@@ -1,0 +1,8 @@
+# Local environment
+.venv/
+.serena/
+__pycache__/
+*.pyc
+
+# User sample projects (requested exclusion)
+sample/
