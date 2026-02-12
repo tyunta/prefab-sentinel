@@ -37,6 +37,7 @@ class BridgeSmokeSamplesTests(unittest.TestCase):
                 plan=Path("sample/avatar/config/prefab_patch_plan.json"),
                 project_path=Path("sample/avatar"),
                 expect_failure=True,
+                expected_code="BRIDGE_FAIL",
             ),
             response_out=Path("reports/bridge_smoke/avatar/response.json"),
             unity_log_file=Path("reports/bridge_smoke/avatar/unity.log"),
@@ -50,6 +51,8 @@ class BridgeSmokeSamplesTests(unittest.TestCase):
         self.assertIn("--unity-timeout-sec", command)
         self.assertIn("240", command)
         self.assertIn("--expect-failure", command)
+        self.assertIn("--expected-code", command)
+        self.assertIn("BRIDGE_FAIL", command)
 
     def test_render_markdown_summary_contains_case_rows(self) -> None:
         markdown = _render_markdown_summary(
@@ -66,6 +69,9 @@ class BridgeSmokeSamplesTests(unittest.TestCase):
                         {
                             "name": "avatar",
                             "matched_expectation": False,
+                            "expected_code": "BRIDGE_FAIL",
+                            "actual_code": "SMOKE_BRIDGE_ERROR",
+                            "code_matches": False,
                             "expected_applied": 2,
                             "expected_applied_source": "cli",
                             "actual_applied": 1,
@@ -84,7 +90,7 @@ class BridgeSmokeSamplesTests(unittest.TestCase):
             }
         )
         self.assertIn(
-            "| avatar | False | 2 | cli | 1 | False | 2 | 1.25 | 450 | profile | 1 | SMOKE_BRIDGE_ERROR |",
+            "| avatar | False | BRIDGE_FAIL | SMOKE_BRIDGE_ERROR | False | 2 | cli | 1 | False | 2 | 1.25 | 450 | profile | 1 | SMOKE_BRIDGE_ERROR |",
             markdown,
         )
 
@@ -240,6 +246,74 @@ raise SystemExit(0)
         self.assertEqual("cli", case["expected_applied_source"])
         self.assertEqual(1, case["actual_applied"])
         self.assertFalse(case["applied_matches"])
+        self.assertFalse(case["matched_expectation"])
+
+    def test_main_returns_nonzero_when_expected_code_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "avatar_plan.json"
+            project = root / "avatar_project"
+            smoke_script = root / "fake_smoke_code.py"
+            out_dir = root / "reports"
+            project.mkdir(parents=True, exist_ok=True)
+            plan.write_text(
+                json.dumps({"target": "Assets/Test.prefab", "ops": []}),
+                encoding="utf-8",
+            )
+            smoke_script.write_text(
+                """
+import argparse
+import json
+from pathlib import Path
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--out", required=True)
+args, _ = parser.parse_known_args()
+payload = {
+    "success": True,
+    "severity": "info",
+    "code": "BRIDGE_OK",
+    "message": "ok",
+    "data": {},
+    "diagnostics": [],
+}
+Path(args.out).write_text(json.dumps(payload), encoding="utf-8")
+print(json.dumps(payload))
+raise SystemExit(0)
+""".strip(),
+                encoding="utf-8",
+            )
+
+            with redirect_stdout(StringIO()):
+                exit_code = main(
+                    [
+                        "--targets",
+                        "avatar",
+                        "--avatar-plan",
+                        str(plan),
+                        "--avatar-project-path",
+                        str(project),
+                        "--smoke-script",
+                        str(smoke_script),
+                        "--python",
+                        sys.executable,
+                        "--bridge-script",
+                        "tools/unity_patch_bridge.py",
+                        "--avatar-expected-code",
+                        "BRIDGE_FAIL",
+                        "--out-dir",
+                        str(out_dir),
+                    ]
+                )
+
+            summary = json.loads((out_dir / "summary.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(1, exit_code)
+        self.assertFalse(summary["success"])
+        case = summary["data"]["cases"][0]
+        self.assertEqual("BRIDGE_FAIL", case["expected_code"])
+        self.assertEqual("BRIDGE_OK", case["actual_code"])
+        self.assertFalse(case["code_matches"])
         self.assertFalse(case["matched_expectation"])
 
     def test_main_applies_expected_applied_from_plan(self) -> None:

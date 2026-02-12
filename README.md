@@ -483,6 +483,7 @@ uv run prefab-sentinel validate bridge-smoke --plan "config/prefab_patch_plan.js
 uv run prefab-sentinel validate bridge-smoke --plan "config/prefab_patch_plan.json" --expected-code "BRIDGE_OK" --unity-command "C:/Program Files/Unity/Hub/Editor/<version>/Editor/Unity.exe" --unity-project-path "D:/git/prefab-sentinel/sample/avatar" --unity-execute-method "PrefabSentinel.UnityPatchBridge.ApplyFromJson"
 uv run prefab-sentinel validate smoke-batch --targets all --out-dir "reports/bridge_smoke" --summary-md "reports/bridge_smoke/summary.md"
 uv run prefab-sentinel validate smoke-batch --targets all --timeout-profile "reports/bridge_timeout_profile.json" --out-dir "reports/bridge_smoke"
+uv run prefab-sentinel validate smoke-batch --targets avatar --avatar-expected-code "OK" --out-dir "reports/bridge_smoke"
 uv run prefab-sentinel validate smoke-batch --targets avatar --avatar-expected-applied 3 --out-dir "reports/bridge_smoke"
 uv run prefab-sentinel validate smoke-batch --targets all --expect-applied-from-plan --out-dir "reports/bridge_smoke"
 uv run prefab-sentinel patch hash --plan "config/patch_plan.example.json"
@@ -528,6 +529,7 @@ uvx --from . prefab-sentinel validate bridge-smoke --plan "config/prefab_patch_p
 uvx --from . prefab-sentinel validate bridge-smoke --plan "config/prefab_patch_plan.json" --expected-code "BRIDGE_OK"
 uvx --from . prefab-sentinel validate smoke-batch --targets all --out-dir "reports/bridge_smoke"
 uvx --from . prefab-sentinel validate smoke-batch --targets all --timeout-profile "reports/bridge_timeout_profile.json" --out-dir "reports/bridge_smoke"
+uvx --from . prefab-sentinel validate smoke-batch --targets avatar --avatar-expected-code "OK" --out-dir "reports/bridge_smoke"
 uvx --from . prefab-sentinel validate smoke-batch --targets avatar --avatar-expected-applied 3 --out-dir "reports/bridge_smoke"
 uvx --from . prefab-sentinel validate smoke-batch --targets all --expect-applied-from-plan --out-dir "reports/bridge_smoke"
 uvx --from . prefab-sentinel patch apply --plan "config/patch_plan.example.json" --dry-run
@@ -568,6 +570,7 @@ uvx --from . prefab-sentinel suggest ignore-guids --scope "Assets/haiirokoubou"
 `scripts/benchmark_regression_report.py` は `--out-md` で比較サマリのMarkdown（回帰一覧 + scope表）を出力できる。
 `prefab-sentinel validate smoke-batch` は `bridge_smoke_samples.py` と同じ複数ターゲット実行（retry/timeout/summary出力）をCLIから実行できる。
 `prefab-sentinel validate smoke-batch --timeout-profile <json>` は `smoke-history` の timeout profile を読み込み、明示指定がないターゲットの timeout 既定値として適用する（優先順: target指定 > 全体指定 > profile）。
+`prefab-sentinel validate smoke-batch --avatar-expected-code CODE --world-expected-code CODE` は `response.code` をターゲット別に検証し、期待値不一致時は `matched_expectation=false` として fail-fast で失敗扱いにする（`summary.json` と `summary.md` に `expected_code` / `actual_code` / `code_matches` を出力）。
 `prefab-sentinel validate smoke-batch --avatar-expected-applied N --world-expected-applied N` は `response.data.applied` をターゲット別に検証し、期待値不一致時は `matched_expectation=false` として fail-fast で失敗扱いにする（`summary.json` と `summary.md` に `expected_applied` / `actual_applied` / `applied_matches` を出力）。
 `prefab-sentinel validate smoke-batch --expect-applied-from-plan` は `target` の patch plan `ops` 件数を期待適用件数として自動採用する（`--*-expected-applied` 未指定時のみ。`--*-expect-failure` ケースは `skipped_expect_failure` として除外）。
 `scripts/bridge_smoke_samples.py` は `unity_bridge_smoke.py` を avatar/world 複数ケースで連続実行し、`reports/bridge_smoke/<target>/response.json` と `unity.log`、集計 `summary.json`（任意 `summary.md`）を決定的なパスで出力できる。`--max-retries` / `--retry-delay-sec` でターゲットごとの一時失敗を再試行でき、`--avatar-unity-timeout-sec` / `--world-unity-timeout-sec` で target 別 timeout を調整できる。`summary` の各ケースには `attempts` と `duration_sec` を含み、timeout tuning の根拠にできる。

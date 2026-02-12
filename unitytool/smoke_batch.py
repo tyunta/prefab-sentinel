@@ -28,6 +28,7 @@ class SmokeCase:
     plan: Path
     project_path: Path
     expect_failure: bool = False
+    expected_code: str | None = None
     expected_applied: int | None = None
 
 
@@ -80,6 +81,16 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         type=int,
         default=None,
         help="Optional expected data.applied value for world target.",
+    )
+    parser.add_argument(
+        "--avatar-expected-code",
+        default=None,
+        help="Optional expected response code value for avatar target.",
+    )
+    parser.add_argument(
+        "--world-expected-code",
+        default=None,
+        help="Optional expected response code value for world target.",
     )
     parser.add_argument(
         "--expect-applied-from-plan",
@@ -199,6 +210,11 @@ def _build_cases(args: argparse.Namespace) -> list[SmokeCase]:
             plan=Path(args.avatar_plan),
             project_path=Path(args.avatar_project_path),
             expect_failure=bool(args.avatar_expect_failure),
+            expected_code=(
+                str(args.avatar_expected_code).strip()
+                if args.avatar_expected_code is not None
+                else None
+            ),
             expected_applied=args.avatar_expected_applied,
         ),
         "world": SmokeCase(
@@ -206,6 +222,11 @@ def _build_cases(args: argparse.Namespace) -> list[SmokeCase]:
             plan=Path(args.world_plan),
             project_path=Path(args.world_project_path),
             expect_failure=bool(args.world_expect_failure),
+            expected_code=(
+                str(args.world_expected_code).strip()
+                if args.world_expected_code is not None
+                else None
+            ),
             expected_applied=args.world_expected_applied,
         ),
     }
@@ -298,6 +319,8 @@ def _build_smoke_command(
         command.extend(["--unity-timeout-sec", str(unity_timeout_sec)])
     if case.expect_failure:
         command.append("--expect-failure")
+    if case.expected_code is not None:
+        command.extend(["--expected-code", case.expected_code])
     return command
 
 
@@ -385,8 +408,8 @@ def _render_markdown_summary(payload: dict[str, Any]) -> str:
             else "- Timeout Profile: n/a"
         ),
         "",
-        "| case | matched | expected_applied | expected_source | actual_applied | applied_matches | attempts | duration_sec | timeout_sec | timeout_source | exit_code | response_code | response_path | unity_log_file |",
-        "| --- | --- | ---: | --- | ---: | --- | ---: | ---: | ---: | --- | ---: | --- | --- | --- |",
+        "| case | matched | expected_code | actual_code | code_matches | expected_applied | expected_source | actual_applied | applied_matches | attempts | duration_sec | timeout_sec | timeout_source | exit_code | response_code | response_path | unity_log_file |",
+        "| --- | --- | --- | --- | --- | ---: | --- | ---: | --- | ---: | ---: | ---: | --- | ---: | --- | --- | --- |",
     ]
     for case in cases:
         timeout_sec = case.get("unity_timeout_sec")
@@ -407,10 +430,22 @@ def _render_markdown_summary(payload: dict[str, Any]) -> str:
         applied_matches = case.get("applied_matches")
         if applied_matches is None:
             applied_matches = ""
+        expected_code = case.get("expected_code")
+        if expected_code is None:
+            expected_code = ""
+        actual_code = case.get("actual_code")
+        if actual_code is None:
+            actual_code = ""
+        code_matches = case.get("code_matches")
+        if code_matches is None:
+            code_matches = ""
         lines.append(
-            "| {name} | {matched} | {expected_applied} | {expected_applied_source} | {actual_applied} | {applied_matches} | {attempts} | {duration_sec} | {timeout_sec} | {timeout_source} | {exit_code} | {response_code} | {response_path} | {unity_log_file} |".format(
+            "| {name} | {matched} | {expected_code} | {actual_code} | {code_matches} | {expected_applied} | {expected_applied_source} | {actual_applied} | {applied_matches} | {attempts} | {duration_sec} | {timeout_sec} | {timeout_source} | {exit_code} | {response_code} | {response_path} | {unity_log_file} |".format(
                 name=case.get("name", ""),
                 matched=case.get("matched_expectation", False),
+                expected_code=expected_code,
+                actual_code=actual_code,
+                code_matches=code_matches,
                 expected_applied=expected_applied,
                 expected_applied_source=expected_applied_source,
                 actual_applied=actual_applied,
@@ -477,6 +512,13 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
     for arg_name, arg_value in expected_applied_args.items():
         if arg_value is not None and arg_value < 0:
             parser.error(f"{arg_name} must be greater than or equal to 0.")
+    expected_code_args = {
+        "--avatar-expected-code": args.avatar_expected_code,
+        "--world-expected-code": args.world_expected_code,
+    }
+    for arg_name, arg_value in expected_code_args.items():
+        if arg_value is not None and not str(arg_value).strip():
+            parser.error(f"{arg_name} must be non-empty when specified.")
 
     timeout_profile_path: Path | None = None
     timeout_profile_overrides: dict[str, int] = {}
@@ -551,7 +593,15 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
         applied_matches: bool | None = None
         if expected_applied is not None:
             applied_matches = actual_applied == expected_applied
+        expected_code = case.expected_code
+        actual_code_raw = case_payload.get("code")
+        actual_code = actual_code_raw if isinstance(actual_code_raw, str) else ""
+        code_matches: bool | None = None
+        if expected_code is not None:
+            code_matches = actual_code == expected_code
         matched_expectation = completed.returncode == 0
+        if code_matches is False:
+            matched_expectation = False
         if applied_matches is False:
             matched_expectation = False
         if not response_path.exists():
@@ -565,6 +615,9 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
                 "plan": str(case.plan),
                 "project_path": str(case.project_path),
                 "expect_failure": case.expect_failure,
+                "expected_code": expected_code,
+                "actual_code": actual_code,
+                "code_matches": code_matches,
                 "expected_applied": expected_applied,
                 "expected_applied_source": expected_applied_source,
                 "actual_applied": actual_applied,

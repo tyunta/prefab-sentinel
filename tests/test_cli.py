@@ -412,6 +412,7 @@ parser.add_argument("--unity-project-path", required=True)
 parser.add_argument("--unity-execute-method", required=True)
 parser.add_argument("--unity-log-file", required=True)
 parser.add_argument("--unity-timeout-sec", type=int, default=None)
+parser.add_argument("--expected-code", default=None)
 parser.add_argument("--out", required=True)
 args = parser.parse_args()
 
@@ -447,6 +448,8 @@ raise SystemExit(0)
                     "tools/unity_patch_bridge.py",
                     "--timeout-profile",
                     str(timeout_profile),
+                    "--avatar-expected-code",
+                    "OK",
                     "--avatar-expected-applied",
                     "1",
                     "--out-dir",
@@ -463,10 +466,130 @@ raise SystemExit(0)
             self.assertEqual(str(timeout_profile), summary["data"]["timeout_profile_path"])
             self.assertEqual(700, summary["data"]["cases"][0]["unity_timeout_sec"])
             self.assertEqual("profile", summary["data"]["cases"][0]["timeout_source"])
+            self.assertEqual("OK", summary["data"]["cases"][0]["expected_code"])
+            self.assertEqual("OK", summary["data"]["cases"][0]["actual_code"])
+            self.assertTrue(summary["data"]["cases"][0]["code_matches"])
             self.assertEqual(1, summary["data"]["cases"][0]["expected_applied"])
             self.assertEqual("cli", summary["data"]["cases"][0]["expected_applied_source"])
             self.assertEqual(1, summary["data"]["cases"][0]["actual_applied"])
             self.assertTrue(summary["data"]["cases"][0]["applied_matches"])
+
+    def test_validate_smoke_batch_expected_code_mismatch_returns_nonzero(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "avatar_plan.json"
+            project = root / "avatar_project"
+            smoke_script = root / "fake_smoke.py"
+            out_dir = root / "reports"
+            project.mkdir(parents=True, exist_ok=True)
+            plan.write_text(
+                json.dumps({"target": "Assets/Test.prefab", "ops": []}),
+                encoding="utf-8",
+            )
+            smoke_script.write_text(
+                """
+import argparse
+import json
+from pathlib import Path
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--out", required=True)
+args, _ = parser.parse_known_args()
+payload = {
+    "success": True,
+    "severity": "info",
+    "code": "OK",
+    "message": "ok",
+    "data": {},
+    "diagnostics": [],
+}
+Path(args.out).write_text(json.dumps(payload), encoding="utf-8")
+print(json.dumps(payload))
+raise SystemExit(0)
+""".strip(),
+                encoding="utf-8",
+            )
+            exit_code, output = self.run_cli(
+                [
+                    "validate",
+                    "smoke-batch",
+                    "--targets",
+                    "avatar",
+                    "--avatar-plan",
+                    str(plan),
+                    "--avatar-project-path",
+                    str(project),
+                    "--smoke-script",
+                    str(smoke_script),
+                    "--python",
+                    sys.executable,
+                    "--bridge-script",
+                    "tools/unity_patch_bridge.py",
+                    "--avatar-expected-code",
+                    "EXPECTED",
+                    "--out-dir",
+                    str(out_dir),
+                ]
+            )
+            summary_path = Path(output.strip())
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(1, exit_code)
+        case = summary["data"]["cases"][0]
+        self.assertEqual("EXPECTED", case["expected_code"])
+        self.assertEqual("OK", case["actual_code"])
+        self.assertFalse(case["code_matches"])
+        self.assertFalse(case["matched_expectation"])
+
+    def test_validate_smoke_batch_rejects_empty_expected_code(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "avatar_plan.json"
+            project = root / "avatar_project"
+            smoke_script = root / "fake_smoke.py"
+            project.mkdir(parents=True, exist_ok=True)
+            plan.write_text(
+                json.dumps({"target": "Assets/Test.prefab", "ops": []}),
+                encoding="utf-8",
+            )
+            smoke_script.write_text(
+                """
+import argparse
+import json
+from pathlib import Path
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--out", required=True)
+args, _ = parser.parse_known_args()
+payload = {"success": True, "severity": "info", "code": "OK", "message": "ok", "data": {}, "diagnostics": []}
+Path(args.out).write_text(json.dumps(payload), encoding="utf-8")
+print(json.dumps(payload))
+raise SystemExit(0)
+""".strip(),
+                encoding="utf-8",
+            )
+            with redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    self.run_cli(
+                        [
+                            "validate",
+                            "smoke-batch",
+                            "--targets",
+                            "avatar",
+                            "--avatar-plan",
+                            str(plan),
+                            "--avatar-project-path",
+                            str(project),
+                            "--smoke-script",
+                            str(smoke_script),
+                            "--python",
+                            sys.executable,
+                            "--bridge-script",
+                            "tools/unity_patch_bridge.py",
+                            "--avatar-expected-code",
+                            "   ",
+                        ]
+                    )
 
     def test_validate_smoke_batch_infers_expected_applied_from_plan(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
