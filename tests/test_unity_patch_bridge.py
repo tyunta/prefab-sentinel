@@ -365,6 +365,43 @@ response_path.write_text(
                             },
                         },
                         {
+                            "op": "set",
+                            "component": "Example.Component",
+                            "path": "curve",
+                            "value": {
+                                "keys": [
+                                    {
+                                        "time": 0.0,
+                                        "value": 1.0,
+                                        "in_tangent": 0.0,
+                                        "out_tangent": 0.0,
+                                    }
+                                ],
+                                "pre_wrap_mode": 1,
+                                "post_wrap_mode": 1,
+                            },
+                        },
+                        {
+                            "op": "set",
+                            "component": "Example.Component",
+                            "path": "gradient",
+                            "value": {
+                                "color_keys": [
+                                    {
+                                        "color": {
+                                            "r": 1.0,
+                                            "g": 1.0,
+                                            "b": 1.0,
+                                            "a": 1.0,
+                                        },
+                                        "time": 0.0,
+                                    }
+                                ],
+                                "alpha_keys": [{"alpha": 1.0, "time": 0.0}],
+                                "mode": 0,
+                            },
+                        },
+                        {
                             "op": "remove_array_element",
                             "component": "Example.Component",
                             "path": "items.Array.data",
@@ -437,8 +474,20 @@ response_path.write_text(
             request_ops[12]["value_json"],
         )
 
-        self.assertEqual("remove_array_element", request_ops[13]["op"])
-        self.assertNotIn("value_kind", request_ops[13])
+        self.assertEqual("json", request_ops[13]["value_kind"])
+        self.assertEqual(
+            '{"keys": [{"time": 0.0, "value": 1.0, "in_tangent": 0.0, "out_tangent": 0.0}], "pre_wrap_mode": 1, "post_wrap_mode": 1}',
+            request_ops[13]["value_json"],
+        )
+
+        self.assertEqual("json", request_ops[14]["value_kind"])
+        self.assertEqual(
+            '{"color_keys": [{"color": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0}, "time": 0.0}], "alpha_keys": [{"alpha": 1.0, "time": 0.0}], "mode": 0}',
+            request_ops[14]["value_json"],
+        )
+
+        self.assertEqual("remove_array_element", request_ops[15]["op"])
+        self.assertNotIn("value_kind", request_ops[15])
 
     def test_reference_bridge_surfaces_nonzero_unity_exit(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
