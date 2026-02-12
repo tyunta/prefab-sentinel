@@ -355,6 +355,16 @@ response_path.write_text(
                             },
                         },
                         {
+                            "op": "set",
+                            "component": "Example.Component",
+                            "path": "managedState",
+                            "value": {
+                                "__type": "Example.ManagedRefDerived, Assembly-CSharp",
+                                "enabled": True,
+                                "threshold": 3,
+                            },
+                        },
+                        {
                             "op": "remove_array_element",
                             "component": "Example.Component",
                             "path": "items.Array.data",
@@ -421,8 +431,14 @@ response_path.write_text(
             request_ops[11]["value_json"],
         )
 
-        self.assertEqual("remove_array_element", request_ops[12]["op"])
-        self.assertNotIn("value_kind", request_ops[12])
+        self.assertEqual("json", request_ops[12]["value_kind"])
+        self.assertEqual(
+            '{"__type": "Example.ManagedRefDerived, Assembly-CSharp", "enabled": true, "threshold": 3}',
+            request_ops[12]["value_json"],
+        )
+
+        self.assertEqual("remove_array_element", request_ops[13]["op"])
+        self.assertNotIn("value_kind", request_ops[13])
 
     def test_reference_bridge_surfaces_nonzero_unity_exit(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

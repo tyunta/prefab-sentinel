@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Reflection;
 using UnityEditor;
 using UnityEngine;
 namespace PrefabSentinel
@@ -134,6 +135,12 @@ namespace PrefabSentinel
         {
             public Vector3IntPayload position = new Vector3IntPayload();
             public Vector3IntPayload size = new Vector3IntPayload();
+        }
+
+        [Serializable]
+        private sealed class ManagedReferenceTypeHintPayload
+        {
+            public string __type = string.Empty;
         }
 
         [Serializable]
@@ -854,6 +861,16 @@ namespace PrefabSentinel
                     property.boolValue = boolValue;
                     return true;
                 }
+                case SerializedPropertyType.Character:
+                {
+                    int charValue;
+                    if (!TryReadCharacterValue(op, valueKind, out charValue, out error))
+                    {
+                        return false;
+                    }
+                    property.intValue = charValue;
+                    return true;
+                }
                 case SerializedPropertyType.String:
                     if (string.Equals(valueKind, "string", StringComparison.Ordinal))
                     {
@@ -997,10 +1014,101 @@ namespace PrefabSentinel
                     property.objectReferenceValue = referenceValue;
                     return true;
                 }
+                case SerializedPropertyType.ExposedReference:
+                {
+                    UnityEngine.Object referenceValue;
+                    if (!TryReadObjectReferenceValue(op, valueKind, out referenceValue, out error))
+                    {
+                        return false;
+                    }
+                    property.exposedReferenceValue = referenceValue;
+                    return true;
+                }
+                case SerializedPropertyType.LayerMask:
+                case SerializedPropertyType.ArraySize:
+                {
+                    int intValue;
+                    if (!TryReadIntegerValue(op, valueKind, out intValue, out error))
+                    {
+                        return false;
+                    }
+                    property.intValue = intValue;
+                    return true;
+                }
+                case SerializedPropertyType.ManagedReference:
+                {
+                    object managedReferenceValue;
+                    if (
+                        !TryReadManagedReferenceValue(
+                            property,
+                            op,
+                            valueKind,
+                            out managedReferenceValue,
+                            out error
+                        )
+                    )
+                    {
+                        return false;
+                    }
+                    property.managedReferenceValue = managedReferenceValue;
+                    return true;
+                }
+                case SerializedPropertyType.Generic:
+                {
+                    object genericValue;
+                    if (!TryReadGenericValue(property, op, valueKind, out genericValue, out error))
+                    {
+                        return false;
+                    }
+                    try
+                    {
+                        property.boxedValue = genericValue;
+                    }
+                    catch (Exception ex)
+                    {
+                        error = $"failed to assign generic value: {ex.Message}";
+                        return false;
+                    }
+                    return true;
+                }
                 default:
                     error = $"SerializedPropertyType '{property.propertyType}' is not supported";
                     return false;
             }
+        }
+
+        private static bool TryReadCharacterValue(
+            PatchOp op,
+            string valueKind,
+            out int value,
+            out string error
+        )
+        {
+            value = 0;
+            error = string.Empty;
+            if (string.Equals(valueKind, "int", StringComparison.Ordinal))
+            {
+                if (op.value_int < char.MinValue || op.value_int > char.MaxValue)
+                {
+                    error = $"character integer value is out of range: {op.value_int}";
+                    return false;
+                }
+                value = op.value_int;
+                return true;
+            }
+            if (string.Equals(valueKind, "string", StringComparison.Ordinal))
+            {
+                string raw = op.value_string ?? string.Empty;
+                if (raw.Length != 1)
+                {
+                    error = "character property requires single-character value_string";
+                    return false;
+                }
+                value = raw[0];
+                return true;
+            }
+            error = "character property requires value_kind='int' or 'string'";
+            return false;
         }
 
         private static bool TryReadIntegerValue(
@@ -1546,6 +1654,292 @@ namespace PrefabSentinel
 
             error = $"ObjectReference file_id '{payload.file_id}' was not found in asset '{assetPath}'";
             return false;
+        }
+
+        private static bool TryReadManagedReferenceValue(
+            SerializedProperty property,
+            PatchOp op,
+            string valueKind,
+            out object value,
+            out string error
+        )
+        {
+            value = null;
+            error = string.Empty;
+            if (string.Equals(valueKind, "null", StringComparison.Ordinal))
+            {
+                return true;
+            }
+            if (!string.Equals(valueKind, "json", StringComparison.Ordinal))
+            {
+                error = "ManagedReference requires value_kind='null' or 'json'";
+                return false;
+            }
+
+            Type targetType;
+            if (!TryResolveManagedReferenceTargetType(property, op.value_json, out targetType, out error))
+            {
+                return false;
+            }
+            if (!TryDecodeJsonToType(op.value_json, targetType, out value, out error))
+            {
+                error = $"failed to parse ManagedReference value_json: {error}";
+                return false;
+            }
+            return true;
+        }
+
+        private static bool TryReadGenericValue(
+            SerializedProperty property,
+            PatchOp op,
+            string valueKind,
+            out object value,
+            out string error
+        )
+        {
+            value = null;
+            error = string.Empty;
+            object current;
+            try
+            {
+                current = property.boxedValue;
+            }
+            catch (Exception ex)
+            {
+                error = $"failed to read generic boxedValue: {ex.Message}";
+                return false;
+            }
+
+            if (string.Equals(valueKind, "null", StringComparison.Ordinal))
+            {
+                if (current != null && current.GetType().IsValueType)
+                {
+                    error = $"generic value type '{current.GetType().FullName}' cannot be set to null";
+                    return false;
+                }
+                return true;
+            }
+            if (!string.Equals(valueKind, "json", StringComparison.Ordinal))
+            {
+                error = "generic property requires value_kind='json' (or 'null' for nullable references)";
+                return false;
+            }
+
+            if (current == null)
+            {
+                error =
+                    "generic property boxedValue is null; set child properties directly or use ManagedReference with __type";
+                return false;
+            }
+            Type targetType = current.GetType();
+            if (!TryDecodeJsonToType(op.value_json, targetType, out value, out error))
+            {
+                error = $"failed to parse generic value_json for type '{targetType.FullName}': {error}";
+                return false;
+            }
+            return true;
+        }
+
+        private static bool TryResolveManagedReferenceTargetType(
+            SerializedProperty property,
+            string rawJson,
+            out Type targetType,
+            out string error
+        )
+        {
+            targetType = null;
+            error = string.Empty;
+
+            string typeHint;
+            if (TryReadManagedReferenceTypeHint(rawJson, out typeHint))
+            {
+                if (!TryResolveType(typeHint, out targetType, out error))
+                {
+                    error = $"failed to resolve managed reference __type '{typeHint}': {error}";
+                    return false;
+                }
+                return true;
+            }
+
+            object current = property.managedReferenceValue;
+            if (current != null)
+            {
+                targetType = current.GetType();
+                return true;
+            }
+
+            if (!TryResolveManagedReferenceFieldType(property, out targetType, out error))
+            {
+                return false;
+            }
+            if (targetType.IsInterface || targetType.IsAbstract)
+            {
+                error =
+                    $"managed reference field type '{targetType.FullName}' is abstract/interface; provide __type in value_json";
+                return false;
+            }
+            return true;
+        }
+
+        private static bool TryResolveManagedReferenceFieldType(
+            SerializedProperty property,
+            out Type fieldType,
+            out string error
+        )
+        {
+            fieldType = null;
+            error = string.Empty;
+            string raw = property.managedReferenceFieldTypename ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                error = "managedReferenceFieldTypename is empty";
+                return false;
+            }
+            int separator = raw.IndexOf(" ", StringComparison.Ordinal);
+            if (separator <= 0 || separator >= raw.Length - 1)
+            {
+                error = $"managedReferenceFieldTypename has invalid format: '{raw}'";
+                return false;
+            }
+            string assemblyName = raw.Substring(0, separator).Trim();
+            string typeName = raw.Substring(separator + 1).Trim();
+            if (!TryResolveType($"{typeName}, {assemblyName}", out fieldType, out error))
+            {
+                error = $"failed to resolve managed reference field type '{raw}': {error}";
+                return false;
+            }
+            return true;
+        }
+
+        private static bool TryReadManagedReferenceTypeHint(string rawJson, out string typeName)
+        {
+            typeName = string.Empty;
+            if (string.IsNullOrWhiteSpace(rawJson))
+            {
+                return false;
+            }
+            try
+            {
+                ManagedReferenceTypeHintPayload payload = JsonUtility.FromJson<ManagedReferenceTypeHintPayload>(rawJson);
+                if (payload == null || string.IsNullOrWhiteSpace(payload.__type))
+                {
+                    return false;
+                }
+                typeName = payload.__type.Trim();
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool TryResolveType(string rawTypeName, out Type type, out string error)
+        {
+            type = null;
+            error = string.Empty;
+            string candidate = (rawTypeName ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(candidate))
+            {
+                error = "type name is empty";
+                return false;
+            }
+
+            type = Type.GetType(candidate, false);
+            if (type != null)
+            {
+                return true;
+            }
+
+            int commaIndex = candidate.IndexOf(",");
+            string typeName = commaIndex >= 0 ? candidate.Substring(0, commaIndex).Trim() : candidate;
+            string assemblyName = commaIndex >= 0 ? candidate.Substring(commaIndex + 1).Trim() : string.Empty;
+
+            Assembly[] assemblies = AppDomain.CurrentDomain.GetAssemblies();
+            for (int i = 0; i < assemblies.Length; i++)
+            {
+                Assembly assembly = assemblies[i];
+                if (!string.IsNullOrWhiteSpace(assemblyName))
+                {
+                    string shortName = assembly.GetName().Name ?? string.Empty;
+                    string fullName = assembly.FullName ?? string.Empty;
+                    if (
+                        !string.Equals(shortName, assemblyName, StringComparison.Ordinal)
+                        && !string.Equals(fullName, assemblyName, StringComparison.Ordinal)
+                    )
+                    {
+                        continue;
+                    }
+                }
+
+                type = assembly.GetType(typeName, false);
+                if (type != null)
+                {
+                    return true;
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(assemblyName))
+            {
+                error = $"type '{typeName}' was not found";
+            }
+            else
+            {
+                error = $"type '{typeName}' was not found in assembly '{assemblyName}'";
+            }
+            return false;
+        }
+
+        private static bool TryDecodeJsonToType(
+            string raw,
+            Type targetType,
+            out object value,
+            out string error
+        )
+        {
+            value = null;
+            error = string.Empty;
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                error = "value_json is empty";
+                return false;
+            }
+            if (targetType == null)
+            {
+                error = "target type is null";
+                return false;
+            }
+
+            try
+            {
+                value = JsonUtility.FromJson(raw, targetType);
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return false;
+            }
+
+            if (value != null)
+            {
+                return true;
+            }
+            if (!targetType.IsValueType)
+            {
+                error = $"value_json decoded to null for type '{targetType.FullName}'";
+                return false;
+            }
+
+            try
+            {
+                value = Activator.CreateInstance(targetType);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = $"failed to create default instance for value type '{targetType.FullName}': {ex.Message}";
+                return false;
+            }
         }
 
         private static bool TryParseJsonPayload<T>(

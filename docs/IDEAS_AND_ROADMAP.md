@@ -147,7 +147,7 @@
 - Added Unity Editor executeMethod apply path for prefab patch operations:
   - `tools/unity/PrefabSentinel.UnityPatchBridge.cs` (`PrefabSentinel.UnityPatchBridge.ApplyFromJson`)
   - supports `.prefab` + `set` / `insert_array_element` / `remove_array_element`
-  - `set` value decoding covers primitive/null + `enum`/`Color`/`Vector2/3/4`/`Vector2Int/3Int`/`Rect/RectInt`/`Bounds/BoundsInt`/`Quaternion`/`ObjectReference({guid,file_id})`
+  - `set` value decoding covers primitive/null + `Character`/`LayerMask`/`ArraySize` + `enum`/`Color`/`Vector2/3/4`/`Vector2Int/3Int`/`Rect/RectInt`/`Bounds/BoundsInt`/`Quaternion`/`ObjectReference({guid,file_id})`/`ExposedReference` + `ManagedReference` (`__type` hint) + `Generic` custom struct payloads
   - component ambiguity and array-path mistakes return richer fail-fast diagnostics
   - component selector accepts `TypeName@Hierarchy/Path` for explicit disambiguation
 - `report export --format md` supports runtime summary section for `VALIDATE_RUNTIME_RESULT`.
@@ -155,8 +155,8 @@
 
 ## Next Executable Tasks
 - Extend Unity executeMethod apply coverage:
-  - broader SerializedProperty support (nested managed-reference scenarios, complex custom structs)
   - Unity-side integration tests against sample prefab assets (batchmode assertions)
+  - remaining unsupported SerializedProperty types (`AnimationCurve` / `Gradient` / fixed buffer edge cases)
 - Add Unity smoke hardening:
   - tune default timeout profile policy parameters based on accumulated smoke history
 
