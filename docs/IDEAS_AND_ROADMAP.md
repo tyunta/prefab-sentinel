@@ -139,6 +139,7 @@
   - supports code assertion quality gates (`--max-code-mismatches` / `--min-code-pass-pct`) with non-zero exit on threshold breach
   - supports applied assertion quality gates (`--max-applied-mismatches` / `--min-applied-pass-pct`) with non-zero exit on threshold breach
   - supports observed-timeout quality gates (`--max-observed-timeout-breaches` / `--min-observed-timeout-coverage-pct`) with non-zero exit on threshold breach
+  - supports timeout-profile quality gates (`--max-profile-timeout-breaches` / `--min-profile-timeout-coverage-pct`) with non-zero exit on threshold breach
   - supports `--matched-only`, `--target`, `--duration-percentile`
   - supports timeout profile JSON export (`--out-timeout-profile`) with policy knobs (`--timeout-multiplier` / `--timeout-slack-sec` / `--timeout-min-sec` / `--timeout-round-sec`)
   - timeout profile includes history coverage metrics (`timeout_breach_count` / `timeout_coverage_pct`)
@@ -146,7 +147,7 @@
   - unit tests: `tests/test_smoke_summary_to_csv.py`
 - Added CI workflow wiring:
   - `.github/workflows/ci.yml` runs `unittest` on push/PR/workflow_dispatch
-  - `bridge-smoke-contract` job runs `prefab-sentinel validate smoke-batch` in expected-failure + expected-code mode, builds timeout decision artifacts via `prefab-sentinel report smoke-history` with code quality gates (`--max-code-mismatches 0 --min-code-pass-pct 100`), and uploads `reports/bridge_smoke`
+  - `bridge-smoke-contract` job runs `prefab-sentinel validate smoke-batch` in expected-failure + expected-code mode, builds timeout decision artifacts via `prefab-sentinel report smoke-history` with code/profile quality gates (`--max-code-mismatches 0 --min-code-pass-pct 100 --max-profile-timeout-breaches 0 --min-profile-timeout-coverage-pct 100`), and uploads `reports/bridge_smoke`
 - Added Unity-enabled smoke workflow:
   - `.github/workflows/unity-smoke.yml` (`workflow_dispatch` + self-hosted Windows runner)
   - runs `prefab-sentinel validate smoke-batch` without `--*-expect-failure` and uploads `reports/bridge_smoke`
@@ -156,7 +157,7 @@
   - supports per-target code assertion inputs (`avatar_expected_code` / `world_expected_code`)
   - supports `expect_applied_from_plan` input (default true) for plan-op-count assertions
   - supports smoke-history code quality gates (`max_code_mismatches` / `min_code_pass_pct`, default: disabled/empty)
-  - supports smoke-history quality gates (`max_applied_mismatches` / `min_applied_pass_pct` / `max_observed_timeout_breaches` / `min_observed_timeout_coverage_pct`, default: `0` / `100` / `0` / `100`)
+  - supports smoke-history quality gates (`max_applied_mismatches` / `min_applied_pass_pct` / `max_observed_timeout_breaches` / `min_observed_timeout_coverage_pct` / `max_profile_timeout_breaches` / `min_profile_timeout_coverage_pct`, default: `0` / `100` / `0` / `100` / `0` / `100`)
   - supports optional UTC run-window gating (`run_window_start_utc_hour` / `run_window_end_utc_hour`)
   - builds decision artifacts via `prefab-sentinel report smoke-history` (`history.csv` / `history.md` / `timeout_profile.json`)
   - uploads split artifacts (`unity-smoke-summary`, `unity-smoke-avatar`, `unity-smoke-world`)

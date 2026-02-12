@@ -195,6 +195,7 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
         markdown = _render_markdown_summary(rows, 90.0)
         self.assertIn("# Bridge Smoke Timeout Decision Table", markdown)
         self.assertIn("- Code assertion runs: 2", markdown)
+        self.assertIn("- Profile timeout samples: 0", markdown)
         self.assertIn("| target | runs | failures | code_assertions |", markdown)
         self.assertIn("| avatar |", markdown)
         self.assertIn("| world |", markdown)
@@ -635,6 +636,42 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
         self.assertEqual(1, exit_code)
         self.assertTrue(out_exists)
 
+    def test_main_fails_when_profile_timeout_coverage_below_threshold(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            summary_path = root / "summary.json"
+            out_csv = root / "history.csv"
+            summary_path.write_text(
+                json.dumps(
+                    _summary_payload(
+                        [
+                            {
+                                "name": "avatar",
+                                "matched_expectation": True,
+                                "attempts": 1,
+                            },
+                        ]
+                    )
+                ),
+                encoding="utf-8",
+            )
+
+            with redirect_stdout(StringIO()):
+                exit_code = main(
+                    [
+                        "--inputs",
+                        str(summary_path),
+                        "--out",
+                        str(out_csv),
+                        "--min-profile-timeout-coverage-pct",
+                        "100",
+                    ]
+                )
+            out_exists = out_csv.exists()
+
+        self.assertEqual(1, exit_code)
+        self.assertTrue(out_exists)
+
     def test_main_rejects_invalid_timeout_profile_arguments(self) -> None:
         with redirect_stderr(StringIO()):
             with self.assertRaises(SystemExit) as raised:
@@ -713,6 +750,37 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
                 )
 
         self.assertEqual(2, raised_pass_pct.exception.code)
+
+    def test_main_rejects_invalid_profile_timeout_threshold_arguments(self) -> None:
+        with redirect_stderr(StringIO()):
+            with self.assertRaises(SystemExit) as raised_breaches:
+                main(
+                    [
+                        "--inputs",
+                        "missing.json",
+                        "--out",
+                        "out.csv",
+                        "--max-profile-timeout-breaches",
+                        "-1",
+                    ]
+                )
+
+        self.assertEqual(2, raised_breaches.exception.code)
+
+        with redirect_stderr(StringIO()):
+            with self.assertRaises(SystemExit) as raised_coverage:
+                main(
+                    [
+                        "--inputs",
+                        "missing.json",
+                        "--out",
+                        "out.csv",
+                        "--min-profile-timeout-coverage-pct",
+                        "101",
+                    ]
+                )
+
+        self.assertEqual(2, raised_coverage.exception.code)
 
 
 if __name__ == "__main__":

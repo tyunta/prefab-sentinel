@@ -75,6 +75,24 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
+        "--max-profile-timeout-breaches",
+        type=int,
+        default=None,
+        help=(
+            "Fail with exit code 1 if timeout-profile breaches exceed this count "
+            "for the selected timeout policy."
+        ),
+    )
+    parser.add_argument(
+        "--min-profile-timeout-coverage-pct",
+        type=float,
+        default=None,
+        help=(
+            "Fail with exit code 1 if timeout-profile coverage percentage falls below this "
+            "value (0-100) for the selected timeout policy."
+        ),
+    )
+    parser.add_argument(
         "--duration-percentile",
         type=float,
         default=90.0,
@@ -513,6 +531,42 @@ def _compute_observed_timeout_metrics(
     )
 
 
+def _compute_profile_timeout_metrics(
+    profile_payload: dict[str, Any] | None,
+) -> tuple[int, int, float | None]:
+    if not isinstance(profile_payload, dict):
+        return 0, 0, None
+    profiles_raw = profile_payload.get("profiles", [])
+    if not isinstance(profiles_raw, list):
+        return 0, 0, None
+
+    profile_timeout_samples = 0
+    profile_timeout_breaches = 0
+    for profile in profiles_raw:
+        if not isinstance(profile, dict):
+            continue
+        evidence = profile.get("evidence", {})
+        if not isinstance(evidence, dict):
+            continue
+        profile_timeout_samples += _to_int(evidence.get("duration_sample_count")) or 0
+        profile_timeout_breaches += _to_int(evidence.get("timeout_breach_count")) or 0
+
+    profile_timeout_coverage_pct = (
+        (
+            (profile_timeout_samples - profile_timeout_breaches)
+            / float(profile_timeout_samples)
+        )
+        * 100.0
+        if profile_timeout_samples > 0
+        else None
+    )
+    return (
+        profile_timeout_samples,
+        profile_timeout_breaches,
+        profile_timeout_coverage_pct,
+    )
+
+
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -531,6 +585,7 @@ def _render_markdown_summary(
     rows: list[dict[str, Any]],
     duration_percentile: float,
     stats: list[dict[str, Any]] | None = None,
+    profile_payload: dict[str, Any] | None = None,
 ) -> str:
     percentile_label = f"duration_p{int(round(duration_percentile))}_sec"
     target_stats = stats if stats is not None else _build_target_stats(rows, duration_percentile)
@@ -564,6 +619,16 @@ def _render_markdown_summary(
         if observed_timeout_coverage_pct_raw is not None
         else None
     )
+    (
+        profile_timeout_samples,
+        profile_timeout_breaches,
+        profile_timeout_coverage_pct_raw,
+    ) = _compute_profile_timeout_metrics(profile_payload)
+    profile_timeout_coverage_pct = (
+        round(profile_timeout_coverage_pct_raw, 2)
+        if profile_timeout_coverage_pct_raw is not None
+        else None
+    )
     lines = [
         "# Bridge Smoke Timeout Decision Table",
         "",
@@ -589,6 +654,13 @@ def _render_markdown_summary(
             f"- Observed timeout coverage pct: {observed_timeout_coverage_pct}"
             if observed_timeout_coverage_pct is not None
             else "- Observed timeout coverage pct: n/a"
+        ),
+        f"- Profile timeout samples: {profile_timeout_samples}",
+        f"- Profile timeout breaches: {profile_timeout_breaches}",
+        (
+            f"- Profile timeout coverage pct: {profile_timeout_coverage_pct}"
+            if profile_timeout_coverage_pct is not None
+            else "- Profile timeout coverage pct: n/a"
         ),
         "",
         f"| target | runs | failures | code_assertions | code_mismatches | code_pass_pct | applied_assertions | applied_mismatches | applied_pass_pct | observed_timeout_samples | observed_timeout_breaches | observed_timeout_coverage_pct | attempts_max | duration_avg_sec | {percentile_label} | duration_max_sec | timeout_max_sec |",
@@ -652,6 +724,16 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
         or args.min_observed_timeout_coverage_pct > 100.0
     ):
         parser.error("--min-observed-timeout-coverage-pct must be in range 0..100.")
+    if (
+        args.max_profile_timeout_breaches is not None
+        and args.max_profile_timeout_breaches < 0
+    ):
+        parser.error("--max-profile-timeout-breaches must be greater than or equal to 0.")
+    if args.min_profile_timeout_coverage_pct is not None and (
+        args.min_profile_timeout_coverage_pct < 0.0
+        or args.min_profile_timeout_coverage_pct > 100.0
+    ):
+        parser.error("--min-profile-timeout-coverage-pct must be in range 0..100.")
 
     input_paths = _expand_inputs(args.inputs)
     if not input_paths:
@@ -712,22 +794,21 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
         or args.out_timeout_profile
         or args.max_observed_timeout_breaches is not None
         or args.min_observed_timeout_coverage_pct is not None
+        or args.max_profile_timeout_breaches is not None
+        or args.min_profile_timeout_coverage_pct is not None
     )
     stats: list[dict[str, Any]] | None = (
         _build_target_stats(rows, args.duration_percentile) if needs_stats else None
     )
 
-    if args.out_md:
-        out_md = Path(args.out_md)
-        out_md.parent.mkdir(parents=True, exist_ok=True)
-        out_md.write_text(
-            _render_markdown_summary(rows, args.duration_percentile, stats=stats) + "\n",
-            encoding="utf-8",
-        )
-        print(out_md)
-
-    if args.out_timeout_profile:
-        out_timeout_profile = Path(args.out_timeout_profile)
+    needs_profile_payload = bool(
+        args.out_md
+        or args.out_timeout_profile
+        or args.max_profile_timeout_breaches is not None
+        or args.min_profile_timeout_coverage_pct is not None
+    )
+    profile_payload: dict[str, Any] | None = None
+    if needs_profile_payload:
         profile_stats = (
             stats
             if stats is not None
@@ -741,6 +822,26 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
             timeout_min_sec=args.timeout_min_sec,
             timeout_round_sec=args.timeout_round_sec,
         )
+
+    if args.out_md:
+        out_md = Path(args.out_md)
+        out_md.parent.mkdir(parents=True, exist_ok=True)
+        out_md.write_text(
+            _render_markdown_summary(
+                rows,
+                args.duration_percentile,
+                stats=stats,
+                profile_payload=profile_payload,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        print(out_md)
+
+    if args.out_timeout_profile:
+        out_timeout_profile = Path(args.out_timeout_profile)
+        if profile_payload is None:
+            parser.error("timeout profile payload was not generated.")
         _write_json(out_timeout_profile, profile_payload)
         print(out_timeout_profile)
 
@@ -767,6 +868,17 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
             if observed_timeout_coverage_pct is not None
             else None
         )
+    (
+        _profile_timeout_samples,
+        profile_timeout_breaches,
+        profile_timeout_coverage_pct,
+    ) = _compute_profile_timeout_metrics(profile_payload)
+    profile_timeout_coverage_pct = (
+        round(profile_timeout_coverage_pct, 2)
+        if profile_timeout_coverage_pct is not None
+        else None
+    )
+
     violations: list[str] = []
     if (
         args.max_code_mismatches is not None
@@ -821,6 +933,24 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
             violations.append(
                 "observed timeout coverage below threshold: "
                 f"{observed_timeout_coverage_pct:.2f} < {args.min_observed_timeout_coverage_pct:.2f}"
+            )
+    if (
+        args.max_profile_timeout_breaches is not None
+        and profile_timeout_breaches > args.max_profile_timeout_breaches
+    ):
+        violations.append(
+            "profile timeout breach threshold exceeded: "
+            f"{profile_timeout_breaches} > {args.max_profile_timeout_breaches}"
+        )
+    if args.min_profile_timeout_coverage_pct is not None:
+        if profile_timeout_coverage_pct is None:
+            violations.append(
+                "profile timeout coverage threshold configured but no timeout profile duration rows exist"
+            )
+        elif profile_timeout_coverage_pct < args.min_profile_timeout_coverage_pct:
+            violations.append(
+                "profile timeout coverage below threshold: "
+                f"{profile_timeout_coverage_pct:.2f} < {args.min_profile_timeout_coverage_pct:.2f}"
             )
 
     for message in violations:
