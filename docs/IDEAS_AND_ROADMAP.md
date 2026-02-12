@@ -93,11 +93,13 @@
   - bridge protocol version check (`protocol_version: 1`)
 - Added Unity bridge script with batchmode command execution path:
   - `tools/unity_patch_bridge.py` (`UNITYTOOL_UNITY_COMMAND` / request-response file contract)
+- Added Unity Editor executeMethod scaffold:
+  - `tools/unity/PrefabSentinel.UnityPatchBridge.cs` (`PrefabSentinel.UnityPatchBridge.ApplyFromJson`)
 - `report export --format md` supports runtime summary section for `VALIDATE_RUNTIME_RESULT`.
 - `report export --format md` supports `--md-max-steps` / `--md-omit-steps` to trim large `data.steps`.
 
 ## Next Executable Tasks
-- Implement Unity Editor-side execute method (`-executeMethod`) that consumes request JSON and writes protocol response JSON.
+- Implement SerializedObject apply logic inside Unity Editor executeMethod (currently protocol scaffold only).
 
 ## Decision-Required Queue
 - Decide default location/policy for ignore-guid files:

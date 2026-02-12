@@ -478,6 +478,7 @@ uv run unitytool patch apply --plan "config/patch_plan.example.json" --dry-run
 set UNITYTOOL_PATCH_BRIDGE="python tools/unity_patch_bridge.py"
 set UNITYTOOL_UNITY_COMMAND="C:/Program Files/Unity/Hub/Editor/<version>/Editor/Unity.exe"
 set UNITYTOOL_UNITY_PROJECT_PATH="D:/git/UnityTool/sample/avatar"
+set UNITYTOOL_UNITY_EXECUTE_METHOD="PrefabSentinel.UnityPatchBridge.ApplyFromJson"
 uv run unitytool patch apply --plan "config/prefab_patch_plan.json" --confirm
 uv run unitytool patch apply --plan "config/prefab_patch_plan.json" --confirm --scope "Assets" --runtime-scene "Assets/Smoke.unity"
 uv run unitytool suggest ignore-guids --scope "Assets/haiirokoubou" --min-occurrences 100 --max-items 20
@@ -539,6 +540,7 @@ uvx --from . unitytool suggest ignore-guids --scope "Assets/haiirokoubou"
 `UNITYTOOL_PATCH_BRIDGE` は JSON入力(stdin) / JSON出力(stdout) のbridgeコマンドを指定する（`protocol_version: 1`）。
 `tools/unity_patch_bridge.py` は `UNITYTOOL_UNITY_COMMAND` を使って Unity batchmode コマンドを実行し、JSONリクエスト/レスポンスファイルを介して結果を返す。
 `tools/unity_patch_bridge.py` は `UNITYTOOL_UNITY_PROJECT_PATH` / `UNITYTOOL_UNITY_EXECUTE_METHOD` / `UNITYTOOL_UNITY_TIMEOUT_SEC` / `UNITYTOOL_UNITY_LOG_FILE` で実行設定を制御できる。
+`tools/unity/PrefabSentinel.UnityPatchBridge.cs` は Unity 側 `-executeMethod` の参照実装（引数・プロトコル検証スキャフォールド）を提供する。
 `validate runtime` は log分類ベースのscaffoldを実装済みで、`--scene` 存在確認、`BROKEN_PPTR` / `UDON_NULLREF` などの分類、`assert_no_critical_errors` 判定までを返す。
 `validate runtime` の compile/ClientSim 実行は現時点では `RUN_COMPILE_SKIPPED` / `RUN_CLIENTSIM_SKIPPED` として明示的に未配線を返す。
 `report export --format md` は `VALIDATE_RUNTIME_RESULT` payload を入力した場合、Runtime Validation 要約（分類件数・severity内訳・カテゴリ表）を追加出力する。
