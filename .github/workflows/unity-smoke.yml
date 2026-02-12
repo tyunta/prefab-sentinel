@@ -92,8 +92,27 @@ jobs:
         run: |
           python scripts/bridge_smoke_samples.py --targets "${{ inputs.targets }}" --avatar-plan "${{ inputs.avatar_plan }}" --world-plan "${{ inputs.world_plan }}" --avatar-project-path "${{ inputs.avatar_project_path }}" --world-project-path "${{ inputs.world_project_path }}" --unity-command "${{ inputs.unity_command }}" --unity-execute-method "${{ inputs.unity_execute_method }}" --unity-timeout-sec "${{ inputs.unity_timeout_sec }}" --out-dir reports/bridge_smoke --summary-md reports/bridge_smoke/summary.md
 
-      - name: Upload Unity Smoke Artifacts
+      - name: Upload Unity Smoke Summary
         uses: actions/upload-artifact@v4
         with:
-          name: unity-smoke-reports
-          path: reports/bridge_smoke
+          name: unity-smoke-summary
+          path: |
+            reports/bridge_smoke/summary.json
+            reports/bridge_smoke/summary.md
+          if-no-files-found: error
+
+      - name: Upload Unity Smoke Avatar Artifact
+        if: ${{ inputs.targets == 'all' || inputs.targets == 'avatar' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: unity-smoke-avatar
+          path: reports/bridge_smoke/avatar
+          if-no-files-found: error
+
+      - name: Upload Unity Smoke World Artifact
+        if: ${{ inputs.targets == 'all' || inputs.targets == 'world' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: unity-smoke-world
+          path: reports/bridge_smoke/world
+          if-no-files-found: error
