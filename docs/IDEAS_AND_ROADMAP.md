@@ -79,12 +79,12 @@
   - non-dry-run confirm gate (`--confirm`)
   - JSON target apply backend (`SER_APPLY_OK`, `.json` only)
 - `report export --format md` supports runtime summary section for `VALIDATE_RUNTIME_RESULT`.
+- `report export --format md` supports `--md-max-steps` / `--md-omit-steps` to trim large `data.steps`.
 
 ## Next Executable Tasks
 - Extend apply backend from JSON-only to Unity SerializedObject bridge.
 - Add optional per-scope baseline pinning file for regression comparison.
 - Add optional markdown summary output for regression report results.
-- Add runtime report filtering option to limit large `data.steps` blocks in markdown export.
 
 ## Decision-Required Queue
 - Decide default location/policy for ignore-guid files:

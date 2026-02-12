@@ -436,6 +436,79 @@ PrefabInstance:
             content = dst.read_text(encoding="utf-8")
             self.assertIn('"usages": []', content)
 
+    def test_report_export_markdown_limits_steps(self) -> None:
+        payload = {
+            "success": True,
+            "severity": "info",
+            "code": "VALIDATE_RUNTIME_RESULT",
+            "message": "ok",
+            "data": {
+                "steps": [
+                    {"step": "a", "result": {"data": {"x": 1}}},
+                    {"step": "b", "result": {"data": {"x": 2}}},
+                ]
+            },
+            "diagnostics": [],
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            src = temp / "input.json"
+            dst = temp / "out.md"
+            src.write_text(json.dumps(payload), encoding="utf-8")
+
+            exit_code, _ = self.run_cli(
+                [
+                    "report",
+                    "export",
+                    "--input",
+                    str(src),
+                    "--format",
+                    "md",
+                    "--out",
+                    str(dst),
+                    "--md-max-steps",
+                    "1",
+                ]
+            )
+
+            self.assertEqual(0, exit_code)
+            content = dst.read_text(encoding="utf-8")
+            self.assertIn('"steps_total": 2', content)
+            self.assertIn('"steps_truncated_for_markdown": 1', content)
+
+    def test_report_export_markdown_omit_steps(self) -> None:
+        payload = {
+            "success": True,
+            "severity": "info",
+            "code": "VALIDATE_RUNTIME_RESULT",
+            "message": "ok",
+            "data": {"steps": [{"step": "a"}]},
+            "diagnostics": [],
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            src = temp / "input.json"
+            dst = temp / "out.md"
+            src.write_text(json.dumps(payload), encoding="utf-8")
+
+            exit_code, _ = self.run_cli(
+                [
+                    "report",
+                    "export",
+                    "--input",
+                    str(src),
+                    "--format",
+                    "md",
+                    "--out",
+                    str(dst),
+                    "--md-omit-steps",
+                ]
+            )
+
+            self.assertEqual(0, exit_code)
+            content = dst.read_text(encoding="utf-8")
+            self.assertIn('"steps": []', content)
+
 
 if __name__ == "__main__":
     unittest.main()

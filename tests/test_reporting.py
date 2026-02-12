@@ -79,6 +79,27 @@ class ReportingTests(unittest.TestCase):
         self.assertIn('"usages_total": 3', rendered)
         self.assertIn('"usages_truncated_for_markdown": 2', rendered)
 
+    def test_render_markdown_report_limits_steps_list(self) -> None:
+        payload = {
+            "success": True,
+            "severity": "info",
+            "code": "VALIDATE_RUNTIME_RESULT",
+            "message": "ok",
+            "data": {
+                "steps": [
+                    {"step": "a", "result": {"data": {"x": 1}}},
+                    {"step": "b", "result": {"data": {"x": 2}}},
+                    {"step": "c", "result": {"data": {"x": 3}}},
+                ]
+            },
+            "diagnostics": [],
+        }
+
+        rendered = render_markdown_report(payload, md_max_steps=1)
+
+        self.assertIn('"steps_total": 3', rendered)
+        self.assertIn('"steps_truncated_for_markdown": 2', rendered)
+
     def test_render_markdown_report_includes_runtime_section(self) -> None:
         payload = {
             "success": False,

@@ -497,6 +497,7 @@ uvx --from . unitytool suggest ignore-guids --scope "Assets/haiirokoubou"
 `suggest ignore-guids` は `--out-ignore-guid-file` で候補GUIDを1行1件で保存できる（`replace`/`append`）。
 `report export --format md` では、`scan_broken_references` データが含まれる場合に Noise Reduction サマリーを先頭に出力する。
 `report export --format md` は `--md-max-usages N` / `--md-omit-usages` で `usages` 配列を軽量化できる。
+`report export --format md` は `--md-max-steps N` / `--md-omit-steps` で `steps` 配列を軽量化できる。
 `scripts/benchmark_refs.py` で `validate refs` の実行時間を同条件で複数回計測できる。
 `scripts/benchmark_refs.py` は `p50` / `p90` をJSON・CSVの双方に出力する。
 `scripts/benchmark_refs.py` は `--out-csv` で比較しやすいCSV行も出力できる。
@@ -530,6 +531,8 @@ uvx --from . unitytool suggest ignore-guids --scope "Assets/haiirokoubou"
 uv run unitytool report export --input reports/input.json --format md --out reports/latest.md
 uv run unitytool report export --input reports/input.json --format md --out reports/latest.md --md-max-usages 100
 uv run unitytool report export --input reports/input.json --format md --out reports/latest.md --md-omit-usages
+uv run unitytool report export --input reports/input.json --format md --out reports/latest.md --md-max-steps 20
+uv run unitytool report export --input reports/input.json --format md --out reports/latest.md --md-omit-steps
 uvx --from . unitytool report export --input reports/input.json --format json --out reports/latest.json
 ```
 

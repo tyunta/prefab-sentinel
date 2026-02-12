@@ -91,9 +91,28 @@ def _limit_usages_for_markdown(value: Any, max_usages: int) -> Any:
     return value
 
 
+def _limit_steps_for_markdown(value: Any, max_steps: int) -> Any:
+    if isinstance(value, dict):
+        limited: dict[str, Any] = {}
+        for key, item in value.items():
+            if key == "steps" and isinstance(item, list):
+                keep = item[:max_steps]
+                limited[key] = [_limit_steps_for_markdown(entry, max_steps) for entry in keep]
+                if len(item) > max_steps:
+                    limited["steps_total"] = len(item)
+                    limited["steps_truncated_for_markdown"] = len(item) - len(keep)
+                continue
+            limited[key] = _limit_steps_for_markdown(item, max_steps)
+        return limited
+    if isinstance(value, list):
+        return [_limit_steps_for_markdown(item, max_steps) for item in value]
+    return value
+
+
 def render_markdown_report(
     payload: dict[str, Any],
     md_max_usages: int | None = None,
+    md_max_steps: int | None = None,
 ) -> str:
     diagnostics = payload.get("diagnostics", [])
     payload_data = payload.get("data", {})
@@ -101,6 +120,8 @@ def render_markdown_report(
         payload_data = {}
     if md_max_usages is not None:
         payload_data = _limit_usages_for_markdown(payload_data, max(0, md_max_usages))
+    if md_max_steps is not None:
+        payload_data = _limit_steps_for_markdown(payload_data, max(0, md_max_steps))
 
     ref_scan = _extract_ref_scan_data(payload_data)
     categories_occ = ref_scan.get("categories_occurrences", {})
@@ -194,13 +215,13 @@ def render_markdown_report(
 
     lines.extend(
         [
-        "## Data",
-        "```json",
-        json.dumps(payload_data, ensure_ascii=False, indent=2),
-        "```",
-        "",
-        "## Diagnostics",
-    ]
+            "## Data",
+            "```json",
+            json.dumps(payload_data, ensure_ascii=False, indent=2),
+            "```",
+            "",
+            "## Diagnostics",
+        ]
     )
     if diagnostics:
         for index, diag in enumerate(diagnostics, start=1):
@@ -219,6 +240,7 @@ def export_report(
     output_path: str,
     fmt: str,
     md_max_usages: int | None = None,
+    md_max_steps: int | None = None,
 ) -> Path:
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -226,7 +248,11 @@ def export_report(
         out.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     elif fmt == "md":
         out.write_text(
-            render_markdown_report(payload, md_max_usages=md_max_usages),
+            render_markdown_report(
+                payload,
+                md_max_usages=md_max_usages,
+                md_max_steps=md_max_steps,
+            ),
             encoding="utf-8",
         )
     else:

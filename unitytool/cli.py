@@ -199,9 +199,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="When --format md, keep at most N usage rows per usages list.",
     )
     report_export.add_argument(
+        "--md-max-steps",
+        type=int,
+        default=None,
+        help="When --format md, keep at most N items per steps list.",
+    )
+    report_export.add_argument(
         "--md-omit-usages",
         action="store_true",
         help="When --format md, omit all usage rows from usages lists.",
+    )
+    report_export.add_argument(
+        "--md-omit-steps",
+        action="store_true",
+        help="When --format md, omit all steps arrays from payload data.",
     )
 
     return parser
@@ -370,13 +381,17 @@ def main(argv: list[str] | None = None) -> int:
         input_path = Path(args.input)
         payload = json.loads(input_path.read_text(encoding="utf-8"))
         md_max_usages = args.md_max_usages
+        md_max_steps = args.md_max_steps
         if args.md_omit_usages:
             md_max_usages = 0
+        if args.md_omit_steps:
+            md_max_steps = 0
         output = export_report(
             payload=payload,
             output_path=args.out,
             fmt=args.format,
             md_max_usages=md_max_usages,
+            md_max_steps=md_max_steps,
         )
         print(f"Exported report: {output}")
         return 0
