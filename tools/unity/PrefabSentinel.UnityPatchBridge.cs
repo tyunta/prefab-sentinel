@@ -17,6 +17,8 @@ namespace PrefabSentinel
         private const string RequestArg = "-unitytoolPatchRequest";
         private const string ResponseArg = "-unitytoolPatchResponse";
         private const string ArrayDataSuffix = ".Array.data";
+        private static readonly PropertyInfo SerializedPropertyGradientValueProperty = typeof(SerializedProperty)
+            .GetProperty("gradientValue", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
 
         [Serializable]
         private sealed class BridgeRequest
@@ -152,6 +154,28 @@ namespace PrefabSentinel
             public float value = 0f;
             public float in_tangent = 0f;
             public float out_tangent = 0f;
+        }
+
+        [Serializable]
+        private sealed class GradientPayload
+        {
+            public GradientColorKeyPayload[] color_keys = Array.Empty<GradientColorKeyPayload>();
+            public GradientAlphaKeyPayload[] alpha_keys = Array.Empty<GradientAlphaKeyPayload>();
+            public int mode = 0;
+        }
+
+        [Serializable]
+        private sealed class GradientColorKeyPayload
+        {
+            public ColorPayload color = new ColorPayload();
+            public float time = 0f;
+        }
+
+        [Serializable]
+        private sealed class GradientAlphaKeyPayload
+        {
+            public float alpha = 1f;
+            public float time = 0f;
         }
 
         [Serializable]
@@ -1031,6 +1055,29 @@ namespace PrefabSentinel
                     property.animationCurveValue = value;
                     return true;
                 }
+                case SerializedPropertyType.Gradient:
+                {
+                    object value;
+                    if (!TryReadGradientValue(op, valueKind, out value, out error))
+                    {
+                        return false;
+                    }
+                    if (SerializedPropertyGradientValueProperty == null)
+                    {
+                        error = "Gradient property is not supported in this Unity version";
+                        return false;
+                    }
+                    try
+                    {
+                        SerializedPropertyGradientValueProperty.SetValue(property, value, null);
+                    }
+                    catch (Exception ex)
+                    {
+                        error = $"failed to assign Gradient value: {ex.Message}";
+                        return false;
+                    }
+                    return true;
+                }
                 case SerializedPropertyType.ObjectReference:
                 {
                     UnityEngine.Object referenceValue;
@@ -1659,6 +1706,106 @@ namespace PrefabSentinel
             value = new AnimationCurve(keys);
             value.preWrapMode = (WrapMode)payload.pre_wrap_mode;
             value.postWrapMode = (WrapMode)payload.post_wrap_mode;
+            return true;
+        }
+
+        private static bool TryReadGradientValue(
+            PatchOp op,
+            string valueKind,
+            out object value,
+            out string error
+        )
+        {
+            value = null;
+            error = string.Empty;
+            if (string.Equals(valueKind, "null", StringComparison.Ordinal))
+            {
+                return true;
+            }
+            if (!string.Equals(valueKind, "json", StringComparison.Ordinal))
+            {
+                error = "Gradient property requires value_kind='null' or 'json'";
+                return false;
+            }
+
+            GradientPayload payload;
+            if (!TryParseJsonPayload(op.value_json, out payload, out error))
+            {
+                error = $"failed to parse Gradient value_json: {error}";
+                return false;
+            }
+            if (payload.color_keys == null)
+            {
+                error = "Gradient value_json requires color_keys array";
+                return false;
+            }
+            if (payload.alpha_keys == null)
+            {
+                error = "Gradient value_json requires alpha_keys array";
+                return false;
+            }
+
+            GradientColorKey[] colorKeys = new GradientColorKey[payload.color_keys.Length];
+            for (int i = 0; i < payload.color_keys.Length; i++)
+            {
+                GradientColorKeyPayload colorKeyPayload = payload.color_keys[i];
+                if (colorKeyPayload == null || colorKeyPayload.color == null)
+                {
+                    error = $"Gradient color key at index {i} is null";
+                    return false;
+                }
+                colorKeys[i] = new GradientColorKey(
+                    new Color(
+                        colorKeyPayload.color.r,
+                        colorKeyPayload.color.g,
+                        colorKeyPayload.color.b,
+                        colorKeyPayload.color.a
+                    ),
+                    colorKeyPayload.time
+                );
+            }
+
+            GradientAlphaKey[] alphaKeys = new GradientAlphaKey[payload.alpha_keys.Length];
+            for (int i = 0; i < payload.alpha_keys.Length; i++)
+            {
+                GradientAlphaKeyPayload alphaKeyPayload = payload.alpha_keys[i];
+                if (alphaKeyPayload == null)
+                {
+                    error = $"Gradient alpha key at index {i} is null";
+                    return false;
+                }
+                alphaKeys[i] = new GradientAlphaKey(alphaKeyPayload.alpha, alphaKeyPayload.time);
+            }
+
+            Gradient gradient = new Gradient();
+            try
+            {
+                gradient.SetKeys(colorKeys, alphaKeys);
+            }
+            catch (Exception ex)
+            {
+                error = $"failed to assign Gradient keys: {ex.Message}";
+                return false;
+            }
+
+            PropertyInfo modeProperty = typeof(Gradient).GetProperty("mode", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            if (modeProperty != null && modeProperty.CanWrite)
+            {
+                try
+                {
+                    Type modeType = modeProperty.PropertyType;
+                    if (modeType.IsEnum && Enum.IsDefined(modeType, payload.mode))
+                    {
+                        object modeValue = Enum.ToObject(modeType, payload.mode);
+                        modeProperty.SetValue(gradient, modeValue, null);
+                    }
+                }
+                catch
+                {
+                }
+            }
+
+            value = gradient;
             return true;
         }
 
