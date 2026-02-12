@@ -474,6 +474,7 @@ uv run unitytool validate refs --scope "Assets/haiirokoubou" --details --max-dia
 uv run unitytool validate refs --scope "Assets/haiirokoubou" --exclude "**/Generated/**"
 uv run unitytool validate refs --scope "Assets/haiirokoubou" --ignore-guid-file "config/ignore_guids.txt"
 uv run unitytool validate runtime --scene "sample/avatar/Assets/Marycia.unity" --log-file "sample/world/Logs/ClientSim.log"
+uv run unitytool patch hash --plan "config/patch_plan.example.json"
 uv run unitytool patch apply --plan "config/patch_plan.example.json" --dry-run
 uv run unitytool patch apply --plan "config/patch_plan.example.json" --dry-run --plan-sha256 "<sha256>"
 set UNITYTOOL_PATCH_BRIDGE="python tools/unity_patch_bridge.py"
@@ -531,6 +532,7 @@ uvx --from . unitytool suggest ignore-guids --scope "Assets/haiirokoubou"
 `scripts/benchmark_regression_report.py` は `--alerts-only` / `--fail-on-regression` でCI向け短文ログと非0終了コードを使える。
 `scripts/benchmark_regression_report.py` は `--out-csv-append` で比較履歴を同一CSVに追記できる。
 `scripts/benchmark_regression_report.py` は `--out-md` で比較サマリのMarkdown（回帰一覧 + scope表）を出力できる。
+`patch hash` は plan JSON を検証したうえで SHA-256 digest を出力する（`--format json` 対応）。
 `patch apply` は plan JSON のスキーマ検証と `dry_run_patch` プレビューを実装済み（`set` / `insert_array_element` / `remove_array_element`）。
 `patch apply` は非dry-run時に `--confirm` を要求し、JSONターゲット（`.json`）は内蔵バックエンドで実編集する。
 `patch apply` は `--plan-sha256` 指定時に plan ファイル内容の SHA-256 を照合し、不一致なら適用前に停止する。

@@ -199,6 +199,49 @@ GameObject:
                         ]
                     )
 
+    def test_patch_hash_outputs_sha256_text(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "patch.json"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "target": "Assets/Variant.prefab",
+                        "ops": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            expected = hashlib.sha256(plan.read_bytes()).hexdigest()
+            exit_code, output = self.run_cli(["patch", "hash", "--plan", str(plan)])
+
+        self.assertEqual(0, exit_code)
+        self.assertEqual(expected, output.strip())
+
+    def test_patch_hash_outputs_sha256_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "patch.json"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "target": "Assets/Variant.prefab",
+                        "ops": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            expected = hashlib.sha256(plan.read_bytes()).hexdigest()
+            exit_code, output = self.run_cli(
+                ["patch", "hash", "--plan", str(plan), "--format", "json"]
+            )
+
+        payload = json.loads(output)
+        self.assertEqual(0, exit_code)
+        self.assertTrue(payload["success"])
+        self.assertEqual("PATCH_PLAN_SHA256", payload["code"])
+        self.assertEqual(expected, payload["data"]["sha256"])
+
     def test_patch_apply_blocks_without_confirm(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

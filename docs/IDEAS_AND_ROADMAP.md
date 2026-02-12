@@ -82,6 +82,7 @@
   - log-based classification (`BROKEN_PPTR`, `UDON_NULLREF`, etc.)
   - runtime assertion step (`assert_no_critical_errors`)
 - Added patch apply scaffold command:
+  - `unitytool patch hash --plan ...`
   - `unitytool patch apply --plan ... --dry-run`
   - optional plan digest verification (`--plan-sha256`)
   - plan schema validation + dry-run diff preview

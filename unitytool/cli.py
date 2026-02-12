@@ -230,6 +230,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum runtime classification diagnostics when --runtime-scene is used.",
     )
     patch_apply.add_argument("--format", choices=("json", "md"), default="json")
+    patch_hash = patch_sub.add_parser("hash", help="Compute SHA-256 digest of a patch plan.")
+    patch_hash.add_argument("--plan", required=True, help="Input patch plan JSON path.")
+    patch_hash.add_argument("--format", choices=("json", "text"), default="text")
 
     report_parser = subparsers.add_parser("report", help="Report conversion commands.")
     report_sub = report_parser.add_subparsers(dest="report_command", required=True)
@@ -439,6 +442,32 @@ def main(argv: list[str] | None = None) -> int:
             runtime_max_diagnostics=args.runtime_max_diagnostics,
         )
         _emit_payload(response.to_dict(), args.format)
+        return 0
+
+    if args.command == "patch" and args.patch_command == "hash":
+        plan_path = Path(args.plan)
+        try:
+            load_patch_plan(plan_path)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            parser.error(f"Failed to load --plan: {exc}")
+        digest = compute_patch_plan_sha256(plan_path)
+        if args.format == "json":
+            print(
+                json.dumps(
+                    {
+                        "success": True,
+                        "severity": "info",
+                        "code": "PATCH_PLAN_SHA256",
+                        "message": "Patch plan digest calculated.",
+                        "data": {"plan": str(plan_path), "sha256": digest},
+                        "diagnostics": [],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+        else:
+            print(digest)
         return 0
 
     if args.command == "report" and args.report_command == "export":
