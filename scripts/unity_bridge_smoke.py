@@ -2,19 +2,24 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
-PROTOCOL_VERSION = 1
-VALID_SEVERITIES = {"info", "warning", "error", "critical"}
-UNITY_COMMAND_ENV = "UNITYTOOL_UNITY_COMMAND"
-UNITY_PROJECT_PATH_ENV = "UNITYTOOL_UNITY_PROJECT_PATH"
-UNITY_EXECUTE_METHOD_ENV = "UNITYTOOL_UNITY_EXECUTE_METHOD"
-UNITY_TIMEOUT_SEC_ENV = "UNITYTOOL_UNITY_TIMEOUT_SEC"
-UNITY_LOG_FILE_ENV = "UNITYTOOL_UNITY_LOG_FILE"
+from unitytool.bridge_smoke import (
+    PROTOCOL_VERSION,
+    UNITY_COMMAND_ENV,
+    UNITY_EXECUTE_METHOD_ENV,
+    UNITY_LOG_FILE_ENV,
+    UNITY_PROJECT_PATH_ENV,
+    UNITY_TIMEOUT_SEC_ENV,
+    build_bridge_env as _build_bridge_env_impl,
+    build_bridge_request as _build_bridge_request_impl,
+    load_patch_plan as _load_patch_plan_impl,
+    run_bridge as _run_bridge_impl,
+    validate_bridge_response as _validate_bridge_response_impl,
+    validate_expectation as _validate_expectation_impl,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -73,39 +78,21 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _load_patch_plan(path: Path) -> dict[str, Any]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError("Patch plan root must be an object.")
-    target = payload.get("target")
-    ops = payload.get("ops")
-    if not isinstance(target, str) or not target.strip():
-        raise ValueError("Patch plan field 'target' must be a non-empty string.")
-    if not isinstance(ops, list):
-        raise ValueError("Patch plan field 'ops' must be an array.")
-    return payload
+    return _load_patch_plan_impl(path)
 
 
 def _build_bridge_request(plan: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "protocol_version": PROTOCOL_VERSION,
-        "target": str(plan.get("target", "")).strip(),
-        "ops": plan.get("ops", []),
-    }
+    return _build_bridge_request_impl(plan)
 
 
 def _build_bridge_env(args: argparse.Namespace) -> dict[str, str]:
-    env = os.environ.copy()
-    overrides: list[tuple[str, str | int | None]] = [
-        (UNITY_COMMAND_ENV, args.unity_command),
-        (UNITY_PROJECT_PATH_ENV, args.unity_project_path),
-        (UNITY_EXECUTE_METHOD_ENV, args.unity_execute_method),
-        (UNITY_TIMEOUT_SEC_ENV, args.unity_timeout_sec),
-        (UNITY_LOG_FILE_ENV, args.unity_log_file),
-    ]
-    for key, value in overrides:
-        if value is not None:
-            env[key] = str(value)
-    return env
+    return _build_bridge_env_impl(
+        unity_command=args.unity_command,
+        unity_project_path=args.unity_project_path,
+        unity_execute_method=args.unity_execute_method,
+        unity_timeout_sec=args.unity_timeout_sec,
+        unity_log_file=args.unity_log_file,
+    )
 
 
 def _run_bridge(
@@ -115,66 +102,20 @@ def _run_bridge(
     request: dict[str, Any],
     env: dict[str, str],
 ) -> dict[str, Any]:
-    completed = subprocess.run(
-        [python_executable, str(bridge_script)],
-        input=json.dumps(request, ensure_ascii=False),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
+    return _run_bridge_impl(
+        bridge_script=bridge_script,
+        python_executable=python_executable,
+        request=request,
         env=env,
-        check=False,
     )
-    if completed.returncode != 0:
-        raise RuntimeError(
-            f"Bridge process exited with {completed.returncode}: {completed.stderr.strip()}"
-        )
-    try:
-        payload = json.loads(completed.stdout)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("Bridge stdout is not valid JSON.") from exc
-    if not isinstance(payload, dict):
-        raise RuntimeError("Bridge response root must be an object.")
-    _validate_bridge_response(payload)
-    return payload
 
 
 def _validate_bridge_response(payload: dict[str, Any]) -> None:
-    required_fields = ("success", "severity", "code", "message", "data", "diagnostics")
-    missing_fields = [field for field in required_fields if field not in payload]
-    if missing_fields:
-        raise RuntimeError(
-            "Bridge response is missing required fields: "
-            + ", ".join(missing_fields)
-            + "."
-        )
-    success = payload.get("success")
-    severity = payload.get("severity")
-    code = payload.get("code")
-    message = payload.get("message")
-    data = payload.get("data")
-    diagnostics = payload.get("diagnostics")
-    if not isinstance(success, bool):
-        raise RuntimeError("Bridge response field 'success' must be a boolean.")
-    if not isinstance(severity, str) or severity not in VALID_SEVERITIES:
-        raise RuntimeError(
-            "Bridge response field 'severity' must be one of: "
-            + ", ".join(sorted(VALID_SEVERITIES))
-            + "."
-        )
-    if not isinstance(code, str) or not code.strip():
-        raise RuntimeError("Bridge response field 'code' must be a non-empty string.")
-    if not isinstance(message, str):
-        raise RuntimeError("Bridge response field 'message' must be a string.")
-    if not isinstance(data, dict):
-        raise RuntimeError("Bridge response field 'data' must be an object.")
-    if not isinstance(diagnostics, list):
-        raise RuntimeError("Bridge response field 'diagnostics' must be an array.")
+    _validate_bridge_response_impl(payload)
 
 
 def _validate_expectation(response: dict[str, Any], expect_failure: bool) -> bool:
-    success = bool(response.get("success"))
-    return (not success) if expect_failure else success
+    return _validate_expectation_impl(response, expect_failure)
 
 
 def main(argv: list[str] | None = None) -> int:

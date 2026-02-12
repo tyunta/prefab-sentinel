@@ -110,6 +110,10 @@
   - bridge response envelope validation (`success` / `severity` / `code` / `message` / `data` / `diagnostics`) with fail-fast errors
 - Added smoke runner unit tests:
   - `tests/test_unity_bridge_smoke.py`
+- Added shared bridge smoke library + CLI command:
+  - `unitytool/bridge_smoke.py` (shared contract/exec logic for script + CLI)
+  - `unitytool validate bridge-smoke ...` (`--expect-failure` / `--out` supported)
+  - CLI tests: `tests/test_cli.py` (`bridge-smoke` success + expectation mismatch)
 - Unity bridge now normalizes op values for executeMethod payload (`value_kind` fields).
 - Added Unity Editor executeMethod apply path for prefab patch operations:
   - `tools/unity/PrefabSentinel.UnityPatchBridge.cs` (`PrefabSentinel.UnityPatchBridge.ApplyFromJson`)

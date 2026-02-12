@@ -4,9 +4,22 @@ import argparse
 import json
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Any
 
+from unitytool.bridge_smoke import (
+    UNITY_COMMAND_ENV,
+    UNITY_EXECUTE_METHOD_ENV,
+    UNITY_LOG_FILE_ENV,
+    UNITY_PROJECT_PATH_ENV,
+    UNITY_TIMEOUT_SEC_ENV,
+    build_bridge_env,
+    build_bridge_request,
+    load_patch_plan as load_bridge_smoke_plan,
+    run_bridge as run_bridge_smoke,
+    validate_expectation as validate_bridge_smoke_expectation,
+)
 from unitytool.mcp.serialized_object import (
     compute_patch_plan_hmac_sha256,
     compute_patch_plan_sha256,
@@ -128,6 +141,58 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum diagnostics to include from runtime log classification.",
     )
     validate_runtime.add_argument("--format", choices=("json", "md"), default="json")
+    validate_bridge_smoke = validate_sub.add_parser(
+        "bridge-smoke",
+        help="Run an end-to-end smoke test against tools/unity_patch_bridge.py.",
+    )
+    validate_bridge_smoke.add_argument("--plan", required=True, help="Patch plan JSON path.")
+    validate_bridge_smoke.add_argument(
+        "--bridge-script",
+        default=str(Path("tools") / "unity_patch_bridge.py"),
+        help="Bridge script path (default: tools/unity_patch_bridge.py).",
+    )
+    validate_bridge_smoke.add_argument(
+        "--python",
+        default=sys.executable,
+        help="Python executable used to run --bridge-script.",
+    )
+    validate_bridge_smoke.add_argument(
+        "--unity-command",
+        default=None,
+        help=f"Override {UNITY_COMMAND_ENV} for this run.",
+    )
+    validate_bridge_smoke.add_argument(
+        "--unity-project-path",
+        default=None,
+        help=f"Override {UNITY_PROJECT_PATH_ENV} for this run.",
+    )
+    validate_bridge_smoke.add_argument(
+        "--unity-execute-method",
+        default=None,
+        help=f"Override {UNITY_EXECUTE_METHOD_ENV} for this run.",
+    )
+    validate_bridge_smoke.add_argument(
+        "--unity-timeout-sec",
+        type=int,
+        default=None,
+        help=f"Override {UNITY_TIMEOUT_SEC_ENV} for this run.",
+    )
+    validate_bridge_smoke.add_argument(
+        "--unity-log-file",
+        default=None,
+        help=f"Override {UNITY_LOG_FILE_ENV} for this run.",
+    )
+    validate_bridge_smoke.add_argument(
+        "--expect-failure",
+        action="store_true",
+        help="Expect bridge result success=false (exit 0 when failure is observed).",
+    )
+    validate_bridge_smoke.add_argument(
+        "--out",
+        default=None,
+        help="Optional output JSON path for bridge response.",
+    )
+    validate_bridge_smoke.add_argument("--format", choices=("json", "md"), default="json")
 
     suggest_parser = subparsers.add_parser("suggest", help="Suggestion commands.")
     suggest_sub = suggest_parser.add_subparsers(dest="suggest_command", required=True)
@@ -549,6 +614,57 @@ def main(argv: list[str] | None = None) -> int:
         )
         _emit_payload(response.to_dict(), args.format)
         return 0
+
+    if args.command == "validate" and args.validate_command == "bridge-smoke":
+        plan_path = Path(args.plan)
+        bridge_script = Path(args.bridge_script)
+        try:
+            plan = load_bridge_smoke_plan(plan_path)
+            request = build_bridge_request(plan)
+            env = build_bridge_env(
+                unity_command=args.unity_command,
+                unity_project_path=args.unity_project_path,
+                unity_execute_method=args.unity_execute_method,
+                unity_timeout_sec=args.unity_timeout_sec,
+                unity_log_file=args.unity_log_file,
+            )
+            payload = run_bridge_smoke(
+                bridge_script=bridge_script,
+                python_executable=args.python,
+                request=request,
+                env=env,
+            )
+        except (OSError, ValueError, RuntimeError) as exc:
+            payload = {
+                "success": False,
+                "severity": "error",
+                "code": "SMOKE_BRIDGE_ERROR",
+                "message": str(exc),
+                "data": {
+                    "plan": str(plan_path),
+                    "bridge_script": str(bridge_script),
+                },
+                "diagnostics": [],
+            }
+            _emit_payload(payload, args.format)
+            return 1
+
+        if args.out:
+            output_path = Path(args.out)
+            try:
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_text(
+                    json.dumps(payload, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+            except OSError as exc:
+                parser.error(f"Failed to write --out: {exc}")
+        _emit_payload(payload, args.format)
+        return (
+            0
+            if validate_bridge_smoke_expectation(payload, args.expect_failure)
+            else 1
+        )
 
     if args.command == "suggest" and args.suggest_command == "ignore-guids":
         try:

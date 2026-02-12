@@ -474,6 +474,7 @@ uv run unitytool validate refs --scope "Assets/haiirokoubou" --details --max-dia
 uv run unitytool validate refs --scope "Assets/haiirokoubou" --exclude "**/Generated/**"
 uv run unitytool validate refs --scope "Assets/haiirokoubou" --ignore-guid-file "config/ignore_guids.txt"
 uv run unitytool validate runtime --scene "sample/avatar/Assets/Marycia.unity" --log-file "sample/world/Logs/ClientSim.log"
+uv run unitytool validate bridge-smoke --plan "config/prefab_patch_plan.json" --unity-command "C:/Program Files/Unity/Hub/Editor/<version>/Editor/Unity.exe" --unity-project-path "D:/git/UnityTool/sample/avatar" --unity-execute-method "PrefabSentinel.UnityPatchBridge.ApplyFromJson"
 uv run unitytool patch hash --plan "config/patch_plan.example.json"
 set UNITYTOOL_PLAN_SIGNING_KEY="replace-with-signing-key"
 uv run unitytool patch sign --plan "config/patch_plan.example.json"
@@ -506,6 +507,7 @@ uvx --from . unitytool inspect variant --path "Assets/... Variant.prefab"
 uvx --from . unitytool inspect where-used --asset-or-guid "Assets/SomeAsset.prefab" --scope "Assets"
 uvx --from . unitytool validate refs --scope "Assets/haiirokoubou"
 uvx --from . unitytool validate runtime --scene "sample/avatar/Assets/Marycia.unity"
+uvx --from . unitytool validate bridge-smoke --plan "config/prefab_patch_plan.json"
 uvx --from . unitytool patch apply --plan "config/patch_plan.example.json" --dry-run
 uvx --from . unitytool suggest ignore-guids --scope "Assets/haiirokoubou"
 ```
@@ -569,6 +571,7 @@ uvx --from . unitytool suggest ignore-guids --scope "Assets/haiirokoubou"
 配列操作パスの診断は `.Array.data` 形式を厳密検証し、`.Array.size`/index付き誤指定時はヒント付きで停止する。
 `validate runtime` は log分類ベースのscaffoldを実装済みで、`--scene` 存在確認、`BROKEN_PPTR` / `UDON_NULLREF` などの分類、`assert_no_critical_errors` 判定までを返す。
 `validate runtime` の compile/ClientSim 実行は現時点では `RUN_COMPILE_SKIPPED` / `RUN_CLIENTSIM_SKIPPED` として明示的に未配線を返す。
+`validate bridge-smoke` は patch plan を bridge request へ変換して `tools/unity_patch_bridge.py` を実行し、`--expect-failure` 判定と `--out` 保存までをCLI本体から実行できる。
 `report export --format md` は `VALIDATE_RUNTIME_RESULT` payload を入力した場合、Runtime Validation 要約（分類件数・severity内訳・カテゴリ表）を追加出力する。
 
 ```bash
