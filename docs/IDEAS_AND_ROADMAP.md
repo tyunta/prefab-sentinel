@@ -105,14 +105,13 @@
 - Added Unity Editor executeMethod apply path for prefab patch operations:
   - `tools/unity/PrefabSentinel.UnityPatchBridge.cs` (`PrefabSentinel.UnityPatchBridge.ApplyFromJson`)
   - supports `.prefab` + `set` / `insert_array_element` / `remove_array_element`
-  - `set` value decoding covers primitive/null + `enum`/`Color`/`Vector2/3/4`/`Quaternion`
+  - `set` value decoding covers primitive/null + `enum`/`Color`/`Vector2/3/4`/`Quaternion`/`ObjectReference({guid,file_id})`
   - component ambiguity and array-path mistakes return richer fail-fast diagnostics
 - `report export --format md` supports runtime summary section for `VALIDATE_RUNTIME_RESULT`.
 - `report export --format md` supports `--md-max-steps` / `--md-omit-steps` to trim large `data.steps`.
 
 ## Next Executable Tasks
 - Extend Unity executeMethod apply coverage:
-  - ObjectReference assignment beyond `null` (GUID + fileID resolution with fail-fast)
   - broader SerializedProperty support (`Rect`, `Bounds`, nested managed-reference scenarios)
   - Unity-side integration tests against sample prefab assets (batchmode assertions)
 

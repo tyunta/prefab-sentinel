@@ -83,6 +83,13 @@ namespace PrefabSentinel
         }
 
         [Serializable]
+        private sealed class ObjectReferencePayload
+        {
+            public string guid = string.Empty;
+            public long file_id = 0;
+        }
+
+        [Serializable]
         private sealed class BridgeResponse
         {
             public int protocol_version = ProtocolVersion;
@@ -805,13 +812,15 @@ namespace PrefabSentinel
                     return true;
                 }
                 case SerializedPropertyType.ObjectReference:
-                    if (string.Equals(valueKind, "null", StringComparison.Ordinal))
+                {
+                    UnityEngine.Object referenceValue;
+                    if (!TryReadObjectReferenceValue(op, valueKind, out referenceValue, out error))
                     {
-                        property.objectReferenceValue = null;
-                        return true;
+                        return false;
                     }
-                    error = "ObjectReference currently supports value_kind='null' only";
-                    return false;
+                    property.objectReferenceValue = referenceValue;
+                    return true;
+                }
                 default:
                     error = $"SerializedPropertyType '{property.propertyType}' is not supported";
                     return false;
@@ -1116,6 +1125,91 @@ namespace PrefabSentinel
             }
             value = new Quaternion(payload.x, payload.y, payload.z, payload.w);
             return true;
+        }
+
+        private static bool TryReadObjectReferenceValue(
+            PatchOp op,
+            string valueKind,
+            out UnityEngine.Object value,
+            out string error
+        )
+        {
+            value = null;
+            error = string.Empty;
+            if (string.Equals(valueKind, "null", StringComparison.Ordinal))
+            {
+                return true;
+            }
+            if (!string.Equals(valueKind, "json", StringComparison.Ordinal))
+            {
+                error = "ObjectReference requires value_kind='null' or 'json' ({guid,file_id})";
+                return false;
+            }
+
+            ObjectReferencePayload payload;
+            if (!TryParseJsonPayload(op.value_json, out payload, out error))
+            {
+                error = $"failed to parse ObjectReference value_json: {error}";
+                return false;
+            }
+
+            string guid = (payload.guid ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(guid))
+            {
+                error = "ObjectReference value_json requires non-empty guid";
+                return false;
+            }
+            if (payload.file_id < 0)
+            {
+                error = "ObjectReference file_id must be >= 0";
+                return false;
+            }
+
+            string assetPath = AssetDatabase.GUIDToAssetPath(guid);
+            if (string.IsNullOrWhiteSpace(assetPath))
+            {
+                error = $"ObjectReference guid could not be resolved: '{guid}'";
+                return false;
+            }
+
+            if (payload.file_id == 0)
+            {
+                value = AssetDatabase.LoadMainAssetAtPath(assetPath);
+                if (value == null)
+                {
+                    error = $"ObjectReference main asset not found at '{assetPath}'";
+                    return false;
+                }
+                return true;
+            }
+
+            UnityEngine.Object[] candidates = AssetDatabase.LoadAllAssetsAtPath(assetPath);
+            for (int i = 0; i < candidates.Length; i++)
+            {
+                UnityEngine.Object candidate = candidates[i];
+                if (candidate == null)
+                {
+                    continue;
+                }
+
+                string candidateGuid;
+                long localFileId;
+                if (!AssetDatabase.TryGetGUIDAndLocalFileIdentifier(candidate, out candidateGuid, out localFileId))
+                {
+                    continue;
+                }
+                if (
+                    string.Equals(candidateGuid, guid, StringComparison.OrdinalIgnoreCase)
+                    && localFileId == payload.file_id
+                )
+                {
+                    value = candidate;
+                    return true;
+                }
+            }
+
+            error = $"ObjectReference file_id '{payload.file_id}' was not found in asset '{assetPath}'";
+            return false;
         }
 
         private static bool TryParseJsonPayload<T>(

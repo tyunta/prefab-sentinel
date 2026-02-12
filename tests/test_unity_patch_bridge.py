@@ -207,6 +207,15 @@ response_path.write_text(
                             "value": [1, 2],
                         },
                         {
+                            "op": "set",
+                            "component": "Example.Component",
+                            "path": "optionalRef",
+                            "value": {
+                                "guid": "0123456789abcdef0123456789abcdef",
+                                "file_id": 11400000,
+                            },
+                        },
+                        {
                             "op": "remove_array_element",
                             "component": "Example.Component",
                             "path": "items.Array.data",
@@ -243,8 +252,14 @@ response_path.write_text(
         self.assertEqual("json", request_ops[6]["value_kind"])
         self.assertEqual("[1, 2]", request_ops[6]["value_json"])
 
-        self.assertEqual("remove_array_element", request_ops[7]["op"])
-        self.assertNotIn("value_kind", request_ops[7])
+        self.assertEqual("json", request_ops[7]["value_kind"])
+        self.assertEqual(
+            '{"guid": "0123456789abcdef0123456789abcdef", "file_id": 11400000}',
+            request_ops[7]["value_json"],
+        )
+
+        self.assertEqual("remove_array_element", request_ops[8]["op"])
+        self.assertNotIn("value_kind", request_ops[8])
 
     def test_reference_bridge_surfaces_nonzero_unity_exit(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
