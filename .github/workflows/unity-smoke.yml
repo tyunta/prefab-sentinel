@@ -74,6 +74,26 @@ on:
         options:
           - "true"
           - "false"
+      avatar_expected_code:
+        description: "Optional expected response code assertion for avatar target."
+        required: false
+        default: ""
+        type: string
+      world_expected_code:
+        description: "Optional expected response code assertion for world target."
+        required: false
+        default: ""
+        type: string
+      max_code_mismatches:
+        description: "Optional smoke-history gate: maximum allowed code assertion mismatches."
+        required: false
+        default: ""
+        type: string
+      min_code_pass_pct:
+        description: "Optional smoke-history gate: minimum required code assertion pass percentage."
+        required: false
+        default: ""
+        type: string
       max_applied_mismatches:
         description: "Optional smoke-history gate: maximum allowed applied assertion mismatches."
         required: false
@@ -155,6 +175,12 @@ jobs:
           $historyTimeoutSlackSecRaw = "${{ inputs.history_timeout_slack_sec }}"
           $historyTimeoutMinSecRaw = "${{ inputs.history_timeout_min_sec }}"
           $historyTimeoutRoundSecRaw = "${{ inputs.history_timeout_round_sec }}"
+          $maxCodeMismatchesRaw = "${{ inputs.max_code_mismatches }}"
+          $minCodePassPctRaw = "${{ inputs.min_code_pass_pct }}"
+          $maxAppliedMismatchesRaw = "${{ inputs.max_applied_mismatches }}"
+          $minAppliedPassPctRaw = "${{ inputs.min_applied_pass_pct }}"
+          $maxObservedTimeoutBreachesRaw = "${{ inputs.max_observed_timeout_breaches }}"
+          $minObservedTimeoutCoveragePctRaw = "${{ inputs.min_observed_timeout_coverage_pct }}"
           if ($target -eq "all" -or $target -eq "avatar") {
             if (-not (Test-Path "${{ inputs.avatar_plan }}")) {
               throw "avatar_plan not found: ${{ inputs.avatar_plan }}"
@@ -231,6 +257,60 @@ jobs:
           if ($historyTimeoutRoundSec -le 0) {
             throw "history_timeout_round_sec must be greater than 0."
           }
+          if ($maxCodeMismatchesRaw -ne "") {
+            $maxCodeMismatches = 0
+            if (-not [int]::TryParse($maxCodeMismatchesRaw, [ref]$maxCodeMismatches)) {
+              throw "max_code_mismatches must be an integer greater than or equal to 0."
+            }
+            if ($maxCodeMismatches -lt 0) {
+              throw "max_code_mismatches must be greater than or equal to 0."
+            }
+          }
+          if ($minCodePassPctRaw -ne "") {
+            $minCodePassPct = 0.0
+            if (-not [double]::TryParse($minCodePassPctRaw, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$minCodePassPct)) {
+              throw "min_code_pass_pct must be a number in range 0..100."
+            }
+            if ($minCodePassPct -lt 0.0 -or $minCodePassPct -gt 100.0) {
+              throw "min_code_pass_pct must be in range 0..100."
+            }
+          }
+          if ($maxAppliedMismatchesRaw -ne "") {
+            $maxAppliedMismatches = 0
+            if (-not [int]::TryParse($maxAppliedMismatchesRaw, [ref]$maxAppliedMismatches)) {
+              throw "max_applied_mismatches must be an integer greater than or equal to 0."
+            }
+            if ($maxAppliedMismatches -lt 0) {
+              throw "max_applied_mismatches must be greater than or equal to 0."
+            }
+          }
+          if ($minAppliedPassPctRaw -ne "") {
+            $minAppliedPassPct = 0.0
+            if (-not [double]::TryParse($minAppliedPassPctRaw, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$minAppliedPassPct)) {
+              throw "min_applied_pass_pct must be a number in range 0..100."
+            }
+            if ($minAppliedPassPct -lt 0.0 -or $minAppliedPassPct -gt 100.0) {
+              throw "min_applied_pass_pct must be in range 0..100."
+            }
+          }
+          if ($maxObservedTimeoutBreachesRaw -ne "") {
+            $maxObservedTimeoutBreaches = 0
+            if (-not [int]::TryParse($maxObservedTimeoutBreachesRaw, [ref]$maxObservedTimeoutBreaches)) {
+              throw "max_observed_timeout_breaches must be an integer greater than or equal to 0."
+            }
+            if ($maxObservedTimeoutBreaches -lt 0) {
+              throw "max_observed_timeout_breaches must be greater than or equal to 0."
+            }
+          }
+          if ($minObservedTimeoutCoveragePctRaw -ne "") {
+            $minObservedTimeoutCoveragePct = 0.0
+            if (-not [double]::TryParse($minObservedTimeoutCoveragePctRaw, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$minObservedTimeoutCoveragePct)) {
+              throw "min_observed_timeout_coverage_pct must be a number in range 0..100."
+            }
+            if ($minObservedTimeoutCoveragePct -lt 0.0 -or $minObservedTimeoutCoveragePct -gt 100.0) {
+              throw "min_observed_timeout_coverage_pct must be in range 0..100."
+            }
+          }
 
       - name: Evaluate UTC Run Window
         id: run_window
@@ -291,6 +371,12 @@ jobs:
           if ("${{ inputs.expect_applied_from_plan }}" -eq "true") {
             $args += @("--expect-applied-from-plan")
           }
+          if ("${{ inputs.avatar_expected_code }}" -ne "") {
+            $args += @("--avatar-expected-code", "${{ inputs.avatar_expected_code }}")
+          }
+          if ("${{ inputs.world_expected_code }}" -ne "") {
+            $args += @("--world-expected-code", "${{ inputs.world_expected_code }}")
+          }
           prefab-sentinel @args
 
       - name: Build Unity Smoke Decision Table Artifacts
@@ -313,8 +399,14 @@ jobs:
           if ("${{ inputs.max_applied_mismatches }}" -ne "") {
             $args += @("--max-applied-mismatches", "${{ inputs.max_applied_mismatches }}")
           }
+          if ("${{ inputs.max_code_mismatches }}" -ne "") {
+            $args += @("--max-code-mismatches", "${{ inputs.max_code_mismatches }}")
+          }
           if ("${{ inputs.min_applied_pass_pct }}" -ne "") {
             $args += @("--min-applied-pass-pct", "${{ inputs.min_applied_pass_pct }}")
+          }
+          if ("${{ inputs.min_code_pass_pct }}" -ne "") {
+            $args += @("--min-code-pass-pct", "${{ inputs.min_code_pass_pct }}")
           }
           if ("${{ inputs.max_observed_timeout_breaches }}" -ne "") {
             $args += @("--max-observed-timeout-breaches", "${{ inputs.max_observed_timeout_breaches }}")

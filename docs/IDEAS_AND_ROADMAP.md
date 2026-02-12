@@ -153,7 +153,9 @@
   - includes `targets` input (`all|avatar|world`) and preflight input checks (required paths + run-window/history policy numeric ranges)
   - supports `timeout_profile_path` input for history-derived timeout defaults
   - supports history timeout policy inputs (`history_duration_percentile` / `history_timeout_multiplier` / `history_timeout_slack_sec` / `history_timeout_min_sec` / `history_timeout_round_sec`)
+  - supports per-target code assertion inputs (`avatar_expected_code` / `world_expected_code`)
   - supports `expect_applied_from_plan` input (default true) for plan-op-count assertions
+  - supports smoke-history code quality gates (`max_code_mismatches` / `min_code_pass_pct`, default: disabled/empty)
   - supports smoke-history quality gates (`max_applied_mismatches` / `min_applied_pass_pct` / `max_observed_timeout_breaches` / `min_observed_timeout_coverage_pct`, default: `0` / `100` / `0` / `100`)
   - supports optional UTC run-window gating (`run_window_start_utc_hour` / `run_window_end_utc_hour`)
   - builds decision artifacts via `prefab-sentinel report smoke-history` (`history.csv` / `history.md` / `timeout_profile.json`)
