@@ -114,6 +114,16 @@ on:
         required: false
         default: "100"
         type: string
+      max_observed_timeout_breaches_per_target:
+        description: "Optional smoke-history gate: maximum allowed observed duration>timeout breaches for any target."
+        required: false
+        default: "0"
+        type: string
+      min_observed_timeout_coverage_pct_per_target:
+        description: "Optional smoke-history gate: minimum required observed timeout coverage percentage for each target."
+        required: false
+        default: "100"
+        type: string
       max_profile_timeout_breaches:
         description: "Optional smoke-history gate: maximum allowed timeout-profile breaches for selected policy."
         required: false
@@ -201,6 +211,8 @@ jobs:
           $minAppliedPassPctRaw = "${{ inputs.min_applied_pass_pct }}"
           $maxObservedTimeoutBreachesRaw = "${{ inputs.max_observed_timeout_breaches }}"
           $minObservedTimeoutCoveragePctRaw = "${{ inputs.min_observed_timeout_coverage_pct }}"
+          $maxObservedTimeoutBreachesPerTargetRaw = "${{ inputs.max_observed_timeout_breaches_per_target }}"
+          $minObservedTimeoutCoveragePctPerTargetRaw = "${{ inputs.min_observed_timeout_coverage_pct_per_target }}"
           $maxProfileTimeoutBreachesRaw = "${{ inputs.max_profile_timeout_breaches }}"
           $minProfileTimeoutCoveragePctRaw = "${{ inputs.min_profile_timeout_coverage_pct }}"
           $maxProfileTimeoutBreachesPerTargetRaw = "${{ inputs.max_profile_timeout_breaches_per_target }}"
@@ -333,6 +345,24 @@ jobs:
             }
             if ($minObservedTimeoutCoveragePct -lt 0.0 -or $minObservedTimeoutCoveragePct -gt 100.0) {
               throw "min_observed_timeout_coverage_pct must be in range 0..100."
+            }
+          }
+          if ($maxObservedTimeoutBreachesPerTargetRaw -ne "") {
+            $maxObservedTimeoutBreachesPerTarget = 0
+            if (-not [int]::TryParse($maxObservedTimeoutBreachesPerTargetRaw, [ref]$maxObservedTimeoutBreachesPerTarget)) {
+              throw "max_observed_timeout_breaches_per_target must be an integer greater than or equal to 0."
+            }
+            if ($maxObservedTimeoutBreachesPerTarget -lt 0) {
+              throw "max_observed_timeout_breaches_per_target must be greater than or equal to 0."
+            }
+          }
+          if ($minObservedTimeoutCoveragePctPerTargetRaw -ne "") {
+            $minObservedTimeoutCoveragePctPerTarget = 0.0
+            if (-not [double]::TryParse($minObservedTimeoutCoveragePctPerTargetRaw, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$minObservedTimeoutCoveragePctPerTarget)) {
+              throw "min_observed_timeout_coverage_pct_per_target must be a number in range 0..100."
+            }
+            if ($minObservedTimeoutCoveragePctPerTarget -lt 0.0 -or $minObservedTimeoutCoveragePctPerTarget -gt 100.0) {
+              throw "min_observed_timeout_coverage_pct_per_target must be in range 0..100."
             }
           }
           if ($maxProfileTimeoutBreachesRaw -ne "") {
@@ -473,6 +503,12 @@ jobs:
           }
           if ("${{ inputs.min_observed_timeout_coverage_pct }}" -ne "") {
             $args += @("--min-observed-timeout-coverage-pct", "${{ inputs.min_observed_timeout_coverage_pct }}")
+          }
+          if ("${{ inputs.max_observed_timeout_breaches_per_target }}" -ne "") {
+            $args += @("--max-observed-timeout-breaches-per-target", "${{ inputs.max_observed_timeout_breaches_per_target }}")
+          }
+          if ("${{ inputs.min_observed_timeout_coverage_pct_per_target }}" -ne "") {
+            $args += @("--min-observed-timeout-coverage-pct-per-target", "${{ inputs.min_observed_timeout_coverage_pct_per_target }}")
           }
           if ("${{ inputs.max_profile_timeout_breaches }}" -ne "") {
             $args += @("--max-profile-timeout-breaches", "${{ inputs.max_profile_timeout_breaches }}")

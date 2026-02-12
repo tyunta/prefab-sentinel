@@ -69,6 +69,10 @@ jobs:
             --out-timeout-profile reports/bridge_smoke/timeout_profile.json \
             --max-code-mismatches 0 \
             --min-code-pass-pct 100 \
+            --max-observed-timeout-breaches 0 \
+            --min-observed-timeout-coverage-pct 100 \
+            --max-observed-timeout-breaches-per-target 0 \
+            --min-observed-timeout-coverage-pct-per-target 100 \
             --max-profile-timeout-breaches 0 \
             --min-profile-timeout-coverage-pct 100 \
             --max-profile-timeout-breaches-per-target 0 \

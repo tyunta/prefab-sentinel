@@ -75,6 +75,24 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
+        "--max-observed-timeout-breaches-per-target",
+        type=int,
+        default=None,
+        help=(
+            "Fail with exit code 1 if any observed duration>timeout target breaches exceed "
+            "this count."
+        ),
+    )
+    parser.add_argument(
+        "--min-observed-timeout-coverage-pct-per-target",
+        type=float,
+        default=None,
+        help=(
+            "Fail with exit code 1 if any observed timeout target coverage percentage falls "
+            "below this value (0-100)."
+        ),
+    )
+    parser.add_argument(
         "--max-profile-timeout-breaches",
         type=int,
         default=None,
@@ -524,16 +542,20 @@ def _compute_applied_assertion_metrics(
 def _compute_observed_timeout_metrics(
     stats: list[dict[str, Any]],
 ) -> tuple[int, int, float | None]:
+    by_target = _compute_observed_timeout_metrics_by_target(stats)
+    if not by_target:
+        return 0, 0, None
+
     observed_timeout_samples = sum(
         [
             _to_int(item.get("observed_timeout_sample_count")) or 0
-            for item in stats
+            for item in by_target.values()
         ]
     )
     observed_timeout_breaches = sum(
         [
             _to_int(item.get("observed_timeout_breach_count")) or 0
-            for item in stats
+            for item in by_target.values()
         ]
     )
     observed_timeout_coverage_pct = (
@@ -547,6 +569,38 @@ def _compute_observed_timeout_metrics(
         observed_timeout_breaches,
         observed_timeout_coverage_pct,
     )
+
+
+def _compute_observed_timeout_metrics_by_target(
+    stats: list[dict[str, Any]],
+) -> dict[str, dict[str, float | int | None]]:
+    by_target: dict[str, dict[str, float | int | None]] = {}
+    for item in stats:
+        target = str(item.get("target", ""))
+        observed_timeout_sample_count = (
+            _to_int(item.get("observed_timeout_sample_count")) or 0
+        )
+        observed_timeout_breach_count = (
+            _to_int(item.get("observed_timeout_breach_count")) or 0
+        )
+        observed_timeout_coverage_pct = (
+            (
+                (
+                    observed_timeout_sample_count
+                    - observed_timeout_breach_count
+                )
+                / float(observed_timeout_sample_count)
+            )
+            * 100.0
+            if observed_timeout_sample_count > 0
+            else None
+        )
+        by_target[target] = {
+            "observed_timeout_sample_count": observed_timeout_sample_count,
+            "observed_timeout_breach_count": observed_timeout_breach_count,
+            "observed_timeout_coverage_pct": observed_timeout_coverage_pct,
+        }
+    return by_target
 
 
 def _compute_profile_timeout_metrics_by_target(
@@ -650,6 +704,7 @@ def _render_markdown_summary(
         if applied_pass_pct_raw is not None
         else None
     )
+    observed_timeout_by_target = _compute_observed_timeout_metrics_by_target(target_stats)
     (
         observed_timeout_samples,
         observed_timeout_breaches,
@@ -690,6 +745,7 @@ def _render_markdown_summary(
             if applied_pass_pct is not None
             else "- Applied assertion pass pct: n/a"
         ),
+        f"- Observed timeout targets: {len(observed_timeout_by_target)}",
         f"- Observed timeout samples: {observed_timeout_samples}",
         f"- Observed timeout breaches: {observed_timeout_breaches}",
         (
@@ -780,6 +836,20 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
     ):
         parser.error("--min-observed-timeout-coverage-pct must be in range 0..100.")
     if (
+        args.max_observed_timeout_breaches_per_target is not None
+        and args.max_observed_timeout_breaches_per_target < 0
+    ):
+        parser.error(
+            "--max-observed-timeout-breaches-per-target must be greater than or equal to 0."
+        )
+    if args.min_observed_timeout_coverage_pct_per_target is not None and (
+        args.min_observed_timeout_coverage_pct_per_target < 0.0
+        or args.min_observed_timeout_coverage_pct_per_target > 100.0
+    ):
+        parser.error(
+            "--min-observed-timeout-coverage-pct-per-target must be in range 0..100."
+        )
+    if (
         args.max_profile_timeout_breaches is not None
         and args.max_profile_timeout_breaches < 0
     ):
@@ -863,6 +933,8 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
         or args.out_timeout_profile
         or args.max_observed_timeout_breaches is not None
         or args.min_observed_timeout_coverage_pct is not None
+        or args.max_observed_timeout_breaches_per_target is not None
+        or args.min_observed_timeout_coverage_pct_per_target is not None
         or args.max_profile_timeout_breaches is not None
         or args.min_profile_timeout_coverage_pct is not None
         or args.max_profile_timeout_breaches_per_target is not None
@@ -930,12 +1002,14 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
     ) = _compute_applied_assertion_metrics(rows)
     observed_timeout_breaches = 0
     observed_timeout_coverage_pct = None
+    observed_timeout_by_target: dict[str, dict[str, float | int | None]] = {}
     if stats is not None:
         (
             _observed_timeout_samples,
             observed_timeout_breaches,
             observed_timeout_coverage_pct,
         ) = _compute_observed_timeout_metrics(stats)
+        observed_timeout_by_target = _compute_observed_timeout_metrics_by_target(stats)
         observed_timeout_coverage_pct = (
             round(observed_timeout_coverage_pct, 2)
             if observed_timeout_coverage_pct is not None
@@ -1008,6 +1082,48 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
                 "observed timeout coverage below threshold: "
                 f"{observed_timeout_coverage_pct:.2f} < {args.min_observed_timeout_coverage_pct:.2f}"
             )
+    if args.max_observed_timeout_breaches_per_target is not None:
+        if not observed_timeout_by_target:
+            violations.append(
+                "observed timeout per-target breach threshold configured but no duration/timeout target rows exist"
+            )
+        else:
+            for target in sorted(observed_timeout_by_target):
+                target_metrics = observed_timeout_by_target[target]
+                target_breaches = (
+                    _to_int(target_metrics.get("observed_timeout_breach_count")) or 0
+                )
+                if target_breaches > args.max_observed_timeout_breaches_per_target:
+                    violations.append(
+                        "observed timeout breach threshold exceeded for target "
+                        f"'{target}': {target_breaches} > "
+                        f"{args.max_observed_timeout_breaches_per_target}"
+                    )
+    if args.min_observed_timeout_coverage_pct_per_target is not None:
+        if not observed_timeout_by_target:
+            violations.append(
+                "observed timeout per-target coverage threshold configured but no duration/timeout target rows exist"
+            )
+        else:
+            for target in sorted(observed_timeout_by_target):
+                target_metrics = observed_timeout_by_target[target]
+                target_coverage_pct = _to_float(
+                    target_metrics.get("observed_timeout_coverage_pct")
+                )
+                if target_coverage_pct is None:
+                    violations.append(
+                        "observed timeout coverage threshold configured but target "
+                        f"'{target}' has no duration/timeout rows"
+                    )
+                elif (
+                    target_coverage_pct
+                    < args.min_observed_timeout_coverage_pct_per_target
+                ):
+                    violations.append(
+                        "observed timeout coverage below threshold for target "
+                        f"'{target}': {target_coverage_pct:.2f} < "
+                        f"{args.min_observed_timeout_coverage_pct_per_target:.2f}"
+                    )
     if (
         args.max_profile_timeout_breaches is not None
         and profile_timeout_breaches > args.max_profile_timeout_breaches

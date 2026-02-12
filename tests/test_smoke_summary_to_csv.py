@@ -308,6 +308,7 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
         self.assertIn("world", csv_text)
         self.assertIn("applied_mismatches", md_text)
         self.assertIn("Applied assertion runs", md_text)
+        self.assertIn("Observed timeout targets", md_text)
         self.assertIn("Observed timeout breaches", md_text)
         self.assertIn("Profile timeout targets", md_text)
         self.assertIn("profile_timeout_samples", md_text)
@@ -638,6 +639,49 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
         self.assertEqual(1, exit_code)
         self.assertTrue(out_exists)
 
+
+    def test_main_fails_when_observed_timeout_coverage_per_target_below_threshold(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            summary_path = root / "summary.json"
+            out_csv = root / "history.csv"
+            summary_path.write_text(
+                json.dumps(
+                    _summary_payload(
+                        [
+                            {
+                                "name": "avatar",
+                                "matched_expectation": True,
+                                "duration_sec": 650.0,
+                                "unity_timeout_sec": 600,
+                            },
+                            {
+                                "name": "world",
+                                "matched_expectation": True,
+                                "attempts": 1,
+                            },
+                        ]
+                    )
+                ),
+                encoding="utf-8",
+            )
+
+            with redirect_stdout(StringIO()):
+                exit_code = main(
+                    [
+                        "--inputs",
+                        str(summary_path),
+                        "--out",
+                        str(out_csv),
+                        "--min-observed-timeout-coverage-pct-per-target",
+                        "100",
+                    ]
+                )
+            out_exists = out_csv.exists()
+
+        self.assertEqual(1, exit_code)
+        self.assertTrue(out_exists)
+
     def test_main_fails_when_profile_timeout_coverage_below_threshold(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -736,7 +780,7 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
 
     def test_main_rejects_invalid_observed_timeout_threshold_arguments(self) -> None:
         with redirect_stderr(StringIO()):
-            with self.assertRaises(SystemExit) as raised:
+            with self.assertRaises(SystemExit) as raised_breaches:
                 main(
                     [
                         "--inputs",
@@ -748,7 +792,37 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
                     ]
                 )
 
-        self.assertEqual(2, raised.exception.code)
+        self.assertEqual(2, raised_breaches.exception.code)
+
+        with redirect_stderr(StringIO()):
+            with self.assertRaises(SystemExit) as raised_breaches_per_target:
+                main(
+                    [
+                        "--inputs",
+                        "missing.json",
+                        "--out",
+                        "out.csv",
+                        "--max-observed-timeout-breaches-per-target",
+                        "-1",
+                    ]
+                )
+
+        self.assertEqual(2, raised_breaches_per_target.exception.code)
+
+        with redirect_stderr(StringIO()):
+            with self.assertRaises(SystemExit) as raised_coverage_per_target:
+                main(
+                    [
+                        "--inputs",
+                        "missing.json",
+                        "--out",
+                        "out.csv",
+                        "--min-observed-timeout-coverage-pct-per-target",
+                        "101",
+                    ]
+                )
+
+        self.assertEqual(2, raised_coverage_per_target.exception.code)
 
     def test_main_rejects_invalid_applied_threshold_arguments(self) -> None:
         with redirect_stderr(StringIO()):
