@@ -119,6 +119,7 @@
   - deterministic artifacts per target (`response.json` + `unity.log`) and aggregate `summary.json`/`summary.md`
   - transient failure retry controls (`--max-retries` / `--retry-delay-sec`)
   - per-target timeout tuning (`--avatar-unity-timeout-sec` / `--world-unity-timeout-sec`)
+  - per-case duration telemetry (`duration_sec`) for timeout tuning evidence
   - unit tests: `tests/test_bridge_smoke_samples.py`
 - Added CI workflow wiring:
   - `.github/workflows/ci.yml` runs `unittest` on push/PR/workflow_dispatch

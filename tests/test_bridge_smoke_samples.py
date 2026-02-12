@@ -67,6 +67,7 @@ class BridgeSmokeSamplesTests(unittest.TestCase):
                             "name": "avatar",
                             "matched_expectation": False,
                             "attempts": 2,
+                            "duration_sec": 1.25,
                             "unity_timeout_sec": 450,
                             "exit_code": 1,
                             "response_code": "SMOKE_BRIDGE_ERROR",
@@ -77,7 +78,7 @@ class BridgeSmokeSamplesTests(unittest.TestCase):
                 },
             }
         )
-        self.assertIn("| avatar | False | 2 | 450 | 1 | SMOKE_BRIDGE_ERROR |", markdown)
+        self.assertIn("| avatar | False | 2 | 1.25 | 450 | 1 | SMOKE_BRIDGE_ERROR |", markdown)
 
     def test_main_writes_summary_and_returns_zero(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -154,6 +155,7 @@ raise SystemExit(0)
         self.assertTrue(summary["success"])
         self.assertEqual(1, summary["data"]["total_cases"])
         self.assertEqual(1, summary["data"]["cases"][0]["attempts"])
+        self.assertGreaterEqual(summary["data"]["cases"][0]["duration_sec"], 0.0)
         self.assertIsNone(summary["data"]["cases"][0]["unity_timeout_sec"])
         self.assertEqual("OK", response["code"])
 
@@ -209,6 +211,7 @@ raise SystemExit(1)
         self.assertFalse(summary["success"])
         self.assertEqual(1, summary["data"]["failed_cases"])
         self.assertEqual(1, summary["data"]["cases"][0]["attempts"])
+        self.assertGreaterEqual(summary["data"]["cases"][0]["duration_sec"], 0.0)
         self.assertIsNone(summary["data"]["cases"][0]["unity_timeout_sec"])
 
     def test_main_retries_and_recovers_after_transient_failure(self) -> None:
@@ -272,7 +275,7 @@ raise SystemExit(0)
         self.assertEqual(0, exit_code)
         self.assertTrue(summary["success"])
         self.assertEqual(2, summary["data"]["cases"][0]["attempts"])
-
+        self.assertGreaterEqual(summary["data"]["cases"][0]["duration_sec"], 0.0)
 
     def test_main_applies_per_target_unity_timeout_overrides(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -359,6 +362,8 @@ raise SystemExit(0)
         self.assertEqual(0, exit_code)
         self.assertTrue(summary["success"])
         by_name = {item["name"]: item for item in summary["data"]["cases"]}
+        self.assertGreaterEqual(by_name["avatar"]["duration_sec"], 0.0)
+        self.assertGreaterEqual(by_name["world"]["duration_sec"], 0.0)
         self.assertEqual(900, by_name["avatar"]["unity_timeout_sec"])
         self.assertEqual(450, by_name["world"]["unity_timeout_sec"])
         self.assertEqual(900, avatar_response["data"]["unity_timeout_sec"])
