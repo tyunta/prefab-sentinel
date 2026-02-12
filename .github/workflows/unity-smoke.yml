@@ -59,6 +59,16 @@ on:
         required: false
         default: "100"
         type: string
+      max_observed_timeout_breaches:
+        description: "Optional smoke-history gate: maximum allowed observed duration>timeout breaches."
+        required: false
+        default: "0"
+        type: string
+      min_observed_timeout_coverage_pct:
+        description: "Optional smoke-history gate: minimum required observed timeout coverage percentage."
+        required: false
+        default: "100"
+        type: string
       avatar_plan:
         description: "Avatar patch plan path."
         required: false
@@ -236,6 +246,12 @@ jobs:
           }
           if ("${{ inputs.min_applied_pass_pct }}" -ne "") {
             $args += @("--min-applied-pass-pct", "${{ inputs.min_applied_pass_pct }}")
+          }
+          if ("${{ inputs.max_observed_timeout_breaches }}" -ne "") {
+            $args += @("--max-observed-timeout-breaches", "${{ inputs.max_observed_timeout_breaches }}")
+          }
+          if ("${{ inputs.min_observed_timeout_coverage_pct }}" -ne "") {
+            $args += @("--min-observed-timeout-coverage-pct", "${{ inputs.min_observed_timeout_coverage_pct }}")
           }
           prefab-sentinel @args
 

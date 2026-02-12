@@ -45,6 +45,21 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
+        "--max-observed-timeout-breaches",
+        type=int,
+        default=None,
+        help="Fail with exit code 1 if observed duration>timeout breaches exceed this count.",
+    )
+    parser.add_argument(
+        "--min-observed-timeout-coverage-pct",
+        type=float,
+        default=None,
+        help=(
+            "Fail with exit code 1 if observed timeout coverage percentage falls below this value "
+            "(0-100)."
+        ),
+    )
+    parser.add_argument(
         "--duration-percentile",
         type=float,
         default=90.0,
@@ -226,6 +241,32 @@ def _build_target_stats(
             for value in (row.get("unity_timeout_sec") for row in target_rows)
             if isinstance(value, int)
         ]
+        observed_timeout_pairs = [
+            (duration, timeout)
+            for duration, timeout in (
+                (row.get("duration_sec"), row.get("unity_timeout_sec")) for row in target_rows
+            )
+            if isinstance(duration, float) and isinstance(timeout, int)
+        ]
+        observed_timeout_sample_count = len(observed_timeout_pairs)
+        observed_timeout_breach_count = len(
+            [pair for pair in observed_timeout_pairs if pair[0] > float(pair[1])]
+        )
+        observed_timeout_coverage_pct = (
+            round(
+                (
+                    (
+                        observed_timeout_sample_count
+                        - observed_timeout_breach_count
+                    )
+                    / float(observed_timeout_sample_count)
+                )
+                * 100.0,
+                2,
+            )
+            if observed_timeout_sample_count > 0
+            else None
+        )
         applied_matches_values = [
             value
             for value in (row.get("applied_matches") for row in target_rows)
@@ -257,6 +298,9 @@ def _build_target_stats(
                 "applied_assertion_runs": applied_assertion_runs,
                 "applied_assertion_mismatches": applied_assertion_mismatches,
                 "applied_assertion_pass_pct": applied_assertion_pass_pct,
+                "observed_timeout_sample_count": observed_timeout_sample_count,
+                "observed_timeout_breach_count": observed_timeout_breach_count,
+                "observed_timeout_coverage_pct": observed_timeout_coverage_pct,
                 "attempts_max": max(attempts) if attempts else None,
                 "duration_avg_sec": duration_avg,
                 "duration_p_sec": _percentile(durations, duration_percentile),
@@ -297,6 +341,7 @@ def _build_timeout_profiles(
                 value = _to_float(raw)
                 if value is not None:
                     duration_values.append(value)
+        duration_sample_count = len(duration_values)
 
         candidates: list[float] = [float(timeout_min_sec)]
         if duration_p is not None:
@@ -319,13 +364,13 @@ def _build_timeout_profiles(
         timeout_coverage_pct = (
             round(
                 (
-                    (len(duration_values) - timeout_breach_count)
-                    / float(len(duration_values))
+                    (duration_sample_count - timeout_breach_count)
+                    / float(duration_sample_count)
                 )
                 * 100.0,
                 2,
             )
-            if duration_values
+            if duration_sample_count > 0
             else None
         )
 
@@ -340,6 +385,7 @@ def _build_timeout_profiles(
                     "duration_p_sec": duration_p,
                     "duration_max_sec": duration_max,
                     "observed_timeout_max_sec": observed_timeout_max,
+                    "duration_sample_count": duration_sample_count,
                     "timeout_breach_count": timeout_breach_count,
                     "timeout_coverage_pct": timeout_coverage_pct,
                 },
@@ -359,6 +405,50 @@ def _build_timeout_profiles(
         },
         "profiles": profiles,
     }
+
+
+def _compute_applied_assertion_metrics(
+    rows: list[dict[str, Any]]
+) -> tuple[int, int, float | None]:
+    applied_matches_values = [
+        value for value in (row.get("applied_matches") for row in rows) if isinstance(value, bool)
+    ]
+    applied_assertions = len(applied_matches_values)
+    applied_mismatches = len([value for value in applied_matches_values if value is False])
+    applied_pass_pct = (
+        ((applied_assertions - applied_mismatches) / float(applied_assertions)) * 100.0
+        if applied_assertions > 0
+        else None
+    )
+    return applied_assertions, applied_mismatches, applied_pass_pct
+
+
+def _compute_observed_timeout_metrics(
+    stats: list[dict[str, Any]],
+) -> tuple[int, int, float | None]:
+    observed_timeout_samples = sum(
+        [
+            _to_int(item.get("observed_timeout_sample_count")) or 0
+            for item in stats
+        ]
+    )
+    observed_timeout_breaches = sum(
+        [
+            _to_int(item.get("observed_timeout_breach_count")) or 0
+            for item in stats
+        ]
+    )
+    observed_timeout_coverage_pct = (
+        ((observed_timeout_samples - observed_timeout_breaches) / float(observed_timeout_samples))
+        * 100.0
+        if observed_timeout_samples > 0
+        else None
+    )
+    return (
+        observed_timeout_samples,
+        observed_timeout_breaches,
+        observed_timeout_coverage_pct,
+    )
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -382,21 +472,24 @@ def _render_markdown_summary(
 ) -> str:
     percentile_label = f"duration_p{int(round(duration_percentile))}_sec"
     target_stats = stats if stats is not None else _build_target_stats(rows, duration_percentile)
-    applied_matches_values = [
-        value for value in (row.get("applied_matches") for row in rows) if isinstance(value, bool)
-    ]
-    applied_assertions = len(applied_matches_values)
-    applied_mismatches = len([value for value in applied_matches_values if value is False])
+    (
+        applied_assertions,
+        applied_mismatches,
+        applied_pass_pct_raw,
+    ) = _compute_applied_assertion_metrics(rows)
     applied_pass_pct = (
-        round(
-            (
-                (applied_assertions - applied_mismatches)
-                / float(applied_assertions)
-            )
-            * 100.0,
-            2,
-        )
-        if applied_assertions > 0
+        round(applied_pass_pct_raw, 2)
+        if applied_pass_pct_raw is not None
+        else None
+    )
+    (
+        observed_timeout_samples,
+        observed_timeout_breaches,
+        observed_timeout_coverage_pct_raw,
+    ) = _compute_observed_timeout_metrics(target_stats)
+    observed_timeout_coverage_pct = (
+        round(observed_timeout_coverage_pct_raw, 2)
+        if observed_timeout_coverage_pct_raw is not None
         else None
     )
     lines = [
@@ -411,19 +504,29 @@ def _render_markdown_summary(
             if applied_pass_pct is not None
             else "- Applied assertion pass pct: n/a"
         ),
+        f"- Observed timeout samples: {observed_timeout_samples}",
+        f"- Observed timeout breaches: {observed_timeout_breaches}",
+        (
+            f"- Observed timeout coverage pct: {observed_timeout_coverage_pct}"
+            if observed_timeout_coverage_pct is not None
+            else "- Observed timeout coverage pct: n/a"
+        ),
         "",
-        f"| target | runs | failures | applied_assertions | applied_mismatches | applied_pass_pct | attempts_max | duration_avg_sec | {percentile_label} | duration_max_sec | timeout_max_sec |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        f"| target | runs | failures | applied_assertions | applied_mismatches | applied_pass_pct | observed_timeout_samples | observed_timeout_breaches | observed_timeout_coverage_pct | attempts_max | duration_avg_sec | {percentile_label} | duration_max_sec | timeout_max_sec |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for item in target_stats:
         lines.append(
-            "| {target} | {runs} | {failures} | {applied_assertion_runs} | {applied_assertion_mismatches} | {applied_assertion_pass_pct} | {attempts_max} | {duration_avg_sec} | {duration_p_sec} | {duration_max_sec} | {timeout_max_sec} |".format(
+            "| {target} | {runs} | {failures} | {applied_assertion_runs} | {applied_assertion_mismatches} | {applied_assertion_pass_pct} | {observed_timeout_sample_count} | {observed_timeout_breach_count} | {observed_timeout_coverage_pct} | {attempts_max} | {duration_avg_sec} | {duration_p_sec} | {duration_max_sec} | {timeout_max_sec} |".format(
                 target=item.get("target", ""),
                 runs=item.get("runs", 0),
                 failures=item.get("failures", 0),
                 applied_assertion_runs=item.get("applied_assertion_runs", 0),
                 applied_assertion_mismatches=item.get("applied_assertion_mismatches", 0),
                 applied_assertion_pass_pct=item.get("applied_assertion_pass_pct", ""),
+                observed_timeout_sample_count=item.get("observed_timeout_sample_count", 0),
+                observed_timeout_breach_count=item.get("observed_timeout_breach_count", 0),
+                observed_timeout_coverage_pct=item.get("observed_timeout_coverage_pct", ""),
                 attempts_max=item.get("attempts_max", ""),
                 duration_avg_sec=item.get("duration_avg_sec", ""),
                 duration_p_sec=item.get("duration_p_sec", ""),
@@ -451,6 +554,16 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
         args.min_applied_pass_pct < 0.0 or args.min_applied_pass_pct > 100.0
     ):
         parser.error("--min-applied-pass-pct must be in range 0..100.")
+    if (
+        args.max_observed_timeout_breaches is not None
+        and args.max_observed_timeout_breaches < 0
+    ):
+        parser.error("--max-observed-timeout-breaches must be greater than or equal to 0.")
+    if args.min_observed_timeout_coverage_pct is not None and (
+        args.min_observed_timeout_coverage_pct < 0.0
+        or args.min_observed_timeout_coverage_pct > 100.0
+    ):
+        parser.error("--min-observed-timeout-coverage-pct must be in range 0..100.")
 
     input_paths = _expand_inputs(args.inputs)
     if not input_paths:
@@ -503,9 +616,15 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
     _write_csv(out_csv, header, rows)
     print(out_csv)
 
-    stats: list[dict[str, Any]] | None = None
-    if args.out_md or args.out_timeout_profile:
-        stats = _build_target_stats(rows, args.duration_percentile)
+    needs_stats = bool(
+        args.out_md
+        or args.out_timeout_profile
+        or args.max_observed_timeout_breaches is not None
+        or args.min_observed_timeout_coverage_pct is not None
+    )
+    stats: list[dict[str, Any]] | None = (
+        _build_target_stats(rows, args.duration_percentile) if needs_stats else None
+    )
 
     if args.out_md:
         out_md = Path(args.out_md)
@@ -534,16 +653,25 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
         _write_json(out_timeout_profile, profile_payload)
         print(out_timeout_profile)
 
-    applied_matches_values = [
-        value for value in (row.get("applied_matches") for row in rows) if isinstance(value, bool)
-    ]
-    applied_assertions = len(applied_matches_values)
-    applied_mismatches = len([value for value in applied_matches_values if value is False])
-    applied_pass_pct = (
-        ((applied_assertions - applied_mismatches) / float(applied_assertions)) * 100.0
-        if applied_assertions > 0
-        else None
-    )
+    (
+        applied_assertions,
+        applied_mismatches,
+        applied_pass_pct,
+    ) = _compute_applied_assertion_metrics(rows)
+    observed_timeout_samples = 0
+    observed_timeout_breaches = 0
+    observed_timeout_coverage_pct = None
+    if stats is not None:
+        (
+            observed_timeout_samples,
+            observed_timeout_breaches,
+            observed_timeout_coverage_pct,
+        ) = _compute_observed_timeout_metrics(stats)
+        observed_timeout_coverage_pct = (
+            round(observed_timeout_coverage_pct, 2)
+            if observed_timeout_coverage_pct is not None
+            else None
+        )
     violations: list[str] = []
     if (
         args.max_applied_mismatches is not None
@@ -562,6 +690,24 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
             violations.append(
                 "applied pass percentage below threshold: "
                 f"{applied_pass_pct:.2f} < {args.min_applied_pass_pct:.2f}"
+            )
+    if (
+        args.max_observed_timeout_breaches is not None
+        and observed_timeout_breaches > args.max_observed_timeout_breaches
+    ):
+        violations.append(
+            "observed timeout breach threshold exceeded: "
+            f"{observed_timeout_breaches} > {args.max_observed_timeout_breaches}"
+        )
+    if args.min_observed_timeout_coverage_pct is not None:
+        if observed_timeout_coverage_pct is None:
+            violations.append(
+                "observed timeout coverage threshold configured but no duration/timeout rows exist"
+            )
+        elif observed_timeout_coverage_pct < args.min_observed_timeout_coverage_pct:
+            violations.append(
+                "observed timeout coverage below threshold: "
+                f"{observed_timeout_coverage_pct:.2f} < {args.min_observed_timeout_coverage_pct:.2f}"
             )
 
     for message in violations:

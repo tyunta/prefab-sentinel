@@ -88,6 +88,9 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
         self.assertEqual(2, stats[0]["applied_assertion_runs"])
         self.assertEqual(1, stats[0]["applied_assertion_mismatches"])
         self.assertAlmostEqual(50.0, stats[0]["applied_assertion_pass_pct"] or 0.0)
+        self.assertEqual(2, stats[0]["observed_timeout_sample_count"])
+        self.assertEqual(0, stats[0]["observed_timeout_breach_count"])
+        self.assertAlmostEqual(100.0, stats[0]["observed_timeout_coverage_pct"] or 0.0)
         self.assertEqual(2, stats[0]["attempts_max"])
         self.assertAlmostEqual(2.8, stats[0]["duration_p_sec"] or 0.0)
         self.assertEqual(900, stats[0]["timeout_max_sec"])
@@ -161,6 +164,7 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
         profile = payload["profiles"][0]
         evidence = profile["evidence"]
         self.assertEqual(30, profile["recommended_timeout_sec"])
+        self.assertEqual(2, evidence["duration_sample_count"])
         self.assertEqual(1, evidence["timeout_breach_count"])
         self.assertAlmostEqual(50.0, evidence["timeout_coverage_pct"] or 0.0)
 
@@ -283,6 +287,7 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
         self.assertIn("world", csv_text)
         self.assertIn("applied_mismatches", md_text)
         self.assertIn("Applied assertion runs", md_text)
+        self.assertIn("Observed timeout breaches", md_text)
         self.assertIn("| avatar |", md_text)
         self.assertIn("| world |", md_text)
         self.assertEqual(2, len(profile["profiles"]))
@@ -432,6 +437,92 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
         self.assertEqual(1, exit_code)
         self.assertTrue(out_exists)
 
+    def test_main_fails_when_observed_timeout_breach_threshold_exceeded(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            summary_path = root / "summary.json"
+            out_csv = root / "history.csv"
+            summary_path.write_text(
+                json.dumps(
+                    _summary_payload(
+                        [
+                            {
+                                "name": "avatar",
+                                "matched_expectation": True,
+                                "duration_sec": 650.0,
+                                "unity_timeout_sec": 600,
+                            },
+                            {
+                                "name": "avatar",
+                                "matched_expectation": True,
+                                "duration_sec": 500.0,
+                                "unity_timeout_sec": 600,
+                            },
+                        ]
+                    )
+                ),
+                encoding="utf-8",
+            )
+
+            with redirect_stdout(StringIO()):
+                exit_code = main(
+                    [
+                        "--inputs",
+                        str(summary_path),
+                        "--out",
+                        str(out_csv),
+                        "--max-observed-timeout-breaches",
+                        "0",
+                    ]
+                )
+            out_exists = out_csv.exists()
+
+        self.assertEqual(1, exit_code)
+        self.assertTrue(out_exists)
+
+    def test_main_fails_when_observed_timeout_coverage_below_threshold(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            summary_path = root / "summary.json"
+            out_csv = root / "history.csv"
+            summary_path.write_text(
+                json.dumps(
+                    _summary_payload(
+                        [
+                            {
+                                "name": "avatar",
+                                "matched_expectation": True,
+                                "duration_sec": 650.0,
+                                "unity_timeout_sec": 600,
+                            },
+                            {
+                                "name": "avatar",
+                                "matched_expectation": True,
+                                "duration_sec": 500.0,
+                                "unity_timeout_sec": 600,
+                            },
+                        ]
+                    )
+                ),
+                encoding="utf-8",
+            )
+
+            with redirect_stdout(StringIO()):
+                exit_code = main(
+                    [
+                        "--inputs",
+                        str(summary_path),
+                        "--out",
+                        str(out_csv),
+                        "--min-observed-timeout-coverage-pct",
+                        "80",
+                    ]
+                )
+            out_exists = out_csv.exists()
+
+        self.assertEqual(1, exit_code)
+        self.assertTrue(out_exists)
+
     def test_main_rejects_invalid_timeout_profile_arguments(self) -> None:
         with redirect_stderr(StringIO()):
             with self.assertRaises(SystemExit) as raised:
@@ -443,6 +534,22 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
                         "out.csv",
                         "--timeout-multiplier",
                         "0.9",
+                    ]
+                )
+
+        self.assertEqual(2, raised.exception.code)
+
+    def test_main_rejects_invalid_observed_timeout_threshold_arguments(self) -> None:
+        with redirect_stderr(StringIO()):
+            with self.assertRaises(SystemExit) as raised:
+                main(
+                    [
+                        "--inputs",
+                        "missing.json",
+                        "--out",
+                        "out.csv",
+                        "--max-observed-timeout-breaches",
+                        "-1",
                     ]
                 )
 

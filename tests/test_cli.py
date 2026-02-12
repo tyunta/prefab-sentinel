@@ -1504,6 +1504,54 @@ PrefabInstance:
             self.assertTrue(out_csv.exists())
             self.assertIn(str(out_csv), output)
 
+    def test_report_smoke_history_fails_on_observed_timeout_breach_threshold(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            summary = temp / "summary.json"
+            out_csv = temp / "history.csv"
+            summary.write_text(
+                json.dumps(
+                    {
+                        "success": True,
+                        "severity": "info",
+                        "code": "SMOKE_BATCH_OK",
+                        "message": "ok",
+                        "data": {
+                            "cases": [
+                                {
+                                    "name": "avatar",
+                                    "matched_expectation": True,
+                                    "attempts": 1,
+                                    "duration_sec": 650.0,
+                                    "unity_timeout_sec": 600,
+                                    "exit_code": 0,
+                                    "response_code": "OK",
+                                },
+                            ]
+                        },
+                        "diagnostics": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            exit_code, output = self.run_cli(
+                [
+                    "report",
+                    "smoke-history",
+                    "--inputs",
+                    str(summary),
+                    "--out",
+                    str(out_csv),
+                    "--max-observed-timeout-breaches",
+                    "0",
+                ]
+            )
+
+            self.assertEqual(1, exit_code)
+            self.assertTrue(out_csv.exists())
+            self.assertIn(str(out_csv), output)
+
     def test_report_export_markdown_limits_usages(self) -> None:
         payload = {
             "success": True,
