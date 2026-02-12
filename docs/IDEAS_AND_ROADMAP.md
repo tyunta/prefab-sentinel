@@ -147,6 +147,7 @@
   - runs `prefab-sentinel validate smoke-batch` without `--*-expect-failure` and uploads `reports/bridge_smoke`
   - includes `targets` input (`all|avatar|world`) and preflight input path checks
   - supports `timeout_profile_path` input for history-derived timeout defaults
+  - supports history timeout policy inputs (`history_duration_percentile` / `history_timeout_multiplier` / `history_timeout_slack_sec` / `history_timeout_min_sec` / `history_timeout_round_sec`)
   - supports `expect_applied_from_plan` input (default true) for plan-op-count assertions
   - supports smoke-history quality gates (`max_applied_mismatches` / `min_applied_pass_pct` / `max_observed_timeout_breaches` / `min_observed_timeout_coverage_pct`, default: `0` / `100` / `0` / `100`)
   - supports optional UTC run-window gating (`run_window_start_utc_hour` / `run_window_end_utc_hour`)

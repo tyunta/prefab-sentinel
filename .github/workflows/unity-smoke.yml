@@ -41,6 +41,31 @@ on:
         required: false
         default: ""
         type: string
+      history_duration_percentile:
+        description: "smoke-history duration percentile for timeout profile generation."
+        required: false
+        default: "90"
+        type: string
+      history_timeout_multiplier:
+        description: "smoke-history timeout multiplier policy parameter."
+        required: false
+        default: "1.5"
+        type: string
+      history_timeout_slack_sec:
+        description: "smoke-history timeout slack seconds policy parameter."
+        required: false
+        default: "60"
+        type: string
+      history_timeout_min_sec:
+        description: "smoke-history timeout minimum seconds policy parameter."
+        required: false
+        default: "300"
+        type: string
+      history_timeout_round_sec:
+        description: "smoke-history timeout rounding seconds policy parameter."
+        required: false
+        default: "30"
+        type: string
       expect_applied_from_plan:
         description: "Infer expected applied count from each target plan ops length."
         required: false
@@ -236,10 +261,14 @@ jobs:
             "report",
             "smoke-history",
             "--inputs", "reports/bridge_smoke/summary.json",
-            "--duration-percentile", "90",
+            "--duration-percentile", "${{ inputs.history_duration_percentile }}",
             "--out", "reports/bridge_smoke/history.csv",
             "--out-md", "reports/bridge_smoke/history.md",
-            "--out-timeout-profile", "reports/bridge_smoke/timeout_profile.json"
+            "--out-timeout-profile", "reports/bridge_smoke/timeout_profile.json",
+            "--timeout-multiplier", "${{ inputs.history_timeout_multiplier }}",
+            "--timeout-slack-sec", "${{ inputs.history_timeout_slack_sec }}",
+            "--timeout-min-sec", "${{ inputs.history_timeout_min_sec }}",
+            "--timeout-round-sec", "${{ inputs.history_timeout_round_sec }}"
           )
           if ("${{ inputs.max_applied_mismatches }}" -ne "") {
             $args += @("--max-applied-mismatches", "${{ inputs.max_applied_mismatches }}")
