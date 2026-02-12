@@ -66,6 +66,9 @@ class BridgeSmokeSamplesTests(unittest.TestCase):
                         {
                             "name": "avatar",
                             "matched_expectation": False,
+                            "expected_applied": 2,
+                            "actual_applied": 1,
+                            "applied_matches": False,
                             "attempts": 2,
                             "duration_sec": 1.25,
                             "unity_timeout_sec": 450,
@@ -80,7 +83,7 @@ class BridgeSmokeSamplesTests(unittest.TestCase):
             }
         )
         self.assertIn(
-            "| avatar | False | 2 | 1.25 | 450 | profile | 1 | SMOKE_BRIDGE_ERROR |",
+            "| avatar | False | 2 | 1 | False | 2 | 1.25 | 450 | profile | 1 | SMOKE_BRIDGE_ERROR |",
             markdown,
         )
 
@@ -120,7 +123,7 @@ payload = {
     "severity": "info",
     "code": "OK",
     "message": "ok",
-    "data": {"plan": args.plan},
+    "data": {"plan": args.plan, "applied": 1},
     "diagnostics": [],
 }
 Path(args.out).write_text(json.dumps(payload), encoding="utf-8")
@@ -145,6 +148,8 @@ raise SystemExit(0)
                         sys.executable,
                         "--bridge-script",
                         "tools/unity_patch_bridge.py",
+                        "--avatar-expected-applied",
+                        "1",
                         "--out-dir",
                         str(out_dir),
                     ]
@@ -161,7 +166,78 @@ raise SystemExit(0)
         self.assertEqual(1, summary["data"]["cases"][0]["attempts"])
         self.assertGreaterEqual(summary["data"]["cases"][0]["duration_sec"], 0.0)
         self.assertIsNone(summary["data"]["cases"][0]["unity_timeout_sec"])
+        self.assertEqual(1, summary["data"]["cases"][0]["expected_applied"])
+        self.assertEqual(1, summary["data"]["cases"][0]["actual_applied"])
+        self.assertTrue(summary["data"]["cases"][0]["applied_matches"])
         self.assertEqual("OK", response["code"])
+
+    def test_main_returns_nonzero_when_expected_applied_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "avatar_plan.json"
+            project = root / "avatar_project"
+            smoke_script = root / "fake_smoke_applied.py"
+            out_dir = root / "reports"
+            project.mkdir(parents=True, exist_ok=True)
+            plan.write_text(
+                json.dumps({"target": "Assets/Test.prefab", "ops": []}),
+                encoding="utf-8",
+            )
+            smoke_script.write_text(
+                """
+import argparse
+import json
+from pathlib import Path
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--out", required=True)
+args, _ = parser.parse_known_args()
+payload = {
+    "success": True,
+    "severity": "info",
+    "code": "OK",
+    "message": "ok",
+    "data": {"applied": 1},
+    "diagnostics": [],
+}
+Path(args.out).write_text(json.dumps(payload), encoding="utf-8")
+print(json.dumps(payload))
+raise SystemExit(0)
+""".strip(),
+                encoding="utf-8",
+            )
+
+            with redirect_stdout(StringIO()):
+                exit_code = main(
+                    [
+                        "--targets",
+                        "avatar",
+                        "--avatar-plan",
+                        str(plan),
+                        "--avatar-project-path",
+                        str(project),
+                        "--smoke-script",
+                        str(smoke_script),
+                        "--python",
+                        sys.executable,
+                        "--bridge-script",
+                        "tools/unity_patch_bridge.py",
+                        "--avatar-expected-applied",
+                        "2",
+                        "--out-dir",
+                        str(out_dir),
+                    ]
+                )
+
+            summary = json.loads((out_dir / "summary.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(1, exit_code)
+        self.assertFalse(summary["success"])
+        case = summary["data"]["cases"][0]
+        self.assertEqual(2, case["expected_applied"])
+        self.assertEqual(1, case["actual_applied"])
+        self.assertFalse(case["applied_matches"])
+        self.assertFalse(case["matched_expectation"])
 
     def test_main_returns_nonzero_on_failed_case(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -552,6 +628,13 @@ raise SystemExit(0)
         with redirect_stderr(StringIO()):
             with self.assertRaises(SystemExit) as raised:
                 main(["--unity-timeout-sec", "0"])
+
+        self.assertEqual(2, raised.exception.code)
+
+    def test_main_rejects_negative_expected_applied_argument(self) -> None:
+        with redirect_stderr(StringIO()):
+            with self.assertRaises(SystemExit) as raised:
+                main(["--avatar-expected-applied", "-1"])
 
         self.assertEqual(2, raised.exception.code)
 

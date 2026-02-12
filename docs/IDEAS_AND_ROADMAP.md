@@ -119,9 +119,11 @@
   - `unitytool/smoke_batch.py` (shared logic for script + CLI)
   - exposed as CLI command: `prefab-sentinel validate smoke-batch ...`
   - supports timeout profile input (`--timeout-profile`) for history-based default timeout selection
+  - supports per-target apply-count assertions (`--avatar-expected-applied` / `--world-expected-applied`)
   - deterministic artifacts per target (`response.json` + `unity.log`) and aggregate `summary.json`/`summary.md`
   - transient failure retry controls (`--max-retries` / `--retry-delay-sec`)
   - per-target timeout tuning (`--avatar-unity-timeout-sec` / `--world-unity-timeout-sec`)
+  - summary includes apply assertion evidence (`expected_applied` / `actual_applied` / `applied_matches`)
   - per-case duration telemetry (`duration_sec`) for timeout tuning evidence
   - unit tests: `tests/test_bridge_smoke_samples.py`
 - Added smoke summary history export for timeout decision support:

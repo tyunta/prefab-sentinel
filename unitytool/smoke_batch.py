@@ -26,6 +26,7 @@ class SmokeCase:
     plan: Path
     project_path: Path
     expect_failure: bool = False
+    expected_applied: int | None = None
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
@@ -65,6 +66,18 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         "--world-expect-failure",
         action="store_true",
         help="Pass --expect-failure for world target.",
+    )
+    parser.add_argument(
+        "--avatar-expected-applied",
+        type=int,
+        default=None,
+        help="Optional expected data.applied value for avatar target.",
+    )
+    parser.add_argument(
+        "--world-expected-applied",
+        type=int,
+        default=None,
+        help="Optional expected data.applied value for world target.",
     )
     parser.add_argument(
         "--python",
@@ -176,12 +189,14 @@ def _build_cases(args: argparse.Namespace) -> list[SmokeCase]:
             plan=Path(args.avatar_plan),
             project_path=Path(args.avatar_project_path),
             expect_failure=bool(args.avatar_expect_failure),
+            expected_applied=args.avatar_expected_applied,
         ),
         "world": SmokeCase(
             name="world",
             plan=Path(args.world_plan),
             project_path=Path(args.world_project_path),
             expect_failure=bool(args.world_expect_failure),
+            expected_applied=args.world_expected_applied,
         ),
     }
     return [cases_map[target] for target in targets]
@@ -316,6 +331,14 @@ def _parse_case_payload(
     return payload
 
 
+def _extract_applied_count(payload: dict[str, Any]) -> int | None:
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return None
+    applied = data.get("applied")
+    return applied if isinstance(applied, int) else None
+
+
 def _render_markdown_summary(payload: dict[str, Any]) -> str:
     data = payload.get("data", {})
     cases = data.get("cases", [])
@@ -336,8 +359,8 @@ def _render_markdown_summary(payload: dict[str, Any]) -> str:
             else "- Timeout Profile: n/a"
         ),
         "",
-        "| case | matched | attempts | duration_sec | timeout_sec | timeout_source | exit_code | response_code | response_path | unity_log_file |",
-        "| --- | --- | ---: | ---: | ---: | --- | ---: | --- | --- | --- |",
+        "| case | matched | expected_applied | actual_applied | applied_matches | attempts | duration_sec | timeout_sec | timeout_source | exit_code | response_code | response_path | unity_log_file |",
+        "| --- | --- | ---: | ---: | --- | ---: | ---: | ---: | --- | ---: | --- | --- | --- |",
     ]
     for case in cases:
         timeout_sec = case.get("unity_timeout_sec")
@@ -346,10 +369,22 @@ def _render_markdown_summary(payload: dict[str, Any]) -> str:
         duration_sec = case.get("duration_sec")
         if duration_sec is None:
             duration_sec = ""
+        expected_applied = case.get("expected_applied")
+        if expected_applied is None:
+            expected_applied = ""
+        actual_applied = case.get("actual_applied")
+        if actual_applied is None:
+            actual_applied = ""
+        applied_matches = case.get("applied_matches")
+        if applied_matches is None:
+            applied_matches = ""
         lines.append(
-            "| {name} | {matched} | {attempts} | {duration_sec} | {timeout_sec} | {timeout_source} | {exit_code} | {response_code} | {response_path} | {unity_log_file} |".format(
+            "| {name} | {matched} | {expected_applied} | {actual_applied} | {applied_matches} | {attempts} | {duration_sec} | {timeout_sec} | {timeout_source} | {exit_code} | {response_code} | {response_path} | {unity_log_file} |".format(
                 name=case.get("name", ""),
                 matched=case.get("matched_expectation", False),
+                expected_applied=expected_applied,
+                actual_applied=actual_applied,
+                applied_matches=applied_matches,
                 attempts=case.get("attempts", 1),
                 duration_sec=duration_sec,
                 timeout_sec=timeout_sec,
@@ -405,6 +440,13 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
     for arg_name, arg_value in timeout_args.items():
         if arg_value is not None and arg_value <= 0:
             parser.error(f"{arg_name} must be greater than 0.")
+    expected_applied_args = {
+        "--avatar-expected-applied": args.avatar_expected_applied,
+        "--world-expected-applied": args.world_expected_applied,
+    }
+    for arg_name, arg_value in expected_applied_args.items():
+        if arg_value is not None and arg_value < 0:
+            parser.error(f"{arg_name} must be greater than or equal to 0.")
 
     timeout_profile_path: Path | None = None
     timeout_profile_overrides: dict[str, int] = {}
@@ -466,6 +508,13 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
             stdout_text=completed.stdout,
             stderr_text=completed.stderr,
         )
+        actual_applied = _extract_applied_count(case_payload)
+        applied_matches: bool | None = None
+        if case.expected_applied is not None:
+            applied_matches = actual_applied == case.expected_applied
+        matched_expectation = completed.returncode == 0
+        if applied_matches is False:
+            matched_expectation = False
         if not response_path.exists():
             response_path.write_text(
                 json.dumps(case_payload, ensure_ascii=False, indent=2),
@@ -477,7 +526,10 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
                 "plan": str(case.plan),
                 "project_path": str(case.project_path),
                 "expect_failure": case.expect_failure,
-                "matched_expectation": completed.returncode == 0,
+                "expected_applied": case.expected_applied,
+                "actual_applied": actual_applied,
+                "applied_matches": applied_matches,
+                "matched_expectation": matched_expectation,
                 "attempts": attempts,
                 "duration_sec": round(duration_sec, 6),
                 "unity_timeout_sec": case_timeout_sec,

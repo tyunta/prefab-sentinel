@@ -232,7 +232,7 @@ payload = {
     "severity": "info",
     "code": "OK",
     "message": "ok",
-    "data": {"unity_timeout_sec": args.unity_timeout_sec},
+    "data": {"unity_timeout_sec": args.unity_timeout_sec, "applied": 1},
     "diagnostics": [],
 }
 Path(args.out).write_text(json.dumps(payload), encoding="utf-8")
@@ -259,6 +259,8 @@ raise SystemExit(0)
                     "tools/unity_patch_bridge.py",
                     "--timeout-profile",
                     str(timeout_profile),
+                    "--avatar-expected-applied",
+                    "1",
                     "--out-dir",
                     str(out_dir),
                 ]
@@ -273,6 +275,9 @@ raise SystemExit(0)
             self.assertEqual(str(timeout_profile), summary["data"]["timeout_profile_path"])
             self.assertEqual(700, summary["data"]["cases"][0]["unity_timeout_sec"])
             self.assertEqual("profile", summary["data"]["cases"][0]["timeout_source"])
+            self.assertEqual(1, summary["data"]["cases"][0]["expected_applied"])
+            self.assertEqual(1, summary["data"]["cases"][0]["actual_applied"])
+            self.assertTrue(summary["data"]["cases"][0]["applied_matches"])
 
     def test_patch_apply_dry_run_returns_preview(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
