@@ -48,6 +48,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Minimum delta seconds required to classify as regression/improvement.",
     )
     parser.add_argument(
+        "--baseline-pinning-file",
+        default=None,
+        help=(
+            "Optional JSON file mapping scope -> baseline JSON path. "
+            "When provided, pinned scopes override auto-selected baseline entries."
+        ),
+    )
+    parser.add_argument(
         "--sort-by",
         choices=("scope", "avg_ratio", "p90_ratio"),
         default="avg_ratio",
@@ -130,6 +138,37 @@ def _pick_latest_by_scope(paths: list[Path]) -> dict[str, tuple[Path, dict[str, 
             latest_by_scope[scope] = (candidate_key, path, payload)
 
     return {scope: (value[1], value[2]) for scope, value in latest_by_scope.items()}
+
+
+def _load_baseline_pinning(path: Path) -> dict[str, Path]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("baseline pinning file root must be an object")
+
+    mapping: dict[str, Path] = {}
+    for raw_scope, raw_source in payload.items():
+        scope = _normalize_scope(raw_scope)
+        if not scope:
+            continue
+        source_path = Path(str(raw_source))
+        if not source_path.is_absolute():
+            source_path = path.parent / source_path
+        mapping[scope] = source_path.resolve()
+    return mapping
+
+
+def _apply_baseline_pinning(
+    baseline_map: dict[str, tuple[Path, dict[str, Any]]],
+    pinning_map: dict[str, Path],
+) -> tuple[dict[str, tuple[Path, dict[str, Any]]], list[str]]:
+    applied: list[str] = []
+    for scope, source_path in pinning_map.items():
+        if not source_path.exists():
+            raise FileNotFoundError(f"Pinned baseline file not found for scope '{scope}': {source_path}")
+        payload = json.loads(source_path.read_text(encoding="utf-8"))
+        baseline_map[scope] = (source_path, payload)
+        applied.append(scope)
+    return baseline_map, sorted(applied)
 
 
 def _compute_delta_ratio(
@@ -382,6 +421,17 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("No latest JSON files were found.")
 
     baseline_map = _pick_latest_by_scope(baseline_paths)
+    baseline_pinning_applied_scopes: list[str] = []
+    if args.baseline_pinning_file:
+        pinning_file = Path(args.baseline_pinning_file).resolve()
+        try:
+            pinning_map = _load_baseline_pinning(pinning_file)
+            baseline_map, baseline_pinning_applied_scopes = _apply_baseline_pinning(
+                baseline_map, pinning_map
+            )
+        except (OSError, ValueError, json.JSONDecodeError, FileNotFoundError) as exc:
+            parser.error(f"Failed to load --baseline-pinning-file: {exc}")
+
     latest_map = _pick_latest_by_scope(latest_paths)
 
     baseline_scopes = set(baseline_map)
@@ -407,6 +457,8 @@ def main(argv: list[str] | None = None) -> int:
         "baseline_scope_count": len(baseline_scopes),
         "latest_scope_count": len(latest_scopes),
         "compared_scope_count": len(compared_scopes),
+        "baseline_pinning_file": args.baseline_pinning_file,
+        "baseline_pinning_applied_scopes": baseline_pinning_applied_scopes,
         "missing_in_latest_scopes": sorted(baseline_scopes - latest_scopes),
         "new_in_latest_scopes": sorted(latest_scopes - baseline_scopes),
         "thresholds": {

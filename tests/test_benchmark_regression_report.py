@@ -6,7 +6,9 @@ import unittest
 from pathlib import Path
 
 from scripts.benchmark_regression_report import (
+    _apply_baseline_pinning,
     _compare_scope,
+    _load_baseline_pinning,
     _normalize_scope,
     _pick_latest_by_scope,
     _render_alert_lines,
@@ -51,6 +53,50 @@ class BenchmarkRegressionReportTests(unittest.TestCase):
 
             self.assertIn("sample/avatar/Assets", latest)
             self.assertEqual(newer, latest["sample/avatar/Assets"][0])
+
+    def test_load_baseline_pinning_resolves_relative_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pin_file = root / "pinning.json"
+            pin_file.write_text(
+                json.dumps({"sample/avatar/Assets": "baseline/avatar_old.json"}),
+                encoding="utf-8",
+            )
+            mapping = _load_baseline_pinning(pin_file)
+            self.assertEqual(
+                root / "baseline" / "avatar_old.json",
+                mapping["sample/avatar/Assets"],
+            )
+
+    def test_apply_baseline_pinning_overrides_scope_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pinned = root / "pinned.json"
+            pinned.write_text(
+                json.dumps(
+                    {
+                        "scope": "sample/avatar/Assets",
+                        "seconds": {"avg": 2.0, "p90": 2.2},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            baseline_map = {
+                "sample/avatar/Assets": (
+                    root / "auto.json",
+                    {"scope": "sample/avatar/Assets", "seconds": {"avg": 1.0}},
+                )
+            }
+            updated_map, applied = _apply_baseline_pinning(
+                baseline_map,
+                {"sample/avatar/Assets": pinned},
+            )
+            self.assertEqual(["sample/avatar/Assets"], applied)
+            self.assertEqual(pinned, updated_map["sample/avatar/Assets"][0])
+            self.assertEqual(
+                2.0,
+                updated_map["sample/avatar/Assets"][1]["seconds"]["avg"],
+            )
 
     def test_compare_scope_classifies_regressed(self) -> None:
         result = _compare_scope(

@@ -102,6 +102,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Auto-discover latest N benchmark JSON files in target config as regression baseline.",
     )
     parser.add_argument(
+        "--regression-baseline-pinning-file",
+        default=None,
+        help="Optional scope->baseline mapping JSON passed to benchmark_regression_report.py.",
+    )
+    parser.add_argument(
         "--regression-avg-ratio-threshold",
         type=float,
         default=1.1,
@@ -258,6 +263,7 @@ def _build_regression_command(
     out_json: Path,
     out_csv: Path,
     out_md: Path | None,
+    baseline_pinning_file: str | None,
     avg_ratio_threshold: float,
     p90_ratio_threshold: float,
     min_absolute_delta_sec: float,
@@ -289,6 +295,8 @@ def _build_regression_command(
     )
     if out_md is not None:
         cmd.extend(["--out-md", str(out_md)])
+    if baseline_pinning_file:
+        cmd.extend(["--baseline-pinning-file", baseline_pinning_file])
     if alerts_only:
         cmd.append("--alerts-only")
     if fail_on_regression:
@@ -392,6 +400,7 @@ def main(argv: list[str] | None = None) -> int:
                     if args.regression_out_md
                     else None
                 ),
+                baseline_pinning_file=args.regression_baseline_pinning_file,
                 avg_ratio_threshold=args.regression_avg_ratio_threshold,
                 p90_ratio_threshold=args.regression_p90_ratio_threshold,
                 min_absolute_delta_sec=args.regression_min_absolute_delta_sec,

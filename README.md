@@ -480,8 +480,8 @@ uv run unitytool suggest ignore-guids --scope "Assets/haiirokoubou" --ignore-gui
 uv run unitytool suggest ignore-guids --scope "Assets/haiirokoubou" --min-occurrences 100 --out-ignore-guid-file "config/ignore_guids.txt" --out-ignore-guid-mode append
 python scripts/benchmark_refs.py --scope "sample/avatar/Assets" --warmup-runs 1 --runs 3 --out "sample/avatar/config/benchmark_refs.json" --out-csv "sample/avatar/config/benchmark_refs.csv" --csv-append --include-generated-date
 python scripts/benchmark_history_to_csv.py --inputs "sample/avatar/config/bench_*.json" --scope-contains "avatar" --severity error --generated-date-prefix "2026-02" --min-p90 2.0 --latest-per-scope --top-slowest 20 --split-by-severity --sort-by avg_sec --sort-order desc --include-date-column --out "sample/avatar/config/benchmark_trend.csv" --out-md "sample/avatar/config/benchmark_trend.md"
-python scripts/benchmark_samples.py --targets all --runs 1 --warmup-runs 0 --history-generated-date-prefix "2026-02" --history-min-p90 2.0 --history-latest-per-scope --history-split-by-severity --history-write-md --run-regression --regression-baseline-auto-latest 3 --regression-alerts-only --regression-fail-on-regression --regression-out-csv-append --regression-out-md
-python scripts/benchmark_regression_report.py --baseline-inputs "sample/avatar/config/bench_20260211*.json" --latest-inputs "sample/avatar/config/bench_20260212*.json" --avg-ratio-threshold 1.1 --p90-ratio-threshold 1.1 --alerts-only --fail-on-regression --out-json "sample/avatar/config/benchmark_regression.json" --out-csv "sample/avatar/config/benchmark_regression.csv" --out-csv-append --out-md "sample/avatar/config/benchmark_regression.md"
+python scripts/benchmark_samples.py --targets all --runs 1 --warmup-runs 0 --history-generated-date-prefix "2026-02" --history-min-p90 2.0 --history-latest-per-scope --history-split-by-severity --history-write-md --run-regression --regression-baseline-auto-latest 3 --regression-baseline-pinning-file "sample/avatar/config/baseline_pinning.json" --regression-alerts-only --regression-fail-on-regression --regression-out-csv-append --regression-out-md
+python scripts/benchmark_regression_report.py --baseline-inputs "sample/avatar/config/bench_20260211*.json" --latest-inputs "sample/avatar/config/bench_20260212*.json" --baseline-pinning-file "sample/avatar/config/baseline_pinning.json" --avg-ratio-threshold 1.1 --p90-ratio-threshold 1.1 --alerts-only --fail-on-regression --out-json "sample/avatar/config/benchmark_regression.json" --out-csv "sample/avatar/config/benchmark_regression.csv" --out-csv-append --out-md "sample/avatar/config/benchmark_regression.md"
 
 # uvx 経由でローカルパッケージから実行（インストール不要）
 uvx --from . unitytool inspect variant --path "Assets/... Variant.prefab"
@@ -517,8 +517,10 @@ uvx --from . unitytool suggest ignore-guids --scope "Assets/haiirokoubou"
 `scripts/benchmark_history_to_csv.py` は benchmark summary 形式でないJSONを自動的に除外する（`bench_*.json` に他用途JSONが混ざってもノイズ化しない）。
 `scripts/benchmark_samples.py` で `sample/avatar` / `sample/world` のベンチ実行と履歴CSV更新をまとめて実行できる（`--history-generated-date-prefix` / `--history-min-p90` / `--history-latest-per-scope` / `--history-split-by-severity` / `--history-write-md` を転送可能）。
 `scripts/benchmark_samples.py` は `--run-regression` と `--regression-baseline-inputs`（または `--regression-baseline-auto-latest N`）で `benchmark_regression_report.py` まで連続実行できる。
+`scripts/benchmark_samples.py` は `--regression-baseline-pinning-file` で scope別baseline固定ファイルを regression report に渡せる。
 `scripts/benchmark_samples.py` は `--regression-out-md` で回帰レポートのMarkdownサマリ（`benchmark_regression.md`）も生成できる。
 `scripts/benchmark_regression_report.py` で baseline/latest のJSON群を scope単位で比較し、`avg_ratio` / `p90_ratio` と閾値で `regressed|improved|stable` を判定できる。
+`scripts/benchmark_regression_report.py` は `--baseline-pinning-file` で scopeごとのbaseline JSONを固定できる。
 `scripts/benchmark_regression_report.py` は `--alerts-only` / `--fail-on-regression` でCI向け短文ログと非0終了コードを使える。
 `scripts/benchmark_regression_report.py` は `--out-csv-append` で比較履歴を同一CSVに追記できる。
 `scripts/benchmark_regression_report.py` は `--out-md` で比較サマリのMarkdown（回帰一覧 + scope表）を出力できる。

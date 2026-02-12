@@ -70,6 +70,7 @@ class BenchmarkSamplesTests(unittest.TestCase):
             out_json=Path("sample/avatar/config/benchmark_regression.json"),
             out_csv=Path("sample/avatar/config/benchmark_regression.csv"),
             out_md=Path("sample/avatar/config/benchmark_regression.md"),
+            baseline_pinning_file="sample/avatar/config/baseline_pinning.json",
             avg_ratio_threshold=1.1,
             p90_ratio_threshold=1.2,
             min_absolute_delta_sec=0.05,
@@ -89,6 +90,8 @@ class BenchmarkSamplesTests(unittest.TestCase):
         self.assertIn("0.05", cmd)
         self.assertIn("--out-md", cmd)
         self.assertIn(str(Path("sample/avatar/config/benchmark_regression.md")), cmd)
+        self.assertIn("--baseline-pinning-file", cmd)
+        self.assertIn("sample/avatar/config/baseline_pinning.json", cmd)
         self.assertIn("--alerts-only", cmd)
         self.assertIn("--fail-on-regression", cmd)
         self.assertIn("--out-csv-append", cmd)

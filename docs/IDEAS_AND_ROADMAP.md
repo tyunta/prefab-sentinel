@@ -73,6 +73,10 @@
   - `--out-md`
 - `scripts/benchmark_samples.py` can request regression markdown output:
   - `--regression-out-md`
+- `scripts/benchmark_regression_report.py` supports per-scope baseline pinning:
+  - `--baseline-pinning-file`
+- `scripts/benchmark_samples.py` can forward baseline pinning file:
+  - `--regression-baseline-pinning-file`
 - Added runtime validation scaffold command:
   - `unitytool validate runtime --scene ...`
   - log-based classification (`BROKEN_PPTR`, `UDON_NULLREF`, etc.)
@@ -87,7 +91,6 @@
 
 ## Next Executable Tasks
 - Extend apply backend from JSON-only to Unity SerializedObject bridge.
-- Add optional per-scope baseline pinning file for regression comparison.
 
 ## Decision-Required Queue
 - Decide default location/policy for ignore-guid files:
