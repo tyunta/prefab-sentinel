@@ -56,6 +56,16 @@ on:
         required: false
         default: "sample/world"
         type: string
+      run_window_start_utc_hour:
+        description: "Optional UTC run window start hour (0-23)."
+        required: false
+        default: ""
+        type: string
+      run_window_end_utc_hour:
+        description: "Optional UTC run window end hour (0-23)."
+        required: false
+        default: ""
+        type: string
 
 jobs:
   bridge-smoke-unity:
@@ -80,6 +90,8 @@ jobs:
         shell: pwsh
         run: |
           $target = "${{ inputs.targets }}"
+          $windowStartRaw = "${{ inputs.run_window_start_utc_hour }}"
+          $windowEndRaw = "${{ inputs.run_window_end_utc_hour }}"
           if ($target -eq "all" -or $target -eq "avatar") {
             if (-not (Test-Path "${{ inputs.avatar_plan }}")) {
               throw "avatar_plan not found: ${{ inputs.avatar_plan }}"
@@ -96,8 +108,57 @@ jobs:
               throw "world_project_path not found: ${{ inputs.world_project_path }}"
             }
           }
+          if (($windowStartRaw -eq "") -xor ($windowEndRaw -eq "")) {
+            throw "run_window_start_utc_hour and run_window_end_utc_hour must be provided together."
+          }
+          if ($windowStartRaw -ne "") {
+            $parsedStart = 0
+            $parsedEnd = 0
+            if (-not [int]::TryParse($windowStartRaw, [ref]$parsedStart)) {
+              throw "run_window_start_utc_hour must be an integer between 0 and 23."
+            }
+            if (-not [int]::TryParse($windowEndRaw, [ref]$parsedEnd)) {
+              throw "run_window_end_utc_hour must be an integer between 0 and 23."
+            }
+            $windowStart = $parsedStart
+            $windowEnd = $parsedEnd
+            if ($windowStart -lt 0 -or $windowStart -gt 23) {
+              throw "run_window_start_utc_hour must be in range 0..23."
+            }
+            if ($windowEnd -lt 0 -or $windowEnd -gt 23) {
+              throw "run_window_end_utc_hour must be in range 0..23."
+            }
+          }
+
+      - name: Evaluate UTC Run Window
+        id: run_window
+        shell: pwsh
+        run: |
+          $windowStartRaw = "${{ inputs.run_window_start_utc_hour }}"
+          $windowEndRaw = "${{ inputs.run_window_end_utc_hour }}"
+          if ($windowStartRaw -eq "" -and $windowEndRaw -eq "") {
+            "within_window=true" >> $env:GITHUB_OUTPUT
+            "window_reason=No run window configured." >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+
+          $windowStart = [int]$windowStartRaw
+          $windowEnd = [int]$windowEndRaw
+          $currentUtcHour = [DateTime]::UtcNow.Hour
+          $withinWindow = $false
+          if ($windowStart -eq $windowEnd) {
+            $withinWindow = $true
+          } elseif ($windowStart -lt $windowEnd) {
+            $withinWindow = ($currentUtcHour -ge $windowStart -and $currentUtcHour -lt $windowEnd)
+          } else {
+            $withinWindow = ($currentUtcHour -ge $windowStart -or $currentUtcHour -lt $windowEnd)
+          }
+
+          "within_window=$($withinWindow.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          "window_reason=Current UTC hour: $currentUtcHour, configured window: [$windowStart, $windowEnd)." >> $env:GITHUB_OUTPUT
 
       - name: Run Bridge Smoke Batch (Unity-enabled)
+        if: ${{ steps.run_window.outputs.within_window == 'true' }}
         shell: pwsh
         run: |
           $args = @(
@@ -123,7 +184,15 @@ jobs:
           }
           python @args
 
+      - name: Skip Outside UTC Run Window
+        if: ${{ steps.run_window.outputs.within_window != 'true' }}
+        shell: pwsh
+        run: |
+          Write-Host "Skipping Unity smoke batch because run window condition was not met."
+          Write-Host "${{ steps.run_window.outputs.window_reason }}"
+
       - name: Upload Unity Smoke Summary
+        if: ${{ steps.run_window.outputs.within_window == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: unity-smoke-summary
@@ -133,7 +202,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload Unity Smoke Avatar Artifact
-        if: ${{ inputs.targets == 'all' || inputs.targets == 'avatar' }}
+        if: ${{ steps.run_window.outputs.within_window == 'true' && (inputs.targets == 'all' || inputs.targets == 'avatar') }}
         uses: actions/upload-artifact@v4
         with:
           name: unity-smoke-avatar
@@ -141,7 +210,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload Unity Smoke World Artifact
-        if: ${{ inputs.targets == 'all' || inputs.targets == 'world' }}
+        if: ${{ steps.run_window.outputs.within_window == 'true' && (inputs.targets == 'all' || inputs.targets == 'world') }}
         uses: actions/upload-artifact@v4
         with:
           name: unity-smoke-world

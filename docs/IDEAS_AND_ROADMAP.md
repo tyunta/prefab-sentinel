@@ -127,6 +127,7 @@
   - `.github/workflows/unity-smoke.yml` (`workflow_dispatch` + self-hosted Windows runner)
   - runs `bridge_smoke_samples.py` without `--*-expect-failure` and uploads `reports/bridge_smoke`
   - includes `targets` input (`all|avatar|world`) and preflight input path checks
+  - supports optional UTC run-window gating (`run_window_start_utc_hour` / `run_window_end_utc_hour`)
   - uploads split artifacts (`unity-smoke-summary`, `unity-smoke-avatar`, `unity-smoke-world`)
 - Unity bridge now normalizes op values for executeMethod payload (`value_kind` fields).
 - Added Unity Editor executeMethod apply path for prefab patch operations:
@@ -143,7 +144,6 @@
   - broader SerializedProperty support (nested managed-reference scenarios, complex custom structs)
   - Unity-side integration tests against sample prefab assets (batchmode assertions)
 - Add Unity smoke hardening:
-  - add optional scheduled run window for self-hosted Unity runner availability
   - add decision table for target-specific timeout defaults by sample size/profile
 
 ## Decision-Required Queue
