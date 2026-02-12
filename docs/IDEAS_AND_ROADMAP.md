@@ -135,6 +135,7 @@
   - runs `bridge_smoke_samples.py` without `--*-expect-failure` and uploads `reports/bridge_smoke`
   - includes `targets` input (`all|avatar|world`) and preflight input path checks
   - supports optional UTC run-window gating (`run_window_start_utc_hour` / `run_window_end_utc_hour`)
+  - builds decision artifacts via `smoke_summary_to_csv.py` (`history.csv` / `history.md` / `timeout_profile.json`)
   - uploads split artifacts (`unity-smoke-summary`, `unity-smoke-avatar`, `unity-smoke-world`)
 - Unity bridge now normalizes op values for executeMethod payload (`value_kind` fields).
 - Added Unity Editor executeMethod apply path for prefab patch operations:

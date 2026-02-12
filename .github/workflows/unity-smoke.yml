@@ -184,6 +184,12 @@ jobs:
           }
           python @args
 
+      - name: Build Unity Smoke Decision Table Artifacts
+        if: ${{ steps.run_window.outputs.within_window == 'true' }}
+        shell: pwsh
+        run: |
+          python scripts/smoke_summary_to_csv.py --inputs reports/bridge_smoke/summary.json --duration-percentile 90 --out reports/bridge_smoke/history.csv --out-md reports/bridge_smoke/history.md --out-timeout-profile reports/bridge_smoke/timeout_profile.json
+
       - name: Skip Outside UTC Run Window
         if: ${{ steps.run_window.outputs.within_window != 'true' }}
         shell: pwsh
@@ -199,6 +205,9 @@ jobs:
           path: |
             reports/bridge_smoke/summary.json
             reports/bridge_smoke/summary.md
+            reports/bridge_smoke/history.csv
+            reports/bridge_smoke/history.md
+            reports/bridge_smoke/timeout_profile.json
           if-no-files-found: error
 
       - name: Upload Unity Smoke Avatar Artifact
