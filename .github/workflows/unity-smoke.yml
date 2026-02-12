@@ -171,7 +171,8 @@ jobs:
         shell: pwsh
         run: |
           $args = @(
-            "scripts/bridge_smoke_samples.py",
+            "validate",
+            "smoke-batch",
             "--targets", "${{ inputs.targets }}",
             "--avatar-plan", "${{ inputs.avatar_plan }}",
             "--world-plan", "${{ inputs.world_plan }}",
@@ -194,13 +195,13 @@ jobs:
           if ("${{ inputs.timeout_profile_path }}" -ne "") {
             $args += @("--timeout-profile", "${{ inputs.timeout_profile_path }}")
           }
-          python @args
+          prefab-sentinel @args
 
       - name: Build Unity Smoke Decision Table Artifacts
         if: ${{ steps.run_window.outputs.within_window == 'true' }}
         shell: pwsh
         run: |
-          python scripts/smoke_summary_to_csv.py --inputs reports/bridge_smoke/summary.json --duration-percentile 90 --out reports/bridge_smoke/history.csv --out-md reports/bridge_smoke/history.md --out-timeout-profile reports/bridge_smoke/timeout_profile.json
+          prefab-sentinel report smoke-history --inputs reports/bridge_smoke/summary.json --duration-percentile 90 --out reports/bridge_smoke/history.csv --out-md reports/bridge_smoke/history.md --out-timeout-profile reports/bridge_smoke/timeout_profile.json
 
       - name: Skip Outside UTC Run Window
         if: ${{ steps.run_window.outputs.within_window != 'true' }}

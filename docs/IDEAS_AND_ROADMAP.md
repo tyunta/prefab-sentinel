@@ -133,13 +133,14 @@
   - unit tests: `tests/test_smoke_summary_to_csv.py`
 - Added CI workflow wiring:
   - `.github/workflows/ci.yml` runs `unittest` on push/PR/workflow_dispatch
-  - `bridge-smoke-contract` job runs `bridge_smoke_samples.py` in expected-failure mode, builds timeout decision artifacts via `smoke_summary_to_csv.py`, and uploads `reports/bridge_smoke`
+  - `bridge-smoke-contract` job runs `prefab-sentinel validate smoke-batch` in expected-failure mode, builds timeout decision artifacts via `prefab-sentinel report smoke-history`, and uploads `reports/bridge_smoke`
 - Added Unity-enabled smoke workflow:
   - `.github/workflows/unity-smoke.yml` (`workflow_dispatch` + self-hosted Windows runner)
-  - runs `bridge_smoke_samples.py` without `--*-expect-failure` and uploads `reports/bridge_smoke`
+  - runs `prefab-sentinel validate smoke-batch` without `--*-expect-failure` and uploads `reports/bridge_smoke`
   - includes `targets` input (`all|avatar|world`) and preflight input path checks
+  - supports `timeout_profile_path` input for history-derived timeout defaults
   - supports optional UTC run-window gating (`run_window_start_utc_hour` / `run_window_end_utc_hour`)
-  - builds decision artifacts via `smoke_summary_to_csv.py` (`history.csv` / `history.md` / `timeout_profile.json`)
+  - builds decision artifacts via `prefab-sentinel report smoke-history` (`history.csv` / `history.md` / `timeout_profile.json`)
   - uploads split artifacts (`unity-smoke-summary`, `unity-smoke-avatar`, `unity-smoke-world`)
 - Unity bridge now normalizes op values for executeMethod payload (`value_kind` fields).
 - Added Unity Editor executeMethod apply path for prefab patch operations:

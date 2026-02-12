@@ -46,7 +46,7 @@ jobs:
 
       - name: Run Bridge Smoke Batch (Expected Failure Contract)
         run: |
-          python scripts/bridge_smoke_samples.py \
+          prefab-sentinel validate smoke-batch \
             --targets all \
             --avatar-plan config/patch_plan.example.json \
             --world-plan config/patch_plan.example.json \
@@ -59,7 +59,7 @@ jobs:
 
       - name: Build Bridge Smoke Decision Table Artifacts
         run: |
-          python scripts/smoke_summary_to_csv.py \
+          prefab-sentinel report smoke-history \
             --inputs reports/bridge_smoke/summary.json \
             --duration-percentile 90 \
             --out reports/bridge_smoke/history.csv \
