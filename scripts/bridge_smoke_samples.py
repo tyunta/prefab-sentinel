@@ -94,7 +94,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--unity-timeout-sec",
         type=int,
         default=None,
-        help="Optional UNITYTOOL_UNITY_TIMEOUT_SEC override.",
+        help="Optional fallback UNITYTOOL_UNITY_TIMEOUT_SEC override for all targets.",
+    )
+    parser.add_argument(
+        "--avatar-unity-timeout-sec",
+        type=int,
+        default=None,
+        help="Optional UNITYTOOL_UNITY_TIMEOUT_SEC override for avatar target.",
+    )
+    parser.add_argument(
+        "--world-unity-timeout-sec",
+        type=int,
+        default=None,
+        help="Optional UNITYTOOL_UNITY_TIMEOUT_SEC override for world target.",
     )
     parser.add_argument(
         "--max-retries",
@@ -159,6 +171,23 @@ def _build_cases(args: argparse.Namespace) -> list[SmokeCase]:
         ),
     }
     return [cases_map[target] for target in targets]
+
+
+def _resolve_case_unity_timeout_sec(
+    *,
+    case: SmokeCase,
+    default_timeout_sec: int | None,
+    avatar_timeout_sec: int | None,
+    world_timeout_sec: int | None,
+) -> int | None:
+    per_target_overrides = {
+        "avatar": avatar_timeout_sec,
+        "world": world_timeout_sec,
+    }
+    case_override = per_target_overrides.get(case.name)
+    if case_override is not None:
+        return case_override
+    return default_timeout_sec
 
 
 def _build_smoke_command(
@@ -254,15 +283,19 @@ def _render_markdown_summary(payload: dict[str, Any]) -> str:
         f"- Passed: {data.get('passed_cases', 0)}",
         f"- Failed: {data.get('failed_cases', 0)}",
         "",
-        "| case | matched | attempts | exit_code | response_code | response_path | unity_log_file |",
-        "| --- | --- | ---: | ---: | --- | --- | --- |",
+        "| case | matched | attempts | timeout_sec | exit_code | response_code | response_path | unity_log_file |",
+        "| --- | --- | ---: | ---: | ---: | --- | --- | --- |",
     ]
     for case in cases:
+        timeout_sec = case.get("unity_timeout_sec")
+        if timeout_sec is None:
+            timeout_sec = ""
         lines.append(
-            "| {name} | {matched} | {attempts} | {exit_code} | {response_code} | {response_path} | {unity_log_file} |".format(
+            "| {name} | {matched} | {attempts} | {timeout_sec} | {exit_code} | {response_code} | {response_path} | {unity_log_file} |".format(
                 name=case.get("name", ""),
                 matched=case.get("matched_expectation", False),
                 attempts=case.get("attempts", 1),
+                timeout_sec=timeout_sec,
                 exit_code=case.get("exit_code", ""),
                 response_code=case.get("response_code", ""),
                 response_path=case.get("response_path", ""),
@@ -305,6 +338,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.retry_delay_sec < 0.0:
         parser.error("--retry-delay-sec must be greater than or equal to 0.")
 
+    timeout_args = {
+        "--unity-timeout-sec": args.unity_timeout_sec,
+        "--avatar-unity-timeout-sec": args.avatar_unity_timeout_sec,
+        "--world-unity-timeout-sec": args.world_unity_timeout_sec,
+    }
+    for arg_name, arg_value in timeout_args.items():
+        if arg_value is not None and arg_value <= 0:
+            parser.error(f"{arg_name} must be greater than 0.")
+
     smoke_script = Path(args.smoke_script)
     bridge_script = Path(args.bridge_script)
     out_dir = Path(args.out_dir)
@@ -320,6 +362,13 @@ def main(argv: list[str] | None = None) -> int:
                 f"Project path not found for {case.name}: {case.project_path}"
             )
 
+        case_timeout_sec = _resolve_case_unity_timeout_sec(
+            case=case,
+            default_timeout_sec=args.unity_timeout_sec,
+            avatar_timeout_sec=args.avatar_unity_timeout_sec,
+            world_timeout_sec=args.world_unity_timeout_sec,
+        )
+
         case_dir = out_dir / case.name
         case_dir.mkdir(parents=True, exist_ok=True)
         response_path = case_dir / "response.json"
@@ -330,7 +379,7 @@ def main(argv: list[str] | None = None) -> int:
             bridge_script=bridge_script,
             unity_command=args.unity_command,
             unity_execute_method=args.unity_execute_method,
-            unity_timeout_sec=args.unity_timeout_sec,
+            unity_timeout_sec=case_timeout_sec,
             case=case,
             response_out=response_path,
             unity_log_file=unity_log_file,
@@ -359,6 +408,7 @@ def main(argv: list[str] | None = None) -> int:
                 "expect_failure": case.expect_failure,
                 "matched_expectation": completed.returncode == 0,
                 "attempts": attempts,
+                "unity_timeout_sec": case_timeout_sec,
                 "exit_code": completed.returncode,
                 "response_code": str(case_payload.get("code", "")),
                 "response_severity": str(case_payload.get("severity", "")),

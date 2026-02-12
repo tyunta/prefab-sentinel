@@ -26,6 +26,16 @@ on:
         required: false
         default: "600"
         type: string
+      avatar_unity_timeout_sec:
+        description: "Avatar target-specific timeout (seconds). Optional."
+        required: false
+        default: ""
+        type: string
+      world_unity_timeout_sec:
+        description: "World target-specific timeout (seconds). Optional."
+        required: false
+        default: ""
+        type: string
       avatar_plan:
         description: "Avatar patch plan path."
         required: false
@@ -90,7 +100,28 @@ jobs:
       - name: Run Bridge Smoke Batch (Unity-enabled)
         shell: pwsh
         run: |
-          python scripts/bridge_smoke_samples.py --targets "${{ inputs.targets }}" --avatar-plan "${{ inputs.avatar_plan }}" --world-plan "${{ inputs.world_plan }}" --avatar-project-path "${{ inputs.avatar_project_path }}" --world-project-path "${{ inputs.world_project_path }}" --unity-command "${{ inputs.unity_command }}" --unity-execute-method "${{ inputs.unity_execute_method }}" --unity-timeout-sec "${{ inputs.unity_timeout_sec }}" --out-dir reports/bridge_smoke --summary-md reports/bridge_smoke/summary.md
+          $args = @(
+            "scripts/bridge_smoke_samples.py",
+            "--targets", "${{ inputs.targets }}",
+            "--avatar-plan", "${{ inputs.avatar_plan }}",
+            "--world-plan", "${{ inputs.world_plan }}",
+            "--avatar-project-path", "${{ inputs.avatar_project_path }}",
+            "--world-project-path", "${{ inputs.world_project_path }}",
+            "--unity-command", "${{ inputs.unity_command }}",
+            "--unity-execute-method", "${{ inputs.unity_execute_method }}",
+            "--out-dir", "reports/bridge_smoke",
+            "--summary-md", "reports/bridge_smoke/summary.md"
+          )
+          if ("${{ inputs.unity_timeout_sec }}" -ne "") {
+            $args += @("--unity-timeout-sec", "${{ inputs.unity_timeout_sec }}")
+          }
+          if ("${{ inputs.avatar_unity_timeout_sec }}" -ne "") {
+            $args += @("--avatar-unity-timeout-sec", "${{ inputs.avatar_unity_timeout_sec }}")
+          }
+          if ("${{ inputs.world_unity_timeout_sec }}" -ne "") {
+            $args += @("--world-unity-timeout-sec", "${{ inputs.world_unity_timeout_sec }}")
+          }
+          python @args
 
       - name: Upload Unity Smoke Summary
         uses: actions/upload-artifact@v4
