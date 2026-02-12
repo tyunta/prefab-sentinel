@@ -4,7 +4,7 @@ import io
 import json
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 from unitytool import cli
@@ -47,6 +47,169 @@ class CliTests(unittest.TestCase):
         self.assertTrue(payload["data"]["read_only"])
         self.assertEqual("REF404", payload["data"]["steps"][0]["result"]["code"])
         self.assertEqual([], payload["diagnostics"])
+
+    def test_validate_runtime_returns_missing_scene_error(self) -> None:
+        exit_code, output = self.run_cli(
+            ["validate", "runtime", "--scene", "Assets/Scenes/Missing.unity"]
+        )
+        payload = json.loads(output)
+        self.assertEqual(0, exit_code)
+        self.assertEqual("VALIDATE_RUNTIME_RESULT", payload["code"])
+        self.assertEqual("error", payload["severity"])
+        self.assertTrue(payload["data"]["fail_fast_triggered"])
+        self.assertEqual("RUN002", payload["data"]["steps"][1]["result"]["code"])
+
+    def test_validate_runtime_classifies_log_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            scene = root / "Smoke.unity"
+            log = root / "Editor.log"
+            _write(
+                scene,
+                """%YAML 1.1
+--- !u!1 &1
+GameObject:
+  m_Name: Smoke
+""",
+            )
+            _write(log, "NullReferenceException in UdonBehaviour\n")
+
+            exit_code, output = self.run_cli(
+                [
+                    "validate",
+                    "runtime",
+                    "--scene",
+                    str(scene),
+                    "--log-file",
+                    str(log),
+                ]
+            )
+
+        payload = json.loads(output)
+        self.assertEqual(0, exit_code)
+        self.assertEqual("VALIDATE_RUNTIME_RESULT", payload["code"])
+        self.assertEqual("critical", payload["severity"])
+        step_codes = [step["result"]["code"] for step in payload["data"]["steps"]]
+        self.assertIn("RUN_LOG_COLLECTED", step_codes)
+        self.assertIn("RUN001", step_codes)
+
+    def test_patch_apply_dry_run_returns_preview(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "patch.json"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "target": "Assets/Variant.prefab",
+                        "ops": [
+                            {
+                                "op": "set",
+                                "component": "Example.Component",
+                                "path": "items.Array.size",
+                                "value": 2,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            exit_code, output = self.run_cli(
+                ["patch", "apply", "--plan", str(plan), "--dry-run"]
+            )
+
+        payload = json.loads(output)
+        self.assertEqual(0, exit_code)
+        self.assertEqual("PATCH_APPLY_RESULT", payload["code"])
+        self.assertTrue(payload["success"])
+        self.assertEqual("SER_DRY_RUN_OK", payload["data"]["steps"][0]["result"]["code"])
+
+    def test_patch_apply_blocks_without_confirm(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "patch.json"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "target": "Assets/Variant.prefab",
+                        "ops": [
+                            {
+                                "op": "set",
+                                "component": "Example.Component",
+                                "path": "items.Array.size",
+                                "value": 2,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            exit_code, output = self.run_cli(["patch", "apply", "--plan", str(plan)])
+
+        payload = json.loads(output)
+        self.assertEqual(0, exit_code)
+        self.assertEqual("PATCH_APPLY_RESULT", payload["code"])
+        self.assertFalse(payload["success"])
+        self.assertEqual("SER_CONFIRM_REQUIRED", payload["data"]["steps"][1]["result"]["code"])
+
+    def test_patch_apply_confirm_updates_json_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            target = root / "state.json"
+            target.write_text(
+                json.dumps({"items": [1, 2], "nested": {"value": 10}}),
+                encoding="utf-8",
+            )
+            plan = root / "patch.json"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "target": str(target),
+                        "ops": [
+                            {
+                                "op": "set",
+                                "component": "Example.Component",
+                                "path": "nested.value",
+                                "value": 42,
+                            },
+                            {
+                                "op": "insert_array_element",
+                                "component": "Example.Component",
+                                "path": "items.Array.data",
+                                "index": 0,
+                                "value": 0,
+                            },
+                            {
+                                "op": "remove_array_element",
+                                "component": "Example.Component",
+                                "path": "items.Array.data",
+                                "index": 1,
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            exit_code, output = self.run_cli(
+                ["patch", "apply", "--plan", str(plan), "--confirm"]
+            )
+
+            payload = json.loads(output)
+            self.assertEqual(0, exit_code)
+            self.assertEqual("PATCH_APPLY_RESULT", payload["code"])
+            self.assertTrue(payload["success"])
+            step_codes = [step["result"]["code"] for step in payload["data"]["steps"]]
+            self.assertIn("SER_APPLY_OK", step_codes)
+            updated = json.loads(target.read_text(encoding="utf-8"))
+            self.assertEqual({"items": [0, 2], "nested": {"value": 42}}, updated)
+
+    def test_patch_apply_invalid_plan_returns_parser_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "patch.json"
+            plan.write_text("[]", encoding="utf-8")
+            with redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    self.run_cli(["patch", "apply", "--plan", str(plan), "--dry-run"])
 
     def test_inspect_where_used_returns_missing_scope_error(self) -> None:
         exit_code, output = self.run_cli(

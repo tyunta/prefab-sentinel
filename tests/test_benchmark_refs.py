@@ -8,6 +8,7 @@ from pathlib import Path
 from scripts.benchmark_refs import (
     _build_command,
     _normalize_run_counts,
+    _percentile,
     _summary_to_csv_row,
     _write_summary_csv,
 )
@@ -36,9 +37,10 @@ class BenchmarkRefsTests(unittest.TestCase):
     def test_summary_to_csv_row_maps_fields(self) -> None:
         summary = {
             "scope": "sample/avatar/Assets",
+            "generated_at_utc": "2026-02-12T10:00:00Z",
             "warmup_runs": 1,
             "runs": 3,
-            "seconds": {"avg": 1.25, "min": 1.0, "max": 1.5},
+            "seconds": {"avg": 1.25, "min": 1.0, "max": 1.5, "p50": 1.2, "p90": 1.4},
             "validate_result": {
                 "success": False,
                 "severity": "error",
@@ -49,12 +51,15 @@ class BenchmarkRefsTests(unittest.TestCase):
         row = _summary_to_csv_row(summary)
 
         self.assertEqual("sample/avatar/Assets", row[0])
-        self.assertEqual("1", row[1])
-        self.assertEqual("3", row[2])
-        self.assertEqual("1.25", row[3])
-        self.assertEqual("False", row[6])
-        self.assertEqual("error", row[7])
-        self.assertEqual("VALIDATE_REFS_RESULT", row[8])
+        self.assertEqual("2026-02-12T10:00:00Z", row[1])
+        self.assertEqual("1", row[2])
+        self.assertEqual("3", row[3])
+        self.assertEqual("1.25", row[4])
+        self.assertEqual("1.2", row[7])
+        self.assertEqual("1.4", row[8])
+        self.assertEqual("False", row[9])
+        self.assertEqual("error", row[10])
+        self.assertEqual("VALIDATE_REFS_RESULT", row[11])
 
     def test_write_summary_csv_overwrite_and_append(self) -> None:
         summary = {
@@ -76,7 +81,7 @@ class BenchmarkRefsTests(unittest.TestCase):
             lines = path.read_text(encoding="utf-8").splitlines()
             self.assertEqual(3, len(lines))
             self.assertIn(
-                "scope,warmup_runs,runs,avg_sec,min_sec,max_sec,success,severity,code",
+                "scope,generated_at_utc,warmup_runs,runs,avg_sec,min_sec,max_sec,p50_sec,p90_sec,success,severity,code",
                 lines[0],
             )
 
@@ -84,6 +89,11 @@ class BenchmarkRefsTests(unittest.TestCase):
         runs, warmup = _normalize_run_counts(runs=0, warmup_runs=-2)
         self.assertEqual(1, runs)
         self.assertEqual(0, warmup)
+
+    def test_percentile_uses_interpolation(self) -> None:
+        self.assertEqual(1.0, _percentile([1.0], 0.5))
+        self.assertEqual(2.0, _percentile([1.0, 3.0], 0.5))
+        self.assertEqual(2.8, _percentile([1.0, 2.0, 3.0], 0.9))
 
 
 if __name__ == "__main__":

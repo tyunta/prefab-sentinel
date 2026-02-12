@@ -1,0 +1,27 @@
+{
+  "target": "Assets/Example/Variant.prefab",
+  "ops": [
+    {
+      "op": "set",
+      "component": "Example.Component",
+      "path": "items.Array.size",
+      "value": 2
+    },
+    {
+      "op": "insert_array_element",
+      "component": "Example.Component",
+      "path": "items.Array.data",
+      "index": 1,
+      "value": {
+        "guid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "file_id": "100100000"
+      }
+    },
+    {
+      "op": "remove_array_element",
+      "component": "Example.Component",
+      "path": "items.Array.data",
+      "index": 0
+    }
+  ]
+}

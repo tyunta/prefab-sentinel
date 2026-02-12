@@ -6,18 +6,24 @@ from pathlib import Path
 from unitytool.contracts import Severity, ToolResponse, max_severity
 from unitytool.mcp.prefab_variant import PrefabVariantMcp
 from unitytool.mcp.reference_resolver import ReferenceResolverMcp
+from unitytool.mcp.runtime_validation import RuntimeValidationMcp
+from unitytool.mcp.serialized_object import SerializedObjectMcp
 
 
 @dataclass(slots=True)
 class Phase1Orchestrator:
     reference_resolver: ReferenceResolverMcp
     prefab_variant: PrefabVariantMcp
+    runtime_validation: RuntimeValidationMcp
+    serialized_object: SerializedObjectMcp
 
     @classmethod
     def default(cls, project_root: Path | None = None) -> "Phase1Orchestrator":
         return cls(
             reference_resolver=ReferenceResolverMcp(project_root=project_root),
             prefab_variant=PrefabVariantMcp(project_root=project_root),
+            runtime_validation=RuntimeValidationMcp(project_root=project_root),
+            serialized_object=SerializedObjectMcp(),
         )
 
     def inspect_variant(
@@ -262,4 +268,177 @@ class Phase1Orchestrator:
                 ),
             },
             diagnostics=[],
+        )
+
+    def validate_runtime(
+        self,
+        scene_path: str,
+        profile: str = "default",
+        log_file: str | None = None,
+        since_timestamp: str | None = None,
+        allow_warnings: bool = False,
+        max_diagnostics: int = 200,
+    ) -> ToolResponse:
+        compile_step = self.runtime_validation.compile_udonsharp()
+        run_step = self.runtime_validation.run_clientsim(scene_path, profile)
+
+        steps = [
+            ("compile_udonsharp", compile_step),
+            ("run_clientsim", run_step),
+        ]
+        if run_step.severity in (Severity.ERROR, Severity.CRITICAL):
+            severity = max_severity([compile_step.severity, run_step.severity])
+            return ToolResponse(
+                success=False,
+                severity=severity,
+                code="VALIDATE_RUNTIME_RESULT",
+                message="validate.runtime stopped by fail-fast policy due to scene/runtime setup errors.",
+                data={
+                    "scene_path": scene_path,
+                    "profile": profile,
+                    "read_only": True,
+                    "fail_fast_triggered": True,
+                    "steps": [
+                        {"step": name, "result": step.to_dict()} for name, step in steps
+                    ],
+                },
+                diagnostics=[],
+            )
+
+        collect_step = self.runtime_validation.collect_unity_console(
+            log_file=log_file,
+            since_timestamp=since_timestamp,
+        )
+        classify_step = self.runtime_validation.classify_errors(
+            log_lines=list(collect_step.data.get("log_lines", [])),
+            max_diagnostics=max_diagnostics,
+        )
+        assert_step = self.runtime_validation.assert_no_critical_errors(
+            classification_result=classify_step,
+            allow_warnings=allow_warnings,
+        )
+        steps.extend(
+            [
+                ("collect_unity_console", collect_step),
+                ("classify_errors", classify_step),
+                ("assert_no_critical_errors", assert_step),
+            ]
+        )
+
+        severities = [step.severity for _, step in steps]
+        severity = max_severity(severities)
+        success = all(step.success for _, step in steps)
+        diagnostics = classify_step.diagnostics
+
+        return ToolResponse(
+            success=success,
+            severity=severity,
+            code="VALIDATE_RUNTIME_RESULT",
+            message="validate.runtime pipeline completed (log-based scaffold).",
+            data={
+                "scene_path": scene_path,
+                "profile": profile,
+                "read_only": True,
+                "fail_fast_triggered": False,
+                "steps": [{"step": name, "result": step.to_dict()} for name, step in steps],
+            },
+            diagnostics=diagnostics,
+        )
+
+    def patch_apply(
+        self,
+        plan: dict[str, object],
+        dry_run: bool = False,
+        confirm: bool = False,
+    ) -> ToolResponse:
+        target = str(plan.get("target", ""))
+        raw_ops = plan.get("ops", [])
+        ops = raw_ops if isinstance(raw_ops, list) else []
+
+        dry_step = self.serialized_object.dry_run_patch(target=target, ops=ops)
+        steps = [("dry_run_patch", dry_step)]
+        if dry_step.severity in (Severity.ERROR, Severity.CRITICAL):
+            return ToolResponse(
+                success=False,
+                severity=dry_step.severity,
+                code="PATCH_APPLY_RESULT",
+                message="patch.apply stopped by fail-fast policy due to invalid patch plan.",
+                data={
+                    "target": target,
+                    "dry_run": dry_run,
+                    "confirm": confirm,
+                    "read_only": True,
+                    "fail_fast_triggered": True,
+                    "steps": [{"step": name, "result": step.to_dict()} for name, step in steps],
+                },
+                diagnostics=dry_step.diagnostics,
+            )
+
+        if dry_run:
+            return ToolResponse(
+                success=True,
+                severity=dry_step.severity,
+                code="PATCH_APPLY_RESULT",
+                message="patch.apply dry-run completed.",
+                data={
+                    "target": target,
+                    "dry_run": True,
+                    "confirm": confirm,
+                    "read_only": True,
+                    "fail_fast_triggered": False,
+                    "steps": [{"step": name, "result": step.to_dict()} for name, step in steps],
+                },
+                diagnostics=dry_step.diagnostics,
+            )
+
+        if not confirm:
+            confirm_step = ToolResponse(
+                success=False,
+                severity=Severity.WARNING,
+                code="SER_CONFIRM_REQUIRED",
+                message="patch.apply requires --confirm when not using --dry-run.",
+                data={"target": target, "op_count": len(ops), "read_only": True},
+                diagnostics=[],
+            )
+            steps.append(("confirm_gate", confirm_step))
+            return ToolResponse(
+                success=False,
+                severity=Severity.WARNING,
+                code="PATCH_APPLY_RESULT",
+                message="patch.apply blocked by confirm gate.",
+                data={
+                    "target": target,
+                    "dry_run": False,
+                    "confirm": False,
+                    "read_only": True,
+                    "fail_fast_triggered": False,
+                    "steps": [{"step": name, "result": step.to_dict()} for name, step in steps],
+                },
+                diagnostics=[],
+            )
+
+        apply_step = self.serialized_object.apply_and_save(target=target, ops=ops)
+        steps.append(("apply_and_save", apply_step))
+        severities = [step.severity for _, step in steps]
+        severity = max_severity(severities)
+        success = all(step.success for _, step in steps)
+        diagnostics = [*dry_step.diagnostics, *apply_step.diagnostics]
+        return ToolResponse(
+            success=success,
+            severity=severity,
+            code="PATCH_APPLY_RESULT",
+            message=(
+                "patch.apply completed."
+                if apply_step.success
+                else "patch.apply completed with errors."
+            ),
+            data={
+                "target": target,
+                "dry_run": False,
+                "confirm": True,
+                "read_only": False,
+                "fail_fast_triggered": False,
+                "steps": [{"step": name, "result": step.to_dict()} for name, step in steps],
+            },
+            diagnostics=diagnostics,
         )

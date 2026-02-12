@@ -79,6 +79,69 @@ class ReportingTests(unittest.TestCase):
         self.assertIn('"usages_total": 3', rendered)
         self.assertIn('"usages_truncated_for_markdown": 2', rendered)
 
+    def test_render_markdown_report_includes_runtime_section(self) -> None:
+        payload = {
+            "success": False,
+            "severity": "critical",
+            "code": "VALIDATE_RUNTIME_RESULT",
+            "message": "validate.runtime pipeline completed (log-based scaffold).",
+            "data": {
+                "steps": [
+                    {
+                        "step": "compile_udonsharp",
+                        "result": {"code": "RUN_COMPILE_SKIPPED", "data": {}},
+                    },
+                    {
+                        "step": "run_clientsim",
+                        "result": {"code": "RUN_CLIENTSIM_SKIPPED", "data": {}},
+                    },
+                    {
+                        "step": "collect_unity_console",
+                        "result": {"code": "RUN_LOG_COLLECTED", "data": {}},
+                    },
+                    {
+                        "step": "classify_errors",
+                        "result": {
+                            "code": "RUN001",
+                            "data": {
+                                "line_count": 12,
+                                "matched_issue_count": 3,
+                                "categories": {"UDON_NULLREF": 2, "BROKEN_PPTR": 1},
+                                "categories_by_severity": {
+                                    "critical": 2,
+                                    "error": 1,
+                                    "warning": 0,
+                                },
+                            },
+                        },
+                    },
+                    {
+                        "step": "assert_no_critical_errors",
+                        "result": {
+                            "code": "RUN001",
+                            "data": {
+                                "critical_count": 2,
+                                "error_count": 1,
+                                "warning_count": 0,
+                                "allow_warnings": False,
+                            },
+                        },
+                    },
+                ]
+            },
+            "diagnostics": [],
+        }
+
+        rendered = render_markdown_report(payload)
+
+        self.assertIn("## Runtime Validation", rendered)
+        self.assertIn("Compile Step: RUN_COMPILE_SKIPPED", rendered)
+        self.assertIn("ClientSim Step: RUN_CLIENTSIM_SKIPPED", rendered)
+        self.assertIn("Log Collect Step: RUN_LOG_COLLECTED", rendered)
+        self.assertIn("Matched Issues: 3", rendered)
+        self.assertIn("| UDON_NULLREF | 2 |", rendered)
+        self.assertIn("| BROKEN_PPTR | 1 |", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

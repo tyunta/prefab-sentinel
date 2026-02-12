@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,6 +8,8 @@ from pathlib import Path
 from unitytool.orchestrator import Phase1Orchestrator
 from unitytool.mcp.prefab_variant import PrefabVariantMcp
 from unitytool.mcp.reference_resolver import ReferenceResolverMcp
+from unitytool.mcp.runtime_validation import RuntimeValidationMcp
+from unitytool.mcp.serialized_object import SerializedObjectMcp
 
 BASE_GUID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 MISSING_GUID = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -273,6 +276,223 @@ class PrefabVariantMcpTests(unittest.TestCase):
             details = [diag.detail for diag in stale.diagnostics]
             self.assertIn("duplicate_override", details)
             self.assertIn("array_size_mismatch", details)
+
+
+class RuntimeValidationMcpTests(unittest.TestCase):
+    def test_run_clientsim_returns_missing_scene_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_sample_project(root)
+            mcp = RuntimeValidationMcp(project_root=root)
+
+            response = mcp.run_clientsim("Assets/MissingScene.unity", "default")
+
+            self.assertFalse(response.success)
+            self.assertEqual("RUN002", response.code)
+
+    def test_classify_errors_detects_known_categories(self) -> None:
+        mcp = RuntimeValidationMcp(project_root=Path.cwd())
+        response = mcp.classify_errors(
+            [
+                "Broken PPtr in file",
+                "NullReferenceException in UdonBehaviour",
+                "There can be only one active EventSystem",
+            ]
+        )
+
+        self.assertFalse(response.success)
+        self.assertEqual("RUN001", response.code)
+        self.assertEqual(1, response.data["categories"]["BROKEN_PPTR"])
+        self.assertEqual(1, response.data["categories"]["UDON_NULLREF"])
+        self.assertEqual(1, response.data["categories"]["DUPLICATE_EVENTSYSTEM"])
+
+    def test_orchestrator_validate_runtime_pipeline(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_sample_project(root)
+            _write(
+                root / "Assets" / "Scenes" / "Smoke.unity",
+                """%YAML 1.1
+--- !u!1 &1
+GameObject:
+  m_Name: Smoke
+""",
+            )
+            _write(
+                root / "Logs" / "Editor.log",
+                "NullReferenceException in UdonBehaviour\n",
+            )
+
+            orchestrator = Phase1Orchestrator.default(project_root=root)
+            response = orchestrator.validate_runtime(
+                scene_path="Assets/Scenes/Smoke.unity",
+                log_file="Logs/Editor.log",
+            )
+
+            self.assertFalse(response.success)
+            self.assertEqual("VALIDATE_RUNTIME_RESULT", response.code)
+            self.assertEqual("critical", response.severity.value)
+            step_codes = [
+                step["result"]["code"]
+                for step in response.data["steps"]
+                if isinstance(step, dict) and isinstance(step.get("result"), dict)
+            ]
+            self.assertIn("RUN_LOG_COLLECTED", step_codes)
+            self.assertIn("RUN001", step_codes)
+
+
+class SerializedObjectMcpTests(unittest.TestCase):
+    def test_dry_run_patch_validates_plan_and_returns_preview(self) -> None:
+        mcp = SerializedObjectMcp()
+        response = mcp.dry_run_patch(
+            target="Assets/Variant.prefab",
+            ops=[
+                {
+                    "op": "set",
+                    "component": "Example.Component",
+                    "path": "items.Array.size",
+                    "value": 2,
+                },
+                {
+                    "op": "remove_array_element",
+                    "component": "Example.Component",
+                    "path": "items.Array.data",
+                    "index": 1,
+                },
+            ],
+        )
+
+        self.assertTrue(response.success)
+        self.assertEqual("SER_DRY_RUN_OK", response.code)
+        self.assertEqual(2, response.data["op_count"])
+        self.assertEqual(2, len(response.data["diff"]))
+
+    def test_dry_run_patch_returns_schema_error(self) -> None:
+        mcp = SerializedObjectMcp()
+        response = mcp.dry_run_patch(
+            target="Assets/Variant.prefab",
+            ops=[{"op": "set", "component": "", "path": "x"}],
+        )
+
+        self.assertFalse(response.success)
+        self.assertEqual("SER_PLAN_INVALID", response.code)
+        self.assertTrue(response.diagnostics)
+
+    def test_apply_and_save_updates_json_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            target = root / "state.json"
+            target.write_text(
+                json.dumps({"items": [1, 2], "nested": {"value": 10}}),
+                encoding="utf-8",
+            )
+
+            mcp = SerializedObjectMcp()
+            response = mcp.apply_and_save(
+                target=str(target),
+                ops=[
+                    {
+                        "op": "set",
+                        "component": "Example.Component",
+                        "path": "nested.value",
+                        "value": 42,
+                    },
+                    {
+                        "op": "insert_array_element",
+                        "component": "Example.Component",
+                        "path": "items.Array.data",
+                        "index": 0,
+                        "value": 0,
+                    },
+                    {
+                        "op": "remove_array_element",
+                        "component": "Example.Component",
+                        "path": "items.Array.data",
+                        "index": 1,
+                    },
+                ],
+            )
+
+            self.assertTrue(response.success)
+            self.assertEqual("SER_APPLY_OK", response.code)
+            updated = json.loads(target.read_text(encoding="utf-8"))
+            self.assertEqual({"items": [0, 2], "nested": {"value": 42}}, updated)
+
+    def test_apply_and_save_rejects_non_json_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            target = root / "state.prefab"
+            target.write_text("%YAML 1.1\n", encoding="utf-8")
+
+            mcp = SerializedObjectMcp()
+            response = mcp.apply_and_save(
+                target=str(target),
+                ops=[
+                    {
+                        "op": "set",
+                        "component": "Example.Component",
+                        "path": "nested.value",
+                        "value": 42,
+                    }
+                ],
+            )
+
+            self.assertFalse(response.success)
+            self.assertEqual("SER_UNSUPPORTED_TARGET", response.code)
+
+    def test_orchestrator_patch_apply_confirm_gate(self) -> None:
+        orchestrator = Phase1Orchestrator.default()
+        response = orchestrator.patch_apply(
+            plan={
+                "target": "Assets/Variant.prefab",
+                "ops": [
+                    {
+                        "op": "set",
+                        "component": "Example.Component",
+                        "path": "items.Array.size",
+                        "value": 3,
+                    }
+                ],
+            },
+            dry_run=False,
+            confirm=False,
+        )
+
+        self.assertFalse(response.success)
+        self.assertEqual("PATCH_APPLY_RESULT", response.code)
+        step_codes = [step["result"]["code"] for step in response.data["steps"]]
+        self.assertIn("SER_CONFIRM_REQUIRED", step_codes)
+
+    def test_orchestrator_patch_apply_confirm_executes_for_json_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            target = root / "state.json"
+            target.write_text(
+                json.dumps({"items": [1, 2], "nested": {"value": 10}}),
+                encoding="utf-8",
+            )
+
+            orchestrator = Phase1Orchestrator.default(project_root=root)
+            response = orchestrator.patch_apply(
+                plan={
+                    "target": str(target),
+                    "ops": [
+                        {
+                            "op": "set",
+                            "component": "Example.Component",
+                            "path": "nested.value",
+                            "value": 42,
+                        }
+                    ],
+                },
+                dry_run=False,
+                confirm=True,
+            )
+
+            self.assertTrue(response.success)
+            self.assertEqual("PATCH_APPLY_RESULT", response.code)
+            step_codes = [step["result"]["code"] for step in response.data["steps"]]
+            self.assertIn("SER_APPLY_OK", step_codes)
 
 
 class OrchestratorSuggestionTests(unittest.TestCase):

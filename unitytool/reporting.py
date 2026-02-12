@@ -27,6 +27,52 @@ def _extract_ref_scan_data(payload_data: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def _extract_runtime_validation_data(payload_data: dict[str, Any]) -> dict[str, Any]:
+    steps = payload_data.get("steps", [])
+    if not isinstance(steps, list):
+        return {}
+
+    runtime: dict[str, Any] = {}
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        step_name = step.get("step")
+        result = step.get("result", {})
+        if not isinstance(result, dict):
+            continue
+        data = result.get("data", {})
+        if not isinstance(data, dict):
+            data = {}
+
+        if step_name == "classify_errors":
+            runtime["classification"] = {
+                "code": result.get("code"),
+                "success": result.get("success"),
+                "severity": result.get("severity"),
+                "line_count": data.get("line_count", 0),
+                "matched_issue_count": data.get("matched_issue_count", 0),
+                "categories": data.get("categories", {}),
+                "categories_by_severity": data.get("categories_by_severity", {}),
+            }
+        elif step_name == "assert_no_critical_errors":
+            runtime["assertion"] = {
+                "code": result.get("code"),
+                "success": result.get("success"),
+                "severity": result.get("severity"),
+                "critical_count": data.get("critical_count", 0),
+                "error_count": data.get("error_count", 0),
+                "warning_count": data.get("warning_count", 0),
+                "allow_warnings": data.get("allow_warnings", False),
+            }
+        elif step_name in {"compile_udonsharp", "run_clientsim", "collect_unity_console"}:
+            runtime[step_name] = {
+                "code": result.get("code"),
+                "success": result.get("success"),
+                "severity": result.get("severity"),
+            }
+    return runtime
+
+
 def _limit_usages_for_markdown(value: Any, max_usages: int) -> Any:
     if isinstance(value, dict):
         limited: dict[str, Any] = {}
@@ -66,6 +112,7 @@ def render_markdown_report(
     top_ignored = ref_scan.get("top_ignored_missing_asset_guids", [])
     if not isinstance(top_ignored, list):
         top_ignored = []
+    runtime = _extract_runtime_validation_data(payload_data)
 
     lines = [
         "# UnityTool Validation Report",
@@ -98,6 +145,51 @@ def render_markdown_report(
                 "- Top Ignored Missing Asset GUID: "
                 f"{top.get('guid', '')} ({top.get('occurrences', 0)})"
             )
+        lines.append("")
+
+    classification = runtime.get("classification", {})
+    assertion = runtime.get("assertion", {})
+    if classification or assertion:
+        categories = classification.get("categories", {})
+        if not isinstance(categories, dict):
+            categories = {}
+        categories_by_severity = classification.get("categories_by_severity", {})
+        if not isinstance(categories_by_severity, dict):
+            categories_by_severity = {}
+        lines.extend(
+            [
+                "## Runtime Validation",
+                f"- Compile Step: {runtime.get('compile_udonsharp', {}).get('code', 'n/a')}",
+                f"- ClientSim Step: {runtime.get('run_clientsim', {}).get('code', 'n/a')}",
+                f"- Log Collect Step: {runtime.get('collect_unity_console', {}).get('code', 'n/a')}",
+                f"- Matched Issues: {classification.get('matched_issue_count', 0)}",
+                f"- Log Line Count: {classification.get('line_count', 0)}",
+                (
+                    "- Severity Counts: "
+                    f"critical={categories_by_severity.get('critical', 0)}, "
+                    f"error={categories_by_severity.get('error', 0)}, "
+                    f"warning={categories_by_severity.get('warning', 0)}"
+                ),
+                (
+                    "- Assertion: "
+                    f"{assertion.get('code', 'n/a')} "
+                    f"(allow_warnings={assertion.get('allow_warnings', False)})"
+                ),
+            ]
+        )
+        if categories:
+            lines.extend(
+                [
+                    "",
+                    "| Runtime Category | Count |",
+                    "| --- | ---: |",
+                ]
+            )
+            for category, count in sorted(
+                categories.items(),
+                key=lambda item: (-int(item[1]), str(item[0])),
+            ):
+                lines.append(f"| {category} | {count} |")
         lines.append("")
 
     lines.extend(

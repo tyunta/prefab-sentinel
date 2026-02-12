@@ -473,16 +473,22 @@ uv run unitytool validate refs --scope "Assets/haiirokoubou"
 uv run unitytool validate refs --scope "Assets/haiirokoubou" --details --max-diagnostics 200
 uv run unitytool validate refs --scope "Assets/haiirokoubou" --exclude "**/Generated/**"
 uv run unitytool validate refs --scope "Assets/haiirokoubou" --ignore-guid-file "config/ignore_guids.txt"
+uv run unitytool validate runtime --scene "sample/avatar/Assets/Marycia.unity" --log-file "sample/world/Logs/ClientSim.log"
+uv run unitytool patch apply --plan "config/patch_plan.example.json" --dry-run
 uv run unitytool suggest ignore-guids --scope "Assets/haiirokoubou" --min-occurrences 100 --max-items 20
 uv run unitytool suggest ignore-guids --scope "Assets/haiirokoubou" --ignore-guid "7e5debf235ac2d54397a268de3328672"
 uv run unitytool suggest ignore-guids --scope "Assets/haiirokoubou" --min-occurrences 100 --out-ignore-guid-file "config/ignore_guids.txt" --out-ignore-guid-mode append
-python scripts/benchmark_refs.py --scope "sample/avatar/Assets" --warmup-runs 1 --runs 3 --out "sample/avatar/config/benchmark_refs.json" --out-csv "sample/avatar/config/benchmark_refs.csv" --csv-append
-python scripts/benchmark_history_to_csv.py --inputs "sample/avatar/config/bench_*.json" --out "sample/avatar/config/benchmark_trend.csv"
+python scripts/benchmark_refs.py --scope "sample/avatar/Assets" --warmup-runs 1 --runs 3 --out "sample/avatar/config/benchmark_refs.json" --out-csv "sample/avatar/config/benchmark_refs.csv" --csv-append --include-generated-date
+python scripts/benchmark_history_to_csv.py --inputs "sample/avatar/config/bench_*.json" --scope-contains "avatar" --severity error --generated-date-prefix "2026-02" --min-p90 2.0 --latest-per-scope --top-slowest 20 --split-by-severity --sort-by avg_sec --sort-order desc --include-date-column --out "sample/avatar/config/benchmark_trend.csv" --out-md "sample/avatar/config/benchmark_trend.md"
+python scripts/benchmark_samples.py --targets all --runs 1 --warmup-runs 0 --history-generated-date-prefix "2026-02" --history-min-p90 2.0 --history-latest-per-scope --history-split-by-severity --history-write-md --run-regression --regression-baseline-auto-latest 3 --regression-alerts-only --regression-fail-on-regression --regression-out-csv-append
+python scripts/benchmark_regression_report.py --baseline-inputs "sample/avatar/config/bench_20260211*.json" --latest-inputs "sample/avatar/config/bench_20260212*.json" --avg-ratio-threshold 1.1 --p90-ratio-threshold 1.1 --alerts-only --fail-on-regression --out-json "sample/avatar/config/benchmark_regression.json" --out-csv "sample/avatar/config/benchmark_regression.csv" --out-csv-append
 
 # uvx 経由でローカルパッケージから実行（インストール不要）
 uvx --from . unitytool inspect variant --path "Assets/... Variant.prefab"
 uvx --from . unitytool inspect where-used --asset-or-guid "Assets/SomeAsset.prefab" --scope "Assets"
 uvx --from . unitytool validate refs --scope "Assets/haiirokoubou"
+uvx --from . unitytool validate runtime --scene "sample/avatar/Assets/Marycia.unity"
+uvx --from . unitytool patch apply --plan "config/patch_plan.example.json" --dry-run
 uvx --from . unitytool suggest ignore-guids --scope "Assets/haiirokoubou"
 ```
 
@@ -492,9 +498,33 @@ uvx --from . unitytool suggest ignore-guids --scope "Assets/haiirokoubou"
 `report export --format md` では、`scan_broken_references` データが含まれる場合に Noise Reduction サマリーを先頭に出力する。
 `report export --format md` は `--md-max-usages N` / `--md-omit-usages` で `usages` 配列を軽量化できる。
 `scripts/benchmark_refs.py` で `validate refs` の実行時間を同条件で複数回計測できる。
+`scripts/benchmark_refs.py` は `p50` / `p90` をJSON・CSVの双方に出力する。
 `scripts/benchmark_refs.py` は `--out-csv` で比較しやすいCSV行も出力できる。
 `scripts/benchmark_refs.py` は `--warmup-runs` で初回ウォームアップ分を計測統計から除外できる。
+`scripts/benchmark_refs.py` は `--include-generated-date` で生成UTC時刻（`generated_at_utc`）をJSON・CSVへ出力できる。
 `scripts/benchmark_history_to_csv.py` で複数JSONの結果を1本の比較CSVへ統合できる。
+`scripts/benchmark_history_to_csv.py` は `--scope-contains` / `--severity` で抽出条件を指定できる。
+`scripts/benchmark_history_to_csv.py` は `--generated-date-prefix` で `generated_at_utc` の日付プレフィックス抽出ができる。
+`scripts/benchmark_history_to_csv.py` は `--min-p90 X` で `p90_sec >= X` の行だけに絞り込める。
+`scripts/benchmark_history_to_csv.py` は `--latest-per-scope` で scopeごとに最新の1件だけを残せる。
+`scripts/benchmark_history_to_csv.py` は `--top-slowest N` で `avg_sec` が遅い上位N件だけに絞り込める。
+`scripts/benchmark_history_to_csv.py` は `--split-by-severity` で `benchmark_trend_error.csv` などseverity別CSVを追加出力できる。
+`scripts/benchmark_history_to_csv.py` は `--out-md` でトレンドのMarkdownサマリを追加出力できる。
+`scripts/benchmark_history_to_csv.py` は `--sort-by {source|scope|avg_sec}` / `--sort-order {asc|desc}` で並び順を指定できる。
+`scripts/benchmark_history_to_csv.py` は `--include-date-column` で `generated_at_utc` から `generated_date_utc` 列を追加できる。
+`scripts/benchmark_history_to_csv.py` は scopeの区切り文字（`/` と `\`）を内部で正規化して比較できる。
+`scripts/benchmark_history_to_csv.py` は benchmark summary 形式でないJSONを自動的に除外する（`bench_*.json` に他用途JSONが混ざってもノイズ化しない）。
+`scripts/benchmark_samples.py` で `sample/avatar` / `sample/world` のベンチ実行と履歴CSV更新をまとめて実行できる（`--history-generated-date-prefix` / `--history-min-p90` / `--history-latest-per-scope` / `--history-split-by-severity` / `--history-write-md` を転送可能）。
+`scripts/benchmark_samples.py` は `--run-regression` と `--regression-baseline-inputs`（または `--regression-baseline-auto-latest N`）で `benchmark_regression_report.py` まで連続実行できる。
+`scripts/benchmark_regression_report.py` で baseline/latest のJSON群を scope単位で比較し、`avg_ratio` / `p90_ratio` と閾値で `regressed|improved|stable` を判定できる。
+`scripts/benchmark_regression_report.py` は `--alerts-only` / `--fail-on-regression` でCI向け短文ログと非0終了コードを使える。
+`scripts/benchmark_regression_report.py` は `--out-csv-append` で比較履歴を同一CSVに追記できる。
+`patch apply` は plan JSON のスキーマ検証と `dry_run_patch` プレビューを実装済み（`set` / `insert_array_element` / `remove_array_element`）。
+`patch apply` は非dry-run時に `--confirm` を要求し、Phase 1 の `apply_and_save` は JSONターゲット（`.json`）のみ実編集を実行する。
+`patch apply` は JSON以外のターゲットに対して `SER_UNSUPPORTED_TARGET` で停止する（Unity YAMLの直接編集は行わない）。
+`validate runtime` は log分類ベースのscaffoldを実装済みで、`--scene` 存在確認、`BROKEN_PPTR` / `UDON_NULLREF` などの分類、`assert_no_critical_errors` 判定までを返す。
+`validate runtime` の compile/ClientSim 実行は現時点では `RUN_COMPILE_SKIPPED` / `RUN_CLIENTSIM_SKIPPED` として明示的に未配線を返す。
+`report export --format md` は `VALIDATE_RUNTIME_RESULT` payload を入力した場合、Runtime Validation 要約（分類件数・severity内訳・カテゴリ表）を追加出力する。
 
 ```bash
 uv run unitytool report export --input reports/input.json --format md --out reports/latest.md

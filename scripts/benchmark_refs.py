@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import csv
+from datetime import datetime, timezone
 import json
+import math
 import statistics
 import subprocess
 import sys
@@ -56,6 +58,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Append a row when --out-csv already exists (default: overwrite).",
     )
+    parser.add_argument(
+        "--include-generated-date",
+        action="store_true",
+        help="Include generated_at_utc in JSON and CSV outputs.",
+    )
     return parser
 
 
@@ -105,11 +112,14 @@ def _summary_to_csv_row(summary: dict[str, Any]) -> list[str]:
     validate = summary.get("validate_result", {})
     return [
         str(summary.get("scope", "")),
+        str(summary.get("generated_at_utc", "")),
         str(summary.get("warmup_runs", "")),
         str(summary.get("runs", "")),
         str(seconds.get("avg", "")),
         str(seconds.get("min", "")),
         str(seconds.get("max", "")),
+        str(seconds.get("p50", "")),
+        str(seconds.get("p90", "")),
         str(validate.get("success", "")),
         str(validate.get("severity", "")),
         str(validate.get("code", "")),
@@ -127,11 +137,14 @@ def _write_summary_csv(path: Path, summary: dict[str, Any], append: bool) -> Non
             writer.writerow(
                 [
                     "scope",
+                    "generated_at_utc",
                     "warmup_runs",
                     "runs",
                     "avg_sec",
                     "min_sec",
                     "max_sec",
+                    "p50_sec",
+                    "p90_sec",
                     "success",
                     "severity",
                     "code",
@@ -142,6 +155,25 @@ def _write_summary_csv(path: Path, summary: dict[str, Any], append: bool) -> Non
 
 def _normalize_run_counts(runs: int, warmup_runs: int) -> tuple[int, int]:
     return max(1, runs), max(0, warmup_runs)
+
+
+def _percentile(values: list[float], percentile: float) -> float:
+    if not values:
+        raise ValueError("values must not be empty")
+    if percentile <= 0:
+        return min(values)
+    if percentile >= 1:
+        return max(values)
+
+    sorted_values = sorted(values)
+    rank = (len(sorted_values) - 1) * percentile
+    lower_idx = math.floor(rank)
+    upper_idx = math.ceil(rank)
+    if lower_idx == upper_idx:
+        return sorted_values[lower_idx]
+    lower = sorted_values[lower_idx]
+    upper = sorted_values[upper_idx]
+    return lower + (upper - lower) * (rank - lower_idx)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -168,6 +200,8 @@ def main(argv: list[str] | None = None) -> int:
             "avg": round(statistics.fmean(elapsed_list), 6),
             "min": round(min(elapsed_list), 6),
             "max": round(max(elapsed_list), 6),
+            "p50": round(_percentile(elapsed_list, 0.5), 6),
+            "p90": round(_percentile(elapsed_list, 0.9), 6),
             "all": [round(value, 6) for value in elapsed_list],
         },
         "validate_result": {
@@ -177,6 +211,10 @@ def main(argv: list[str] | None = None) -> int:
         },
         "command": command,
     }
+    if args.include_generated_date:
+        summary["generated_at_utc"] = datetime.now(timezone.utc).replace(
+            microsecond=0
+        ).isoformat().replace("+00:00", "Z")
 
     output = json.dumps(summary, ensure_ascii=False, indent=2)
     print(output)

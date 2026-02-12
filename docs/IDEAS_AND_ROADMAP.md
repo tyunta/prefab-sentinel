@@ -28,10 +28,63 @@
 - `scripts/benchmark_refs.py` supports warm-up runs:
   - `--warmup-runs`
 - Added `scripts/benchmark_history_to_csv.py` to combine JSON benchmarks into one CSV.
+- `scripts/benchmark_refs.py` supports percentile output:
+  - `p50`
+  - `p90`
+- `scripts/benchmark_refs.py` supports generated timestamp output:
+  - `--include-generated-date`
+  - `generated_at_utc`
+- `scripts/benchmark_history_to_csv.py` supports filters:
+  - `--scope-contains`
+  - `--severity`
+- `scripts/benchmark_history_to_csv.py` supports sorting:
+  - `--sort-by {source|scope|avg_sec}`
+  - `--sort-order {asc|desc}`
+- `scripts/benchmark_history_to_csv.py` supports optional date column:
+  - `--include-date-column`
+  - `generated_date_utc`
+- `scripts/benchmark_history_to_csv.py` supports generated date prefix filter:
+  - `--generated-date-prefix`
+- `scripts/benchmark_history_to_csv.py` supports slowest-row compaction:
+  - `--top-slowest`
+- `scripts/benchmark_history_to_csv.py` supports percentile threshold filter:
+  - `--min-p90`
+- `scripts/benchmark_history_to_csv.py` supports latest-row compaction:
+  - `--latest-per-scope`
+- `scripts/benchmark_history_to_csv.py` normalizes mixed scope path separators (`/` and `\`).
+- `scripts/benchmark_history_to_csv.py` supports severity-split exports:
+  - `--split-by-severity`
+- `scripts/benchmark_history_to_csv.py` supports markdown snapshot output:
+  - `--out-md`
+- `scripts/benchmark_history_to_csv.py` ignores non-benchmark JSON schema rows.
+- Added `scripts/benchmark_samples.py` for sample avatar/world benchmark orchestration.
+- Added `scripts/benchmark_regression_report.py` for baseline/latest benchmark regression detection.
+- `scripts/benchmark_samples.py` can run regression report in one flow:
+  - `--run-regression`
+  - `--regression-baseline-inputs`
+- `scripts/benchmark_samples.py` supports baseline auto-discovery:
+  - `--regression-baseline-auto-latest`
+- `scripts/benchmark_regression_report.py` supports CI-oriented alerts:
+  - `--alerts-only`
+  - `--fail-on-regression`
+- `scripts/benchmark_regression_report.py` supports CSV history append:
+  - `--out-csv-append`
+- Added runtime validation scaffold command:
+  - `unitytool validate runtime --scene ...`
+  - log-based classification (`BROKEN_PPTR`, `UDON_NULLREF`, etc.)
+  - runtime assertion step (`assert_no_critical_errors`)
+- Added patch apply scaffold command:
+  - `unitytool patch apply --plan ... --dry-run`
+  - plan schema validation + dry-run diff preview
+  - non-dry-run confirm gate (`--confirm`)
+  - JSON target apply backend (`SER_APPLY_OK`, `.json` only)
+- `report export --format md` supports runtime summary section for `VALIDATE_RUNTIME_RESULT`.
 
 ## Next Executable Tasks
-- Add optional percentiles (p50/p90) to benchmark summary and CSV.
-- Add benchmark filter options (by scope/severity) for history CSV export.
+- Extend apply backend from JSON-only to Unity SerializedObject bridge.
+- Add optional per-scope baseline pinning file for regression comparison.
+- Add optional markdown summary output for regression report results.
+- Add runtime report filtering option to limit large `data.steps` blocks in markdown export.
 
 ## Decision-Required Queue
 - Decide default location/policy for ignore-guid files:
@@ -41,5 +94,6 @@
 - Decide whether to allow automatic ignore-guid application in CI.
 
 ## Notes
-- Keep read-only policy for Phase 1 behavior.
+- Keep read-only policy for inspection/validation commands in Phase 1.
+- `patch apply` is write-enabled only for explicit `--confirm` + `.json` targets.
 - Continue fail-fast for invalid input and missing required paths.

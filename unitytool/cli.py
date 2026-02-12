@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from unitytool.mcp.serialized_object import load_patch_plan
 from unitytool.orchestrator import Phase1Orchestrator
 from unitytool.reporting import export_report, render_markdown_report
 
@@ -87,6 +88,38 @@ def build_parser() -> argparse.ArgumentParser:
         help="UTF-8 text file with one missing-asset GUID per line (# comment supported).",
     )
     validate_refs.add_argument("--format", choices=("json", "md"), default="json")
+    validate_runtime = validate_sub.add_parser(
+        "runtime",
+        help="Validate runtime status using scene checks and log classification.",
+    )
+    validate_runtime.add_argument("--scene", required=True, help="Target Unity scene path.")
+    validate_runtime.add_argument(
+        "--profile",
+        default="default",
+        help="Runtime profile label for ClientSim execution context.",
+    )
+    validate_runtime.add_argument(
+        "--log-file",
+        default=None,
+        help="Optional Unity log file path. Default: <project>/Logs/Editor.log.",
+    )
+    validate_runtime.add_argument(
+        "--since-timestamp",
+        default=None,
+        help="Optional log cursor label for future integrations.",
+    )
+    validate_runtime.add_argument(
+        "--allow-warnings",
+        action="store_true",
+        help="Treat warning-only runtime findings as pass.",
+    )
+    validate_runtime.add_argument(
+        "--max-diagnostics",
+        type=int,
+        default=200,
+        help="Maximum diagnostics to include from runtime log classification.",
+    )
+    validate_runtime.add_argument("--format", choices=("json", "md"), default="json")
 
     suggest_parser = subparsers.add_parser("suggest", help="Suggestion commands.")
     suggest_sub = suggest_parser.add_subparsers(dest="suggest_command", required=True)
@@ -136,6 +169,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write mode for --out-ignore-guid-file (default: replace).",
     )
     suggest_ignore.add_argument("--format", choices=("json", "md"), default="json")
+
+    patch_parser = subparsers.add_parser("patch", help="Patch commands.")
+    patch_sub = patch_parser.add_subparsers(dest="patch_command", required=True)
+    patch_apply = patch_sub.add_parser("apply", help="Validate/apply a patch plan.")
+    patch_apply.add_argument("--plan", required=True, help="Input patch plan JSON path.")
+    patch_apply.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate plan and emit dry-run diff preview only.",
+    )
+    patch_apply.add_argument(
+        "--confirm",
+        action="store_true",
+        help="Allow non-dry-run execution path (Phase 1 supports JSON targets only).",
+    )
+    patch_apply.add_argument("--format", choices=("json", "md"), default="json")
 
     report_parser = subparsers.add_parser("report", help="Report conversion commands.")
     report_sub = report_parser.add_subparsers(dest="report_command", required=True)
@@ -250,6 +299,18 @@ def main(argv: list[str] | None = None) -> int:
         _emit_payload(response.to_dict(), args.format)
         return 0
 
+    if args.command == "validate" and args.validate_command == "runtime":
+        response = orchestrator.validate_runtime(
+            scene_path=args.scene,
+            profile=args.profile,
+            log_file=args.log_file,
+            since_timestamp=args.since_timestamp,
+            allow_warnings=args.allow_warnings,
+            max_diagnostics=args.max_diagnostics,
+        )
+        _emit_payload(response.to_dict(), args.format)
+        return 0
+
     if args.command == "suggest" and args.suggest_command == "ignore-guids":
         try:
             ignore_guids = _load_ignore_guids(args.ignore_guid, args.ignore_guid_file)
@@ -290,6 +351,19 @@ def main(argv: list[str] | None = None) -> int:
                     "reason": "no_candidates",
                 }
         _emit_payload(payload, args.format)
+        return 0
+
+    if args.command == "patch" and args.patch_command == "apply":
+        try:
+            plan = load_patch_plan(Path(args.plan))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            parser.error(f"Failed to load --plan: {exc}")
+        response = orchestrator.patch_apply(
+            plan=plan,
+            dry_run=args.dry_run,
+            confirm=args.confirm,
+        )
+        _emit_payload(response.to_dict(), args.format)
         return 0
 
     if args.command == "report" and args.report_command == "export":
