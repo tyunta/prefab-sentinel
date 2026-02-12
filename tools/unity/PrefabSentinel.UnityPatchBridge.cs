@@ -693,8 +693,17 @@ namespace PrefabSentinel
         {
             component = null;
             error = string.Empty;
+
+            string typeSelector;
+            string hierarchySelector;
+            if (!TryParseComponentSelector(selector, out typeSelector, out hierarchySelector, out error))
+            {
+                return false;
+            }
+
             Component[] components = root.GetComponentsInChildren<Component>(true);
             List<Component> matches = new List<Component>();
+            List<Component> typeMatches = new List<Component>();
             HashSet<string> availableTypeNames = new HashSet<string>(StringComparer.Ordinal);
             for (int i = 0; i < components.Length; i++)
             {
@@ -715,13 +724,24 @@ namespace PrefabSentinel
                 }
 
                 if (
-                    string.Equals(type.FullName, selector, StringComparison.Ordinal)
-                    || string.Equals(type.Name, selector, StringComparison.Ordinal)
-                    || string.Equals(type.AssemblyQualifiedName, selector, StringComparison.Ordinal)
+                    !string.Equals(type.FullName, typeSelector, StringComparison.Ordinal)
+                    && !string.Equals(type.Name, typeSelector, StringComparison.Ordinal)
+                    && !string.Equals(type.AssemblyQualifiedName, typeSelector, StringComparison.Ordinal)
                 )
                 {
-                    matches.Add(candidate);
+                    continue;
                 }
+
+                typeMatches.Add(candidate);
+                if (!string.IsNullOrWhiteSpace(hierarchySelector))
+                {
+                    string candidatePath = BuildHierarchyPath(candidate.transform).Replace('\\', '/');
+                    if (!string.Equals(candidatePath, hierarchySelector, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+                }
+                matches.Add(candidate);
             }
 
             if (matches.Count == 1)
@@ -731,6 +751,15 @@ namespace PrefabSentinel
             }
             if (matches.Count == 0)
             {
+                if (!string.IsNullOrWhiteSpace(hierarchySelector) && typeMatches.Count > 0)
+                {
+                    string candidates = BuildComponentSample(typeMatches, 5);
+                    error = string.IsNullOrEmpty(candidates)
+                        ? $"component path filter did not match any '{typeSelector}' components: '{hierarchySelector}'"
+                        : $"component path filter did not match any '{typeSelector}' components at '{hierarchySelector}'. available paths: {candidates}";
+                    return false;
+                }
+
                 string available = BuildTypeNameSample(availableTypeNames, 8);
                 error = string.IsNullOrEmpty(available)
                     ? $"component not found: '{selector}'"
@@ -738,11 +767,51 @@ namespace PrefabSentinel
                 return false;
             }
 
-            string candidates = BuildComponentSample(matches, 5);
-            error = string.IsNullOrEmpty(candidates)
+            string matchedCandidates = BuildComponentSample(matches, 5);
+            error = string.IsNullOrEmpty(matchedCandidates)
                 ? $"component selector is ambiguous: '{selector}' matched {matches.Count} components"
-                : $"component selector is ambiguous: '{selector}' matched {matches.Count} components ({candidates})";
+                : $"component selector is ambiguous: '{selector}' matched {matches.Count} components ({matchedCandidates})";
             return false;
+        }
+
+        private static bool TryParseComponentSelector(
+            string selector,
+            out string typeSelector,
+            out string hierarchySelector,
+            out string error
+        )
+        {
+            typeSelector = string.Empty;
+            hierarchySelector = string.Empty;
+            error = string.Empty;
+
+            string raw = (selector ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                error = "component selector is empty";
+                return false;
+            }
+
+            int delimiter = raw.IndexOf('@');
+            if (delimiter < 0)
+            {
+                typeSelector = raw;
+                return true;
+            }
+
+            typeSelector = raw.Substring(0, delimiter).Trim();
+            hierarchySelector = raw.Substring(delimiter + 1).Trim().Replace('\\', '/');
+            if (string.IsNullOrWhiteSpace(typeSelector))
+            {
+                error = "component selector must include type before '@'";
+                return false;
+            }
+            if (string.IsNullOrWhiteSpace(hierarchySelector))
+            {
+                error = "component selector must include hierarchy path after '@'";
+                return false;
+            }
+            return true;
         }
 
         private static bool TryAssignPropertyValue(
