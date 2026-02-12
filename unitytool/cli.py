@@ -184,6 +184,42 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Allow non-dry-run execution path (.json built-in, Unity targets via bridge).",
     )
+    patch_apply.add_argument(
+        "--scope",
+        default=None,
+        help="Optional preflight scope for scan_broken_references before apply.",
+    )
+    patch_apply.add_argument(
+        "--runtime-scene",
+        default=None,
+        help="Optional scene path for runtime validation steps after apply.",
+    )
+    patch_apply.add_argument(
+        "--runtime-profile",
+        default="default",
+        help="Runtime validation profile passed to run_clientsim (default: default).",
+    )
+    patch_apply.add_argument(
+        "--runtime-log-file",
+        default=None,
+        help="Optional Unity log file path used by runtime validation classification.",
+    )
+    patch_apply.add_argument(
+        "--runtime-since-timestamp",
+        default=None,
+        help="Optional timestamp marker to annotate runtime log collection.",
+    )
+    patch_apply.add_argument(
+        "--runtime-allow-warnings",
+        action="store_true",
+        help="Allow warnings in runtime assertion when --runtime-scene is used.",
+    )
+    patch_apply.add_argument(
+        "--runtime-max-diagnostics",
+        type=int,
+        default=200,
+        help="Maximum runtime classification diagnostics when --runtime-scene is used.",
+    )
     patch_apply.add_argument("--format", choices=("json", "md"), default="json")
 
     report_parser = subparsers.add_parser("report", help="Report conversion commands.")
@@ -373,6 +409,13 @@ def main(argv: list[str] | None = None) -> int:
             plan=plan,
             dry_run=args.dry_run,
             confirm=args.confirm,
+            scope=args.scope,
+            runtime_scene=args.runtime_scene,
+            runtime_profile=args.runtime_profile,
+            runtime_log_file=args.runtime_log_file,
+            runtime_since_timestamp=args.runtime_since_timestamp,
+            runtime_allow_warnings=args.runtime_allow_warnings,
+            runtime_max_diagnostics=args.runtime_max_diagnostics,
         )
         _emit_payload(response.to_dict(), args.format)
         return 0

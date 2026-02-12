@@ -85,6 +85,9 @@
   - `unitytool patch apply --plan ... --dry-run`
   - plan schema validation + dry-run diff preview
   - non-dry-run confirm gate (`--confirm`)
+  - optional preflight reference scan (`--scope`)
+  - optional prefab override preflight (`list_overrides` for `.prefab` target)
+  - optional post-apply runtime validation sequence (`--runtime-scene` and related flags)
   - JSON target apply backend (`SER_APPLY_OK`, `.json` only)
   - Unity bridge adapter via `UNITYTOOL_PATCH_BRIDGE` (allowlisted external command)
   - bridge protocol version check (`protocol_version: 1`)

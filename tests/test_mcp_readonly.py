@@ -613,6 +613,78 @@ print(
             step_codes = [step["result"]["code"] for step in response.data["steps"]]
             self.assertIn("SER_APPLY_OK", step_codes)
 
+    def test_orchestrator_patch_apply_stops_on_preflight_reference_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_sample_project(root)
+            target = root / "state.json"
+            target.write_text(json.dumps({"nested": {"value": 10}}), encoding="utf-8")
+
+            orchestrator = Phase1Orchestrator.default(project_root=root)
+            response = orchestrator.patch_apply(
+                plan={
+                    "target": str(target),
+                    "ops": [
+                        {
+                            "op": "set",
+                            "component": "Example.Component",
+                            "path": "nested.value",
+                            "value": 42,
+                        }
+                    ],
+                },
+                dry_run=False,
+                confirm=True,
+                scope="Assets",
+            )
+
+            self.assertFalse(response.success)
+            self.assertTrue(response.data["fail_fast_triggered"])
+            step_codes = [step["result"]["code"] for step in response.data["steps"]]
+            self.assertIn("REF_SCAN_BROKEN", step_codes)
+            self.assertNotIn("SER_APPLY_OK", step_codes)
+
+    def test_orchestrator_patch_apply_runs_runtime_validation_when_scene_provided(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            assets = root / "Assets"
+            assets.mkdir(parents=True, exist_ok=True)
+            scene = assets / "Smoke.unity"
+            scene.write_text("%YAML 1.1\n", encoding="utf-8")
+            target = root / "state.json"
+            target.write_text(
+                json.dumps({"items": [1, 2], "nested": {"value": 10}}),
+                encoding="utf-8",
+            )
+
+            orchestrator = Phase1Orchestrator.default(project_root=root)
+            response = orchestrator.patch_apply(
+                plan={
+                    "target": str(target),
+                    "ops": [
+                        {
+                            "op": "set",
+                            "component": "Example.Component",
+                            "path": "nested.value",
+                            "value": 42,
+                        }
+                    ],
+                },
+                dry_run=False,
+                confirm=True,
+                scope="Assets",
+                runtime_scene="Assets/Smoke.unity",
+            )
+
+            self.assertTrue(response.success)
+            self.assertEqual("PATCH_APPLY_RESULT", response.code)
+            step_codes = [step["result"]["code"] for step in response.data["steps"]]
+            self.assertIn("REF_SCAN_OK", step_codes)
+            self.assertIn("SER_APPLY_OK", step_codes)
+            self.assertIn("RUN_CLIENTSIM_SKIPPED", step_codes)
+            self.assertIn("RUN_ASSERT_OK", step_codes)
+            self.assertFalse(response.data["read_only"])
+
 
 class OrchestratorSuggestionTests(unittest.TestCase):
     def test_suggest_ignore_guids_returns_candidates(self) -> None:

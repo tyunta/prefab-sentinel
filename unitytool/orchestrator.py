@@ -350,46 +350,67 @@ class Phase1Orchestrator:
         plan: dict[str, object],
         dry_run: bool = False,
         confirm: bool = False,
+        scope: str | None = None,
+        runtime_scene: str | None = None,
+        runtime_profile: str = "default",
+        runtime_log_file: str | None = None,
+        runtime_since_timestamp: str | None = None,
+        runtime_allow_warnings: bool = False,
+        runtime_max_diagnostics: int = 200,
     ) -> ToolResponse:
         target = str(plan.get("target", ""))
         raw_ops = plan.get("ops", [])
         ops = raw_ops if isinstance(raw_ops, list) else []
+        target_suffix = Path(target).suffix.lower()
 
-        dry_step = self.serialized_object.dry_run_patch(target=target, ops=ops)
-        steps = [("dry_run_patch", dry_step)]
-        if dry_step.severity in (Severity.ERROR, Severity.CRITICAL):
+        steps: list[tuple[str, ToolResponse]] = []
+
+        def _finalize(message: str, fail_fast: bool) -> ToolResponse:
+            severities = [step.severity for _, step in steps]
+            severity = max_severity(severities)
+            success = all(step.success for _, step in steps)
+            diagnostics = [
+                diagnostic
+                for _, step in steps
+                for diagnostic in step.diagnostics
+            ]
+            write_executed = any(step_name == "apply_and_save" for step_name, _ in steps)
             return ToolResponse(
-                success=False,
-                severity=dry_step.severity,
+                success=success,
+                severity=severity,
                 code="PATCH_APPLY_RESULT",
-                message="patch.apply stopped by fail-fast policy due to invalid patch plan.",
+                message=message,
                 data={
                     "target": target,
                     "dry_run": dry_run,
                     "confirm": confirm,
-                    "read_only": True,
-                    "fail_fast_triggered": True,
-                    "steps": [{"step": name, "result": step.to_dict()} for name, step in steps],
+                    "scope": scope,
+                    "runtime_scene": runtime_scene,
+                    "runtime_profile": runtime_profile,
+                    "runtime_log_file": runtime_log_file,
+                    "runtime_since_timestamp": runtime_since_timestamp,
+                    "runtime_allow_warnings": runtime_allow_warnings,
+                    "runtime_max_diagnostics": runtime_max_diagnostics,
+                    "read_only": not write_executed,
+                    "fail_fast_triggered": fail_fast,
+                    "steps": [
+                        {"step": step_name, "result": step.to_dict()}
+                        for step_name, step in steps
+                    ],
                 },
-                diagnostics=dry_step.diagnostics,
+                diagnostics=diagnostics,
+            )
+
+        dry_step = self.serialized_object.dry_run_patch(target=target, ops=ops)
+        steps.append(("dry_run_patch", dry_step))
+        if dry_step.severity in (Severity.ERROR, Severity.CRITICAL):
+            return _finalize(
+                "patch.apply stopped by fail-fast policy due to invalid patch plan.",
+                fail_fast=True,
             )
 
         if dry_run:
-            return ToolResponse(
-                success=True,
-                severity=dry_step.severity,
-                code="PATCH_APPLY_RESULT",
-                message="patch.apply dry-run completed.",
-                data={
-                    "target": target,
-                    "dry_run": True,
-                    "confirm": confirm,
-                    "read_only": True,
-                    "fail_fast_triggered": False,
-                    "steps": [{"step": name, "result": step.to_dict()} for name, step in steps],
-                },
-                diagnostics=dry_step.diagnostics,
-            )
+            return _finalize("patch.apply dry-run completed.", fail_fast=False)
 
         if not confirm:
             confirm_step = ToolResponse(
@@ -401,44 +422,81 @@ class Phase1Orchestrator:
                 diagnostics=[],
             )
             steps.append(("confirm_gate", confirm_step))
-            return ToolResponse(
-                success=False,
-                severity=Severity.WARNING,
-                code="PATCH_APPLY_RESULT",
-                message="patch.apply blocked by confirm gate.",
-                data={
-                    "target": target,
-                    "dry_run": False,
-                    "confirm": False,
-                    "read_only": True,
-                    "fail_fast_triggered": False,
-                    "steps": [{"step": name, "result": step.to_dict()} for name, step in steps],
-                },
-                diagnostics=[],
+            return _finalize("patch.apply blocked by confirm gate.", fail_fast=False)
+
+        if scope:
+            preflight_refs = self.reference_resolver.scan_broken_references(
+                scope=scope,
+                include_diagnostics=False,
+                max_diagnostics=runtime_max_diagnostics,
             )
+            steps.append(("scan_broken_references_preflight", preflight_refs))
+            if preflight_refs.severity in (Severity.ERROR, Severity.CRITICAL):
+                return _finalize(
+                    "patch.apply stopped by fail-fast policy due to preflight reference errors.",
+                    fail_fast=True,
+                )
+
+        if target_suffix == ".prefab":
+            overrides_step = self.prefab_variant.list_overrides(target)
+            steps.append(("list_overrides_preflight", overrides_step))
+            if overrides_step.severity in (Severity.ERROR, Severity.CRITICAL):
+                return _finalize(
+                    "patch.apply stopped by fail-fast policy due to preflight override inspection errors.",
+                    fail_fast=True,
+                )
 
         apply_step = self.serialized_object.apply_and_save(target=target, ops=ops)
         steps.append(("apply_and_save", apply_step))
-        severities = [step.severity for _, step in steps]
-        severity = max_severity(severities)
+        if apply_step.severity in (Severity.ERROR, Severity.CRITICAL):
+            return _finalize("patch.apply completed with errors.", fail_fast=False)
+
+        if runtime_scene:
+            compile_step = self.runtime_validation.compile_udonsharp()
+            run_step = self.runtime_validation.run_clientsim(runtime_scene, runtime_profile)
+            steps.extend(
+                [
+                    ("compile_udonsharp", compile_step),
+                    ("run_clientsim", run_step),
+                ]
+            )
+            if run_step.severity in (Severity.ERROR, Severity.CRITICAL):
+                return _finalize(
+                    "patch.apply stopped by fail-fast policy due to runtime scene validation errors.",
+                    fail_fast=True,
+                )
+
+            collect_step = self.runtime_validation.collect_unity_console(
+                log_file=runtime_log_file,
+                since_timestamp=runtime_since_timestamp,
+            )
+            classify_step = self.runtime_validation.classify_errors(
+                log_lines=list(collect_step.data.get("log_lines", [])),
+                max_diagnostics=runtime_max_diagnostics,
+            )
+            assert_step = self.runtime_validation.assert_no_critical_errors(
+                classification_result=classify_step,
+                allow_warnings=runtime_allow_warnings,
+            )
+            steps.extend(
+                [
+                    ("collect_unity_console", collect_step),
+                    ("classify_errors", classify_step),
+                    ("assert_no_critical_errors", assert_step),
+                ]
+            )
+            if classify_step.severity in (Severity.ERROR, Severity.CRITICAL):
+                return _finalize(
+                    "patch.apply stopped by fail-fast policy due to runtime error classification.",
+                    fail_fast=True,
+                )
+            if assert_step.severity in (Severity.ERROR, Severity.CRITICAL):
+                return _finalize(
+                    "patch.apply stopped by fail-fast policy due to runtime assertion failure.",
+                    fail_fast=True,
+                )
+
         success = all(step.success for _, step in steps)
-        diagnostics = [*dry_step.diagnostics, *apply_step.diagnostics]
-        return ToolResponse(
-            success=success,
-            severity=severity,
-            code="PATCH_APPLY_RESULT",
-            message=(
-                "patch.apply completed."
-                if apply_step.success
-                else "patch.apply completed with errors."
-            ),
-            data={
-                "target": target,
-                "dry_run": False,
-                "confirm": True,
-                "read_only": False,
-                "fail_fast_triggered": False,
-                "steps": [{"step": name, "result": step.to_dict()} for name, step in steps],
-            },
-            diagnostics=diagnostics,
-        )
+        if success:
+            return _finalize("patch.apply completed.", fail_fast=False)
+        return _finalize("patch.apply completed with warnings.", fail_fast=False)

@@ -205,6 +205,57 @@ GameObject:
             updated = json.loads(target.read_text(encoding="utf-8"))
             self.assertEqual({"items": [0, 2], "nested": {"value": 42}}, updated)
 
+    def test_patch_apply_confirm_runs_preflight_and_runtime_when_requested(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            assets = root / "Assets"
+            assets.mkdir(parents=True, exist_ok=True)
+            scene = assets / "Smoke.unity"
+            _write(scene, "%YAML 1.1\n")
+            target = root / "state.json"
+            target.write_text(
+                json.dumps({"nested": {"value": 10}}),
+                encoding="utf-8",
+            )
+            plan = root / "patch.json"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "target": str(target),
+                        "ops": [
+                            {
+                                "op": "set",
+                                "component": "Example.Component",
+                                "path": "nested.value",
+                                "value": 42,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            exit_code, output = self.run_cli(
+                [
+                    "patch",
+                    "apply",
+                    "--plan",
+                    str(plan),
+                    "--confirm",
+                    "--scope",
+                    str(assets),
+                    "--runtime-scene",
+                    str(scene),
+                ]
+            )
+
+        payload = json.loads(output)
+        self.assertEqual(0, exit_code)
+        self.assertTrue(payload["success"])
+        step_codes = [step["result"]["code"] for step in payload["data"]["steps"]]
+        self.assertIn("REF_SCAN_OK", step_codes)
+        self.assertIn("RUN_CLIENTSIM_SKIPPED", step_codes)
+        self.assertIn("RUN_ASSERT_OK", step_codes)
+
     def test_patch_apply_confirm_uses_bridge_env_for_prefab_target(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

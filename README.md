@@ -479,6 +479,7 @@ set UNITYTOOL_PATCH_BRIDGE="python tools/unity_patch_bridge.py"
 set UNITYTOOL_UNITY_COMMAND="C:/Program Files/Unity/Hub/Editor/<version>/Editor/Unity.exe"
 set UNITYTOOL_UNITY_PROJECT_PATH="D:/git/UnityTool/sample/avatar"
 uv run unitytool patch apply --plan "config/prefab_patch_plan.json" --confirm
+uv run unitytool patch apply --plan "config/prefab_patch_plan.json" --confirm --scope "Assets" --runtime-scene "Assets/Smoke.unity"
 uv run unitytool suggest ignore-guids --scope "Assets/haiirokoubou" --min-occurrences 100 --max-items 20
 uv run unitytool suggest ignore-guids --scope "Assets/haiirokoubou" --ignore-guid "7e5debf235ac2d54397a268de3328672"
 uv run unitytool suggest ignore-guids --scope "Assets/haiirokoubou" --min-occurrences 100 --out-ignore-guid-file "config/ignore_guids.txt" --out-ignore-guid-mode append
@@ -530,6 +531,9 @@ uvx --from . unitytool suggest ignore-guids --scope "Assets/haiirokoubou"
 `scripts/benchmark_regression_report.py` は `--out-md` で比較サマリのMarkdown（回帰一覧 + scope表）を出力できる。
 `patch apply` は plan JSON のスキーマ検証と `dry_run_patch` プレビューを実装済み（`set` / `insert_array_element` / `remove_array_element`）。
 `patch apply` は非dry-run時に `--confirm` を要求し、JSONターゲット（`.json`）は内蔵バックエンドで実編集する。
+`patch apply` は `--scope` 指定時に `scan_broken_references` を事前実行し、`error`/`critical` で fail-fast 停止する。
+`patch apply` は `.prefab` ターゲットで `list_overrides` を事前実行し、`error`/`critical` で fail-fast 停止する。
+`patch apply` は `--runtime-scene` 指定時に `compile_udonsharp` / `run_clientsim` / ログ分類 / `assert_no_critical_errors` を後段実行する。
 `patch apply` は Unityターゲット（`.prefab` / `.unity` / `.asset` など）に対して `UNITYTOOL_PATCH_BRIDGE` 経由の外部bridgeを使って適用できる。
 `patch apply` は Unity bridge 未設定時に Unityターゲットを `SER_UNSUPPORTED_TARGET` で停止する（Unity YAMLの直接編集は行わない）。
 `UNITYTOOL_PATCH_BRIDGE` は JSON入力(stdin) / JSON出力(stdout) のbridgeコマンドを指定する（`protocol_version: 1`）。
