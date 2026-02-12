@@ -285,11 +285,45 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional UTF-8 key file path (overrides --key-env when set).",
     )
     patch_sign.add_argument("--format", choices=("json", "text"), default="text")
+    patch_attest = patch_sub.add_parser(
+        "attest",
+        help="Emit patch-plan attestation (sha256 + optional signature).",
+    )
+    patch_attest.add_argument("--plan", required=True, help="Input patch plan JSON path.")
+    patch_attest.add_argument(
+        "--unsigned",
+        action="store_true",
+        help="Emit attestation without HMAC signature.",
+    )
+    patch_attest.add_argument(
+        "--key-env",
+        default=_DEFAULT_PLAN_SIGNING_KEY_ENV,
+        help=(
+            "Env var name for HMAC signing key "
+            f"(default: {_DEFAULT_PLAN_SIGNING_KEY_ENV})."
+        ),
+    )
+    patch_attest.add_argument(
+        "--key-file",
+        default=None,
+        help="Optional UTF-8 key file path (overrides --key-env when set).",
+    )
+    patch_attest.add_argument(
+        "--out",
+        default=None,
+        help="Optional output path for attestation JSON file.",
+    )
+    patch_attest.add_argument("--format", choices=("json", "text"), default="json")
     patch_verify = patch_sub.add_parser(
         "verify",
         help="Verify SHA-256/HMAC signatures of a patch plan.",
     )
     patch_verify.add_argument("--plan", required=True, help="Input patch plan JSON path.")
+    patch_verify.add_argument(
+        "--attestation-file",
+        default=None,
+        help="Optional attestation JSON path containing expected sha256/signature.",
+    )
     patch_verify.add_argument("--sha256", default=None, help="Expected SHA-256 digest.")
     patch_verify.add_argument("--signature", default=None, help="Expected HMAC-SHA256 signature.")
     patch_verify.add_argument(
@@ -401,6 +435,33 @@ def _normalize_expected_digest(
     if not re.fullmatch(r"[0-9a-f]{64}", normalized):
         parser.error(f"{option_name} must be a 64-character hexadecimal digest.")
     return normalized
+
+
+def _load_attestation_expectations(
+    parser: argparse.ArgumentParser,
+    attestation_file: str,
+) -> tuple[str | None, str | None]:
+    path = Path(attestation_file)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        parser.error(f"Failed to load --attestation-file: {exc}")
+
+    if not isinstance(payload, dict):
+        parser.error("--attestation-file root must be a JSON object.")
+
+    source: dict[str, Any] = payload
+    data = payload.get("data")
+    if isinstance(data, dict):
+        source = data
+
+    sha256 = source.get("sha256")
+    signature = source.get("signature")
+    if sha256 is not None and not isinstance(sha256, str):
+        parser.error("--attestation-file field 'sha256' must be a string when present.")
+    if signature is not None and not isinstance(signature, str):
+        parser.error("--attestation-file field 'signature' must be a string when present.")
+    return sha256, signature
 
 
 def _ordered_unique(values: list[str]) -> list[str]:
@@ -643,34 +704,91 @@ def main(argv: list[str] | None = None) -> int:
             print(signature)
         return 0
 
+    if args.command == "patch" and args.patch_command == "attest":
+        plan_path = Path(args.plan)
+        try:
+            load_patch_plan(plan_path)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            parser.error(f"Failed to load --plan: {exc}")
+        sha256 = compute_patch_plan_sha256(plan_path)
+        signature = None
+        if not args.unsigned:
+            key = _resolve_signing_key(parser, key_env=args.key_env, key_file=args.key_file)
+            signature = compute_patch_plan_hmac_sha256(plan_path, key)
+
+        payload = {
+            "success": True,
+            "severity": "info",
+            "code": "PATCH_PLAN_ATTESTATION",
+            "message": "Patch plan attestation generated.",
+            "data": {
+                "plan": str(plan_path),
+                "sha256": sha256,
+                "signature": signature,
+            },
+            "diagnostics": [],
+        }
+        if args.out:
+            output_path = Path(args.out)
+            try:
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_text(
+                    json.dumps(payload, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+            except OSError as exc:
+                parser.error(f"Failed to write --out: {exc}")
+            payload["data"]["attestation_path"] = str(output_path)
+
+        if args.format == "json":
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        else:
+            print(f"sha256={sha256}")
+            if signature:
+                print(f"signature={signature}")
+        return 0
+
     if args.command == "patch" and args.patch_command == "verify":
         plan_path = Path(args.plan)
         try:
             load_patch_plan(plan_path)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             parser.error(f"Failed to load --plan: {exc}")
-        if not args.sha256 and not args.signature:
-            parser.error("patch verify requires at least one of --sha256 / --signature.")
+        attested_sha256 = None
+        attested_signature = None
+        if args.attestation_file:
+            attested_sha256, attested_signature = _load_attestation_expectations(
+                parser,
+                args.attestation_file,
+            )
+
+        sha256_input = args.sha256 if args.sha256 is not None else attested_sha256
+        signature_input = args.signature if args.signature is not None else attested_signature
+        if sha256_input is None and signature_input is None:
+            parser.error(
+                "patch verify requires at least one expected value: "
+                "--sha256 / --signature / --attestation-file."
+            )
 
         actual_sha256 = compute_patch_plan_sha256(plan_path)
-        sha256_checked = args.sha256 is not None
+        sha256_checked = sha256_input is not None
         sha256_expected = (
             _normalize_expected_digest(
                 parser,
                 option_name="--sha256",
-                digest=args.sha256,
+                digest=sha256_input,
             )
             if sha256_checked
             else None
         )
         sha256_matched = (actual_sha256 == sha256_expected) if sha256_checked else None
 
-        signature_checked = args.signature is not None
+        signature_checked = signature_input is not None
         signature_expected = (
             _normalize_expected_digest(
                 parser,
                 option_name="--signature",
-                digest=args.signature,
+                digest=signature_input,
             )
             if signature_checked
             else None
@@ -701,6 +819,7 @@ def main(argv: list[str] | None = None) -> int:
             "message": message,
             "data": {
                 "plan": str(plan_path),
+                "attestation_file": args.attestation_file,
                 "sha256": {
                     "checked": sha256_checked,
                     "expected": sha256_expected,

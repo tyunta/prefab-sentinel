@@ -398,6 +398,60 @@ GameObject:
         self.assertEqual("PATCH_PLAN_SIGNATURE", payload["code"])
         self.assertEqual(expected, payload["data"]["signature"])
 
+    def test_patch_attest_outputs_json_with_signature(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "patch.json"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "target": "Assets/Variant.prefab",
+                        "ops": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            key = "attest-signing-key"
+            expected_signature = hmac.new(
+                key.encode("utf-8"),
+                plan.read_bytes(),
+                hashlib.sha256,
+            ).hexdigest()
+            with patch.dict(os.environ, {"UNITYTOOL_PLAN_SIGNING_KEY": key}, clear=False):
+                exit_code, output = self.run_cli(["patch", "attest", "--plan", str(plan)])
+
+        payload = json.loads(output)
+        self.assertEqual(0, exit_code)
+        self.assertTrue(payload["success"])
+        self.assertEqual("PATCH_PLAN_ATTESTATION", payload["code"])
+        self.assertEqual(expected_signature, payload["data"]["signature"])
+
+    def test_patch_attest_writes_output_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "patch.json"
+            out_file = root / "reports" / "attestation.json"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "target": "Assets/Variant.prefab",
+                        "ops": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            exit_code, output = self.run_cli(
+                ["patch", "attest", "--plan", str(plan), "--unsigned", "--out", str(out_file)]
+            )
+
+            file_payload = json.loads(out_file.read_text(encoding="utf-8"))
+
+        payload = json.loads(output)
+        self.assertEqual(0, exit_code)
+        self.assertTrue(payload["success"])
+        self.assertEqual(str(out_file), payload["data"]["attestation_path"])
+        self.assertEqual("PATCH_PLAN_ATTESTATION", file_payload["code"])
+
     def test_patch_verify_succeeds_with_sha256(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -458,6 +512,41 @@ GameObject:
         self.assertEqual(0, exit_code)
         self.assertTrue(payload["success"])
         self.assertTrue(payload["data"]["signature"]["matched"])
+
+    def test_patch_verify_uses_attestation_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "patch.json"
+            attestation = root / "attestation.json"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "target": "Assets/Variant.prefab",
+                        "ops": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            expected = hashlib.sha256(plan.read_bytes()).hexdigest()
+            attestation.write_text(
+                json.dumps({"data": {"sha256": expected}}),
+                encoding="utf-8",
+            )
+            exit_code, output = self.run_cli(
+                [
+                    "patch",
+                    "verify",
+                    "--plan",
+                    str(plan),
+                    "--attestation-file",
+                    str(attestation),
+                ]
+            )
+
+        payload = json.loads(output)
+        self.assertEqual(0, exit_code)
+        self.assertTrue(payload["success"])
+        self.assertEqual(str(attestation), payload["data"]["attestation_file"])
 
     def test_patch_verify_returns_nonzero_on_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
