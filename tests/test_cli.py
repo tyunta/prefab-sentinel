@@ -193,10 +193,21 @@ sys.stdout.write(json.dumps({"success": True, "severity": "info", "code": "BRIDG
             plan = root / "avatar_plan.json"
             project = root / "avatar_project"
             smoke_script = root / "fake_smoke.py"
+            timeout_profile = root / "timeout_profile.json"
             out_dir = root / "reports"
             project.mkdir(parents=True, exist_ok=True)
             plan.write_text(
                 json.dumps({"target": "Assets/Test.prefab", "ops": []}),
+                encoding="utf-8",
+            )
+            timeout_profile.write_text(
+                json.dumps(
+                    {
+                        "profiles": [
+                            {"target": "avatar", "recommended_timeout_sec": 700},
+                        ]
+                    }
+                ),
                 encoding="utf-8",
             )
             smoke_script.write_text(
@@ -212,6 +223,7 @@ parser.add_argument("--python", required=True)
 parser.add_argument("--unity-project-path", required=True)
 parser.add_argument("--unity-execute-method", required=True)
 parser.add_argument("--unity-log-file", required=True)
+parser.add_argument("--unity-timeout-sec", type=int, default=None)
 parser.add_argument("--out", required=True)
 args = parser.parse_args()
 
@@ -220,7 +232,7 @@ payload = {
     "severity": "info",
     "code": "OK",
     "message": "ok",
-    "data": {},
+    "data": {"unity_timeout_sec": args.unity_timeout_sec},
     "diagnostics": [],
 }
 Path(args.out).write_text(json.dumps(payload), encoding="utf-8")
@@ -245,6 +257,8 @@ raise SystemExit(0)
                     sys.executable,
                     "--bridge-script",
                     "tools/unity_patch_bridge.py",
+                    "--timeout-profile",
+                    str(timeout_profile),
                     "--out-dir",
                     str(out_dir),
                 ]
@@ -256,6 +270,9 @@ raise SystemExit(0)
             self.assertTrue(summary["success"])
             self.assertEqual("SMOKE_BATCH_OK", summary["code"])
             self.assertEqual(1, summary["data"]["total_cases"])
+            self.assertEqual(str(timeout_profile), summary["data"]["timeout_profile_path"])
+            self.assertEqual(700, summary["data"]["cases"][0]["unity_timeout_sec"])
+            self.assertEqual("profile", summary["data"]["cases"][0]["timeout_source"])
 
     def test_patch_apply_dry_run_returns_preview(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

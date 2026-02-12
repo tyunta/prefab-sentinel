@@ -69,6 +69,7 @@ class BridgeSmokeSamplesTests(unittest.TestCase):
                             "attempts": 2,
                             "duration_sec": 1.25,
                             "unity_timeout_sec": 450,
+                            "timeout_source": "profile",
                             "exit_code": 1,
                             "response_code": "SMOKE_BRIDGE_ERROR",
                             "response_path": "reports/bridge_smoke/avatar/response.json",
@@ -78,7 +79,10 @@ class BridgeSmokeSamplesTests(unittest.TestCase):
                 },
             }
         )
-        self.assertIn("| avatar | False | 2 | 1.25 | 450 | 1 | SMOKE_BRIDGE_ERROR |", markdown)
+        self.assertIn(
+            "| avatar | False | 2 | 1.25 | 450 | profile | 1 | SMOKE_BRIDGE_ERROR |",
+            markdown,
+        )
 
     def test_main_writes_summary_and_returns_zero(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -368,6 +372,181 @@ raise SystemExit(0)
         self.assertEqual(450, by_name["world"]["unity_timeout_sec"])
         self.assertEqual(900, avatar_response["data"]["unity_timeout_sec"])
         self.assertEqual(450, world_response["data"]["unity_timeout_sec"])
+
+    def test_main_applies_timeout_profile_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            avatar_plan = root / "avatar_plan.json"
+            world_plan = root / "world_plan.json"
+            avatar_project = root / "avatar_project"
+            world_project = root / "world_project"
+            smoke_script = root / "fake_smoke_timeout.py"
+            timeout_profile = root / "timeout_profile.json"
+            out_dir = root / "reports"
+            avatar_project.mkdir(parents=True, exist_ok=True)
+            world_project.mkdir(parents=True, exist_ok=True)
+            avatar_plan.write_text(
+                json.dumps({"target": "Assets/Avatar.prefab", "ops": []}),
+                encoding="utf-8",
+            )
+            world_plan.write_text(
+                json.dumps({"target": "Assets/World.prefab", "ops": []}),
+                encoding="utf-8",
+            )
+            timeout_profile.write_text(
+                json.dumps(
+                    {
+                        "profiles": [
+                            {"target": "avatar", "recommended_timeout_sec": 720},
+                            {"target": "world", "recommended_timeout_sec": 840},
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            smoke_script.write_text(
+                """
+import argparse
+import json
+from pathlib import Path
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--out", required=True)
+parser.add_argument("--unity-timeout-sec", type=int, default=None)
+args, _ = parser.parse_known_args()
+payload = {
+    "success": True,
+    "severity": "info",
+    "code": "OK",
+    "message": "ok",
+    "data": {"unity_timeout_sec": args.unity_timeout_sec},
+    "diagnostics": [],
+}
+Path(args.out).write_text(json.dumps(payload), encoding="utf-8")
+print(json.dumps(payload))
+raise SystemExit(0)
+""".strip(),
+                encoding="utf-8",
+            )
+
+            with redirect_stdout(StringIO()):
+                exit_code = main(
+                    [
+                        "--targets",
+                        "all",
+                        "--avatar-plan",
+                        str(avatar_plan),
+                        "--world-plan",
+                        str(world_plan),
+                        "--avatar-project-path",
+                        str(avatar_project),
+                        "--world-project-path",
+                        str(world_project),
+                        "--smoke-script",
+                        str(smoke_script),
+                        "--python",
+                        sys.executable,
+                        "--bridge-script",
+                        "tools/unity_patch_bridge.py",
+                        "--timeout-profile",
+                        str(timeout_profile),
+                        "--out-dir",
+                        str(out_dir),
+                    ]
+                )
+
+            summary = json.loads((out_dir / "summary.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(0, exit_code)
+        self.assertTrue(summary["success"])
+        by_name = {item["name"]: item for item in summary["data"]["cases"]}
+        self.assertEqual(720, by_name["avatar"]["unity_timeout_sec"])
+        self.assertEqual(840, by_name["world"]["unity_timeout_sec"])
+        self.assertEqual("profile", by_name["avatar"]["timeout_source"])
+        self.assertEqual("profile", by_name["world"]["timeout_source"])
+        self.assertEqual(str(timeout_profile), summary["data"]["timeout_profile_path"])
+        self.assertEqual(["avatar", "world"], summary["data"]["timeout_profile_targets"])
+
+    def test_main_default_timeout_overrides_timeout_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            world_plan = root / "world_plan.json"
+            world_project = root / "world_project"
+            smoke_script = root / "fake_smoke_timeout.py"
+            timeout_profile = root / "timeout_profile.json"
+            out_dir = root / "reports"
+            world_project.mkdir(parents=True, exist_ok=True)
+            world_plan.write_text(
+                json.dumps({"target": "Assets/World.prefab", "ops": []}),
+                encoding="utf-8",
+            )
+            timeout_profile.write_text(
+                json.dumps(
+                    {
+                        "profiles": [
+                            {"target": "world", "recommended_timeout_sec": 840},
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            smoke_script.write_text(
+                """
+import argparse
+import json
+from pathlib import Path
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--out", required=True)
+parser.add_argument("--unity-timeout-sec", type=int, default=None)
+args, _ = parser.parse_known_args()
+payload = {
+    "success": True,
+    "severity": "info",
+    "code": "OK",
+    "message": "ok",
+    "data": {"unity_timeout_sec": args.unity_timeout_sec},
+    "diagnostics": [],
+}
+Path(args.out).write_text(json.dumps(payload), encoding="utf-8")
+print(json.dumps(payload))
+raise SystemExit(0)
+""".strip(),
+                encoding="utf-8",
+            )
+
+            with redirect_stdout(StringIO()):
+                exit_code = main(
+                    [
+                        "--targets",
+                        "world",
+                        "--world-plan",
+                        str(world_plan),
+                        "--world-project-path",
+                        str(world_project),
+                        "--smoke-script",
+                        str(smoke_script),
+                        "--python",
+                        sys.executable,
+                        "--bridge-script",
+                        "tools/unity_patch_bridge.py",
+                        "--timeout-profile",
+                        str(timeout_profile),
+                        "--unity-timeout-sec",
+                        "600",
+                        "--out-dir",
+                        str(out_dir),
+                    ]
+                )
+
+            summary = json.loads((out_dir / "summary.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(0, exit_code)
+        self.assertTrue(summary["success"])
+        case = summary["data"]["cases"][0]
+        self.assertEqual("world", case["name"])
+        self.assertEqual(600, case["unity_timeout_sec"])
+        self.assertEqual("default_override", case["timeout_source"])
 
     def test_main_rejects_non_positive_timeout_argument(self) -> None:
         with redirect_stderr(StringIO()):

@@ -479,6 +479,7 @@ uv run prefab-sentinel validate refs --scope "Assets/haiirokoubou" --ignore-guid
 uv run prefab-sentinel validate runtime --scene "sample/avatar/Assets/Marycia.unity" --log-file "sample/world/Logs/ClientSim.log"
 uv run prefab-sentinel validate bridge-smoke --plan "config/prefab_patch_plan.json" --unity-command "C:/Program Files/Unity/Hub/Editor/<version>/Editor/Unity.exe" --unity-project-path "D:/git/prefab-sentinel/sample/avatar" --unity-execute-method "PrefabSentinel.UnityPatchBridge.ApplyFromJson"
 uv run prefab-sentinel validate smoke-batch --targets all --out-dir "reports/bridge_smoke" --summary-md "reports/bridge_smoke/summary.md"
+uv run prefab-sentinel validate smoke-batch --targets all --timeout-profile "reports/bridge_timeout_profile.json" --out-dir "reports/bridge_smoke"
 uv run prefab-sentinel patch hash --plan "config/patch_plan.example.json"
 set UNITYTOOL_PLAN_SIGNING_KEY="replace-with-signing-key"
 uv run prefab-sentinel patch sign --plan "config/patch_plan.example.json"
@@ -517,6 +518,7 @@ uvx --from . prefab-sentinel validate refs --scope "Assets/haiirokoubou"
 uvx --from . prefab-sentinel validate runtime --scene "sample/avatar/Assets/Marycia.unity"
 uvx --from . prefab-sentinel validate bridge-smoke --plan "config/prefab_patch_plan.json"
 uvx --from . prefab-sentinel validate smoke-batch --targets all --out-dir "reports/bridge_smoke"
+uvx --from . prefab-sentinel validate smoke-batch --targets all --timeout-profile "reports/bridge_timeout_profile.json" --out-dir "reports/bridge_smoke"
 uvx --from . prefab-sentinel patch apply --plan "config/patch_plan.example.json" --dry-run
 uvx --from . prefab-sentinel suggest ignore-guids --scope "Assets/haiirokoubou"
 ```
@@ -554,11 +556,12 @@ uvx --from . prefab-sentinel suggest ignore-guids --scope "Assets/haiirokoubou"
 `scripts/benchmark_regression_report.py` は `--out-csv-append` で比較履歴を同一CSVに追記できる。
 `scripts/benchmark_regression_report.py` は `--out-md` で比較サマリのMarkdown（回帰一覧 + scope表）を出力できる。
 `prefab-sentinel validate smoke-batch` は `bridge_smoke_samples.py` と同じ複数ターゲット実行（retry/timeout/summary出力）をCLIから実行できる。
+`prefab-sentinel validate smoke-batch --timeout-profile <json>` は `smoke-history` の timeout profile を読み込み、明示指定がないターゲットの timeout 既定値として適用する（優先順: target指定 > 全体指定 > profile）。
 `scripts/bridge_smoke_samples.py` は `unity_bridge_smoke.py` を avatar/world 複数ケースで連続実行し、`reports/bridge_smoke/<target>/response.json` と `unity.log`、集計 `summary.json`（任意 `summary.md`）を決定的なパスで出力できる。`--max-retries` / `--retry-delay-sec` でターゲットごとの一時失敗を再試行でき、`--avatar-unity-timeout-sec` / `--world-unity-timeout-sec` で target 別 timeout を調整できる。`summary` の各ケースには `attempts` と `duration_sec` を含み、timeout tuning の根拠にできる。
 `scripts/smoke_summary_to_csv.py` は `bridge_smoke_samples.py` の `summary.json` 群を集約して、target別の duration/attempts/failure 傾向を CSV と Markdown decision table として出力できる。`--out-timeout-profile` を指定すると、観測値ベースの timeout 推奨値（`recommended_cli_arg` 付き）を JSON で出力できる。
 `prefab-sentinel report smoke-history` は `scripts/smoke_summary_to_csv.py` と同等の集計/推奨timeout出力を CLI から直接実行できる。
 `.github/workflows/ci.yml` は `python -m unittest discover -s tests -v` と `bridge-smoke-contract`（`bridge_smoke_samples.py` の expected-failure 実行 + `smoke_summary_to_csv.py` による timeout decision table/timeout profile 生成 + artifact保存）を自動実行する。
-`.github/workflows/unity-smoke.yml` は `workflow_dispatch` 専用で self-hosted Windows Unity ランナー上の実Unity smoke（`bridge_smoke_samples.py` 非期待失敗モード）を実行し、`unity-smoke-summary` / `unity-smoke-avatar` / `unity-smoke-world` の分割artifactで保存する。`unity-smoke-summary` には `summary.json`/`summary.md` に加えて `history.csv`/`history.md`/`timeout_profile.json`（`smoke_summary_to_csv.py` 生成）を含む。`targets`（`all|avatar|world`）と入力パスの preflight 検証を備え、`unity_timeout_sec` + `avatar/world` 個別 timeout 入力で batchmode timeout を調整できる。さらに `run_window_start_utc_hour` / `run_window_end_utc_hour` を指定すると、UTC実行ウィンドウ外では smoke 実行をスキップできる。
+`.github/workflows/unity-smoke.yml` は `workflow_dispatch` 専用で self-hosted Windows Unity ランナー上の実Unity smoke（`bridge_smoke_samples.py` 非期待失敗モード）を実行し、`unity-smoke-summary` / `unity-smoke-avatar` / `unity-smoke-world` の分割artifactで保存する。`unity-smoke-summary` には `summary.json`/`summary.md` に加えて `history.csv`/`history.md`/`timeout_profile.json`（`smoke_summary_to_csv.py` 生成）を含む。`targets`（`all|avatar|world`）と入力パスの preflight 検証を備え、`timeout_profile_path` + `unity_timeout_sec` + `avatar/world` 個別 timeout 入力で batchmode timeout を調整できる。さらに `run_window_start_utc_hour` / `run_window_end_utc_hour` を指定すると、UTC実行ウィンドウ外では smoke 実行をスキップできる。
 `patch hash` は plan JSON を検証したうえで SHA-256 digest を出力する（`--format json` 対応）。
 `patch sign` は plan JSON を検証したうえで HMAC-SHA256 署名を出力する（`--key-env` / `--key-file` / `--format json` 対応）。
 `patch attest` は plan の sha256 と任意の署名を attestation JSON として出力できる（`--unsigned` / `--out`）。

@@ -36,6 +36,11 @@ on:
         required: false
         default: ""
         type: string
+      timeout_profile_path:
+        description: "Optional timeout profile JSON path (smoke-history output)."
+        required: false
+        default: ""
+        type: string
       avatar_plan:
         description: "Avatar patch plan path."
         required: false
@@ -111,6 +116,10 @@ jobs:
           if (($windowStartRaw -eq "") -xor ($windowEndRaw -eq "")) {
             throw "run_window_start_utc_hour and run_window_end_utc_hour must be provided together."
           }
+          $timeoutProfilePath = "${{ inputs.timeout_profile_path }}"
+          if ($timeoutProfilePath -ne "" -and -not (Test-Path $timeoutProfilePath)) {
+            throw "timeout_profile_path not found: $timeoutProfilePath"
+          }
           if ($windowStartRaw -ne "") {
             $parsedStart = 0
             $parsedEnd = 0
@@ -181,6 +190,9 @@ jobs:
           }
           if ("${{ inputs.world_unity_timeout_sec }}" -ne "") {
             $args += @("--world-unity-timeout-sec", "${{ inputs.world_unity_timeout_sec }}")
+          }
+          if ("${{ inputs.timeout_profile_path }}" -ne "") {
+            $args += @("--timeout-profile", "${{ inputs.timeout_profile_path }}")
           }
           python @args
 
