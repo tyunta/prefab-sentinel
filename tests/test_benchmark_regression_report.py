@@ -10,6 +10,7 @@ from scripts.benchmark_regression_report import (
     _normalize_scope,
     _pick_latest_by_scope,
     _render_alert_lines,
+    _render_markdown_summary,
     _sort_results,
     _write_comparison_csv,
 )
@@ -112,6 +113,43 @@ class BenchmarkRegressionReportTests(unittest.TestCase):
     def test_render_alert_lines_outputs_no_regression_marker(self) -> None:
         lines = _render_alert_lines([{"scope": "sample/world/Assets", "status": "stable"}])
         self.assertEqual(["NO_REGRESSIONS"], lines)
+
+    def test_render_markdown_summary_includes_regression_rows(self) -> None:
+        markdown = _render_markdown_summary(
+            {
+                "baseline_file_count": 3,
+                "latest_file_count": 1,
+                "compared_scope_count": 2,
+                "thresholds": {
+                    "avg_ratio_threshold": 1.1,
+                    "p90_ratio_threshold": 1.2,
+                    "min_absolute_delta_sec": 0.05,
+                },
+                "regressed_scopes": ["sample/avatar/Assets"],
+                "results": [
+                    {
+                        "scope": "sample/avatar/Assets",
+                        "status": "regressed",
+                        "avg_ratio": 1.2,
+                        "p90_ratio": 1.3,
+                        "avg_delta_sec": 0.2,
+                        "p90_delta_sec": 0.3,
+                    },
+                    {
+                        "scope": "sample/world/Assets",
+                        "status": "stable",
+                        "avg_ratio": 1.0,
+                        "p90_ratio": 1.0,
+                        "avg_delta_sec": 0.0,
+                        "p90_delta_sec": 0.0,
+                    },
+                ],
+            }
+        )
+        self.assertIn("# Benchmark Regression Summary", markdown)
+        self.assertIn("- Regressed: 1", markdown)
+        self.assertIn("- `sample/avatar/Assets`", markdown)
+        self.assertIn("| sample/avatar/Assets | regressed | 1.2 | 1.3 | 0.2 | 0.3 |", markdown)
 
     def test_write_comparison_csv_supports_append(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

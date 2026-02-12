@@ -135,6 +135,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Pass --out-csv-append to regression report.",
     )
     parser.add_argument(
+        "--regression-out-md",
+        action="store_true",
+        help="Write benchmark_regression.md via regression report --out-md.",
+    )
+    parser.add_argument(
         "--no-history",
         action="store_false",
         dest="generate_history",
@@ -252,6 +257,7 @@ def _build_regression_command(
     latest_input: Path,
     out_json: Path,
     out_csv: Path,
+    out_md: Path | None,
     avg_ratio_threshold: float,
     p90_ratio_threshold: float,
     min_absolute_delta_sec: float,
@@ -281,6 +287,8 @@ def _build_regression_command(
             str(out_csv),
         ]
     )
+    if out_md is not None:
+        cmd.extend(["--out-md", str(out_md)])
     if alerts_only:
         cmd.append("--alerts-only")
     if fail_on_regression:
@@ -379,6 +387,11 @@ def main(argv: list[str] | None = None) -> int:
                 latest_input=bench_json,
                 out_json=config_dir / "benchmark_regression.json",
                 out_csv=config_dir / "benchmark_regression.csv",
+                out_md=(
+                    config_dir / "benchmark_regression.md"
+                    if args.regression_out_md
+                    else None
+                ),
                 avg_ratio_threshold=args.regression_avg_ratio_threshold,
                 p90_ratio_threshold=args.regression_p90_ratio_threshold,
                 min_absolute_delta_sec=args.regression_min_absolute_delta_sec,
@@ -396,6 +409,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.run_regression:
             print(config_dir / "benchmark_regression.json")
             print(config_dir / "benchmark_regression.csv")
+            if args.regression_out_md:
+                print(config_dir / "benchmark_regression.md")
 
     return 0
 

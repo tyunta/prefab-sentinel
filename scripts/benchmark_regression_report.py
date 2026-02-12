@@ -72,6 +72,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--out-json", default=None, help="Optional JSON output path.")
     parser.add_argument("--out-csv", default=None, help="Optional CSV output path.")
     parser.add_argument(
+        "--out-md",
+        default=None,
+        help="Optional Markdown summary output path.",
+    )
+    parser.add_argument(
         "--out-csv-append",
         action="store_true",
         help="Append rows to --out-csv when the file already exists.",
@@ -306,6 +311,65 @@ def _render_alert_lines(results: list[dict[str, Any]]) -> list[str]:
     ]
 
 
+def _render_markdown_summary(payload: dict[str, Any]) -> str:
+    thresholds = payload.get("thresholds", {})
+    results = payload.get("results", [])
+    regressed_scopes = payload.get("regressed_scopes", [])
+
+    stable_count = sum(1 for item in results if item.get("status") == "stable")
+    improved_count = sum(1 for item in results if item.get("status") == "improved")
+    regressed_count = sum(1 for item in results if item.get("status") == "regressed")
+
+    def _fmt(value: Any) -> str:
+        if value is None:
+            return "-"
+        return str(value)
+
+    lines = [
+        "# Benchmark Regression Summary",
+        f"- Baseline Files: {payload.get('baseline_file_count', 0)}",
+        f"- Latest Files: {payload.get('latest_file_count', 0)}",
+        f"- Compared Scopes: {payload.get('compared_scope_count', 0)}",
+        f"- Regressed: {regressed_count}",
+        f"- Improved: {improved_count}",
+        f"- Stable: {stable_count}",
+        (
+            "- Thresholds: "
+            f"avg_ratio={thresholds.get('avg_ratio_threshold', '')}, "
+            f"p90_ratio={thresholds.get('p90_ratio_threshold', '')}, "
+            f"min_delta_sec={thresholds.get('min_absolute_delta_sec', '')}"
+        ),
+        "",
+        "## Regressions",
+    ]
+
+    if regressed_scopes:
+        lines.extend([f"- `{scope}`" for scope in regressed_scopes])
+    else:
+        lines.append("- None")
+
+    lines.extend(
+        [
+            "",
+            "## Scope Results",
+            "| Scope | Status | Avg Ratio | P90 Ratio | Avg Delta(s) | P90 Delta(s) |",
+            "| --- | --- | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for result in results:
+        lines.append(
+            "| "
+            f"{result.get('scope', '')} | "
+            f"{result.get('status', '')} | "
+            f"{_fmt(result.get('avg_ratio'))} | "
+            f"{_fmt(result.get('p90_ratio'))} | "
+            f"{_fmt(result.get('avg_delta_sec'))} | "
+            f"{_fmt(result.get('p90_delta_sec'))} |"
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -372,6 +436,10 @@ def main(argv: list[str] | None = None) -> int:
         _write_comparison_csv(
             Path(args.out_csv), results, append=args.out_csv_append
         )
+    if args.out_md:
+        out_md = Path(args.out_md)
+        out_md.parent.mkdir(parents=True, exist_ok=True)
+        out_md.write_text(_render_markdown_summary(payload), encoding="utf-8")
 
     if args.fail_on_regression and payload["regressed_scopes"]:
         return 2

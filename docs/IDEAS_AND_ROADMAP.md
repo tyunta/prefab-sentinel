@@ -69,6 +69,10 @@
   - `--fail-on-regression`
 - `scripts/benchmark_regression_report.py` supports CSV history append:
   - `--out-csv-append`
+- `scripts/benchmark_regression_report.py` supports markdown summary export:
+  - `--out-md`
+- `scripts/benchmark_samples.py` can request regression markdown output:
+  - `--regression-out-md`
 - Added runtime validation scaffold command:
   - `unitytool validate runtime --scene ...`
   - log-based classification (`BROKEN_PPTR`, `UDON_NULLREF`, etc.)
@@ -84,7 +88,6 @@
 ## Next Executable Tasks
 - Extend apply backend from JSON-only to Unity SerializedObject bridge.
 - Add optional per-scope baseline pinning file for regression comparison.
-- Add optional markdown summary output for regression report results.
 
 ## Decision-Required Queue
 - Decide default location/policy for ignore-guid files:
