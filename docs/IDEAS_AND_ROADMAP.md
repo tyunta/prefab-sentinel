@@ -147,7 +147,7 @@
   - includes `targets` input (`all|avatar|world`) and preflight input path checks
   - supports `timeout_profile_path` input for history-derived timeout defaults
   - supports `expect_applied_from_plan` input (default true) for plan-op-count assertions
-  - supports optional smoke-history quality gates (`max_applied_mismatches` / `min_applied_pass_pct`)
+  - supports smoke-history quality gates (`max_applied_mismatches` / `min_applied_pass_pct`, default: `0` / `100`)
   - supports optional UTC run-window gating (`run_window_start_utc_hour` / `run_window_end_utc_hour`)
   - builds decision artifacts via `prefab-sentinel report smoke-history` (`history.csv` / `history.md` / `timeout_profile.json`)
   - uploads split artifacts (`unity-smoke-summary`, `unity-smoke-avatar`, `unity-smoke-world`)

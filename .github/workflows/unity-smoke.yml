@@ -52,12 +52,12 @@ on:
       max_applied_mismatches:
         description: "Optional smoke-history gate: maximum allowed applied assertion mismatches."
         required: false
-        default: ""
+        default: "0"
         type: string
       min_applied_pass_pct:
         description: "Optional smoke-history gate: minimum required applied assertion pass percentage."
         required: false
-        default: ""
+        default: "100"
         type: string
       avatar_plan:
         description: "Avatar patch plan path."
