@@ -5,6 +5,7 @@ import csv
 import glob
 import json
 import math
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,21 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         "--matched-only",
         action="store_true",
         help="Only include rows where matched_expectation is true.",
+    )
+    parser.add_argument(
+        "--max-applied-mismatches",
+        type=int,
+        default=None,
+        help="Fail with exit code 1 if applied assertion mismatches exceed this count.",
+    )
+    parser.add_argument(
+        "--min-applied-pass-pct",
+        type=float,
+        default=None,
+        help=(
+            "Fail with exit code 1 if applied assertion pass percentage falls below this value "
+            "(0-100)."
+        ),
     )
     parser.add_argument(
         "--duration-percentile",
@@ -366,11 +382,35 @@ def _render_markdown_summary(
 ) -> str:
     percentile_label = f"duration_p{int(round(duration_percentile))}_sec"
     target_stats = stats if stats is not None else _build_target_stats(rows, duration_percentile)
+    applied_matches_values = [
+        value for value in (row.get("applied_matches") for row in rows) if isinstance(value, bool)
+    ]
+    applied_assertions = len(applied_matches_values)
+    applied_mismatches = len([value for value in applied_matches_values if value is False])
+    applied_pass_pct = (
+        round(
+            (
+                (applied_assertions - applied_mismatches)
+                / float(applied_assertions)
+            )
+            * 100.0,
+            2,
+        )
+        if applied_assertions > 0
+        else None
+    )
     lines = [
         "# Bridge Smoke Timeout Decision Table",
         "",
         f"- Cases: {len(rows)}",
         f"- Duration percentile: p{duration_percentile:g}",
+        f"- Applied assertion runs: {applied_assertions}",
+        f"- Applied assertion mismatches: {applied_mismatches}",
+        (
+            f"- Applied assertion pass pct: {applied_pass_pct}"
+            if applied_pass_pct is not None
+            else "- Applied assertion pass pct: n/a"
+        ),
         "",
         f"| target | runs | failures | applied_assertions | applied_mismatches | applied_pass_pct | attempts_max | duration_avg_sec | {percentile_label} | duration_max_sec | timeout_max_sec |",
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
@@ -405,6 +445,12 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
         parser.error("--timeout-min-sec must be greater than 0.")
     if args.timeout_round_sec <= 0:
         parser.error("--timeout-round-sec must be greater than 0.")
+    if args.max_applied_mismatches is not None and args.max_applied_mismatches < 0:
+        parser.error("--max-applied-mismatches must be greater than or equal to 0.")
+    if args.min_applied_pass_pct is not None and (
+        args.min_applied_pass_pct < 0.0 or args.min_applied_pass_pct > 100.0
+    ):
+        parser.error("--min-applied-pass-pct must be in range 0..100.")
 
     input_paths = _expand_inputs(args.inputs)
     if not input_paths:
@@ -488,7 +534,39 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
         _write_json(out_timeout_profile, profile_payload)
         print(out_timeout_profile)
 
-    return 0
+    applied_matches_values = [
+        value for value in (row.get("applied_matches") for row in rows) if isinstance(value, bool)
+    ]
+    applied_assertions = len(applied_matches_values)
+    applied_mismatches = len([value for value in applied_matches_values if value is False])
+    applied_pass_pct = (
+        ((applied_assertions - applied_mismatches) / float(applied_assertions)) * 100.0
+        if applied_assertions > 0
+        else None
+    )
+    violations: list[str] = []
+    if (
+        args.max_applied_mismatches is not None
+        and applied_mismatches > args.max_applied_mismatches
+    ):
+        violations.append(
+            "applied mismatch threshold exceeded: "
+            f"{applied_mismatches} > {args.max_applied_mismatches}"
+        )
+    if args.min_applied_pass_pct is not None:
+        if applied_pass_pct is None:
+            violations.append(
+                "applied pass percentage threshold configured but no applied assertion rows exist"
+            )
+        elif applied_pass_pct < args.min_applied_pass_pct:
+            violations.append(
+                "applied pass percentage below threshold: "
+                f"{applied_pass_pct:.2f} < {args.min_applied_pass_pct:.2f}"
+            )
+
+    for message in violations:
+        print(f"SMOKE_HISTORY_THRESHOLD_FAILED: {message}", file=sys.stderr)
+    return 0 if not violations else 1
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()

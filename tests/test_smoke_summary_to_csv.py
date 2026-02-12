@@ -282,6 +282,7 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
         self.assertIn("avatar", csv_text)
         self.assertIn("world", csv_text)
         self.assertIn("applied_mismatches", md_text)
+        self.assertIn("Applied assertion runs", md_text)
         self.assertIn("| avatar |", md_text)
         self.assertIn("| world |", md_text)
         self.assertEqual(2, len(profile["profiles"]))
@@ -347,6 +348,89 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
         self.assertEqual(2, len(csv_lines))
         self.assertIn(",avatar,", csv_lines[1])
 
+    def test_main_fails_when_applied_mismatch_threshold_exceeded(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            summary_path = root / "summary.json"
+            out_csv = root / "history.csv"
+            summary_path.write_text(
+                json.dumps(
+                    _summary_payload(
+                        [
+                            {
+                                "name": "avatar",
+                                "matched_expectation": True,
+                                "applied_matches": True,
+                            },
+                            {
+                                "name": "avatar",
+                                "matched_expectation": False,
+                                "applied_matches": False,
+                            },
+                        ],
+                        success=False,
+                    )
+                ),
+                encoding="utf-8",
+            )
+
+            with redirect_stdout(StringIO()):
+                exit_code = main(
+                    [
+                        "--inputs",
+                        str(summary_path),
+                        "--out",
+                        str(out_csv),
+                        "--max-applied-mismatches",
+                        "0",
+                    ]
+                )
+            out_exists = out_csv.exists()
+
+        self.assertEqual(1, exit_code)
+        self.assertTrue(out_exists)
+
+    def test_main_fails_when_applied_pass_pct_below_threshold(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            summary_path = root / "summary.json"
+            out_csv = root / "history.csv"
+            summary_path.write_text(
+                json.dumps(
+                    _summary_payload(
+                        [
+                            {
+                                "name": "avatar",
+                                "matched_expectation": True,
+                                "applied_matches": True,
+                            },
+                            {
+                                "name": "avatar",
+                                "matched_expectation": False,
+                                "applied_matches": False,
+                            },
+                        ],
+                        success=False,
+                    )
+                ),
+                encoding="utf-8",
+            )
+
+            with redirect_stdout(StringIO()):
+                exit_code = main(
+                    [
+                        "--inputs",
+                        str(summary_path),
+                        "--out",
+                        str(out_csv),
+                        "--min-applied-pass-pct",
+                        "80",
+                    ]
+                )
+            out_exists = out_csv.exists()
+
+        self.assertEqual(1, exit_code)
+        self.assertTrue(out_exists)
 
     def test_main_rejects_invalid_timeout_profile_arguments(self) -> None:
         with redirect_stderr(StringIO()):
@@ -359,6 +443,22 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
                         "out.csv",
                         "--timeout-multiplier",
                         "0.9",
+                    ]
+                )
+
+        self.assertEqual(2, raised.exception.code)
+
+    def test_main_rejects_invalid_applied_threshold_arguments(self) -> None:
+        with redirect_stderr(StringIO()):
+            with self.assertRaises(SystemExit) as raised:
+                main(
+                    [
+                        "--inputs",
+                        "missing.json",
+                        "--out",
+                        "out.csv",
+                        "--max-applied-mismatches",
+                        "-1",
                     ]
                 )
 

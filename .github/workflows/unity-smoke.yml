@@ -49,6 +49,16 @@ on:
         options:
           - "true"
           - "false"
+      max_applied_mismatches:
+        description: "Optional smoke-history gate: maximum allowed applied assertion mismatches."
+        required: false
+        default: ""
+        type: string
+      min_applied_pass_pct:
+        description: "Optional smoke-history gate: minimum required applied assertion pass percentage."
+        required: false
+        default: ""
+        type: string
       avatar_plan:
         description: "Avatar patch plan path."
         required: false
@@ -212,7 +222,22 @@ jobs:
         if: ${{ steps.run_window.outputs.within_window == 'true' }}
         shell: pwsh
         run: |
-          prefab-sentinel report smoke-history --inputs reports/bridge_smoke/summary.json --duration-percentile 90 --out reports/bridge_smoke/history.csv --out-md reports/bridge_smoke/history.md --out-timeout-profile reports/bridge_smoke/timeout_profile.json
+          $args = @(
+            "report",
+            "smoke-history",
+            "--inputs", "reports/bridge_smoke/summary.json",
+            "--duration-percentile", "90",
+            "--out", "reports/bridge_smoke/history.csv",
+            "--out-md", "reports/bridge_smoke/history.md",
+            "--out-timeout-profile", "reports/bridge_smoke/timeout_profile.json"
+          )
+          if ("${{ inputs.max_applied_mismatches }}" -ne "") {
+            $args += @("--max-applied-mismatches", "${{ inputs.max_applied_mismatches }}")
+          }
+          if ("${{ inputs.min_applied_pass_pct }}" -ne "") {
+            $args += @("--min-applied-pass-pct", "${{ inputs.min_applied_pass_pct }}")
+          }
+          prefab-sentinel @args
 
       - name: Skip Outside UTC Run Window
         if: ${{ steps.run_window.outputs.within_window != 'true' }}
