@@ -594,7 +594,8 @@ uvx --from . prefab-sentinel suggest ignore-guids --scope "Assets/haiirokoubou"
 `scripts/unity_bridge_smoke.py` は patch plan から `tools/unity_patch_bridge.py` を end-to-end 実行し、Unity実行環境の上書き・期待成功/失敗判定・レスポンス保存（`--out`）をまとめて検証できる。bridge応答は `success/severity/code/message/data/diagnostics` を厳密検証し、欠落・型不一致時は fail-fast で停止する。
 `tools/unity/PrefabSentinel.UnityPatchBridge.cs` は Unity 側 `-executeMethod` 実装として `.prefab` ターゲットの `set` / `insert_array_element` / `remove_array_element` を SerializedObject 経由で適用する（`component` は一意一致必須、component曖昧時は候補パス付きで fail-fast）。
 `component` セレクタは `TypeName@Hierarchy/Path` 形式を受け付け、同型コンポーネントが複数ある場合にGameObject階層で明示的に絞り込める。
-`set` の値デコードは `int/float/bool/string/null` に加えて `Character` / `LayerMask` / `ArraySize`、`enum`、`Color`、`Vector2/3/4`、`Vector2Int/3Int`、`Rect/RectInt`、`Bounds/BoundsInt`、`Quaternion`、`ObjectReference` / `ExposedReference`（`value_kind=json` の `{guid,file_id}`）、`ManagedReference`（`value_kind=json`、必要時 `{"__type":"Namespace.Type, Assembly"}` ヒント対応）、`Generic`（カスタム構造体の `value_json` 反映）を扱う。
+`set` の値デコードは `int/float/bool/string/null` に加えて `Character` / `LayerMask` / `ArraySize`、`enum`、`Color`、`Vector2/3/4`、`Vector2Int/3Int`、`Rect/RectInt`、`Bounds/BoundsInt`、`Quaternion`、`AnimationCurve`、`ObjectReference` / `ExposedReference`（`value_kind=json` の `{guid,file_id}`）、`ManagedReference`（`value_kind=json`、必要時 `{"__type":"Namespace.Type, Assembly"}` ヒント対応）、`Generic`（カスタム構造体の `value_json` 反映）を扱う。
+`AnimationCurve` は `value_kind=json` で `{ "keys":[{"time":0.0,"value":1.0,"in_tangent":0.0,"out_tangent":0.0}], "pre_wrap_mode":1, "post_wrap_mode":1 }` 形式を受け付ける（`value_kind=null` で null 設定）。
 配列操作パスの診断は `.Array.data` 形式を厳密検証し、`.Array.size`/index付き誤指定時はヒント付きで停止する。
 `validate runtime` は log分類ベースのscaffoldを実装済みで、`--scene` 存在確認、`BROKEN_PPTR` / `UDON_NULLREF` などの分類、`assert_no_critical_errors` 判定までを返す。
 `validate runtime` の compile/ClientSim 実行は現時点では `RUN_COMPILE_SKIPPED` / `RUN_CLIENTSIM_SKIPPED` として明示的に未配線を返す。

@@ -138,6 +138,23 @@ namespace PrefabSentinel
         }
 
         [Serializable]
+        private sealed class AnimationCurvePayload
+        {
+            public AnimationCurveKeyPayload[] keys = Array.Empty<AnimationCurveKeyPayload>();
+            public int pre_wrap_mode = (int)WrapMode.Default;
+            public int post_wrap_mode = (int)WrapMode.Default;
+        }
+
+        [Serializable]
+        private sealed class AnimationCurveKeyPayload
+        {
+            public float time = 0f;
+            public float value = 0f;
+            public float in_tangent = 0f;
+            public float out_tangent = 0f;
+        }
+
+        [Serializable]
         private sealed class ManagedReferenceTypeHintPayload
         {
             public string __type = string.Empty;
@@ -1004,6 +1021,16 @@ namespace PrefabSentinel
                     property.quaternionValue = value;
                     return true;
                 }
+                case SerializedPropertyType.AnimationCurve:
+                {
+                    AnimationCurve value;
+                    if (!TryReadAnimationCurveValue(op, valueKind, out value, out error))
+                    {
+                        return false;
+                    }
+                    property.animationCurveValue = value;
+                    return true;
+                }
                 case SerializedPropertyType.ObjectReference:
                 {
                     UnityEngine.Object referenceValue;
@@ -1568,6 +1595,70 @@ namespace PrefabSentinel
                 return false;
             }
             value = new Quaternion(payload.x, payload.y, payload.z, payload.w);
+            return true;
+        }
+
+        private static bool TryReadAnimationCurveValue(
+            PatchOp op,
+            string valueKind,
+            out AnimationCurve value,
+            out string error
+        )
+        {
+            value = null;
+            error = string.Empty;
+            if (string.Equals(valueKind, "null", StringComparison.Ordinal))
+            {
+                return true;
+            }
+            if (!string.Equals(valueKind, "json", StringComparison.Ordinal))
+            {
+                error = "AnimationCurve property requires value_kind='null' or 'json'";
+                return false;
+            }
+
+            AnimationCurvePayload payload;
+            if (!TryParseJsonPayload(op.value_json, out payload, out error))
+            {
+                error = $"failed to parse AnimationCurve value_json: {error}";
+                return false;
+            }
+            if (payload.keys == null)
+            {
+                error = "AnimationCurve value_json requires keys array";
+                return false;
+            }
+            if (!Enum.IsDefined(typeof(WrapMode), payload.pre_wrap_mode))
+            {
+                error = $"AnimationCurve pre_wrap_mode is invalid: {payload.pre_wrap_mode}";
+                return false;
+            }
+            if (!Enum.IsDefined(typeof(WrapMode), payload.post_wrap_mode))
+            {
+                error = $"AnimationCurve post_wrap_mode is invalid: {payload.post_wrap_mode}";
+                return false;
+            }
+
+            Keyframe[] keys = new Keyframe[payload.keys.Length];
+            for (int i = 0; i < payload.keys.Length; i++)
+            {
+                AnimationCurveKeyPayload keyPayload = payload.keys[i];
+                if (keyPayload == null)
+                {
+                    error = $"AnimationCurve key at index {i} is null";
+                    return false;
+                }
+                keys[i] = new Keyframe(
+                    keyPayload.time,
+                    keyPayload.value,
+                    keyPayload.in_tangent,
+                    keyPayload.out_tangent
+                );
+            }
+
+            value = new AnimationCurve(keys);
+            value.preWrapMode = (WrapMode)payload.pre_wrap_mode;
+            value.postWrapMode = (WrapMode)payload.post_wrap_mode;
             return true;
         }
 
