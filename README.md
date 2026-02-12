@@ -464,7 +464,7 @@ prefab-sentinel report export --format md --out reports/latest.md
 
 Phase 1では read-only 検査系の CLI 骨格のみ提供する。  
 ローカル実行は `uv run`、可搬実行は `uvx --from .` を使用する。
-CLI名は `prefab-sentinel` を正規とし、旧 `unitytool` は後方互換エイリアスとして当面維持する。
+CLI名は `prefab-sentinel` を正規とする。
 環境変数プレフィックス（`UNITYTOOL_*`）は互換性のため現状維持とする。
 
 ```bash
