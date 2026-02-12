@@ -7,6 +7,15 @@ on:
         description: "Path to Unity.exe used for batchmode."
         required: true
         type: string
+      targets:
+        description: "Smoke target selection."
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - avatar
+          - world
       unity_execute_method:
         description: "Unity executeMethod entrypoint."
         required: false
@@ -57,10 +66,31 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e .
 
+      - name: Preflight Input Paths
+        shell: pwsh
+        run: |
+          $target = "${{ inputs.targets }}"
+          if ($target -eq "all" -or $target -eq "avatar") {
+            if (-not (Test-Path "${{ inputs.avatar_plan }}")) {
+              throw "avatar_plan not found: ${{ inputs.avatar_plan }}"
+            }
+            if (-not (Test-Path "${{ inputs.avatar_project_path }}")) {
+              throw "avatar_project_path not found: ${{ inputs.avatar_project_path }}"
+            }
+          }
+          if ($target -eq "all" -or $target -eq "world") {
+            if (-not (Test-Path "${{ inputs.world_plan }}")) {
+              throw "world_plan not found: ${{ inputs.world_plan }}"
+            }
+            if (-not (Test-Path "${{ inputs.world_project_path }}")) {
+              throw "world_project_path not found: ${{ inputs.world_project_path }}"
+            }
+          }
+
       - name: Run Bridge Smoke Batch (Unity-enabled)
         shell: pwsh
         run: |
-          python scripts/bridge_smoke_samples.py --targets all --avatar-plan "${{ inputs.avatar_plan }}" --world-plan "${{ inputs.world_plan }}" --avatar-project-path "${{ inputs.avatar_project_path }}" --world-project-path "${{ inputs.world_project_path }}" --unity-command "${{ inputs.unity_command }}" --unity-execute-method "${{ inputs.unity_execute_method }}" --unity-timeout-sec "${{ inputs.unity_timeout_sec }}" --out-dir reports/bridge_smoke --summary-md reports/bridge_smoke/summary.md
+          python scripts/bridge_smoke_samples.py --targets "${{ inputs.targets }}" --avatar-plan "${{ inputs.avatar_plan }}" --world-plan "${{ inputs.world_plan }}" --avatar-project-path "${{ inputs.avatar_project_path }}" --world-project-path "${{ inputs.world_project_path }}" --unity-command "${{ inputs.unity_command }}" --unity-execute-method "${{ inputs.unity_execute_method }}" --unity-timeout-sec "${{ inputs.unity_timeout_sec }}" --out-dir reports/bridge_smoke --summary-md reports/bridge_smoke/summary.md
 
       - name: Upload Unity Smoke Artifacts
         uses: actions/upload-artifact@v4

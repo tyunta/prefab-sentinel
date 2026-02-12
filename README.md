@@ -547,7 +547,7 @@ uvx --from . unitytool suggest ignore-guids --scope "Assets/haiirokoubou"
 `scripts/benchmark_regression_report.py` は `--out-md` で比較サマリのMarkdown（回帰一覧 + scope表）を出力できる。
 `scripts/bridge_smoke_samples.py` は `unity_bridge_smoke.py` を avatar/world 複数ケースで連続実行し、`reports/bridge_smoke/<target>/response.json` と `unity.log`、集計 `summary.json`（任意 `summary.md`）を決定的なパスで出力できる。
 `.github/workflows/ci.yml` は `python -m unittest discover -s tests -v` と `bridge-smoke-contract`（`bridge_smoke_samples.py` の expected-failure 実行 + artifact保存）を自動実行する。
-`.github/workflows/unity-smoke.yml` は `workflow_dispatch` 専用で self-hosted Windows Unity ランナー上の実Unity smoke（`bridge_smoke_samples.py` 非期待失敗モード）を実行し、`reports/bridge_smoke` を artifact 保存する。
+`.github/workflows/unity-smoke.yml` は `workflow_dispatch` 専用で self-hosted Windows Unity ランナー上の実Unity smoke（`bridge_smoke_samples.py` 非期待失敗モード）を実行し、`reports/bridge_smoke` を artifact 保存する。`targets`（`all|avatar|world`）と入力パスの preflight 検証を備える。
 `patch hash` は plan JSON を検証したうえで SHA-256 digest を出力する（`--format json` 対応）。
 `patch sign` は plan JSON を検証したうえで HMAC-SHA256 署名を出力する（`--key-env` / `--key-file` / `--format json` 対応）。
 `patch attest` は plan の sha256 と任意の署名を attestation JSON として出力できる（`--unsigned` / `--out`）。

@@ -124,6 +124,7 @@
 - Added Unity-enabled smoke workflow:
   - `.github/workflows/unity-smoke.yml` (`workflow_dispatch` + self-hosted Windows runner)
   - runs `bridge_smoke_samples.py` without `--*-expect-failure` and uploads `reports/bridge_smoke`
+  - includes `targets` input (`all|avatar|world`) and preflight input path checks
 - Unity bridge now normalizes op values for executeMethod payload (`value_kind` fields).
 - Added Unity Editor executeMethod apply path for prefab patch operations:
   - `tools/unity/PrefabSentinel.UnityPatchBridge.cs` (`PrefabSentinel.UnityPatchBridge.ApplyFromJson`)
@@ -139,8 +140,8 @@
   - broader SerializedProperty support (nested managed-reference scenarios, complex custom structs)
   - Unity-side integration tests against sample prefab assets (batchmode assertions)
 - Add Unity smoke hardening:
-  - add preflight check for missing sample plan paths in workflow inputs
-  - add optional nightly/manual matrix for avatar-only / world-only smoke
+  - add optional scheduled run window for self-hosted Unity runner availability
+  - add per-target artifact split names for easier triage (`unity-smoke-avatar`, `unity-smoke-world`)
 
 ## Decision-Required Queue
 - Decide default location/policy for ignore-guid files:
