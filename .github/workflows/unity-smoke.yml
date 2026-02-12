@@ -124,6 +124,16 @@ on:
         required: false
         default: "100"
         type: string
+      max_profile_timeout_breaches_per_target:
+        description: "Optional smoke-history gate: maximum allowed timeout-profile breaches for any target under selected policy."
+        required: false
+        default: "0"
+        type: string
+      min_profile_timeout_coverage_pct_per_target:
+        description: "Optional smoke-history gate: minimum required timeout-profile coverage percentage for each target under selected policy."
+        required: false
+        default: "100"
+        type: string
       avatar_plan:
         description: "Avatar patch plan path."
         required: false
@@ -193,6 +203,8 @@ jobs:
           $minObservedTimeoutCoveragePctRaw = "${{ inputs.min_observed_timeout_coverage_pct }}"
           $maxProfileTimeoutBreachesRaw = "${{ inputs.max_profile_timeout_breaches }}"
           $minProfileTimeoutCoveragePctRaw = "${{ inputs.min_profile_timeout_coverage_pct }}"
+          $maxProfileTimeoutBreachesPerTargetRaw = "${{ inputs.max_profile_timeout_breaches_per_target }}"
+          $minProfileTimeoutCoveragePctPerTargetRaw = "${{ inputs.min_profile_timeout_coverage_pct_per_target }}"
           if ($target -eq "all" -or $target -eq "avatar") {
             if (-not (Test-Path "${{ inputs.avatar_plan }}")) {
               throw "avatar_plan not found: ${{ inputs.avatar_plan }}"
@@ -341,6 +353,24 @@ jobs:
               throw "min_profile_timeout_coverage_pct must be in range 0..100."
             }
           }
+          if ($maxProfileTimeoutBreachesPerTargetRaw -ne "") {
+            $maxProfileTimeoutBreachesPerTarget = 0
+            if (-not [int]::TryParse($maxProfileTimeoutBreachesPerTargetRaw, [ref]$maxProfileTimeoutBreachesPerTarget)) {
+              throw "max_profile_timeout_breaches_per_target must be an integer greater than or equal to 0."
+            }
+            if ($maxProfileTimeoutBreachesPerTarget -lt 0) {
+              throw "max_profile_timeout_breaches_per_target must be greater than or equal to 0."
+            }
+          }
+          if ($minProfileTimeoutCoveragePctPerTargetRaw -ne "") {
+            $minProfileTimeoutCoveragePctPerTarget = 0.0
+            if (-not [double]::TryParse($minProfileTimeoutCoveragePctPerTargetRaw, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$minProfileTimeoutCoveragePctPerTarget)) {
+              throw "min_profile_timeout_coverage_pct_per_target must be a number in range 0..100."
+            }
+            if ($minProfileTimeoutCoveragePctPerTarget -lt 0.0 -or $minProfileTimeoutCoveragePctPerTarget -gt 100.0) {
+              throw "min_profile_timeout_coverage_pct_per_target must be in range 0..100."
+            }
+          }
 
       - name: Evaluate UTC Run Window
         id: run_window
@@ -449,6 +479,12 @@ jobs:
           }
           if ("${{ inputs.min_profile_timeout_coverage_pct }}" -ne "") {
             $args += @("--min-profile-timeout-coverage-pct", "${{ inputs.min_profile_timeout_coverage_pct }}")
+          }
+          if ("${{ inputs.max_profile_timeout_breaches_per_target }}" -ne "") {
+            $args += @("--max-profile-timeout-breaches-per-target", "${{ inputs.max_profile_timeout_breaches_per_target }}")
+          }
+          if ("${{ inputs.min_profile_timeout_coverage_pct_per_target }}" -ne "") {
+            $args += @("--min-profile-timeout-coverage-pct-per-target", "${{ inputs.min_profile_timeout_coverage_pct_per_target }}")
           }
           prefab-sentinel @args
 

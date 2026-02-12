@@ -70,7 +70,9 @@ jobs:
             --max-code-mismatches 0 \
             --min-code-pass-pct 100 \
             --max-profile-timeout-breaches 0 \
-            --min-profile-timeout-coverage-pct 100
+            --min-profile-timeout-coverage-pct 100 \
+            --max-profile-timeout-breaches-per-target 0 \
+            --min-profile-timeout-coverage-pct-per-target 100
 
       - name: Upload Bridge Smoke Artifacts
         uses: actions/upload-artifact@v4
