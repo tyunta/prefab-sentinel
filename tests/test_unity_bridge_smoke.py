@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 from scripts.unity_bridge_smoke import (
@@ -154,6 +154,28 @@ sys.stdout.write(json.dumps({"success": True, "severity": "notice", "code": "OK"
         self.assertFalse(_validate_expectation({"success": False}, expect_failure=False))
         self.assertTrue(_validate_expectation({"success": False}, expect_failure=True))
         self.assertFalse(_validate_expectation({"success": True}, expect_failure=True))
+        response = {"success": True, "data": {"applied": 2}}
+        self.assertTrue(
+            _validate_expectation(
+                response,
+                expect_failure=False,
+                expected_applied=2,
+            )
+        )
+        self.assertEqual(2, response["data"]["expected_applied"])
+        self.assertEqual(2, response["data"]["actual_applied"])
+        self.assertTrue(response["data"]["applied_matches"])
+        mismatch_response = {"success": True, "data": {"applied": 1}}
+        self.assertFalse(
+            _validate_expectation(
+                mismatch_response,
+                expect_failure=False,
+                expected_applied=2,
+            )
+        )
+        self.assertEqual(2, mismatch_response["data"]["expected_applied"])
+        self.assertEqual(1, mismatch_response["data"]["actual_applied"])
+        self.assertFalse(mismatch_response["data"]["applied_matches"])
 
     def test_main_returns_nonzero_when_expectation_is_not_met(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -186,6 +208,50 @@ sys.stdout.write(json.dumps({"success": True, "severity": "info", "code": "OK", 
                     ]
                 )
         self.assertEqual(1, exit_code)
+
+    def test_main_returns_nonzero_when_expected_applied_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "plan.json"
+            bridge = root / "fake_bridge.py"
+            plan.write_text(
+                json.dumps({"target": "Assets/Test.prefab", "ops": []}),
+                encoding="utf-8",
+            )
+            bridge.write_text(
+                """
+import json
+import sys
+_ = json.loads(sys.stdin.read())
+sys.stdout.write(json.dumps({"success": True, "severity": "info", "code": "OK", "message": "ok", "data": {"applied": 1}, "diagnostics": []}))
+""".strip(),
+                encoding="utf-8",
+            )
+            output = io.StringIO()
+            with redirect_stdout(output):
+                exit_code = main(
+                    [
+                        "--plan",
+                        str(plan),
+                        "--bridge-script",
+                        str(bridge),
+                        "--python",
+                        sys.executable,
+                        "--expected-applied",
+                        "2",
+                    ]
+                )
+        payload = json.loads(output.getvalue())
+        self.assertEqual(1, exit_code)
+        self.assertTrue(payload["success"])
+        self.assertEqual(2, payload["data"]["expected_applied"])
+        self.assertEqual(1, payload["data"]["actual_applied"])
+        self.assertFalse(payload["data"]["applied_matches"])
+
+    def test_main_rejects_negative_expected_applied_argument(self) -> None:
+        with redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                main(["--plan", "ignored.json", "--expected-applied", "-1"])
 
     def test_script_entrypoint_runs_when_invoked_by_path(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

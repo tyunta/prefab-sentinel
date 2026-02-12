@@ -106,13 +106,14 @@
   - `scripts/unity_bridge_smoke.py`
   - `--plan` required + bridge request shaping (`protocol_version` / `target` / `ops`)
   - Unity execution env overrides (`--unity-command` / `--unity-project-path` / `--unity-execute-method` / `--unity-timeout-sec` / `--unity-log-file`)
-  - expectation checks (`--expect-failure`) and optional response export (`--out`)
+  - expectation checks (`--expect-failure` / `--expected-applied`) and optional response export (`--out`)
   - bridge response envelope validation (`success` / `severity` / `code` / `message` / `data` / `diagnostics`) with fail-fast errors
 - Added smoke runner unit tests:
   - `tests/test_unity_bridge_smoke.py`
 - Added shared bridge smoke library + CLI command:
   - `unitytool/bridge_smoke.py` (shared contract/exec logic for script + CLI)
-  - `prefab-sentinel validate bridge-smoke ...` (`--expect-failure` / `--out` supported)
+  - `prefab-sentinel validate bridge-smoke ...` (`--expect-failure` / `--expected-applied` / `--out` supported)
+  - output `data` now includes apply assertion evidence (`expected_applied` / `actual_applied` / `applied_matches`) when `--expected-applied` is specified
   - CLI tests: `tests/test_cli.py` (`bridge-smoke` success + expectation mismatch)
 - Added smoke automation runner for sample avatar/world:
   - `scripts/bridge_smoke_samples.py`

@@ -123,6 +123,41 @@ def run_bridge(
     return payload
 
 
-def validate_expectation(response: dict[str, Any], expect_failure: bool) -> bool:
+def extract_applied_count(response: dict[str, Any]) -> int | None:
+    data = response.get("data")
+    if not isinstance(data, dict):
+        return None
+    applied = data.get("applied")
+    if isinstance(applied, bool):
+        return None
+    return applied if isinstance(applied, int) else None
+
+
+def apply_applied_expectation(
+    response: dict[str, Any],
+    expected_applied: int | None,
+) -> bool | None:
+    if expected_applied is None:
+        return None
+    data = response.get("data")
+    if not isinstance(data, dict):
+        return None
+    actual_applied = extract_applied_count(response)
+    applied_matches = actual_applied == expected_applied
+    data["expected_applied"] = expected_applied
+    data["actual_applied"] = actual_applied
+    data["applied_matches"] = applied_matches
+    return applied_matches
+
+
+def validate_expectation(
+    response: dict[str, Any],
+    expect_failure: bool,
+    expected_applied: int | None = None,
+) -> bool:
     success = bool(response.get("success"))
-    return (not success) if expect_failure else success
+    matched_expectation = (not success) if expect_failure else success
+    applied_matches = apply_applied_expectation(response, expected_applied)
+    if applied_matches is False:
+        return False
+    return matched_expectation

@@ -196,6 +196,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Expect bridge result success=false (exit 0 when failure is observed).",
     )
     validate_bridge_smoke.add_argument(
+        "--expected-applied",
+        type=int,
+        default=None,
+        help="Optional expected data.applied value for bridge response.",
+    )
+    validate_bridge_smoke.add_argument(
         "--out",
         default=None,
         help="Optional output JSON path for bridge response.",
@@ -634,6 +640,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "validate" and args.validate_command == "bridge-smoke":
+        if args.expected_applied is not None and args.expected_applied < 0:
+            parser.error("--expected-applied must be greater than or equal to 0.")
         plan_path = Path(args.plan)
         bridge_script = Path(args.bridge_script)
         try:
@@ -667,6 +675,11 @@ def main(argv: list[str] | None = None) -> int:
             _emit_payload(payload, args.format)
             return 1
 
+        matched_expectation = validate_bridge_smoke_expectation(
+            payload,
+            args.expect_failure,
+            args.expected_applied,
+        )
         if args.out:
             output_path = Path(args.out)
             try:
@@ -678,11 +691,7 @@ def main(argv: list[str] | None = None) -> int:
             except OSError as exc:
                 parser.error(f"Failed to write --out: {exc}")
         _emit_payload(payload, args.format)
-        return (
-            0
-            if validate_bridge_smoke_expectation(payload, args.expect_failure)
-            else 1
-        )
+        return 0 if matched_expectation else 1
 
     if args.command == "validate" and args.validate_command == "smoke-batch":
         return run_smoke_batch_from_args(args, parser)

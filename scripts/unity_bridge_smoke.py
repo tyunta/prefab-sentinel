@@ -76,6 +76,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Expect bridge result success=false (exit 0 when failure is observed).",
     )
     parser.add_argument(
+        "--expected-applied",
+        type=int,
+        default=None,
+        help="Optional expected data.applied value for bridge response.",
+    )
+    parser.add_argument(
         "--out",
         default=None,
         help="Optional output JSON path for bridge response.",
@@ -120,13 +126,19 @@ def _validate_bridge_response(payload: dict[str, Any]) -> None:
     _validate_bridge_response_impl(payload)
 
 
-def _validate_expectation(response: dict[str, Any], expect_failure: bool) -> bool:
-    return _validate_expectation_impl(response, expect_failure)
+def _validate_expectation(
+    response: dict[str, Any],
+    expect_failure: bool,
+    expected_applied: int | None = None,
+) -> bool:
+    return _validate_expectation_impl(response, expect_failure, expected_applied)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.expected_applied is not None and args.expected_applied < 0:
+        parser.error("--expected-applied must be greater than or equal to 0.")
 
     plan_path = Path(args.plan)
     bridge_script = Path(args.bridge_script)
@@ -155,6 +167,11 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 1
 
+    matched_expectation = _validate_expectation(
+        response,
+        args.expect_failure,
+        args.expected_applied,
+    )
     if args.out:
         output_path = Path(args.out)
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -164,7 +181,7 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     print(json.dumps(response, ensure_ascii=False, indent=2))
-    return 0 if _validate_expectation(response, args.expect_failure) else 1
+    return 0 if matched_expectation else 1
 
 
 if __name__ == "__main__":
