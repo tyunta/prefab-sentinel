@@ -561,6 +561,7 @@ uvx --from . unitytool suggest ignore-guids --scope "Assets/haiirokoubou"
 `UNITYTOOL_PATCH_BRIDGE` は JSON入力(stdin) / JSON出力(stdout) のbridgeコマンドを指定する（`protocol_version: 1`）。
 `tools/unity_patch_bridge.py` は `UNITYTOOL_UNITY_COMMAND` を使って Unity batchmode コマンドを実行し、JSONリクエスト/レスポンスファイルを介して結果を返す（`set` / `insert_array_element` の `value` を Unity 側で扱える型情報へ正規化）。
 `tools/unity_patch_bridge.py` は `UNITYTOOL_UNITY_PROJECT_PATH` / `UNITYTOOL_UNITY_EXECUTE_METHOD` / `UNITYTOOL_UNITY_TIMEOUT_SEC` / `UNITYTOOL_UNITY_LOG_FILE` で実行設定を制御できる。
+`tools/unity_patch_bridge.py` は Unity応答の `success/severity/code/message/data/diagnostics` を厳密検証し、欠落・型不一致時は `BRIDGE_UNITY_RESPONSE_SCHEMA` で fail-fast 停止する。
 `scripts/unity_bridge_smoke.py` は patch plan から `tools/unity_patch_bridge.py` を end-to-end 実行し、Unity実行環境の上書き・期待成功/失敗判定・レスポンス保存（`--out`）をまとめて検証できる。bridge応答は `success/severity/code/message/data/diagnostics` を厳密検証し、欠落・型不一致時は fail-fast で停止する。
 `tools/unity/PrefabSentinel.UnityPatchBridge.cs` は Unity 側 `-executeMethod` 実装として `.prefab` ターゲットの `set` / `insert_array_element` / `remove_array_element` を SerializedObject 経由で適用する（`component` は一意一致必須、component曖昧時は候補パス付きで fail-fast）。
 `component` セレクタは `TypeName@Hierarchy/Path` 形式を受け付け、同型コンポーネントが複数ある場合にGameObject階層で明示的に絞り込める。

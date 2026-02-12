@@ -101,6 +101,7 @@
   - bridge protocol version check (`protocol_version: 1`)
 - Added Unity bridge script with batchmode command execution path:
   - `tools/unity_patch_bridge.py` (`UNITYTOOL_UNITY_COMMAND` / request-response file contract)
+  - strict Unity response envelope validation (`BRIDGE_UNITY_RESPONSE_SCHEMA` on missing/invalid `success|severity|code|message|data|diagnostics`)
 - Added Unity bridge smoke runner for end-to-end bridge invocation from patch plans:
   - `scripts/unity_bridge_smoke.py`
   - `--plan` required + bridge request shaping (`protocol_version` / `target` / `ops`)

@@ -25,6 +25,7 @@ UNITY_TIMEOUT_SEC_ENV = "UNITYTOOL_UNITY_TIMEOUT_SEC"
 UNITY_LOG_FILE_ENV = "UNITYTOOL_UNITY_LOG_FILE"
 DEFAULT_EXECUTE_METHOD = "PrefabSentinel.UnityPatchBridge.ApplyFromJson"
 DEFAULT_TIMEOUT_SEC = 120
+VALID_SEVERITIES = {"info", "warning", "error", "critical"}
 
 
 def _emit(payload: dict[str, Any]) -> int:
@@ -117,20 +118,13 @@ def _finalize_unity_response(
             },
         )
 
+    schema_error = _validate_unity_response_envelope(payload)
+    if schema_error is not None:
+        return schema_error
+
     response = dict(payload)
     response["protocol_version"] = protocol_version
-    response.setdefault("success", False)
-    response.setdefault("severity", "error")
-    response.setdefault("code", "BRIDGE_UNITY_RESPONSE")
-    response.setdefault("message", "Unity bridge response parsed.")
-
-    diagnostics = response.get("diagnostics")
-    if not isinstance(diagnostics, list):
-        response["diagnostics"] = []
-
-    data = response.get("data")
-    if not isinstance(data, dict):
-        data = {}
+    data = dict(response.get("data", {}))
     data.setdefault("target", target)
     data.setdefault("op_count", op_count)
     data.setdefault("read_only", False)
@@ -138,6 +132,54 @@ def _finalize_unity_response(
     data.setdefault("protocol_version", protocol_version)
     response["data"] = data
     return response
+
+
+def _validate_unity_response_envelope(payload: dict[str, Any]) -> dict[str, Any] | None:
+    required_fields = ("success", "severity", "code", "message", "data", "diagnostics")
+    missing_fields = [field for field in required_fields if field not in payload]
+    if missing_fields:
+        return _error_response(
+            code="BRIDGE_UNITY_RESPONSE_SCHEMA",
+            message="Unity batchmode response is missing required fields.",
+            data={"missing_fields": missing_fields},
+        )
+    if not isinstance(payload.get("success"), bool):
+        return _error_response(
+            code="BRIDGE_UNITY_RESPONSE_SCHEMA",
+            message="Unity batchmode response field 'success' must be a boolean.",
+        )
+    severity = payload.get("severity")
+    if not isinstance(severity, str) or severity not in VALID_SEVERITIES:
+        return _error_response(
+            code="BRIDGE_UNITY_RESPONSE_SCHEMA",
+            message=(
+                "Unity batchmode response field 'severity' must be one of: "
+                + ", ".join(sorted(VALID_SEVERITIES))
+                + "."
+            ),
+        )
+    code = payload.get("code")
+    if not isinstance(code, str) or not code.strip():
+        return _error_response(
+            code="BRIDGE_UNITY_RESPONSE_SCHEMA",
+            message="Unity batchmode response field 'code' must be a non-empty string.",
+        )
+    if not isinstance(payload.get("message"), str):
+        return _error_response(
+            code="BRIDGE_UNITY_RESPONSE_SCHEMA",
+            message="Unity batchmode response field 'message' must be a string.",
+        )
+    if not isinstance(payload.get("data"), dict):
+        return _error_response(
+            code="BRIDGE_UNITY_RESPONSE_SCHEMA",
+            message="Unity batchmode response field 'data' must be an object.",
+        )
+    if not isinstance(payload.get("diagnostics"), list):
+        return _error_response(
+            code="BRIDGE_UNITY_RESPONSE_SCHEMA",
+            message="Unity batchmode response field 'diagnostics' must be an array.",
+        )
+    return None
 
 
 def _encode_bridge_value(value: object) -> dict[str, object]:

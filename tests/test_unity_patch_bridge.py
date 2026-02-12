@@ -118,6 +118,105 @@ response_path.write_text(
         self.assertEqual(1, result["data"]["op_count"])
         self.assertTrue(result["data"]["executed"])
 
+    def test_reference_bridge_rejects_unity_response_missing_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            unity_runner = root / "fake_unity_missing_fields.py"
+            unity_runner.write_text(
+                """
+import json
+import sys
+from pathlib import Path
+
+def _arg(flag: str) -> str:
+    args = sys.argv[1:]
+    idx = args.index(flag)
+    return args[idx + 1]
+
+response_path = Path(_arg("-unitytoolPatchResponse"))
+response_path.write_text(
+    json.dumps(
+        {
+            "protocol_version": 1,
+            "success": True,
+            "severity": "info",
+            "code": "SER_APPLY_OK",
+            "message": "missing diagnostics field",
+            "data": {},
+        }
+    ),
+    encoding="utf-8",
+)
+""".strip(),
+                encoding="utf-8",
+            )
+
+            result = self._run_bridge(
+                {
+                    "protocol_version": 1,
+                    "target": "Assets/Test.prefab",
+                    "ops": [],
+                },
+                env_overrides={
+                    "UNITYTOOL_UNITY_COMMAND": f'"{sys.executable}" "{unity_runner}"',
+                    "UNITYTOOL_UNITY_PROJECT_PATH": str(root),
+                },
+            )
+
+        self.assertFalse(result["success"])
+        self.assertEqual("BRIDGE_UNITY_RESPONSE_SCHEMA", result["code"])
+        self.assertIn("missing required fields", result["message"])
+
+    def test_reference_bridge_rejects_unity_response_invalid_severity(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            unity_runner = root / "fake_unity_invalid_severity.py"
+            unity_runner.write_text(
+                """
+import json
+import sys
+from pathlib import Path
+
+def _arg(flag: str) -> str:
+    args = sys.argv[1:]
+    idx = args.index(flag)
+    return args[idx + 1]
+
+response_path = Path(_arg("-unitytoolPatchResponse"))
+response_path.write_text(
+    json.dumps(
+        {
+            "protocol_version": 1,
+            "success": True,
+            "severity": "notice",
+            "code": "SER_APPLY_OK",
+            "message": "invalid severity",
+            "data": {},
+            "diagnostics": [],
+        }
+    ),
+    encoding="utf-8",
+)
+""".strip(),
+                encoding="utf-8",
+            )
+
+            result = self._run_bridge(
+                {
+                    "protocol_version": 1,
+                    "target": "Assets/Test.prefab",
+                    "ops": [],
+                },
+                env_overrides={
+                    "UNITYTOOL_UNITY_COMMAND": f'"{sys.executable}" "{unity_runner}"',
+                    "UNITYTOOL_UNITY_PROJECT_PATH": str(root),
+                },
+            )
+
+        self.assertFalse(result["success"])
+        self.assertEqual("BRIDGE_UNITY_RESPONSE_SCHEMA", result["code"])
+        self.assertIn("field 'severity'", result["message"])
+
     def test_reference_bridge_normalizes_op_values_for_unity_request(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
