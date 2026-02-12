@@ -449,11 +449,14 @@ def main(argv: list[str] | None = None) -> int:
         payload = response.to_dict()
         if args.out_report:
             report_path = Path(args.out_report)
-            report_path.parent.mkdir(parents=True, exist_ok=True)
-            report_path.write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
+            try:
+                report_path.parent.mkdir(parents=True, exist_ok=True)
+                report_path.write_text(
+                    json.dumps(payload, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+            except OSError as exc:
+                parser.error(f"Failed to write --out-report: {exc}")
         _emit_payload(payload, args.format)
         return 0
 

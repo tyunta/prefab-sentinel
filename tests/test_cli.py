@@ -206,6 +206,35 @@ GameObject:
         self.assertEqual("PATCH_APPLY_RESULT", report_payload["code"])
         self.assertEqual(payload["data"]["target"], report_payload["data"]["target"])
 
+    def test_patch_apply_fails_when_out_report_is_unwritable(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "patch.json"
+            out_report_dir = root / "reports"
+            out_report_dir.mkdir(parents=True, exist_ok=True)
+            plan.write_text(
+                json.dumps(
+                    {
+                        "target": "Assets/Variant.prefab",
+                        "ops": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    self.run_cli(
+                        [
+                            "patch",
+                            "apply",
+                            "--plan",
+                            str(plan),
+                            "--dry-run",
+                            "--out-report",
+                            str(out_report_dir),
+                        ]
+                    )
+
     def test_patch_apply_rejects_plan_sha256_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
