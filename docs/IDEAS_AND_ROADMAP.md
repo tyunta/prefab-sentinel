@@ -85,6 +85,7 @@
   - `unitytool patch hash --plan ...`
   - `unitytool patch apply --plan ... --dry-run`
   - optional plan digest verification (`--plan-sha256`)
+  - optional JSON report output (`--out-report`)
   - plan schema validation + dry-run diff preview
   - non-dry-run confirm gate (`--confirm`)
   - optional preflight reference scan (`--scope`)

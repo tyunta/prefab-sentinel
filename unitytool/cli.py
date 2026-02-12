@@ -229,6 +229,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=200,
         help="Maximum runtime classification diagnostics when --runtime-scene is used.",
     )
+    patch_apply.add_argument(
+        "--out-report",
+        default=None,
+        help="Optional output path to store patch apply result envelope as JSON.",
+    )
     patch_apply.add_argument("--format", choices=("json", "md"), default="json")
     patch_hash = patch_sub.add_parser("hash", help="Compute SHA-256 digest of a patch plan.")
     patch_hash.add_argument("--plan", required=True, help="Input patch plan JSON path.")
@@ -441,7 +446,15 @@ def main(argv: list[str] | None = None) -> int:
             runtime_allow_warnings=args.runtime_allow_warnings,
             runtime_max_diagnostics=args.runtime_max_diagnostics,
         )
-        _emit_payload(response.to_dict(), args.format)
+        payload = response.to_dict()
+        if args.out_report:
+            report_path = Path(args.out_report)
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        _emit_payload(payload, args.format)
         return 0
 
     if args.command == "patch" and args.patch_command == "hash":

@@ -477,6 +477,7 @@ uv run unitytool validate runtime --scene "sample/avatar/Assets/Marycia.unity" -
 uv run unitytool patch hash --plan "config/patch_plan.example.json"
 uv run unitytool patch apply --plan "config/patch_plan.example.json" --dry-run
 uv run unitytool patch apply --plan "config/patch_plan.example.json" --dry-run --plan-sha256 "<sha256>"
+uv run unitytool patch apply --plan "config/patch_plan.example.json" --dry-run --out-report "reports/patch_result.json"
 set UNITYTOOL_PATCH_BRIDGE="python tools/unity_patch_bridge.py"
 set UNITYTOOL_UNITY_COMMAND="C:/Program Files/Unity/Hub/Editor/<version>/Editor/Unity.exe"
 set UNITYTOOL_UNITY_PROJECT_PATH="D:/git/UnityTool/sample/avatar"
@@ -534,6 +535,7 @@ uvx --from . unitytool suggest ignore-guids --scope "Assets/haiirokoubou"
 `scripts/benchmark_regression_report.py` は `--out-md` で比較サマリのMarkdown（回帰一覧 + scope表）を出力できる。
 `patch hash` は plan JSON を検証したうえで SHA-256 digest を出力する（`--format json` 対応）。
 `patch apply` は plan JSON のスキーマ検証と `dry_run_patch` プレビューを実装済み（`set` / `insert_array_element` / `remove_array_element`）。
+`patch apply` は `--out-report` 指定時に結果 envelope を JSON ファイルに保存する。
 `patch apply` は非dry-run時に `--confirm` を要求し、JSONターゲット（`.json`）は内蔵バックエンドで実編集する。
 `patch apply` は `--plan-sha256` 指定時に plan ファイル内容の SHA-256 を照合し、不一致なら適用前に停止する。
 `patch apply` は `--scope` 指定時に `scan_broken_references` を事前実行し、`error`/`critical` で fail-fast 停止する。

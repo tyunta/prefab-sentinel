@@ -165,6 +165,47 @@ GameObject:
         self.assertTrue(payload["success"])
         self.assertEqual(digest, payload["data"]["plan_sha256"])
 
+    def test_patch_apply_writes_out_report_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "patch.json"
+            out_report = root / "reports" / "patch_result.json"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "target": "Assets/Variant.prefab",
+                        "ops": [
+                            {
+                                "op": "set",
+                                "component": "Example.Component",
+                                "path": "items.Array.size",
+                                "value": 2,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            exit_code, output = self.run_cli(
+                [
+                    "patch",
+                    "apply",
+                    "--plan",
+                    str(plan),
+                    "--dry-run",
+                    "--out-report",
+                    str(out_report),
+                ]
+            )
+
+            report_payload = json.loads(out_report.read_text(encoding="utf-8"))
+
+        payload = json.loads(output)
+        self.assertEqual(0, exit_code)
+        self.assertTrue(payload["success"])
+        self.assertEqual("PATCH_APPLY_RESULT", report_payload["code"])
+        self.assertEqual(payload["data"]["target"], report_payload["data"]["target"])
+
     def test_patch_apply_rejects_plan_sha256_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
