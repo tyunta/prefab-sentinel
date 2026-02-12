@@ -116,6 +116,8 @@
   - CLI tests: `tests/test_cli.py` (`bridge-smoke` success + expectation mismatch)
 - Added smoke automation runner for sample avatar/world:
   - `scripts/bridge_smoke_samples.py`
+  - `unitytool/smoke_batch.py` (shared logic for script + CLI)
+  - exposed as CLI command: `prefab-sentinel validate smoke-batch ...`
   - deterministic artifacts per target (`response.json` + `unity.log`) and aggregate `summary.json`/`summary.md`
   - transient failure retry controls (`--max-retries` / `--retry-delay-sec`)
   - per-target timeout tuning (`--avatar-unity-timeout-sec` / `--world-unity-timeout-sec`)

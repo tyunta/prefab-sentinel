@@ -187,6 +187,76 @@ sys.stdout.write(json.dumps({"success": True, "severity": "info", "code": "BRIDG
         self.assertTrue(payload["success"])
         self.assertEqual("BRIDGE_OK", payload["code"])
 
+    def test_validate_smoke_batch_runs_and_writes_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "avatar_plan.json"
+            project = root / "avatar_project"
+            smoke_script = root / "fake_smoke.py"
+            out_dir = root / "reports"
+            project.mkdir(parents=True, exist_ok=True)
+            plan.write_text(
+                json.dumps({"target": "Assets/Test.prefab", "ops": []}),
+                encoding="utf-8",
+            )
+            smoke_script.write_text(
+                """
+import argparse
+import json
+from pathlib import Path
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--plan", required=True)
+parser.add_argument("--bridge-script", required=True)
+parser.add_argument("--python", required=True)
+parser.add_argument("--unity-project-path", required=True)
+parser.add_argument("--unity-execute-method", required=True)
+parser.add_argument("--unity-log-file", required=True)
+parser.add_argument("--out", required=True)
+args = parser.parse_args()
+
+payload = {
+    "success": True,
+    "severity": "info",
+    "code": "OK",
+    "message": "ok",
+    "data": {},
+    "diagnostics": [],
+}
+Path(args.out).write_text(json.dumps(payload), encoding="utf-8")
+print(json.dumps(payload))
+raise SystemExit(0)
+""".strip(),
+                encoding="utf-8",
+            )
+            exit_code, output = self.run_cli(
+                [
+                    "validate",
+                    "smoke-batch",
+                    "--targets",
+                    "avatar",
+                    "--avatar-plan",
+                    str(plan),
+                    "--avatar-project-path",
+                    str(project),
+                    "--smoke-script",
+                    str(smoke_script),
+                    "--python",
+                    sys.executable,
+                    "--bridge-script",
+                    "tools/unity_patch_bridge.py",
+                    "--out-dir",
+                    str(out_dir),
+                ]
+            )
+            summary_path = Path(output.strip())
+            self.assertEqual(0, exit_code)
+            self.assertEqual(out_dir / "summary.json", summary_path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            self.assertTrue(summary["success"])
+            self.assertEqual("SMOKE_BATCH_OK", summary["code"])
+            self.assertEqual(1, summary["data"]["total_cases"])
+
     def test_patch_apply_dry_run_returns_preview(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

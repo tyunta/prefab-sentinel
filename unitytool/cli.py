@@ -27,6 +27,10 @@ from unitytool.mcp.serialized_object import (
 )
 from unitytool.orchestrator import Phase1Orchestrator
 from unitytool.reporting import export_report, render_markdown_report
+from unitytool.smoke_batch import (
+    add_arguments as add_smoke_batch_arguments,
+    run_from_args as run_smoke_batch_from_args,
+)
 from unitytool.smoke_history import (
     add_arguments as add_smoke_history_arguments,
     run_from_args as run_smoke_history_from_args,
@@ -197,6 +201,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional output JSON path for bridge response.",
     )
     validate_bridge_smoke.add_argument("--format", choices=("json", "md"), default="json")
+    validate_smoke_batch = validate_sub.add_parser(
+        "smoke-batch",
+        help="Run smoke cases for avatar/world targets and write batch summaries.",
+    )
+    add_smoke_batch_arguments(validate_smoke_batch)
 
     suggest_parser = subparsers.add_parser("suggest", help="Suggestion commands.")
     suggest_sub = suggest_parser.add_subparsers(dest="suggest_command", required=True)
@@ -674,6 +683,9 @@ def main(argv: list[str] | None = None) -> int:
             if validate_bridge_smoke_expectation(payload, args.expect_failure)
             else 1
         )
+
+    if args.command == "validate" and args.validate_command == "smoke-batch":
+        return run_smoke_batch_from_args(args, parser)
 
     if args.command == "suggest" and args.suggest_command == "ignore-guids":
         try:
