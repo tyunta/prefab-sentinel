@@ -479,6 +479,7 @@ uv run prefab-sentinel validate refs --scope "Assets/haiirokoubou" --ignore-guid
 uv run prefab-sentinel validate runtime --scene "sample/avatar/Assets/Marycia.unity" --log-file "sample/world/Logs/ClientSim.log"
 uv run prefab-sentinel validate bridge-smoke --plan "config/prefab_patch_plan.json" --unity-command "C:/Program Files/Unity/Hub/Editor/<version>/Editor/Unity.exe" --unity-project-path "D:/git/prefab-sentinel/sample/avatar" --unity-execute-method "PrefabSentinel.UnityPatchBridge.ApplyFromJson"
 uv run prefab-sentinel validate bridge-smoke --plan "config/prefab_patch_plan.json" --expected-applied 3 --unity-command "C:/Program Files/Unity/Hub/Editor/<version>/Editor/Unity.exe" --unity-project-path "D:/git/prefab-sentinel/sample/avatar" --unity-execute-method "PrefabSentinel.UnityPatchBridge.ApplyFromJson"
+uv run prefab-sentinel validate bridge-smoke --plan "config/prefab_patch_plan.json" --expect-applied-from-plan --unity-command "C:/Program Files/Unity/Hub/Editor/<version>/Editor/Unity.exe" --unity-project-path "D:/git/prefab-sentinel/sample/avatar" --unity-execute-method "PrefabSentinel.UnityPatchBridge.ApplyFromJson"
 uv run prefab-sentinel validate smoke-batch --targets all --out-dir "reports/bridge_smoke" --summary-md "reports/bridge_smoke/summary.md"
 uv run prefab-sentinel validate smoke-batch --targets all --timeout-profile "reports/bridge_timeout_profile.json" --out-dir "reports/bridge_smoke"
 uv run prefab-sentinel validate smoke-batch --targets avatar --avatar-expected-applied 3 --out-dir "reports/bridge_smoke"
@@ -522,6 +523,7 @@ uvx --from . prefab-sentinel validate refs --scope "Assets/haiirokoubou"
 uvx --from . prefab-sentinel validate runtime --scene "sample/avatar/Assets/Marycia.unity"
 uvx --from . prefab-sentinel validate bridge-smoke --plan "config/prefab_patch_plan.json"
 uvx --from . prefab-sentinel validate bridge-smoke --plan "config/prefab_patch_plan.json" --expected-applied 3
+uvx --from . prefab-sentinel validate bridge-smoke --plan "config/prefab_patch_plan.json" --expect-applied-from-plan
 uvx --from . prefab-sentinel validate smoke-batch --targets all --out-dir "reports/bridge_smoke"
 uvx --from . prefab-sentinel validate smoke-batch --targets all --timeout-profile "reports/bridge_timeout_profile.json" --out-dir "reports/bridge_smoke"
 uvx --from . prefab-sentinel validate smoke-batch --targets avatar --avatar-expected-applied 3 --out-dir "reports/bridge_smoke"
@@ -594,7 +596,7 @@ uvx --from . prefab-sentinel suggest ignore-guids --scope "Assets/haiirokoubou"
 `tools/unity_patch_bridge.py` は Unity起動前に `ops` を検証し、`set` の `value` 欠落や配列操作の `index` 欠落などを `BRIDGE_REQUEST_SCHEMA` で fail-fast 停止する。
 `tools/unity_patch_bridge.py` は `UNITYTOOL_UNITY_PROJECT_PATH` / `UNITYTOOL_UNITY_EXECUTE_METHOD` / `UNITYTOOL_UNITY_TIMEOUT_SEC` / `UNITYTOOL_UNITY_LOG_FILE` で実行設定を制御できる。
 `tools/unity_patch_bridge.py` は Unity応答の `success/severity/code/message/data/diagnostics` を厳密検証し、欠落・型不一致時は `BRIDGE_UNITY_RESPONSE_SCHEMA` で fail-fast 停止する。
-`scripts/unity_bridge_smoke.py` は patch plan から `tools/unity_patch_bridge.py` を end-to-end 実行し、Unity実行環境の上書き・期待成功/失敗判定・適用件数検証（`--expected-applied`）・レスポンス保存（`--out`）をまとめて検証できる。bridge応答は `success/severity/code/message/data/diagnostics` を厳密検証し、欠落・型不一致時は fail-fast で停止する。
+`scripts/unity_bridge_smoke.py` は patch plan から `tools/unity_patch_bridge.py` を end-to-end 実行し、Unity実行環境の上書き・期待成功/失敗判定・適用件数検証（`--expected-applied` または `--expect-applied-from-plan`）・レスポンス保存（`--out`）をまとめて検証できる。bridge応答は `success/severity/code/message/data/diagnostics` を厳密検証し、欠落・型不一致時は fail-fast で停止する。
 `tools/unity/PrefabSentinel.UnityPatchBridge.cs` は Unity 側 `-executeMethod` 実装として `.prefab` ターゲットの `set` / `insert_array_element` / `remove_array_element` を SerializedObject 経由で適用する（`component` は一意一致必須、component曖昧時は候補パス付きで fail-fast）。
 `component` セレクタは `TypeName@Hierarchy/Path` 形式を受け付け、同型コンポーネントが複数ある場合にGameObject階層で明示的に絞り込める。
 `set` の値デコードは `int/float/bool/string/null` に加えて `Character` / `LayerMask` / `ArraySize`、`enum`、`Color`、`Vector2/3/4`、`Vector2Int/3Int`、`Rect/RectInt`、`Bounds/BoundsInt`、`Quaternion`、`AnimationCurve`、`Gradient`、`ObjectReference` / `ExposedReference`（`value_kind=json` の `{guid,file_id}`）、`ManagedReference`（`value_kind=json`、必要時 `{"__type":"Namespace.Type, Assembly"}` ヒント対応）、`Generic`（カスタム構造体の `value_json` 反映）を扱う。
@@ -604,7 +606,7 @@ uvx --from . prefab-sentinel suggest ignore-guids --scope "Assets/haiirokoubou"
 fixed buffer 配列に対する `insert_array_element` / `remove_array_element` は未対応として明示的に fail-fast 停止し、要素更新は `set` で個別要素パスを指定する方針とする。
 `validate runtime` は log分類ベースのscaffoldを実装済みで、`--scene` 存在確認、`BROKEN_PPTR` / `UDON_NULLREF` などの分類、`assert_no_critical_errors` 判定までを返す。
 `validate runtime` の compile/ClientSim 実行は現時点では `RUN_COMPILE_SKIPPED` / `RUN_CLIENTSIM_SKIPPED` として明示的に未配線を返す。
-`validate bridge-smoke` は patch plan を bridge request へ変換して `tools/unity_patch_bridge.py` を実行し、`--expect-failure` 判定・`--expected-applied` の `response.data.applied` 検証・`--out` 保存までをCLI本体から実行できる（`--expected-applied` 指定時は出力 `data` に `expected_applied` / `actual_applied` / `applied_matches` を付与）。
+`validate bridge-smoke` は patch plan を bridge request へ変換して `tools/unity_patch_bridge.py` を実行し、`--expect-failure` 判定・`--expected-applied` / `--expect-applied-from-plan` の `response.data.applied` 検証・`--out` 保存までをCLI本体から実行できる（apply検証有効時は出力 `data` に `expected_applied` / `expected_applied_source` / `actual_applied` / `applied_matches` を付与。`--expect-applied-from-plan` は `--expect-failure` 指定時に自動スキップ）。
 `report export --format md` は `VALIDATE_RUNTIME_RESULT` payload を入力した場合、Runtime Validation 要約（分類件数・severity内訳・カテゴリ表）を追加出力する。
 
 ```bash

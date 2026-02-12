@@ -17,6 +17,7 @@ from unitytool.bridge_smoke import (
     build_bridge_env,
     build_bridge_request,
     load_patch_plan as load_bridge_smoke_plan,
+    resolve_expected_applied as resolve_bridge_expected_applied,
     run_bridge as run_bridge_smoke,
     validate_expectation as validate_bridge_smoke_expectation,
 )
@@ -200,6 +201,14 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Optional expected data.applied value for bridge response.",
+    )
+    validate_bridge_smoke.add_argument(
+        "--expect-applied-from-plan",
+        action="store_true",
+        help=(
+            "Infer expected applied count from patch plan ops length when "
+            "--expected-applied is not specified and --expect-failure is not set."
+        ),
     )
     validate_bridge_smoke.add_argument(
         "--out",
@@ -646,6 +655,12 @@ def main(argv: list[str] | None = None) -> int:
         bridge_script = Path(args.bridge_script)
         try:
             plan = load_bridge_smoke_plan(plan_path)
+            expected_applied, expected_applied_source = resolve_bridge_expected_applied(
+                plan=plan,
+                expected_applied=args.expected_applied,
+                expect_applied_from_plan=args.expect_applied_from_plan,
+                expect_failure=args.expect_failure,
+            )
             request = build_bridge_request(plan)
             env = build_bridge_env(
                 unity_command=args.unity_command,
@@ -678,7 +693,8 @@ def main(argv: list[str] | None = None) -> int:
         matched_expectation = validate_bridge_smoke_expectation(
             payload,
             args.expect_failure,
-            args.expected_applied,
+            expected_applied,
+            expected_applied_source,
         )
         if args.out:
             output_path = Path(args.out)

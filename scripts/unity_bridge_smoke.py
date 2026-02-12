@@ -22,6 +22,7 @@ from unitytool.bridge_smoke import (
     build_bridge_env as _build_bridge_env_impl,
     build_bridge_request as _build_bridge_request_impl,
     load_patch_plan as _load_patch_plan_impl,
+    resolve_expected_applied as _resolve_expected_applied_impl,
     run_bridge as _run_bridge_impl,
     validate_bridge_response as _validate_bridge_response_impl,
     validate_expectation as _validate_expectation_impl,
@@ -82,6 +83,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional expected data.applied value for bridge response.",
     )
     parser.add_argument(
+        "--expect-applied-from-plan",
+        action="store_true",
+        help=(
+            "Infer expected applied count from patch plan ops length when "
+            "--expected-applied is not specified and --expect-failure is not set."
+        ),
+    )
+    parser.add_argument(
         "--out",
         default=None,
         help="Optional output JSON path for bridge response.",
@@ -126,12 +135,33 @@ def _validate_bridge_response(payload: dict[str, Any]) -> None:
     _validate_bridge_response_impl(payload)
 
 
+def _resolve_expected_applied(
+    *,
+    plan: dict[str, Any],
+    expected_applied: int | None,
+    expect_applied_from_plan: bool,
+    expect_failure: bool,
+) -> tuple[int | None, str]:
+    return _resolve_expected_applied_impl(
+        plan=plan,
+        expected_applied=expected_applied,
+        expect_applied_from_plan=expect_applied_from_plan,
+        expect_failure=expect_failure,
+    )
+
+
 def _validate_expectation(
     response: dict[str, Any],
     expect_failure: bool,
     expected_applied: int | None = None,
+    expected_applied_source: str | None = None,
 ) -> bool:
-    return _validate_expectation_impl(response, expect_failure, expected_applied)
+    return _validate_expectation_impl(
+        response,
+        expect_failure,
+        expected_applied,
+        expected_applied_source,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -144,6 +174,12 @@ def main(argv: list[str] | None = None) -> int:
     bridge_script = Path(args.bridge_script)
     try:
         plan = _load_patch_plan(plan_path)
+        expected_applied, expected_applied_source = _resolve_expected_applied(
+            plan=plan,
+            expected_applied=args.expected_applied,
+            expect_applied_from_plan=args.expect_applied_from_plan,
+            expect_failure=args.expect_failure,
+        )
         request = _build_bridge_request(plan)
         env = _build_bridge_env(args)
         response = _run_bridge(
@@ -170,7 +206,8 @@ def main(argv: list[str] | None = None) -> int:
     matched_expectation = _validate_expectation(
         response,
         args.expect_failure,
-        args.expected_applied,
+        expected_applied,
+        expected_applied_source,
     )
     if args.out:
         output_path = Path(args.out)

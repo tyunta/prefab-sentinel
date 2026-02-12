@@ -36,6 +36,25 @@ def build_bridge_request(plan: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def resolve_expected_applied(
+    *,
+    plan: dict[str, Any],
+    expected_applied: int | None,
+    expect_applied_from_plan: bool,
+    expect_failure: bool,
+) -> tuple[int | None, str]:
+    if expected_applied is not None:
+        return expected_applied, "cli"
+    if not expect_applied_from_plan:
+        return None, "none"
+    if expect_failure:
+        return None, "skipped_expect_failure"
+    ops = plan.get("ops")
+    if not isinstance(ops, list):
+        raise ValueError("Patch plan field 'ops' must be an array.")
+    return len(ops), "plan_ops"
+
+
 def build_bridge_env(
     *,
     unity_command: str | None = None,
@@ -136,6 +155,7 @@ def extract_applied_count(response: dict[str, Any]) -> int | None:
 def apply_applied_expectation(
     response: dict[str, Any],
     expected_applied: int | None,
+    expected_applied_source: str | None = None,
 ) -> bool | None:
     if expected_applied is None:
         return None
@@ -145,6 +165,9 @@ def apply_applied_expectation(
     actual_applied = extract_applied_count(response)
     applied_matches = actual_applied == expected_applied
     data["expected_applied"] = expected_applied
+    data["expected_applied_source"] = (
+        expected_applied_source if expected_applied_source is not None else "cli"
+    )
     data["actual_applied"] = actual_applied
     data["applied_matches"] = applied_matches
     return applied_matches
@@ -154,10 +177,15 @@ def validate_expectation(
     response: dict[str, Any],
     expect_failure: bool,
     expected_applied: int | None = None,
+    expected_applied_source: str | None = None,
 ) -> bool:
     success = bool(response.get("success"))
     matched_expectation = (not success) if expect_failure else success
-    applied_matches = apply_applied_expectation(response, expected_applied)
+    applied_matches = apply_applied_expectation(
+        response,
+        expected_applied,
+        expected_applied_source,
+    )
     if applied_matches is False:
         return False
     return matched_expectation

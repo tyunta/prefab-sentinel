@@ -224,8 +224,98 @@ sys.stdout.write(json.dumps({"success": True, "severity": "info", "code": "BRIDG
         self.assertEqual(1, exit_code)
         self.assertTrue(payload["success"])
         self.assertEqual(2, payload["data"]["expected_applied"])
+        self.assertEqual("cli", payload["data"]["expected_applied_source"])
         self.assertEqual(1, payload["data"]["actual_applied"])
         self.assertFalse(payload["data"]["applied_matches"])
+
+    def test_validate_bridge_smoke_infers_expected_applied_from_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "plan.json"
+            bridge = root / "fake_bridge.py"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "target": "Assets/Test.prefab",
+                        "ops": [{"op": "set"}, {"op": "set"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            bridge.write_text(
+                """
+import json
+import sys
+_ = json.loads(sys.stdin.read())
+sys.stdout.write(json.dumps({"success": True, "severity": "info", "code": "BRIDGE_OK", "message": "ok", "data": {"applied": 2}, "diagnostics": []}))
+""".strip(),
+                encoding="utf-8",
+            )
+            exit_code, output = self.run_cli(
+                [
+                    "validate",
+                    "bridge-smoke",
+                    "--plan",
+                    str(plan),
+                    "--bridge-script",
+                    str(bridge),
+                    "--python",
+                    sys.executable,
+                    "--expect-applied-from-plan",
+                ]
+            )
+
+        payload = json.loads(output)
+        self.assertEqual(0, exit_code)
+        self.assertEqual(2, payload["data"]["expected_applied"])
+        self.assertEqual("plan_ops", payload["data"]["expected_applied_source"])
+        self.assertEqual(2, payload["data"]["actual_applied"])
+        self.assertTrue(payload["data"]["applied_matches"])
+
+    def test_validate_bridge_smoke_expect_applied_from_plan_skips_expect_failure_case(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "plan.json"
+            bridge = root / "fake_bridge.py"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "target": "Assets/Test.prefab",
+                        "ops": [{"op": "set"}, {"op": "set"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            bridge.write_text(
+                """
+import json
+import sys
+_ = json.loads(sys.stdin.read())
+sys.stdout.write(json.dumps({"success": False, "severity": "error", "code": "BRIDGE_FAIL", "message": "failed", "data": {}, "diagnostics": []}))
+""".strip(),
+                encoding="utf-8",
+            )
+            exit_code, output = self.run_cli(
+                [
+                    "validate",
+                    "bridge-smoke",
+                    "--plan",
+                    str(plan),
+                    "--bridge-script",
+                    str(bridge),
+                    "--python",
+                    sys.executable,
+                    "--expect-failure",
+                    "--expect-applied-from-plan",
+                ]
+            )
+
+        payload = json.loads(output)
+        self.assertEqual(0, exit_code)
+        self.assertFalse(payload["success"])
+        self.assertNotIn("expected_applied", payload["data"])
 
     def test_validate_bridge_smoke_rejects_negative_expected_applied(self) -> None:
         with redirect_stderr(io.StringIO()):

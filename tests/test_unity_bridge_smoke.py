@@ -20,6 +20,7 @@ from scripts.unity_bridge_smoke import (
     _build_bridge_env,
     _build_bridge_request,
     _load_patch_plan,
+    _resolve_expected_applied,
     _run_bridge,
     _validate_expectation,
     main,
@@ -53,6 +54,36 @@ class UnityBridgeSmokeTests(unittest.TestCase):
         self.assertEqual(1, request["protocol_version"])
         self.assertEqual("Assets/Test.prefab", request["target"])
         self.assertEqual([{"op": "set"}], request["ops"])
+
+    def test_resolve_expected_applied(self) -> None:
+        plan = {"target": "Assets/Test.prefab", "ops": [{"op": "set"}, {"op": "set"}]}
+        self.assertEqual(
+            (3, "cli"),
+            _resolve_expected_applied(
+                plan=plan,
+                expected_applied=3,
+                expect_applied_from_plan=True,
+                expect_failure=False,
+            ),
+        )
+        self.assertEqual(
+            (2, "plan_ops"),
+            _resolve_expected_applied(
+                plan=plan,
+                expected_applied=None,
+                expect_applied_from_plan=True,
+                expect_failure=False,
+            ),
+        )
+        self.assertEqual(
+            (None, "skipped_expect_failure"),
+            _resolve_expected_applied(
+                plan=plan,
+                expected_applied=None,
+                expect_applied_from_plan=True,
+                expect_failure=True,
+            ),
+        )
 
     def test_build_bridge_env_applies_overrides(self) -> None:
         args = argparse.Namespace(
@@ -163,6 +194,7 @@ sys.stdout.write(json.dumps({"success": True, "severity": "notice", "code": "OK"
             )
         )
         self.assertEqual(2, response["data"]["expected_applied"])
+        self.assertEqual("cli", response["data"]["expected_applied_source"])
         self.assertEqual(2, response["data"]["actual_applied"])
         self.assertTrue(response["data"]["applied_matches"])
         mismatch_response = {"success": True, "data": {"applied": 1}}
@@ -174,6 +206,7 @@ sys.stdout.write(json.dumps({"success": True, "severity": "notice", "code": "OK"
             )
         )
         self.assertEqual(2, mismatch_response["data"]["expected_applied"])
+        self.assertEqual("cli", mismatch_response["data"]["expected_applied_source"])
         self.assertEqual(1, mismatch_response["data"]["actual_applied"])
         self.assertFalse(mismatch_response["data"]["applied_matches"])
 
@@ -245,8 +278,93 @@ sys.stdout.write(json.dumps({"success": True, "severity": "info", "code": "OK", 
         self.assertEqual(1, exit_code)
         self.assertTrue(payload["success"])
         self.assertEqual(2, payload["data"]["expected_applied"])
+        self.assertEqual("cli", payload["data"]["expected_applied_source"])
         self.assertEqual(1, payload["data"]["actual_applied"])
         self.assertFalse(payload["data"]["applied_matches"])
+
+    def test_main_applies_expected_applied_from_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "plan.json"
+            bridge = root / "fake_bridge.py"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "target": "Assets/Test.prefab",
+                        "ops": [{"op": "set"}, {"op": "set"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            bridge.write_text(
+                """
+import json
+import sys
+_ = json.loads(sys.stdin.read())
+sys.stdout.write(json.dumps({"success": True, "severity": "info", "code": "OK", "message": "ok", "data": {"applied": 2}, "diagnostics": []}))
+""".strip(),
+                encoding="utf-8",
+            )
+            output = io.StringIO()
+            with redirect_stdout(output):
+                exit_code = main(
+                    [
+                        "--plan",
+                        str(plan),
+                        "--bridge-script",
+                        str(bridge),
+                        "--python",
+                        sys.executable,
+                        "--expect-applied-from-plan",
+                    ]
+                )
+        payload = json.loads(output.getvalue())
+        self.assertEqual(0, exit_code)
+        self.assertEqual(2, payload["data"]["expected_applied"])
+        self.assertEqual("plan_ops", payload["data"]["expected_applied_source"])
+        self.assertEqual(2, payload["data"]["actual_applied"])
+        self.assertTrue(payload["data"]["applied_matches"])
+
+    def test_main_expect_applied_from_plan_skips_expect_failure_case(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "plan.json"
+            bridge = root / "fake_bridge.py"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "target": "Assets/Test.prefab",
+                        "ops": [{"op": "set"}, {"op": "set"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            bridge.write_text(
+                """
+import json
+import sys
+_ = json.loads(sys.stdin.read())
+sys.stdout.write(json.dumps({"success": False, "severity": "error", "code": "FAIL", "message": "failed", "data": {}, "diagnostics": []}))
+""".strip(),
+                encoding="utf-8",
+            )
+            output = io.StringIO()
+            with redirect_stdout(output):
+                exit_code = main(
+                    [
+                        "--plan",
+                        str(plan),
+                        "--bridge-script",
+                        str(bridge),
+                        "--python",
+                        sys.executable,
+                        "--expect-failure",
+                        "--expect-applied-from-plan",
+                    ]
+                )
+        payload = json.loads(output.getvalue())
+        self.assertEqual(0, exit_code)
+        self.assertNotIn("expected_applied", payload["data"])
 
     def test_main_rejects_negative_expected_applied_argument(self) -> None:
         with redirect_stderr(io.StringIO()):
