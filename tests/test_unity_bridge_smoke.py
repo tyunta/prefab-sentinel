@@ -57,14 +57,14 @@ class UnityBridgeSmokeTests(unittest.TestCase):
     def test_build_bridge_env_applies_overrides(self) -> None:
         args = argparse.Namespace(
             unity_command="C:/Unity/Editor/Unity.exe",
-            unity_project_path="D:/git/UnityTool/sample/avatar",
+            unity_project_path="D:/git/prefab-sentinel/sample/avatar",
             unity_execute_method="PrefabSentinel.UnityPatchBridge.ApplyFromJson",
             unity_timeout_sec=300,
             unity_log_file="D:/tmp/unity.log",
         )
         env = _build_bridge_env(args)
         self.assertEqual("C:/Unity/Editor/Unity.exe", env[UNITY_COMMAND_ENV])
-        self.assertEqual("D:/git/UnityTool/sample/avatar", env[UNITY_PROJECT_PATH_ENV])
+        self.assertEqual("D:/git/prefab-sentinel/sample/avatar", env[UNITY_PROJECT_PATH_ENV])
         self.assertEqual(
             "PrefabSentinel.UnityPatchBridge.ApplyFromJson",
             env[UNITY_EXECUTE_METHOD_ENV],

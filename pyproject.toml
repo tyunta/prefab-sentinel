@@ -3,12 +3,16 @@ requires = ["hatchling>=1.24.0"]
 build-backend = "hatchling.build"
 
 [project]
-name = "unitytool"
+name = "prefab-sentinel"
 version = "0.1.67"
-description = "Phase 1 scaffold for UnityTool CLI and MCP contracts."
+description = "Phase 1 scaffold for Prefab Sentinel CLI and MCP contracts."
 requires-python = ">=3.11"
 readme = "README.md"
 dependencies = []
 
 [project.scripts]
+prefab-sentinel = "unitytool.cli:main"
 unitytool = "unitytool.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["unitytool"]

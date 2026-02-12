@@ -1,4 +1,4 @@
-# UnityTool Ideas And Roadmap
+# Prefab Sentinel Ideas And Roadmap
 
 ## Purpose
 - Keep implementation ideas and execution order in one place.
@@ -78,15 +78,15 @@
 - `scripts/benchmark_samples.py` can forward baseline pinning file:
   - `--regression-baseline-pinning-file`
 - Added runtime validation scaffold command:
-  - `unitytool validate runtime --scene ...`
+  - `prefab-sentinel validate runtime --scene ...`
   - log-based classification (`BROKEN_PPTR`, `UDON_NULLREF`, etc.)
   - runtime assertion step (`assert_no_critical_errors`)
 - Added patch apply scaffold command:
-  - `unitytool patch hash --plan ...`
-  - `unitytool patch sign --plan ...`
-  - `unitytool patch attest --plan ...`
-  - `unitytool patch verify --plan ...`
-  - `unitytool patch apply --plan ... --dry-run`
+  - `prefab-sentinel patch hash --plan ...`
+  - `prefab-sentinel patch sign --plan ...`
+  - `prefab-sentinel patch attest --plan ...`
+  - `prefab-sentinel patch verify --plan ...`
+  - `prefab-sentinel patch apply --plan ... --dry-run`
   - optional attestation verification (`--attestation-file`)
   - optional plan digest verification (`--plan-sha256`)
   - optional plan signature verification (`--plan-signature`)
@@ -112,7 +112,7 @@
   - `tests/test_unity_bridge_smoke.py`
 - Added shared bridge smoke library + CLI command:
   - `unitytool/bridge_smoke.py` (shared contract/exec logic for script + CLI)
-  - `unitytool validate bridge-smoke ...` (`--expect-failure` / `--out` supported)
+  - `prefab-sentinel validate bridge-smoke ...` (`--expect-failure` / `--out` supported)
   - CLI tests: `tests/test_cli.py` (`bridge-smoke` success + expectation mismatch)
 - Added smoke automation runner for sample avatar/world:
   - `scripts/bridge_smoke_samples.py`
@@ -126,7 +126,7 @@
   - aggregates `summary.json` rows into CSV and Markdown decision table by target
   - supports `--matched-only`, `--target`, `--duration-percentile`
   - supports timeout profile JSON export (`--out-timeout-profile`) with policy knobs (`--timeout-multiplier` / `--timeout-slack-sec` / `--timeout-min-sec` / `--timeout-round-sec`)
-  - exposed as CLI command: `unitytool report smoke-history ...`
+  - exposed as CLI command: `prefab-sentinel report smoke-history ...`
   - unit tests: `tests/test_smoke_summary_to_csv.py`
 - Added CI workflow wiring:
   - `.github/workflows/ci.yml` runs `unittest` on push/PR/workflow_dispatch
@@ -167,3 +167,4 @@
 - `patch apply` is write-enabled only for explicit `--confirm`.
 - JSON targets use built-in backend; Unity targets require external bridge command (`UNITYTOOL_PATCH_BRIDGE`).
 - Continue fail-fast for invalid input and missing required paths.
+

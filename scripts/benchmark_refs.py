@@ -16,7 +16,7 @@ from typing import Any
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="benchmark_refs",
-        description="Benchmark unitytool validate refs execution time.",
+        description="Benchmark prefab-sentinel validate refs execution time.",
     )
     parser.add_argument("--scope", required=True, help="Scope path for validate refs.")
     parser.add_argument("--runs", type=int, default=3, help="Number of benchmark runs.")

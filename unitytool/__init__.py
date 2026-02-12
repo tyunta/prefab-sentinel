@@ -1,2 +1,2 @@
-"""UnityTool Phase 1 scaffold package."""
+"""Prefab Sentinel Phase 1 scaffold package."""
 

@@ -136,7 +136,7 @@ def render_markdown_report(
     runtime = _extract_runtime_validation_data(payload_data)
 
     lines = [
-        "# UnityTool Validation Report",
+        "# Prefab Sentinel Validation Report",
         f"- Success: {payload.get('success')}",
         f"- Severity: {payload.get('severity')}",
         f"- Code: {payload.get('code')}",

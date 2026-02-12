@@ -1210,7 +1210,7 @@ PrefabInstance:
             self.assertIn("Exported report:", output)
             self.assertTrue(dst.exists())
             content = dst.read_text(encoding="utf-8")
-            self.assertIn("# UnityTool Validation Report", content)
+            self.assertIn("# Prefab Sentinel Validation Report", content)
 
     def test_report_smoke_history_writes_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -37,8 +37,8 @@ _DEFAULT_PLAN_SIGNING_KEY_ENV = "UNITYTOOL_PLAN_SIGNING_KEY"
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="unitytool",
-        description="UnityTool Phase 1 scaffold CLI.",
+        prog="prefab-sentinel",
+        description="Prefab Sentinel Phase 1 scaffold CLI.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 

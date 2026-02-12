@@ -1,4 +1,4 @@
-# UnityTool 統合仕様書（MCP / Skills / 運用設計）
+# Prefab Sentinel 統合仕様書（MCP / Skills / 運用設計）
 
 ## 0. このドキュメントの目的
 この文書は、Unity/VRChatプロジェクトに対して安全かつ再現可能にPrefab/Scene/Udon設定を編集するためのツール群の**全体構想・詳細仕様・相互関係**を定義する。
@@ -59,7 +59,7 @@
 [User/Codex]
     |
     v
-[UnityTool CLI Orchestrator]
+[Prefab Sentinel CLI Orchestrator]
     |-------------------------------|
     v                               v
 [MCP: serialized-object]        [Skills Layer]
@@ -75,7 +75,7 @@
 ```
 
 ### 3.1 コンポーネント責務
-- UnityTool CLI Orchestrator
+- Prefab Sentinel CLI Orchestrator
   - ユースケース単位で複数MCPを編成
   - 実行計画、依存順序、停止条件を管理
 - MCP群
@@ -451,52 +451,54 @@ Udonログを根拠に修正候補を最短で絞る。
 ## 17. CLI想定コマンド
 
 ```bash
-unitytool inspect variant --path "Assets/... Variant.prefab"
-unitytool inspect where-used --asset-or-guid "Assets/SomeAsset.prefab" --scope "Assets"
-unitytool validate refs --scope "Assets/haiirokoubou"
-unitytool suggest ignore-guids --scope "Assets/haiirokoubou"
-unitytool patch apply --plan patch.json --dry-run
-unitytool validate runtime --scene "Assets/Scenes/VRCDefaultWorldScene.unity"
-unitytool report export --format md --out reports/latest.md
+prefab-sentinel inspect variant --path "Assets/... Variant.prefab"
+prefab-sentinel inspect where-used --asset-or-guid "Assets/SomeAsset.prefab" --scope "Assets"
+prefab-sentinel validate refs --scope "Assets/haiirokoubou"
+prefab-sentinel suggest ignore-guids --scope "Assets/haiirokoubou"
+prefab-sentinel patch apply --plan patch.json --dry-run
+prefab-sentinel validate runtime --scene "Assets/Scenes/VRCDefaultWorldScene.unity"
+prefab-sentinel report export --format md --out reports/latest.md
 ```
 
 ### 17.1 Phase 1 Scaffold 実行方法（現行実装）
 
 Phase 1では read-only 検査系の CLI 骨格のみ提供する。  
 ローカル実行は `uv run`、可搬実行は `uvx --from .` を使用する。
+CLI名は `prefab-sentinel` を正規とし、旧 `unitytool` は後方互換エイリアスとして当面維持する。
+環境変数プレフィックス（`UNITYTOOL_*`）は互換性のため現状維持とする。
 
 ```bash
 # プロジェクトルートで
-uv run unitytool inspect variant --path "Assets/... Variant.prefab"
-uv run unitytool inspect where-used --asset-or-guid "Assets/SomeAsset.prefab" --scope "Assets" --max-usages 200
-uv run unitytool validate refs --scope "Assets/haiirokoubou"
-uv run unitytool validate refs --scope "Assets/haiirokoubou" --details --max-diagnostics 200
-uv run unitytool validate refs --scope "Assets/haiirokoubou" --exclude "**/Generated/**"
-uv run unitytool validate refs --scope "Assets/haiirokoubou" --ignore-guid-file "config/ignore_guids.txt"
-uv run unitytool validate runtime --scene "sample/avatar/Assets/Marycia.unity" --log-file "sample/world/Logs/ClientSim.log"
-uv run unitytool validate bridge-smoke --plan "config/prefab_patch_plan.json" --unity-command "C:/Program Files/Unity/Hub/Editor/<version>/Editor/Unity.exe" --unity-project-path "D:/git/UnityTool/sample/avatar" --unity-execute-method "PrefabSentinel.UnityPatchBridge.ApplyFromJson"
-uv run unitytool patch hash --plan "config/patch_plan.example.json"
+uv run prefab-sentinel inspect variant --path "Assets/... Variant.prefab"
+uv run prefab-sentinel inspect where-used --asset-or-guid "Assets/SomeAsset.prefab" --scope "Assets" --max-usages 200
+uv run prefab-sentinel validate refs --scope "Assets/haiirokoubou"
+uv run prefab-sentinel validate refs --scope "Assets/haiirokoubou" --details --max-diagnostics 200
+uv run prefab-sentinel validate refs --scope "Assets/haiirokoubou" --exclude "**/Generated/**"
+uv run prefab-sentinel validate refs --scope "Assets/haiirokoubou" --ignore-guid-file "config/ignore_guids.txt"
+uv run prefab-sentinel validate runtime --scene "sample/avatar/Assets/Marycia.unity" --log-file "sample/world/Logs/ClientSim.log"
+uv run prefab-sentinel validate bridge-smoke --plan "config/prefab_patch_plan.json" --unity-command "C:/Program Files/Unity/Hub/Editor/<version>/Editor/Unity.exe" --unity-project-path "D:/git/prefab-sentinel/sample/avatar" --unity-execute-method "PrefabSentinel.UnityPatchBridge.ApplyFromJson"
+uv run prefab-sentinel patch hash --plan "config/patch_plan.example.json"
 set UNITYTOOL_PLAN_SIGNING_KEY="replace-with-signing-key"
-uv run unitytool patch sign --plan "config/patch_plan.example.json"
-uv run unitytool patch attest --plan "config/patch_plan.example.json" --out "reports/patch_attestation.json"
-uv run unitytool patch verify --plan "config/patch_plan.example.json" --sha256 "<sha256>"
-uv run unitytool patch verify --plan "config/patch_plan.example.json" --attestation-file "reports/patch_attestation.json"
-uv run unitytool patch verify --plan "config/patch_plan.example.json" --signature "<signature>"
-uv run unitytool patch apply --plan "config/patch_plan.example.json" --dry-run
-uv run unitytool patch apply --plan "config/patch_plan.example.json" --dry-run --attestation-file "reports/patch_attestation.json"
-uv run unitytool patch apply --plan "config/patch_plan.example.json" --dry-run --plan-sha256 "<sha256>"
-uv run unitytool patch apply --plan "config/patch_plan.example.json" --dry-run --plan-signature "<signature>"
-uv run unitytool patch apply --plan "config/patch_plan.example.json" --dry-run --out-report "reports/patch_result.json"
+uv run prefab-sentinel patch sign --plan "config/patch_plan.example.json"
+uv run prefab-sentinel patch attest --plan "config/patch_plan.example.json" --out "reports/patch_attestation.json"
+uv run prefab-sentinel patch verify --plan "config/patch_plan.example.json" --sha256 "<sha256>"
+uv run prefab-sentinel patch verify --plan "config/patch_plan.example.json" --attestation-file "reports/patch_attestation.json"
+uv run prefab-sentinel patch verify --plan "config/patch_plan.example.json" --signature "<signature>"
+uv run prefab-sentinel patch apply --plan "config/patch_plan.example.json" --dry-run
+uv run prefab-sentinel patch apply --plan "config/patch_plan.example.json" --dry-run --attestation-file "reports/patch_attestation.json"
+uv run prefab-sentinel patch apply --plan "config/patch_plan.example.json" --dry-run --plan-sha256 "<sha256>"
+uv run prefab-sentinel patch apply --plan "config/patch_plan.example.json" --dry-run --plan-signature "<signature>"
+uv run prefab-sentinel patch apply --plan "config/patch_plan.example.json" --dry-run --out-report "reports/patch_result.json"
 set UNITYTOOL_PATCH_BRIDGE="python tools/unity_patch_bridge.py"
 set UNITYTOOL_UNITY_COMMAND="C:/Program Files/Unity/Hub/Editor/<version>/Editor/Unity.exe"
-set UNITYTOOL_UNITY_PROJECT_PATH="D:/git/UnityTool/sample/avatar"
+set UNITYTOOL_UNITY_PROJECT_PATH="D:/git/prefab-sentinel/sample/avatar"
 set UNITYTOOL_UNITY_EXECUTE_METHOD="PrefabSentinel.UnityPatchBridge.ApplyFromJson"
-python scripts/unity_bridge_smoke.py --plan "config/prefab_patch_plan.json" --unity-command "C:/Program Files/Unity/Hub/Editor/<version>/Editor/Unity.exe" --unity-project-path "D:/git/UnityTool/sample/avatar" --unity-execute-method "PrefabSentinel.UnityPatchBridge.ApplyFromJson" --out "reports/unity_bridge_smoke.json"
-uv run unitytool patch apply --plan "config/prefab_patch_plan.json" --confirm
-uv run unitytool patch apply --plan "config/prefab_patch_plan.json" --confirm --scope "Assets" --runtime-scene "Assets/Smoke.unity"
-uv run unitytool suggest ignore-guids --scope "Assets/haiirokoubou" --min-occurrences 100 --max-items 20
-uv run unitytool suggest ignore-guids --scope "Assets/haiirokoubou" --ignore-guid "7e5debf235ac2d54397a268de3328672"
-uv run unitytool suggest ignore-guids --scope "Assets/haiirokoubou" --min-occurrences 100 --out-ignore-guid-file "config/ignore_guids.txt" --out-ignore-guid-mode append
+python scripts/unity_bridge_smoke.py --plan "config/prefab_patch_plan.json" --unity-command "C:/Program Files/Unity/Hub/Editor/<version>/Editor/Unity.exe" --unity-project-path "D:/git/prefab-sentinel/sample/avatar" --unity-execute-method "PrefabSentinel.UnityPatchBridge.ApplyFromJson" --out "reports/unity_bridge_smoke.json"
+uv run prefab-sentinel patch apply --plan "config/prefab_patch_plan.json" --confirm
+uv run prefab-sentinel patch apply --plan "config/prefab_patch_plan.json" --confirm --scope "Assets" --runtime-scene "Assets/Smoke.unity"
+uv run prefab-sentinel suggest ignore-guids --scope "Assets/haiirokoubou" --min-occurrences 100 --max-items 20
+uv run prefab-sentinel suggest ignore-guids --scope "Assets/haiirokoubou" --ignore-guid "7e5debf235ac2d54397a268de3328672"
+uv run prefab-sentinel suggest ignore-guids --scope "Assets/haiirokoubou" --min-occurrences 100 --out-ignore-guid-file "config/ignore_guids.txt" --out-ignore-guid-mode append
 python scripts/benchmark_refs.py --scope "sample/avatar/Assets" --warmup-runs 1 --runs 3 --out "sample/avatar/config/benchmark_refs.json" --out-csv "sample/avatar/config/benchmark_refs.csv" --csv-append --include-generated-date
 python scripts/benchmark_history_to_csv.py --inputs "sample/avatar/config/bench_*.json" --scope-contains "avatar" --severity error --generated-date-prefix "2026-02" --min-p90 2.0 --latest-per-scope --top-slowest 20 --split-by-severity --sort-by avg_sec --sort-order desc --include-date-column --out "sample/avatar/config/benchmark_trend.csv" --out-md "sample/avatar/config/benchmark_trend.md"
 python scripts/benchmark_samples.py --targets all --runs 1 --warmup-runs 0 --history-generated-date-prefix "2026-02" --history-min-p90 2.0 --history-latest-per-scope --history-split-by-severity --history-write-md --run-regression --regression-baseline-auto-latest 3 --regression-baseline-pinning-file "sample/avatar/config/baseline_pinning.json" --regression-alerts-only --regression-fail-on-regression --regression-out-csv-append --regression-out-md
@@ -504,16 +506,16 @@ python scripts/benchmark_regression_report.py --baseline-inputs "sample/avatar/c
 python scripts/bridge_smoke_samples.py --targets all --avatar-plan "sample/avatar/config/prefab_patch_plan.json" --world-plan "sample/world/config/prefab_patch_plan.json" --unity-command "C:/Program Files/Unity/Hub/Editor/<version>/Editor/Unity.exe" --out-dir "reports/bridge_smoke" --summary-md "reports/bridge_smoke/summary.md"
 python scripts/bridge_smoke_samples.py --targets all --avatar-plan "sample/avatar/config/prefab_patch_plan.json" --world-plan "sample/world/config/prefab_patch_plan.json" --unity-command "C:/Program Files/Unity/Hub/Editor/<version>/Editor/Unity.exe" --unity-timeout-sec 600 --avatar-unity-timeout-sec 900 --world-unity-timeout-sec 450 --max-retries 2 --retry-delay-sec 5 --out-dir "reports/bridge_smoke" --summary-md "reports/bridge_smoke/summary.md"
 python scripts/smoke_summary_to_csv.py --inputs "reports/bridge_smoke/**/summary.json" --duration-percentile 90 --out "reports/bridge_smoke_history.csv" --out-md "reports/bridge_smoke_history.md" --out-timeout-profile "reports/bridge_timeout_profile.json" --timeout-multiplier 1.5 --timeout-slack-sec 60 --timeout-min-sec 300 --timeout-round-sec 30
-uvx --from . unitytool report smoke-history --inputs "reports/bridge_smoke/**/summary.json" --duration-percentile 90 --out "reports/bridge_smoke_history.csv" --out-md "reports/bridge_smoke_history.md" --out-timeout-profile "reports/bridge_timeout_profile.json" --timeout-multiplier 1.5 --timeout-slack-sec 60 --timeout-min-sec 300 --timeout-round-sec 30
+uvx --from . prefab-sentinel report smoke-history --inputs "reports/bridge_smoke/**/summary.json" --duration-percentile 90 --out "reports/bridge_smoke_history.csv" --out-md "reports/bridge_smoke_history.md" --out-timeout-profile "reports/bridge_timeout_profile.json" --timeout-multiplier 1.5 --timeout-slack-sec 60 --timeout-min-sec 300 --timeout-round-sec 30
 
 # uvx 経由でローカルパッケージから実行（インストール不要）
-uvx --from . unitytool inspect variant --path "Assets/... Variant.prefab"
-uvx --from . unitytool inspect where-used --asset-or-guid "Assets/SomeAsset.prefab" --scope "Assets"
-uvx --from . unitytool validate refs --scope "Assets/haiirokoubou"
-uvx --from . unitytool validate runtime --scene "sample/avatar/Assets/Marycia.unity"
-uvx --from . unitytool validate bridge-smoke --plan "config/prefab_patch_plan.json"
-uvx --from . unitytool patch apply --plan "config/patch_plan.example.json" --dry-run
-uvx --from . unitytool suggest ignore-guids --scope "Assets/haiirokoubou"
+uvx --from . prefab-sentinel inspect variant --path "Assets/... Variant.prefab"
+uvx --from . prefab-sentinel inspect where-used --asset-or-guid "Assets/SomeAsset.prefab" --scope "Assets"
+uvx --from . prefab-sentinel validate refs --scope "Assets/haiirokoubou"
+uvx --from . prefab-sentinel validate runtime --scene "sample/avatar/Assets/Marycia.unity"
+uvx --from . prefab-sentinel validate bridge-smoke --plan "config/prefab_patch_plan.json"
+uvx --from . prefab-sentinel patch apply --plan "config/patch_plan.example.json" --dry-run
+uvx --from . prefab-sentinel suggest ignore-guids --scope "Assets/haiirokoubou"
 ```
 
 `report export` は JSON レポートを Markdown / JSON に変換して保存する。
@@ -550,7 +552,7 @@ uvx --from . unitytool suggest ignore-guids --scope "Assets/haiirokoubou"
 `scripts/benchmark_regression_report.py` は `--out-md` で比較サマリのMarkdown（回帰一覧 + scope表）を出力できる。
 `scripts/bridge_smoke_samples.py` は `unity_bridge_smoke.py` を avatar/world 複数ケースで連続実行し、`reports/bridge_smoke/<target>/response.json` と `unity.log`、集計 `summary.json`（任意 `summary.md`）を決定的なパスで出力できる。`--max-retries` / `--retry-delay-sec` でターゲットごとの一時失敗を再試行でき、`--avatar-unity-timeout-sec` / `--world-unity-timeout-sec` で target 別 timeout を調整できる。`summary` の各ケースには `attempts` と `duration_sec` を含み、timeout tuning の根拠にできる。
 `scripts/smoke_summary_to_csv.py` は `bridge_smoke_samples.py` の `summary.json` 群を集約して、target別の duration/attempts/failure 傾向を CSV と Markdown decision table として出力できる。`--out-timeout-profile` を指定すると、観測値ベースの timeout 推奨値（`recommended_cli_arg` 付き）を JSON で出力できる。
-`unitytool report smoke-history` は `scripts/smoke_summary_to_csv.py` と同等の集計/推奨timeout出力を CLI から直接実行できる。
+`prefab-sentinel report smoke-history` は `scripts/smoke_summary_to_csv.py` と同等の集計/推奨timeout出力を CLI から直接実行できる。
 `.github/workflows/ci.yml` は `python -m unittest discover -s tests -v` と `bridge-smoke-contract`（`bridge_smoke_samples.py` の expected-failure 実行 + `smoke_summary_to_csv.py` による timeout decision table/timeout profile 生成 + artifact保存）を自動実行する。
 `.github/workflows/unity-smoke.yml` は `workflow_dispatch` 専用で self-hosted Windows Unity ランナー上の実Unity smoke（`bridge_smoke_samples.py` 非期待失敗モード）を実行し、`unity-smoke-summary` / `unity-smoke-avatar` / `unity-smoke-world` の分割artifactで保存する。`unity-smoke-summary` には `summary.json`/`summary.md` に加えて `history.csv`/`history.md`/`timeout_profile.json`（`smoke_summary_to_csv.py` 生成）を含む。`targets`（`all|avatar|world`）と入力パスの preflight 検証を備え、`unity_timeout_sec` + `avatar/world` 個別 timeout 入力で batchmode timeout を調整できる。さらに `run_window_start_utc_hour` / `run_window_end_utc_hour` を指定すると、UTC実行ウィンドウ外では smoke 実行をスキップできる。
 `patch hash` は plan JSON を検証したうえで SHA-256 digest を出力する（`--format json` 対応）。
@@ -584,12 +586,12 @@ uvx --from . unitytool suggest ignore-guids --scope "Assets/haiirokoubou"
 `report export --format md` は `VALIDATE_RUNTIME_RESULT` payload を入力した場合、Runtime Validation 要約（分類件数・severity内訳・カテゴリ表）を追加出力する。
 
 ```bash
-uv run unitytool report export --input reports/input.json --format md --out reports/latest.md
-uv run unitytool report export --input reports/input.json --format md --out reports/latest.md --md-max-usages 100
-uv run unitytool report export --input reports/input.json --format md --out reports/latest.md --md-omit-usages
-uv run unitytool report export --input reports/input.json --format md --out reports/latest.md --md-max-steps 20
-uv run unitytool report export --input reports/input.json --format md --out reports/latest.md --md-omit-steps
-uvx --from . unitytool report export --input reports/input.json --format json --out reports/latest.json
+uv run prefab-sentinel report export --input reports/input.json --format md --out reports/latest.md
+uv run prefab-sentinel report export --input reports/input.json --format md --out reports/latest.md --md-max-usages 100
+uv run prefab-sentinel report export --input reports/input.json --format md --out reports/latest.md --md-omit-usages
+uv run prefab-sentinel report export --input reports/input.json --format md --out reports/latest.md --md-max-steps 20
+uv run prefab-sentinel report export --input reports/input.json --format md --out reports/latest.md --md-omit-steps
+uvx --from . prefab-sentinel report export --input reports/input.json --format json --out reports/latest.json
 ```
 
 現行Phase 1では read-only 解析を実装済み。  
@@ -614,7 +616,7 @@ GUIDインデックスは scope が属する Unity プロジェクトルート�
 ## 18. 代表レポート出力フォーマット
 
 ```md
-# UnityTool Validation Report
+# Prefab Sentinel Validation Report
 - RunId: 20260211-235959-abc123
 - Scope: Assets/haiirokoubou
 - Result: FAILED
@@ -650,4 +652,5 @@ GUIDインデックスは scope が属する Unity プロジェクトルート�
 - **実行検証**（壊れていないと確認できる）
 を分離しつつ連携させることで、Unity/VRChatギミック修正の失敗率と復旧コストを大幅に下げることを目的とする。
 
-このREADMEをUnityToolの正本仕様として運用し、MCP・Skills実装時は本書の責務境界と不変条件に従う。
+このREADMEをPrefab Sentinelの正本仕様として運用し、MCP・Skills実装時は本書の責務境界と不変条件に従う。
+
