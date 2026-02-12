@@ -477,6 +477,8 @@ uv run unitytool validate runtime --scene "sample/avatar/Assets/Marycia.unity" -
 uv run unitytool patch hash --plan "config/patch_plan.example.json"
 set UNITYTOOL_PLAN_SIGNING_KEY="replace-with-signing-key"
 uv run unitytool patch sign --plan "config/patch_plan.example.json"
+uv run unitytool patch verify --plan "config/patch_plan.example.json" --sha256 "<sha256>"
+uv run unitytool patch verify --plan "config/patch_plan.example.json" --signature "<signature>"
 uv run unitytool patch apply --plan "config/patch_plan.example.json" --dry-run
 uv run unitytool patch apply --plan "config/patch_plan.example.json" --dry-run --plan-sha256 "<sha256>"
 uv run unitytool patch apply --plan "config/patch_plan.example.json" --dry-run --plan-signature "<signature>"
@@ -538,6 +540,7 @@ uvx --from . unitytool suggest ignore-guids --scope "Assets/haiirokoubou"
 `scripts/benchmark_regression_report.py` は `--out-md` で比較サマリのMarkdown（回帰一覧 + scope表）を出力できる。
 `patch hash` は plan JSON を検証したうえで SHA-256 digest を出力する（`--format json` 対応）。
 `patch sign` は plan JSON を検証したうえで HMAC-SHA256 署名を出力する（`--key-env` / `--key-file` / `--format json` 対応）。
+`patch verify` は SHA-256 / HMAC-SHA256 の一致検証を行い、検証失敗時は非0終了コードを返す（`--format json`/`text`）。
 `patch apply` は plan JSON のスキーマ検証と `dry_run_patch` プレビューを実装済み（`set` / `insert_array_element` / `remove_array_element`）。
 `patch apply` は `--out-report` 指定時に結果 envelope を JSON ファイルに保存する。
 `patch apply` は非dry-run時に `--confirm` を要求し、JSONターゲット（`.json`）は内蔵バックエンドで実編集する。

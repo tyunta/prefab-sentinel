@@ -398,6 +398,89 @@ GameObject:
         self.assertEqual("PATCH_PLAN_SIGNATURE", payload["code"])
         self.assertEqual(expected, payload["data"]["signature"])
 
+    def test_patch_verify_succeeds_with_sha256(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "patch.json"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "target": "Assets/Variant.prefab",
+                        "ops": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            expected = hashlib.sha256(plan.read_bytes()).hexdigest()
+            exit_code, output = self.run_cli(
+                ["patch", "verify", "--plan", str(plan), "--sha256", expected]
+            )
+
+        payload = json.loads(output)
+        self.assertEqual(0, exit_code)
+        self.assertTrue(payload["success"])
+        self.assertTrue(payload["data"]["sha256"]["matched"])
+
+    def test_patch_verify_succeeds_with_signature_key_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "patch.json"
+            key_file = root / "verify_key.txt"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "target": "Assets/Variant.prefab",
+                        "ops": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            key_file.write_text("verify-signing-key\n", encoding="utf-8")
+            expected_signature = hmac.new(
+                "verify-signing-key".encode("utf-8"),
+                plan.read_bytes(),
+                hashlib.sha256,
+            ).hexdigest()
+            exit_code, output = self.run_cli(
+                [
+                    "patch",
+                    "verify",
+                    "--plan",
+                    str(plan),
+                    "--signature",
+                    expected_signature,
+                    "--signing-key-file",
+                    str(key_file),
+                ]
+            )
+
+        payload = json.loads(output)
+        self.assertEqual(0, exit_code)
+        self.assertTrue(payload["success"])
+        self.assertTrue(payload["data"]["signature"]["matched"])
+
+    def test_patch_verify_returns_nonzero_on_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "patch.json"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "target": "Assets/Variant.prefab",
+                        "ops": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            exit_code, output = self.run_cli(
+                ["patch", "verify", "--plan", str(plan), "--sha256", "0" * 64]
+            )
+
+        payload = json.loads(output)
+        self.assertEqual(1, exit_code)
+        self.assertFalse(payload["success"])
+        self.assertEqual("PATCH_PLAN_VERIFY_MISMATCH", payload["code"])
+
     def test_patch_hash_outputs_sha256_text(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

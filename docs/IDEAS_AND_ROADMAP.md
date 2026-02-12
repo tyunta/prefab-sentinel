@@ -84,6 +84,7 @@
 - Added patch apply scaffold command:
   - `unitytool patch hash --plan ...`
   - `unitytool patch sign --plan ...`
+  - `unitytool patch verify --plan ...`
   - `unitytool patch apply --plan ... --dry-run`
   - optional plan digest verification (`--plan-sha256`)
   - optional plan signature verification (`--plan-signature`)

@@ -285,6 +285,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional UTF-8 key file path (overrides --key-env when set).",
     )
     patch_sign.add_argument("--format", choices=("json", "text"), default="text")
+    patch_verify = patch_sub.add_parser(
+        "verify",
+        help="Verify SHA-256/HMAC signatures of a patch plan.",
+    )
+    patch_verify.add_argument("--plan", required=True, help="Input patch plan JSON path.")
+    patch_verify.add_argument("--sha256", default=None, help="Expected SHA-256 digest.")
+    patch_verify.add_argument("--signature", default=None, help="Expected HMAC-SHA256 signature.")
+    patch_verify.add_argument(
+        "--signing-key-env",
+        default=_DEFAULT_PLAN_SIGNING_KEY_ENV,
+        help=(
+            "Env var name for HMAC signing key when --signature is used "
+            f"(default: {_DEFAULT_PLAN_SIGNING_KEY_ENV})."
+        ),
+    )
+    patch_verify.add_argument(
+        "--signing-key-file",
+        default=None,
+        help="Optional UTF-8 key file path for --signature verification.",
+    )
+    patch_verify.add_argument("--format", choices=("json", "text"), default="json")
 
     report_parser = subparsers.add_parser("report", help="Report conversion commands.")
     report_sub = report_parser.add_subparsers(dest="report_command", required=True)
@@ -368,6 +389,18 @@ def _resolve_signing_key(
 
     parser.error("Signing key source is not configured.")
     return ""
+
+
+def _normalize_expected_digest(
+    parser: argparse.ArgumentParser,
+    *,
+    option_name: str,
+    digest: str,
+) -> str:
+    normalized = digest.strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", normalized):
+        parser.error(f"{option_name} must be a 64-character hexadecimal digest.")
+    return normalized
 
 
 def _ordered_unique(values: list[str]) -> list[str]:
@@ -502,18 +535,22 @@ def main(argv: list[str] | None = None) -> int:
         plan_sha256 = compute_patch_plan_sha256(plan_path)
         plan_signature = None
         if args.plan_sha256:
-            expected_digest = args.plan_sha256.strip().lower()
-            if not re.fullmatch(r"[0-9a-f]{64}", expected_digest):
-                parser.error("--plan-sha256 must be a 64-character hexadecimal digest.")
+            expected_digest = _normalize_expected_digest(
+                parser,
+                option_name="--plan-sha256",
+                digest=args.plan_sha256,
+            )
             if expected_digest != plan_sha256:
                 parser.error(
                     "Plan digest mismatch: "
                     f"--plan-sha256={expected_digest} does not match actual {plan_sha256}."
                 )
         if args.plan_signature:
-            expected_signature = args.plan_signature.strip().lower()
-            if not re.fullmatch(r"[0-9a-f]{64}", expected_signature):
-                parser.error("--plan-signature must be a 64-character hexadecimal digest.")
+            expected_signature = _normalize_expected_digest(
+                parser,
+                option_name="--plan-signature",
+                digest=args.plan_signature,
+            )
             key = _resolve_signing_key(
                 parser,
                 key_env=args.plan_signing_key_env,
@@ -605,6 +642,85 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(signature)
         return 0
+
+    if args.command == "patch" and args.patch_command == "verify":
+        plan_path = Path(args.plan)
+        try:
+            load_patch_plan(plan_path)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            parser.error(f"Failed to load --plan: {exc}")
+        if not args.sha256 and not args.signature:
+            parser.error("patch verify requires at least one of --sha256 / --signature.")
+
+        actual_sha256 = compute_patch_plan_sha256(plan_path)
+        sha256_checked = args.sha256 is not None
+        sha256_expected = (
+            _normalize_expected_digest(
+                parser,
+                option_name="--sha256",
+                digest=args.sha256,
+            )
+            if sha256_checked
+            else None
+        )
+        sha256_matched = (actual_sha256 == sha256_expected) if sha256_checked else None
+
+        signature_checked = args.signature is not None
+        signature_expected = (
+            _normalize_expected_digest(
+                parser,
+                option_name="--signature",
+                digest=args.signature,
+            )
+            if signature_checked
+            else None
+        )
+        signature_actual = None
+        signature_matched = None
+        if signature_checked:
+            key = _resolve_signing_key(
+                parser,
+                key_env=args.signing_key_env,
+                key_file=args.signing_key_file,
+            )
+            signature_actual = compute_patch_plan_hmac_sha256(plan_path, key)
+            signature_matched = signature_actual == signature_expected
+
+        checks = [value for value in (sha256_matched, signature_matched) if value is not None]
+        success = all(checks)
+        code = "PATCH_PLAN_VERIFY_OK" if success else "PATCH_PLAN_VERIFY_MISMATCH"
+        message = (
+            "Patch plan verification succeeded."
+            if success
+            else "Patch plan verification failed."
+        )
+        payload = {
+            "success": success,
+            "severity": "info" if success else "error",
+            "code": code,
+            "message": message,
+            "data": {
+                "plan": str(plan_path),
+                "sha256": {
+                    "checked": sha256_checked,
+                    "expected": sha256_expected,
+                    "actual": actual_sha256,
+                    "matched": sha256_matched,
+                },
+                "signature": {
+                    "checked": signature_checked,
+                    "expected": signature_expected,
+                    "actual": signature_actual,
+                    "matched": signature_matched,
+                },
+            },
+            "diagnostics": [],
+        }
+        if args.format == "json":
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        else:
+            print("OK" if success else "MISMATCH")
+        return 0 if success else 1
 
     if args.command == "report" and args.report_command == "export":
         input_path = Path(args.input)
