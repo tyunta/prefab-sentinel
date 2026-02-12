@@ -2,13 +2,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
 
-from unitytool.mcp.serialized_object import compute_patch_plan_sha256, load_patch_plan
+from unitytool.mcp.serialized_object import (
+    compute_patch_plan_hmac_sha256,
+    compute_patch_plan_sha256,
+    load_patch_plan,
+)
 from unitytool.orchestrator import Phase1Orchestrator
 from unitytool.reporting import export_report, render_markdown_report
+
+_DEFAULT_PLAN_SIGNING_KEY_ENV = "UNITYTOOL_PLAN_SIGNING_KEY"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -194,6 +201,27 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     patch_apply.add_argument(
+        "--plan-signature",
+        default=None,
+        help=(
+            "Optional expected HMAC-SHA256 signature for --plan. "
+            "Requires key source (env/file)."
+        ),
+    )
+    patch_apply.add_argument(
+        "--plan-signing-key-env",
+        default=_DEFAULT_PLAN_SIGNING_KEY_ENV,
+        help=(
+            "Env var name for HMAC signing key when --plan-signature is used "
+            f"(default: {_DEFAULT_PLAN_SIGNING_KEY_ENV})."
+        ),
+    )
+    patch_apply.add_argument(
+        "--plan-signing-key-file",
+        default=None,
+        help="Optional UTF-8 key file path for --plan-signature verification.",
+    )
+    patch_apply.add_argument(
         "--scope",
         default=None,
         help="Optional preflight scope for scan_broken_references before apply.",
@@ -238,6 +266,25 @@ def build_parser() -> argparse.ArgumentParser:
     patch_hash = patch_sub.add_parser("hash", help="Compute SHA-256 digest of a patch plan.")
     patch_hash.add_argument("--plan", required=True, help="Input patch plan JSON path.")
     patch_hash.add_argument("--format", choices=("json", "text"), default="text")
+    patch_sign = patch_sub.add_parser(
+        "sign",
+        help="Compute HMAC-SHA256 signature of a patch plan.",
+    )
+    patch_sign.add_argument("--plan", required=True, help="Input patch plan JSON path.")
+    patch_sign.add_argument(
+        "--key-env",
+        default=_DEFAULT_PLAN_SIGNING_KEY_ENV,
+        help=(
+            "Env var name for HMAC signing key "
+            f"(default: {_DEFAULT_PLAN_SIGNING_KEY_ENV})."
+        ),
+    )
+    patch_sign.add_argument(
+        "--key-file",
+        default=None,
+        help="Optional UTF-8 key file path (overrides --key-env when set).",
+    )
+    patch_sign.add_argument("--format", choices=("json", "text"), default="text")
 
     report_parser = subparsers.add_parser("report", help="Report conversion commands.")
     report_sub = report_parser.add_subparsers(dest="report_command", required=True)
@@ -292,6 +339,35 @@ def _load_ignore_guids(
         if line:
             collected.append(line)
     return tuple(collected)
+
+
+def _resolve_signing_key(
+    parser: argparse.ArgumentParser,
+    *,
+    key_env: str | None,
+    key_file: str | None,
+) -> str:
+    if key_file:
+        path = Path(key_file)
+        try:
+            key = path.read_text(encoding="utf-8").rstrip("\r\n")
+        except OSError as exc:
+            parser.error(f"Failed to read signing key file: {exc}")
+        if not key:
+            parser.error("Signing key file is empty.")
+        return key
+
+    if key_env:
+        key = os.environ.get(key_env)
+        if key is None:
+            parser.error(f"Signing key env var is not set: {key_env}")
+        key = key.rstrip("\r\n")
+        if not key:
+            parser.error(f"Signing key env var is empty: {key_env}")
+        return key
+
+    parser.error("Signing key source is not configured.")
+    return ""
 
 
 def _ordered_unique(values: list[str]) -> list[str]:
@@ -424,6 +500,7 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             parser.error(f"Failed to load --plan: {exc}")
         plan_sha256 = compute_patch_plan_sha256(plan_path)
+        plan_signature = None
         if args.plan_sha256:
             expected_digest = args.plan_sha256.strip().lower()
             if not re.fullmatch(r"[0-9a-f]{64}", expected_digest):
@@ -433,11 +510,27 @@ def main(argv: list[str] | None = None) -> int:
                     "Plan digest mismatch: "
                     f"--plan-sha256={expected_digest} does not match actual {plan_sha256}."
                 )
+        if args.plan_signature:
+            expected_signature = args.plan_signature.strip().lower()
+            if not re.fullmatch(r"[0-9a-f]{64}", expected_signature):
+                parser.error("--plan-signature must be a 64-character hexadecimal digest.")
+            key = _resolve_signing_key(
+                parser,
+                key_env=args.plan_signing_key_env,
+                key_file=args.plan_signing_key_file,
+            )
+            plan_signature = compute_patch_plan_hmac_sha256(plan_path, key)
+            if expected_signature != plan_signature:
+                parser.error(
+                    "Plan signature mismatch: "
+                    f"--plan-signature={expected_signature} does not match actual {plan_signature}."
+                )
         response = orchestrator.patch_apply(
             plan=plan,
             dry_run=args.dry_run,
             confirm=args.confirm,
             plan_sha256=plan_sha256,
+            plan_signature=plan_signature,
             scope=args.scope,
             runtime_scene=args.runtime_scene,
             runtime_profile=args.runtime_profile,
@@ -484,6 +577,33 @@ def main(argv: list[str] | None = None) -> int:
             )
         else:
             print(digest)
+        return 0
+
+    if args.command == "patch" and args.patch_command == "sign":
+        plan_path = Path(args.plan)
+        try:
+            load_patch_plan(plan_path)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            parser.error(f"Failed to load --plan: {exc}")
+        key = _resolve_signing_key(parser, key_env=args.key_env, key_file=args.key_file)
+        signature = compute_patch_plan_hmac_sha256(plan_path, key)
+        if args.format == "json":
+            print(
+                json.dumps(
+                    {
+                        "success": True,
+                        "severity": "info",
+                        "code": "PATCH_PLAN_SIGNATURE",
+                        "message": "Patch plan signature calculated.",
+                        "data": {"plan": str(plan_path), "signature": signature},
+                        "diagnostics": [],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+        else:
+            print(signature)
         return 0
 
     if args.command == "report" and args.report_command == "export":

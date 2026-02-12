@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import shlex
@@ -807,3 +808,8 @@ def load_patch_plan(path: Path) -> dict[str, Any]:
 
 def compute_patch_plan_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def compute_patch_plan_hmac_sha256(path: Path, key: str) -> str:
+    digest = hmac.new(key.encode("utf-8"), path.read_bytes(), hashlib.sha256)
+    return digest.hexdigest()

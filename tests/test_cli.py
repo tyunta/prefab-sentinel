@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import hashlib
 import io
 import json
@@ -165,6 +166,74 @@ GameObject:
         self.assertTrue(payload["success"])
         self.assertEqual(digest, payload["data"]["plan_sha256"])
 
+    def test_patch_apply_accepts_matching_plan_signature(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "patch.json"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "target": "Assets/Variant.prefab",
+                        "ops": [
+                            {
+                                "op": "set",
+                                "component": "Example.Component",
+                                "path": "items.Array.size",
+                                "value": 2,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            key = "local-signing-key"
+            signature = hmac.new(key.encode("utf-8"), plan.read_bytes(), hashlib.sha256).hexdigest()
+            with patch.dict(os.environ, {"UNITYTOOL_PLAN_SIGNING_KEY": key}, clear=False):
+                exit_code, output = self.run_cli(
+                    [
+                        "patch",
+                        "apply",
+                        "--plan",
+                        str(plan),
+                        "--dry-run",
+                        "--plan-signature",
+                        signature,
+                    ]
+                )
+
+        payload = json.loads(output)
+        self.assertEqual(0, exit_code)
+        self.assertTrue(payload["success"])
+        self.assertEqual(signature, payload["data"]["plan_signature"])
+
+    def test_patch_apply_rejects_plan_signature_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "patch.json"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "target": "Assets/Variant.prefab",
+                        "ops": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {"UNITYTOOL_PLAN_SIGNING_KEY": "local-signing-key"}, clear=False):
+                with redirect_stderr(io.StringIO()):
+                    with self.assertRaises(SystemExit):
+                        self.run_cli(
+                            [
+                                "patch",
+                                "apply",
+                                "--plan",
+                                str(plan),
+                                "--dry-run",
+                                "--plan-signature",
+                                "0" * 64,
+                            ]
+                        )
+
     def test_patch_apply_writes_out_report_json(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -268,6 +337,66 @@ GameObject:
                             "0" * 64,
                         ]
                     )
+
+    def test_patch_sign_outputs_signature_text(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "patch.json"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "target": "Assets/Variant.prefab",
+                        "ops": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            key = "local-signing-key"
+            expected = hmac.new(key.encode("utf-8"), plan.read_bytes(), hashlib.sha256).hexdigest()
+            with patch.dict(os.environ, {"UNITYTOOL_PLAN_SIGNING_KEY": key}, clear=False):
+                exit_code, output = self.run_cli(["patch", "sign", "--plan", str(plan)])
+
+        self.assertEqual(0, exit_code)
+        self.assertEqual(expected, output.strip())
+
+    def test_patch_sign_outputs_signature_json_from_key_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "patch.json"
+            key_file = root / "signing_key.txt"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "target": "Assets/Variant.prefab",
+                        "ops": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            key_file.write_text("file-signing-key\n", encoding="utf-8")
+            expected = hmac.new(
+                "file-signing-key".encode("utf-8"),
+                plan.read_bytes(),
+                hashlib.sha256,
+            ).hexdigest()
+            exit_code, output = self.run_cli(
+                [
+                    "patch",
+                    "sign",
+                    "--plan",
+                    str(plan),
+                    "--key-file",
+                    str(key_file),
+                    "--format",
+                    "json",
+                ]
+            )
+
+        payload = json.loads(output)
+        self.assertEqual(0, exit_code)
+        self.assertTrue(payload["success"])
+        self.assertEqual("PATCH_PLAN_SIGNATURE", payload["code"])
+        self.assertEqual(expected, payload["data"]["signature"])
 
     def test_patch_hash_outputs_sha256_text(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

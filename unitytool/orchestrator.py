@@ -351,6 +351,7 @@ class Phase1Orchestrator:
         dry_run: bool = False,
         confirm: bool = False,
         plan_sha256: str | None = None,
+        plan_signature: str | None = None,
         scope: str | None = None,
         runtime_scene: str | None = None,
         runtime_profile: str = "default",
@@ -384,6 +385,7 @@ class Phase1Orchestrator:
                 data={
                     "target": target,
                     "plan_sha256": plan_sha256,
+                    "plan_signature": plan_signature,
                     "dry_run": dry_run,
                     "confirm": confirm,
                     "scope": scope,
