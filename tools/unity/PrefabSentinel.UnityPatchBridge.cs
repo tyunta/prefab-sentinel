@@ -19,6 +19,10 @@ namespace PrefabSentinel
         private const string ArrayDataSuffix = ".Array.data";
         private static readonly PropertyInfo SerializedPropertyGradientValueProperty = typeof(SerializedProperty)
             .GetProperty("gradientValue", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        private static readonly PropertyInfo SerializedPropertyIsFixedBufferProperty = typeof(SerializedProperty)
+            .GetProperty("isFixedBuffer", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        private static readonly PropertyInfo SerializedPropertyFixedBufferSizeProperty = typeof(SerializedProperty)
+            .GetProperty("fixedBufferSize", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
 
         [Serializable]
         private sealed class BridgeRequest
@@ -729,7 +733,58 @@ namespace PrefabSentinel
                 error = $"property is not an array: '{arrayPath}'";
                 return false;
             }
+            if (TryIsFixedBufferProperty(arrayProperty, out int fixedBufferSize) && fixedBufferSize >= 0)
+            {
+                string detail = fixedBufferSize > 0
+                    ? $"property is fixed buffer (size={fixedBufferSize}); insert/remove are not supported"
+                    : "property is fixed buffer; insert/remove are not supported";
+                error = $"{detail}: '{arrayPath}'";
+                return false;
+            }
             return true;
+        }
+
+        private static bool TryIsFixedBufferProperty(SerializedProperty property, out int fixedBufferSize)
+        {
+            fixedBufferSize = -1;
+            if (property == null)
+            {
+                return false;
+            }
+            if (SerializedPropertyIsFixedBufferProperty != null)
+            {
+                try
+                {
+                    object rawIsFixedBuffer = SerializedPropertyIsFixedBufferProperty.GetValue(property, null);
+                    if (rawIsFixedBuffer is bool boolValue && !boolValue)
+                    {
+                        return false;
+                    }
+                    if (rawIsFixedBuffer is bool)
+                    {
+                        fixedBufferSize = 0;
+                    }
+                }
+                catch
+                {
+                }
+            }
+            if (SerializedPropertyFixedBufferSizeProperty != null)
+            {
+                try
+                {
+                    object rawSize = SerializedPropertyFixedBufferSizeProperty.GetValue(property, null);
+                    if (rawSize is int size && size > 0)
+                    {
+                        fixedBufferSize = size;
+                        return true;
+                    }
+                }
+                catch
+                {
+                }
+            }
+            return fixedBufferSize == 0;
         }
 
         private static bool TryFindUniqueComponent(
@@ -1146,6 +1201,17 @@ namespace PrefabSentinel
                     return true;
                 }
                 default:
+                    if (
+                        string.Equals(
+                            property.propertyType.ToString(),
+                            "FixedBufferSize",
+                            StringComparison.Ordinal
+                        )
+                    )
+                    {
+                        error = "FixedBufferSize is read-only; set individual fixed buffer elements instead";
+                        return false;
+                    }
                     error = $"SerializedPropertyType '{property.propertyType}' is not supported";
                     return false;
             }

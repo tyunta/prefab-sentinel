@@ -598,6 +598,7 @@ uvx --from . prefab-sentinel suggest ignore-guids --scope "Assets/haiirokoubou"
 `AnimationCurve` は `value_kind=json` で `{ "keys":[{"time":0.0,"value":1.0,"in_tangent":0.0,"out_tangent":0.0}], "pre_wrap_mode":1, "post_wrap_mode":1 }` 形式を受け付ける（`value_kind=null` で null 設定）。
 `Gradient` は `value_kind=json` で `{ "color_keys":[{"color":{"r":1,"g":1,"b":1,"a":1},"time":0.0}], "alpha_keys":[{"alpha":1.0,"time":0.0}], "mode":0 }` 形式を受け付ける（`value_kind=null` で null 設定）。
 配列操作パスの診断は `.Array.data` 形式を厳密検証し、`.Array.size`/index付き誤指定時はヒント付きで停止する。
+fixed buffer 配列に対する `insert_array_element` / `remove_array_element` は未対応として明示的に fail-fast 停止し、要素更新は `set` で個別要素パスを指定する方針とする。
 `validate runtime` は log分類ベースのscaffoldを実装済みで、`--scene` 存在確認、`BROKEN_PPTR` / `UDON_NULLREF` などの分類、`assert_no_critical_errors` 判定までを返す。
 `validate runtime` の compile/ClientSim 実行は現時点では `RUN_COMPILE_SKIPPED` / `RUN_CLIENTSIM_SKIPPED` として明示的に未配線を返す。
 `validate bridge-smoke` は patch plan を bridge request へ変換して `tools/unity_patch_bridge.py` を実行し、`--expect-failure` 判定と `--out` 保存までをCLI本体から実行できる。
