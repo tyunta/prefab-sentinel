@@ -118,6 +118,12 @@ def _to_int(value: Any) -> int | None:
         return None
 
 
+def _to_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    return None
+
+
 def _is_smoke_batch_summary(payload: Any) -> bool:
     if not isinstance(payload, dict):
         return False
@@ -139,6 +145,10 @@ def _case_to_row(source: Path, payload: dict[str, Any], case: dict[str, Any]) ->
         "batch_severity": str(payload.get("severity", "")),
         "target": str(case.get("name", "")),
         "matched_expectation": bool(case.get("matched_expectation", False)),
+        "expected_applied": _to_int(case.get("expected_applied")),
+        "expected_applied_source": str(case.get("expected_applied_source", "")),
+        "actual_applied": _to_int(case.get("actual_applied")),
+        "applied_matches": _to_bool(case.get("applied_matches")),
         "attempts": _to_int(case.get("attempts")),
         "duration_sec": _to_float(case.get("duration_sec")),
         "unity_timeout_sec": _to_int(case.get("unity_timeout_sec")),
@@ -200,13 +210,37 @@ def _build_target_stats(
             for value in (row.get("unity_timeout_sec") for row in target_rows)
             if isinstance(value, int)
         ]
+        applied_matches_values = [
+            value
+            for value in (row.get("applied_matches") for row in target_rows)
+            if isinstance(value, bool)
+        ]
         failures = [row for row in target_rows if not bool(row.get("matched_expectation", False))]
+        applied_assertion_runs = len(applied_matches_values)
+        applied_assertion_mismatches = len(
+            [value for value in applied_matches_values if value is False]
+        )
+        applied_assertion_pass_pct = (
+            round(
+                (
+                    (applied_assertion_runs - applied_assertion_mismatches)
+                    / float(applied_assertion_runs)
+                )
+                * 100.0,
+                2,
+            )
+            if applied_assertion_runs > 0
+            else None
+        )
         duration_avg = sum(durations) / len(durations) if durations else None
         stats.append(
             {
                 "target": target,
                 "runs": len(target_rows),
                 "failures": len(failures),
+                "applied_assertion_runs": applied_assertion_runs,
+                "applied_assertion_mismatches": applied_assertion_mismatches,
+                "applied_assertion_pass_pct": applied_assertion_pass_pct,
                 "attempts_max": max(attempts) if attempts else None,
                 "duration_avg_sec": duration_avg,
                 "duration_p_sec": _percentile(durations, duration_percentile),
@@ -338,15 +372,18 @@ def _render_markdown_summary(
         f"- Cases: {len(rows)}",
         f"- Duration percentile: p{duration_percentile:g}",
         "",
-        f"| target | runs | failures | attempts_max | duration_avg_sec | {percentile_label} | duration_max_sec | timeout_max_sec |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        f"| target | runs | failures | applied_assertions | applied_mismatches | applied_pass_pct | attempts_max | duration_avg_sec | {percentile_label} | duration_max_sec | timeout_max_sec |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for item in target_stats:
         lines.append(
-            "| {target} | {runs} | {failures} | {attempts_max} | {duration_avg_sec} | {duration_p_sec} | {duration_max_sec} | {timeout_max_sec} |".format(
+            "| {target} | {runs} | {failures} | {applied_assertion_runs} | {applied_assertion_mismatches} | {applied_assertion_pass_pct} | {attempts_max} | {duration_avg_sec} | {duration_p_sec} | {duration_max_sec} | {timeout_max_sec} |".format(
                 target=item.get("target", ""),
                 runs=item.get("runs", 0),
                 failures=item.get("failures", 0),
+                applied_assertion_runs=item.get("applied_assertion_runs", 0),
+                applied_assertion_mismatches=item.get("applied_assertion_mismatches", 0),
+                applied_assertion_pass_pct=item.get("applied_assertion_pass_pct", ""),
                 attempts_max=item.get("attempts_max", ""),
                 duration_avg_sec=item.get("duration_avg_sec", ""),
                 duration_p_sec=item.get("duration_p_sec", ""),
@@ -401,6 +438,10 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
         "batch_severity",
         "target",
         "matched_expectation",
+        "expected_applied",
+        "expected_applied_source",
+        "actual_applied",
+        "applied_matches",
         "attempts",
         "duration_sec",
         "unity_timeout_sec",

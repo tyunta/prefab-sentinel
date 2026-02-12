@@ -66,6 +66,7 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
             {
                 "target": "avatar",
                 "matched_expectation": True,
+                "applied_matches": True,
                 "attempts": 1,
                 "duration_sec": 1.0,
                 "unity_timeout_sec": 600,
@@ -73,6 +74,7 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
             {
                 "target": "avatar",
                 "matched_expectation": False,
+                "applied_matches": False,
                 "attempts": 2,
                 "duration_sec": 3.0,
                 "unity_timeout_sec": 900,
@@ -83,6 +85,9 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
         self.assertEqual("avatar", stats[0]["target"])
         self.assertEqual(2, stats[0]["runs"])
         self.assertEqual(1, stats[0]["failures"])
+        self.assertEqual(2, stats[0]["applied_assertion_runs"])
+        self.assertEqual(1, stats[0]["applied_assertion_mismatches"])
+        self.assertAlmostEqual(50.0, stats[0]["applied_assertion_pass_pct"] or 0.0)
         self.assertEqual(2, stats[0]["attempts_max"])
         self.assertAlmostEqual(2.8, stats[0]["duration_p_sec"] or 0.0)
         self.assertEqual(900, stats[0]["timeout_max_sec"])
@@ -196,6 +201,10 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
                             {
                                 "name": "avatar",
                                 "matched_expectation": True,
+                                "expected_applied": 1,
+                                "expected_applied_source": "cli",
+                                "actual_applied": 1,
+                                "applied_matches": True,
                                 "attempts": 1,
                                 "duration_sec": 1.1,
                                 "unity_timeout_sec": 600,
@@ -219,6 +228,10 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
                             {
                                 "name": "world",
                                 "matched_expectation": False,
+                                "expected_applied": 2,
+                                "expected_applied_source": "plan_ops",
+                                "actual_applied": 1,
+                                "applied_matches": False,
                                 "attempts": 2,
                                 "duration_sec": 2.9,
                                 "unity_timeout_sec": 900,
@@ -264,8 +277,11 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
             profile = json.loads(out_profile.read_text(encoding="utf-8"))
 
         self.assertEqual(0, exit_code)
+        self.assertIn("expected_applied_source", csv_text)
+        self.assertIn(",plan_ops,", csv_text)
         self.assertIn("avatar", csv_text)
         self.assertIn("world", csv_text)
+        self.assertIn("applied_mismatches", md_text)
         self.assertIn("| avatar |", md_text)
         self.assertIn("| world |", md_text)
         self.assertEqual(2, len(profile["profiles"]))
