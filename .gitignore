@@ -6,3 +6,6 @@ __pycache__/
 
 # User sample projects (requested exclusion)
 sample/
+
+# Generated reports/artifacts
+reports/

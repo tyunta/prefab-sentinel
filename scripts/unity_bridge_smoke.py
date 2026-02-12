@@ -6,6 +6,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
+# Allow direct script execution (`python scripts/unity_bridge_smoke.py`) to
+# resolve project-local imports from repository root.
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
 from unitytool.bridge_smoke import (
     PROTOCOL_VERSION,
     UNITY_COMMAND_ENV,

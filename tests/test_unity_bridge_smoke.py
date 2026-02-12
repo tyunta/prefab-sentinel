@@ -4,6 +4,7 @@ import argparse
 import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -185,6 +186,47 @@ sys.stdout.write(json.dumps({"success": True, "severity": "info", "code": "OK", 
                     ]
                 )
         self.assertEqual(1, exit_code)
+
+    def test_script_entrypoint_runs_when_invoked_by_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "plan.json"
+            bridge = root / "fake_bridge.py"
+            plan.write_text(
+                json.dumps({"target": "Assets/Test.prefab", "ops": []}),
+                encoding="utf-8",
+            )
+            bridge.write_text(
+                """
+import json
+import sys
+_ = json.loads(sys.stdin.read())
+sys.stdout.write(json.dumps({"success": False, "severity": "error", "code": "BRIDGE_FAIL", "message": "failed", "data": {}, "diagnostics": []}))
+""".strip(),
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path("scripts") / "unity_bridge_smoke.py"),
+                    "--plan",
+                    str(plan),
+                    "--bridge-script",
+                    str(bridge),
+                    "--python",
+                    sys.executable,
+                    "--expect-failure",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+            )
+        self.assertEqual(0, completed.returncode, msg=completed.stderr)
+        payload = json.loads(completed.stdout)
+        self.assertFalse(payload["success"])
+        self.assertEqual("BRIDGE_FAIL", payload["code"])
 
 
 if __name__ == "__main__":
