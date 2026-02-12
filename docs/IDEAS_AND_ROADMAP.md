@@ -154,6 +154,7 @@
   - builds decision artifacts via `prefab-sentinel report smoke-history` (`history.csv` / `history.md` / `timeout_profile.json`)
   - uploads split artifacts (`unity-smoke-summary`, `unity-smoke-avatar`, `unity-smoke-world`)
 - Unity bridge now normalizes op values for executeMethod payload (`value_kind` fields).
+- Unity patch bridge Python preflight now validates op shape (`component/path/index/value`) before Unity launch.
 - Added Unity Editor executeMethod apply path for prefab patch operations:
   - `tools/unity/PrefabSentinel.UnityPatchBridge.cs` (`PrefabSentinel.UnityPatchBridge.ApplyFromJson`)
   - supports `.prefab` + `set` / `insert_array_element` / `remove_array_element`

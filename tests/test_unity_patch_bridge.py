@@ -62,6 +62,42 @@ class UnityPatchBridgeTests(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertEqual("BRIDGE_PROTOCOL_VERSION", result["code"])
 
+    def test_reference_bridge_rejects_set_op_without_value(self) -> None:
+        result = self._run_bridge(
+            {
+                "protocol_version": 1,
+                "target": "Assets/Test.prefab",
+                "ops": [
+                    {
+                        "op": "set",
+                        "component": "Example.Component",
+                        "path": "enabled",
+                    }
+                ],
+            }
+        )
+        self.assertFalse(result["success"])
+        self.assertEqual("BRIDGE_REQUEST_SCHEMA", result["code"])
+        self.assertEqual("ops[0]", result["data"]["location"])
+
+    def test_reference_bridge_rejects_array_op_without_index(self) -> None:
+        result = self._run_bridge(
+            {
+                "protocol_version": 1,
+                "target": "Assets/Test.prefab",
+                "ops": [
+                    {
+                        "op": "remove_array_element",
+                        "component": "Example.Component",
+                        "path": "items.Array.data",
+                    }
+                ],
+            }
+        )
+        self.assertFalse(result["success"])
+        self.assertEqual("BRIDGE_REQUEST_SCHEMA", result["code"])
+        self.assertEqual("ops[0].index", result["data"]["location"])
+
     def test_reference_bridge_runs_unity_command_and_returns_payload(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -102,7 +138,14 @@ response_path.write_text(
                 {
                     "protocol_version": 1,
                     "target": "Assets/Test.prefab",
-                    "ops": [{"op": "set"}],
+                    "ops": [
+                        {
+                            "op": "set",
+                            "component": "Example.Component",
+                            "path": "enabled",
+                            "value": True,
+                        }
+                    ],
                 },
                 env_overrides={
                     "UNITYTOOL_UNITY_COMMAND": f'"{sys.executable}" "{unity_runner}"',

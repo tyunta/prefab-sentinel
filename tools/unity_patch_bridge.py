@@ -26,6 +26,7 @@ UNITY_LOG_FILE_ENV = "UNITYTOOL_UNITY_LOG_FILE"
 DEFAULT_EXECUTE_METHOD = "PrefabSentinel.UnityPatchBridge.ApplyFromJson"
 DEFAULT_TIMEOUT_SEC = 120
 VALID_SEVERITIES = {"info", "warning", "error", "critical"}
+SUPPORTED_OP_NAMES = {"set", "insert_array_element", "remove_array_element"}
 
 
 def _emit(payload: dict[str, Any]) -> int:
@@ -217,6 +218,40 @@ def _normalize_bridge_ops(ops: list[object]) -> list[object]:
     return [_normalize_bridge_op(op) for op in ops]
 
 
+def _validate_bridge_ops(ops: list[object]) -> dict[str, Any] | None:
+    for index, op in enumerate(ops):
+        location = f"ops[{index}]"
+        if not isinstance(op, dict):
+            return {"location": location, "error": "operation must be an object"}
+
+        op_name = str(op.get("op", "")).strip()
+        if op_name not in SUPPORTED_OP_NAMES:
+            return {"location": f"{location}.op", "error": f"unsupported op '{op_name}'"}
+
+        component = op.get("component")
+        if not isinstance(component, str) or not component.strip():
+            return {"location": f"{location}.component", "error": "component is required"}
+
+        path = op.get("path")
+        if not isinstance(path, str) or not path.strip():
+            return {"location": f"{location}.path", "error": "path is required"}
+
+        if op_name == "set" and "value" not in op:
+            return {
+                "location": location,
+                "error": "set operation requires 'value'",
+            }
+
+        if op_name in {"insert_array_element", "remove_array_element"}:
+            op_index = op.get("index")
+            if isinstance(op_index, bool) or not isinstance(op_index, int):
+                return {
+                    "location": f"{location}.index",
+                    "error": "array operation requires integer 'index'",
+                }
+    return None
+
+
 def main() -> int:
     raw = sys.stdin.read()
     if not raw.strip():
@@ -277,6 +312,15 @@ def main() -> int:
             _error_response(
                 code="BRIDGE_REQUEST_SCHEMA",
                 message="ops must be an array.",
+            )
+        )
+    ops_schema_error = _validate_bridge_ops(ops)
+    if ops_schema_error is not None:
+        return _emit(
+            _error_response(
+                code="BRIDGE_REQUEST_SCHEMA",
+                message="ops contain invalid operation data.",
+                data=ops_schema_error,
             )
         )
 
