@@ -44,6 +44,35 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional markdown decision table output path.",
     )
     parser.add_argument(
+        "--out-timeout-profile",
+        default=None,
+        help="Optional timeout profile JSON output path.",
+    )
+    parser.add_argument(
+        "--timeout-multiplier",
+        type=float,
+        default=1.5,
+        help="Multiplier applied to duration percentile for timeout recommendation.",
+    )
+    parser.add_argument(
+        "--timeout-slack-sec",
+        type=int,
+        default=60,
+        help="Additional seconds added to duration_max and failure cases.",
+    )
+    parser.add_argument(
+        "--timeout-min-sec",
+        type=int,
+        default=300,
+        help="Minimum timeout recommendation in seconds.",
+    )
+    parser.add_argument(
+        "--timeout-round-sec",
+        type=int,
+        default=30,
+        help="Round timeout recommendation up by this step in seconds.",
+    )
+    parser.add_argument(
         "--out",
         required=True,
         help="Output CSV path.",
@@ -185,6 +214,80 @@ def _build_target_stats(
     return stats
 
 
+def _round_up_timeout(value_sec: float, step_sec: int) -> int:
+    if step_sec <= 0:
+        raise ValueError("step_sec must be greater than 0")
+    return int(math.ceil(value_sec / step_sec) * step_sec)
+
+
+def _build_timeout_profiles(
+    stats: list[dict[str, Any]],
+    *,
+    duration_percentile: float,
+    timeout_multiplier: float,
+    timeout_slack_sec: int,
+    timeout_min_sec: int,
+    timeout_round_sec: int,
+) -> dict[str, Any]:
+    profiles: list[dict[str, Any]] = []
+    for item in stats:
+        target = str(item.get("target", ""))
+        duration_p = _to_float(item.get("duration_p_sec"))
+        duration_max = _to_float(item.get("duration_max_sec"))
+        observed_timeout_max = _to_int(item.get("timeout_max_sec"))
+        failures = _to_int(item.get("failures")) or 0
+
+        candidates: list[float] = [float(timeout_min_sec)]
+        if duration_p is not None:
+            candidates.append(duration_p * timeout_multiplier)
+        if duration_max is not None:
+            candidates.append(duration_max + float(timeout_slack_sec))
+        if observed_timeout_max is not None:
+            candidates.append(float(observed_timeout_max))
+
+        # Recommendation formula is evidence-based and conservative:
+        # keep at least min timeout, cover percentile/max durations with safety slack,
+        # and never go below the largest observed timeout in history.
+        base_timeout_sec = max(candidates)
+        if failures > 0:
+            base_timeout_sec += float(timeout_slack_sec)
+        recommended_timeout_sec = _round_up_timeout(base_timeout_sec, timeout_round_sec)
+
+        profiles.append(
+            {
+                "target": target,
+                "recommended_timeout_sec": recommended_timeout_sec,
+                "recommended_cli_arg": f"--{target}-unity-timeout-sec {recommended_timeout_sec}",
+                "evidence": {
+                    "runs": _to_int(item.get("runs")),
+                    "failures": failures,
+                    "duration_p_sec": duration_p,
+                    "duration_max_sec": duration_max,
+                    "observed_timeout_max_sec": observed_timeout_max,
+                },
+            }
+        )
+
+    return {
+        "version": 1,
+        "generated_by": "smoke_summary_to_csv",
+        "duration_percentile": duration_percentile,
+        "timeout_policy": {
+            "timeout_multiplier": timeout_multiplier,
+            "timeout_slack_sec": timeout_slack_sec,
+            "timeout_min_sec": timeout_min_sec,
+            "timeout_round_sec": timeout_round_sec,
+            "formula": "round_up(max(min_timeout, duration_p*multiplier, duration_max+slack, observed_timeout_max) + failure_slack, round_sec)",
+        },
+        "profiles": profiles,
+    }
+
+
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def _write_csv(out_path: Path, header: list[str], rows: list[dict[str, Any]]) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", encoding="utf-8", newline="") as stream:
@@ -194,9 +297,13 @@ def _write_csv(out_path: Path, header: list[str], rows: list[dict[str, Any]]) ->
             writer.writerow(row)
 
 
-def _render_markdown_summary(rows: list[dict[str, Any]], duration_percentile: float) -> str:
+def _render_markdown_summary(
+    rows: list[dict[str, Any]],
+    duration_percentile: float,
+    stats: list[dict[str, Any]] | None = None,
+) -> str:
     percentile_label = f"duration_p{int(round(duration_percentile))}_sec"
-    stats = _build_target_stats(rows, duration_percentile)
+    target_stats = stats if stats is not None else _build_target_stats(rows, duration_percentile)
     lines = [
         "# Bridge Smoke Timeout Decision Table",
         "",
@@ -206,7 +313,7 @@ def _render_markdown_summary(rows: list[dict[str, Any]], duration_percentile: fl
         f"| target | runs | failures | attempts_max | duration_avg_sec | {percentile_label} | duration_max_sec | timeout_max_sec |",
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
-    for item in stats:
+    for item in target_stats:
         lines.append(
             "| {target} | {runs} | {failures} | {attempts_max} | {duration_avg_sec} | {duration_p_sec} | {duration_max_sec} | {timeout_max_sec} |".format(
                 target=item.get("target", ""),
@@ -227,6 +334,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.duration_percentile < 0.0 or args.duration_percentile > 100.0:
         parser.error("--duration-percentile must be in range 0..100.")
+    if args.timeout_multiplier < 1.0:
+        parser.error("--timeout-multiplier must be greater than or equal to 1.0.")
+    if args.timeout_slack_sec < 0:
+        parser.error("--timeout-slack-sec must be greater than or equal to 0.")
+    if args.timeout_min_sec <= 0:
+        parser.error("--timeout-min-sec must be greater than 0.")
+    if args.timeout_round_sec <= 0:
+        parser.error("--timeout-round-sec must be greater than 0.")
 
     input_paths = _expand_inputs(args.inputs)
     if not input_paths:
@@ -275,14 +390,37 @@ def main(argv: list[str] | None = None) -> int:
     _write_csv(out_csv, header, rows)
     print(out_csv)
 
+    stats: list[dict[str, Any]] | None = None
+    if args.out_md or args.out_timeout_profile:
+        stats = _build_target_stats(rows, args.duration_percentile)
+
     if args.out_md:
         out_md = Path(args.out_md)
         out_md.parent.mkdir(parents=True, exist_ok=True)
         out_md.write_text(
-            _render_markdown_summary(rows, args.duration_percentile) + "\n",
+            _render_markdown_summary(rows, args.duration_percentile, stats=stats) + "\n",
             encoding="utf-8",
         )
         print(out_md)
+
+    if args.out_timeout_profile:
+        out_timeout_profile = Path(args.out_timeout_profile)
+        profile_stats = (
+            stats
+            if stats is not None
+            else _build_target_stats(rows, args.duration_percentile)
+        )
+        profile_payload = _build_timeout_profiles(
+            profile_stats,
+            duration_percentile=args.duration_percentile,
+            timeout_multiplier=args.timeout_multiplier,
+            timeout_slack_sec=args.timeout_slack_sec,
+            timeout_min_sec=args.timeout_min_sec,
+            timeout_round_sec=args.timeout_round_sec,
+        )
+        _write_json(out_timeout_profile, profile_payload)
+        print(out_timeout_profile)
+
     return 0
 
 

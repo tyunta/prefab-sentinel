@@ -63,7 +63,8 @@ jobs:
             --inputs reports/bridge_smoke/summary.json \
             --duration-percentile 90 \
             --out reports/bridge_smoke/history.csv \
-            --out-md reports/bridge_smoke/history.md
+            --out-md reports/bridge_smoke/history.md \
+            --out-timeout-profile reports/bridge_smoke/timeout_profile.json
 
       - name: Upload Bridge Smoke Artifacts
         uses: actions/upload-artifact@v4

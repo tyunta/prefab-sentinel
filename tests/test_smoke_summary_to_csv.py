@@ -3,11 +3,12 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 
 from scripts.smoke_summary_to_csv import (
+    _build_timeout_profiles,
     _build_target_stats,
     _expand_inputs,
     _is_smoke_batch_summary,
@@ -86,6 +87,49 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
         self.assertAlmostEqual(2.8, stats[0]["duration_p_sec"] or 0.0)
         self.assertEqual(900, stats[0]["timeout_max_sec"])
 
+
+    def test_build_timeout_profiles_generates_recommended_values(self) -> None:
+        stats = [
+            {
+                "target": "avatar",
+                "runs": 3,
+                "failures": 1,
+                "duration_p_sec": 100.0,
+                "duration_max_sec": 140.0,
+                "timeout_max_sec": 180,
+            },
+            {
+                "target": "world",
+                "runs": 2,
+                "failures": 0,
+                "duration_p_sec": 30.0,
+                "duration_max_sec": 40.0,
+                "timeout_max_sec": None,
+            },
+        ]
+
+        payload = _build_timeout_profiles(
+            stats,
+            duration_percentile=90.0,
+            timeout_multiplier=1.5,
+            timeout_slack_sec=60,
+            timeout_min_sec=120,
+            timeout_round_sec=30,
+        )
+
+        self.assertEqual(1, payload["version"])
+        self.assertEqual(2, len(payload["profiles"]))
+        avatar_profile = payload["profiles"][0]
+        world_profile = payload["profiles"][1]
+
+        self.assertEqual("avatar", avatar_profile["target"])
+        self.assertEqual(270, avatar_profile["recommended_timeout_sec"])
+        self.assertEqual(
+            "--avatar-unity-timeout-sec 270", avatar_profile["recommended_cli_arg"]
+        )
+        self.assertEqual("world", world_profile["target"])
+        self.assertEqual(120, world_profile["recommended_timeout_sec"])
+
     def test_render_markdown_summary_includes_target_rows(self) -> None:
         rows = [
             {
@@ -115,6 +159,7 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
             summary_b = root / "summary_b.json"
             out_csv = root / "smoke_history.csv"
             out_md = root / "smoke_history.md"
+            out_profile = root / "timeout_profile.json"
             summary_a.write_text(
                 json.dumps(
                     _summary_payload(
@@ -172,17 +217,39 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
                         str(out_csv),
                         "--out-md",
                         str(out_md),
+                        "--out-timeout-profile",
+                        str(out_profile),
+                        "--timeout-multiplier",
+                        "1.2",
+                        "--timeout-slack-sec",
+                        "30",
+                        "--timeout-min-sec",
+                        "120",
+                        "--timeout-round-sec",
+                        "10",
                     ]
                 )
 
             csv_text = out_csv.read_text(encoding="utf-8")
             md_text = out_md.read_text(encoding="utf-8")
+            profile = json.loads(out_profile.read_text(encoding="utf-8"))
 
         self.assertEqual(0, exit_code)
         self.assertIn("avatar", csv_text)
         self.assertIn("world", csv_text)
         self.assertIn("| avatar |", md_text)
         self.assertIn("| world |", md_text)
+        self.assertEqual(2, len(profile["profiles"]))
+        self.assertEqual("avatar", profile["profiles"][0]["target"])
+        self.assertEqual("world", profile["profiles"][1]["target"])
+        self.assertEqual(
+            "--avatar-unity-timeout-sec 600",
+            profile["profiles"][0]["recommended_cli_arg"],
+        )
+        self.assertEqual(
+            "--world-unity-timeout-sec 930",
+            profile["profiles"][1]["recommended_cli_arg"],
+        )
 
     def test_main_filters_target_and_matched_only(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -234,6 +301,23 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
         self.assertEqual(0, exit_code)
         self.assertEqual(2, len(csv_lines))
         self.assertIn(",avatar,", csv_lines[1])
+
+
+    def test_main_rejects_invalid_timeout_profile_arguments(self) -> None:
+        with redirect_stderr(StringIO()):
+            with self.assertRaises(SystemExit) as raised:
+                main(
+                    [
+                        "--inputs",
+                        "missing.json",
+                        "--out",
+                        "out.csv",
+                        "--timeout-multiplier",
+                        "0.9",
+                    ]
+                )
+
+        self.assertEqual(2, raised.exception.code)
 
 
 if __name__ == "__main__":

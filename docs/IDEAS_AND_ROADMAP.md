@@ -125,6 +125,7 @@
   - `scripts/smoke_summary_to_csv.py`
   - aggregates `summary.json` rows into CSV and Markdown decision table by target
   - supports `--matched-only`, `--target`, `--duration-percentile`
+  - supports timeout profile JSON export (`--out-timeout-profile`) with policy knobs (`--timeout-multiplier` / `--timeout-slack-sec` / `--timeout-min-sec` / `--timeout-round-sec`)
   - unit tests: `tests/test_smoke_summary_to_csv.py`
 - Added CI workflow wiring:
   - `.github/workflows/ci.yml` runs `unittest` on push/PR/workflow_dispatch
@@ -150,7 +151,7 @@
   - broader SerializedProperty support (nested managed-reference scenarios, complex custom structs)
   - Unity-side integration tests against sample prefab assets (batchmode assertions)
 - Add Unity smoke hardening:
-  - add profile template examples that map observed duration bands to timeout presets
+  - tune default timeout profile policy parameters based on accumulated smoke history
 
 ## Decision-Required Queue
 - Decide default location/policy for ignore-guid files:
