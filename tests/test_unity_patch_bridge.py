@@ -175,6 +175,43 @@ response_path.write_text(
                             "index": 0,
                             "value": {"name": "x"},
                         },
+                        {
+                            "op": "set",
+                            "component": "Example.Component",
+                            "path": "enabled",
+                            "value": True,
+                        },
+                        {
+                            "op": "set",
+                            "component": "Example.Component",
+                            "path": "weight",
+                            "value": 1.5,
+                        },
+                        {
+                            "op": "set",
+                            "component": "Example.Component",
+                            "path": "label",
+                            "value": "hello",
+                        },
+                        {
+                            "op": "set",
+                            "component": "Example.Component",
+                            "path": "optionalRef",
+                            "value": None,
+                        },
+                        {
+                            "op": "insert_array_element",
+                            "component": "Example.Component",
+                            "path": "items.Array.data",
+                            "index": 1,
+                            "value": [1, 2],
+                        },
+                        {
+                            "op": "remove_array_element",
+                            "component": "Example.Component",
+                            "path": "items.Array.data",
+                            "index": 0,
+                        },
                     ],
                 },
                 env_overrides={
@@ -187,8 +224,27 @@ response_path.write_text(
         request_ops = result["data"]["request_ops"]
         self.assertEqual("int", request_ops[0]["value_kind"])
         self.assertEqual(2, request_ops[0]["value_int"])
+
         self.assertEqual("json", request_ops[1]["value_kind"])
         self.assertEqual('{"name": "x"}', request_ops[1]["value_json"])
+
+        self.assertEqual("bool", request_ops[2]["value_kind"])
+        self.assertTrue(request_ops[2]["value_bool"])
+
+        self.assertEqual("float", request_ops[3]["value_kind"])
+        self.assertEqual(1.5, request_ops[3]["value_float"])
+
+        self.assertEqual("string", request_ops[4]["value_kind"])
+        self.assertEqual("hello", request_ops[4]["value_string"])
+
+        self.assertEqual("null", request_ops[5]["value_kind"])
+        self.assertNotIn("value_json", request_ops[5])
+
+        self.assertEqual("json", request_ops[6]["value_kind"])
+        self.assertEqual("[1, 2]", request_ops[6]["value_json"])
+
+        self.assertEqual("remove_array_element", request_ops[7]["op"])
+        self.assertNotIn("value_kind", request_ops[7])
 
     def test_reference_bridge_surfaces_nonzero_unity_exit(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

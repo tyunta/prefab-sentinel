@@ -1,9 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using UnityEditor;
 using UnityEngine;
-
 namespace PrefabSentinel
 {
     /// <summary>
@@ -38,6 +38,48 @@ namespace PrefabSentinel
             public float value_float = 0f;
             public bool value_bool = false;
             public string value_json = string.Empty;
+        }
+
+        [Serializable]
+        private sealed class ColorPayload
+        {
+            public float r = 0f;
+            public float g = 0f;
+            public float b = 0f;
+            public float a = 1f;
+        }
+
+        [Serializable]
+        private sealed class Vector2Payload
+        {
+            public float x = 0f;
+            public float y = 0f;
+        }
+
+        [Serializable]
+        private sealed class Vector3Payload
+        {
+            public float x = 0f;
+            public float y = 0f;
+            public float z = 0f;
+        }
+
+        [Serializable]
+        private sealed class Vector4Payload
+        {
+            public float x = 0f;
+            public float y = 0f;
+            public float z = 0f;
+            public float w = 0f;
+        }
+
+        [Serializable]
+        private sealed class QuaternionPayload
+        {
+            public float x = 0f;
+            public float y = 0f;
+            public float z = 0f;
+            public float w = 1f;
         }
 
         [Serializable]
@@ -414,13 +456,16 @@ namespace PrefabSentinel
                 SerializedProperty property = serialized.FindProperty(op.path);
                 if (property == null)
                 {
+                    string hint = BuildSetPathHint(op.path);
                     diagnostics.Add(
                         new BridgeDiagnostic
                         {
                             path = target,
                             location = $"ops[{opIndex}].path",
                             detail = "apply_error",
-                            evidence = $"property not found: '{op.path}'"
+                            evidence = string.IsNullOrEmpty(hint)
+                                ? $"property not found: '{op.path}'"
+                                : $"property not found: '{op.path}'. {hint}"
                         }
                     );
                     return false;
@@ -545,12 +590,32 @@ namespace PrefabSentinel
         {
             arrayProperty = null;
             error = string.Empty;
+            if (string.IsNullOrWhiteSpace(propertyPath))
+            {
+                error = "array operation path is empty";
+                return false;
+            }
+            if (propertyPath.EndsWith(".Array.size", StringComparison.Ordinal))
+            {
+                error = "array operation path must target '.Array.data'; use set with '.Array.size' for resize";
+                return false;
+            }
+            if (propertyPath.IndexOf(".Array.data[", StringComparison.Ordinal) >= 0)
+            {
+                error = "array operation path must target the array itself; remove element index from the path";
+                return false;
+            }
             if (!propertyPath.EndsWith(ArrayDataSuffix, StringComparison.Ordinal))
             {
                 error = $"array operation path must end with '{ArrayDataSuffix}'";
                 return false;
             }
             string arrayPath = propertyPath.Substring(0, propertyPath.Length - ArrayDataSuffix.Length);
+            if (string.IsNullOrWhiteSpace(arrayPath))
+            {
+                error = "array operation path must include a property prefix before '.Array.data'";
+                return false;
+            }
             arrayProperty = serialized.FindProperty(arrayPath);
             if (arrayProperty == null)
             {
@@ -576,6 +641,7 @@ namespace PrefabSentinel
             error = string.Empty;
             Component[] components = root.GetComponentsInChildren<Component>(true);
             List<Component> matches = new List<Component>();
+            HashSet<string> availableTypeNames = new HashSet<string>(StringComparer.Ordinal);
             for (int i = 0; i < components.Length; i++)
             {
                 Component candidate = components[i];
@@ -583,7 +649,17 @@ namespace PrefabSentinel
                 {
                     continue;
                 }
+
                 Type type = candidate.GetType();
+                if (!string.IsNullOrEmpty(type.FullName))
+                {
+                    availableTypeNames.Add(type.FullName);
+                }
+                else
+                {
+                    availableTypeNames.Add(type.Name);
+                }
+
                 if (
                     string.Equals(type.FullName, selector, StringComparison.Ordinal)
                     || string.Equals(type.Name, selector, StringComparison.Ordinal)
@@ -601,11 +677,17 @@ namespace PrefabSentinel
             }
             if (matches.Count == 0)
             {
-                error = $"component not found: '{selector}'";
+                string available = BuildTypeNameSample(availableTypeNames, 8);
+                error = string.IsNullOrEmpty(available)
+                    ? $"component not found: '{selector}'"
+                    : $"component not found: '{selector}'. available types: {available}";
                 return false;
             }
 
-            error = $"component selector is ambiguous: '{selector}' matched {matches.Count} components";
+            string candidates = BuildComponentSample(matches, 5);
+            error = string.IsNullOrEmpty(candidates)
+                ? $"component selector is ambiguous: '{selector}' matched {matches.Count} components"
+                : $"component selector is ambiguous: '{selector}' matched {matches.Count} components ({candidates})";
             return false;
         }
 
@@ -616,52 +698,114 @@ namespace PrefabSentinel
         )
         {
             error = string.Empty;
+            string valueKind = (op.value_kind ?? string.Empty).Trim();
             switch (property.propertyType)
             {
                 case SerializedPropertyType.Integer:
-                    if (string.Equals(op.value_kind, "int", StringComparison.Ordinal))
+                {
+                    int intValue;
+                    if (!TryReadIntegerValue(op, valueKind, out intValue, out error))
                     {
-                        property.intValue = op.value_int;
-                        return true;
+                        return false;
                     }
-                    error = "integer property requires value_kind='int'";
-                    return false;
+                    property.intValue = intValue;
+                    return true;
+                }
                 case SerializedPropertyType.Float:
-                    if (string.Equals(op.value_kind, "float", StringComparison.Ordinal))
+                {
+                    float floatValue;
+                    if (!TryReadFloatValue(op, valueKind, out floatValue, out error))
                     {
-                        property.floatValue = op.value_float;
-                        return true;
+                        return false;
                     }
-                    if (string.Equals(op.value_kind, "int", StringComparison.Ordinal))
-                    {
-                        property.floatValue = op.value_int;
-                        return true;
-                    }
-                    error = "float property requires value_kind='float' or 'int'";
-                    return false;
+                    property.floatValue = floatValue;
+                    return true;
+                }
                 case SerializedPropertyType.Boolean:
-                    if (string.Equals(op.value_kind, "bool", StringComparison.Ordinal))
+                {
+                    bool boolValue;
+                    if (!TryReadBoolValue(op, valueKind, out boolValue, out error))
                     {
-                        property.boolValue = op.value_bool;
-                        return true;
+                        return false;
                     }
-                    error = "boolean property requires value_kind='bool'";
-                    return false;
+                    property.boolValue = boolValue;
+                    return true;
+                }
                 case SerializedPropertyType.String:
-                    if (string.Equals(op.value_kind, "string", StringComparison.Ordinal))
+                    if (string.Equals(valueKind, "string", StringComparison.Ordinal))
                     {
                         property.stringValue = op.value_string ?? string.Empty;
                         return true;
                     }
-                    if (string.Equals(op.value_kind, "null", StringComparison.Ordinal))
+                    if (string.Equals(valueKind, "null", StringComparison.Ordinal))
                     {
                         property.stringValue = string.Empty;
                         return true;
                     }
                     error = "string property requires value_kind='string' or 'null'";
                     return false;
+                case SerializedPropertyType.Enum:
+                {
+                    int enumIndex;
+                    if (!TryReadEnumValue(property, op, valueKind, out enumIndex, out error))
+                    {
+                        return false;
+                    }
+                    property.enumValueIndex = enumIndex;
+                    return true;
+                }
+                case SerializedPropertyType.Color:
+                {
+                    Color colorValue;
+                    if (!TryReadColorValue(op, valueKind, out colorValue, out error))
+                    {
+                        return false;
+                    }
+                    property.colorValue = colorValue;
+                    return true;
+                }
+                case SerializedPropertyType.Vector2:
+                {
+                    Vector2 value;
+                    if (!TryReadVector2Value(op, valueKind, out value, out error))
+                    {
+                        return false;
+                    }
+                    property.vector2Value = value;
+                    return true;
+                }
+                case SerializedPropertyType.Vector3:
+                {
+                    Vector3 value;
+                    if (!TryReadVector3Value(op, valueKind, out value, out error))
+                    {
+                        return false;
+                    }
+                    property.vector3Value = value;
+                    return true;
+                }
+                case SerializedPropertyType.Vector4:
+                {
+                    Vector4 value;
+                    if (!TryReadVector4Value(op, valueKind, out value, out error))
+                    {
+                        return false;
+                    }
+                    property.vector4Value = value;
+                    return true;
+                }
+                case SerializedPropertyType.Quaternion:
+                {
+                    Quaternion value;
+                    if (!TryReadQuaternionValue(op, valueKind, out value, out error))
+                    {
+                        return false;
+                    }
+                    property.quaternionValue = value;
+                    return true;
+                }
                 case SerializedPropertyType.ObjectReference:
-                    if (string.Equals(op.value_kind, "null", StringComparison.Ordinal))
+                    if (string.Equals(valueKind, "null", StringComparison.Ordinal))
                     {
                         property.objectReferenceValue = null;
                         return true;
@@ -672,6 +816,442 @@ namespace PrefabSentinel
                     error = $"SerializedPropertyType '{property.propertyType}' is not supported";
                     return false;
             }
+        }
+
+        private static bool TryReadIntegerValue(
+            PatchOp op,
+            string valueKind,
+            out int value,
+            out string error
+        )
+        {
+            value = 0;
+            error = string.Empty;
+            if (string.Equals(valueKind, "int", StringComparison.Ordinal))
+            {
+                value = op.value_int;
+                return true;
+            }
+            if (string.Equals(valueKind, "float", StringComparison.Ordinal))
+            {
+                float rounded = Mathf.Round(op.value_float);
+                if (!Mathf.Approximately(rounded, op.value_float))
+                {
+                    error = "integer property requires a whole-number float value";
+                    return false;
+                }
+                value = (int)rounded;
+                return true;
+            }
+            if (string.Equals(valueKind, "bool", StringComparison.Ordinal))
+            {
+                value = op.value_bool ? 1 : 0;
+                return true;
+            }
+            if (string.Equals(valueKind, "string", StringComparison.Ordinal))
+            {
+                if (int.TryParse(op.value_string, NumberStyles.Integer, CultureInfo.InvariantCulture, out value))
+                {
+                    return true;
+                }
+                error = $"failed to parse integer from value_string '{op.value_string}'";
+                return false;
+            }
+            error = "integer property requires value_kind='int' (or compatible float/bool/string)";
+            return false;
+        }
+
+        private static bool TryReadFloatValue(
+            PatchOp op,
+            string valueKind,
+            out float value,
+            out string error
+        )
+        {
+            value = 0f;
+            error = string.Empty;
+            if (string.Equals(valueKind, "float", StringComparison.Ordinal))
+            {
+                value = op.value_float;
+                return true;
+            }
+            if (string.Equals(valueKind, "int", StringComparison.Ordinal))
+            {
+                value = op.value_int;
+                return true;
+            }
+            if (string.Equals(valueKind, "bool", StringComparison.Ordinal))
+            {
+                value = op.value_bool ? 1f : 0f;
+                return true;
+            }
+            if (string.Equals(valueKind, "string", StringComparison.Ordinal))
+            {
+                if (
+                    float.TryParse(
+                        op.value_string,
+                        NumberStyles.Float | NumberStyles.AllowThousands,
+                        CultureInfo.InvariantCulture,
+                        out value
+                    )
+                )
+                {
+                    return true;
+                }
+                error = $"failed to parse float from value_string '{op.value_string}'";
+                return false;
+            }
+            error = "float property requires value_kind='float' (or compatible int/bool/string)";
+            return false;
+        }
+
+        private static bool TryReadBoolValue(
+            PatchOp op,
+            string valueKind,
+            out bool value,
+            out string error
+        )
+        {
+            value = false;
+            error = string.Empty;
+            if (string.Equals(valueKind, "bool", StringComparison.Ordinal))
+            {
+                value = op.value_bool;
+                return true;
+            }
+            if (string.Equals(valueKind, "int", StringComparison.Ordinal))
+            {
+                value = op.value_int != 0;
+                return true;
+            }
+            if (string.Equals(valueKind, "string", StringComparison.Ordinal))
+            {
+                if (bool.TryParse(op.value_string, out value))
+                {
+                    return true;
+                }
+                int intValue;
+                if (int.TryParse(op.value_string, NumberStyles.Integer, CultureInfo.InvariantCulture, out intValue))
+                {
+                    value = intValue != 0;
+                    return true;
+                }
+                error = $"failed to parse bool from value_string '{op.value_string}'";
+                return false;
+            }
+            error = "boolean property requires value_kind='bool' (or compatible int/string)";
+            return false;
+        }
+
+        private static bool TryReadEnumValue(
+            SerializedProperty property,
+            PatchOp op,
+            string valueKind,
+            out int enumIndex,
+            out string error
+        )
+        {
+            enumIndex = 0;
+            error = string.Empty;
+            if (string.Equals(valueKind, "int", StringComparison.Ordinal))
+            {
+                enumIndex = op.value_int;
+            }
+            else if (string.Equals(valueKind, "string", StringComparison.Ordinal))
+            {
+                string raw = op.value_string ?? string.Empty;
+                for (int i = 0; i < property.enumDisplayNames.Length; i++)
+                {
+                    if (
+                        string.Equals(property.enumDisplayNames[i], raw, StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(property.enumNames[i], raw, StringComparison.OrdinalIgnoreCase)
+                    )
+                    {
+                        enumIndex = i;
+                        return true;
+                    }
+                }
+                error = $"failed to map enum value from value_string '{raw}'";
+                return false;
+            }
+            else
+            {
+                error = "enum property requires value_kind='int' or 'string'";
+                return false;
+            }
+
+            if (enumIndex < 0 || enumIndex >= property.enumDisplayNames.Length)
+            {
+                error = $"enum index out of range: {enumIndex}";
+                return false;
+            }
+            return true;
+        }
+
+        private static bool TryReadColorValue(
+            PatchOp op,
+            string valueKind,
+            out Color value,
+            out string error
+        )
+        {
+            value = default(Color);
+            error = string.Empty;
+            if (string.Equals(valueKind, "string", StringComparison.Ordinal))
+            {
+                if (ColorUtility.TryParseHtmlString(op.value_string, out value))
+                {
+                    return true;
+                }
+                error = $"failed to parse color from value_string '{op.value_string}'";
+                return false;
+            }
+            if (string.Equals(valueKind, "json", StringComparison.Ordinal))
+            {
+                ColorPayload payload;
+                if (!TryParseJsonPayload(op.value_json, out payload, out error))
+                {
+                    error = $"failed to parse color value_json: {error}";
+                    return false;
+                }
+                value = new Color(payload.r, payload.g, payload.b, payload.a);
+                return true;
+            }
+
+            error = "color property requires value_kind='string' (#RRGGBB/#RRGGBBAA) or 'json'";
+            return false;
+        }
+
+        private static bool TryReadVector2Value(
+            PatchOp op,
+            string valueKind,
+            out Vector2 value,
+            out string error
+        )
+        {
+            value = default(Vector2);
+            error = string.Empty;
+            if (!string.Equals(valueKind, "json", StringComparison.Ordinal))
+            {
+                error = "Vector2 property requires value_kind='json' with {x,y}";
+                return false;
+            }
+            Vector2Payload payload;
+            if (!TryParseJsonPayload(op.value_json, out payload, out error))
+            {
+                error = $"failed to parse Vector2 value_json: {error}";
+                return false;
+            }
+            value = new Vector2(payload.x, payload.y);
+            return true;
+        }
+
+        private static bool TryReadVector3Value(
+            PatchOp op,
+            string valueKind,
+            out Vector3 value,
+            out string error
+        )
+        {
+            value = default(Vector3);
+            error = string.Empty;
+            if (!string.Equals(valueKind, "json", StringComparison.Ordinal))
+            {
+                error = "Vector3 property requires value_kind='json' with {x,y,z}";
+                return false;
+            }
+            Vector3Payload payload;
+            if (!TryParseJsonPayload(op.value_json, out payload, out error))
+            {
+                error = $"failed to parse Vector3 value_json: {error}";
+                return false;
+            }
+            value = new Vector3(payload.x, payload.y, payload.z);
+            return true;
+        }
+
+        private static bool TryReadVector4Value(
+            PatchOp op,
+            string valueKind,
+            out Vector4 value,
+            out string error
+        )
+        {
+            value = default(Vector4);
+            error = string.Empty;
+            if (!string.Equals(valueKind, "json", StringComparison.Ordinal))
+            {
+                error = "Vector4 property requires value_kind='json' with {x,y,z,w}";
+                return false;
+            }
+            Vector4Payload payload;
+            if (!TryParseJsonPayload(op.value_json, out payload, out error))
+            {
+                error = $"failed to parse Vector4 value_json: {error}";
+                return false;
+            }
+            value = new Vector4(payload.x, payload.y, payload.z, payload.w);
+            return true;
+        }
+
+        private static bool TryReadQuaternionValue(
+            PatchOp op,
+            string valueKind,
+            out Quaternion value,
+            out string error
+        )
+        {
+            value = default(Quaternion);
+            error = string.Empty;
+            if (!string.Equals(valueKind, "json", StringComparison.Ordinal))
+            {
+                error = "Quaternion property requires value_kind='json' with {x,y,z,w}";
+                return false;
+            }
+            QuaternionPayload payload;
+            if (!TryParseJsonPayload(op.value_json, out payload, out error))
+            {
+                error = $"failed to parse Quaternion value_json: {error}";
+                return false;
+            }
+            value = new Quaternion(payload.x, payload.y, payload.z, payload.w);
+            return true;
+        }
+
+        private static bool TryParseJsonPayload<T>(
+            string raw,
+            out T payload,
+            out string error
+        ) where T : class
+        {
+            payload = null;
+            error = string.Empty;
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                error = "value_json is empty";
+                return false;
+            }
+
+            try
+            {
+                payload = JsonUtility.FromJson<T>(raw);
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return false;
+            }
+
+            if (payload == null)
+            {
+                error = "value_json decoded to null";
+                return false;
+            }
+            return true;
+        }
+
+        private static string BuildTypeNameSample(HashSet<string> availableTypeNames, int maxItems)
+        {
+            if (availableTypeNames == null || availableTypeNames.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            List<string> values = new List<string>(availableTypeNames);
+            values.Sort(StringComparer.Ordinal);
+            int take = Math.Min(maxItems, values.Count);
+            List<string> sample = new List<string>();
+            for (int i = 0; i < take; i++)
+            {
+                sample.Add(values[i]);
+            }
+            if (values.Count > take)
+            {
+                sample.Add("...");
+            }
+            return string.Join(", ", sample.ToArray());
+        }
+
+        private static string BuildComponentSample(List<Component> matches, int maxItems)
+        {
+            if (matches == null || matches.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            int take = Math.Min(maxItems, matches.Count);
+            List<string> sample = new List<string>();
+            for (int i = 0; i < take; i++)
+            {
+                sample.Add(DescribeComponent(matches[i]));
+            }
+            if (matches.Count > take)
+            {
+                sample.Add("...");
+            }
+            return string.Join("; ", sample.ToArray());
+        }
+
+        private static string DescribeComponent(Component component)
+        {
+            if (component == null)
+            {
+                return "(missing component)";
+            }
+            Type type = component.GetType();
+            string typeName = type.FullName ?? type.Name;
+            return $"{typeName} @ {BuildHierarchyPath(component.transform)}";
+        }
+
+        private static string BuildHierarchyPath(Transform transform)
+        {
+            if (transform == null)
+            {
+                return "(unknown)";
+            }
+
+            List<string> parts = new List<string>();
+            Transform current = transform;
+            while (current != null)
+            {
+                parts.Add(current.name);
+                current = current.parent;
+            }
+            parts.Reverse();
+            return string.Join("/", parts.ToArray());
+        }
+
+        private static string BuildSetPathHint(string propertyPath)
+        {
+            if (string.IsNullOrWhiteSpace(propertyPath))
+            {
+                return string.Empty;
+            }
+            if (propertyPath.EndsWith(ArrayDataSuffix, StringComparison.Ordinal))
+            {
+                return "set path cannot end with '.Array.data'; use '.Array.size' or '.Array.data[index].field'";
+            }
+
+            int index = propertyPath.IndexOf(".Array.data", StringComparison.Ordinal);
+            if (index < 0)
+            {
+                return string.Empty;
+            }
+
+            string suffix = propertyPath.Substring(index + ".Array.data".Length);
+            if (suffix.Length == 0)
+            {
+                return "array element path should include an index like '.Array.data[0]'";
+            }
+            if (!suffix.StartsWith("[", StringComparison.Ordinal))
+            {
+                return "array element path should include an index like '.Array.data[0]'";
+            }
+            if (suffix.IndexOf(']') < 0)
+            {
+                return "array element index is missing closing ']'";
+            }
+            return string.Empty;
         }
 
         private static BridgeResponse BuildError(
