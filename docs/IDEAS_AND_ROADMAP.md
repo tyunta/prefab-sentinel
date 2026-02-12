@@ -87,6 +87,7 @@
   - `unitytool patch attest --plan ...`
   - `unitytool patch verify --plan ...`
   - `unitytool patch apply --plan ... --dry-run`
+  - optional attestation verification (`--attestation-file`)
   - optional plan digest verification (`--plan-sha256`)
   - optional plan signature verification (`--plan-signature`)
   - optional JSON report output (`--out-report`)

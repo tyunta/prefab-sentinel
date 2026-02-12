@@ -209,6 +209,11 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     patch_apply.add_argument(
+        "--attestation-file",
+        default=None,
+        help="Optional attestation JSON path containing expected plan digest/signature.",
+    )
+    patch_apply.add_argument(
         "--plan-signing-key-env",
         default=_DEFAULT_PLAN_SIGNING_KEY_ENV,
         help=(
@@ -595,22 +600,45 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(f"Failed to load --plan: {exc}")
         plan_sha256 = compute_patch_plan_sha256(plan_path)
         plan_signature = None
-        if args.plan_sha256:
+        attested_sha256 = None
+        attested_signature = None
+        if args.attestation_file:
+            attested_sha256, attested_signature = _load_attestation_expectations(
+                parser,
+                args.attestation_file,
+            )
+            if (
+                attested_sha256 is None
+                and attested_signature is None
+                and args.plan_sha256 is None
+                and args.plan_signature is None
+            ):
+                parser.error(
+                    "patch apply --attestation-file must include sha256/signature when "
+                    "--plan-sha256/--plan-signature are not specified."
+                )
+
+        sha256_input = args.plan_sha256 if args.plan_sha256 is not None else attested_sha256
+        signature_input = (
+            args.plan_signature if args.plan_signature is not None else attested_signature
+        )
+
+        if sha256_input is not None:
             expected_digest = _normalize_expected_digest(
                 parser,
                 option_name="--plan-sha256",
-                digest=args.plan_sha256,
+                digest=sha256_input,
             )
             if expected_digest != plan_sha256:
                 parser.error(
                     "Plan digest mismatch: "
                     f"--plan-sha256={expected_digest} does not match actual {plan_sha256}."
                 )
-        if args.plan_signature:
+        if signature_input is not None:
             expected_signature = _normalize_expected_digest(
                 parser,
                 option_name="--plan-signature",
-                digest=args.plan_signature,
+                digest=signature_input,
             )
             key = _resolve_signing_key(
                 parser,
@@ -638,6 +666,7 @@ def main(argv: list[str] | None = None) -> int:
             runtime_max_diagnostics=args.runtime_max_diagnostics,
         )
         payload = response.to_dict()
+        payload.setdefault("data", {})["plan_attestation_file"] = args.attestation_file
         if args.out_report:
             report_path = Path(args.out_report)
             try:

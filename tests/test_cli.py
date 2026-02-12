@@ -206,6 +206,170 @@ GameObject:
         self.assertTrue(payload["success"])
         self.assertEqual(signature, payload["data"]["plan_signature"])
 
+    def test_patch_apply_accepts_sha256_from_attestation_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "patch.json"
+            attestation = root / "attestation.json"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "target": "Assets/Variant.prefab",
+                        "ops": [
+                            {
+                                "op": "set",
+                                "component": "Example.Component",
+                                "path": "items.Array.size",
+                                "value": 2,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            digest = hashlib.sha256(plan.read_bytes()).hexdigest()
+            attestation.write_text(
+                json.dumps({"data": {"sha256": digest}}),
+                encoding="utf-8",
+            )
+            exit_code, output = self.run_cli(
+                [
+                    "patch",
+                    "apply",
+                    "--plan",
+                    str(plan),
+                    "--dry-run",
+                    "--attestation-file",
+                    str(attestation),
+                ]
+            )
+
+        payload = json.loads(output)
+        self.assertEqual(0, exit_code)
+        self.assertTrue(payload["success"])
+        self.assertEqual(digest, payload["data"]["plan_sha256"])
+        self.assertEqual(str(attestation), payload["data"]["plan_attestation_file"])
+
+    def test_patch_apply_accepts_signature_from_attestation_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "patch.json"
+            attestation = root / "attestation.json"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "target": "Assets/Variant.prefab",
+                        "ops": [
+                            {
+                                "op": "set",
+                                "component": "Example.Component",
+                                "path": "items.Array.size",
+                                "value": 2,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            key = "local-signing-key"
+            signature = hmac.new(key.encode("utf-8"), plan.read_bytes(), hashlib.sha256).hexdigest()
+            attestation.write_text(
+                json.dumps({"data": {"signature": signature}}),
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {"UNITYTOOL_PLAN_SIGNING_KEY": key}, clear=False):
+                exit_code, output = self.run_cli(
+                    [
+                        "patch",
+                        "apply",
+                        "--plan",
+                        str(plan),
+                        "--dry-run",
+                        "--attestation-file",
+                        str(attestation),
+                    ]
+                )
+
+        payload = json.loads(output)
+        self.assertEqual(0, exit_code)
+        self.assertTrue(payload["success"])
+        self.assertEqual(signature, payload["data"]["plan_signature"])
+        self.assertEqual(str(attestation), payload["data"]["plan_attestation_file"])
+
+    def test_patch_apply_prefers_cli_expected_values_over_attestation_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "patch.json"
+            attestation = root / "attestation.json"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "target": "Assets/Variant.prefab",
+                        "ops": [
+                            {
+                                "op": "set",
+                                "component": "Example.Component",
+                                "path": "items.Array.size",
+                                "value": 2,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            digest = hashlib.sha256(plan.read_bytes()).hexdigest()
+            attestation.write_text(
+                json.dumps({"data": {"sha256": "0" * 64}}),
+                encoding="utf-8",
+            )
+            exit_code, output = self.run_cli(
+                [
+                    "patch",
+                    "apply",
+                    "--plan",
+                    str(plan),
+                    "--dry-run",
+                    "--attestation-file",
+                    str(attestation),
+                    "--plan-sha256",
+                    digest,
+                ]
+            )
+
+        payload = json.loads(output)
+        self.assertEqual(0, exit_code)
+        self.assertTrue(payload["success"])
+        self.assertEqual(digest, payload["data"]["plan_sha256"])
+
+    def test_patch_apply_rejects_attestation_without_expected_values(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "patch.json"
+            attestation = root / "attestation.json"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "target": "Assets/Variant.prefab",
+                        "ops": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            attestation.write_text(json.dumps({"data": {}}), encoding="utf-8")
+            with redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    self.run_cli(
+                        [
+                            "patch",
+                            "apply",
+                            "--plan",
+                            str(plan),
+                            "--dry-run",
+                            "--attestation-file",
+                            str(attestation),
+                        ]
+                    )
+
     def test_patch_apply_rejects_plan_signature_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
