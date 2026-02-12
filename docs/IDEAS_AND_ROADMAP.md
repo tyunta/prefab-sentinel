@@ -121,6 +121,11 @@
   - per-target timeout tuning (`--avatar-unity-timeout-sec` / `--world-unity-timeout-sec`)
   - per-case duration telemetry (`duration_sec`) for timeout tuning evidence
   - unit tests: `tests/test_bridge_smoke_samples.py`
+- Added smoke summary history export for timeout decision support:
+  - `scripts/smoke_summary_to_csv.py`
+  - aggregates `summary.json` rows into CSV and Markdown decision table by target
+  - supports `--matched-only`, `--target`, `--duration-percentile`
+  - unit tests: `tests/test_smoke_summary_to_csv.py`
 - Added CI workflow wiring:
   - `.github/workflows/ci.yml` runs `unittest` on push/PR/workflow_dispatch
   - `bridge-smoke-contract` job runs `bridge_smoke_samples.py` in expected-failure mode and uploads `reports/bridge_smoke`
@@ -145,7 +150,7 @@
   - broader SerializedProperty support (nested managed-reference scenarios, complex custom structs)
   - Unity-side integration tests against sample prefab assets (batchmode assertions)
 - Add Unity smoke hardening:
-  - add decision table for target-specific timeout defaults by sample size/profile
+  - add profile template examples that map observed duration bands to timeout presets
 
 ## Decision-Required Queue
 - Decide default location/policy for ignore-guid files:
