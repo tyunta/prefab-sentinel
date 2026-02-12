@@ -128,7 +128,7 @@
   - unit tests: `tests/test_smoke_summary_to_csv.py`
 - Added CI workflow wiring:
   - `.github/workflows/ci.yml` runs `unittest` on push/PR/workflow_dispatch
-  - `bridge-smoke-contract` job runs `bridge_smoke_samples.py` in expected-failure mode and uploads `reports/bridge_smoke`
+  - `bridge-smoke-contract` job runs `bridge_smoke_samples.py` in expected-failure mode, builds timeout decision artifacts via `smoke_summary_to_csv.py`, and uploads `reports/bridge_smoke`
 - Added Unity-enabled smoke workflow:
   - `.github/workflows/unity-smoke.yml` (`workflow_dispatch` + self-hosted Windows runner)
   - runs `bridge_smoke_samples.py` without `--*-expect-failure` and uploads `reports/bridge_smoke`

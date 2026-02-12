@@ -57,6 +57,14 @@ jobs:
             --out-dir reports/bridge_smoke \
             --summary-md reports/bridge_smoke/summary.md
 
+      - name: Build Bridge Smoke Decision Table Artifacts
+        run: |
+          python scripts/smoke_summary_to_csv.py \
+            --inputs reports/bridge_smoke/summary.json \
+            --duration-percentile 90 \
+            --out reports/bridge_smoke/history.csv \
+            --out-md reports/bridge_smoke/history.md
+
       - name: Upload Bridge Smoke Artifacts
         uses: actions/upload-artifact@v4
         with:
