@@ -561,7 +561,7 @@ uvx --from . unitytool suggest ignore-guids --scope "Assets/haiirokoubou"
 `tools/unity_patch_bridge.py` は `UNITYTOOL_UNITY_COMMAND` を使って Unity batchmode コマンドを実行し、JSONリクエスト/レスポンスファイルを介して結果を返す（`set` / `insert_array_element` の `value` を Unity 側で扱える型情報へ正規化）。
 `tools/unity_patch_bridge.py` は `UNITYTOOL_UNITY_PROJECT_PATH` / `UNITYTOOL_UNITY_EXECUTE_METHOD` / `UNITYTOOL_UNITY_TIMEOUT_SEC` / `UNITYTOOL_UNITY_LOG_FILE` で実行設定を制御できる。
 `tools/unity/PrefabSentinel.UnityPatchBridge.cs` は Unity 側 `-executeMethod` 実装として `.prefab` ターゲットの `set` / `insert_array_element` / `remove_array_element` を SerializedObject 経由で適用する（`component` は一意一致必須、component曖昧時は候補パス付きで fail-fast）。
-`set` の値デコードは `int/float/bool/string/null` に加えて `enum`、`Color`、`Vector2/3/4`、`Rect`、`Bounds`、`Quaternion`、`ObjectReference`（`value_kind=json` の `{guid,file_id}`）を扱う。
+`set` の値デコードは `int/float/bool/string/null` に加えて `enum`、`Color`、`Vector2/3/4`、`Vector2Int/3Int`、`Rect/RectInt`、`Bounds/BoundsInt`、`Quaternion`、`ObjectReference`（`value_kind=json` の `{guid,file_id}`）を扱う。
 配列操作パスの診断は `.Array.data` 形式を厳密検証し、`.Array.size`/index付き誤指定時はヒント付きで停止する。
 `validate runtime` は log分類ベースのscaffoldを実装済みで、`--scene` 存在確認、`BROKEN_PPTR` / `UDON_NULLREF` などの分類、`assert_no_critical_errors` 判定までを返す。
 `validate runtime` の compile/ClientSim 実行は現時点では `RUN_COMPILE_SKIPPED` / `RUN_CLIENTSIM_SKIPPED` として明示的に未配線を返す。

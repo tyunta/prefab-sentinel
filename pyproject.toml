@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "unitytool"
-version = "0.1.50"
+version = "0.1.51"
 description = "Phase 1 scaffold for UnityTool CLI and MCP contracts."
 requires-python = ">=3.11"
 readme = "README.md"

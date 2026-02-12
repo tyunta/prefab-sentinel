@@ -236,6 +236,26 @@ response_path.write_text(
                             },
                         },
                         {
+                            "op": "set",
+                            "component": "Example.Component",
+                            "path": "clipRectInt",
+                            "value": {
+                                "x": 1,
+                                "y": 2,
+                                "width": 3,
+                                "height": 4,
+                            },
+                        },
+                        {
+                            "op": "set",
+                            "component": "Example.Component",
+                            "path": "boundsInt",
+                            "value": {
+                                "position": {"x": 1, "y": 2, "z": 3},
+                                "size": {"x": 4, "y": 5, "z": 6},
+                            },
+                        },
+                        {
                             "op": "remove_array_element",
                             "component": "Example.Component",
                             "path": "items.Array.data",
@@ -290,8 +310,20 @@ response_path.write_text(
             request_ops[9]["value_json"],
         )
 
-        self.assertEqual("remove_array_element", request_ops[10]["op"])
-        self.assertNotIn("value_kind", request_ops[10])
+        self.assertEqual("json", request_ops[10]["value_kind"])
+        self.assertEqual(
+            '{"x": 1, "y": 2, "width": 3, "height": 4}',
+            request_ops[10]["value_json"],
+        )
+
+        self.assertEqual("json", request_ops[11]["value_kind"])
+        self.assertEqual(
+            '{"position": {"x": 1, "y": 2, "z": 3}, "size": {"x": 4, "y": 5, "z": 6}}',
+            request_ops[11]["value_json"],
+        )
+
+        self.assertEqual("remove_array_element", request_ops[12]["op"])
+        self.assertNotIn("value_kind", request_ops[12])
 
     def test_reference_bridge_surfaces_nonzero_unity_exit(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
