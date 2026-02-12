@@ -106,6 +106,7 @@
   - `--plan` required + bridge request shaping (`protocol_version` / `target` / `ops`)
   - Unity execution env overrides (`--unity-command` / `--unity-project-path` / `--unity-execute-method` / `--unity-timeout-sec` / `--unity-log-file`)
   - expectation checks (`--expect-failure`) and optional response export (`--out`)
+  - bridge response envelope validation (`success` / `severity` / `code` / `message` / `data` / `diagnostics`) with fail-fast errors
 - Added smoke runner unit tests:
   - `tests/test_unity_bridge_smoke.py`
 - Unity bridge now normalizes op values for executeMethod payload (`value_kind` fields).

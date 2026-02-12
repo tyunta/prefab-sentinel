@@ -106,6 +106,48 @@ sys.stdout.write(
         self.assertTrue(response["success"])
         self.assertEqual("Assets/Test.prefab", response["data"]["target"])
 
+    def test_run_bridge_rejects_missing_required_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            bridge = root / "fake_bridge.py"
+            bridge.write_text(
+                """
+import json
+import sys
+_ = json.loads(sys.stdin.read())
+sys.stdout.write(json.dumps({"success": True, "severity": "info", "code": "OK", "message": "ok", "data": {}}))
+""".strip(),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(RuntimeError, "missing required fields"):
+                _run_bridge(
+                    bridge_script=bridge,
+                    python_executable=sys.executable,
+                    request={"protocol_version": 1, "target": "Assets/Test.prefab", "ops": []},
+                    env=os.environ.copy(),
+                )
+
+    def test_run_bridge_rejects_invalid_severity(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            bridge = root / "fake_bridge.py"
+            bridge.write_text(
+                """
+import json
+import sys
+_ = json.loads(sys.stdin.read())
+sys.stdout.write(json.dumps({"success": True, "severity": "notice", "code": "OK", "message": "ok", "data": {}, "diagnostics": []}))
+""".strip(),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(RuntimeError, "field 'severity'"):
+                _run_bridge(
+                    bridge_script=bridge,
+                    python_executable=sys.executable,
+                    request={"protocol_version": 1, "target": "Assets/Test.prefab", "ops": []},
+                    env=os.environ.copy(),
+                )
+
     def test_validate_expectation(self) -> None:
         self.assertTrue(_validate_expectation({"success": True}, expect_failure=False))
         self.assertFalse(_validate_expectation({"success": False}, expect_failure=False))

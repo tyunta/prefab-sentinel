@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 PROTOCOL_VERSION = 1
+VALID_SEVERITIES = {"info", "warning", "error", "critical"}
 UNITY_COMMAND_ENV = "UNITYTOOL_UNITY_COMMAND"
 UNITY_PROJECT_PATH_ENV = "UNITYTOOL_UNITY_PROJECT_PATH"
 UNITY_EXECUTE_METHOD_ENV = "UNITYTOOL_UNITY_EXECUTE_METHOD"
@@ -134,7 +135,41 @@ def _run_bridge(
         raise RuntimeError("Bridge stdout is not valid JSON.") from exc
     if not isinstance(payload, dict):
         raise RuntimeError("Bridge response root must be an object.")
+    _validate_bridge_response(payload)
     return payload
+
+
+def _validate_bridge_response(payload: dict[str, Any]) -> None:
+    required_fields = ("success", "severity", "code", "message", "data", "diagnostics")
+    missing_fields = [field for field in required_fields if field not in payload]
+    if missing_fields:
+        raise RuntimeError(
+            "Bridge response is missing required fields: "
+            + ", ".join(missing_fields)
+            + "."
+        )
+    success = payload.get("success")
+    severity = payload.get("severity")
+    code = payload.get("code")
+    message = payload.get("message")
+    data = payload.get("data")
+    diagnostics = payload.get("diagnostics")
+    if not isinstance(success, bool):
+        raise RuntimeError("Bridge response field 'success' must be a boolean.")
+    if not isinstance(severity, str) or severity not in VALID_SEVERITIES:
+        raise RuntimeError(
+            "Bridge response field 'severity' must be one of: "
+            + ", ".join(sorted(VALID_SEVERITIES))
+            + "."
+        )
+    if not isinstance(code, str) or not code.strip():
+        raise RuntimeError("Bridge response field 'code' must be a non-empty string.")
+    if not isinstance(message, str):
+        raise RuntimeError("Bridge response field 'message' must be a string.")
+    if not isinstance(data, dict):
+        raise RuntimeError("Bridge response field 'data' must be an object.")
+    if not isinstance(diagnostics, list):
+        raise RuntimeError("Bridge response field 'diagnostics' must be an array.")
 
 
 def _validate_expectation(response: dict[str, Any], expect_failure: bool) -> bool:
