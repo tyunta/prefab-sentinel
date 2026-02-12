@@ -216,6 +216,26 @@ response_path.write_text(
                             },
                         },
                         {
+                            "op": "set",
+                            "component": "Example.Component",
+                            "path": "clipRect",
+                            "value": {
+                                "x": 1.0,
+                                "y": 2.0,
+                                "width": 3.0,
+                                "height": 4.0,
+                            },
+                        },
+                        {
+                            "op": "set",
+                            "component": "Example.Component",
+                            "path": "bounds",
+                            "value": {
+                                "center": {"x": 1.0, "y": 2.0, "z": 3.0},
+                                "size": {"x": 4.0, "y": 5.0, "z": 6.0},
+                            },
+                        },
+                        {
                             "op": "remove_array_element",
                             "component": "Example.Component",
                             "path": "items.Array.data",
@@ -258,8 +278,20 @@ response_path.write_text(
             request_ops[7]["value_json"],
         )
 
-        self.assertEqual("remove_array_element", request_ops[8]["op"])
-        self.assertNotIn("value_kind", request_ops[8])
+        self.assertEqual("json", request_ops[8]["value_kind"])
+        self.assertEqual(
+            '{"x": 1.0, "y": 2.0, "width": 3.0, "height": 4.0}',
+            request_ops[8]["value_json"],
+        )
+
+        self.assertEqual("json", request_ops[9]["value_kind"])
+        self.assertEqual(
+            '{"center": {"x": 1.0, "y": 2.0, "z": 3.0}, "size": {"x": 4.0, "y": 5.0, "z": 6.0}}',
+            request_ops[9]["value_json"],
+        )
+
+        self.assertEqual("remove_array_element", request_ops[10]["op"])
+        self.assertNotIn("value_kind", request_ops[10])
 
     def test_reference_bridge_surfaces_nonzero_unity_exit(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

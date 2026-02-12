@@ -90,6 +90,22 @@ namespace PrefabSentinel
         }
 
         [Serializable]
+        private sealed class RectPayload
+        {
+            public float x = 0f;
+            public float y = 0f;
+            public float width = 0f;
+            public float height = 0f;
+        }
+
+        [Serializable]
+        private sealed class BoundsPayload
+        {
+            public Vector3Payload center = new Vector3Payload();
+            public Vector3Payload size = new Vector3Payload();
+        }
+
+        [Serializable]
         private sealed class BridgeResponse
         {
             public int protocol_version = ProtocolVersion;
@@ -801,6 +817,26 @@ namespace PrefabSentinel
                     property.vector4Value = value;
                     return true;
                 }
+                case SerializedPropertyType.Rect:
+                {
+                    Rect value;
+                    if (!TryReadRectValue(op, valueKind, out value, out error))
+                    {
+                        return false;
+                    }
+                    property.rectValue = value;
+                    return true;
+                }
+                case SerializedPropertyType.Bounds:
+                {
+                    Bounds value;
+                    if (!TryReadBoundsValue(op, valueKind, out value, out error))
+                    {
+                        return false;
+                    }
+                    property.boundsValue = value;
+                    return true;
+                }
                 case SerializedPropertyType.Quaternion:
                 {
                     Quaternion value;
@@ -1100,6 +1136,62 @@ namespace PrefabSentinel
                 return false;
             }
             value = new Vector4(payload.x, payload.y, payload.z, payload.w);
+            return true;
+        }
+
+        private static bool TryReadRectValue(
+            PatchOp op,
+            string valueKind,
+            out Rect value,
+            out string error
+        )
+        {
+            value = default(Rect);
+            error = string.Empty;
+            if (!string.Equals(valueKind, "json", StringComparison.Ordinal))
+            {
+                error = "Rect property requires value_kind='json' with {x,y,width,height}";
+                return false;
+            }
+            RectPayload payload;
+            if (!TryParseJsonPayload(op.value_json, out payload, out error))
+            {
+                error = $"failed to parse Rect value_json: {error}";
+                return false;
+            }
+            value = new Rect(payload.x, payload.y, payload.width, payload.height);
+            return true;
+        }
+
+        private static bool TryReadBoundsValue(
+            PatchOp op,
+            string valueKind,
+            out Bounds value,
+            out string error
+        )
+        {
+            value = default(Bounds);
+            error = string.Empty;
+            if (!string.Equals(valueKind, "json", StringComparison.Ordinal))
+            {
+                error = "Bounds property requires value_kind='json' with {center:{x,y,z},size:{x,y,z}}";
+                return false;
+            }
+            BoundsPayload payload;
+            if (!TryParseJsonPayload(op.value_json, out payload, out error))
+            {
+                error = $"failed to parse Bounds value_json: {error}";
+                return false;
+            }
+            if (payload.center == null || payload.size == null)
+            {
+                error = "Bounds value_json requires both center and size objects";
+                return false;
+            }
+            value = new Bounds(
+                new Vector3(payload.center.x, payload.center.y, payload.center.z),
+                new Vector3(payload.size.x, payload.size.y, payload.size.z)
+            );
             return true;
         }
 
