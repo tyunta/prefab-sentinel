@@ -101,6 +101,13 @@
   - bridge protocol version check (`protocol_version: 1`)
 - Added Unity bridge script with batchmode command execution path:
   - `tools/unity_patch_bridge.py` (`UNITYTOOL_UNITY_COMMAND` / request-response file contract)
+- Added Unity bridge smoke runner for end-to-end bridge invocation from patch plans:
+  - `scripts/unity_bridge_smoke.py`
+  - `--plan` required + bridge request shaping (`protocol_version` / `target` / `ops`)
+  - Unity execution env overrides (`--unity-command` / `--unity-project-path` / `--unity-execute-method` / `--unity-timeout-sec` / `--unity-log-file`)
+  - expectation checks (`--expect-failure`) and optional response export (`--out`)
+- Added smoke runner unit tests:
+  - `tests/test_unity_bridge_smoke.py`
 - Unity bridge now normalizes op values for executeMethod payload (`value_kind` fields).
 - Added Unity Editor executeMethod apply path for prefab patch operations:
   - `tools/unity/PrefabSentinel.UnityPatchBridge.cs` (`PrefabSentinel.UnityPatchBridge.ApplyFromJson`)
@@ -115,6 +122,8 @@
 - Extend Unity executeMethod apply coverage:
   - broader SerializedProperty support (nested managed-reference scenarios, complex custom structs)
   - Unity-side integration tests against sample prefab assets (batchmode assertions)
+- Add CI/automation entry for `scripts/unity_bridge_smoke.py`:
+  - run smoke against sample avatar/world plans with deterministic artifact output (`--out` JSON + Unity log path)
 
 ## Decision-Required Queue
 - Decide default location/policy for ignore-guid files:
