@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 from typing import Any
 
-from unitytool.mcp.serialized_object import load_patch_plan
+from unitytool.mcp.serialized_object import compute_patch_plan_sha256, load_patch_plan
 from unitytool.orchestrator import Phase1Orchestrator
 from unitytool.reporting import export_report, render_markdown_report
 
@@ -183,6 +184,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--confirm",
         action="store_true",
         help="Allow non-dry-run execution path (.json built-in, Unity targets via bridge).",
+    )
+    patch_apply.add_argument(
+        "--plan-sha256",
+        default=None,
+        help=(
+            "Optional expected SHA-256 digest for --plan. "
+            "When specified, mismatched plan content is rejected."
+        ),
     )
     patch_apply.add_argument(
         "--scope",
@@ -401,14 +410,26 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "patch" and args.patch_command == "apply":
+        plan_path = Path(args.plan)
         try:
-            plan = load_patch_plan(Path(args.plan))
+            plan = load_patch_plan(plan_path)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             parser.error(f"Failed to load --plan: {exc}")
+        plan_sha256 = compute_patch_plan_sha256(plan_path)
+        if args.plan_sha256:
+            expected_digest = args.plan_sha256.strip().lower()
+            if not re.fullmatch(r"[0-9a-f]{64}", expected_digest):
+                parser.error("--plan-sha256 must be a 64-character hexadecimal digest.")
+            if expected_digest != plan_sha256:
+                parser.error(
+                    "Plan digest mismatch: "
+                    f"--plan-sha256={expected_digest} does not match actual {plan_sha256}."
+                )
         response = orchestrator.patch_apply(
             plan=plan,
             dry_run=args.dry_run,
             confirm=args.confirm,
+            plan_sha256=plan_sha256,
             scope=args.scope,
             runtime_scene=args.runtime_scene,
             runtime_profile=args.runtime_profile,

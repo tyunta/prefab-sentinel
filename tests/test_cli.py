@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
@@ -125,6 +126,78 @@ GameObject:
         self.assertEqual("PATCH_APPLY_RESULT", payload["code"])
         self.assertTrue(payload["success"])
         self.assertEqual("SER_DRY_RUN_OK", payload["data"]["steps"][0]["result"]["code"])
+
+    def test_patch_apply_accepts_matching_plan_sha256(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "patch.json"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "target": "Assets/Variant.prefab",
+                        "ops": [
+                            {
+                                "op": "set",
+                                "component": "Example.Component",
+                                "path": "items.Array.size",
+                                "value": 2,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            digest = hashlib.sha256(plan.read_bytes()).hexdigest()
+            exit_code, output = self.run_cli(
+                [
+                    "patch",
+                    "apply",
+                    "--plan",
+                    str(plan),
+                    "--dry-run",
+                    "--plan-sha256",
+                    digest,
+                ]
+            )
+
+        payload = json.loads(output)
+        self.assertEqual(0, exit_code)
+        self.assertTrue(payload["success"])
+        self.assertEqual(digest, payload["data"]["plan_sha256"])
+
+    def test_patch_apply_rejects_plan_sha256_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "patch.json"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "target": "Assets/Variant.prefab",
+                        "ops": [
+                            {
+                                "op": "set",
+                                "component": "Example.Component",
+                                "path": "items.Array.size",
+                                "value": 2,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    self.run_cli(
+                        [
+                            "patch",
+                            "apply",
+                            "--plan",
+                            str(plan),
+                            "--dry-run",
+                            "--plan-sha256",
+                            "0" * 64,
+                        ]
+                    )
 
     def test_patch_apply_blocks_without_confirm(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shlex
@@ -798,9 +799,11 @@ class SerializedObjectMcp:
 
 
 def load_patch_plan(path: Path) -> dict[str, Any]:
-    import json
-
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("Patch plan root must be an object.")
     return payload
+
+
+def compute_patch_plan_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()

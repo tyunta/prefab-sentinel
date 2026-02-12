@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import tempfile
@@ -10,7 +11,7 @@ from unitytool.orchestrator import Phase1Orchestrator
 from unitytool.mcp.prefab_variant import PrefabVariantMcp
 from unitytool.mcp.reference_resolver import ReferenceResolverMcp
 from unitytool.mcp.runtime_validation import RuntimeValidationMcp
-from unitytool.mcp.serialized_object import SerializedObjectMcp
+from unitytool.mcp.serialized_object import SerializedObjectMcp, compute_patch_plan_sha256
 
 BASE_GUID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 MISSING_GUID = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -343,6 +344,16 @@ GameObject:
 
 
 class SerializedObjectMcpTests(unittest.TestCase):
+    def test_compute_patch_plan_sha256_returns_expected_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "patch.json"
+            path.write_text('{"target":"Assets/Test.prefab","ops":[]}', encoding="utf-8")
+
+            digest = compute_patch_plan_sha256(path)
+            expected = hashlib.sha256(path.read_bytes()).hexdigest()
+
+            self.assertEqual(expected, digest)
+
     def test_dry_run_patch_validates_plan_and_returns_preview(self) -> None:
         mcp = SerializedObjectMcp()
         response = mcp.dry_run_patch(

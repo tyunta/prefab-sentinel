@@ -83,6 +83,7 @@
   - runtime assertion step (`assert_no_critical_errors`)
 - Added patch apply scaffold command:
   - `unitytool patch apply --plan ... --dry-run`
+  - optional plan digest verification (`--plan-sha256`)
   - plan schema validation + dry-run diff preview
   - non-dry-run confirm gate (`--confirm`)
   - optional preflight reference scan (`--scope`)
