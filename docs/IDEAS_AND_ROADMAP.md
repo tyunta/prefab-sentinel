@@ -114,6 +114,10 @@
   - `unitytool/bridge_smoke.py` (shared contract/exec logic for script + CLI)
   - `unitytool validate bridge-smoke ...` (`--expect-failure` / `--out` supported)
   - CLI tests: `tests/test_cli.py` (`bridge-smoke` success + expectation mismatch)
+- Added smoke automation runner for sample avatar/world:
+  - `scripts/bridge_smoke_samples.py`
+  - deterministic artifacts per target (`response.json` + `unity.log`) and aggregate `summary.json`/`summary.md`
+  - unit tests: `tests/test_bridge_smoke_samples.py`
 - Unity bridge now normalizes op values for executeMethod payload (`value_kind` fields).
 - Added Unity Editor executeMethod apply path for prefab patch operations:
   - `tools/unity/PrefabSentinel.UnityPatchBridge.cs` (`PrefabSentinel.UnityPatchBridge.ApplyFromJson`)
@@ -128,8 +132,8 @@
 - Extend Unity executeMethod apply coverage:
   - broader SerializedProperty support (nested managed-reference scenarios, complex custom structs)
   - Unity-side integration tests against sample prefab assets (batchmode assertions)
-- Add CI/automation entry for `scripts/unity_bridge_smoke.py`:
-  - run smoke against sample avatar/world plans with deterministic artifact output (`--out` JSON + Unity log path)
+- Add CI workflow wiring for smoke automation:
+  - invoke `scripts/bridge_smoke_samples.py` on self-hosted Unity runner and publish `reports/bridge_smoke/*`
 
 ## Decision-Required Queue
 - Decide default location/policy for ignore-guid files:
