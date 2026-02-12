@@ -15,6 +15,7 @@ namespace PrefabSentinel
         private const int ProtocolVersion = 1;
         private const string RequestArg = "-unitytoolPatchRequest";
         private const string ResponseArg = "-unitytoolPatchResponse";
+        private const string ArrayDataSuffix = ".Array.data";
 
         [Serializable]
         private sealed class BridgeRequest
@@ -193,7 +194,7 @@ namespace PrefabSentinel
                 return;
             }
 
-            WriteResponseSafe(responsePath, ApplyPrefabSetOperations(request, assetPath));
+            WriteResponseSafe(responsePath, ApplyPrefabOperations(request, assetPath));
         }
 
         private static string GetArgValue(string[] args, string key)
@@ -208,7 +209,7 @@ namespace PrefabSentinel
             return string.Empty;
         }
 
-        private static BridgeResponse ApplyPrefabSetOperations(BridgeRequest request, string assetPath)
+        private static BridgeResponse ApplyPrefabOperations(BridgeRequest request, string assetPath)
         {
             int applied = 0;
             List<BridgeDiagnostic> diagnostics = new List<BridgeDiagnostic>();
@@ -230,7 +231,7 @@ namespace PrefabSentinel
                 for (int i = 0; i < request.ops.Length; i++)
                 {
                     PatchOp op = request.ops[i];
-                    if (!TryApplySetOp(prefabRoot, request.target, op, i, diagnostics))
+                    if (!TryApplyOp(prefabRoot, request.target, op, i, diagnostics))
                     {
                         return BuildError(
                             "UNITY_BRIDGE_APPLY",
@@ -338,7 +339,7 @@ namespace PrefabSentinel
             return true;
         }
 
-        private static bool TryApplySetOp(
+        private static bool TryApplyOp(
             GameObject prefabRoot,
             string target,
             PatchOp op,
@@ -359,7 +360,11 @@ namespace PrefabSentinel
                 );
                 return false;
             }
-            if (!string.Equals(op.op, "set", StringComparison.Ordinal))
+            if (
+                !string.Equals(op.op, "set", StringComparison.Ordinal)
+                && !string.Equals(op.op, "insert_array_element", StringComparison.Ordinal)
+                && !string.Equals(op.op, "remove_array_element", StringComparison.Ordinal)
+            )
             {
                 diagnostics.Add(
                     new BridgeDiagnostic
@@ -367,7 +372,7 @@ namespace PrefabSentinel
                         path = target,
                         location = $"ops[{opIndex}].op",
                         detail = "schema_error",
-                        evidence = "executeMethod currently supports only op='set'"
+                        evidence = $"unsupported op '{op.op}'"
                     }
                 );
                 return false;
@@ -403,23 +408,46 @@ namespace PrefabSentinel
             }
 
             SerializedObject serialized = new SerializedObject(component);
-            SerializedProperty property = serialized.FindProperty(op.path);
-            if (property == null)
+            string opName = (op.op ?? string.Empty).Trim();
+            if (string.Equals(opName, "set", StringComparison.Ordinal))
             {
-                diagnostics.Add(
-                    new BridgeDiagnostic
-                    {
-                        path = target,
-                        location = $"ops[{opIndex}].path",
-                        detail = "apply_error",
-                        evidence = $"property not found: '{op.path}'"
-                    }
-                );
-                return false;
+                SerializedProperty property = serialized.FindProperty(op.path);
+                if (property == null)
+                {
+                    diagnostics.Add(
+                        new BridgeDiagnostic
+                        {
+                            path = target,
+                            location = $"ops[{opIndex}].path",
+                            detail = "apply_error",
+                            evidence = $"property not found: '{op.path}'"
+                        }
+                    );
+                    return false;
+                }
+
+                string setError;
+                if (!TryAssignPropertyValue(property, op, out setError))
+                {
+                    diagnostics.Add(
+                        new BridgeDiagnostic
+                        {
+                            path = target,
+                            location = $"ops[{opIndex}]",
+                            detail = "apply_error",
+                            evidence = setError
+                        }
+                    );
+                    return false;
+                }
+
+                serialized.ApplyModifiedPropertiesWithoutUndo();
+                return true;
             }
 
-            string valueError;
-            if (!TryAssignPropertyValue(property, op, out valueError))
+            SerializedProperty arrayProperty;
+            string arrayError;
+            if (!TryResolveArrayProperty(serialized, op.path, out arrayProperty, out arrayError))
             {
                 diagnostics.Add(
                     new BridgeDiagnostic
@@ -427,13 +455,113 @@ namespace PrefabSentinel
                         path = target,
                         location = $"ops[{opIndex}]",
                         detail = "apply_error",
-                        evidence = valueError
+                        evidence = arrayError
                     }
                 );
                 return false;
             }
 
+            if (string.Equals(opName, "insert_array_element", StringComparison.Ordinal))
+            {
+                if (op.index < 0 || op.index > arrayProperty.arraySize)
+                {
+                    diagnostics.Add(
+                        new BridgeDiagnostic
+                        {
+                            path = target,
+                            location = $"ops[{opIndex}].index",
+                            detail = "apply_error",
+                            evidence = $"insert index {op.index} is out of bounds"
+                        }
+                    );
+                    return false;
+                }
+                arrayProperty.InsertArrayElementAtIndex(op.index);
+                SerializedProperty inserted = arrayProperty.GetArrayElementAtIndex(op.index);
+                if (!string.IsNullOrWhiteSpace(op.value_kind))
+                {
+                    string insertValueError;
+                    if (!TryAssignPropertyValue(inserted, op, out insertValueError))
+                    {
+                        diagnostics.Add(
+                            new BridgeDiagnostic
+                            {
+                                path = target,
+                                location = $"ops[{opIndex}]",
+                                detail = "apply_error",
+                                evidence = insertValueError
+                            }
+                        );
+                        return false;
+                    }
+                }
+                serialized.ApplyModifiedPropertiesWithoutUndo();
+                return true;
+            }
+
+            if (op.index < 0 || op.index >= arrayProperty.arraySize)
+            {
+                diagnostics.Add(
+                    new BridgeDiagnostic
+                    {
+                        path = target,
+                        location = $"ops[{opIndex}].index",
+                        detail = "apply_error",
+                        evidence = $"remove index {op.index} is out of bounds"
+                    }
+                );
+                return false;
+            }
+
+            int beforeSize = arrayProperty.arraySize;
+            arrayProperty.DeleteArrayElementAtIndex(op.index);
+            if (arrayProperty.arraySize == beforeSize)
+            {
+                arrayProperty.DeleteArrayElementAtIndex(op.index);
+            }
+            if (arrayProperty.arraySize != beforeSize - 1)
+            {
+                diagnostics.Add(
+                    new BridgeDiagnostic
+                    {
+                        path = target,
+                        location = $"ops[{opIndex}]",
+                        detail = "apply_error",
+                        evidence = "remove array element did not change array size as expected"
+                    }
+                );
+                return false;
+            }
             serialized.ApplyModifiedPropertiesWithoutUndo();
+            return true;
+        }
+
+        private static bool TryResolveArrayProperty(
+            SerializedObject serialized,
+            string propertyPath,
+            out SerializedProperty arrayProperty,
+            out string error
+        )
+        {
+            arrayProperty = null;
+            error = string.Empty;
+            if (!propertyPath.EndsWith(ArrayDataSuffix, StringComparison.Ordinal))
+            {
+                error = $"array operation path must end with '{ArrayDataSuffix}'";
+                return false;
+            }
+            string arrayPath = propertyPath.Substring(0, propertyPath.Length - ArrayDataSuffix.Length);
+            arrayProperty = serialized.FindProperty(arrayPath);
+            if (arrayProperty == null)
+            {
+                error = $"array property not found: '{arrayPath}'";
+                return false;
+            }
+            if (!arrayProperty.isArray || arrayProperty.propertyType == SerializedPropertyType.String)
+            {
+                error = $"property is not an array: '{arrayPath}'";
+                return false;
+            }
             return true;
         }
 

@@ -102,16 +102,16 @@
 - Added Unity bridge script with batchmode command execution path:
   - `tools/unity_patch_bridge.py` (`UNITYTOOL_UNITY_COMMAND` / request-response file contract)
 - Unity bridge now normalizes op values for executeMethod payload (`value_kind` fields).
-- Added Unity Editor executeMethod apply path for prefab `set` operations:
+- Added Unity Editor executeMethod apply path for prefab patch operations:
   - `tools/unity/PrefabSentinel.UnityPatchBridge.cs` (`PrefabSentinel.UnityPatchBridge.ApplyFromJson`)
-  - supports `.prefab` + `set` (primitive/null subset), fail-fast on unsupported op/type
+  - supports `.prefab` + `set` / `insert_array_element` / `remove_array_element` (primitive/null subset), fail-fast on unsupported type
 - `report export --format md` supports runtime summary section for `VALIDATE_RUNTIME_RESULT`.
 - `report export --format md` supports `--md-max-steps` / `--md-omit-steps` to trim large `data.steps`.
 
 ## Next Executable Tasks
 - Extend Unity executeMethod apply coverage:
-  - `insert_array_element` / `remove_array_element`
   - additional SerializedProperty types and value decoding rules
+  - stronger diagnostics for component selection and nested property-path edge cases
 
 ## Decision-Required Queue
 - Decide default location/policy for ignore-guid files:
