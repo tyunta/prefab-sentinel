@@ -120,10 +120,11 @@
   - exposed as CLI command: `prefab-sentinel validate smoke-batch ...`
   - supports timeout profile input (`--timeout-profile`) for history-based default timeout selection
   - supports per-target apply-count assertions (`--avatar-expected-applied` / `--world-expected-applied`)
+  - supports plan-derived apply assertions (`--expect-applied-from-plan`, non-`expect-failure` targets only)
   - deterministic artifacts per target (`response.json` + `unity.log`) and aggregate `summary.json`/`summary.md`
   - transient failure retry controls (`--max-retries` / `--retry-delay-sec`)
   - per-target timeout tuning (`--avatar-unity-timeout-sec` / `--world-unity-timeout-sec`)
-  - summary includes apply assertion evidence (`expected_applied` / `actual_applied` / `applied_matches`)
+  - summary includes apply assertion evidence (`expected_applied` / `expected_applied_source` / `actual_applied` / `applied_matches`)
   - per-case duration telemetry (`duration_sec`) for timeout tuning evidence
   - unit tests: `tests/test_bridge_smoke_samples.py`
 - Added smoke summary history export for timeout decision support:
@@ -142,6 +143,7 @@
   - runs `prefab-sentinel validate smoke-batch` without `--*-expect-failure` and uploads `reports/bridge_smoke`
   - includes `targets` input (`all|avatar|world`) and preflight input path checks
   - supports `timeout_profile_path` input for history-derived timeout defaults
+  - supports `expect_applied_from_plan` input (default true) for plan-op-count assertions
   - supports optional UTC run-window gating (`run_window_start_utc_hour` / `run_window_end_utc_hour`)
   - builds decision artifacts via `prefab-sentinel report smoke-history` (`history.csv` / `history.md` / `timeout_profile.json`)
   - uploads split artifacts (`unity-smoke-summary`, `unity-smoke-avatar`, `unity-smoke-world`)

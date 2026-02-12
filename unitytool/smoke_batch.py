@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from unitytool.bridge_smoke import load_patch_plan
+
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _PROJECT_SMOKE_SCRIPT = _PROJECT_ROOT / "scripts" / "unity_bridge_smoke.py"
 UNITY_BRIDGE_SMOKE_SCRIPT = (
@@ -78,6 +80,14 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         type=int,
         default=None,
         help="Optional expected data.applied value for world target.",
+    )
+    parser.add_argument(
+        "--expect-applied-from-plan",
+        action="store_true",
+        help=(
+            "Infer expected applied count from patch plan ops length for non-failure targets "
+            "when target-specific expected-applied is not provided."
+        ),
     )
     parser.add_argument(
         "--python",
@@ -339,6 +349,22 @@ def _extract_applied_count(payload: dict[str, Any]) -> int | None:
     return applied if isinstance(applied, int) else None
 
 
+def _resolve_expected_applied(
+    *,
+    case: SmokeCase,
+    expect_applied_from_plan: bool,
+) -> tuple[int | None, str]:
+    if case.expected_applied is not None:
+        return case.expected_applied, "cli"
+    if not expect_applied_from_plan:
+        return None, "none"
+    if case.expect_failure:
+        return None, "skipped_expect_failure"
+    plan = load_patch_plan(case.plan)
+    ops = plan.get("ops", [])
+    return len(ops), "plan_ops"
+
+
 def _render_markdown_summary(payload: dict[str, Any]) -> str:
     data = payload.get("data", {})
     cases = data.get("cases", [])
@@ -359,8 +385,8 @@ def _render_markdown_summary(payload: dict[str, Any]) -> str:
             else "- Timeout Profile: n/a"
         ),
         "",
-        "| case | matched | expected_applied | actual_applied | applied_matches | attempts | duration_sec | timeout_sec | timeout_source | exit_code | response_code | response_path | unity_log_file |",
-        "| --- | --- | ---: | ---: | --- | ---: | ---: | ---: | --- | ---: | --- | --- | --- |",
+        "| case | matched | expected_applied | expected_source | actual_applied | applied_matches | attempts | duration_sec | timeout_sec | timeout_source | exit_code | response_code | response_path | unity_log_file |",
+        "| --- | --- | ---: | --- | ---: | --- | ---: | ---: | ---: | --- | ---: | --- | --- | --- |",
     ]
     for case in cases:
         timeout_sec = case.get("unity_timeout_sec")
@@ -372,6 +398,9 @@ def _render_markdown_summary(payload: dict[str, Any]) -> str:
         expected_applied = case.get("expected_applied")
         if expected_applied is None:
             expected_applied = ""
+        expected_applied_source = case.get("expected_applied_source")
+        if expected_applied_source is None:
+            expected_applied_source = ""
         actual_applied = case.get("actual_applied")
         if actual_applied is None:
             actual_applied = ""
@@ -379,10 +408,11 @@ def _render_markdown_summary(payload: dict[str, Any]) -> str:
         if applied_matches is None:
             applied_matches = ""
         lines.append(
-            "| {name} | {matched} | {expected_applied} | {actual_applied} | {applied_matches} | {attempts} | {duration_sec} | {timeout_sec} | {timeout_source} | {exit_code} | {response_code} | {response_path} | {unity_log_file} |".format(
+            "| {name} | {matched} | {expected_applied} | {expected_applied_source} | {actual_applied} | {applied_matches} | {attempts} | {duration_sec} | {timeout_sec} | {timeout_source} | {exit_code} | {response_code} | {response_path} | {unity_log_file} |".format(
                 name=case.get("name", ""),
                 matched=case.get("matched_expectation", False),
                 expected_applied=expected_applied,
+                expected_applied_source=expected_applied_source,
                 actual_applied=actual_applied,
                 applied_matches=applied_matches,
                 attempts=case.get("attempts", 1),
@@ -508,10 +538,19 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
             stdout_text=completed.stdout,
             stderr_text=completed.stderr,
         )
+        try:
+            expected_applied, expected_applied_source = _resolve_expected_applied(
+                case=case,
+                expect_applied_from_plan=args.expect_applied_from_plan,
+            )
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            raise ValueError(
+                f"Failed to resolve expected applied count for {case.name}: {exc}"
+            ) from exc
         actual_applied = _extract_applied_count(case_payload)
         applied_matches: bool | None = None
-        if case.expected_applied is not None:
-            applied_matches = actual_applied == case.expected_applied
+        if expected_applied is not None:
+            applied_matches = actual_applied == expected_applied
         matched_expectation = completed.returncode == 0
         if applied_matches is False:
             matched_expectation = False
@@ -526,7 +565,8 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
                 "plan": str(case.plan),
                 "project_path": str(case.project_path),
                 "expect_failure": case.expect_failure,
-                "expected_applied": case.expected_applied,
+                "expected_applied": expected_applied,
+                "expected_applied_source": expected_applied_source,
                 "actual_applied": actual_applied,
                 "applied_matches": applied_matches,
                 "matched_expectation": matched_expectation,

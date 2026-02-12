@@ -41,6 +41,14 @@ on:
         required: false
         default: ""
         type: string
+      expect_applied_from_plan:
+        description: "Infer expected applied count from each target plan ops length."
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
       avatar_plan:
         description: "Avatar patch plan path."
         required: false
@@ -194,6 +202,9 @@ jobs:
           }
           if ("${{ inputs.timeout_profile_path }}" -ne "") {
             $args += @("--timeout-profile", "${{ inputs.timeout_profile_path }}")
+          }
+          if ("${{ inputs.expect_applied_from_plan }}" -eq "true") {
+            $args += @("--expect-applied-from-plan")
           }
           prefab-sentinel @args
 

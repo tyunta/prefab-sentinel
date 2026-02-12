@@ -67,6 +67,7 @@ class BridgeSmokeSamplesTests(unittest.TestCase):
                             "name": "avatar",
                             "matched_expectation": False,
                             "expected_applied": 2,
+                            "expected_applied_source": "cli",
                             "actual_applied": 1,
                             "applied_matches": False,
                             "attempts": 2,
@@ -83,7 +84,7 @@ class BridgeSmokeSamplesTests(unittest.TestCase):
             }
         )
         self.assertIn(
-            "| avatar | False | 2 | 1 | False | 2 | 1.25 | 450 | profile | 1 | SMOKE_BRIDGE_ERROR |",
+            "| avatar | False | 2 | cli | 1 | False | 2 | 1.25 | 450 | profile | 1 | SMOKE_BRIDGE_ERROR |",
             markdown,
         )
 
@@ -167,6 +168,7 @@ raise SystemExit(0)
         self.assertGreaterEqual(summary["data"]["cases"][0]["duration_sec"], 0.0)
         self.assertIsNone(summary["data"]["cases"][0]["unity_timeout_sec"])
         self.assertEqual(1, summary["data"]["cases"][0]["expected_applied"])
+        self.assertEqual("cli", summary["data"]["cases"][0]["expected_applied_source"])
         self.assertEqual(1, summary["data"]["cases"][0]["actual_applied"])
         self.assertTrue(summary["data"]["cases"][0]["applied_matches"])
         self.assertEqual("OK", response["code"])
@@ -235,9 +237,149 @@ raise SystemExit(0)
         self.assertFalse(summary["success"])
         case = summary["data"]["cases"][0]
         self.assertEqual(2, case["expected_applied"])
+        self.assertEqual("cli", case["expected_applied_source"])
         self.assertEqual(1, case["actual_applied"])
         self.assertFalse(case["applied_matches"])
         self.assertFalse(case["matched_expectation"])
+
+    def test_main_applies_expected_applied_from_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "avatar_plan.json"
+            project = root / "avatar_project"
+            smoke_script = root / "fake_smoke_plan_count.py"
+            out_dir = root / "reports"
+            project.mkdir(parents=True, exist_ok=True)
+            plan.write_text(
+                json.dumps(
+                    {
+                        "target": "Assets/Test.prefab",
+                        "ops": [
+                            {"op": "set", "component": "Example.Component", "path": "items.Array.size", "value": 2},
+                            {"op": "remove_array_element", "component": "Example.Component", "path": "items.Array.data", "index": 0},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            smoke_script.write_text(
+                """
+import argparse
+import json
+from pathlib import Path
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--out", required=True)
+args, _ = parser.parse_known_args()
+payload = {
+    "success": True,
+    "severity": "info",
+    "code": "OK",
+    "message": "ok",
+    "data": {"applied": 2},
+    "diagnostics": [],
+}
+Path(args.out).write_text(json.dumps(payload), encoding="utf-8")
+print(json.dumps(payload))
+raise SystemExit(0)
+""".strip(),
+                encoding="utf-8",
+            )
+
+            with redirect_stdout(StringIO()):
+                exit_code = main(
+                    [
+                        "--targets",
+                        "avatar",
+                        "--avatar-plan",
+                        str(plan),
+                        "--avatar-project-path",
+                        str(project),
+                        "--smoke-script",
+                        str(smoke_script),
+                        "--python",
+                        sys.executable,
+                        "--bridge-script",
+                        "tools/unity_patch_bridge.py",
+                        "--expect-applied-from-plan",
+                        "--out-dir",
+                        str(out_dir),
+                    ]
+                )
+
+            summary = json.loads((out_dir / "summary.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(0, exit_code)
+        self.assertTrue(summary["success"])
+        case = summary["data"]["cases"][0]
+        self.assertEqual(2, case["expected_applied"])
+        self.assertEqual("plan_ops", case["expected_applied_source"])
+        self.assertEqual(2, case["actual_applied"])
+        self.assertTrue(case["applied_matches"])
+
+    def test_main_expect_applied_from_plan_skips_expect_failure_case(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "avatar_plan.json"
+            project = root / "avatar_project"
+            smoke_script = root / "fake_smoke_expect_failure.py"
+            out_dir = root / "reports"
+            project.mkdir(parents=True, exist_ok=True)
+            plan.write_text(
+                json.dumps(
+                    {
+                        "target": "Assets/Test.prefab",
+                        "ops": [
+                            {"op": "set", "component": "Example.Component", "path": "items.Array.size", "value": 2},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            smoke_script.write_text(
+                """
+import argparse
+import json
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--out", required=True)
+_args, _ = parser.parse_known_args()
+print(json.dumps({"success": False, "severity": "error", "code": "SMOKE_BRIDGE_ERROR", "message": "failed", "data": {}, "diagnostics": []}))
+raise SystemExit(0)
+""".strip(),
+                encoding="utf-8",
+            )
+
+            with redirect_stdout(StringIO()):
+                exit_code = main(
+                    [
+                        "--targets",
+                        "avatar",
+                        "--avatar-plan",
+                        str(plan),
+                        "--avatar-project-path",
+                        str(project),
+                        "--avatar-expect-failure",
+                        "--smoke-script",
+                        str(smoke_script),
+                        "--python",
+                        sys.executable,
+                        "--bridge-script",
+                        "tools/unity_patch_bridge.py",
+                        "--expect-applied-from-plan",
+                        "--out-dir",
+                        str(out_dir),
+                    ]
+                )
+
+            summary = json.loads((out_dir / "summary.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(0, exit_code)
+        self.assertTrue(summary["success"])
+        case = summary["data"]["cases"][0]
+        self.assertIsNone(case["expected_applied"])
+        self.assertEqual("skipped_expect_failure", case["expected_applied_source"])
+        self.assertIsNone(case["applied_matches"])
 
     def test_main_returns_nonzero_on_failed_case(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
