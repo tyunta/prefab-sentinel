@@ -133,6 +133,7 @@
 - Added smoke summary history export for timeout decision support:
   - `scripts/smoke_summary_to_csv.py`
   - aggregates `summary.json` rows into CSV and Markdown decision table by target
+  - exports code assertion fields (`expected_code` / `actual_code` / `code_matches`) to CSV
   - exports apply assertion fields (`expected_applied` / `expected_applied_source` / `actual_applied` / `applied_matches`) to CSV
   - reports apply assertion quality (`applied_mismatches` / `applied_pass_pct`) per target in Markdown
   - supports applied assertion quality gates (`--max-applied-mismatches` / `--min-applied-pass-pct`) with non-zero exit on threshold breach

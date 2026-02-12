@@ -205,6 +205,9 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
                             {
                                 "name": "avatar",
                                 "matched_expectation": True,
+                                "expected_code": "OK",
+                                "actual_code": "OK",
+                                "code_matches": True,
                                 "expected_applied": 1,
                                 "expected_applied_source": "cli",
                                 "actual_applied": 1,
@@ -232,6 +235,9 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
                             {
                                 "name": "world",
                                 "matched_expectation": False,
+                                "expected_code": "OK",
+                                "actual_code": "SMOKE_BRIDGE_ERROR",
+                                "code_matches": False,
                                 "expected_applied": 2,
                                 "expected_applied_source": "plan_ops",
                                 "actual_applied": 1,
@@ -281,7 +287,12 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
             profile = json.loads(out_profile.read_text(encoding="utf-8"))
 
         self.assertEqual(0, exit_code)
+        self.assertIn("expected_code", csv_text)
+        self.assertIn("actual_code", csv_text)
+        self.assertIn("code_matches", csv_text)
         self.assertIn("expected_applied_source", csv_text)
+        self.assertIn(",OK,OK,True,", csv_text)
+        self.assertIn(",OK,SMOKE_BRIDGE_ERROR,False,", csv_text)
         self.assertIn(",plan_ops,", csv_text)
         self.assertIn("avatar", csv_text)
         self.assertIn("world", csv_text)

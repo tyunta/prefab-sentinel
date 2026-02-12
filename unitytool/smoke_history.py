@@ -170,12 +170,19 @@ def _is_smoke_batch_summary(payload: Any) -> bool:
 
 
 def _case_to_row(source: Path, payload: dict[str, Any], case: dict[str, Any]) -> dict[str, Any]:
+    expected_code_value = case.get("expected_code")
+    actual_code_value = case.get("actual_code")
     return {
         "source": str(source),
         "batch_success": bool(payload.get("success", False)),
         "batch_severity": str(payload.get("severity", "")),
         "target": str(case.get("name", "")),
         "matched_expectation": bool(case.get("matched_expectation", False)),
+        "expected_code": (
+            str(expected_code_value) if isinstance(expected_code_value, str) else ""
+        ),
+        "actual_code": str(actual_code_value) if isinstance(actual_code_value, str) else "",
+        "code_matches": _to_bool(case.get("code_matches")),
         "expected_applied": _to_int(case.get("expected_applied")),
         "expected_applied_source": str(case.get("expected_applied_source", "")),
         "actual_applied": _to_int(case.get("actual_applied")),
@@ -597,6 +604,9 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
         "batch_severity",
         "target",
         "matched_expectation",
+        "expected_code",
+        "actual_code",
+        "code_matches",
         "expected_applied",
         "expected_applied_source",
         "actual_applied",
