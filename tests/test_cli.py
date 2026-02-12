@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 from unitytool import cli
 
@@ -201,6 +204,70 @@ GameObject:
             self.assertIn("SER_APPLY_OK", step_codes)
             updated = json.loads(target.read_text(encoding="utf-8"))
             self.assertEqual({"items": [0, 2], "nested": {"value": 42}}, updated)
+
+    def test_patch_apply_confirm_uses_bridge_env_for_prefab_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            target = root / "state.prefab"
+            target.write_text("%YAML 1.1\n", encoding="utf-8")
+            bridge = root / "bridge.py"
+            bridge.write_text(
+                """
+import json
+import sys
+
+request = json.load(sys.stdin)
+print(
+    json.dumps(
+        {
+            "success": True,
+            "severity": "info",
+            "code": "SER_APPLY_OK",
+            "message": "Bridge apply completed.",
+            "data": {
+                "target": request.get("target", ""),
+                "op_count": len(request.get("ops", [])),
+                "applied": len(request.get("ops", [])),
+                "read_only": False,
+                "executed": True,
+            },
+            "diagnostics": [],
+        }
+    )
+)
+""".strip(),
+                encoding="utf-8",
+            )
+            plan = root / "patch.json"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "target": str(target),
+                        "ops": [
+                            {
+                                "op": "set",
+                                "component": "Example.Component",
+                                "path": "nested.value",
+                                "value": 42,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            bridge_cmd = f'"{sys.executable}" "{bridge}"'
+            with patch.dict(os.environ, {"UNITYTOOL_PATCH_BRIDGE": bridge_cmd}, clear=False):
+                exit_code, output = self.run_cli(
+                    ["patch", "apply", "--plan", str(plan), "--confirm"]
+                )
+
+            payload = json.loads(output)
+            self.assertEqual(0, exit_code)
+            self.assertTrue(payload["success"])
+            self.assertEqual("PATCH_APPLY_RESULT", payload["code"])
+            step_codes = [step["result"]["code"] for step in payload["data"]["steps"]]
+            self.assertIn("SER_APPLY_OK", step_codes)
 
     def test_patch_apply_invalid_plan_returns_parser_error(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

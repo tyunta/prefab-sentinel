@@ -182,7 +182,7 @@ def build_parser() -> argparse.ArgumentParser:
     patch_apply.add_argument(
         "--confirm",
         action="store_true",
-        help="Allow non-dry-run execution path (Phase 1 supports JSON targets only).",
+        help="Allow non-dry-run execution path (.json built-in, Unity targets via bridge).",
     )
     patch_apply.add_argument("--format", choices=("json", "md"), default="json")
 

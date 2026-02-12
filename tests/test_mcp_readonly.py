@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -439,6 +440,79 @@ class SerializedObjectMcpTests(unittest.TestCase):
 
             self.assertFalse(response.success)
             self.assertEqual("SER_UNSUPPORTED_TARGET", response.code)
+
+    def test_apply_and_save_uses_unity_bridge_for_prefab_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            target = root / "state.prefab"
+            target.write_text("%YAML 1.1\n", encoding="utf-8")
+            bridge = root / "bridge.py"
+            bridge.write_text(
+                """
+import json
+import sys
+
+request = json.load(sys.stdin)
+print(
+    json.dumps(
+        {
+            "success": True,
+            "severity": "info",
+            "code": "SER_APPLY_OK",
+            "message": "Bridge apply completed.",
+            "data": {
+                "target": request.get("target", ""),
+                "op_count": len(request.get("ops", [])),
+                "applied": len(request.get("ops", [])),
+                "read_only": False,
+                "executed": True,
+            },
+            "diagnostics": [],
+        }
+    )
+)
+""".strip(),
+                encoding="utf-8",
+            )
+
+            mcp = SerializedObjectMcp(bridge_command=(sys.executable, str(bridge)))
+            response = mcp.apply_and_save(
+                target=str(target),
+                ops=[
+                    {
+                        "op": "set",
+                        "component": "Example.Component",
+                        "path": "nested.value",
+                        "value": 42,
+                    }
+                ],
+            )
+
+            self.assertTrue(response.success)
+            self.assertEqual("SER_APPLY_OK", response.code)
+            self.assertEqual(1, response.data["applied"])
+
+    def test_apply_and_save_rejects_bridge_command_outside_allowlist(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            target = root / "state.prefab"
+            target.write_text("%YAML 1.1\n", encoding="utf-8")
+
+            mcp = SerializedObjectMcp(bridge_command=("forbidden-bridge", "run"))
+            response = mcp.apply_and_save(
+                target=str(target),
+                ops=[
+                    {
+                        "op": "set",
+                        "component": "Example.Component",
+                        "path": "nested.value",
+                        "value": 42,
+                    }
+                ],
+            )
+
+            self.assertFalse(response.success)
+            self.assertEqual("SER_BRIDGE_DENIED", response.code)
 
     def test_orchestrator_patch_apply_confirm_gate(self) -> None:
         orchestrator = Phase1Orchestrator.default()

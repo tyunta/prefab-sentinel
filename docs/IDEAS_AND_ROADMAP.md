@@ -86,11 +86,13 @@
   - plan schema validation + dry-run diff preview
   - non-dry-run confirm gate (`--confirm`)
   - JSON target apply backend (`SER_APPLY_OK`, `.json` only)
+  - Unity bridge adapter via `UNITYTOOL_PATCH_BRIDGE` (allowlisted external command)
 - `report export --format md` supports runtime summary section for `VALIDATE_RUNTIME_RESULT`.
 - `report export --format md` supports `--md-max-steps` / `--md-omit-steps` to trim large `data.steps`.
 
 ## Next Executable Tasks
-- Extend apply backend from JSON-only to Unity SerializedObject bridge.
+- Provide a production Unity SerializedObject bridge executable (batchmode entrypoint) compatible with bridge JSON protocol.
+- Add bridge protocol version field and compatibility checks.
 
 ## Decision-Required Queue
 - Decide default location/policy for ignore-guid files:
@@ -101,5 +103,6 @@
 
 ## Notes
 - Keep read-only policy for inspection/validation commands in Phase 1.
-- `patch apply` is write-enabled only for explicit `--confirm` + `.json` targets.
+- `patch apply` is write-enabled only for explicit `--confirm`.
+- JSON targets use built-in backend; Unity targets require external bridge command (`UNITYTOOL_PATCH_BRIDGE`).
 - Continue fail-fast for invalid input and missing required paths.

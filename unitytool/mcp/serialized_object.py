@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import shlex
+import subprocess
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -9,12 +12,290 @@ from unitytool.contracts import Diagnostic, Severity, ToolResponse
 from unitytool.unity_assets import decode_text_file
 
 _SUPPORTED_OPS = {"set", "insert_array_element", "remove_array_element"}
+_UNITY_BRIDGE_SUPPORTED_SUFFIXES = {
+    ".prefab",
+    ".unity",
+    ".asset",
+    ".mat",
+    ".anim",
+    ".controller",
+}
+_UNITY_BRIDGE_ALLOWED_COMMANDS = {
+    "python",
+    "python3",
+    "py",
+    "python.exe",
+    "py.exe",
+    "uv",
+    "uvx",
+    "uv.exe",
+    "uvx.exe",
+    "unitytool-unity-bridge",
+    "unitytool-unity-bridge.exe",
+    "unitytool-unity-serialized-object-bridge",
+    "unitytool-unity-serialized-object-bridge.exe",
+}
 
 
 class SerializedObjectMcp:
     """Serialized-object MCP scaffold with plan validation and dry-run preview."""
 
     TOOL_NAME = "unity-serialized-object-mcp"
+
+    def __init__(
+        self,
+        bridge_command: tuple[str, ...] | None = None,
+        bridge_timeout_sec: float = 120.0,
+    ) -> None:
+        self.bridge_command_error: str | None = None
+        self.bridge_command = (
+            bridge_command
+            if bridge_command is not None
+            else self._load_bridge_command_from_env()
+        )
+        try:
+            timeout = float(bridge_timeout_sec)
+        except (TypeError, ValueError):
+            timeout = 120.0
+        self.bridge_timeout_sec = max(1.0, timeout)
+
+    def _load_bridge_command_from_env(self) -> tuple[str, ...] | None:
+        raw = os.getenv("UNITYTOOL_PATCH_BRIDGE", "").strip()
+        if not raw:
+            return None
+        try:
+            parts = tuple(shlex.split(raw, posix=False))
+        except ValueError as exc:
+            self.bridge_command_error = (
+                f"Failed to parse UNITYTOOL_PATCH_BRIDGE: {exc}"
+            )
+            return None
+        normalized_parts: list[str] = []
+        for part in parts:
+            if len(part) >= 2 and part[0] == part[-1] and part[0] in {'"', "'"}:
+                normalized_parts.append(part[1:-1])
+            else:
+                normalized_parts.append(part)
+        parts = tuple(normalized_parts)
+        if not parts:
+            self.bridge_command_error = (
+                "UNITYTOOL_PATCH_BRIDGE did not produce a command."
+            )
+            return None
+        return parts
+
+    def _is_unity_bridge_target(self, target_path: Path) -> bool:
+        return target_path.suffix.lower() in _UNITY_BRIDGE_SUPPORTED_SUFFIXES
+
+    def _is_bridge_command_allowed(self, command: tuple[str, ...]) -> bool:
+        head = Path(command[0]).name.lower()
+        return head in _UNITY_BRIDGE_ALLOWED_COMMANDS
+
+    def _parse_bridge_response(
+        self,
+        payload: dict[str, Any],
+        target_path: Path,
+        ops: list[dict[str, Any]],
+    ) -> ToolResponse:
+        if not isinstance(payload, dict):
+            return ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code="SER_BRIDGE_PROTOCOL",
+                message="Unity bridge response must be a JSON object.",
+                data={
+                    "target": str(target_path),
+                    "op_count": len(ops),
+                    "applied": 0,
+                    "read_only": False,
+                    "executed": False,
+                },
+                diagnostics=[],
+            )
+
+        severity_raw = str(payload.get("severity", Severity.ERROR.value))
+        try:
+            severity = Severity(severity_raw)
+        except ValueError:
+            severity = Severity.ERROR
+
+        diagnostics_payload = payload.get("diagnostics", [])
+        diagnostics: list[Diagnostic] = []
+        if isinstance(diagnostics_payload, list):
+            for item in diagnostics_payload:
+                if not isinstance(item, dict):
+                    continue
+                diagnostics.append(
+                    Diagnostic(
+                        path=str(item.get("path", "")),
+                        location=str(item.get("location", "")),
+                        detail=str(item.get("detail", "")),
+                        evidence=str(item.get("evidence", "")),
+                    )
+                )
+
+        data = payload.get("data", {})
+        if not isinstance(data, dict):
+            data = {}
+        data.setdefault("target", str(target_path))
+        data.setdefault("op_count", len(ops))
+        data.setdefault("read_only", False)
+        data.setdefault("executed", True)
+
+        return ToolResponse(
+            success=bool(payload.get("success", False)),
+            severity=severity,
+            code=str(payload.get("code", "SER_BRIDGE_PROTOCOL")),
+            message=str(payload.get("message", "Unity bridge response parsed.")),
+            data=data,
+            diagnostics=diagnostics,
+        )
+
+    def _apply_with_unity_bridge(
+        self,
+        target_path: Path,
+        ops: list[dict[str, Any]],
+    ) -> ToolResponse:
+        if self.bridge_command_error:
+            return ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code="SER_BRIDGE_CONFIG",
+                message="Unity bridge command configuration is invalid.",
+                data={
+                    "target": str(target_path),
+                    "op_count": len(ops),
+                    "applied": 0,
+                    "read_only": False,
+                    "executed": False,
+                    "error": self.bridge_command_error,
+                },
+                diagnostics=[],
+            )
+        if not self.bridge_command:
+            return ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code="SER_UNSUPPORTED_TARGET",
+                message=(
+                    "Non-JSON target requires UNITYTOOL_PATCH_BRIDGE for Unity bridge "
+                    "execution."
+                ),
+                data={
+                    "target": str(target_path),
+                    "op_count": len(ops),
+                    "applied": 0,
+                    "read_only": False,
+                    "executed": False,
+                },
+                diagnostics=[],
+            )
+        if not self._is_bridge_command_allowed(self.bridge_command):
+            return ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code="SER_BRIDGE_DENIED",
+                message="Unity bridge command is not in the allowlist.",
+                data={
+                    "target": str(target_path),
+                    "op_count": len(ops),
+                    "command": list(self.bridge_command),
+                    "allowed_commands": sorted(_UNITY_BRIDGE_ALLOWED_COMMANDS),
+                    "read_only": False,
+                    "executed": False,
+                },
+                diagnostics=[],
+            )
+
+        request_payload = {
+            "target": str(target_path),
+            "ops": ops,
+        }
+        try:
+            completed = subprocess.run(
+                list(self.bridge_command),
+                input=json.dumps(request_payload, ensure_ascii=False),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=self.bridge_timeout_sec,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            return ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code="SER_BRIDGE_TIMEOUT",
+                message="Unity bridge process timed out.",
+                data={
+                    "target": str(target_path),
+                    "op_count": len(ops),
+                    "command": list(self.bridge_command),
+                    "timeout_sec": self.bridge_timeout_sec,
+                    "error": str(exc),
+                    "read_only": False,
+                    "executed": False,
+                },
+                diagnostics=[],
+            )
+        except OSError as exc:
+            return ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code="SER_BRIDGE_EXEC",
+                message="Failed to start Unity bridge process.",
+                data={
+                    "target": str(target_path),
+                    "op_count": len(ops),
+                    "command": list(self.bridge_command),
+                    "error": str(exc),
+                    "read_only": False,
+                    "executed": False,
+                },
+                diagnostics=[],
+            )
+
+        if completed.returncode != 0:
+            return ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code="SER_BRIDGE_FAILED",
+                message="Unity bridge process returned non-zero exit code.",
+                data={
+                    "target": str(target_path),
+                    "op_count": len(ops),
+                    "command": list(self.bridge_command),
+                    "returncode": completed.returncode,
+                    "stdout": completed.stdout,
+                    "stderr": completed.stderr,
+                    "read_only": False,
+                    "executed": False,
+                },
+                diagnostics=[],
+            )
+
+        try:
+            payload = json.loads(completed.stdout)
+        except json.JSONDecodeError as exc:
+            return ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code="SER_BRIDGE_PROTOCOL",
+                message="Unity bridge output must be valid JSON.",
+                data={
+                    "target": str(target_path),
+                    "op_count": len(ops),
+                    "command": list(self.bridge_command),
+                    "stdout": completed.stdout,
+                    "stderr": completed.stderr,
+                    "error": str(exc),
+                    "read_only": False,
+                    "executed": False,
+                },
+                diagnostics=[],
+            )
+
+        return self._parse_bridge_response(payload, target_path=target_path, ops=ops)
 
     def _validate_op(
         self,
@@ -353,11 +634,13 @@ class SerializedObjectMcp:
 
         target_path = self._resolve_target_path(target)
         if target_path.suffix.lower() != ".json":
+            if self._is_unity_bridge_target(target_path):
+                return self._apply_with_unity_bridge(target_path=target_path, ops=ops)
             return ToolResponse(
                 success=False,
                 severity=Severity.ERROR,
                 code="SER_UNSUPPORTED_TARGET",
-                message="Phase 1 apply backend only supports .json targets.",
+                message="Phase 1 apply backend supports .json or Unity bridge targets only.",
                 data={
                     "target": str(target_path),
                     "op_count": len(ops),
