@@ -136,6 +136,7 @@
   - exports code assertion fields (`expected_code` / `actual_code` / `code_matches`) to CSV
   - exports apply assertion fields (`expected_applied` / `expected_applied_source` / `actual_applied` / `applied_matches`) to CSV
   - reports apply assertion quality (`applied_mismatches` / `applied_pass_pct`) per target in Markdown
+  - supports code assertion quality gates (`--max-code-mismatches` / `--min-code-pass-pct`) with non-zero exit on threshold breach
   - supports applied assertion quality gates (`--max-applied-mismatches` / `--min-applied-pass-pct`) with non-zero exit on threshold breach
   - supports observed-timeout quality gates (`--max-observed-timeout-breaches` / `--min-observed-timeout-coverage-pct`) with non-zero exit on threshold breach
   - supports `--matched-only`, `--target`, `--duration-percentile`

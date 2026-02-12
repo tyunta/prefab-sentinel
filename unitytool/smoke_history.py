@@ -30,6 +30,21 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         help="Only include rows where matched_expectation is true.",
     )
     parser.add_argument(
+        "--max-code-mismatches",
+        type=int,
+        default=None,
+        help="Fail with exit code 1 if code assertion mismatches exceed this count.",
+    )
+    parser.add_argument(
+        "--min-code-pass-pct",
+        type=float,
+        default=None,
+        help=(
+            "Fail with exit code 1 if code assertion pass percentage falls below this value "
+            "(0-100)."
+        ),
+    )
+    parser.add_argument(
         "--max-applied-mismatches",
         type=int,
         default=None,
@@ -274,12 +289,33 @@ def _build_target_stats(
             if observed_timeout_sample_count > 0
             else None
         )
+        code_matches_values = [
+            value
+            for value in (row.get("code_matches") for row in target_rows)
+            if isinstance(value, bool)
+        ]
         applied_matches_values = [
             value
             for value in (row.get("applied_matches") for row in target_rows)
             if isinstance(value, bool)
         ]
         failures = [row for row in target_rows if not bool(row.get("matched_expectation", False))]
+        code_assertion_runs = len(code_matches_values)
+        code_assertion_mismatches = len(
+            [value for value in code_matches_values if value is False]
+        )
+        code_assertion_pass_pct = (
+            round(
+                (
+                    (code_assertion_runs - code_assertion_mismatches)
+                    / float(code_assertion_runs)
+                )
+                * 100.0,
+                2,
+            )
+            if code_assertion_runs > 0
+            else None
+        )
         applied_assertion_runs = len(applied_matches_values)
         applied_assertion_mismatches = len(
             [value for value in applied_matches_values if value is False]
@@ -302,6 +338,9 @@ def _build_target_stats(
                 "target": target,
                 "runs": len(target_rows),
                 "failures": len(failures),
+                "code_assertion_runs": code_assertion_runs,
+                "code_assertion_mismatches": code_assertion_mismatches,
+                "code_assertion_pass_pct": code_assertion_pass_pct,
                 "applied_assertion_runs": applied_assertion_runs,
                 "applied_assertion_mismatches": applied_assertion_mismatches,
                 "applied_assertion_pass_pct": applied_assertion_pass_pct,
@@ -414,6 +453,22 @@ def _build_timeout_profiles(
     }
 
 
+def _compute_code_assertion_metrics(
+    rows: list[dict[str, Any]]
+) -> tuple[int, int, float | None]:
+    code_matches_values = [
+        value for value in (row.get("code_matches") for row in rows) if isinstance(value, bool)
+    ]
+    code_assertions = len(code_matches_values)
+    code_mismatches = len([value for value in code_matches_values if value is False])
+    code_pass_pct = (
+        ((code_assertions - code_mismatches) / float(code_assertions)) * 100.0
+        if code_assertions > 0
+        else None
+    )
+    return code_assertions, code_mismatches, code_pass_pct
+
+
 def _compute_applied_assertion_metrics(
     rows: list[dict[str, Any]]
 ) -> tuple[int, int, float | None]:
@@ -480,6 +535,16 @@ def _render_markdown_summary(
     percentile_label = f"duration_p{int(round(duration_percentile))}_sec"
     target_stats = stats if stats is not None else _build_target_stats(rows, duration_percentile)
     (
+        code_assertions,
+        code_mismatches,
+        code_pass_pct_raw,
+    ) = _compute_code_assertion_metrics(rows)
+    code_pass_pct = (
+        round(code_pass_pct_raw, 2)
+        if code_pass_pct_raw is not None
+        else None
+    )
+    (
         applied_assertions,
         applied_mismatches,
         applied_pass_pct_raw,
@@ -504,6 +569,13 @@ def _render_markdown_summary(
         "",
         f"- Cases: {len(rows)}",
         f"- Duration percentile: p{duration_percentile:g}",
+        f"- Code assertion runs: {code_assertions}",
+        f"- Code assertion mismatches: {code_mismatches}",
+        (
+            f"- Code assertion pass pct: {code_pass_pct}"
+            if code_pass_pct is not None
+            else "- Code assertion pass pct: n/a"
+        ),
         f"- Applied assertion runs: {applied_assertions}",
         f"- Applied assertion mismatches: {applied_mismatches}",
         (
@@ -519,15 +591,18 @@ def _render_markdown_summary(
             else "- Observed timeout coverage pct: n/a"
         ),
         "",
-        f"| target | runs | failures | applied_assertions | applied_mismatches | applied_pass_pct | observed_timeout_samples | observed_timeout_breaches | observed_timeout_coverage_pct | attempts_max | duration_avg_sec | {percentile_label} | duration_max_sec | timeout_max_sec |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        f"| target | runs | failures | code_assertions | code_mismatches | code_pass_pct | applied_assertions | applied_mismatches | applied_pass_pct | observed_timeout_samples | observed_timeout_breaches | observed_timeout_coverage_pct | attempts_max | duration_avg_sec | {percentile_label} | duration_max_sec | timeout_max_sec |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for item in target_stats:
         lines.append(
-            "| {target} | {runs} | {failures} | {applied_assertion_runs} | {applied_assertion_mismatches} | {applied_assertion_pass_pct} | {observed_timeout_sample_count} | {observed_timeout_breach_count} | {observed_timeout_coverage_pct} | {attempts_max} | {duration_avg_sec} | {duration_p_sec} | {duration_max_sec} | {timeout_max_sec} |".format(
+            "| {target} | {runs} | {failures} | {code_assertion_runs} | {code_assertion_mismatches} | {code_assertion_pass_pct} | {applied_assertion_runs} | {applied_assertion_mismatches} | {applied_assertion_pass_pct} | {observed_timeout_sample_count} | {observed_timeout_breach_count} | {observed_timeout_coverage_pct} | {attempts_max} | {duration_avg_sec} | {duration_p_sec} | {duration_max_sec} | {timeout_max_sec} |".format(
                 target=item.get("target", ""),
                 runs=item.get("runs", 0),
                 failures=item.get("failures", 0),
+                code_assertion_runs=item.get("code_assertion_runs", 0),
+                code_assertion_mismatches=item.get("code_assertion_mismatches", 0),
+                code_assertion_pass_pct=item.get("code_assertion_pass_pct", ""),
                 applied_assertion_runs=item.get("applied_assertion_runs", 0),
                 applied_assertion_mismatches=item.get("applied_assertion_mismatches", 0),
                 applied_assertion_pass_pct=item.get("applied_assertion_pass_pct", ""),
@@ -555,6 +630,12 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
         parser.error("--timeout-min-sec must be greater than 0.")
     if args.timeout_round_sec <= 0:
         parser.error("--timeout-round-sec must be greater than 0.")
+    if args.max_code_mismatches is not None and args.max_code_mismatches < 0:
+        parser.error("--max-code-mismatches must be greater than or equal to 0.")
+    if args.min_code_pass_pct is not None and (
+        args.min_code_pass_pct < 0.0 or args.min_code_pass_pct > 100.0
+    ):
+        parser.error("--min-code-pass-pct must be in range 0..100.")
     if args.max_applied_mismatches is not None and args.max_applied_mismatches < 0:
         parser.error("--max-applied-mismatches must be greater than or equal to 0.")
     if args.min_applied_pass_pct is not None and (
@@ -664,16 +745,20 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
         print(out_timeout_profile)
 
     (
-        applied_assertions,
+        _code_assertions,
+        code_mismatches,
+        code_pass_pct,
+    ) = _compute_code_assertion_metrics(rows)
+    (
+        _applied_assertions,
         applied_mismatches,
         applied_pass_pct,
     ) = _compute_applied_assertion_metrics(rows)
-    observed_timeout_samples = 0
     observed_timeout_breaches = 0
     observed_timeout_coverage_pct = None
     if stats is not None:
         (
-            observed_timeout_samples,
+            _observed_timeout_samples,
             observed_timeout_breaches,
             observed_timeout_coverage_pct,
         ) = _compute_observed_timeout_metrics(stats)
@@ -683,6 +768,24 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
             else None
         )
     violations: list[str] = []
+    if (
+        args.max_code_mismatches is not None
+        and code_mismatches > args.max_code_mismatches
+    ):
+        violations.append(
+            "code mismatch threshold exceeded: "
+            f"{code_mismatches} > {args.max_code_mismatches}"
+        )
+    if args.min_code_pass_pct is not None:
+        if code_pass_pct is None:
+            violations.append(
+                "code pass percentage threshold configured but no code assertion rows exist"
+            )
+        elif code_pass_pct < args.min_code_pass_pct:
+            violations.append(
+                "code pass percentage below threshold: "
+                f"{code_pass_pct:.2f} < {args.min_code_pass_pct:.2f}"
+            )
     if (
         args.max_applied_mismatches is not None
         and applied_mismatches > args.max_applied_mismatches

@@ -1815,6 +1815,57 @@ PrefabInstance:
             self.assertTrue(out_csv.exists())
             self.assertIn(str(out_csv), output)
 
+    def test_report_smoke_history_fails_on_code_mismatch_threshold(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            summary = temp / "summary.json"
+            out_csv = temp / "history.csv"
+            summary.write_text(
+                json.dumps(
+                    {
+                        "success": False,
+                        "severity": "error",
+                        "code": "SMOKE_BATCH_FAILED",
+                        "message": "failed",
+                        "data": {
+                            "cases": [
+                                {
+                                    "name": "avatar",
+                                    "matched_expectation": False,
+                                    "expected_code": "OK",
+                                    "actual_code": "ERR",
+                                    "code_matches": False,
+                                    "attempts": 2,
+                                    "duration_sec": 5.0,
+                                    "unity_timeout_sec": 900,
+                                    "exit_code": 1,
+                                    "response_code": "SMOKE_BRIDGE_ERROR",
+                                },
+                            ]
+                        },
+                        "diagnostics": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            exit_code, output = self.run_cli(
+                [
+                    "report",
+                    "smoke-history",
+                    "--inputs",
+                    str(summary),
+                    "--out",
+                    str(out_csv),
+                    "--max-code-mismatches",
+                    "0",
+                ]
+            )
+
+            self.assertEqual(1, exit_code)
+            self.assertTrue(out_csv.exists())
+            self.assertIn(str(out_csv), output)
+
     def test_report_smoke_history_fails_on_observed_timeout_breach_threshold(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)

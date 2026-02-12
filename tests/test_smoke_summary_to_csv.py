@@ -66,6 +66,7 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
             {
                 "target": "avatar",
                 "matched_expectation": True,
+                "code_matches": True,
                 "applied_matches": True,
                 "attempts": 1,
                 "duration_sec": 1.0,
@@ -74,6 +75,7 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
             {
                 "target": "avatar",
                 "matched_expectation": False,
+                "code_matches": False,
                 "applied_matches": False,
                 "attempts": 2,
                 "duration_sec": 3.0,
@@ -85,6 +87,9 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
         self.assertEqual("avatar", stats[0]["target"])
         self.assertEqual(2, stats[0]["runs"])
         self.assertEqual(1, stats[0]["failures"])
+        self.assertEqual(2, stats[0]["code_assertion_runs"])
+        self.assertEqual(1, stats[0]["code_assertion_mismatches"])
+        self.assertAlmostEqual(50.0, stats[0]["code_assertion_pass_pct"] or 0.0)
         self.assertEqual(2, stats[0]["applied_assertion_runs"])
         self.assertEqual(1, stats[0]["applied_assertion_mismatches"])
         self.assertAlmostEqual(50.0, stats[0]["applied_assertion_pass_pct"] or 0.0)
@@ -173,6 +178,7 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
             {
                 "target": "avatar",
                 "matched_expectation": True,
+                "code_matches": True,
                 "attempts": 1,
                 "duration_sec": 1.2,
                 "unity_timeout_sec": 600,
@@ -180,6 +186,7 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
             {
                 "target": "world",
                 "matched_expectation": True,
+                "code_matches": True,
                 "attempts": 1,
                 "duration_sec": 2.4,
                 "unity_timeout_sec": 700,
@@ -187,6 +194,8 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
         ]
         markdown = _render_markdown_summary(rows, 90.0)
         self.assertIn("# Bridge Smoke Timeout Decision Table", markdown)
+        self.assertIn("- Code assertion runs: 2", markdown)
+        self.assertIn("| target | runs | failures | code_assertions |", markdown)
         self.assertIn("| avatar |", markdown)
         self.assertIn("| world |", markdown)
 
@@ -406,6 +415,52 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
         self.assertEqual(1, exit_code)
         self.assertTrue(out_exists)
 
+    def test_main_fails_when_code_mismatch_threshold_exceeded(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            summary_path = root / "summary.json"
+            out_csv = root / "history.csv"
+            summary_path.write_text(
+                json.dumps(
+                    _summary_payload(
+                        [
+                            {
+                                "name": "avatar",
+                                "matched_expectation": True,
+                                "expected_code": "OK",
+                                "actual_code": "OK",
+                                "code_matches": True,
+                            },
+                            {
+                                "name": "avatar",
+                                "matched_expectation": False,
+                                "expected_code": "OK",
+                                "actual_code": "ERR",
+                                "code_matches": False,
+                            },
+                        ],
+                        success=False,
+                    )
+                ),
+                encoding="utf-8",
+            )
+
+            with redirect_stdout(StringIO()):
+                exit_code = main(
+                    [
+                        "--inputs",
+                        str(summary_path),
+                        "--out",
+                        str(out_csv),
+                        "--max-code-mismatches",
+                        "0",
+                    ]
+                )
+            out_exists = out_csv.exists()
+
+        self.assertEqual(1, exit_code)
+        self.assertTrue(out_exists)
+
     def test_main_fails_when_applied_pass_pct_below_threshold(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -440,6 +495,52 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
                         "--out",
                         str(out_csv),
                         "--min-applied-pass-pct",
+                        "80",
+                    ]
+                )
+            out_exists = out_csv.exists()
+
+        self.assertEqual(1, exit_code)
+        self.assertTrue(out_exists)
+
+    def test_main_fails_when_code_pass_pct_below_threshold(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            summary_path = root / "summary.json"
+            out_csv = root / "history.csv"
+            summary_path.write_text(
+                json.dumps(
+                    _summary_payload(
+                        [
+                            {
+                                "name": "avatar",
+                                "matched_expectation": True,
+                                "expected_code": "OK",
+                                "actual_code": "OK",
+                                "code_matches": True,
+                            },
+                            {
+                                "name": "avatar",
+                                "matched_expectation": False,
+                                "expected_code": "OK",
+                                "actual_code": "ERR",
+                                "code_matches": False,
+                            },
+                        ],
+                        success=False,
+                    )
+                ),
+                encoding="utf-8",
+            )
+
+            with redirect_stdout(StringIO()):
+                exit_code = main(
+                    [
+                        "--inputs",
+                        str(summary_path),
+                        "--out",
+                        str(out_csv),
+                        "--min-code-pass-pct",
                         "80",
                     ]
                 )
@@ -581,6 +682,37 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
                 )
 
         self.assertEqual(2, raised.exception.code)
+
+    def test_main_rejects_invalid_code_threshold_arguments(self) -> None:
+        with redirect_stderr(StringIO()):
+            with self.assertRaises(SystemExit) as raised_mismatch:
+                main(
+                    [
+                        "--inputs",
+                        "missing.json",
+                        "--out",
+                        "out.csv",
+                        "--max-code-mismatches",
+                        "-1",
+                    ]
+                )
+
+        self.assertEqual(2, raised_mismatch.exception.code)
+
+        with redirect_stderr(StringIO()):
+            with self.assertRaises(SystemExit) as raised_pass_pct:
+                main(
+                    [
+                        "--inputs",
+                        "missing.json",
+                        "--out",
+                        "out.csv",
+                        "--min-code-pass-pct",
+                        "101",
+                    ]
+                )
+
+        self.assertEqual(2, raised_pass_pct.exception.code)
 
 
 if __name__ == "__main__":
