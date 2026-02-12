@@ -558,9 +558,9 @@ uvx --from . unitytool suggest ignore-guids --scope "Assets/haiirokoubou"
 `patch apply` は Unityターゲット（`.prefab` / `.unity` / `.asset` など）に対して `UNITYTOOL_PATCH_BRIDGE` 経由の外部bridgeを使って適用できる。
 `patch apply` は Unity bridge 未設定時に Unityターゲットを `SER_UNSUPPORTED_TARGET` で停止する（Unity YAMLの直接編集は行わない）。
 `UNITYTOOL_PATCH_BRIDGE` は JSON入力(stdin) / JSON出力(stdout) のbridgeコマンドを指定する（`protocol_version: 1`）。
-`tools/unity_patch_bridge.py` は `UNITYTOOL_UNITY_COMMAND` を使って Unity batchmode コマンドを実行し、JSONリクエスト/レスポンスファイルを介して結果を返す。
+`tools/unity_patch_bridge.py` は `UNITYTOOL_UNITY_COMMAND` を使って Unity batchmode コマンドを実行し、JSONリクエスト/レスポンスファイルを介して結果を返す（`set` / `insert_array_element` の `value` を Unity 側で扱える型情報へ正規化）。
 `tools/unity_patch_bridge.py` は `UNITYTOOL_UNITY_PROJECT_PATH` / `UNITYTOOL_UNITY_EXECUTE_METHOD` / `UNITYTOOL_UNITY_TIMEOUT_SEC` / `UNITYTOOL_UNITY_LOG_FILE` で実行設定を制御できる。
-`tools/unity/PrefabSentinel.UnityPatchBridge.cs` は Unity 側 `-executeMethod` の参照実装（引数・プロトコル検証スキャフォールド）を提供する。
+`tools/unity/PrefabSentinel.UnityPatchBridge.cs` は Unity 側 `-executeMethod` 実装として `.prefab` ターゲットの `set` op を SerializedObject 経由で適用する（`component` は一意一致必須、未対応opや未対応型は fail-fast で停止）。
 `validate runtime` は log分類ベースのscaffoldを実装済みで、`--scene` 存在確認、`BROKEN_PPTR` / `UDON_NULLREF` などの分類、`assert_no_critical_errors` 判定までを返す。
 `validate runtime` の compile/ClientSim 実行は現時点では `RUN_COMPILE_SKIPPED` / `RUN_CLIENTSIM_SKIPPED` として明示的に未配線を返す。
 `report export --format md` は `VALIDATE_RUNTIME_RESULT` payload を入力した場合、Runtime Validation 要約（分類件数・severity内訳・カテゴリ表）を追加出力する。

@@ -140,6 +140,41 @@ def _finalize_unity_response(
     return response
 
 
+def _encode_bridge_value(value: object) -> dict[str, object]:
+    if value is None:
+        return {"value_kind": "null"}
+    if isinstance(value, bool):
+        return {"value_kind": "bool", "value_bool": value}
+    if isinstance(value, int):
+        return {"value_kind": "int", "value_int": value}
+    if isinstance(value, float):
+        return {"value_kind": "float", "value_float": value}
+    if isinstance(value, str):
+        return {"value_kind": "string", "value_string": value}
+    return {
+        "value_kind": "json",
+        "value_json": json.dumps(value, ensure_ascii=False),
+    }
+
+
+def _normalize_bridge_op(op: object) -> object:
+    if not isinstance(op, dict):
+        return op
+    normalized: dict[str, object] = {}
+    for key in ("op", "component", "path", "index"):
+        if key in op:
+            normalized[key] = op[key]
+
+    op_name = str(op.get("op", "")).strip()
+    if op_name in {"set", "insert_array_element"} and "value" in op:
+        normalized.update(_encode_bridge_value(op["value"]))
+    return normalized
+
+
+def _normalize_bridge_ops(ops: list[object]) -> list[object]:
+    return [_normalize_bridge_op(op) for op in ops]
+
+
 def main() -> int:
     raw = sys.stdin.read()
     if not raw.strip():
@@ -271,7 +306,7 @@ def main() -> int:
         request_payload = {
             "protocol_version": PROTOCOL_VERSION,
             "target": target,
-            "ops": ops,
+            "ops": _normalize_bridge_ops(ops),
         }
         request_path.write_text(
             json.dumps(request_payload, ensure_ascii=False),

@@ -101,13 +101,17 @@
   - bridge protocol version check (`protocol_version: 1`)
 - Added Unity bridge script with batchmode command execution path:
   - `tools/unity_patch_bridge.py` (`UNITYTOOL_UNITY_COMMAND` / request-response file contract)
-- Added Unity Editor executeMethod scaffold:
+- Unity bridge now normalizes op values for executeMethod payload (`value_kind` fields).
+- Added Unity Editor executeMethod apply path for prefab `set` operations:
   - `tools/unity/PrefabSentinel.UnityPatchBridge.cs` (`PrefabSentinel.UnityPatchBridge.ApplyFromJson`)
+  - supports `.prefab` + `set` (primitive/null subset), fail-fast on unsupported op/type
 - `report export --format md` supports runtime summary section for `VALIDATE_RUNTIME_RESULT`.
 - `report export --format md` supports `--md-max-steps` / `--md-omit-steps` to trim large `data.steps`.
 
 ## Next Executable Tasks
-- Implement SerializedObject apply logic inside Unity Editor executeMethod (currently protocol scaffold only).
+- Extend Unity executeMethod apply coverage:
+  - `insert_array_element` / `remove_array_element`
+  - additional SerializedProperty types and value decoding rules
 
 ## Decision-Required Queue
 - Decide default location/policy for ignore-guid files:
