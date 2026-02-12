@@ -117,6 +117,7 @@
 - Added smoke automation runner for sample avatar/world:
   - `scripts/bridge_smoke_samples.py`
   - deterministic artifacts per target (`response.json` + `unity.log`) and aggregate `summary.json`/`summary.md`
+  - transient failure retry controls (`--max-retries` / `--retry-delay-sec`)
   - unit tests: `tests/test_bridge_smoke_samples.py`
 - Added CI workflow wiring:
   - `.github/workflows/ci.yml` runs `unittest` on push/PR/workflow_dispatch
@@ -142,7 +143,7 @@
   - Unity-side integration tests against sample prefab assets (batchmode assertions)
 - Add Unity smoke hardening:
   - add optional scheduled run window for self-hosted Unity runner availability
-  - add optional retry strategy / timeout tuning per target
+  - add per-target timeout tuning (`avatar/world` individual timeout overrides)
 
 ## Decision-Required Queue
 - Decide default location/policy for ignore-guid files:

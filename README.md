@@ -502,6 +502,7 @@ python scripts/benchmark_history_to_csv.py --inputs "sample/avatar/config/bench_
 python scripts/benchmark_samples.py --targets all --runs 1 --warmup-runs 0 --history-generated-date-prefix "2026-02" --history-min-p90 2.0 --history-latest-per-scope --history-split-by-severity --history-write-md --run-regression --regression-baseline-auto-latest 3 --regression-baseline-pinning-file "sample/avatar/config/baseline_pinning.json" --regression-alerts-only --regression-fail-on-regression --regression-out-csv-append --regression-out-md
 python scripts/benchmark_regression_report.py --baseline-inputs "sample/avatar/config/bench_20260211*.json" --latest-inputs "sample/avatar/config/bench_20260212*.json" --baseline-pinning-file "sample/avatar/config/baseline_pinning.json" --avg-ratio-threshold 1.1 --p90-ratio-threshold 1.1 --alerts-only --fail-on-regression --out-json "sample/avatar/config/benchmark_regression.json" --out-csv "sample/avatar/config/benchmark_regression.csv" --out-csv-append --out-md "sample/avatar/config/benchmark_regression.md"
 python scripts/bridge_smoke_samples.py --targets all --avatar-plan "sample/avatar/config/prefab_patch_plan.json" --world-plan "sample/world/config/prefab_patch_plan.json" --unity-command "C:/Program Files/Unity/Hub/Editor/<version>/Editor/Unity.exe" --out-dir "reports/bridge_smoke" --summary-md "reports/bridge_smoke/summary.md"
+python scripts/bridge_smoke_samples.py --targets all --avatar-plan "sample/avatar/config/prefab_patch_plan.json" --world-plan "sample/world/config/prefab_patch_plan.json" --unity-command "C:/Program Files/Unity/Hub/Editor/<version>/Editor/Unity.exe" --max-retries 2 --retry-delay-sec 5 --out-dir "reports/bridge_smoke" --summary-md "reports/bridge_smoke/summary.md"
 
 # uvx 経由でローカルパッケージから実行（インストール不要）
 uvx --from . unitytool inspect variant --path "Assets/... Variant.prefab"
@@ -545,7 +546,7 @@ uvx --from . unitytool suggest ignore-guids --scope "Assets/haiirokoubou"
 `scripts/benchmark_regression_report.py` は `--alerts-only` / `--fail-on-regression` でCI向け短文ログと非0終了コードを使える。
 `scripts/benchmark_regression_report.py` は `--out-csv-append` で比較履歴を同一CSVに追記できる。
 `scripts/benchmark_regression_report.py` は `--out-md` で比較サマリのMarkdown（回帰一覧 + scope表）を出力できる。
-`scripts/bridge_smoke_samples.py` は `unity_bridge_smoke.py` を avatar/world 複数ケースで連続実行し、`reports/bridge_smoke/<target>/response.json` と `unity.log`、集計 `summary.json`（任意 `summary.md`）を決定的なパスで出力できる。
+`scripts/bridge_smoke_samples.py` は `unity_bridge_smoke.py` を avatar/world 複数ケースで連続実行し、`reports/bridge_smoke/<target>/response.json` と `unity.log`、集計 `summary.json`（任意 `summary.md`）を決定的なパスで出力できる。`--max-retries` / `--retry-delay-sec` でターゲットごとの一時失敗を再試行できる。
 `.github/workflows/ci.yml` は `python -m unittest discover -s tests -v` と `bridge-smoke-contract`（`bridge_smoke_samples.py` の expected-failure 実行 + artifact保存）を自動実行する。
 `.github/workflows/unity-smoke.yml` は `workflow_dispatch` 専用で self-hosted Windows Unity ランナー上の実Unity smoke（`bridge_smoke_samples.py` 非期待失敗モード）を実行し、`unity-smoke-summary` / `unity-smoke-avatar` / `unity-smoke-world` の分割artifactで保存する。`targets`（`all|avatar|world`）と入力パスの preflight 検証を備える。
 `patch hash` は plan JSON を検証したうえで SHA-256 digest を出力する（`--format json` 対応）。

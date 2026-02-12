@@ -4,6 +4,7 @@ import argparse
 import json
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -94,6 +95,18 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Optional UNITYTOOL_UNITY_TIMEOUT_SEC override.",
+    )
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=0,
+        help="Retry count for transient smoke failures per target (default: 0).",
+    )
+    parser.add_argument(
+        "--retry-delay-sec",
+        type=float,
+        default=0.0,
+        help="Delay seconds between retries (default: 0.0).",
     )
     parser.add_argument(
         "--out-dir",
@@ -241,14 +254,15 @@ def _render_markdown_summary(payload: dict[str, Any]) -> str:
         f"- Passed: {data.get('passed_cases', 0)}",
         f"- Failed: {data.get('failed_cases', 0)}",
         "",
-        "| case | matched | exit_code | response_code | response_path | unity_log_file |",
-        "| --- | --- | ---: | --- | --- | --- |",
+        "| case | matched | attempts | exit_code | response_code | response_path | unity_log_file |",
+        "| --- | --- | ---: | ---: | --- | --- | --- |",
     ]
     for case in cases:
         lines.append(
-            "| {name} | {matched} | {exit_code} | {response_code} | {response_path} | {unity_log_file} |".format(
+            "| {name} | {matched} | {attempts} | {exit_code} | {response_code} | {response_path} | {unity_log_file} |".format(
                 name=case.get("name", ""),
                 matched=case.get("matched_expectation", False),
+                attempts=case.get("attempts", 1),
                 exit_code=case.get("exit_code", ""),
                 response_code=case.get("response_code", ""),
                 response_path=case.get("response_path", ""),
@@ -258,9 +272,38 @@ def _render_markdown_summary(payload: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _run_smoke_with_retries(
+    *,
+    command: list[str],
+    max_retries: int,
+    retry_delay_sec: float,
+) -> tuple[subprocess.CompletedProcess[str], int]:
+    attempts = 0
+    while True:
+        attempts += 1
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        if completed.returncode == 0:
+            return completed, attempts
+        if attempts > max_retries:
+            return completed, attempts
+        if retry_delay_sec > 0.0:
+            time.sleep(retry_delay_sec)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.max_retries < 0:
+        parser.error("--max-retries must be greater than or equal to 0.")
+    if args.retry_delay_sec < 0.0:
+        parser.error("--retry-delay-sec must be greater than or equal to 0.")
 
     smoke_script = Path(args.smoke_script)
     bridge_script = Path(args.bridge_script)
@@ -292,13 +335,10 @@ def main(argv: list[str] | None = None) -> int:
             response_out=response_path,
             unity_log_file=unity_log_file,
         )
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
+        completed, attempts = _run_smoke_with_retries(
+            command=command,
+            max_retries=args.max_retries,
+            retry_delay_sec=args.retry_delay_sec,
         )
         case_payload = _parse_case_payload(
             case=case,
@@ -318,6 +358,7 @@ def main(argv: list[str] | None = None) -> int:
                 "project_path": str(case.project_path),
                 "expect_failure": case.expect_failure,
                 "matched_expectation": completed.returncode == 0,
+                "attempts": attempts,
                 "exit_code": completed.returncode,
                 "response_code": str(case_payload.get("code", "")),
                 "response_severity": str(case_payload.get("severity", "")),

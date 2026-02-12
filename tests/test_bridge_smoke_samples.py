@@ -66,6 +66,7 @@ class BridgeSmokeSamplesTests(unittest.TestCase):
                         {
                             "name": "avatar",
                             "matched_expectation": False,
+                            "attempts": 2,
                             "exit_code": 1,
                             "response_code": "SMOKE_BRIDGE_ERROR",
                             "response_path": "reports/bridge_smoke/avatar/response.json",
@@ -75,7 +76,7 @@ class BridgeSmokeSamplesTests(unittest.TestCase):
                 },
             }
         )
-        self.assertIn("| avatar | False | 1 | SMOKE_BRIDGE_ERROR |", markdown)
+        self.assertIn("| avatar | False | 2 | 1 | SMOKE_BRIDGE_ERROR |", markdown)
 
     def test_main_writes_summary_and_returns_zero(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -151,6 +152,7 @@ raise SystemExit(0)
         self.assertEqual(0, exit_code)
         self.assertTrue(summary["success"])
         self.assertEqual(1, summary["data"]["total_cases"])
+        self.assertEqual(1, summary["data"]["cases"][0]["attempts"])
         self.assertEqual("OK", response["code"])
 
     def test_main_returns_nonzero_on_failed_case(self) -> None:
@@ -204,6 +206,69 @@ raise SystemExit(1)
         self.assertEqual(1, exit_code)
         self.assertFalse(summary["success"])
         self.assertEqual(1, summary["data"]["failed_cases"])
+        self.assertEqual(1, summary["data"]["cases"][0]["attempts"])
+
+    def test_main_retries_and_recovers_after_transient_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "avatar_plan.json"
+            project = root / "avatar_project"
+            smoke_script = root / "fake_smoke_retry.py"
+            out_dir = root / "reports"
+            project.mkdir(parents=True, exist_ok=True)
+            plan.write_text(
+                json.dumps({"target": "Assets/Test.prefab", "ops": []}),
+                encoding="utf-8",
+            )
+            smoke_script.write_text(
+                """
+import argparse
+import json
+from pathlib import Path
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--out", required=True)
+args, _ = parser.parse_known_args()
+marker = Path(args.out).with_suffix(".marker")
+if not marker.exists():
+    marker.write_text("attempt-1", encoding="utf-8")
+    print(json.dumps({"success": False, "severity": "error", "code": "TRANSIENT", "message": "retry", "data": {}, "diagnostics": []}))
+    raise SystemExit(1)
+print(json.dumps({"success": True, "severity": "info", "code": "OK", "message": "ok", "data": {}, "diagnostics": []}))
+raise SystemExit(0)
+""".strip(),
+                encoding="utf-8",
+            )
+
+            with redirect_stdout(StringIO()):
+                exit_code = main(
+                    [
+                        "--targets",
+                        "avatar",
+                        "--avatar-plan",
+                        str(plan),
+                        "--avatar-project-path",
+                        str(project),
+                        "--smoke-script",
+                        str(smoke_script),
+                        "--python",
+                        sys.executable,
+                        "--bridge-script",
+                        "tools/unity_patch_bridge.py",
+                        "--out-dir",
+                        str(out_dir),
+                        "--max-retries",
+                        "1",
+                        "--retry-delay-sec",
+                        "0",
+                    ]
+                )
+
+            summary = json.loads((out_dir / "summary.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(0, exit_code)
+        self.assertTrue(summary["success"])
+        self.assertEqual(2, summary["data"]["cases"][0]["attempts"])
 
 
 if __name__ == "__main__":
