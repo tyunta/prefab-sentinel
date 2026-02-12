@@ -212,6 +212,7 @@ def _build_target_stats(
                 "duration_p_sec": _percentile(durations, duration_percentile),
                 "duration_max_sec": max(durations) if durations else None,
                 "timeout_max_sec": max(timeouts) if timeouts else None,
+                "duration_values_sec": durations,
             }
         )
     return stats
@@ -239,6 +240,13 @@ def _build_timeout_profiles(
         duration_max = _to_float(item.get("duration_max_sec"))
         observed_timeout_max = _to_int(item.get("timeout_max_sec"))
         failures = _to_int(item.get("failures")) or 0
+        duration_values_raw = item.get("duration_values_sec", [])
+        duration_values: list[float] = []
+        if isinstance(duration_values_raw, list):
+            for raw in duration_values_raw:
+                value = _to_float(raw)
+                if value is not None:
+                    duration_values.append(value)
 
         candidates: list[float] = [float(timeout_min_sec)]
         if duration_p is not None:
@@ -255,6 +263,21 @@ def _build_timeout_profiles(
         if failures > 0:
             base_timeout_sec += float(timeout_slack_sec)
         recommended_timeout_sec = _round_up_timeout(base_timeout_sec, timeout_round_sec)
+        timeout_breach_count = len(
+            [value for value in duration_values if value > float(recommended_timeout_sec)]
+        )
+        timeout_coverage_pct = (
+            round(
+                (
+                    (len(duration_values) - timeout_breach_count)
+                    / float(len(duration_values))
+                )
+                * 100.0,
+                2,
+            )
+            if duration_values
+            else None
+        )
 
         profiles.append(
             {
@@ -267,6 +290,8 @@ def _build_timeout_profiles(
                     "duration_p_sec": duration_p,
                     "duration_max_sec": duration_max,
                     "observed_timeout_max_sec": observed_timeout_max,
+                    "timeout_breach_count": timeout_breach_count,
+                    "timeout_coverage_pct": timeout_coverage_pct,
                 },
             }
         )

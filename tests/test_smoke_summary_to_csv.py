@@ -86,6 +86,7 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
         self.assertEqual(2, stats[0]["attempts_max"])
         self.assertAlmostEqual(2.8, stats[0]["duration_p_sec"] or 0.0)
         self.assertEqual(900, stats[0]["timeout_max_sec"])
+        self.assertEqual([1.0, 3.0], stats[0]["duration_values_sec"])
 
 
     def test_build_timeout_profiles_generates_recommended_values(self) -> None:
@@ -129,6 +130,34 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
         )
         self.assertEqual("world", world_profile["target"])
         self.assertEqual(120, world_profile["recommended_timeout_sec"])
+
+    def test_build_timeout_profiles_includes_coverage_metrics(self) -> None:
+        stats = [
+            {
+                "target": "avatar",
+                "runs": 2,
+                "failures": 0,
+                "duration_p_sec": 10.0,
+                "duration_max_sec": 20.0,
+                "timeout_max_sec": None,
+                "duration_values_sec": [5.0, 55.0],
+            }
+        ]
+
+        payload = _build_timeout_profiles(
+            stats,
+            duration_percentile=90.0,
+            timeout_multiplier=1.5,
+            timeout_slack_sec=0,
+            timeout_min_sec=30,
+            timeout_round_sec=10,
+        )
+
+        profile = payload["profiles"][0]
+        evidence = profile["evidence"]
+        self.assertEqual(30, profile["recommended_timeout_sec"])
+        self.assertEqual(1, evidence["timeout_breach_count"])
+        self.assertAlmostEqual(50.0, evidence["timeout_coverage_pct"] or 0.0)
 
     def test_render_markdown_summary_includes_target_rows(self) -> None:
         rows = [

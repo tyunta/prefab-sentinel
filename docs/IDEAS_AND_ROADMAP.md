@@ -129,6 +129,7 @@
   - aggregates `summary.json` rows into CSV and Markdown decision table by target
   - supports `--matched-only`, `--target`, `--duration-percentile`
   - supports timeout profile JSON export (`--out-timeout-profile`) with policy knobs (`--timeout-multiplier` / `--timeout-slack-sec` / `--timeout-min-sec` / `--timeout-round-sec`)
+  - timeout profile includes history coverage metrics (`timeout_breach_count` / `timeout_coverage_pct`)
   - exposed as CLI command: `prefab-sentinel report smoke-history ...`
   - unit tests: `tests/test_smoke_summary_to_csv.py`
 - Added CI workflow wiring:
