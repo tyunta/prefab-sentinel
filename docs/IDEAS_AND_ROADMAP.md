@@ -146,7 +146,7 @@
   - unit tests: `tests/test_smoke_summary_to_csv.py`
 - Added CI workflow wiring:
   - `.github/workflows/ci.yml` runs `unittest` on push/PR/workflow_dispatch
-  - `bridge-smoke-contract` job runs `prefab-sentinel validate smoke-batch` in expected-failure mode, builds timeout decision artifacts via `prefab-sentinel report smoke-history`, and uploads `reports/bridge_smoke`
+  - `bridge-smoke-contract` job runs `prefab-sentinel validate smoke-batch` in expected-failure + expected-code mode, builds timeout decision artifacts via `prefab-sentinel report smoke-history` with code quality gates (`--max-code-mismatches 0 --min-code-pass-pct 100`), and uploads `reports/bridge_smoke`
 - Added Unity-enabled smoke workflow:
   - `.github/workflows/unity-smoke.yml` (`workflow_dispatch` + self-hosted Windows runner)
   - runs `prefab-sentinel validate smoke-batch` without `--*-expect-failure` and uploads `reports/bridge_smoke`

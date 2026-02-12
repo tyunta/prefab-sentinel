@@ -54,6 +54,8 @@ jobs:
             --world-project-path sample/world \
             --avatar-expect-failure \
             --world-expect-failure \
+            --avatar-expected-code BRIDGE_UNITY_COMMAND_MISSING \
+            --world-expected-code BRIDGE_UNITY_COMMAND_MISSING \
             --out-dir reports/bridge_smoke \
             --summary-md reports/bridge_smoke/summary.md
 
@@ -64,7 +66,9 @@ jobs:
             --duration-percentile 90 \
             --out reports/bridge_smoke/history.csv \
             --out-md reports/bridge_smoke/history.md \
-            --out-timeout-profile reports/bridge_smoke/timeout_profile.json
+            --out-timeout-profile reports/bridge_smoke/timeout_profile.json \
+            --max-code-mismatches 0 \
+            --min-code-pass-pct 100
 
       - name: Upload Bridge Smoke Artifacts
         uses: actions/upload-artifact@v4
