@@ -1212,6 +1212,73 @@ PrefabInstance:
             content = dst.read_text(encoding="utf-8")
             self.assertIn("# UnityTool Validation Report", content)
 
+    def test_report_smoke_history_writes_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            summary = temp / "summary.json"
+            out_csv = temp / "history.csv"
+            out_md = temp / "history.md"
+            out_profile = temp / "timeout_profile.json"
+            summary.write_text(
+                json.dumps(
+                    {
+                        "success": False,
+                        "severity": "error",
+                        "code": "SMOKE_BATCH_FAILED",
+                        "message": "failed",
+                        "data": {
+                            "cases": [
+                                {
+                                    "name": "avatar",
+                                    "matched_expectation": True,
+                                    "attempts": 1,
+                                    "duration_sec": 2.5,
+                                    "unity_timeout_sec": 600,
+                                    "exit_code": 0,
+                                    "response_code": "OK",
+                                },
+                                {
+                                    "name": "world",
+                                    "matched_expectation": False,
+                                    "attempts": 2,
+                                    "duration_sec": 5.0,
+                                    "unity_timeout_sec": 900,
+                                    "exit_code": 1,
+                                    "response_code": "SMOKE_BRIDGE_ERROR",
+                                },
+                            ]
+                        },
+                        "diagnostics": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            exit_code, output = self.run_cli(
+                [
+                    "report",
+                    "smoke-history",
+                    "--inputs",
+                    str(summary),
+                    "--out",
+                    str(out_csv),
+                    "--out-md",
+                    str(out_md),
+                    "--out-timeout-profile",
+                    str(out_profile),
+                ]
+            )
+
+            self.assertEqual(0, exit_code)
+            self.assertTrue(out_csv.exists())
+            self.assertTrue(out_md.exists())
+            self.assertTrue(out_profile.exists())
+            self.assertIn(str(out_csv), output)
+            profile = json.loads(out_profile.read_text(encoding="utf-8"))
+            self.assertEqual(2, len(profile["profiles"]))
+            self.assertEqual("avatar", profile["profiles"][0]["target"])
+            self.assertEqual("world", profile["profiles"][1]["target"])
+
     def test_report_export_markdown_limits_usages(self) -> None:
         payload = {
             "success": True,

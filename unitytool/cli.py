@@ -27,6 +27,10 @@ from unitytool.mcp.serialized_object import (
 )
 from unitytool.orchestrator import Phase1Orchestrator
 from unitytool.reporting import export_report, render_markdown_report
+from unitytool.smoke_history import (
+    add_arguments as add_smoke_history_arguments,
+    run_from_args as run_smoke_history_from_args,
+)
 
 _DEFAULT_PLAN_SIGNING_KEY_ENV = "UNITYTOOL_PLAN_SIGNING_KEY"
 
@@ -439,6 +443,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="When --format md, omit all steps arrays from payload data.",
     )
+    report_smoke_history = report_sub.add_parser(
+        "smoke-history",
+        help="Aggregate bridge smoke summaries into CSV/Markdown/timeout profiles.",
+    )
+    add_smoke_history_arguments(report_smoke_history)
 
     return parser
 
@@ -1004,6 +1013,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(f"Exported report: {output}")
         return 0
+
+    if args.command == "report" and args.report_command == "smoke-history":
+        return run_smoke_history_from_args(args, parser)
 
     parser.error("Unknown command.")
     return 2
