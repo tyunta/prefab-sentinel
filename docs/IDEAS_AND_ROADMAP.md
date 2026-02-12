@@ -88,13 +88,13 @@
   - JSON target apply backend (`SER_APPLY_OK`, `.json` only)
   - Unity bridge adapter via `UNITYTOOL_PATCH_BRIDGE` (allowlisted external command)
   - bridge protocol version check (`protocol_version: 1`)
-- Added reference bridge script:
-  - `tools/unity_patch_bridge.py` (protocol validation scaffold)
+- Added Unity bridge script with batchmode command execution path:
+  - `tools/unity_patch_bridge.py` (`UNITYTOOL_UNITY_COMMAND` / request-response file contract)
 - `report export --format md` supports runtime summary section for `VALIDATE_RUNTIME_RESULT`.
 - `report export --format md` supports `--md-max-steps` / `--md-omit-steps` to trim large `data.steps`.
 
 ## Next Executable Tasks
-- Provide a production Unity SerializedObject bridge executable (batchmode entrypoint) compatible with bridge JSON protocol.
+- Implement Unity Editor-side execute method (`-executeMethod`) that consumes request JSON and writes protocol response JSON.
 
 ## Decision-Required Queue
 - Decide default location/policy for ignore-guid files:

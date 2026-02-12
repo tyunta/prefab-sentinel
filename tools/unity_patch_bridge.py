@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
+import shlex
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +18,13 @@ SUPPORTED_SUFFIXES = {
     ".anim",
     ".controller",
 }
+UNITY_COMMAND_ENV = "UNITYTOOL_UNITY_COMMAND"
+UNITY_PROJECT_PATH_ENV = "UNITYTOOL_UNITY_PROJECT_PATH"
+UNITY_EXECUTE_METHOD_ENV = "UNITYTOOL_UNITY_EXECUTE_METHOD"
+UNITY_TIMEOUT_SEC_ENV = "UNITYTOOL_UNITY_TIMEOUT_SEC"
+UNITY_LOG_FILE_ENV = "UNITYTOOL_UNITY_LOG_FILE"
+DEFAULT_EXECUTE_METHOD = "PrefabSentinel.UnityPatchBridge.ApplyFromJson"
+DEFAULT_TIMEOUT_SEC = 120
 
 
 def _emit(payload: dict[str, Any]) -> int:
@@ -37,6 +48,96 @@ def _error_response(
         "data": data or {},
         "diagnostics": [],
     }
+
+
+def _split_command(command_raw: str) -> tuple[list[str], str | None]:
+    try:
+        parts = shlex.split(command_raw)
+    except ValueError as exc:
+        return [], str(exc)
+    command = [part.strip() for part in parts if part.strip()]
+    if not command:
+        return [], "command is empty after parsing"
+    return command, None
+
+
+def _build_unity_command(
+    *,
+    base_command: list[str],
+    project_path: str,
+    execute_method: str,
+    request_path: str,
+    response_path: str,
+    log_path: str,
+) -> list[str]:
+    return [
+        *base_command,
+        "-batchmode",
+        "-quit",
+        "-projectPath",
+        project_path,
+        "-executeMethod",
+        execute_method,
+        "-logFile",
+        log_path,
+        "-unitytoolPatchRequest",
+        request_path,
+        "-unitytoolPatchResponse",
+        response_path,
+    ]
+
+
+def _decode_process_output(raw: bytes) -> str:
+    if not raw:
+        return ""
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("cp932", errors="replace")
+
+
+def _finalize_unity_response(
+    *,
+    payload: dict[str, Any],
+    target: str,
+    op_count: int,
+) -> dict[str, Any]:
+    protocol_raw = payload.get("protocol_version", PROTOCOL_VERSION)
+    try:
+        protocol_version = int(protocol_raw)
+    except (TypeError, ValueError):
+        protocol_version = -1
+    if protocol_version != PROTOCOL_VERSION:
+        return _error_response(
+            code="BRIDGE_PROTOCOL_VERSION",
+            message="Bridge protocol version mismatch.",
+            data={
+                "expected_protocol_version": PROTOCOL_VERSION,
+                "received_protocol_version": protocol_raw,
+            },
+        )
+
+    response = dict(payload)
+    response["protocol_version"] = protocol_version
+    response.setdefault("success", False)
+    response.setdefault("severity", "error")
+    response.setdefault("code", "BRIDGE_UNITY_RESPONSE")
+    response.setdefault("message", "Unity bridge response parsed.")
+
+    diagnostics = response.get("diagnostics")
+    if not isinstance(diagnostics, list):
+        response["diagnostics"] = []
+
+    data = response.get("data")
+    if not isinstance(data, dict):
+        data = {}
+    data.setdefault("target", target)
+    data.setdefault("op_count", op_count)
+    data.setdefault("read_only", False)
+    data.setdefault("executed", True)
+    data.setdefault("protocol_version", protocol_version)
+    response["data"] = data
+    return response
 
 
 def main() -> int:
@@ -112,27 +213,180 @@ def main() -> int:
             )
         )
 
-    # This reference bridge validates protocol contract only.
-    # A production bridge should invoke Unity batchmode and return actual apply results.
-    return _emit(
-        {
+    command_raw = os.environ.get(UNITY_COMMAND_ENV, "").strip()
+    if not command_raw:
+        return _emit(
+            _error_response(
+                code="BRIDGE_UNITY_COMMAND_MISSING",
+                message=f"{UNITY_COMMAND_ENV} is not configured.",
+            )
+        )
+
+    base_command, split_error = _split_command(command_raw)
+    if split_error:
+        return _emit(
+            _error_response(
+                code="BRIDGE_UNITY_COMMAND_INVALID",
+                message="Unity command cannot be parsed.",
+                data={"error": split_error},
+            )
+        )
+
+    timeout_raw = os.environ.get(UNITY_TIMEOUT_SEC_ENV, str(DEFAULT_TIMEOUT_SEC)).strip()
+    try:
+        timeout_sec = int(timeout_raw)
+    except ValueError:
+        timeout_sec = -1
+    if timeout_sec <= 0:
+        return _emit(
+            _error_response(
+                code="BRIDGE_TIMEOUT_INVALID",
+                message=f"{UNITY_TIMEOUT_SEC_ENV} must be a positive integer.",
+                data={"received_timeout": timeout_raw},
+            )
+        )
+
+    execute_method = os.environ.get(UNITY_EXECUTE_METHOD_ENV, DEFAULT_EXECUTE_METHOD).strip()
+    if not execute_method:
+        execute_method = DEFAULT_EXECUTE_METHOD
+    project_path = Path(
+        os.environ.get(UNITY_PROJECT_PATH_ENV, str(Path.cwd())).strip() or str(Path.cwd())
+    )
+    if not project_path.exists():
+        return _emit(
+            _error_response(
+                code="BRIDGE_PROJECT_PATH_MISSING",
+                message="Unity project path does not exist.",
+                data={"project_path": str(project_path)},
+            )
+        )
+
+    with tempfile.TemporaryDirectory(prefix="unitytool-bridge-") as temp_dir:
+        temp_root = Path(temp_dir)
+        request_path = temp_root / "request.json"
+        response_path = temp_root / "response.json"
+        log_path_raw = os.environ.get(UNITY_LOG_FILE_ENV, "").strip()
+        log_path = Path(log_path_raw) if log_path_raw else temp_root / "unity-bridge.log"
+
+        request_payload = {
             "protocol_version": PROTOCOL_VERSION,
-            "success": False,
-            "severity": "warning",
-            "code": "PHASE1_STUB",
-            "message": (
-                "Reference Unity bridge scaffold loaded, but Unity batchmode apply "
-                "is not implemented."
-            ),
-            "data": {
-                "target": target,
-                "op_count": len(ops),
-                "applied": 0,
-                "read_only": False,
-                "executed": False,
-            },
-            "diagnostics": [],
+            "target": target,
+            "ops": ops,
         }
+        request_path.write_text(
+            json.dumps(request_payload, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+        command = _build_unity_command(
+            base_command=base_command,
+            project_path=str(project_path),
+            execute_method=execute_method,
+            request_path=str(request_path),
+            response_path=str(response_path),
+            log_path=str(log_path),
+        )
+
+        try:
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                timeout=timeout_sec,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            return _emit(
+                _error_response(
+                    code="BRIDGE_UNITY_TIMEOUT",
+                    message="Unity batchmode process timed out.",
+                    data={
+                        "timeout_sec": timeout_sec,
+                        "command": command,
+                        "error": str(exc),
+                    },
+                )
+            )
+        except OSError as exc:
+            return _emit(
+                _error_response(
+                    code="BRIDGE_UNITY_EXEC",
+                    message="Failed to start Unity batchmode process.",
+                    data={
+                        "command": command,
+                        "error": str(exc),
+                    },
+                )
+            )
+
+        if completed.returncode != 0:
+            stdout_text = _decode_process_output(completed.stdout)
+            stderr_text = _decode_process_output(completed.stderr)
+            return _emit(
+                _error_response(
+                    code="BRIDGE_UNITY_FAILED",
+                    message="Unity batchmode process returned non-zero exit code.",
+                    data={
+                        "returncode": completed.returncode,
+                        "command": command,
+                        "stdout": stdout_text,
+                        "stderr": stderr_text,
+                        "log_path": str(log_path),
+                    },
+                )
+            )
+
+        if not response_path.exists():
+            return _emit(
+                _error_response(
+                    code="BRIDGE_UNITY_RESPONSE_MISSING",
+                    message="Unity batchmode response file is missing.",
+                    data={
+                        "response_path": str(response_path),
+                        "log_path": str(log_path),
+                    },
+                )
+            )
+
+        try:
+            unity_payload_raw = response_path.read_text(encoding="utf-8")
+            unity_payload = json.loads(unity_payload_raw)
+        except OSError as exc:
+            return _emit(
+                _error_response(
+                    code="BRIDGE_UNITY_RESPONSE_READ",
+                    message="Unity batchmode response file could not be read.",
+                    data={
+                        "response_path": str(response_path),
+                        "error": str(exc),
+                    },
+                )
+            )
+        except json.JSONDecodeError as exc:
+            return _emit(
+                _error_response(
+                    code="BRIDGE_UNITY_RESPONSE_JSON",
+                    message="Unity batchmode response file is not valid JSON.",
+                    data={
+                        "response_path": str(response_path),
+                        "error": str(exc),
+                    },
+                )
+            )
+
+    if not isinstance(unity_payload, dict):
+        return _emit(
+            _error_response(
+                code="BRIDGE_UNITY_RESPONSE_SCHEMA",
+                message="Unity batchmode response root must be an object.",
+            )
+        )
+
+    return _emit(
+        _finalize_unity_response(
+            payload=unity_payload,
+            target=target,
+            op_count=len(ops),
+        )
     )
 
 
