@@ -150,6 +150,11 @@ jobs:
           $target = "${{ inputs.targets }}"
           $windowStartRaw = "${{ inputs.run_window_start_utc_hour }}"
           $windowEndRaw = "${{ inputs.run_window_end_utc_hour }}"
+          $historyDurationPercentileRaw = "${{ inputs.history_duration_percentile }}"
+          $historyTimeoutMultiplierRaw = "${{ inputs.history_timeout_multiplier }}"
+          $historyTimeoutSlackSecRaw = "${{ inputs.history_timeout_slack_sec }}"
+          $historyTimeoutMinSecRaw = "${{ inputs.history_timeout_min_sec }}"
+          $historyTimeoutRoundSecRaw = "${{ inputs.history_timeout_round_sec }}"
           if ($target -eq "all" -or $target -eq "avatar") {
             if (-not (Test-Path "${{ inputs.avatar_plan }}")) {
               throw "avatar_plan not found: ${{ inputs.avatar_plan }}"
@@ -190,6 +195,41 @@ jobs:
             if ($windowEnd -lt 0 -or $windowEnd -gt 23) {
               throw "run_window_end_utc_hour must be in range 0..23."
             }
+          }
+          $historyDurationPercentile = 0.0
+          if (-not [double]::TryParse($historyDurationPercentileRaw, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$historyDurationPercentile)) {
+            throw "history_duration_percentile must be a number in range 0..100."
+          }
+          if ($historyDurationPercentile -lt 0.0 -or $historyDurationPercentile -gt 100.0) {
+            throw "history_duration_percentile must be in range 0..100."
+          }
+          $historyTimeoutMultiplier = 0.0
+          if (-not [double]::TryParse($historyTimeoutMultiplierRaw, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$historyTimeoutMultiplier)) {
+            throw "history_timeout_multiplier must be a number greater than or equal to 1.0."
+          }
+          if ($historyTimeoutMultiplier -lt 1.0) {
+            throw "history_timeout_multiplier must be greater than or equal to 1.0."
+          }
+          $historyTimeoutSlackSec = 0
+          if (-not [int]::TryParse($historyTimeoutSlackSecRaw, [ref]$historyTimeoutSlackSec)) {
+            throw "history_timeout_slack_sec must be an integer greater than or equal to 0."
+          }
+          if ($historyTimeoutSlackSec -lt 0) {
+            throw "history_timeout_slack_sec must be greater than or equal to 0."
+          }
+          $historyTimeoutMinSec = 0
+          if (-not [int]::TryParse($historyTimeoutMinSecRaw, [ref]$historyTimeoutMinSec)) {
+            throw "history_timeout_min_sec must be an integer greater than 0."
+          }
+          if ($historyTimeoutMinSec -le 0) {
+            throw "history_timeout_min_sec must be greater than 0."
+          }
+          $historyTimeoutRoundSec = 0
+          if (-not [int]::TryParse($historyTimeoutRoundSecRaw, [ref]$historyTimeoutRoundSec)) {
+            throw "history_timeout_round_sec must be an integer greater than 0."
+          }
+          if ($historyTimeoutRoundSec -le 0) {
+            throw "history_timeout_round_sec must be greater than 0."
           }
 
       - name: Evaluate UTC Run Window

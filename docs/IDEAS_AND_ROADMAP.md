@@ -145,7 +145,7 @@
 - Added Unity-enabled smoke workflow:
   - `.github/workflows/unity-smoke.yml` (`workflow_dispatch` + self-hosted Windows runner)
   - runs `prefab-sentinel validate smoke-batch` without `--*-expect-failure` and uploads `reports/bridge_smoke`
-  - includes `targets` input (`all|avatar|world`) and preflight input path checks
+  - includes `targets` input (`all|avatar|world`) and preflight input checks (required paths + run-window/history policy numeric ranges)
   - supports `timeout_profile_path` input for history-derived timeout defaults
   - supports history timeout policy inputs (`history_duration_percentile` / `history_timeout_multiplier` / `history_timeout_slack_sec` / `history_timeout_min_sec` / `history_timeout_round_sec`)
   - supports `expect_applied_from_plan` input (default true) for plan-op-count assertions
