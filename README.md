@@ -475,7 +475,7 @@ uv run unitytool validate refs --scope "Assets/haiirokoubou" --exclude "**/Gener
 uv run unitytool validate refs --scope "Assets/haiirokoubou" --ignore-guid-file "config/ignore_guids.txt"
 uv run unitytool validate runtime --scene "sample/avatar/Assets/Marycia.unity" --log-file "sample/world/Logs/ClientSim.log"
 uv run unitytool patch apply --plan "config/patch_plan.example.json" --dry-run
-set UNITYTOOL_PATCH_BRIDGE="python <unity_bridge_script.py>"
+set UNITYTOOL_PATCH_BRIDGE="python tools/unity_patch_bridge.py"
 uv run unitytool patch apply --plan "config/prefab_patch_plan.json" --confirm
 uv run unitytool suggest ignore-guids --scope "Assets/haiirokoubou" --min-occurrences 100 --max-items 20
 uv run unitytool suggest ignore-guids --scope "Assets/haiirokoubou" --ignore-guid "7e5debf235ac2d54397a268de3328672"
@@ -530,7 +530,8 @@ uvx --from . unitytool suggest ignore-guids --scope "Assets/haiirokoubou"
 `patch apply` は非dry-run時に `--confirm` を要求し、JSONターゲット（`.json`）は内蔵バックエンドで実編集する。
 `patch apply` は Unityターゲット（`.prefab` / `.unity` / `.asset` など）に対して `UNITYTOOL_PATCH_BRIDGE` 経由の外部bridgeを使って適用できる。
 `patch apply` は Unity bridge 未設定時に Unityターゲットを `SER_UNSUPPORTED_TARGET` で停止する（Unity YAMLの直接編集は行わない）。
-`UNITYTOOL_PATCH_BRIDGE` は JSON入力(stdin) / JSON出力(stdout) のbridgeコマンドを指定する。
+`UNITYTOOL_PATCH_BRIDGE` は JSON入力(stdin) / JSON出力(stdout) のbridgeコマンドを指定する（`protocol_version: 1`）。
+`tools/unity_patch_bridge.py` は bridgeプロトコル検証用の参照実装で、Unity batchmode適用は未実装（`PHASE1_STUB`）として返す。
 `validate runtime` は log分類ベースのscaffoldを実装済みで、`--scene` 存在確認、`BROKEN_PPTR` / `UDON_NULLREF` などの分類、`assert_no_critical_errors` 判定までを返す。
 `validate runtime` の compile/ClientSim 実行は現時点では `RUN_COMPILE_SKIPPED` / `RUN_CLIENTSIM_SKIPPED` として明示的に未配線を返す。
 `report export --format md` は `VALIDATE_RUNTIME_RESULT` payload を入力した場合、Runtime Validation 要約（分類件数・severity内訳・カテゴリ表）を追加出力する。

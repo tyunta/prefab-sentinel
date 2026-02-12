@@ -492,6 +492,51 @@ print(
             self.assertEqual("SER_APPLY_OK", response.code)
             self.assertEqual(1, response.data["applied"])
 
+    def test_apply_and_save_rejects_bridge_protocol_version_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            target = root / "state.prefab"
+            target.write_text("%YAML 1.1\n", encoding="utf-8")
+            bridge = root / "bridge.py"
+            bridge.write_text(
+                """
+import json
+import sys
+
+json.load(sys.stdin)
+print(
+    json.dumps(
+        {
+            "protocol_version": 999,
+            "success": True,
+            "severity": "info",
+            "code": "SER_APPLY_OK",
+            "message": "Bridge apply completed.",
+            "data": {"applied": 1},
+            "diagnostics": [],
+        }
+    )
+)
+""".strip(),
+                encoding="utf-8",
+            )
+
+            mcp = SerializedObjectMcp(bridge_command=(sys.executable, str(bridge)))
+            response = mcp.apply_and_save(
+                target=str(target),
+                ops=[
+                    {
+                        "op": "set",
+                        "component": "Example.Component",
+                        "path": "nested.value",
+                        "value": 42,
+                    }
+                ],
+            )
+
+            self.assertFalse(response.success)
+            self.assertEqual("SER_BRIDGE_PROTOCOL_VERSION", response.code)
+
     def test_apply_and_save_rejects_bridge_command_outside_allowlist(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

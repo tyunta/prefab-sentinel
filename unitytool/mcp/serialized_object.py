@@ -12,6 +12,7 @@ from unitytool.contracts import Diagnostic, Severity, ToolResponse
 from unitytool.unity_assets import decode_text_file
 
 _SUPPORTED_OPS = {"set", "insert_array_element", "remove_array_element"}
+_UNITY_BRIDGE_PROTOCOL_VERSION = 1
 _UNITY_BRIDGE_SUPPORTED_SUFFIXES = {
     ".prefab",
     ".unity",
@@ -113,6 +114,28 @@ class SerializedObjectMcp:
                 diagnostics=[],
             )
 
+        protocol_raw = payload.get("protocol_version", _UNITY_BRIDGE_PROTOCOL_VERSION)
+        try:
+            protocol_version = int(protocol_raw)
+        except (TypeError, ValueError):
+            protocol_version = -1
+        if protocol_version != _UNITY_BRIDGE_PROTOCOL_VERSION:
+            return ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code="SER_BRIDGE_PROTOCOL_VERSION",
+                message="Unity bridge protocol version mismatch.",
+                data={
+                    "target": str(target_path),
+                    "op_count": len(ops),
+                    "expected_protocol_version": _UNITY_BRIDGE_PROTOCOL_VERSION,
+                    "received_protocol_version": protocol_raw,
+                    "read_only": False,
+                    "executed": False,
+                },
+                diagnostics=[],
+            )
+
         severity_raw = str(payload.get("severity", Severity.ERROR.value))
         try:
             severity = Severity(severity_raw)
@@ -141,6 +164,7 @@ class SerializedObjectMcp:
         data.setdefault("op_count", len(ops))
         data.setdefault("read_only", False)
         data.setdefault("executed", True)
+        data.setdefault("protocol_version", protocol_version)
 
         return ToolResponse(
             success=bool(payload.get("success", False)),
@@ -208,6 +232,7 @@ class SerializedObjectMcp:
             )
 
         request_payload = {
+            "protocol_version": _UNITY_BRIDGE_PROTOCOL_VERSION,
             "target": str(target_path),
             "ops": ops,
         }
