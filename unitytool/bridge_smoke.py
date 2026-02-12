@@ -173,14 +173,36 @@ def apply_applied_expectation(
     return applied_matches
 
 
+def apply_code_expectation(
+    response: dict[str, Any],
+    expected_code: str | None,
+) -> bool | None:
+    if expected_code is None:
+        return None
+    data = response.get("data")
+    if not isinstance(data, dict):
+        return None
+    actual_code = response.get("code")
+    actual_code_text = actual_code if isinstance(actual_code, str) else None
+    code_matches = actual_code_text == expected_code
+    data["expected_code"] = expected_code
+    data["actual_code"] = actual_code_text
+    data["code_matches"] = code_matches
+    return code_matches
+
+
 def validate_expectation(
     response: dict[str, Any],
     expect_failure: bool,
     expected_applied: int | None = None,
     expected_applied_source: str | None = None,
+    expected_code: str | None = None,
 ) -> bool:
     success = bool(response.get("success"))
     matched_expectation = (not success) if expect_failure else success
+    code_matches = apply_code_expectation(response, expected_code)
+    if code_matches is False:
+        return False
     applied_matches = apply_applied_expectation(
         response,
         expected_applied,

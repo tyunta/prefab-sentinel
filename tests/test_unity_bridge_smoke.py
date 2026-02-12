@@ -185,6 +185,28 @@ sys.stdout.write(json.dumps({"success": True, "severity": "notice", "code": "OK"
         self.assertFalse(_validate_expectation({"success": False}, expect_failure=False))
         self.assertTrue(_validate_expectation({"success": False}, expect_failure=True))
         self.assertFalse(_validate_expectation({"success": True}, expect_failure=True))
+        code_response = {"success": True, "code": "BRIDGE_OK", "data": {}}
+        self.assertTrue(
+            _validate_expectation(
+                code_response,
+                expect_failure=False,
+                expected_code="BRIDGE_OK",
+            )
+        )
+        self.assertEqual("BRIDGE_OK", code_response["data"]["expected_code"])
+        self.assertEqual("BRIDGE_OK", code_response["data"]["actual_code"])
+        self.assertTrue(code_response["data"]["code_matches"])
+        code_mismatch_response = {"success": True, "code": "BRIDGE_OK", "data": {}}
+        self.assertFalse(
+            _validate_expectation(
+                code_mismatch_response,
+                expect_failure=False,
+                expected_code="BRIDGE_FAIL",
+            )
+        )
+        self.assertEqual("BRIDGE_FAIL", code_mismatch_response["data"]["expected_code"])
+        self.assertEqual("BRIDGE_OK", code_mismatch_response["data"]["actual_code"])
+        self.assertFalse(code_mismatch_response["data"]["code_matches"])
         response = {"success": True, "data": {"applied": 2}}
         self.assertTrue(
             _validate_expectation(
@@ -281,6 +303,44 @@ sys.stdout.write(json.dumps({"success": True, "severity": "info", "code": "OK", 
         self.assertEqual("cli", payload["data"]["expected_applied_source"])
         self.assertEqual(1, payload["data"]["actual_applied"])
         self.assertFalse(payload["data"]["applied_matches"])
+
+    def test_main_returns_nonzero_when_expected_code_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "plan.json"
+            bridge = root / "fake_bridge.py"
+            plan.write_text(
+                json.dumps({"target": "Assets/Test.prefab", "ops": []}),
+                encoding="utf-8",
+            )
+            bridge.write_text(
+                """
+import json
+import sys
+_ = json.loads(sys.stdin.read())
+sys.stdout.write(json.dumps({"success": True, "severity": "info", "code": "BRIDGE_OK", "message": "ok", "data": {}, "diagnostics": []}))
+""".strip(),
+                encoding="utf-8",
+            )
+            output = io.StringIO()
+            with redirect_stdout(output):
+                exit_code = main(
+                    [
+                        "--plan",
+                        str(plan),
+                        "--bridge-script",
+                        str(bridge),
+                        "--python",
+                        sys.executable,
+                        "--expected-code",
+                        "BRIDGE_FAIL",
+                    ]
+                )
+        payload = json.loads(output.getvalue())
+        self.assertEqual(1, exit_code)
+        self.assertEqual("BRIDGE_FAIL", payload["data"]["expected_code"])
+        self.assertEqual("BRIDGE_OK", payload["data"]["actual_code"])
+        self.assertFalse(payload["data"]["code_matches"])
 
     def test_main_applies_expected_applied_from_plan(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

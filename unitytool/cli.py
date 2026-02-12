@@ -197,6 +197,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Expect bridge result success=false (exit 0 when failure is observed).",
     )
     validate_bridge_smoke.add_argument(
+        "--expected-code",
+        default=None,
+        help="Optional expected response code value.",
+    )
+    validate_bridge_smoke.add_argument(
         "--expected-applied",
         type=int,
         default=None,
@@ -695,6 +700,7 @@ def main(argv: list[str] | None = None) -> int:
             args.expect_failure,
             expected_applied,
             expected_applied_source,
+            args.expected_code,
         )
         if args.out:
             output_path = Path(args.out)

@@ -77,6 +77,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Expect bridge result success=false (exit 0 when failure is observed).",
     )
     parser.add_argument(
+        "--expected-code",
+        default=None,
+        help="Optional expected response code value.",
+    )
+    parser.add_argument(
         "--expected-applied",
         type=int,
         default=None,
@@ -155,12 +160,14 @@ def _validate_expectation(
     expect_failure: bool,
     expected_applied: int | None = None,
     expected_applied_source: str | None = None,
+    expected_code: str | None = None,
 ) -> bool:
     return _validate_expectation_impl(
         response,
         expect_failure,
         expected_applied,
         expected_applied_source,
+        expected_code,
     )
 
 
@@ -208,6 +215,7 @@ def main(argv: list[str] | None = None) -> int:
         args.expect_failure,
         expected_applied,
         expected_applied_source,
+        args.expected_code,
     )
     if args.out:
         output_path = Path(args.out)
