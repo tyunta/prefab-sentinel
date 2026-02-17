@@ -732,6 +732,11 @@ class OrchestratorSuggestionTests(unittest.TestCase):
             first = response.data["candidates"][0]
             self.assertEqual(MISSING_GUID, first["guid"])
             self.assertGreaterEqual(first["occurrences"], 1)
+            self.assertEqual([], response.data["safe_fix"])
+            self.assertEqual(
+                response.data["candidate_count"],
+                len(response.data["decision_required"]),
+            )
 
     def test_suggest_ignore_guids_respects_ignore_list(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

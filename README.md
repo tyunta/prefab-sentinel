@@ -34,6 +34,37 @@
 
 ---
 
+## 1.1 できることと効果
+
+### 今すぐできること（Unity不要）
+- 参照破損の検出: `validate refs --scope ...` で Broken PPtr / missing fileID を検出
+- Variant観察: `inspect variant --path ...` で prefab chain / overrides / 実効値を可視化
+- 参照逆引き: `inspect where-used --asset-or-guid ... --scope ...` で利用箇所を列挙
+- ignore候補抽出: `suggest ignore-guids --scope ...` で候補GUIDを `decision_required` として提示
+- 変更差分の事前確認: `patch apply --plan ... --dry-run` で差分プレビュー
+- 監査ログ付き適用: `patch apply --confirm --out-report --change-reason` で監査可能な適用
+- レポート整形: `report export` / `report smoke-history` で結果をMarkdown/CSV化
+
+### Unity環境があるとできること（現状は保留）
+- 実行時検証: `validate runtime` / `patch apply --runtime-scene` で Udon/ClientSim を含む検証
+- Unity bridge 統合: `.prefab` / `.unity` の apply を `UNITYTOOL_PATCH_BRIDGE` 経由で実行
+- Unity smoke: `validate bridge-smoke` / `validate smoke-batch` でE2Eの動作確認
+
+### 何をしたら、どう良いことがあるか（目的別）
+- `validate refs` を回す: 参照破損の早期検出で後工程の失敗を防ぐ
+- `inspect variant` を回す: override衝突や不整合を実効値で可視化できる
+- `suggest ignore-guids` を回す: ノイズの多いmissing GUIDを整理し、判断対象を絞れる
+- `patch apply --dry-run` を回す: 変更内容の誤りを本番適用前に排除できる
+- `patch apply --confirm` を回す: 監査ログ（理由/差分/検証結果）を残しながら安全に反映できる
+
+### 推奨フロー（Unity不要の範囲）
+1. `--scope` を決めて `validate refs` を実行する
+2. 必要なら `suggest ignore-guids` で候補を確認し、判断後に ignore リストへ反映する
+3. `patch apply --dry-run` で差分を確認する
+4. `patch apply --confirm --out-report --change-reason` で適用し、監査ログを保存する
+
+---
+
 ## 2. 背景課題（現行運用の痛点）
 
 ### 2.1 参照破損
@@ -223,6 +254,7 @@ GUID/fileID参照を人間可読の実体へ逆引きし、壊れた参照を早
 ## 5.1 skill: variant-safe-edit
 ### 目的
 Variant編集で破損を出さないための標準手順。
+Implementation: `skills/variant-safe-edit/SKILL.md`
 
 ### 手順
 1. `prefab-variant-mcp.list_overrides`
@@ -241,6 +273,7 @@ Variant編集で破損を出さないための標準手順。
 ## 5.2 skill: udon-log-triage
 ### 目的
 Udonログを根拠に修正候補を最短で絞る。
+Implementation: `skills/udon-log-triage/SKILL.md`
 
 ### 手順
 1. 例外箇所（ファイル/行）抽出
@@ -253,6 +286,7 @@ Udonログを根拠に修正候補を最短で絞る。
 ## 5.3 skill: prefab-reference-repair
 ### 目的
 壊れた参照の機械的復旧。
+Implementation: `skills/prefab-reference-repair/SKILL.md`
 
 ### 手順
 1. `scan_broken_references`
@@ -444,6 +478,12 @@ Udonログを根拠に修正候補を最短で絞る。
 - 変更前に必ずscope宣言（対象Prefab/Scene）
 - 変更後に必ずruntime検証
 - decision_requiredはユーザー合意後のみ適用
+- ignore-guidは `<scope>/config/ignore_guids.txt` を既定とする（存在しなければ無視）
+- CIでのignore-guid反映は許可するが、`suggest ignore-guids --out-ignore-guid-file` の明示指定時かつ許可ブランチのみ更新する（既定: `main`, `release/*`。必要なら `UNITYTOOL_IGNORE_GUID_ALLOW_BRANCHES` で上書き）
+  - CIブランチ名は `UNITYTOOL_CI_BRANCH` / `GITHUB_REF_NAME` などから解決する
+- scope は実行時に `--scope` で指定し、固定パスは持たない
+- 完了基準は本READMEの「Definition of Done」に従う
+- patch apply の非dry-run実行（`--confirm`）は `--change-reason` と `--out-report` を必須とする（監査ログのため）
 - READMEを単一の運用・仕様の正本とする
 
 ---
@@ -464,7 +504,7 @@ prefab-sentinel report export --format md --out reports/latest.md
 ### 17.1 Phase 1 Scaffold 実行方法（現行実装）
 
 Phase 1では read-only 検査系の CLI 骨格のみ提供する。  
-ローカル実行は `uv run`、可搬実行は `uvx --from .` を使用する。
+ローカル実行は `uv run`、可搬実行は `uvx --from git+https://github.com/tyunta/prefab-sentinel.git` を使用する。
 CLI名は `prefab-sentinel` を正規とする。
 環境変数プレフィックス（`UNITYTOOL_*`）は互換性のため現状維持とする。
 
@@ -475,7 +515,7 @@ uv run prefab-sentinel inspect where-used --asset-or-guid "Assets/SomeAsset.pref
 uv run prefab-sentinel validate refs --scope "Assets/haiirokoubou"
 uv run prefab-sentinel validate refs --scope "Assets/haiirokoubou" --details --max-diagnostics 200
 uv run prefab-sentinel validate refs --scope "Assets/haiirokoubou" --exclude "**/Generated/**"
-uv run prefab-sentinel validate refs --scope "Assets/haiirokoubou" --ignore-guid-file "config/ignore_guids.txt"
+uv run prefab-sentinel validate refs --scope "Assets/haiirokoubou" --ignore-guid-file "Assets/haiirokoubou/config/ignore_guids.txt"
 uv run prefab-sentinel validate runtime --scene "sample/avatar/Assets/Marycia.unity" --log-file "sample/world/Logs/ClientSim.log"
 uv run prefab-sentinel validate bridge-smoke --plan "config/prefab_patch_plan.json" --unity-command "C:/Program Files/Unity/Hub/Editor/<version>/Editor/Unity.exe" --unity-project-path "D:/git/prefab-sentinel/sample/avatar" --unity-execute-method "PrefabSentinel.UnityPatchBridge.ApplyFromJson"
 uv run prefab-sentinel validate bridge-smoke --plan "config/prefab_patch_plan.json" --expected-applied 3 --unity-command "C:/Program Files/Unity/Hub/Editor/<version>/Editor/Unity.exe" --unity-project-path "D:/git/prefab-sentinel/sample/avatar" --unity-execute-method "PrefabSentinel.UnityPatchBridge.ApplyFromJson"
@@ -503,11 +543,11 @@ set UNITYTOOL_UNITY_COMMAND="C:/Program Files/Unity/Hub/Editor/<version>/Editor/
 set UNITYTOOL_UNITY_PROJECT_PATH="D:/git/prefab-sentinel/sample/avatar"
 set UNITYTOOL_UNITY_EXECUTE_METHOD="PrefabSentinel.UnityPatchBridge.ApplyFromJson"
 python scripts/unity_bridge_smoke.py --plan "config/prefab_patch_plan.json" --unity-command "C:/Program Files/Unity/Hub/Editor/<version>/Editor/Unity.exe" --unity-project-path "D:/git/prefab-sentinel/sample/avatar" --unity-execute-method "PrefabSentinel.UnityPatchBridge.ApplyFromJson" --out "reports/unity_bridge_smoke.json"
-uv run prefab-sentinel patch apply --plan "config/prefab_patch_plan.json" --confirm
-uv run prefab-sentinel patch apply --plan "config/prefab_patch_plan.json" --confirm --scope "Assets" --runtime-scene "Assets/Smoke.unity"
+uv run prefab-sentinel patch apply --plan "config/prefab_patch_plan.json" --confirm --out-report "reports/patch_result.json" --change-reason "apply prefab patch"
+uv run prefab-sentinel patch apply --plan "config/prefab_patch_plan.json" --confirm --out-report "reports/patch_result.json" --change-reason "apply prefab patch" --scope "Assets" --runtime-scene "Assets/Smoke.unity"
 uv run prefab-sentinel suggest ignore-guids --scope "Assets/haiirokoubou" --min-occurrences 100 --max-items 20
 uv run prefab-sentinel suggest ignore-guids --scope "Assets/haiirokoubou" --ignore-guid "7e5debf235ac2d54397a268de3328672"
-uv run prefab-sentinel suggest ignore-guids --scope "Assets/haiirokoubou" --min-occurrences 100 --out-ignore-guid-file "config/ignore_guids.txt" --out-ignore-guid-mode append
+uv run prefab-sentinel suggest ignore-guids --scope "Assets/haiirokoubou" --min-occurrences 100 --out-ignore-guid-file "Assets/haiirokoubou/config/ignore_guids.txt" --out-ignore-guid-mode append
 python scripts/benchmark_refs.py --scope "sample/avatar/Assets" --warmup-runs 1 --runs 3 --out "sample/avatar/config/benchmark_refs.json" --out-csv "sample/avatar/config/benchmark_refs.csv" --csv-append --include-generated-date
 python scripts/benchmark_history_to_csv.py --inputs "sample/avatar/config/bench_*.json" --scope-contains "avatar" --severity error --generated-date-prefix "2026-02" --min-p90 2.0 --latest-per-scope --top-slowest 20 --split-by-severity --sort-by avg_sec --sort-order desc --include-date-column --out "sample/avatar/config/benchmark_trend.csv" --out-md "sample/avatar/config/benchmark_trend.md"
 python scripts/benchmark_samples.py --targets all --runs 1 --warmup-runs 0 --history-generated-date-prefix "2026-02" --history-min-p90 2.0 --history-latest-per-scope --history-split-by-severity --history-write-md --run-regression --regression-baseline-auto-latest 3 --regression-baseline-pinning-file "sample/avatar/config/baseline_pinning.json" --regression-alerts-only --regression-fail-on-regression --regression-out-csv-append --regression-out-md
@@ -515,29 +555,29 @@ python scripts/benchmark_regression_report.py --baseline-inputs "sample/avatar/c
 python scripts/bridge_smoke_samples.py --targets all --avatar-plan "sample/avatar/config/prefab_patch_plan.json" --world-plan "sample/world/config/prefab_patch_plan.json" --unity-command "C:/Program Files/Unity/Hub/Editor/<version>/Editor/Unity.exe" --out-dir "reports/bridge_smoke" --summary-md "reports/bridge_smoke/summary.md"
 python scripts/bridge_smoke_samples.py --targets all --avatar-plan "sample/avatar/config/prefab_patch_plan.json" --world-plan "sample/world/config/prefab_patch_plan.json" --unity-command "C:/Program Files/Unity/Hub/Editor/<version>/Editor/Unity.exe" --unity-timeout-sec 600 --avatar-unity-timeout-sec 900 --world-unity-timeout-sec 450 --max-retries 2 --retry-delay-sec 5 --out-dir "reports/bridge_smoke" --summary-md "reports/bridge_smoke/summary.md"
 python scripts/smoke_summary_to_csv.py --inputs "reports/bridge_smoke/**/summary.json" --duration-percentile 90 --out "reports/bridge_smoke_history.csv" --out-md "reports/bridge_smoke_history.md" --out-timeout-profile "reports/bridge_timeout_profile.json" --timeout-multiplier 1.5 --timeout-slack-sec 60 --timeout-min-sec 300 --timeout-round-sec 30
-uvx --from . prefab-sentinel report smoke-history --inputs "reports/bridge_smoke/**/summary.json" --duration-percentile 90 --out "reports/bridge_smoke_history.csv" --out-md "reports/bridge_smoke_history.md" --out-timeout-profile "reports/bridge_timeout_profile.json" --timeout-multiplier 1.5 --timeout-slack-sec 60 --timeout-min-sec 300 --timeout-round-sec 30
-uvx --from . prefab-sentinel report smoke-history --inputs "reports/bridge_smoke/**/summary.json" --out "reports/bridge_smoke_history.csv" --max-code-mismatches 0 --min-code-pass-pct 100 --max-applied-mismatches 0 --min-applied-pass-pct 100 --max-observed-timeout-breaches 0 --min-observed-timeout-coverage-pct 100 --max-observed-timeout-breaches-per-target 0 --min-observed-timeout-coverage-pct-per-target 100 --max-profile-timeout-breaches 0 --min-profile-timeout-coverage-pct 100 --max-profile-timeout-breaches-per-target 0 --min-profile-timeout-coverage-pct-per-target 100
+uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel report smoke-history --inputs "reports/bridge_smoke/**/summary.json" --duration-percentile 90 --out "reports/bridge_smoke_history.csv" --out-md "reports/bridge_smoke_history.md" --out-timeout-profile "reports/bridge_timeout_profile.json" --timeout-multiplier 1.5 --timeout-slack-sec 60 --timeout-min-sec 300 --timeout-round-sec 30
+uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel report smoke-history --inputs "reports/bridge_smoke/**/summary.json" --out "reports/bridge_smoke_history.csv" --max-code-mismatches 0 --min-code-pass-pct 100 --max-applied-mismatches 0 --min-applied-pass-pct 100 --max-observed-timeout-breaches 0 --min-observed-timeout-coverage-pct 100 --max-observed-timeout-breaches-per-target 0 --min-observed-timeout-coverage-pct-per-target 100 --max-profile-timeout-breaches 0 --min-profile-timeout-coverage-pct 100 --max-profile-timeout-breaches-per-target 0 --min-profile-timeout-coverage-pct-per-target 100
 
 # uvx 経由でローカルパッケージから実行（インストール不要）
-uvx --from . prefab-sentinel inspect variant --path "Assets/... Variant.prefab"
-uvx --from . prefab-sentinel inspect where-used --asset-or-guid "Assets/SomeAsset.prefab" --scope "Assets"
-uvx --from . prefab-sentinel validate refs --scope "Assets/haiirokoubou"
-uvx --from . prefab-sentinel validate runtime --scene "sample/avatar/Assets/Marycia.unity"
-uvx --from . prefab-sentinel validate bridge-smoke --plan "config/prefab_patch_plan.json"
-uvx --from . prefab-sentinel validate bridge-smoke --plan "config/prefab_patch_plan.json" --expected-applied 3
-uvx --from . prefab-sentinel validate bridge-smoke --plan "config/prefab_patch_plan.json" --expect-applied-from-plan
-uvx --from . prefab-sentinel validate bridge-smoke --plan "config/prefab_patch_plan.json" --expected-code "BRIDGE_OK"
-uvx --from . prefab-sentinel validate smoke-batch --targets all --out-dir "reports/bridge_smoke"
-uvx --from . prefab-sentinel validate smoke-batch --targets all --timeout-profile "reports/bridge_timeout_profile.json" --out-dir "reports/bridge_smoke"
-uvx --from . prefab-sentinel validate smoke-batch --targets avatar --avatar-expected-code "OK" --out-dir "reports/bridge_smoke"
-uvx --from . prefab-sentinel validate smoke-batch --targets avatar --avatar-expected-applied 3 --out-dir "reports/bridge_smoke"
-uvx --from . prefab-sentinel validate smoke-batch --targets all --expect-applied-from-plan --out-dir "reports/bridge_smoke"
-uvx --from . prefab-sentinel patch apply --plan "config/patch_plan.example.json" --dry-run
-uvx --from . prefab-sentinel suggest ignore-guids --scope "Assets/haiirokoubou"
+uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel inspect variant --path "Assets/... Variant.prefab"
+uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel inspect where-used --asset-or-guid "Assets/SomeAsset.prefab" --scope "Assets"
+uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel validate refs --scope "Assets/haiirokoubou"
+uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel validate runtime --scene "sample/avatar/Assets/Marycia.unity"
+uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel validate bridge-smoke --plan "config/prefab_patch_plan.json"
+uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel validate bridge-smoke --plan "config/prefab_patch_plan.json" --expected-applied 3
+uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel validate bridge-smoke --plan "config/prefab_patch_plan.json" --expect-applied-from-plan
+uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel validate bridge-smoke --plan "config/prefab_patch_plan.json" --expected-code "BRIDGE_OK"
+uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel validate smoke-batch --targets all --out-dir "reports/bridge_smoke"
+uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel validate smoke-batch --targets all --timeout-profile "reports/bridge_timeout_profile.json" --out-dir "reports/bridge_smoke"
+uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel validate smoke-batch --targets avatar --avatar-expected-code "OK" --out-dir "reports/bridge_smoke"
+uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel validate smoke-batch --targets avatar --avatar-expected-applied 3 --out-dir "reports/bridge_smoke"
+uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel validate smoke-batch --targets all --expect-applied-from-plan --out-dir "reports/bridge_smoke"
+uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel patch apply --plan "config/patch_plan.example.json" --dry-run
+uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel suggest ignore-guids --scope "Assets/haiirokoubou"
 ```
 
 `report export` は JSON レポートを Markdown / JSON に変換して保存する。
-`--ignore-guid-file` は UTF-8 テキスト（1行1GUID、`#` 以降コメント可）を受け付ける。
+`--ignore-guid-file` は UTF-8 テキスト（1行1GUID、`#` 以降コメント可）を受け付ける。未指定時は `<scope>/config/ignore_guids.txt` を参照し、存在しなければ無視する。
 `suggest ignore-guids` は `--out-ignore-guid-file` で候補GUIDを1行1件で保存できる（`replace`/`append`）。
 `report export --format md` では、`scan_broken_references` データが含まれる場合に Noise Reduction サマリーを先頭に出力する。
 `report export --format md` は `--md-max-usages N` / `--md-omit-usages` で `usages` 配列を軽量化できる。
@@ -586,8 +626,8 @@ uvx --from . prefab-sentinel suggest ignore-guids --scope "Assets/haiirokoubou"
 `patch verify` は SHA-256 / HMAC-SHA256 の一致検証を行い、検証失敗時は非0終了コードを返す（`--format json`/`text`）。
 `patch verify` は `--attestation-file` から期待値を読み取って照合できる。
 `patch apply` は plan JSON のスキーマ検証と `dry_run_patch` プレビューを実装済み（`set` / `insert_array_element` / `remove_array_element`）。
-`patch apply` は `--out-report` 指定時に結果 envelope を JSON ファイルに保存する。
-`patch apply` は非dry-run時に `--confirm` を要求し、JSONターゲット（`.json`）は内蔵バックエンドで実編集する。
+`patch apply` は `--out-report` 指定時に結果 envelope を JSON ファイルに保存する（`--confirm` 時は必須）。
+`patch apply` は非dry-run時に `--confirm` と `--change-reason` を要求し、JSONターゲット（`.json`）は内蔵バックエンドで実編集する。
 `patch apply` は `--attestation-file` から期待値（sha256/signature）を読み取って適用前照合できる（CLI引数の `--plan-sha256` / `--plan-signature` が優先）。
 `patch apply` は `--plan-sha256` 指定時に plan ファイル内容の SHA-256 を照合し、不一致なら適用前に停止する。
 `patch apply` は `--plan-signature` 指定時に HMAC-SHA256 署名を照合し、不一致なら適用前に停止する（既定キー環境変数: `UNITYTOOL_PLAN_SIGNING_KEY`）。
@@ -597,6 +637,61 @@ uvx --from . prefab-sentinel suggest ignore-guids --scope "Assets/haiirokoubou"
 `patch apply` は Unityターゲット（`.prefab` / `.unity` / `.asset` など）に対して `UNITYTOOL_PATCH_BRIDGE` 経由の外部bridgeを使って適用できる。
 `patch apply` は Unity bridge 未設定時に Unityターゲットを `SER_UNSUPPORTED_TARGET` で停止する（Unity YAMLの直接編集は行わない）。
 `UNITYTOOL_PATCH_BRIDGE` は JSON入力(stdin) / JSON出力(stdout) のbridgeコマンドを指定する（`protocol_version: 1`）。
+
+`patch apply --confirm --out-report` の出力例（before/after diff + validation steps の抜粋）:
+```json
+{
+  "success": true,
+  "severity": "info",
+  "code": "PATCH_APPLY_RESULT",
+  "message": "patch.apply completed.",
+  "data": {
+    "execution_id": "8f0c2b7c0e8f4f30a3d3a7f0f1f1e2aa",
+    "executed_at_utc": "2026-02-17T00:00:00+00:00",
+    "change_reason": "apply prefab patch",
+    "steps": [
+      {
+        "step": "dry_run_patch",
+        "result": {
+          "code": "SER_DRY_RUN_OK",
+          "data": {
+            "diff": [
+              {
+                "op": "set",
+                "path": "nested.value",
+                "before": "(unknown)",
+                "after": 42
+              }
+            ]
+          }
+        }
+      },
+      {
+        "step": "apply_and_save",
+        "result": {
+          "code": "SER_APPLY_OK",
+          "data": {
+            "diff": [
+              {
+                "op": "set",
+                "path": "nested.value",
+                "before": 10,
+                "after": 42
+              }
+            ]
+          }
+        }
+      },
+      {
+        "step": "assert_no_critical_errors",
+        "result": {
+          "code": "RUN_ASSERT_OK"
+        }
+      }
+    ]
+  }
+}
+```
 `tools/unity_patch_bridge.py` は `UNITYTOOL_UNITY_COMMAND` を使って Unity batchmode コマンドを実行し、JSONリクエスト/レスポンスファイルを介して結果を返す（`set` / `insert_array_element` の `value` を Unity 側で扱える型情報へ正規化）。
 `tools/unity_patch_bridge.py` は Unity起動前に `ops` を検証し、`set` の `value` 欠落や配列操作の `index` 欠落などを `BRIDGE_REQUEST_SCHEMA` で fail-fast 停止する。
 `tools/unity_patch_bridge.py` は `UNITYTOOL_UNITY_PROJECT_PATH` / `UNITYTOOL_UNITY_EXECUTE_METHOD` / `UNITYTOOL_UNITY_TIMEOUT_SEC` / `UNITYTOOL_UNITY_LOG_FILE` で実行設定を制御できる。
@@ -620,7 +715,7 @@ uv run prefab-sentinel report export --input reports/input.json --format md --ou
 uv run prefab-sentinel report export --input reports/input.json --format md --out reports/latest.md --md-omit-usages
 uv run prefab-sentinel report export --input reports/input.json --format md --out reports/latest.md --md-max-steps 20
 uv run prefab-sentinel report export --input reports/input.json --format md --out reports/latest.md --md-omit-steps
-uvx --from . prefab-sentinel report export --input reports/input.json --format json --out reports/latest.json
+uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel report export --input reports/input.json --format json --out reports/latest.json
 ```
 
 現行Phase 1では read-only 解析を実装済み。  
@@ -634,7 +729,7 @@ GUIDインデックスは scope が属する Unity プロジェクトルート�
 外部 `*.prefab` 参照の fileID 検証は誤検知回避のため既定でスキップし、件数を `skipped_external_prefab_fileid_checks` に集計する。  
 `validate refs` の `categories` はユニーク問題件数（例: missing GUID単位）を返し、発生回数は `categories_occurrences` / `broken_occurrences` で確認する。  
 ノイズ判定に使えるよう、`top_missing_asset_guids` に missing GUID上位を返す。  
-`suggest ignore-guids` は `top_missing_asset_guids` から閾値ベースで無視候補GUIDを提案する（適用は手動判断前提）。  
+`suggest ignore-guids` は `top_missing_asset_guids` から閾値ベースで無視候補GUIDを提案する（適用は手動判断前提）。候補は `decision_required` として返却する。  
 `--ignore-guid` / `--ignore-guid-file` で missing GUID を一時的に無視でき、集計は `ignored_missing_asset_occurrences` / `top_ignored_missing_asset_guids` で確認できる。  
 候補採用を継続運用する場合は `--out-ignore-guid-file` で ignore リストへ追記して再利用できる。  
 `where_used` も同じ既定除外を適用し、`Library` など非本番スコープを走査しない。  

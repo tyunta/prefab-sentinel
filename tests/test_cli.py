@@ -1381,6 +1381,67 @@ raise SystemExit(0)
         self.assertFalse(payload["success"])
         self.assertEqual("SER_CONFIRM_REQUIRED", payload["data"]["steps"][1]["result"]["code"])
 
+    def test_patch_apply_confirm_requires_out_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "patch.json"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "target": "Assets/Variant.prefab",
+                        "ops": [
+                            {
+                                "op": "set",
+                                "component": "Example.Component",
+                                "path": "items.Array.size",
+                                "value": 2,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    self.run_cli(
+                        ["patch", "apply", "--plan", str(plan), "--confirm", "--change-reason", "test"]
+                    )
+
+    def test_patch_apply_confirm_requires_change_reason(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "patch.json"
+            out_report = root / "reports" / "patch_result.json"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "target": "Assets/Variant.prefab",
+                        "ops": [
+                            {
+                                "op": "set",
+                                "component": "Example.Component",
+                                "path": "items.Array.size",
+                                "value": 2,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    self.run_cli(
+                        [
+                            "patch",
+                            "apply",
+                            "--plan",
+                            str(plan),
+                            "--confirm",
+                            "--out-report",
+                            str(out_report),
+                        ]
+                    )
+
     def test_patch_apply_confirm_updates_json_target(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -1419,8 +1480,19 @@ raise SystemExit(0)
                 ),
                 encoding="utf-8",
             )
+            out_report = root / "reports" / "patch_result.json"
             exit_code, output = self.run_cli(
-                ["patch", "apply", "--plan", str(plan), "--confirm"]
+                [
+                    "patch",
+                    "apply",
+                    "--plan",
+                    str(plan),
+                    "--confirm",
+                    "--out-report",
+                    str(out_report),
+                    "--change-reason",
+                    "test patch apply",
+                ]
             )
 
             payload = json.loads(output)
@@ -1461,6 +1533,7 @@ raise SystemExit(0)
                 ),
                 encoding="utf-8",
             )
+            out_report = root / "reports" / "patch_result.json"
             exit_code, output = self.run_cli(
                 [
                     "patch",
@@ -1468,6 +1541,10 @@ raise SystemExit(0)
                     "--plan",
                     str(plan),
                     "--confirm",
+                    "--out-report",
+                    str(out_report),
+                    "--change-reason",
+                    "test runtime preflight",
                     "--scope",
                     str(assets),
                     "--runtime-scene",
@@ -1537,7 +1614,17 @@ print(
             bridge_cmd = f'"{sys.executable}" "{bridge}"'
             with patch.dict(os.environ, {"UNITYTOOL_PATCH_BRIDGE": bridge_cmd}, clear=False):
                 exit_code, output = self.run_cli(
-                    ["patch", "apply", "--plan", str(plan), "--confirm"]
+                    [
+                        "patch",
+                        "apply",
+                        "--plan",
+                        str(plan),
+                        "--confirm",
+                        "--out-report",
+                        str(root / "reports" / "patch_result.json"),
+                        "--change-reason",
+                        "test bridge apply",
+                    ]
                 )
 
             payload = json.loads(output)
@@ -1606,6 +1693,46 @@ print(
         self.assertEqual("VALIDATE_REFS_RESULT", payload["code"])
         self.assertEqual("REF404", payload["data"]["steps"][0]["result"]["code"])
 
+    def test_validate_refs_loads_default_ignore_guid_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            scope = Path(temp_dir) / "Assets" / "Tyunta"
+            ignore_file = scope / "config" / "ignore_guids.txt"
+            ignore_file.parent.mkdir(parents=True, exist_ok=True)
+            ignore_file.write_text(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\ncccccccccccccccccccccccccccccccc\n",
+                encoding="utf-8",
+            )
+            exit_code, output = self.run_cli(
+                ["validate", "refs", "--scope", str(scope)]
+            )
+        payload = json.loads(output)
+        self.assertEqual(0, exit_code)
+        self.assertEqual("VALIDATE_REFS_RESULT", payload["code"])
+        self.assertEqual(
+            ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "cccccccccccccccccccccccccccccccc"],
+            payload["data"]["ignore_asset_guids"],
+        )
+
+    def test_suggest_ignore_guids_loads_default_ignore_guid_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            scope = Path(temp_dir) / "Assets" / "Tyunta"
+            ignore_file = scope / "config" / "ignore_guids.txt"
+            ignore_file.parent.mkdir(parents=True, exist_ok=True)
+            ignore_file.write_text(
+                "dddddddddddddddddddddddddddddddd\n",
+                encoding="utf-8",
+            )
+            exit_code, output = self.run_cli(
+                ["suggest", "ignore-guids", "--scope", str(scope)]
+            )
+        payload = json.loads(output)
+        self.assertEqual(0, exit_code)
+        self.assertEqual("SUGGEST_IGNORE_GUIDS_RESULT", payload["code"])
+        self.assertEqual(
+            ["dddddddddddddddddddddddddddddddd"],
+            payload["data"]["criteria"]["ignore_asset_guids"],
+        )
+
     def test_suggest_ignore_guids_writes_ignore_guid_file(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -1664,6 +1791,77 @@ PrefabInstance:
             payload = json.loads(output)
             self.assertEqual(0, exit_code)
             self.assertEqual(0, payload["data"]["ignore_file_update"]["added"])
+
+    def test_suggest_ignore_guids_blocks_ci_write_on_disallowed_branch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _write(
+                root / "Assets" / "Ref.prefab",
+                f"""%YAML 1.1
+--- !u!1001 &100100000
+PrefabInstance:
+  m_SourcePrefab: {{fileID: 11400000, guid: {MISSING_GUID}, type: 3}}
+""",
+            )
+            out_file = root / "Assets" / "config" / "ignore_guids.txt"
+            with patch.dict(
+                os.environ,
+                {"CI": "true", "GITHUB_REF_NAME": "feature/test"},
+                clear=False,
+            ):
+                with redirect_stderr(io.StringIO()):
+                    with self.assertRaises(SystemExit):
+                        self.run_cli(
+                            [
+                                "suggest",
+                                "ignore-guids",
+                                "--scope",
+                                str(root / "Assets"),
+                                "--min-occurrences",
+                                "1",
+                                "--max-items",
+                                "10",
+                                "--out-ignore-guid-file",
+                                str(out_file),
+                                "--out-ignore-guid-mode",
+                                "replace",
+                            ]
+                        )
+
+    def test_suggest_ignore_guids_allows_ci_write_on_main(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _write(
+                root / "Assets" / "Ref.prefab",
+                f"""%YAML 1.1
+--- !u!1001 &100100000
+PrefabInstance:
+  m_SourcePrefab: {{fileID: 11400000, guid: {MISSING_GUID}, type: 3}}
+""",
+            )
+            out_file = root / "Assets" / "config" / "ignore_guids.txt"
+            with patch.dict(os.environ, {"CI": "true", "GITHUB_REF_NAME": "main"}, clear=False):
+                exit_code, output = self.run_cli(
+                    [
+                        "suggest",
+                        "ignore-guids",
+                        "--scope",
+                        str(root / "Assets"),
+                        "--min-occurrences",
+                        "1",
+                        "--max-items",
+                        "10",
+                        "--out-ignore-guid-file",
+                        str(out_file),
+                        "--out-ignore-guid-mode",
+                        "replace",
+                    ]
+                )
+
+            payload = json.loads(output)
+            self.assertEqual(0, exit_code)
+            self.assertEqual("SUGGEST_IGNORE_GUIDS_RESULT", payload["code"])
+            self.assertTrue(out_file.exists())
 
     def test_report_export_writes_markdown(self) -> None:
         payload = {

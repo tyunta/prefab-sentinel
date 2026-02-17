@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
+import uuid
 
 from unitytool.contracts import Severity, ToolResponse, max_severity
 from unitytool.mcp.prefab_variant import PrefabVariantMcp
@@ -208,6 +210,15 @@ class Phase1Orchestrator:
             if len(candidates) >= effective_max_items:
                 break
 
+        decision_required = [
+            {
+                "action": "ignore_guid",
+                "guid": item.get("guid", ""),
+                "occurrences": item.get("occurrences", 0),
+            }
+            for item in candidates
+        ]
+
         if candidates:
             severity = Severity.INFO
             success = True
@@ -237,6 +248,8 @@ class Phase1Orchestrator:
                 "missing_asset_occurrences": missing_asset_occurrences,
                 "candidate_count": len(candidates),
                 "candidates": candidates,
+                "safe_fix": [],
+                "decision_required": decision_required,
                 "steps": [
                     {
                         "step": "scan_broken_references",
@@ -352,6 +365,7 @@ class Phase1Orchestrator:
         confirm: bool = False,
         plan_sha256: str | None = None,
         plan_signature: str | None = None,
+        change_reason: str | None = None,
         scope: str | None = None,
         runtime_scene: str | None = None,
         runtime_profile: str = "default",
@@ -366,6 +380,9 @@ class Phase1Orchestrator:
         target_suffix = Path(target).suffix.lower()
 
         steps: list[tuple[str, ToolResponse]] = []
+        execution_id = uuid.uuid4().hex
+        executed_at_utc = datetime.now(timezone.utc).isoformat()
+        normalized_reason = change_reason.strip() if change_reason else None
 
         def _finalize(message: str, fail_fast: bool) -> ToolResponse:
             severities = [step.severity for _, step in steps]
@@ -386,6 +403,9 @@ class Phase1Orchestrator:
                     "target": target,
                     "plan_sha256": plan_sha256,
                     "plan_signature": plan_signature,
+                    "change_reason": normalized_reason,
+                    "execution_id": execution_id,
+                    "executed_at_utc": executed_at_utc,
                     "dry_run": dry_run,
                     "confirm": confirm,
                     "scope": scope,

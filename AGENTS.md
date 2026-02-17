@@ -44,6 +44,7 @@
 3. 変更は `dry_run_patch` で差分確認後に `apply_and_save` する。
 4. 適用後に `compile_udonsharp` と `run_clientsim` で実行検証する。
 5. `critical` / `error` が 1 件でもあれば停止し、修正または判断待ちへ回す。
+- `patch apply --confirm` は `--change-reason` と `--out-report` を必須とする（監査ログのため）。
 
 ## 5. 意思決定ルール
 - 自動修復可能で根拠があるもののみ `safe_fix` として提案・適用する。
@@ -75,3 +76,7 @@
 - README は「やること / やる内容 / やらないこと」を維持する。
 - 運用ルール変更時は本ファイルに追記し、理由を簡潔に残す。
 - 仕様との齟齬が出た場合は README を優先して同期する。
+
+## 11. ignore-guid 運用
+- ignore-guid は `<scope>/config/ignore_guids.txt` を既定とし、存在しなければ無視する。理由: スコープ独立性と誤抑制の局所化。
+- CI での ignore-guid 反映は許可するが、`--out-ignore-guid-file` の明示指定時かつ許可ブランチのみ更新する。既定は `main` / `release/*`（`UNITYTOOL_IGNORE_GUID_ALLOW_BRANCHES` で上書き可）。理由: 意図の明示と監査性の確保。

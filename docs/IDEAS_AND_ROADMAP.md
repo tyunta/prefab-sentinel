@@ -181,15 +181,55 @@
   - validate timeout policy knobs (`--timeout-multiplier` / `--timeout-slack-sec`) against accumulated real Unity runner history
 
 ## Decision-Required Queue
-- Decide default location/policy for ignore-guid files:
-  - Option A: project local (`config/ignore_guids.txt`)
-  - Option B: scope local (`<scope>/config/ignore_guids.txt`)
-  - Option C: user managed only (no default path)
-- Decide whether to allow automatic ignore-guid application in CI.
+- Resolved (2026-02-16): ignore-guid policy -> Option B (`<scope>/config/ignore_guids.txt`, missing ignored).
+- Resolved (2026-02-16): CI auto-apply allowed when `--out-ignore-guid-file` is explicitly set and branch is allowlisted.
 
 ## Notes
 - Keep read-only policy for inspection/validation commands in Phase 1.
 - `patch apply` is write-enabled only for explicit `--confirm`.
 - JSON targets use built-in backend; Unity targets require external bridge command (`UNITYTOOL_PATCH_BRIDGE`).
 - Continue fail-fast for invalid input and missing required paths.
+
+## Completion Plan
+### Phase 0: Scope And Criteria
+- [x] Confirm completion criteria and acceptance tests (Definition of Done baseline).
+- [x] Declare target scope policy (scope is per-run via CLI; no fixed path).
+- [x] Record scope + criteria in README.
+
+### Phase 1: Decision-Required Items
+- [x] Decide ignore-guid file policy (Option B, per-scope config).
+- [x] Decide whether CI can auto-apply ignore-guid updates (allowed with explicit output flag).
+
+### Phase 2: Unity ExecuteMethod Coverage
+- [ ] Add Unity-side integration tests for `set` / `insert_array_element` / `remove_array_element`.
+- [ ] Add fixed buffer indexed element test cases (`set` with indexed element paths).
+- [ ] Automate batchmode assertions and capture Unity logs as artifacts.
+
+### Phase 3: Smoke Hardening
+- [ ] Collect real Unity runner history data for timeout tuning.
+- [ ] Validate timeout policy knobs (`--timeout-multiplier`, `--timeout-slack-sec`) against history.
+- [ ] Update defaults/constraints and add regression checks.
+
+### Phase 4: MCP Boundaries And Orchestrator
+- [x] Verify MCP responsibility split (serialized-object / prefab-variant / reference-resolver / runtime-validation).
+- [x] Ensure CLI orchestrator enforces dependency order and stop conditions.
+- [x] Emit audit log with change reason, target, before/after diff, validation report.
+- [x] Enforce `safe_fix` vs `decision_required` handling in workflow (suggest ignore-guids returns decision_required).
+
+### Phase 5: End-to-End Pipeline
+- [x] Preflight: `list_overrides` + `scan_broken_references` for scope (when scope/target provided).
+- [x] Patch flow: `dry_run_patch` -> `apply_and_save` (confirm gate).
+- [x] Post-apply: `compile_udonsharp` + `run_clientsim` with log classification (when runtime scene provided).
+- [x] Fail-fast on any `critical` or `error` and route to decision queue.
+
+### Phase 6: Quality Gates And Tests
+- [x] Unit tests: propertyPath resolution, array bounds, reference reverse lookup.
+- [ ] Integration tests: Base / Variant / Scene edit E2E.
+- [ ] Regression tests: Broken PPtr and Udon nullref fixtures.
+- [ ] CI gates: Broken PPtr 0, Variant override 100%, Udon runtime critical 0.
+
+### Phase 7: Documentation And Examples
+- [x] Sync README policy sections and add plan/attestation/allowlist examples.
+- [x] Include sample before/after diffs + validation report artifacts.
+- [x] Update roadmap status when tasks complete.
 

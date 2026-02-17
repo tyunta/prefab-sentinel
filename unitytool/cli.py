@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from fnmatch import fnmatch
 import json
 import os
 import re
@@ -36,8 +37,12 @@ from unitytool.smoke_history import (
     add_arguments as add_smoke_history_arguments,
     run_from_args as run_smoke_history_from_args,
 )
+from unitytool.unity_assets import find_project_root, resolve_scope_path
 
 _DEFAULT_PLAN_SIGNING_KEY_ENV = "UNITYTOOL_PLAN_SIGNING_KEY"
+_DEFAULT_IGNORE_GUID_BRANCH_ALLOWLIST = ("main", "release/*")
+_IGNORE_GUID_BRANCH_ALLOWLIST_ENV = "UNITYTOOL_IGNORE_GUID_ALLOW_BRANCHES"
+_CI_BRANCH_ENV = "UNITYTOOL_CI_BRANCH"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -115,7 +120,10 @@ def build_parser() -> argparse.ArgumentParser:
     validate_refs.add_argument(
         "--ignore-guid-file",
         default=None,
-        help="UTF-8 text file with one missing-asset GUID per line (# comment supported).",
+        help=(
+            "UTF-8 text file with one missing-asset GUID per line (# comment supported). "
+            "If omitted, <scope>/config/ignore_guids.txt is used when present."
+        ),
     )
     validate_refs.add_argument("--format", choices=("json", "md"), default="json")
     validate_runtime = validate_sub.add_parser(
@@ -261,7 +269,10 @@ def build_parser() -> argparse.ArgumentParser:
     suggest_ignore.add_argument(
         "--ignore-guid-file",
         default=None,
-        help="UTF-8 text file with one GUID per line to exclude from candidate suggestion.",
+        help=(
+            "UTF-8 text file with one GUID per line to exclude from candidate suggestion. "
+            "If omitted, <scope>/config/ignore_guids.txt is used when present."
+        ),
     )
     suggest_ignore.add_argument(
         "--out-ignore-guid-file",
@@ -364,6 +375,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--out-report",
         default=None,
         help="Optional output path to store patch apply result envelope as JSON.",
+    )
+    patch_apply.add_argument(
+        "--change-reason",
+        default=None,
+        help="Required when using --confirm (non-dry-run). Describes why the change is needed.",
     )
     patch_apply.add_argument("--format", choices=("json", "md"), default="json")
     patch_hash = patch_sub.add_parser("hash", help="Compute SHA-256 digest of a patch plan.")
@@ -504,6 +520,84 @@ def _load_ignore_guids(
     return tuple(collected)
 
 
+def _resolve_ignore_guid_file(
+    ignore_guid_file: str | None,
+    scope: str | None,
+) -> str | None:
+    if ignore_guid_file:
+        return ignore_guid_file
+    if not scope:
+        return None
+    project_root = find_project_root(Path.cwd())
+    scope_path = resolve_scope_path(scope, project_root)
+    candidate = scope_path / "config" / "ignore_guids.txt"
+    if candidate.exists():
+        return str(candidate)
+    return None
+
+
+def _is_ci_environment() -> bool:
+    value = os.environ.get("CI")
+    if not value:
+        return False
+    return value.lower() not in {"0", "false", "no"}
+
+
+def _parse_ignore_guid_branch_allowlist(raw: str | None) -> tuple[str, ...]:
+    if raw:
+        parsed = [item.strip() for item in raw.split(",") if item.strip()]
+        if parsed:
+            return tuple(parsed)
+    return _DEFAULT_IGNORE_GUID_BRANCH_ALLOWLIST
+
+
+def _resolve_ci_branch() -> str | None:
+    candidates = (
+        _CI_BRANCH_ENV,
+        "GITHUB_REF_NAME",
+        "GITHUB_HEAD_REF",
+        "CI_COMMIT_REF_NAME",
+        "BRANCH_NAME",
+        "GIT_BRANCH",
+        "GITHUB_REF",
+    )
+    for key in candidates:
+        value = os.environ.get(key)
+        if not value:
+            continue
+        if key in {"GITHUB_REF", "GIT_BRANCH"}:
+            if value.startswith("refs/heads/"):
+                value = value[len("refs/heads/") :]
+            if value.startswith("origin/"):
+                value = value[len("origin/") :]
+        return value
+    return None
+
+
+def _enforce_ci_ignore_guid_policy(
+    parser: argparse.ArgumentParser,
+    out_ignore_guid_file: str | None,
+) -> None:
+    if not out_ignore_guid_file:
+        return
+    if not _is_ci_environment():
+        return
+    allowlist = _parse_ignore_guid_branch_allowlist(
+        os.environ.get(_IGNORE_GUID_BRANCH_ALLOWLIST_ENV)
+    )
+    branch = _resolve_ci_branch()
+    if not branch:
+        parser.error(
+            "CI ignore-guid updates require branch context. "
+            f"Set {_CI_BRANCH_ENV} or provide GITHUB_REF_NAME."
+        )
+    if not any(fnmatch(branch, pattern) for pattern in allowlist):
+        parser.error(
+            "CI ignore-guid updates are restricted to branches: "
+            f"{', '.join(allowlist)} (current: {branch})."
+        )
+
+
 def _resolve_signing_key(
     parser: argparse.ArgumentParser,
     *,
@@ -627,8 +721,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "validate" and args.validate_command == "refs":
+        ignore_guid_file = _resolve_ignore_guid_file(
+            args.ignore_guid_file,
+            args.scope,
+        )
         try:
-            ignore_guids = _load_ignore_guids(args.ignore_guid, args.ignore_guid_file)
+            ignore_guids = _load_ignore_guids(args.ignore_guid, ignore_guid_file)
         except OSError as exc:
             parser.error(f"Failed to read --ignore-guid-file: {exc}")
         response = orchestrator.validate_refs(
@@ -719,8 +817,12 @@ def main(argv: list[str] | None = None) -> int:
         return run_smoke_batch_from_args(args, parser)
 
     if args.command == "suggest" and args.suggest_command == "ignore-guids":
+        ignore_guid_file = _resolve_ignore_guid_file(
+            args.ignore_guid_file,
+            args.scope,
+        )
         try:
-            ignore_guids = _load_ignore_guids(args.ignore_guid, args.ignore_guid_file)
+            ignore_guids = _load_ignore_guids(args.ignore_guid, ignore_guid_file)
         except OSError as exc:
             parser.error(f"Failed to read --ignore-guid-file: {exc}")
         response = orchestrator.suggest_ignore_guids(
@@ -733,6 +835,7 @@ def main(argv: list[str] | None = None) -> int:
         payload = response.to_dict()
         out_ignore_file = args.out_ignore_guid_file
         if out_ignore_file:
+            _enforce_ci_ignore_guid_policy(parser, out_ignore_file)
             candidate_guids = [
                 str(item.get("guid", ""))
                 for item in payload.get("data", {}).get("candidates", [])
@@ -762,6 +865,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "patch" and args.patch_command == "apply":
         plan_path = Path(args.plan)
+        if not args.dry_run and args.confirm:
+            if not args.out_report:
+                parser.error(
+                    "patch apply --confirm requires --out-report to record the audit log."
+                )
+            if not args.change_reason or not args.change_reason.strip():
+                parser.error("patch apply --confirm requires --change-reason.")
         try:
             plan = load_patch_plan(plan_path)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
@@ -825,6 +935,7 @@ def main(argv: list[str] | None = None) -> int:
             confirm=args.confirm,
             plan_sha256=plan_sha256,
             plan_signature=plan_signature,
+            change_reason=args.change_reason,
             scope=args.scope,
             runtime_scene=args.runtime_scene,
             runtime_profile=args.runtime_profile,
