@@ -16,6 +16,7 @@ from unitytool.mcp.serialized_object import (
     SerializedObjectMcp,
     compute_patch_plan_hmac_sha256,
     compute_patch_plan_sha256,
+    load_patch_plan,
 )
 
 BASE_GUID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -349,6 +350,56 @@ GameObject:
 
 
 class SerializedObjectMcpTests(unittest.TestCase):
+    def test_load_patch_plan_normalizes_v2_resources(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "patch.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "plan_version": 2,
+                        "resources": [
+                            {
+                                "id": "first",
+                                "kind": "json",
+                                "path": "Assets/StateA.json",
+                                "mode": "open",
+                            },
+                            {
+                                "id": "second",
+                                "kind": "prefab",
+                                "path": "Assets/StateB.prefab",
+                                "mode": "open",
+                            },
+                        ],
+                        "ops": [
+                            {
+                                "resource": "first",
+                                "op": "set",
+                                "component": "Example.Component",
+                                "path": "nested.value",
+                                "value": 1,
+                            },
+                            {
+                                "resource": "second",
+                                "op": "set",
+                                "component": "Example.Component",
+                                "path": "enabled",
+                                "value": True,
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            loaded = load_patch_plan(path)
+
+            self.assertEqual(2, loaded["plan_version"])
+            self.assertEqual(2, len(loaded["resources"]))
+            self.assertEqual("first", loaded["resources"][0]["id"])
+            self.assertEqual("json", loaded["resources"][0]["kind"])
+            self.assertEqual("second", loaded["ops"][1]["resource"])
+
     def test_compute_patch_plan_sha256_returns_expected_digest(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "patch.json"

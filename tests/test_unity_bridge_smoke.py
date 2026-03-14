@@ -41,19 +41,29 @@ class UnityBridgeSmokeTests(unittest.TestCase):
                 encoding="utf-8",
             )
             loaded = _load_patch_plan(path)
-        self.assertEqual("Assets/Test.prefab", loaded["target"])
+        self.assertEqual(2, loaded["plan_version"])
+        self.assertEqual("Assets/Test.prefab", loaded["resources"][0]["path"])
+        self.assertEqual("target", loaded["resources"][0]["id"])
         self.assertEqual([], loaded["ops"])
 
     def test_build_bridge_request_maps_fields(self) -> None:
         request = _build_bridge_request(
             {
-                "target": "Assets/Test.prefab",
-                "ops": [{"op": "set"}],
+                "plan_version": 2,
+                "resources": [
+                    {"id": "variant", "kind": "prefab", "path": "Assets/Test.prefab", "mode": "open"}
+                ],
+                "ops": [{"resource": "variant", "op": "set"}],
             }
         )
-        self.assertEqual(1, request["protocol_version"])
+        self.assertEqual(2, request["protocol_version"])
+        self.assertEqual(2, request["plan_version"])
         self.assertEqual("Assets/Test.prefab", request["target"])
-        self.assertEqual([{"op": "set"}], request["ops"])
+        self.assertEqual(
+            [{"id": "variant", "kind": "prefab", "path": "Assets/Test.prefab", "mode": "open"}],
+            request["resources"],
+        )
+        self.assertEqual([{"resource": "variant", "op": "set"}], request["ops"])
 
     def test_resolve_expected_applied(self) -> None:
         plan = {"target": "Assets/Test.prefab", "ops": [{"op": "set"}, {"op": "set"}]}
@@ -131,7 +141,7 @@ sys.stdout.write(
             response = _run_bridge(
                 bridge_script=bridge,
                 python_executable=sys.executable,
-                request={"protocol_version": 1, "target": "Assets/Test.prefab", "ops": []},
+                request={"protocol_version": 2, "target": "Assets/Test.prefab", "resources": [], "ops": []},
                 env=os.environ.copy(),
             )
 
@@ -155,7 +165,7 @@ sys.stdout.write(json.dumps({"success": True, "severity": "info", "code": "OK", 
                 _run_bridge(
                     bridge_script=bridge,
                     python_executable=sys.executable,
-                    request={"protocol_version": 1, "target": "Assets/Test.prefab", "ops": []},
+                    request={"protocol_version": 2, "target": "Assets/Test.prefab", "resources": [], "ops": []},
                     env=os.environ.copy(),
                 )
 
@@ -176,7 +186,7 @@ sys.stdout.write(json.dumps({"success": True, "severity": "notice", "code": "OK"
                 _run_bridge(
                     bridge_script=bridge,
                     python_executable=sys.executable,
-                    request={"protocol_version": 1, "target": "Assets/Test.prefab", "ops": []},
+                    request={"protocol_version": 2, "target": "Assets/Test.prefab", "resources": [], "ops": []},
                     env=os.environ.copy(),
                 )
 

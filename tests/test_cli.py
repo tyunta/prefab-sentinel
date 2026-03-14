@@ -704,6 +704,60 @@ raise SystemExit(0)
         self.assertTrue(payload["success"])
         self.assertEqual("SER_DRY_RUN_OK", payload["data"]["steps"][0]["result"]["code"])
 
+    def test_patch_apply_dry_run_accepts_v2_multi_resource_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plan = root / "patch.json"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "plan_version": 2,
+                        "resources": [
+                            {
+                                "id": "left",
+                                "kind": "json",
+                                "path": str(root / "left.json"),
+                                "mode": "open",
+                            },
+                            {
+                                "id": "right",
+                                "kind": "json",
+                                "path": str(root / "right.json"),
+                                "mode": "open",
+                            },
+                        ],
+                        "ops": [
+                            {
+                                "resource": "left",
+                                "op": "set",
+                                "component": "Example.Component",
+                                "path": "nested.value",
+                                "value": 10,
+                            },
+                            {
+                                "resource": "right",
+                                "op": "set",
+                                "component": "Example.Component",
+                                "path": "nested.value",
+                                "value": 20,
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            exit_code, output = self.run_cli(
+                ["patch", "apply", "--plan", str(plan), "--dry-run"]
+            )
+
+        payload = json.loads(output)
+        self.assertEqual(0, exit_code)
+        self.assertTrue(payload["success"])
+        self.assertEqual(2, payload["data"]["resource_count"])
+        step_names = [step["step"] for step in payload["data"]["steps"]]
+        self.assertIn("dry_run_patch:left", step_names)
+        self.assertIn("dry_run_patch:right", step_names)
+
     def test_patch_apply_accepts_matching_plan_sha256(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -1503,6 +1557,74 @@ raise SystemExit(0)
             self.assertIn("SER_APPLY_OK", step_codes)
             updated = json.loads(target.read_text(encoding="utf-8"))
             self.assertEqual({"items": [0, 2], "nested": {"value": 42}}, updated)
+
+    def test_patch_apply_confirm_updates_multiple_json_targets_from_v2_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            left = root / "left.json"
+            right = root / "right.json"
+            left.write_text(json.dumps({"nested": {"value": 1}}), encoding="utf-8")
+            right.write_text(json.dumps({"nested": {"value": 2}}), encoding="utf-8")
+            plan = root / "patch.json"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "plan_version": 2,
+                        "resources": [
+                            {
+                                "id": "left",
+                                "kind": "json",
+                                "path": str(left),
+                                "mode": "open",
+                            },
+                            {
+                                "id": "right",
+                                "kind": "json",
+                                "path": str(right),
+                                "mode": "open",
+                            },
+                        ],
+                        "ops": [
+                            {
+                                "resource": "left",
+                                "op": "set",
+                                "component": "Example.Component",
+                                "path": "nested.value",
+                                "value": 10,
+                            },
+                            {
+                                "resource": "right",
+                                "op": "set",
+                                "component": "Example.Component",
+                                "path": "nested.value",
+                                "value": 20,
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            out_report = root / "reports" / "patch_result.json"
+            exit_code, output = self.run_cli(
+                [
+                    "patch",
+                    "apply",
+                    "--plan",
+                    str(plan),
+                    "--confirm",
+                    "--out-report",
+                    str(out_report),
+                    "--change-reason",
+                    "test multi resource patch apply",
+                ]
+            )
+
+            payload = json.loads(output)
+            self.assertEqual(0, exit_code)
+            self.assertTrue(payload["success"])
+            self.assertEqual(2, payload["data"]["resource_count"])
+            self.assertEqual(10, json.loads(left.read_text(encoding="utf-8"))["nested"]["value"])
+            self.assertEqual(20, json.loads(right.read_text(encoding="utf-8"))["nested"]["value"])
 
     def test_patch_apply_confirm_runs_preflight_and_runtime_when_requested(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

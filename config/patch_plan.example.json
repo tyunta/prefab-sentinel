@@ -1,13 +1,23 @@
 {
-  "target": "Assets/Example/Variant.prefab",
+  "plan_version": 2,
+  "resources": [
+    {
+      "id": "variant",
+      "kind": "prefab",
+      "path": "Assets/Example/Variant.prefab",
+      "mode": "open"
+    }
+  ],
   "ops": [
     {
+      "resource": "variant",
       "op": "set",
       "component": "Example.Component",
       "path": "items.Array.size",
       "value": 2
     },
     {
+      "resource": "variant",
       "op": "insert_array_element",
       "component": "Example.Component",
       "path": "items.Array.data",
@@ -18,6 +28,7 @@
       }
     },
     {
+      "resource": "variant",
       "op": "remove_array_element",
       "component": "Example.Component",
       "path": "items.Array.data",

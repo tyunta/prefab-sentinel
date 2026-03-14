@@ -43,7 +43,7 @@ class UnityPatchBridgeTests(unittest.TestCase):
     def test_reference_bridge_requires_unity_command(self) -> None:
         result = self._run_bridge(
             {
-                "protocol_version": 1,
+                "protocol_version": 2,
                 "target": "Assets/Test.prefab",
                 "ops": [],
             }
@@ -65,7 +65,7 @@ class UnityPatchBridgeTests(unittest.TestCase):
     def test_reference_bridge_rejects_set_op_without_value(self) -> None:
         result = self._run_bridge(
             {
-                "protocol_version": 1,
+                "protocol_version": 2,
                 "target": "Assets/Test.prefab",
                 "ops": [
                     {
@@ -83,7 +83,7 @@ class UnityPatchBridgeTests(unittest.TestCase):
     def test_reference_bridge_rejects_array_op_without_index(self) -> None:
         result = self._run_bridge(
             {
-                "protocol_version": 1,
+                "protocol_version": 2,
                 "target": "Assets/Test.prefab",
                 "ops": [
                     {
@@ -136,7 +136,7 @@ response_path.write_text(
 
             result = self._run_bridge(
                 {
-                    "protocol_version": 1,
+                    "protocol_version": 2,
                     "target": "Assets/Test.prefab",
                     "ops": [
                         {
@@ -155,11 +155,99 @@ response_path.write_text(
 
         self.assertTrue(result["success"])
         self.assertEqual("SER_APPLY_OK", result["code"])
-        self.assertEqual(1, result["protocol_version"])
+        self.assertEqual(2, result["protocol_version"])
         self.assertEqual(1, result["data"]["applied"])
         self.assertEqual("Assets/Test.prefab", result["data"]["target"])
         self.assertEqual(1, result["data"]["op_count"])
         self.assertTrue(result["data"]["executed"])
+
+    def test_reference_bridge_aggregates_multiple_resources(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            unity_runner = root / "fake_unity_multi.py"
+            unity_runner.write_text(
+                """
+import json
+import sys
+from pathlib import Path
+
+def _arg(flag: str) -> str:
+    args = sys.argv[1:]
+    idx = args.index(flag)
+    return args[idx + 1]
+
+request_path = Path(_arg("-unitytoolPatchRequest"))
+response_path = Path(_arg("-unitytoolPatchResponse"))
+request = json.loads(request_path.read_text(encoding="utf-8"))
+response_path.write_text(
+    json.dumps(
+        {
+            "protocol_version": 1,
+            "success": True,
+            "severity": "info",
+            "code": "SER_APPLY_OK",
+            "message": "Applied by fake Unity runner.",
+            "data": {
+                "applied": len(request.get("ops", [])),
+                "target": request.get("target", ""),
+            },
+            "diagnostics": [],
+        }
+    ),
+    encoding="utf-8",
+)
+""".strip(),
+                encoding="utf-8",
+            )
+
+            result = self._run_bridge(
+                {
+                    "protocol_version": 2,
+                    "plan_version": 2,
+                    "resources": [
+                        {
+                            "id": "left",
+                            "kind": "prefab",
+                            "path": "Assets/Left.prefab",
+                            "mode": "open",
+                        },
+                        {
+                            "id": "right",
+                            "kind": "prefab",
+                            "path": "Assets/Right.prefab",
+                            "mode": "open",
+                        },
+                    ],
+                    "ops": [
+                        {
+                            "resource": "left",
+                            "op": "set",
+                            "component": "Example.Component",
+                            "path": "enabled",
+                            "value": True,
+                        },
+                        {
+                            "resource": "right",
+                            "op": "set",
+                            "component": "Example.Component",
+                            "path": "enabled",
+                            "value": False,
+                        },
+                    ],
+                },
+                env_overrides={
+                    "UNITYTOOL_UNITY_COMMAND": f'"{sys.executable}" "{unity_runner}"',
+                    "UNITYTOOL_UNITY_PROJECT_PATH": str(root),
+                },
+            )
+
+        self.assertTrue(result["success"])
+        self.assertEqual("SER_APPLY_OK", result["code"])
+        self.assertEqual(2, result["protocol_version"])
+        self.assertEqual(2, result["data"]["resource_count"])
+        self.assertEqual(2, result["data"]["applied"])
+        self.assertEqual("Assets/Left.prefab", result["data"]["resources"][0]["path"])
+        self.assertEqual("Assets/Right.prefab", result["data"]["resources"][1]["path"])
 
     def test_reference_bridge_rejects_unity_response_missing_fields(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -196,7 +284,7 @@ response_path.write_text(
 
             result = self._run_bridge(
                 {
-                    "protocol_version": 1,
+                    "protocol_version": 2,
                     "target": "Assets/Test.prefab",
                     "ops": [],
                 },
@@ -246,7 +334,7 @@ response_path.write_text(
 
             result = self._run_bridge(
                 {
-                    "protocol_version": 1,
+                    "protocol_version": 2,
                     "target": "Assets/Test.prefab",
                     "ops": [],
                 },
@@ -301,7 +389,7 @@ response_path.write_text(
 
             result = self._run_bridge(
                 {
-                    "protocol_version": 1,
+                    "protocol_version": 2,
                     "target": "Assets/Test.prefab",
                     "ops": [
                         {
@@ -547,7 +635,7 @@ raise SystemExit(9)
 
             result = self._run_bridge(
                 {
-                    "protocol_version": 1,
+                    "protocol_version": 2,
                     "target": "Assets/Test.prefab",
                     "ops": [],
                 },

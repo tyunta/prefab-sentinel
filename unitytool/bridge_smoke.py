@@ -6,7 +6,13 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-PROTOCOL_VERSION = 1
+from unitytool.patch_plan import (
+    PLAN_VERSION as PROTOCOL_VERSION,
+    build_bridge_request as _build_bridge_request_impl,
+    count_plan_ops,
+    load_patch_plan as _load_patch_plan_impl,
+)
+
 VALID_SEVERITIES = {"info", "warning", "error", "critical"}
 UNITY_COMMAND_ENV = "UNITYTOOL_UNITY_COMMAND"
 UNITY_PROJECT_PATH_ENV = "UNITYTOOL_UNITY_PROJECT_PATH"
@@ -16,24 +22,11 @@ UNITY_LOG_FILE_ENV = "UNITYTOOL_UNITY_LOG_FILE"
 
 
 def load_patch_plan(path: Path) -> dict[str, Any]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError("Patch plan root must be an object.")
-    target = payload.get("target")
-    ops = payload.get("ops")
-    if not isinstance(target, str) or not target.strip():
-        raise ValueError("Patch plan field 'target' must be a non-empty string.")
-    if not isinstance(ops, list):
-        raise ValueError("Patch plan field 'ops' must be an array.")
-    return payload
+    return _load_patch_plan_impl(path)
 
 
 def build_bridge_request(plan: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "protocol_version": PROTOCOL_VERSION,
-        "target": str(plan.get("target", "")).strip(),
-        "ops": plan.get("ops", []),
-    }
+    return _build_bridge_request_impl(plan)
 
 
 def resolve_expected_applied(
@@ -49,10 +42,7 @@ def resolve_expected_applied(
         return None, "none"
     if expect_failure:
         return None, "skipped_expect_failure"
-    ops = plan.get("ops")
-    if not isinstance(ops, list):
-        raise ValueError("Patch plan field 'ops' must be an array.")
-    return len(ops), "plan_ops"
+    return count_plan_ops(plan), "plan_ops"
 
 
 def build_bridge_env(

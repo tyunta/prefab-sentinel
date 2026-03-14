@@ -10,6 +10,7 @@ from unitytool.mcp.prefab_variant import PrefabVariantMcp
 from unitytool.mcp.reference_resolver import ReferenceResolverMcp
 from unitytool.mcp.runtime_validation import RuntimeValidationMcp
 from unitytool.mcp.serialized_object import SerializedObjectMcp
+from unitytool.patch_plan import count_plan_ops, iter_resource_batches, normalize_patch_plan
 
 
 @dataclass(slots=True)
@@ -374,15 +375,20 @@ class Phase1Orchestrator:
         runtime_allow_warnings: bool = False,
         runtime_max_diagnostics: int = 200,
     ) -> ToolResponse:
-        target = str(plan.get("target", ""))
-        raw_ops = plan.get("ops", [])
-        ops = raw_ops if isinstance(raw_ops, list) else []
-        target_suffix = Path(target).suffix.lower()
+        normalized_plan = normalize_patch_plan(plan)
+        resource_batches = iter_resource_batches(normalized_plan)
+        resource_count = len(resource_batches)
+        targets = [str(resource.get("path", "")) for resource, _ in resource_batches]
+        primary_target = targets[0] if resource_count == 1 else None
+        total_op_count = count_plan_ops(normalized_plan)
 
         steps: list[tuple[str, ToolResponse]] = []
         execution_id = uuid.uuid4().hex
         executed_at_utc = datetime.now(timezone.utc).isoformat()
         normalized_reason = change_reason.strip() if change_reason else None
+
+        def _step_name(base: str, resource_id: str) -> str:
+            return base if resource_count == 1 else f"{base}:{resource_id}"
 
         def _finalize(message: str, fail_fast: bool) -> ToolResponse:
             severities = [step.severity for _, step in steps]
@@ -393,14 +399,30 @@ class Phase1Orchestrator:
                 for _, step in steps
                 for diagnostic in step.diagnostics
             ]
-            write_executed = any(step_name == "apply_and_save" for step_name, _ in steps)
+            write_executed = any(
+                step_name == "apply_and_save" or step_name.startswith("apply_and_save:")
+                for step_name, _ in steps
+            )
             return ToolResponse(
                 success=success,
                 severity=severity,
                 code="PATCH_APPLY_RESULT",
                 message=message,
                 data={
-                    "target": target,
+                    "plan_version": normalized_plan.get("plan_version"),
+                    "target": primary_target,
+                    "targets": targets,
+                    "resource_count": resource_count,
+                    "resources": [
+                        {
+                            "id": resource.get("id"),
+                            "kind": resource.get("kind"),
+                            "path": resource.get("path"),
+                            "mode": resource.get("mode"),
+                        }
+                        for resource, _ in resource_batches
+                    ],
+                    "op_count": total_op_count,
                     "plan_sha256": plan_sha256,
                     "plan_signature": plan_signature,
                     "change_reason": normalized_reason,
@@ -425,13 +447,15 @@ class Phase1Orchestrator:
                 diagnostics=diagnostics,
             )
 
-        dry_step = self.serialized_object.dry_run_patch(target=target, ops=ops)
-        steps.append(("dry_run_patch", dry_step))
-        if dry_step.severity in (Severity.ERROR, Severity.CRITICAL):
-            return _finalize(
-                "patch.apply stopped by fail-fast policy due to invalid patch plan.",
-                fail_fast=True,
-            )
+        for resource, ops in resource_batches:
+            target = str(resource.get("path", ""))
+            dry_step = self.serialized_object.dry_run_patch(target=target, ops=ops)
+            steps.append((_step_name("dry_run_patch", str(resource.get("id", ""))), dry_step))
+            if dry_step.severity in (Severity.ERROR, Severity.CRITICAL):
+                return _finalize(
+                    "patch.apply stopped by fail-fast policy due to invalid patch plan.",
+                    fail_fast=True,
+                )
 
         if dry_run:
             return _finalize("patch.apply dry-run completed.", fail_fast=False)
@@ -442,7 +466,13 @@ class Phase1Orchestrator:
                 severity=Severity.WARNING,
                 code="SER_CONFIRM_REQUIRED",
                 message="patch.apply requires --confirm when not using --dry-run.",
-                data={"target": target, "op_count": len(ops), "read_only": True},
+                data={
+                    "target": primary_target,
+                    "targets": targets,
+                    "resource_count": resource_count,
+                    "op_count": total_op_count,
+                    "read_only": True,
+                },
                 diagnostics=[],
             )
             steps.append(("confirm_gate", confirm_step))
@@ -461,19 +491,26 @@ class Phase1Orchestrator:
                     fail_fast=True,
                 )
 
-        if target_suffix == ".prefab":
-            overrides_step = self.prefab_variant.list_overrides(target)
-            steps.append(("list_overrides_preflight", overrides_step))
-            if overrides_step.severity in (Severity.ERROR, Severity.CRITICAL):
-                return _finalize(
-                    "patch.apply stopped by fail-fast policy due to preflight override inspection errors.",
-                    fail_fast=True,
-                )
+        for resource, ops in resource_batches:
+            resource_id = str(resource.get("id", ""))
+            target = str(resource.get("path", ""))
+            target_suffix = Path(target).suffix.lower()
 
-        apply_step = self.serialized_object.apply_and_save(target=target, ops=ops)
-        steps.append(("apply_and_save", apply_step))
-        if apply_step.severity in (Severity.ERROR, Severity.CRITICAL):
-            return _finalize("patch.apply completed with errors.", fail_fast=False)
+            if target_suffix == ".prefab":
+                overrides_step = self.prefab_variant.list_overrides(target)
+                steps.append(
+                    (_step_name("list_overrides_preflight", resource_id), overrides_step)
+                )
+                if overrides_step.severity in (Severity.ERROR, Severity.CRITICAL):
+                    return _finalize(
+                        "patch.apply stopped by fail-fast policy due to preflight override inspection errors.",
+                        fail_fast=True,
+                    )
+
+            apply_step = self.serialized_object.apply_and_save(target=target, ops=ops)
+            steps.append((_step_name("apply_and_save", resource_id), apply_step))
+            if apply_step.severity in (Severity.ERROR, Severity.CRITICAL):
+                return _finalize("patch.apply completed with errors.", fail_fast=False)
 
         if runtime_scene:
             compile_step = self.runtime_validation.compile_udonsharp()

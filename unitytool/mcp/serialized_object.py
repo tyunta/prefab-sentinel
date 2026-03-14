@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
 import os
 import shlex
@@ -11,10 +9,17 @@ from pathlib import Path
 from typing import Any
 
 from unitytool.contracts import Diagnostic, Severity, ToolResponse
+from unitytool.patch_plan import (
+    PLAN_VERSION,
+    build_bridge_request,
+    compute_patch_plan_hmac_sha256,
+    compute_patch_plan_sha256,
+    load_patch_plan,
+)
 from unitytool.unity_assets import decode_text_file
 
 _SUPPORTED_OPS = {"set", "insert_array_element", "remove_array_element"}
-_UNITY_BRIDGE_PROTOCOL_VERSION = 1
+_UNITY_BRIDGE_PROTOCOL_VERSION = PLAN_VERSION
 _UNITY_BRIDGE_SUPPORTED_SUFFIXES = {
     ".prefab",
     ".unity",
@@ -37,6 +42,15 @@ _UNITY_BRIDGE_ALLOWED_COMMANDS = {
     "unitytool-unity-bridge.exe",
     "unitytool-unity-serialized-object-bridge",
     "unitytool-unity-serialized-object-bridge.exe",
+}
+
+_UNITY_BRIDGE_KIND_BY_SUFFIX = {
+    ".prefab": "prefab",
+    ".unity": "scene",
+    ".asset": "asset",
+    ".mat": "material",
+    ".anim": "animation",
+    ".controller": "controller",
 }
 
 
@@ -93,6 +107,31 @@ class SerializedObjectMcp:
     def _is_bridge_command_allowed(self, command: tuple[str, ...]) -> bool:
         head = Path(command[0]).name.lower()
         return head in _UNITY_BRIDGE_ALLOWED_COMMANDS
+
+    def _infer_bridge_resource_kind(self, target_path: Path) -> str:
+        return _UNITY_BRIDGE_KIND_BY_SUFFIX.get(target_path.suffix.lower(), "asset")
+
+    def _build_unity_bridge_request(
+        self,
+        target_path: Path,
+        ops: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        resource_id = "target"
+        bridged_ops = [{**deepcopy(op), "resource": resource_id} for op in ops]
+        return build_bridge_request(
+            {
+                "plan_version": PLAN_VERSION,
+                "resources": [
+                    {
+                        "id": resource_id,
+                        "kind": self._infer_bridge_resource_kind(target_path),
+                        "path": str(target_path),
+                        "mode": "open",
+                    }
+                ],
+                "ops": bridged_ops,
+            }
+        )
 
     def _parse_bridge_response(
         self,
@@ -234,9 +273,7 @@ class SerializedObjectMcp:
             )
 
         request_payload = {
-            "protocol_version": _UNITY_BRIDGE_PROTOCOL_VERSION,
-            "target": str(target_path),
-            "ops": ops,
+            **self._build_unity_bridge_request(target_path=target_path, ops=ops),
         }
         try:
             completed = subprocess.run(
@@ -797,19 +834,3 @@ class SerializedObjectMcp:
             },
             diagnostics=[],
         )
-
-
-def load_patch_plan(path: Path) -> dict[str, Any]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError("Patch plan root must be an object.")
-    return payload
-
-
-def compute_patch_plan_sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def compute_patch_plan_hmac_sha256(path: Path, key: str) -> str:
-    digest = hmac.new(key.encode("utf-8"), path.read_bytes(), hashlib.sha256)
-    return digest.hexdigest()
