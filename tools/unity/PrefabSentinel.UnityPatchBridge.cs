@@ -39,6 +39,10 @@ namespace PrefabSentinel
         {
             public string op = string.Empty;
             public string name = string.Empty;
+            public string result = string.Empty;
+            public string parent = string.Empty;
+            public string target = string.Empty;
+            public string type = string.Empty;
             public string component = string.Empty;
             public string path = string.Empty;
             public int index = 0;
@@ -465,6 +469,7 @@ namespace PrefabSentinel
             List<BridgeDiagnostic> diagnostics = new List<BridgeDiagnostic>();
             GameObject prefabRoot = null;
             bool saved = false;
+            Dictionary<string, UnityEngine.Object> handles = new Dictionary<string, UnityEngine.Object>(StringComparer.Ordinal);
             try
             {
                 if (File.Exists(Path.Combine(Path.GetFullPath(Path.Combine(Application.dataPath, "..")), assetPath)))
@@ -498,7 +503,10 @@ namespace PrefabSentinel
                 {
                     PatchOp op = request.ops[i];
                     string opName = (op?.op ?? string.Empty).Trim();
-                    if (string.Equals(opName, "create_prefab", StringComparison.Ordinal))
+                    if (
+                        string.Equals(opName, "create_prefab", StringComparison.Ordinal)
+                        || string.Equals(opName, "create_root", StringComparison.Ordinal)
+                    )
                     {
                         if (prefabRoot != null)
                         {
@@ -508,7 +516,7 @@ namespace PrefabSentinel
                                     path = request.target,
                                     location = $"ops[{i}].op",
                                     detail = "schema_error",
-                                    evidence = "create_prefab may appear only once"
+                                    evidence = "prefab root may be created only once"
                                 }
                             );
                             return BuildError(
@@ -522,10 +530,574 @@ namespace PrefabSentinel
                             );
                         }
 
-                        string rootName = string.IsNullOrWhiteSpace(op.name)
-                            ? Path.GetFileNameWithoutExtension(assetPath)
-                            : op.name.Trim();
+                        string rootName;
+                        if (string.Equals(opName, "create_root", StringComparison.Ordinal))
+                        {
+                            if (string.IsNullOrWhiteSpace(op.name))
+                            {
+                                diagnostics.Add(
+                                    new BridgeDiagnostic
+                                    {
+                                        path = request.target,
+                                        location = $"ops[{i}].name",
+                                        detail = "schema_error",
+                                        evidence = "create_root requires name"
+                                    }
+                                );
+                                return BuildError(
+                                    "UNITY_BRIDGE_SCHEMA",
+                                    "Invalid prefab create plan.",
+                                    request.target,
+                                    request.ops.Length,
+                                    executed: false,
+                                    applied: applied,
+                                    diagnostics: diagnostics.ToArray()
+                                );
+                            }
+                            rootName = op.name.Trim();
+                        }
+                        else
+                        {
+                            rootName = string.IsNullOrWhiteSpace(op.name)
+                                ? Path.GetFileNameWithoutExtension(assetPath)
+                                : op.name.Trim();
+                        }
                         prefabRoot = new GameObject(rootName);
+                        handles["root"] = prefabRoot;
+                        if (!TryRegisterHandle(op.result, prefabRoot, handles, request.target, i, diagnostics))
+                        {
+                            return BuildError(
+                                "UNITY_BRIDGE_SCHEMA",
+                                "Invalid prefab create plan.",
+                                request.target,
+                                request.ops.Length,
+                                executed: false,
+                                applied: applied,
+                                diagnostics: diagnostics.ToArray()
+                            );
+                        }
+                        applied += 1;
+                        continue;
+                    }
+
+                    if (string.Equals(opName, "create_game_object", StringComparison.Ordinal))
+                    {
+                        if (prefabRoot == null)
+                        {
+                            diagnostics.Add(
+                                new BridgeDiagnostic
+                                {
+                                    path = request.target,
+                                    location = $"ops[{i}].op",
+                                    detail = "schema_error",
+                                    evidence = "create_game_object requires a prefab root first"
+                                }
+                            );
+                            return BuildError(
+                                "UNITY_BRIDGE_SCHEMA",
+                                "Invalid prefab create plan.",
+                                request.target,
+                                request.ops.Length,
+                                executed: false,
+                                applied: applied,
+                                diagnostics: diagnostics.ToArray()
+                            );
+                        }
+                        if (string.IsNullOrWhiteSpace(op.name))
+                        {
+                            diagnostics.Add(
+                                new BridgeDiagnostic
+                                {
+                                    path = request.target,
+                                    location = $"ops[{i}].name",
+                                    detail = "schema_error",
+                                    evidence = "create_game_object requires name"
+                                }
+                            );
+                            return BuildError(
+                                "UNITY_BRIDGE_SCHEMA",
+                                "Invalid prefab create plan.",
+                                request.target,
+                                request.ops.Length,
+                                executed: false,
+                                applied: applied,
+                                diagnostics: diagnostics.ToArray()
+                            );
+                        }
+                        GameObject parentObject;
+                        string handleError;
+                        if (!TryResolveGameObjectHandle(op.parent, handles, out parentObject, out handleError))
+                        {
+                            diagnostics.Add(
+                                new BridgeDiagnostic
+                                {
+                                    path = request.target,
+                                    location = $"ops[{i}].parent",
+                                    detail = "schema_error",
+                                    evidence = handleError
+                                }
+                            );
+                            return BuildError(
+                                "UNITY_BRIDGE_SCHEMA",
+                                "Invalid prefab create plan.",
+                                request.target,
+                                request.ops.Length,
+                                executed: false,
+                                applied: applied,
+                                diagnostics: diagnostics.ToArray()
+                            );
+                        }
+                        GameObject child = new GameObject(op.name.Trim());
+                        child.transform.SetParent(parentObject.transform, false);
+                        if (!TryRegisterHandle(op.result, child, handles, request.target, i, diagnostics))
+                        {
+                            UnityEngine.Object.DestroyImmediate(child);
+                            return BuildError(
+                                "UNITY_BRIDGE_SCHEMA",
+                                "Invalid prefab create plan.",
+                                request.target,
+                                request.ops.Length,
+                                executed: false,
+                                applied: applied,
+                                diagnostics: diagnostics.ToArray()
+                            );
+                        }
+                        applied += 1;
+                        continue;
+                    }
+
+                    if (string.Equals(opName, "add_component", StringComparison.Ordinal))
+                    {
+                        GameObject targetObject;
+                        string targetHandleError;
+                        if (!TryResolveGameObjectHandle(op.target, handles, out targetObject, out targetHandleError))
+                        {
+                            diagnostics.Add(
+                                new BridgeDiagnostic
+                                {
+                                    path = request.target,
+                                    location = $"ops[{i}].target",
+                                    detail = "schema_error",
+                                    evidence = targetHandleError
+                                }
+                            );
+                            return BuildError(
+                                "UNITY_BRIDGE_SCHEMA",
+                                "Invalid prefab create plan.",
+                                request.target,
+                                request.ops.Length,
+                                executed: false,
+                                applied: applied,
+                                diagnostics: diagnostics.ToArray()
+                            );
+                        }
+                        Type componentType;
+                        string typeError;
+                        if (!TryResolveComponentType(op.type, out componentType, out typeError))
+                        {
+                            diagnostics.Add(
+                                new BridgeDiagnostic
+                                {
+                                    path = request.target,
+                                    location = $"ops[{i}].type",
+                                    detail = "apply_error",
+                                    evidence = typeError
+                                }
+                            );
+                            return BuildError(
+                                "UNITY_BRIDGE_APPLY",
+                                "Failed to add component.",
+                                request.target,
+                                request.ops.Length,
+                                executed: true,
+                                applied: applied,
+                                diagnostics: diagnostics.ToArray()
+                            );
+                        }
+                        if (componentType.IsAbstract || componentType.ContainsGenericParameters)
+                        {
+                            diagnostics.Add(
+                                new BridgeDiagnostic
+                                {
+                                    path = request.target,
+                                    location = $"ops[{i}].type",
+                                    detail = "apply_error",
+                                    evidence = $"component type '{componentType.FullName ?? componentType.Name}' cannot be instantiated"
+                                }
+                            );
+                            return BuildError(
+                                "UNITY_BRIDGE_APPLY",
+                                "Failed to add component.",
+                                request.target,
+                                request.ops.Length,
+                                executed: true,
+                                applied: applied,
+                                diagnostics: diagnostics.ToArray()
+                            );
+                        }
+                        if (componentType == typeof(Transform))
+                        {
+                            diagnostics.Add(
+                                new BridgeDiagnostic
+                                {
+                                    path = request.target,
+                                    location = $"ops[{i}].type",
+                                    detail = "apply_error",
+                                    evidence = "Transform is implicit and cannot be added"
+                                }
+                            );
+                            return BuildError(
+                                "UNITY_BRIDGE_APPLY",
+                                "Failed to add component.",
+                                request.target,
+                                request.ops.Length,
+                                executed: true,
+                                applied: applied,
+                                diagnostics: diagnostics.ToArray()
+                            );
+                        }
+
+                        Component addedComponent = targetObject.AddComponent(componentType);
+                        if (addedComponent == null)
+                        {
+                            diagnostics.Add(
+                                new BridgeDiagnostic
+                                {
+                                    path = request.target,
+                                    location = $"ops[{i}]",
+                                    detail = "apply_error",
+                                    evidence = $"AddComponent returned null for '{componentType.FullName ?? componentType.Name}'"
+                                }
+                            );
+                            return BuildError(
+                                "UNITY_BRIDGE_APPLY",
+                                "Failed to add component.",
+                                request.target,
+                                request.ops.Length,
+                                executed: true,
+                                applied: applied,
+                                diagnostics: diagnostics.ToArray()
+                            );
+                        }
+                        if (!TryRegisterHandle(op.result, addedComponent, handles, request.target, i, diagnostics))
+                        {
+                            UnityEngine.Object.DestroyImmediate(addedComponent);
+                            return BuildError(
+                                "UNITY_BRIDGE_SCHEMA",
+                                "Invalid prefab create plan.",
+                                request.target,
+                                request.ops.Length,
+                                executed: false,
+                                applied: applied,
+                                diagnostics: diagnostics.ToArray()
+                            );
+                        }
+                        applied += 1;
+                        continue;
+                    }
+
+                    if (string.Equals(opName, "find_component", StringComparison.Ordinal))
+                    {
+                        GameObject targetObject;
+                        string targetHandleError;
+                        if (!TryResolveGameObjectHandle(op.target, handles, out targetObject, out targetHandleError))
+                        {
+                            diagnostics.Add(
+                                new BridgeDiagnostic
+                                {
+                                    path = request.target,
+                                    location = $"ops[{i}].target",
+                                    detail = "schema_error",
+                                    evidence = targetHandleError
+                                }
+                            );
+                            return BuildError(
+                                "UNITY_BRIDGE_SCHEMA",
+                                "Invalid prefab create plan.",
+                                request.target,
+                                request.ops.Length,
+                                executed: false,
+                                applied: applied,
+                                diagnostics: diagnostics.ToArray()
+                            );
+                        }
+                        Component foundComponent;
+                        string componentError;
+                        if (!TryFindUniqueComponentOnObject(targetObject, op.type, out foundComponent, out componentError))
+                        {
+                            diagnostics.Add(
+                                new BridgeDiagnostic
+                                {
+                                    path = request.target,
+                                    location = $"ops[{i}].type",
+                                    detail = "apply_error",
+                                    evidence = componentError
+                                }
+                            );
+                            return BuildError(
+                                "UNITY_BRIDGE_APPLY",
+                                "Failed to resolve component.",
+                                request.target,
+                                request.ops.Length,
+                                executed: true,
+                                applied: applied,
+                                diagnostics: diagnostics.ToArray()
+                            );
+                        }
+                        if (!TryRegisterHandle(op.result, foundComponent, handles, request.target, i, diagnostics))
+                        {
+                            return BuildError(
+                                "UNITY_BRIDGE_SCHEMA",
+                                "Invalid prefab create plan.",
+                                request.target,
+                                request.ops.Length,
+                                executed: false,
+                                applied: applied,
+                                diagnostics: diagnostics.ToArray()
+                            );
+                        }
+                        applied += 1;
+                        continue;
+                    }
+
+                    if (string.Equals(opName, "remove_component", StringComparison.Ordinal))
+                    {
+                        Component targetComponent;
+                        string componentHandleError;
+                        if (!TryResolveComponentHandle(op.target, handles, out targetComponent, out componentHandleError))
+                        {
+                            diagnostics.Add(
+                                new BridgeDiagnostic
+                                {
+                                    path = request.target,
+                                    location = $"ops[{i}].target",
+                                    detail = "schema_error",
+                                    evidence = componentHandleError
+                                }
+                            );
+                            return BuildError(
+                                "UNITY_BRIDGE_SCHEMA",
+                                "Invalid prefab create plan.",
+                                request.target,
+                                request.ops.Length,
+                                executed: false,
+                                applied: applied,
+                                diagnostics: diagnostics.ToArray()
+                            );
+                        }
+                        if (targetComponent is Transform)
+                        {
+                            diagnostics.Add(
+                                new BridgeDiagnostic
+                                {
+                                    path = request.target,
+                                    location = $"ops[{i}].target",
+                                    detail = "apply_error",
+                                    evidence = "Transform cannot be removed"
+                                }
+                            );
+                            return BuildError(
+                                "UNITY_BRIDGE_APPLY",
+                                "Failed to remove component.",
+                                request.target,
+                                request.ops.Length,
+                                executed: true,
+                                applied: applied,
+                                diagnostics: diagnostics.ToArray()
+                            );
+                        }
+                        UnityEngine.Object.DestroyImmediate(targetComponent);
+                        applied += 1;
+                        continue;
+                    }
+
+                    if (
+                        string.Equals(opName, "set", StringComparison.Ordinal)
+                        || string.Equals(opName, "insert_array_element", StringComparison.Ordinal)
+                        || string.Equals(opName, "remove_array_element", StringComparison.Ordinal)
+                    )
+                    {
+                        Component targetComponent;
+                        string componentHandleError;
+                        if (!TryResolveComponentHandle(op.target, handles, out targetComponent, out componentHandleError))
+                        {
+                            diagnostics.Add(
+                                new BridgeDiagnostic
+                                {
+                                    path = request.target,
+                                    location = $"ops[{i}].target",
+                                    detail = "schema_error",
+                                    evidence = componentHandleError
+                                }
+                            );
+                            return BuildError(
+                                "UNITY_BRIDGE_SCHEMA",
+                                "Invalid prefab create plan.",
+                                request.target,
+                                request.ops.Length,
+                                executed: false,
+                                applied: applied,
+                                diagnostics: diagnostics.ToArray()
+                            );
+                        }
+                        if (!TryApplyMutationOpToComponent(targetComponent, request.target, op, i, diagnostics))
+                        {
+                            return BuildError(
+                                "UNITY_BRIDGE_APPLY",
+                                "Failed to apply component mutation.",
+                                request.target,
+                                request.ops.Length,
+                                executed: true,
+                                applied: applied,
+                                diagnostics: diagnostics.ToArray()
+                            );
+                        }
+                        applied += 1;
+                        continue;
+                    }
+
+                    if (string.Equals(opName, "rename_object", StringComparison.Ordinal))
+                    {
+                        GameObject targetObject;
+                        string handleError;
+                        if (!TryResolveGameObjectHandle(op.target, handles, out targetObject, out handleError))
+                        {
+                            diagnostics.Add(
+                                new BridgeDiagnostic
+                                {
+                                    path = request.target,
+                                    location = $"ops[{i}].target",
+                                    detail = "schema_error",
+                                    evidence = handleError
+                                }
+                            );
+                            return BuildError(
+                                "UNITY_BRIDGE_SCHEMA",
+                                "Invalid prefab create plan.",
+                                request.target,
+                                request.ops.Length,
+                                executed: false,
+                                applied: applied,
+                                diagnostics: diagnostics.ToArray()
+                            );
+                        }
+                        if (string.IsNullOrWhiteSpace(op.name))
+                        {
+                            diagnostics.Add(
+                                new BridgeDiagnostic
+                                {
+                                    path = request.target,
+                                    location = $"ops[{i}].name",
+                                    detail = "schema_error",
+                                    evidence = "rename_object requires name"
+                                }
+                            );
+                            return BuildError(
+                                "UNITY_BRIDGE_SCHEMA",
+                                "Invalid prefab create plan.",
+                                request.target,
+                                request.ops.Length,
+                                executed: false,
+                                applied: applied,
+                                diagnostics: diagnostics.ToArray()
+                            );
+                        }
+                        targetObject.name = op.name.Trim();
+                        applied += 1;
+                        continue;
+                    }
+
+                    if (string.Equals(opName, "reparent", StringComparison.Ordinal))
+                    {
+                        GameObject targetObject;
+                        string targetHandleError;
+                        if (!TryResolveGameObjectHandle(op.target, handles, out targetObject, out targetHandleError))
+                        {
+                            diagnostics.Add(
+                                new BridgeDiagnostic
+                                {
+                                    path = request.target,
+                                    location = $"ops[{i}].target",
+                                    detail = "schema_error",
+                                    evidence = targetHandleError
+                                }
+                            );
+                            return BuildError(
+                                "UNITY_BRIDGE_SCHEMA",
+                                "Invalid prefab create plan.",
+                                request.target,
+                                request.ops.Length,
+                                executed: false,
+                                applied: applied,
+                                diagnostics: diagnostics.ToArray()
+                            );
+                        }
+                        GameObject parentObject;
+                        string parentHandleError;
+                        if (!TryResolveGameObjectHandle(op.parent, handles, out parentObject, out parentHandleError))
+                        {
+                            diagnostics.Add(
+                                new BridgeDiagnostic
+                                {
+                                    path = request.target,
+                                    location = $"ops[{i}].parent",
+                                    detail = "schema_error",
+                                    evidence = parentHandleError
+                                }
+                            );
+                            return BuildError(
+                                "UNITY_BRIDGE_SCHEMA",
+                                "Invalid prefab create plan.",
+                                request.target,
+                                request.ops.Length,
+                                executed: false,
+                                applied: applied,
+                                diagnostics: diagnostics.ToArray()
+                            );
+                        }
+                        if (ReferenceEquals(targetObject, prefabRoot))
+                        {
+                            diagnostics.Add(
+                                new BridgeDiagnostic
+                                {
+                                    path = request.target,
+                                    location = $"ops[{i}].target",
+                                    detail = "schema_error",
+                                    evidence = "root handle cannot be reparented"
+                                }
+                            );
+                            return BuildError(
+                                "UNITY_BRIDGE_SCHEMA",
+                                "Invalid prefab create plan.",
+                                request.target,
+                                request.ops.Length,
+                                executed: false,
+                                applied: applied,
+                                diagnostics: diagnostics.ToArray()
+                            );
+                        }
+                        if (ReferenceEquals(targetObject, parentObject))
+                        {
+                            diagnostics.Add(
+                                new BridgeDiagnostic
+                                {
+                                    path = request.target,
+                                    location = $"ops[{i}]",
+                                    detail = "schema_error",
+                                    evidence = "target and parent handles must differ"
+                                }
+                            );
+                            return BuildError(
+                                "UNITY_BRIDGE_SCHEMA",
+                                "Invalid prefab create plan.",
+                                request.target,
+                                request.ops.Length,
+                                executed: false,
+                                applied: applied,
+                                diagnostics: diagnostics.ToArray()
+                            );
+                        }
+                        targetObject.transform.SetParent(parentObject.transform, false);
                         applied += 1;
                         continue;
                     }
@@ -540,7 +1112,28 @@ namespace PrefabSentinel
                                     path = request.target,
                                     location = $"ops[{i}].op",
                                     detail = "schema_error",
-                                    evidence = "save requires create_prefab first"
+                                    evidence = "save requires a prefab root first"
+                                }
+                            );
+                            return BuildError(
+                                "UNITY_BRIDGE_SCHEMA",
+                                "Invalid prefab create plan.",
+                                request.target,
+                                request.ops.Length,
+                                executed: false,
+                                applied: applied,
+                                diagnostics: diagnostics.ToArray()
+                            );
+                        }
+                        if (i != request.ops.Length - 1)
+                        {
+                            diagnostics.Add(
+                                new BridgeDiagnostic
+                                {
+                                    path = request.target,
+                                    location = $"ops[{i}].op",
+                                    detail = "schema_error",
+                                    evidence = "save must be the final operation in create mode"
                                 }
                             );
                             return BuildError(
@@ -606,7 +1199,7 @@ namespace PrefabSentinel
                 {
                     return BuildError(
                         "UNITY_BRIDGE_SCHEMA",
-                        "Prefab create mode requires create_prefab and save operations.",
+                        "Prefab create mode requires a root creation operation and save.",
                         request.target,
                         request.ops.Length,
                         executed: false,
@@ -661,6 +1254,189 @@ namespace PrefabSentinel
                     UnityEngine.Object.DestroyImmediate(prefabRoot);
                 }
             }
+        }
+
+        private static string NormalizeHandle(string raw)
+        {
+            string normalized = (raw ?? string.Empty).Trim();
+            if (normalized.StartsWith("$", StringComparison.Ordinal))
+            {
+                normalized = normalized.Substring(1);
+            }
+            return normalized.Trim();
+        }
+
+        private static bool TryRegisterHandle(
+            string rawHandle,
+            UnityEngine.Object obj,
+            Dictionary<string, UnityEngine.Object> handles,
+            string requestTarget,
+            int opIndex,
+            List<BridgeDiagnostic> diagnostics
+        )
+        {
+            string handle = NormalizeHandle(rawHandle);
+            if (string.IsNullOrWhiteSpace(handle))
+            {
+                return true;
+            }
+            if (handles.ContainsKey(handle))
+            {
+                diagnostics.Add(
+                    new BridgeDiagnostic
+                    {
+                        path = requestTarget,
+                        location = $"ops[{opIndex}].result",
+                        detail = "schema_error",
+                        evidence = $"handle '{handle}' is already defined"
+                    }
+                );
+                return false;
+            }
+            handles[handle] = obj;
+            return true;
+        }
+
+        private static bool TryResolveHandle(
+            string rawHandle,
+            Dictionary<string, UnityEngine.Object> handles,
+            out UnityEngine.Object obj,
+            out string error
+        )
+        {
+            obj = null;
+            string handle = NormalizeHandle(rawHandle);
+            if (string.IsNullOrWhiteSpace(handle))
+            {
+                error = "handle is required";
+                return false;
+            }
+            if (!handles.TryGetValue(handle, out obj) || obj == null)
+            {
+                error = $"unknown handle '{handle}'";
+                return false;
+            }
+            error = string.Empty;
+            return true;
+        }
+
+        private static bool TryResolveGameObjectHandle(
+            string rawHandle,
+            Dictionary<string, UnityEngine.Object> handles,
+            out GameObject obj,
+            out string error
+        )
+        {
+            obj = null;
+            UnityEngine.Object handleObject;
+            if (!TryResolveHandle(rawHandle, handles, out handleObject, out error))
+            {
+                return false;
+            }
+            obj = handleObject as GameObject;
+            if (obj == null)
+            {
+                error = $"handle '{NormalizeHandle(rawHandle)}' does not reference a GameObject";
+                return false;
+            }
+            return true;
+        }
+
+        private static bool TryResolveComponentHandle(
+            string rawHandle,
+            Dictionary<string, UnityEngine.Object> handles,
+            out Component component,
+            out string error
+        )
+        {
+            component = null;
+            UnityEngine.Object handleObject;
+            if (!TryResolveHandle(rawHandle, handles, out handleObject, out error))
+            {
+                return false;
+            }
+            component = handleObject as Component;
+            if (component == null)
+            {
+                error = $"handle '{NormalizeHandle(rawHandle)}' does not reference a Component";
+                return false;
+            }
+            return true;
+        }
+
+        private static bool TryResolveComponentType(
+            string rawTypeName,
+            out Type componentType,
+            out string error
+        )
+        {
+            componentType = null;
+            error = string.Empty;
+            Type resolvedType;
+            if (!TryResolveType(rawTypeName, out resolvedType, out error))
+            {
+                return false;
+            }
+            if (!typeof(Component).IsAssignableFrom(resolvedType))
+            {
+                error = $"type '{resolvedType.FullName ?? resolvedType.Name}' is not a UnityEngine.Component";
+                return false;
+            }
+            componentType = resolvedType;
+            return true;
+        }
+
+        private static bool TryFindUniqueComponentOnObject(
+            GameObject targetObject,
+            string rawTypeName,
+            out Component component,
+            out string error
+        )
+        {
+            component = null;
+            error = string.Empty;
+            Type targetType;
+            if (!TryResolveComponentType(rawTypeName, out targetType, out error))
+            {
+                return false;
+            }
+
+            Component[] components = targetObject.GetComponents<Component>();
+            List<Component> matches = new List<Component>();
+            HashSet<string> availableTypeNames = new HashSet<string>(StringComparer.Ordinal);
+            for (int i = 0; i < components.Length; i++)
+            {
+                Component candidate = components[i];
+                if (candidate == null)
+                {
+                    continue;
+                }
+
+                Type candidateType = candidate.GetType();
+                availableTypeNames.Add(candidateType.FullName ?? candidateType.Name);
+                if (targetType.IsAssignableFrom(candidateType))
+                {
+                    matches.Add(candidate);
+                }
+            }
+
+            string objectPath = BuildHierarchyPath(targetObject.transform);
+            if (matches.Count == 1)
+            {
+                component = matches[0];
+                return true;
+            }
+            if (matches.Count == 0)
+            {
+                string available = BuildTypeNameSample(availableTypeNames, 8);
+                error = string.IsNullOrEmpty(available)
+                    ? $"component type '{rawTypeName}' was not found on '{objectPath}'"
+                    : $"component type '{rawTypeName}' was not found on '{objectPath}'. available types: {available}";
+                return false;
+            }
+
+            error = $"component type '{rawTypeName}' matched {matches.Count} components on '{objectPath}'";
+            return false;
         }
 
         private static bool TryResolveAssetPath(
@@ -744,15 +1520,15 @@ namespace PrefabSentinel
                 );
                 return false;
             }
-            if (string.IsNullOrWhiteSpace(op.component) || string.IsNullOrWhiteSpace(op.path))
+            if (string.IsNullOrWhiteSpace(op.component))
             {
                 diagnostics.Add(
                     new BridgeDiagnostic
                     {
                         path = target,
-                        location = $"ops[{opIndex}]",
+                        location = $"ops[{opIndex}].component",
                         detail = "schema_error",
-                        evidence = "component and path are required"
+                        evidence = "component is required"
                     }
                 );
                 return false;
@@ -769,6 +1545,44 @@ namespace PrefabSentinel
                         location = $"ops[{opIndex}].component",
                         detail = "apply_error",
                         evidence = componentError
+                    }
+                );
+                return false;
+            }
+
+            return TryApplyMutationOpToComponent(component, target, op, opIndex, diagnostics);
+        }
+
+        private static bool TryApplyMutationOpToComponent(
+            Component component,
+            string target,
+            PatchOp op,
+            int opIndex,
+            List<BridgeDiagnostic> diagnostics
+        )
+        {
+            if (component == null)
+            {
+                diagnostics.Add(
+                    new BridgeDiagnostic
+                    {
+                        path = target,
+                        location = $"ops[{opIndex}]",
+                        detail = "apply_error",
+                        evidence = "component target resolved to null"
+                    }
+                );
+                return false;
+            }
+            if (string.IsNullOrWhiteSpace(op.path))
+            {
+                diagnostics.Add(
+                    new BridgeDiagnostic
+                    {
+                        path = target,
+                        location = $"ops[{opIndex}].path",
+                        detail = "schema_error",
+                        evidence = "path is required"
                     }
                 );
                 return false;

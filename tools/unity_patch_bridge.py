@@ -37,6 +37,13 @@ SUPPORTED_OP_NAMES = {
     "insert_array_element",
     "remove_array_element",
     "create_prefab",
+    "create_root",
+    "create_game_object",
+    "rename_object",
+    "reparent",
+    "add_component",
+    "find_component",
+    "remove_component",
     "save",
 }
 _SEVERITY_ORDER = {"info": 0, "warning": 1, "error": 2, "critical": 3}
@@ -220,7 +227,7 @@ def _normalize_bridge_op(op: object) -> object:
     if not isinstance(op, dict):
         return op
     normalized: dict[str, object] = {}
-    for key in ("op", "component", "path", "index", "name"):
+    for key in ("op", "component", "path", "index", "name", "result", "parent", "target", "type"):
         if key in op:
             normalized[key] = op[key]
 
@@ -265,12 +272,96 @@ def _validate_bridge_ops(
                 }
             continue
 
+        if op_name == "create_root":
+            name = op.get("name")
+            if not isinstance(name, str) or not name.strip():
+                return {
+                    "location": f"{location}.name",
+                    "error": "create_root requires a non-empty 'name'",
+                }
+            continue
+
+        if op_name == "create_game_object":
+            name = op.get("name")
+            parent = op.get("parent")
+            if not isinstance(name, str) or not name.strip():
+                return {
+                    "location": f"{location}.name",
+                    "error": "create_game_object requires a non-empty 'name'",
+                }
+            if not isinstance(parent, str) or not parent.strip():
+                return {
+                    "location": f"{location}.parent",
+                    "error": "create_game_object requires a non-empty 'parent'",
+                }
+            continue
+
+        if op_name == "rename_object":
+            target = op.get("target")
+            name = op.get("name")
+            if not isinstance(target, str) or not target.strip():
+                return {
+                    "location": f"{location}.target",
+                    "error": "rename_object requires a non-empty 'target'",
+                }
+            if not isinstance(name, str) or not name.strip():
+                return {
+                    "location": f"{location}.name",
+                    "error": "rename_object requires a non-empty 'name'",
+                }
+            continue
+
+        if op_name == "reparent":
+            target = op.get("target")
+            parent = op.get("parent")
+            if not isinstance(target, str) or not target.strip():
+                return {
+                    "location": f"{location}.target",
+                    "error": "reparent requires a non-empty 'target'",
+                }
+            if not isinstance(parent, str) or not parent.strip():
+                return {
+                    "location": f"{location}.parent",
+                    "error": "reparent requires a non-empty 'parent'",
+                }
+            continue
+
+        if op_name in {"add_component", "find_component"}:
+            target = op.get("target")
+            type_name = op.get("type")
+            if not isinstance(target, str) or not target.strip():
+                return {
+                    "location": f"{location}.target",
+                    "error": f"{op_name} requires a non-empty 'target'",
+                }
+            if not isinstance(type_name, str) or not type_name.strip():
+                return {
+                    "location": f"{location}.type",
+                    "error": f"{op_name} requires a non-empty 'type'",
+                }
+            continue
+
+        if op_name == "remove_component":
+            target = op.get("target")
+            if not isinstance(target, str) or not target.strip():
+                return {
+                    "location": f"{location}.target",
+                    "error": "remove_component requires a non-empty 'target'",
+                }
+            continue
+
         if op_name == "save":
             continue
 
         component = op.get("component")
-        if not isinstance(component, str) or not component.strip():
-            return {"location": f"{location}.component", "error": "component is required"}
+        target = op.get("target")
+        has_component = isinstance(component, str) and bool(component.strip())
+        has_target = isinstance(target, str) and bool(target.strip())
+        if not has_component and not has_target:
+            return {
+                "location": location,
+                "error": "mutation op requires a non-empty 'component' or 'target'",
+            }
 
         path = op.get("path")
         if not isinstance(path, str) or not path.strip():

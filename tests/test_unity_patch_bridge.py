@@ -319,6 +319,257 @@ response_path.write_text(
         self.assertEqual("create_prefab", result["data"]["request_ops"][0]["op"])
         self.assertEqual("GeneratedRoot", result["data"]["request_ops"][0]["name"])
 
+    def test_reference_bridge_passes_prefab_hierarchy_ops_to_unity_request(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            unity_runner = root / "fake_unity_hierarchy.py"
+            unity_runner.write_text(
+                """
+import json
+import sys
+from pathlib import Path
+
+def _arg(flag: str) -> str:
+    args = sys.argv[1:]
+    idx = args.index(flag)
+    return args[idx + 1]
+
+request_path = Path(_arg("-unitytoolPatchRequest"))
+response_path = Path(_arg("-unitytoolPatchResponse"))
+request = json.loads(request_path.read_text(encoding="utf-8"))
+response_path.write_text(
+    json.dumps(
+        {
+            "protocol_version": 1,
+            "success": True,
+            "severity": "info",
+            "code": "SER_APPLY_OK",
+            "message": "Captured request payload.",
+            "data": {
+                "applied": len(request.get("ops", [])),
+                "request_ops": request.get("ops", []),
+            },
+            "diagnostics": [],
+        }
+    ),
+    encoding="utf-8",
+)
+""".strip(),
+                encoding="utf-8",
+            )
+
+            result = self._run_bridge(
+                {
+                    "protocol_version": 2,
+                    "plan_version": 2,
+                    "resources": [
+                        {
+                            "id": "prefab",
+                            "kind": "prefab",
+                            "path": "Assets/Generated/New.prefab",
+                            "mode": "create",
+                        }
+                    ],
+                    "ops": [
+                        {"resource": "prefab", "op": "create_prefab", "name": "GeneratedRoot"},
+                        {
+                            "resource": "prefab",
+                            "op": "create_game_object",
+                            "name": "ChildA",
+                            "parent": "$root",
+                            "result": "child_a",
+                        },
+                        {
+                            "resource": "prefab",
+                            "op": "rename_object",
+                            "target": "$child_a",
+                            "name": "ChildRenamed",
+                        },
+                        {"resource": "prefab", "op": "save"},
+                    ],
+                },
+                env_overrides={
+                    "UNITYTOOL_UNITY_COMMAND": f'"{sys.executable}" "{unity_runner}"',
+                    "UNITYTOOL_UNITY_PROJECT_PATH": str(root),
+                },
+            )
+
+        self.assertTrue(result["success"])
+        request_ops = result["data"]["request_ops"]
+        self.assertEqual("create_game_object", request_ops[1]["op"])
+        self.assertEqual("$root", request_ops[1]["parent"])
+        self.assertEqual("child_a", request_ops[1]["result"])
+        self.assertEqual("rename_object", request_ops[2]["op"])
+        self.assertEqual("$child_a", request_ops[2]["target"])
+
+    def test_reference_bridge_passes_prefab_component_ops_to_unity_request(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            unity_runner = root / "fake_unity_components.py"
+            unity_runner.write_text(
+                """
+import json
+import sys
+from pathlib import Path
+
+def _arg(flag: str) -> str:
+    args = sys.argv[1:]
+    idx = args.index(flag)
+    return args[idx + 1]
+
+request_path = Path(_arg("-unitytoolPatchRequest"))
+response_path = Path(_arg("-unitytoolPatchResponse"))
+request = json.loads(request_path.read_text(encoding="utf-8"))
+response_path.write_text(
+    json.dumps(
+        {
+            "protocol_version": 1,
+            "success": True,
+            "severity": "info",
+            "code": "SER_APPLY_OK",
+            "message": "Captured request payload.",
+            "data": {
+                "applied": len(request.get("ops", [])),
+                "request_ops": request.get("ops", []),
+            },
+            "diagnostics": [],
+        }
+    ),
+    encoding="utf-8",
+)
+""".strip(),
+                encoding="utf-8",
+            )
+
+            result = self._run_bridge(
+                {
+                    "protocol_version": 2,
+                    "plan_version": 2,
+                    "resources": [
+                        {
+                            "id": "prefab",
+                            "kind": "prefab",
+                            "path": "Assets/Generated/New.prefab",
+                            "mode": "create",
+                        }
+                    ],
+                    "ops": [
+                        {"resource": "prefab", "op": "create_prefab", "name": "GeneratedRoot"},
+                        {
+                            "resource": "prefab",
+                            "op": "create_game_object",
+                            "name": "ChildA",
+                            "parent": "$root",
+                            "result": "child_a",
+                        },
+                        {
+                            "resource": "prefab",
+                            "op": "add_component",
+                            "target": "$child_a",
+                            "type": "UnityEngine.BoxCollider",
+                            "result": "child_collider",
+                        },
+                        {"resource": "prefab", "op": "remove_component", "target": "$child_collider"},
+                        {"resource": "prefab", "op": "save"},
+                    ],
+                },
+                env_overrides={
+                    "UNITYTOOL_UNITY_COMMAND": f'"{sys.executable}" "{unity_runner}"',
+                    "UNITYTOOL_UNITY_PROJECT_PATH": str(root),
+                },
+            )
+
+        self.assertTrue(result["success"])
+        request_ops = result["data"]["request_ops"]
+        self.assertEqual("add_component", request_ops[2]["op"])
+        self.assertEqual("$child_a", request_ops[2]["target"])
+        self.assertEqual("UnityEngine.BoxCollider", request_ops[2]["type"])
+        self.assertEqual("remove_component", request_ops[3]["op"])
+        self.assertEqual("$child_collider", request_ops[3]["target"])
+
+    def test_reference_bridge_passes_prefab_component_mutation_ops_to_unity_request(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            unity_runner = root / "fake_unity_component_mutation.py"
+            unity_runner.write_text(
+                """
+import json
+import sys
+from pathlib import Path
+
+def _arg(flag: str) -> str:
+    args = sys.argv[1:]
+    idx = args.index(flag)
+    return args[idx + 1]
+
+request_path = Path(_arg("-unitytoolPatchRequest"))
+response_path = Path(_arg("-unitytoolPatchResponse"))
+request = json.loads(request_path.read_text(encoding="utf-8"))
+response_path.write_text(
+    json.dumps(
+        {
+            "protocol_version": 1,
+            "success": True,
+            "severity": "info",
+            "code": "SER_APPLY_OK",
+            "message": "Captured request payload.",
+            "data": {
+                "applied": len(request.get("ops", [])),
+                "request_ops": request.get("ops", []),
+            },
+            "diagnostics": [],
+        }
+    ),
+    encoding="utf-8",
+)
+""".strip(),
+                encoding="utf-8",
+            )
+
+            result = self._run_bridge(
+                {
+                    "protocol_version": 2,
+                    "plan_version": 2,
+                    "resources": [
+                        {
+                            "id": "prefab",
+                            "kind": "prefab",
+                            "path": "Assets/Generated/New.prefab",
+                            "mode": "create",
+                        }
+                    ],
+                    "ops": [
+                        {"resource": "prefab", "op": "create_prefab", "name": "GeneratedRoot"},
+                        {
+                            "resource": "prefab",
+                            "op": "add_component",
+                            "target": "$root",
+                            "type": "UnityEngine.BoxCollider",
+                            "result": "root_collider",
+                        },
+                        {
+                            "resource": "prefab",
+                            "op": "set",
+                            "target": "$root_collider",
+                            "path": "m_IsTrigger",
+                            "value": True,
+                        },
+                        {"resource": "prefab", "op": "save"},
+                    ],
+                },
+                env_overrides={
+                    "UNITYTOOL_UNITY_COMMAND": f'"{sys.executable}" "{unity_runner}"',
+                    "UNITYTOOL_UNITY_PROJECT_PATH": str(root),
+                },
+            )
+
+        self.assertTrue(result["success"])
+        request_ops = result["data"]["request_ops"]
+        self.assertEqual("set", request_ops[2]["op"])
+        self.assertEqual("$root_collider", request_ops[2]["target"])
+        self.assertEqual("m_IsTrigger", request_ops[2]["path"])
+        self.assertEqual("bool", request_ops[2]["value_kind"])
+
     def test_reference_bridge_rejects_unity_response_missing_fields(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

@@ -19,7 +19,21 @@ from unitytool.patch_plan import (
 from unitytool.unity_assets import decode_text_file
 
 _SUPPORTED_OPS = {"set", "insert_array_element", "remove_array_element"}
-_PREFAB_CREATE_OPS = {"create_prefab", "save"}
+_PREFAB_CREATE_OPS = {
+    "create_prefab",
+    "create_root",
+    "create_game_object",
+    "rename_object",
+    "reparent",
+    "add_component",
+    "find_component",
+    "remove_component",
+    "set",
+    "insert_array_element",
+    "remove_array_element",
+    "save",
+}
+_ROOT_HANDLE = "root"
 _UNITY_BRIDGE_PROTOCOL_VERSION = PLAN_VERSION
 _UNITY_BRIDGE_SUPPORTED_SUFFIXES = {
     ".prefab",
@@ -414,6 +428,86 @@ class SerializedObjectMcp:
         created = False
         saved = False
         root_name = Path(target).stem or "PrefabRoot"
+        known_handles: dict[str, str] = {}
+
+        def _normalize_handle_name(raw: object) -> str:
+            if not isinstance(raw, str):
+                return ""
+            normalized = raw.strip()
+            if normalized.startswith("$"):
+                normalized = normalized[1:]
+            return normalized.strip()
+
+        def _validate_result_handle(index: int, op: dict[str, Any]) -> str | None:
+            if "result" not in op:
+                return None
+            handle_name = _normalize_handle_name(op.get("result"))
+            if not handle_name:
+                diagnostics.append(
+                    Diagnostic(
+                        path=target,
+                        location=f"ops[{index}].result",
+                        detail="schema_error",
+                        evidence="result must be a non-empty string when provided",
+                    )
+                )
+                return None
+            if handle_name in known_handles:
+                diagnostics.append(
+                    Diagnostic(
+                        path=target,
+                        location=f"ops[{index}].result",
+                        detail="schema_error",
+                        evidence=f"handle '{handle_name}' is already defined",
+                    )
+                )
+                return None
+            return handle_name
+
+        def _require_handle_ref(
+            index: int,
+            field: str,
+            op: dict[str, Any],
+            *,
+            expected_kind: str | None = None,
+        ) -> str | None:
+            handle_name = _normalize_handle_name(op.get(field))
+            if not handle_name:
+                diagnostics.append(
+                    Diagnostic(
+                        path=target,
+                        location=f"ops[{index}].{field}",
+                        detail="schema_error",
+                        evidence=f"{field} must reference a handle",
+                    )
+                )
+                return None
+            if handle_name not in known_handles:
+                diagnostics.append(
+                    Diagnostic(
+                        path=target,
+                        location=f"ops[{index}].{field}",
+                        detail="schema_error",
+                        evidence=f"unknown handle '{handle_name}'",
+                    )
+                )
+                return None
+            actual_kind = known_handles[handle_name]
+            if expected_kind is not None and actual_kind != expected_kind:
+                diagnostics.append(
+                    Diagnostic(
+                        path=target,
+                        location=f"ops[{index}].{field}",
+                        detail="schema_error",
+                        evidence=(
+                            f"handle '{handle_name}' must reference a "
+                            f"{expected_kind.replace('_', ' ')}"
+                        ),
+                    )
+                )
+                return None
+            return handle_name
+
         for index, op in enumerate(ops):
             if not isinstance(op, dict):
                 diagnostics.append(
@@ -427,20 +521,33 @@ class SerializedObjectMcp:
                 continue
 
             op_name = str(op.get("op", "")).strip()
-            if op_name == "create_prefab":
+            if op_name in {"create_prefab", "create_root"}:
                 if created:
                     diagnostics.append(
                         Diagnostic(
                             path=target,
                             location=f"ops[{index}].op",
                             detail="schema_error",
-                            evidence="create_prefab may appear only once",
+                            evidence="prefab root may be created only once",
                         )
                     )
                     continue
                 created = True
+                known_handles[_ROOT_HANDLE] = "game_object"
                 name_value = op.get("name")
-                if name_value is not None:
+                if op_name == "create_root":
+                    if not isinstance(name_value, str) or not name_value.strip():
+                        diagnostics.append(
+                            Diagnostic(
+                                path=target,
+                                location=f"ops[{index}].name",
+                                detail="schema_error",
+                                evidence="name is required for create_root",
+                            )
+                        )
+                        continue
+                    root_name = name_value.strip()
+                elif name_value is not None:
                     if not isinstance(name_value, str) or not name_value.strip():
                         diagnostics.append(
                             Diagnostic(
@@ -452,13 +559,281 @@ class SerializedObjectMcp:
                         )
                         continue
                     root_name = name_value.strip()
+                result_handle = _validate_result_handle(index, op)
+                if result_handle and result_handle != _ROOT_HANDLE:
+                    known_handles[result_handle] = "game_object"
                 preview.append(
                     {
                         "op": op_name,
                         "before": "(missing)",
-                        "after": {"path": target, "root_name": root_name},
+                        "after": {
+                            "path": target,
+                            "root_name": root_name,
+                            "handle": result_handle or _ROOT_HANDLE,
+                            "kind": "game_object",
+                        },
                     }
                 )
+                continue
+
+            if op_name == "create_game_object":
+                if not created:
+                    diagnostics.append(
+                        Diagnostic(
+                            path=target,
+                            location=f"ops[{index}].op",
+                            detail="schema_error",
+                            evidence="create_game_object requires a prefab root first",
+                        )
+                    )
+                    continue
+                name_value = op.get("name")
+                if not isinstance(name_value, str) or not name_value.strip():
+                    diagnostics.append(
+                        Diagnostic(
+                            path=target,
+                            location=f"ops[{index}].name",
+                            detail="schema_error",
+                            evidence="name is required for create_game_object",
+                        )
+                    )
+                    continue
+                parent_handle = _require_handle_ref(
+                    index,
+                    "parent",
+                    op,
+                    expected_kind="game_object",
+                )
+                result_handle = _validate_result_handle(index, op)
+                if parent_handle is None or ("result" in op and result_handle is None):
+                    continue
+                if result_handle:
+                    known_handles[result_handle] = "game_object"
+                preview.append(
+                    {
+                        "op": op_name,
+                        "before": "(missing)",
+                        "after": {
+                            "name": name_value.strip(),
+                            "parent": parent_handle,
+                            "handle": result_handle or "(anonymous)",
+                            "kind": "game_object",
+                        },
+                    }
+                )
+                continue
+
+            if op_name == "rename_object":
+                object_handle = _require_handle_ref(
+                    index,
+                    "target",
+                    op,
+                    expected_kind="game_object",
+                )
+                name_value = op.get("name")
+                if object_handle is None:
+                    continue
+                if not isinstance(name_value, str) or not name_value.strip():
+                    diagnostics.append(
+                        Diagnostic(
+                            path=target,
+                            location=f"ops[{index}].name",
+                            detail="schema_error",
+                            evidence="name is required for rename_object",
+                        )
+                    )
+                    continue
+                preview.append(
+                    {
+                        "op": op_name,
+                        "before": {"handle": object_handle},
+                        "after": {"handle": object_handle, "name": name_value.strip()},
+                    }
+                )
+                continue
+
+            if op_name == "reparent":
+                object_handle = _require_handle_ref(
+                    index,
+                    "target",
+                    op,
+                    expected_kind="game_object",
+                )
+                parent_handle = _require_handle_ref(
+                    index,
+                    "parent",
+                    op,
+                    expected_kind="game_object",
+                )
+                if object_handle is None or parent_handle is None:
+                    continue
+                if object_handle == _ROOT_HANDLE:
+                    diagnostics.append(
+                        Diagnostic(
+                            path=target,
+                            location=f"ops[{index}].target",
+                            detail="schema_error",
+                            evidence="root handle cannot be reparented",
+                        )
+                    )
+                    continue
+                if object_handle == parent_handle:
+                    diagnostics.append(
+                        Diagnostic(
+                            path=target,
+                            location=f"ops[{index}]",
+                            detail="schema_error",
+                            evidence="target and parent handles must differ",
+                        )
+                    )
+                    continue
+                preview.append(
+                    {
+                        "op": op_name,
+                        "before": {"handle": object_handle},
+                        "after": {"handle": object_handle, "parent": parent_handle},
+                    }
+                )
+                continue
+
+            if op_name in {"add_component", "find_component"}:
+                if not created:
+                    diagnostics.append(
+                        Diagnostic(
+                            path=target,
+                            location=f"ops[{index}].op",
+                            detail="schema_error",
+                            evidence=f"{op_name} requires a prefab root first",
+                        )
+                    )
+                    continue
+                object_handle = _require_handle_ref(
+                    index,
+                    "target",
+                    op,
+                    expected_kind="game_object",
+                )
+                type_name = op.get("type")
+                if object_handle is None:
+                    continue
+                if not isinstance(type_name, str) or not type_name.strip():
+                    diagnostics.append(
+                        Diagnostic(
+                            path=target,
+                            location=f"ops[{index}].type",
+                            detail="schema_error",
+                            evidence=f"type is required for {op_name}",
+                        )
+                    )
+                    continue
+                result_handle = _validate_result_handle(index, op)
+                if "result" in op and result_handle is None:
+                    continue
+                if result_handle:
+                    known_handles[result_handle] = "component"
+                preview.append(
+                    {
+                        "op": op_name,
+                        "before": "(missing)" if op_name == "add_component" else {"target": object_handle},
+                        "after": {
+                            "target": object_handle,
+                            "type": type_name.strip(),
+                            "handle": result_handle or "(anonymous)",
+                            "kind": "component",
+                        },
+                    }
+                )
+                continue
+
+            if op_name == "remove_component":
+                component_handle = _require_handle_ref(
+                    index,
+                    "target",
+                    op,
+                    expected_kind="component",
+                )
+                if component_handle is None:
+                    continue
+                preview.append(
+                    {
+                        "op": op_name,
+                        "before": {"handle": component_handle, "kind": "component"},
+                        "after": "(removed)",
+                    }
+                )
+                continue
+
+            if op_name in _SUPPORTED_OPS:
+                component_handle = _require_handle_ref(
+                    index,
+                    "target",
+                    op,
+                    expected_kind="component",
+                )
+                property_path = str(op.get("path", "")).strip()
+                if component_handle is None:
+                    continue
+                if not property_path:
+                    diagnostics.append(
+                        Diagnostic(
+                            path=target,
+                            location=f"ops[{index}].path",
+                            detail="schema_error",
+                            evidence="path is required",
+                        )
+                    )
+                    continue
+                if op_name == "set":
+                    if "value" not in op:
+                        diagnostics.append(
+                            Diagnostic(
+                                path=target,
+                                location=f"ops[{index}].value",
+                                detail="schema_error",
+                                evidence="value is required for set",
+                            )
+                        )
+                        continue
+                    preview.append(
+                        {
+                            "op": op_name,
+                            "before": {"handle": component_handle, "path": property_path},
+                            "after": {
+                                "handle": component_handle,
+                                "path": property_path,
+                                "value": deepcopy(op.get("value")),
+                            },
+                        }
+                    )
+                    continue
+
+                op_index = op.get("index")
+                if isinstance(op_index, bool) or not isinstance(op_index, int):
+                    diagnostics.append(
+                        Diagnostic(
+                            path=target,
+                            location=f"ops[{index}].index",
+                            detail="schema_error",
+                            evidence="index must be an integer",
+                        )
+                    )
+                    continue
+                entry = {
+                    "op": op_name,
+                    "before": {
+                        "handle": component_handle,
+                        "path": property_path,
+                        "index": op_index,
+                    },
+                    "after": {
+                        "handle": component_handle,
+                        "path": property_path,
+                        "index": op_index,
+                    },
+                }
+                if op_name == "insert_array_element" and "value" in op:
+                    entry["after"]["value"] = deepcopy(op.get("value"))
+                preview.append(entry)
                 continue
 
             if op_name == "save":
@@ -469,6 +844,26 @@ class SerializedObjectMcp:
                             location=f"ops[{index}].op",
                             detail="schema_error",
                             evidence="save may appear only once",
+                        )
+                    )
+                    continue
+                if not created:
+                    diagnostics.append(
+                        Diagnostic(
+                            path=target,
+                            location=f"ops[{index}].op",
+                            detail="schema_error",
+                            evidence="save requires a prefab root first",
+                        )
+                    )
+                    continue
+                if index != len(ops) - 1:
+                    diagnostics.append(
+                        Diagnostic(
+                            path=target,
+                            location=f"ops[{index}].op",
+                            detail="schema_error",
+                            evidence="save must be the final operation in create mode",
                         )
                     )
                     continue
@@ -497,7 +892,7 @@ class SerializedObjectMcp:
                     path=target,
                     location="ops",
                     detail="schema_error",
-                    evidence="create mode requires a create_prefab operation",
+                    evidence="create mode requires a root creation operation",
                 )
             )
         if not saved:

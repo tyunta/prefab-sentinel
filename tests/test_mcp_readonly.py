@@ -477,6 +477,112 @@ class SerializedObjectMcpTests(unittest.TestCase):
         self.assertEqual("create", response.data["mode"])
         self.assertEqual(2, len(response.data["diff"]))
 
+    def test_dry_run_resource_plan_supports_prefab_hierarchy_ops(self) -> None:
+        mcp = SerializedObjectMcp()
+        response = mcp.dry_run_resource_plan(
+            resource={
+                "id": "prefab",
+                "kind": "prefab",
+                "path": "Assets/Generated/New.prefab",
+                "mode": "create",
+            },
+            ops=[
+                {"op": "create_prefab", "name": "GeneratedRoot", "result": "prefab_root"},
+                {
+                    "op": "create_game_object",
+                    "name": "ChildA",
+                    "parent": "$root",
+                    "result": "child_a",
+                },
+                {
+                    "op": "rename_object",
+                    "target": "$child_a",
+                    "name": "ChildRenamed",
+                },
+                {"op": "save"},
+            ],
+        )
+
+        self.assertTrue(response.success)
+        self.assertEqual("SER_DRY_RUN_OK", response.code)
+        self.assertEqual(4, len(response.data["diff"]))
+
+    def test_dry_run_resource_plan_supports_prefab_component_ops(self) -> None:
+        mcp = SerializedObjectMcp()
+        response = mcp.dry_run_resource_plan(
+            resource={
+                "id": "prefab",
+                "kind": "prefab",
+                "path": "Assets/Generated/New.prefab",
+                "mode": "create",
+            },
+            ops=[
+                {"op": "create_prefab", "name": "GeneratedRoot"},
+                {
+                    "op": "create_game_object",
+                    "name": "ChildA",
+                    "parent": "$root",
+                    "result": "child_a",
+                },
+                {
+                    "op": "add_component",
+                    "target": "$child_a",
+                    "type": "UnityEngine.BoxCollider",
+                    "result": "child_collider",
+                },
+                {
+                    "op": "find_component",
+                    "target": "$child_a",
+                    "type": "UnityEngine.BoxCollider",
+                    "result": "resolved_collider",
+                },
+                {"op": "remove_component", "target": "$resolved_collider"},
+                {"op": "save"},
+            ],
+        )
+
+        self.assertTrue(response.success)
+        self.assertEqual("SER_DRY_RUN_OK", response.code)
+        self.assertEqual(6, len(response.data["diff"]))
+
+    def test_dry_run_resource_plan_supports_prefab_component_mutation_ops(self) -> None:
+        mcp = SerializedObjectMcp()
+        response = mcp.dry_run_resource_plan(
+            resource={
+                "id": "prefab",
+                "kind": "prefab",
+                "path": "Assets/Generated/New.prefab",
+                "mode": "create",
+            },
+            ops=[
+                {"op": "create_prefab", "name": "GeneratedRoot"},
+                {
+                    "op": "add_component",
+                    "target": "$root",
+                    "type": "UnityEngine.BoxCollider",
+                    "result": "root_collider",
+                },
+                {
+                    "op": "set",
+                    "target": "$root_collider",
+                    "path": "m_IsTrigger",
+                    "value": True,
+                },
+                {
+                    "op": "insert_array_element",
+                    "target": "$root_collider",
+                    "path": "m_LayerOverridePriority.Array.data",
+                    "index": 0,
+                    "value": 1,
+                },
+                {"op": "save"},
+            ],
+        )
+
+        self.assertTrue(response.success)
+        self.assertEqual("SER_DRY_RUN_OK", response.code)
+        self.assertEqual(5, len(response.data["diff"]))
+
     def test_dry_run_resource_plan_rejects_non_prefab_target_for_create_mode(self) -> None:
         mcp = SerializedObjectMcp()
         response = mcp.dry_run_resource_plan(
@@ -489,6 +595,76 @@ class SerializedObjectMcpTests(unittest.TestCase):
             ops=[
                 {"op": "create_prefab", "name": "GeneratedRoot"},
                 {"op": "save"},
+            ],
+        )
+
+        self.assertFalse(response.success)
+        self.assertEqual("SER_PLAN_INVALID", response.code)
+        self.assertTrue(response.diagnostics)
+
+    def test_dry_run_resource_plan_rejects_wrong_handle_kind_for_component_op(self) -> None:
+        mcp = SerializedObjectMcp()
+        response = mcp.dry_run_resource_plan(
+            resource={
+                "id": "prefab",
+                "kind": "prefab",
+                "path": "Assets/Generated/New.prefab",
+                "mode": "create",
+            },
+            ops=[
+                {"op": "create_prefab", "name": "GeneratedRoot"},
+                {"op": "remove_component", "target": "$root"},
+                {"op": "save"},
+            ],
+        )
+
+        self.assertFalse(response.success)
+        self.assertEqual("SER_PLAN_INVALID", response.code)
+        self.assertTrue(response.diagnostics)
+
+    def test_dry_run_resource_plan_rejects_unknown_handle_in_prefab_hierarchy_ops(self) -> None:
+        mcp = SerializedObjectMcp()
+        response = mcp.dry_run_resource_plan(
+            resource={
+                "id": "prefab",
+                "kind": "prefab",
+                "path": "Assets/Generated/New.prefab",
+                "mode": "create",
+            },
+            ops=[
+                {"op": "create_prefab", "name": "GeneratedRoot"},
+                {
+                    "op": "create_game_object",
+                    "name": "ChildA",
+                    "parent": "$missing",
+                    "result": "child_a",
+                },
+                {"op": "save"},
+            ],
+        )
+
+        self.assertFalse(response.success)
+        self.assertEqual("SER_PLAN_INVALID", response.code)
+        self.assertTrue(response.diagnostics)
+
+    def test_dry_run_resource_plan_rejects_save_before_final_op(self) -> None:
+        mcp = SerializedObjectMcp()
+        response = mcp.dry_run_resource_plan(
+            resource={
+                "id": "prefab",
+                "kind": "prefab",
+                "path": "Assets/Generated/New.prefab",
+                "mode": "create",
+            },
+            ops=[
+                {"op": "create_prefab", "name": "GeneratedRoot"},
+                {"op": "save"},
+                {
+                    "op": "create_game_object",
+                    "name": "ChildA",
+                    "parent": "$root",
+                    "result": "child_a",
+                },
             ],
         )
 
@@ -727,6 +903,202 @@ print(
             self.assertEqual("SER_APPLY_OK", response.code)
             self.assertEqual("create", response.data["mode"])
             self.assertEqual(2, response.data["applied"])
+
+    def test_apply_resource_plan_forwards_prefab_hierarchy_ops_to_bridge(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            bridge = root / "bridge.py"
+            bridge.write_text(
+                """
+import json
+import sys
+
+request = json.load(sys.stdin)
+print(
+    json.dumps(
+        {
+            "success": True,
+            "severity": "info",
+            "code": "SER_APPLY_OK",
+            "message": "Bridge apply completed.",
+            "data": {
+                "target": request.get("target", ""),
+                "mode": request.get("resources", [{}])[0].get("mode", ""),
+                "op_count": len(request.get("ops", [])),
+                "applied": len(request.get("ops", [])),
+                "request_ops": request.get("ops", []),
+                "read_only": False,
+                "executed": True,
+            },
+            "diagnostics": [],
+        }
+    )
+)
+""".strip(),
+                encoding="utf-8",
+            )
+
+            mcp = SerializedObjectMcp(bridge_command=(sys.executable, str(bridge)))
+            response = mcp.apply_resource_plan(
+                resource={
+                    "id": "prefab",
+                    "kind": "prefab",
+                    "path": str(root / "Assets" / "Generated" / "New.prefab"),
+                    "mode": "create",
+                },
+                ops=[
+                    {"op": "create_prefab", "name": "GeneratedRoot", "result": "prefab_root"},
+                    {
+                        "op": "create_game_object",
+                        "name": "ChildA",
+                        "parent": "$root",
+                        "result": "child_a",
+                    },
+                    {"op": "rename_object", "target": "$child_a", "name": "ChildRenamed"},
+                    {"op": "save"},
+                ],
+            )
+
+            self.assertTrue(response.success)
+            self.assertEqual("SER_APPLY_OK", response.code)
+            self.assertEqual("create", response.data["mode"])
+            self.assertEqual("create_game_object", response.data["request_ops"][1]["op"])
+            self.assertEqual("$root", response.data["request_ops"][1]["parent"])
+
+    def test_apply_resource_plan_forwards_prefab_component_ops_to_bridge(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            bridge = root / "bridge.py"
+            bridge.write_text(
+                """
+import json
+import sys
+
+request = json.load(sys.stdin)
+print(
+    json.dumps(
+        {
+            "success": True,
+            "severity": "info",
+            "code": "SER_APPLY_OK",
+            "message": "Bridge apply completed.",
+            "data": {
+                "target": request.get("target", ""),
+                "mode": request.get("resources", [{}])[0].get("mode", ""),
+                "op_count": len(request.get("ops", [])),
+                "applied": len(request.get("ops", [])),
+                "request_ops": request.get("ops", []),
+                "read_only": False,
+                "executed": True,
+            },
+            "diagnostics": [],
+        }
+    )
+)
+""".strip(),
+                encoding="utf-8",
+            )
+
+            mcp = SerializedObjectMcp(bridge_command=(sys.executable, str(bridge)))
+            response = mcp.apply_resource_plan(
+                resource={
+                    "id": "prefab",
+                    "kind": "prefab",
+                    "path": str(root / "Assets" / "Generated" / "New.prefab"),
+                    "mode": "create",
+                },
+                ops=[
+                    {"op": "create_prefab", "name": "GeneratedRoot"},
+                    {
+                        "op": "create_game_object",
+                        "name": "ChildA",
+                        "parent": "$root",
+                        "result": "child_a",
+                    },
+                    {
+                        "op": "add_component",
+                        "target": "$child_a",
+                        "type": "UnityEngine.BoxCollider",
+                        "result": "child_collider",
+                    },
+                    {"op": "remove_component", "target": "$child_collider"},
+                    {"op": "save"},
+                ],
+            )
+
+            self.assertTrue(response.success)
+            self.assertEqual("SER_APPLY_OK", response.code)
+            self.assertEqual("add_component", response.data["request_ops"][2]["op"])
+            self.assertEqual(
+                "UnityEngine.BoxCollider",
+                response.data["request_ops"][2]["type"],
+            )
+
+    def test_apply_resource_plan_forwards_prefab_component_mutation_ops_to_bridge(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            bridge = root / "bridge.py"
+            bridge.write_text(
+                """
+import json
+import sys
+
+request = json.load(sys.stdin)
+print(
+    json.dumps(
+        {
+            "success": True,
+            "severity": "info",
+            "code": "SER_APPLY_OK",
+            "message": "Bridge apply completed.",
+            "data": {
+                "target": request.get("target", ""),
+                "mode": request.get("resources", [{}])[0].get("mode", ""),
+                "op_count": len(request.get("ops", [])),
+                "applied": len(request.get("ops", [])),
+                "request_ops": request.get("ops", []),
+                "read_only": False,
+                "executed": True,
+            },
+            "diagnostics": [],
+        }
+    )
+)
+""".strip(),
+                encoding="utf-8",
+            )
+
+            mcp = SerializedObjectMcp(bridge_command=(sys.executable, str(bridge)))
+            response = mcp.apply_resource_plan(
+                resource={
+                    "id": "prefab",
+                    "kind": "prefab",
+                    "path": str(root / "Assets" / "Generated" / "New.prefab"),
+                    "mode": "create",
+                },
+                ops=[
+                    {"op": "create_prefab", "name": "GeneratedRoot"},
+                    {
+                        "op": "add_component",
+                        "target": "$root",
+                        "type": "UnityEngine.BoxCollider",
+                        "result": "root_collider",
+                    },
+                    {
+                        "op": "set",
+                        "target": "$root_collider",
+                        "path": "m_IsTrigger",
+                        "value": True,
+                    },
+                    {"op": "save"},
+                ],
+            )
+
+            self.assertTrue(response.success)
+            self.assertEqual("SER_APPLY_OK", response.code)
+            self.assertEqual("set", response.data["request_ops"][2]["op"])
+            self.assertEqual("$root_collider", response.data["request_ops"][2]["target"])
+            self.assertEqual("m_IsTrigger", response.data["request_ops"][2]["path"])
 
     def test_orchestrator_patch_apply_confirm_gate(self) -> None:
         orchestrator = Phase1Orchestrator.default()

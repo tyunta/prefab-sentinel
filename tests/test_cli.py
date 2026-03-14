@@ -1832,6 +1832,283 @@ print(
             self.assertEqual(1, payload["data"]["resource_count"])
             self.assertEqual("create", payload["data"]["steps"][-1]["result"]["data"]["mode"])
 
+    def test_patch_apply_confirm_uses_bridge_env_for_prefab_hierarchy_create_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            bridge = root / "bridge.py"
+            bridge.write_text(
+                """
+import json
+import sys
+
+request = json.load(sys.stdin)
+print(
+    json.dumps(
+        {
+            "success": True,
+            "severity": "info",
+            "code": "SER_APPLY_OK",
+            "message": "Bridge apply completed.",
+            "data": {
+                "target": request.get("target", ""),
+                "mode": request.get("resources", [{}])[0].get("mode", ""),
+                "request_ops": request.get("ops", []),
+                "op_count": len(request.get("ops", [])),
+                "applied": len(request.get("ops", [])),
+                "read_only": False,
+                "executed": True,
+            },
+            "diagnostics": [],
+        }
+    )
+)
+""".strip(),
+                encoding="utf-8",
+            )
+            plan = root / "patch.json"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "plan_version": 2,
+                        "resources": [
+                            {
+                                "id": "prefab",
+                                "kind": "prefab",
+                                "path": str(root / "Assets" / "Generated" / "New.prefab"),
+                                "mode": "create",
+                            }
+                        ],
+                        "ops": [
+                            {"resource": "prefab", "op": "create_prefab", "name": "GeneratedRoot"},
+                            {
+                                "resource": "prefab",
+                                "op": "create_game_object",
+                                "name": "ChildA",
+                                "parent": "$root",
+                                "result": "child_a",
+                            },
+                            {
+                                "resource": "prefab",
+                                "op": "rename_object",
+                                "target": "$child_a",
+                                "name": "ChildRenamed",
+                            },
+                            {"resource": "prefab", "op": "save"},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            bridge_cmd = f'"{sys.executable}" "{bridge}"'
+            with patch.dict(os.environ, {"UNITYTOOL_PATCH_BRIDGE": bridge_cmd}, clear=False):
+                exit_code, output = self.run_cli(
+                    [
+                        "patch",
+                        "apply",
+                        "--plan",
+                        str(plan),
+                        "--confirm",
+                        "--out-report",
+                        str(root / "reports" / "patch_result.json"),
+                        "--change-reason",
+                        "test bridge prefab hierarchy create",
+                    ]
+                )
+
+            payload = json.loads(output)
+            self.assertEqual(0, exit_code)
+            self.assertTrue(payload["success"])
+            request_ops = payload["data"]["steps"][-1]["result"]["data"]["request_ops"]
+            self.assertEqual("create_game_object", request_ops[1]["op"])
+            self.assertEqual("$root", request_ops[1]["parent"])
+
+    def test_patch_apply_confirm_uses_bridge_env_for_prefab_component_create_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            bridge = root / "bridge.py"
+            bridge.write_text(
+                """
+import json
+import sys
+
+request = json.load(sys.stdin)
+print(
+    json.dumps(
+        {
+            "success": True,
+            "severity": "info",
+            "code": "SER_APPLY_OK",
+            "message": "Bridge apply completed.",
+            "data": {
+                "target": request.get("target", ""),
+                "mode": request.get("resources", [{}])[0].get("mode", ""),
+                "request_ops": request.get("ops", []),
+                "op_count": len(request.get("ops", [])),
+                "applied": len(request.get("ops", [])),
+                "read_only": False,
+                "executed": True,
+            },
+            "diagnostics": [],
+        }
+    )
+)
+""".strip(),
+                encoding="utf-8",
+            )
+            plan = root / "patch.json"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "plan_version": 2,
+                        "resources": [
+                            {
+                                "id": "prefab",
+                                "kind": "prefab",
+                                "path": str(root / "Assets" / "Generated" / "New.prefab"),
+                                "mode": "create",
+                            }
+                        ],
+                        "ops": [
+                            {"resource": "prefab", "op": "create_prefab", "name": "GeneratedRoot"},
+                            {
+                                "resource": "prefab",
+                                "op": "create_game_object",
+                                "name": "ChildA",
+                                "parent": "$root",
+                                "result": "child_a",
+                            },
+                            {
+                                "resource": "prefab",
+                                "op": "add_component",
+                                "target": "$child_a",
+                                "type": "UnityEngine.BoxCollider",
+                                "result": "child_collider",
+                            },
+                            {"resource": "prefab", "op": "remove_component", "target": "$child_collider"},
+                            {"resource": "prefab", "op": "save"},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            bridge_cmd = f'"{sys.executable}" "{bridge}"'
+            with patch.dict(os.environ, {"UNITYTOOL_PATCH_BRIDGE": bridge_cmd}, clear=False):
+                exit_code, output = self.run_cli(
+                    [
+                        "patch",
+                        "apply",
+                        "--plan",
+                        str(plan),
+                        "--confirm",
+                        "--out-report",
+                        str(root / "reports" / "patch_result.json"),
+                        "--change-reason",
+                        "test bridge prefab component create",
+                    ]
+                )
+
+            payload = json.loads(output)
+            self.assertEqual(0, exit_code)
+            self.assertTrue(payload["success"])
+            request_ops = payload["data"]["steps"][-1]["result"]["data"]["request_ops"]
+            self.assertEqual("add_component", request_ops[2]["op"])
+            self.assertEqual("UnityEngine.BoxCollider", request_ops[2]["type"])
+
+    def test_patch_apply_confirm_uses_bridge_env_for_prefab_component_mutation_create_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            bridge = root / "bridge.py"
+            bridge.write_text(
+                """
+import json
+import sys
+
+request = json.load(sys.stdin)
+print(
+    json.dumps(
+        {
+            "success": True,
+            "severity": "info",
+            "code": "SER_APPLY_OK",
+            "message": "Bridge apply completed.",
+            "data": {
+                "target": request.get("target", ""),
+                "mode": request.get("resources", [{}])[0].get("mode", ""),
+                "request_ops": request.get("ops", []),
+                "op_count": len(request.get("ops", [])),
+                "applied": len(request.get("ops", [])),
+                "read_only": False,
+                "executed": True,
+            },
+            "diagnostics": [],
+        }
+    )
+)
+""".strip(),
+                encoding="utf-8",
+            )
+            plan = root / "patch.json"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "plan_version": 2,
+                        "resources": [
+                            {
+                                "id": "prefab",
+                                "kind": "prefab",
+                                "path": str(root / "Assets" / "Generated" / "New.prefab"),
+                                "mode": "create",
+                            }
+                        ],
+                        "ops": [
+                            {"resource": "prefab", "op": "create_prefab", "name": "GeneratedRoot"},
+                            {
+                                "resource": "prefab",
+                                "op": "add_component",
+                                "target": "$root",
+                                "type": "UnityEngine.BoxCollider",
+                                "result": "root_collider",
+                            },
+                            {
+                                "resource": "prefab",
+                                "op": "set",
+                                "target": "$root_collider",
+                                "path": "m_IsTrigger",
+                                "value": True,
+                            },
+                            {"resource": "prefab", "op": "save"},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            bridge_cmd = f'"{sys.executable}" "{bridge}"'
+            with patch.dict(os.environ, {"UNITYTOOL_PATCH_BRIDGE": bridge_cmd}, clear=False):
+                exit_code, output = self.run_cli(
+                    [
+                        "patch",
+                        "apply",
+                        "--plan",
+                        str(plan),
+                        "--confirm",
+                        "--out-report",
+                        str(root / "reports" / "patch_result.json"),
+                        "--change-reason",
+                        "test bridge prefab component mutation create",
+                    ]
+                )
+
+            payload = json.loads(output)
+            self.assertEqual(0, exit_code)
+            self.assertTrue(payload["success"])
+            request_ops = payload["data"]["steps"][-1]["result"]["data"]["request_ops"]
+            self.assertEqual("set", request_ops[2]["op"])
+            self.assertEqual("$root_collider", request_ops[2]["target"])
+            self.assertEqual("m_IsTrigger", request_ops[2]["path"])
+
     def test_patch_apply_invalid_plan_returns_parser_error(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
