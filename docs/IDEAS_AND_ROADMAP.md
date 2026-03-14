@@ -180,6 +180,529 @@
 - Add Unity smoke hardening:
   - validate timeout policy knobs (`--timeout-multiplier` / `--timeout-slack-sec`) against accumulated real Unity runner history
 
+## Authoring Tool Sprint Plan
+
+This section converts the generic Unity asset authoring roadmap into prioritized implementation sprints.
+Assumption: one primary implementer, one sprint is roughly one to two weeks, and later sprints do not start until the exit criteria of the current sprint are satisfied.
+
+### Sprint 1. Foundation And Compatibility
+
+**Priority**
+- `P0`
+
+**Goal**
+- Introduce an authoring-capable plan model without breaking the existing patch flow.
+- Keep audit, confirm-gate, and fail-fast behavior intact while adding multi-resource execution.
+
+**Includes**
+- `A01. Add authoring plan v2 schema and normalizer`
+- `A02. Execute normalized authoring plans in the orchestrator`
+- `A03. Add resource and handle context to the Unity bridge protocol`
+
+**Why this sprint is first**
+- Every later create or mutate workflow depends on resource IDs, handles, and a versioned bridge contract.
+- This is the shortest path that unlocks authoring work without forcing a risky rewrite of the current v1 patch flow.
+
+**Exit criteria**
+- `patch apply --dry-run` accepts both v1 and v2 plans.
+- v1 plans are normalized internally and still produce the current audit/report envelope.
+- Unity bridge requests and responses are versioned and reject protocol mismatches with explicit diagnostics.
+- Resource IDs and `$handle` references are represented consistently across Python and Unity bridge layers.
+
+**Deferred to later sprints**
+- Asset creation.
+- Scene support.
+- Runtime validation execution changes.
+
+### Sprint 2. Prefab Creation Core
+
+**Priority**
+- `P0`
+
+**Goal**
+- Make it possible to create a new prefab resource, build a hierarchy, and add components before any advanced validation work.
+
+**Includes**
+- `A04. Create prefab resources and save them from authoring plans`
+- `A05. Add GameObject hierarchy authoring operations`
+- `A06. Add component lifecycle operations`
+
+**Why this sprint is second**
+- Prefab creation is the smallest authoring slice with high user value.
+- Hierarchy and component creation are prerequisites for meaningful authored content.
+
+**Exit criteria**
+- A plan can create a new prefab at a new `Assets/...` path and save it.
+- A plan can create a root object, create children, reparent them, and rename them deterministically.
+- A plan can add, remove, and find components, and later steps can reuse returned handles.
+- Invalid output paths, bad parent handles, ambiguous component selections, and unsupported component types fail fast with structured diagnostics.
+
+**Deferred to later sprints**
+- Property mutation on newly created objects.
+- Scene authoring.
+- Runtime verification.
+
+### Sprint 3. Prefab Authoring MVP Hardening
+
+**Priority**
+- `P0`
+
+**Goal**
+- Reuse the current property mutation coverage on top of the new handle model and prove that prefab authoring actually survives save/reopen/validate.
+
+**Includes**
+- `A07. Port property mutation ops to v2 handles`
+- `A08. Add prefab authoring end-to-end tests`
+
+**Why this sprint is third**
+- Prefab authoring is not credible until create, mutate, save, reopen, and reference validation all work together.
+- This sprint turns the new execution model into a usable MVP instead of a partial API surface.
+
+**Exit criteria**
+- Newly created prefab objects and components can be mutated through v2 handle-based property ops.
+- Existing v1-equivalent property mutation behavior remains intact.
+- End-to-end tests cover create -> hierarchy -> component -> mutate -> save -> reopen -> validate.
+- `scan_broken_references` shows zero newly introduced broken references on the prefab authoring test set.
+
+**Deferred to later sprints**
+- Non-prefab asset families.
+- Scene flows.
+- Real runtime compile and ClientSim execution.
+
+### Sprint 4. Asset Family Expansion
+
+**Priority**
+- `P1`
+
+**Goal**
+- Extend the authoring model beyond prefabs with the simplest additional asset families.
+
+**Includes**
+- `A09. Support ScriptableObject and Material authoring`
+
+**Why this sprint is fourth**
+- ScriptableObject and Material creation expands tool usefulness without introducing scene graph complexity.
+- This is the cleanest test of whether the authoring model generalizes beyond prefabs.
+
+**Exit criteria**
+- A plan can create, save, reopen, and mutate ScriptableObject resources.
+- A plan can create, save, reopen, and mutate Material resources.
+- Prefab-side reference assignment to created ScriptableObjects or Materials is covered by tests where applicable.
+- Unsupported asset type requests fail fast with deterministic diagnostics.
+
+**Deferred to later sprints**
+- Scene authoring.
+- Runtime execution.
+- Asset-family adapter split.
+
+### Sprint 5. Scene Authoring Beta
+
+**Priority**
+- `P1`
+
+**Goal**
+- Add the first scene-level authoring workflow so authored assets can be assembled into a runnable scene.
+
+**Includes**
+- `A10. Add scene authoring MVP`
+
+**Why this sprint is fifth**
+- Scene authoring becomes much simpler once prefab, hierarchy, component, and simple asset-family creation already exist.
+- This is the first sprint that moves the tool from asset preparation toward world assembly automation.
+
+**Exit criteria**
+- A plan can create or open a scene, instantiate prefabs, perform hierarchy/component/property operations, and save the scene.
+- Saved scenes can be reopened with object state preserved.
+- Missing prefab references and invalid scene paths fail fast with structured diagnostics.
+
+**Deferred to later sprints**
+- Real runtime compile/ClientSim execution.
+- Multi-scene editing.
+- Advanced merge/conflict workflows.
+
+### Sprint 6. Runtime Verification Closure
+
+**Priority**
+- `P1`
+
+**Goal**
+- Replace stubbed runtime validation steps with real Unity-backed verification where the environment is available.
+
+**Includes**
+- `A11. Wire compile_udonsharp and run_clientsim to real Unity execution`
+
+**Why this sprint is sixth**
+- The repository policy already treats compile and ClientSim checks as mandatory verification gates.
+- Authoring flows should be functionally useful before spending time on environment-sensitive runtime execution wiring.
+
+**Exit criteria**
+- `compile_udonsharp` executes real Unity batchmode compile checks when the environment is configured.
+- `run_clientsim` executes real ClientSim smoke checks when the environment is configured.
+- Structured `ToolResponse` envelopes report runtime failures without regressing current fallback behavior in unsupported environments.
+- `patch apply --runtime-scene` can run authored outputs through end-to-end verification.
+
+**Deferred to later sprints**
+- Adapter refactoring.
+- New asset-family support.
+
+### Sprint 7. Architecture Hardening And Postconditions
+
+**Priority**
+- `P2`
+
+**Goal**
+- Stabilize the design for long-term growth after prefab, asset, scene, and runtime flows are proven.
+
+**Includes**
+- `A12. Split asset-family adapters and add postcondition verification`
+
+**Why this sprint is last**
+- Adapter boundaries and postconditions are easier to design correctly after the main authoring paths exist in working form.
+- Doing this too early increases abstraction cost without enough real execution feedback.
+
+**Exit criteria**
+- Prefab, scene, scriptable object, and material handling are split into dedicated adapters.
+- Plans can declare postconditions such as `broken_refs == 0` or `asset_exists == true`.
+- Postcondition failures stop execution with fail-fast diagnostics and remain compatible with the current reporting envelope.
+- Adapter dispatch and postcondition evaluation are covered by unit and integration tests.
+
+**Release checkpoints**
+- `Authoring Alpha`: Sprint 1 complete.
+- `Prefab Authoring MVP`: Sprint 3 complete.
+- `Generic Asset Authoring Beta`: Sprint 5 complete.
+- `Verified Authoring Beta`: Sprint 6 complete.
+- `Architecture Stabilization`: Sprint 7 complete.
+
+## Authoring Tool Issue Drafts
+
+This section keeps the issue-sized backlog that the sprint plan above is built from.
+The IDs below are draft planning IDs, not GitHub issue numbers.
+
+### A01. Add authoring plan v2 schema and normalizer
+
+**Background**
+- The current plan model is `target + ops[]`, which assumes a single existing asset target.
+- Generic authoring needs multiple resources, creation modes, and object handles that can be reused across steps.
+- A versioned plan format is required so the existing patch flow can remain compatible while authoring support grows.
+
+**Out of scope**
+- Unity-side execution changes.
+- New runtime validation behavior.
+- Asset-family-specific create operations.
+
+**Acceptance criteria**
+- Define `plan_version: 2` with `resources[]` and `ops[]`.
+- Support `result` handles and `$handle` references in op payloads.
+- Add a normalizer that converts v1 `target + ops[]` plans into v2 internally.
+- Reject invalid plans with fail-fast diagnostics that include the failing field path.
+- Keep `patch apply --dry-run` working for both v1 and v2 plans.
+
+**Test considerations**
+- Unit tests for valid v2 parsing.
+- Unit tests for v1-to-v2 normalization.
+- Negative tests for missing `resources`, invalid handle references, and duplicate resource IDs.
+
+**Depends on**
+- None.
+
+### A02. Execute normalized authoring plans in the orchestrator
+
+**Background**
+- The current orchestrator executes a linear patch flow that expects one `target` and one `ops[]` array.
+- Authoring plans need multi-resource execution, stable step recording, and audit metadata preservation.
+- The CLI already has confirm gates, attestations, and audit outputs that should be reused rather than replaced.
+
+**Out of scope**
+- Unity bridge protocol redesign.
+- New create or mutate backend implementations.
+- Runtime execution wiring changes beyond orchestration hooks.
+
+**Acceptance criteria**
+- Accept normalized v2 plans in `patch apply`.
+- Preserve `execution_id`, `executed_at_utc`, `change_reason`, and `out-report`.
+- Record authoring steps in the result envelope in execution order.
+- Preserve existing confirm gate, fail-fast, attestation, and digest verification behavior.
+- Keep v1 plans executable through the normalization path.
+
+**Test considerations**
+- CLI tests for v2 dry-run and confirm flows.
+- Envelope tests to ensure audit metadata remains present.
+- Failure-path tests for step ordering and fail-fast behavior.
+
+**Depends on**
+- `A01`
+
+### A03. Add resource and handle context to the Unity bridge protocol
+
+**Background**
+- The current bridge protocol passes one `target` and raw `ops[]`.
+- Generic authoring requires resource-scoped execution contexts and object handles that survive across multiple operations.
+- Without explicit context, create operations cannot feed later mutation or reference-binding steps safely.
+
+**Out of scope**
+- Prefab-specific create implementation.
+- Scene/material/scriptable object execution logic.
+- Runtime validation behavior.
+
+**Acceptance criteria**
+- Extend the bridge request/response contract to carry resource IDs and handle references.
+- Version the bridge contract so protocol mismatches fail-fast with explicit diagnostics.
+- Define serialization rules for handles, resource references, and resource-local save steps.
+- Keep existing bridge validation strict on required fields and protocol version.
+
+**Test considerations**
+- Unit tests for protocol version mismatch.
+- Unit tests for malformed handle/resource payloads.
+- Contract tests for request/response shaping in Python bridge code.
+
+**Depends on**
+- `A01`
+- `A02`
+
+### A04. Create prefab resources and save them from authoring plans
+
+**Background**
+- The current Unity executeMethod path edits existing prefabs only.
+- Generic authoring needs to create new prefab assets as first-class resources.
+- Prefab creation is the smallest high-value create path and should anchor the authoring MVP.
+
+**Out of scope**
+- Scene authoring.
+- Component add/remove operations.
+- Runtime validation integration.
+
+**Acceptance criteria**
+- Add `create_prefab` and `save` operations for prefab resources.
+- Support creating a prefab at a new `Assets/...` path.
+- Return deterministic diagnostics when the path already exists or the path is invalid.
+- Save the prefab through Unity APIs and make it reloadable by path.
+
+**Test considerations**
+- Unity-side integration test for create -> save -> reopen.
+- Negative test for invalid or existing output path.
+- Validation test that generated prefab files are recognized by reference scanners.
+
+**Depends on**
+- `A03`
+
+### A05. Add GameObject hierarchy authoring operations
+
+**Background**
+- Creating a prefab is not enough; authoring needs a hierarchy model.
+- Existing mutation logic assumes a component can already be found on an existing object path.
+- Hierarchy creation is required before component injection or property assignment on new objects.
+
+**Out of scope**
+- Component creation/removal.
+- Scene hierarchy support.
+- Non-prefab asset families.
+
+**Acceptance criteria**
+- Add `create_root`, `create_game_object`, `reparent`, and `rename_object` operations.
+- Support returning handles for created objects.
+- Ensure hierarchy path resolution is deterministic after reparent/rename.
+- Fail-fast on ambiguous or invalid hierarchy targets.
+
+**Test considerations**
+- Unity-side tests for nested object creation and reparenting.
+- Tests for handle reuse across multiple hierarchy operations.
+- Negative tests for invalid parent handle or duplicate root creation.
+
+**Depends on**
+- `A04`
+
+### A06. Add component lifecycle operations
+
+**Background**
+- Generic authoring must create and remove components, not only mutate properties.
+- The current prefab bridge resolves components by selector but does not create them.
+- Component lifecycle operations are required before many real-world prefab assembly tasks can be expressed.
+
+**Out of scope**
+- Property mutation semantics for newly created components.
+- Scene-specific component authoring.
+- Runtime validation.
+
+**Acceptance criteria**
+- Add `add_component`, `remove_component`, and `find_component` operations.
+- Return handles for created components.
+- Support disambiguation diagnostics when multiple matching components exist.
+- Preserve fail-fast behavior when a requested type cannot be added or found.
+
+**Test considerations**
+- Unity-side tests for add/remove/find on created and existing GameObjects.
+- Tests for handle reuse in later operations.
+- Negative tests for unsupported component types and ambiguous selectors.
+
+**Depends on**
+- `A05`
+
+### A07. Port property mutation ops to v2 handles
+
+**Background**
+- Existing mutation coverage is useful and should not be discarded.
+- Generic authoring needs to apply the same property operations to newly created objects and components via handles.
+- Reusing the current mutation backend reduces risk and shortens time to prefab authoring MVP.
+
+**Out of scope**
+- New asset-family create backends.
+- Runtime validation execution.
+- Postcondition design.
+
+**Acceptance criteria**
+- Add v2 property ops such as `set_property`, `insert_array_element`, and `remove_array_element`.
+- Support both handle-based targets and legacy `component + path` selectors where useful.
+- Preserve current type decoding coverage for primitives, references, managed references, and structured payloads.
+- Preserve current fail-fast diagnostics for array path errors and unsupported shapes.
+
+**Test considerations**
+- Regression tests to ensure v1-equivalent property ops still work.
+- Unity-side tests that mutate newly created prefab objects/components via handles.
+- Negative tests for stale handles, invalid paths, and array bound violations.
+
+**Depends on**
+- `A06`
+
+### A08. Add prefab authoring end-to-end tests
+
+**Background**
+- Prefab authoring MVP is only credible if create, mutate, save, reopen, and validate all work together.
+- The current tests cover JSON apply and bridge protocol behavior, but not Unity-backed authoring flows.
+- This is the quality gate that separates "API exists" from "authoring is usable."
+
+**Out of scope**
+- Material/scriptable object authoring.
+- Scene authoring.
+- Runtime execution with real ClientSim.
+
+**Acceptance criteria**
+- Add E2E tests that create a prefab, build hierarchy, add components, mutate properties, save, reopen, and re-validate.
+- Run `scan_broken_references` after authoring and require zero newly introduced broken references.
+- Reopen the prefab and assert expected hierarchy/component/property state.
+- Capture Unity logs and include them in test failure output.
+
+**Test considerations**
+- Integration tests on representative prefab fixtures.
+- Regression fixtures for Broken PPtr-sensitive cases.
+- Test matrix should include reference assignment and array mutation cases.
+
+**Depends on**
+- `A04`
+- `A05`
+- `A06`
+- `A07`
+
+### A09. Support ScriptableObject and Material authoring
+
+**Background**
+- Prefabs alone are not enough for a generic authoring tool.
+- ScriptableObjects and Materials are the next simplest asset families because they have direct asset creation APIs and clear save semantics.
+- Supporting them expands authoring usefulness without the full complexity of scene graphs.
+
+**Out of scope**
+- Scene authoring.
+- AnimatorController, Timeline, or importer-specific asset families.
+- Runtime validation wiring.
+
+**Acceptance criteria**
+- Add `create_asset` support for ScriptableObject and Material resources.
+- Support save and reopen of those assets.
+- Support property mutation on the created resources through the same plan model.
+- Preserve deterministic diagnostics for unsupported asset type requests.
+
+**Test considerations**
+- Unity-side tests for create -> mutate -> save -> reopen.
+- Reference resolution tests where prefab fields point at created ScriptableObjects or Materials.
+- Negative tests for invalid type names and invalid destination paths.
+
+**Depends on**
+- `A03`
+- `A07`
+
+### A10. Add scene authoring MVP
+
+**Background**
+- A generic Unity authoring tool eventually needs scene-level assembly, not only asset-level mutation.
+- Scene authoring introduces open/save semantics, root object management, and prefab instantiation workflows.
+- This is the first step where authoring becomes useful for automation beyond asset preparation.
+
+**Out of scope**
+- Runtime validation execution.
+- Advanced scene merge/conflict workflows.
+- Multi-scene editing.
+
+**Acceptance criteria**
+- Add `open_scene`, `create_scene`, `instantiate_prefab`, and `save_scene` operations.
+- Support hierarchy and component operations on scene objects through the same handle model.
+- Preserve fail-fast diagnostics for invalid scene paths and missing prefab references.
+- Reopen saved scenes and confirm object state is preserved.
+
+**Test considerations**
+- Unity-side integration tests for create/open/save/reopen scene flows.
+- Tests for scene object handles and prefab instance creation.
+- Negative tests for missing prefab resources and invalid save locations.
+
+**Depends on**
+- `A05`
+- `A06`
+- `A07`
+- `A09`
+
+### A11. Wire compile_udonsharp and run_clientsim to real Unity execution
+
+**Background**
+- The current runtime validation layer classifies logs but skips actual compile and ClientSim execution.
+- A generic authoring tool needs post-apply verification that matches the operational policy in this repository.
+- Without real runtime execution, authoring can still silently produce invalid worlds or prefabs.
+
+**Out of scope**
+- New authoring plan semantics.
+- Asset-family-specific create logic.
+- CI policy redesign.
+
+**Acceptance criteria**
+- Replace `RUN_COMPILE_SKIPPED` and `RUN_CLIENTSIM_SKIPPED` with real Unity batchmode execution where environment is configured.
+- Preserve scaffold fallback behavior when the environment is clearly unavailable.
+- Surface compile/runtime failures through structured `ToolResponse` envelopes.
+- Allow `patch apply --runtime-scene` to run end-to-end verification on authored outputs.
+
+**Test considerations**
+- Unit tests for environment detection and command construction.
+- Integration tests with fake runners where possible.
+- Real Unity smoke tests on supported runners for compile and ClientSim paths.
+
+**Depends on**
+- `A10`
+
+### A12. Split asset-family adapters and add postcondition verification
+
+**Background**
+- As authoring coverage expands, one large backend will become brittle.
+- Different asset families need different creation, save, and validation semantics.
+- Plans should be able to declare postconditions so authoring success is defined by verifiable outcomes, not only process completion.
+
+**Out of scope**
+- New asset family support beyond the adapters already implemented.
+- UI or IDE integration.
+- Workflow approval UX beyond current confirm gates.
+
+**Acceptance criteria**
+- Split prefab, scene, scriptable object, and material handling into dedicated adapters.
+- Define a postcondition model for authoring plans, such as `broken_refs == 0` or `asset_exists == true`.
+- Enforce postconditions in the orchestrator with fail-fast semantics.
+- Keep reporting structured and compatible with existing `success / severity / code / message / data / diagnostics` envelopes.
+
+**Test considerations**
+- Unit tests for adapter dispatch and postcondition evaluation.
+- Integration tests that intentionally violate postconditions and assert fail-fast behavior.
+- Regression tests that verify reporting remains stable across asset families.
+
+**Depends on**
+- `A08`
+- `A09`
+- `A10`
+- `A11`
+
 ## Decision-Required Queue
 - Resolved (2026-02-16): ignore-guid policy -> Option B (`<scope>/config/ignore_guids.txt`, missing ignored).
 - Resolved (2026-02-16): CI auto-apply allowed when `--out-ignore-guid-file` is explicitly set and branch is allowlisted.
