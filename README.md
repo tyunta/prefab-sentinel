@@ -553,6 +553,7 @@ set UNITYTOOL_PATCH_BRIDGE="python tools/unity_patch_bridge.py"
 set UNITYTOOL_UNITY_COMMAND="C:/Program Files/Unity/Hub/Editor/<version>/Editor/Unity.exe"
 set UNITYTOOL_UNITY_PROJECT_PATH="D:/git/prefab-sentinel/sample/avatar"
 set UNITYTOOL_UNITY_EXECUTE_METHOD="PrefabSentinel.UnityPatchBridge.ApplyFromJson"
+set UNITYTOOL_RUNTIME_EXECUTE_METHOD="PrefabSentinel.UnityRuntimeValidationBridge.RunFromJson"
 python scripts/unity_bridge_smoke.py --plan "config/prefab_patch_plan.json" --unity-command "C:/Program Files/Unity/Hub/Editor/<version>/Editor/Unity.exe" --unity-project-path "D:/git/prefab-sentinel/sample/avatar" --unity-execute-method "PrefabSentinel.UnityPatchBridge.ApplyFromJson" --out "reports/unity_bridge_smoke.json"
 uv run prefab-sentinel patch apply --plan "config/prefab_patch_plan.json" --confirm --out-report "reports/patch_result.json" --change-reason "apply prefab patch"
 uv run prefab-sentinel patch apply --plan "config/prefab_patch_plan.json" --confirm --out-report "reports/patch_result.json" --change-reason "apply prefab patch" --scope "Assets" --runtime-scene "Assets/Smoke.unity"
@@ -646,8 +647,10 @@ uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel sug
 - `patch attest` は plan の sha256 と任意の署名を attestation JSON として出力できる（`--unsigned` / `--out`）。
 - `patch verify` は SHA-256 / HMAC-SHA256 の一致検証を行い、検証失敗時は非 0 終了コードを返す（`--format json` / `text`）。
 - `patch verify` は `--attestation-file` から期待値を読み取って照合できる。
-- `patch apply` は plan JSON のスキーマ検証と `dry_run_patch` プレビューを実装済み（open mode: `set` / `insert_array_element` / `remove_array_element`、prefab create mode: `create_prefab` / `create_root` / `create_game_object` / `rename_object` / `reparent` / `add_component` / `find_component` / `remove_component` / `save`）。
+- `patch apply` は plan JSON のスキーマ検証と `dry_run_patch` プレビューを実装済み（open mode: prefab `set` / `insert_array_element` / `remove_array_element`、material / ScriptableObject root asset mutation、scene `open_scene` / hierarchy / component / `save_scene`、prefab create mode: `create_prefab` / `create_root` / `create_game_object` / `rename_object` / `reparent` / `add_component` / `find_component` / `remove_component` / `save`、material / ScriptableObject create mode: `create_asset` / `save` + mutation op、scene create mode: `create_scene` / `create_game_object` / `instantiate_prefab` / `rename_object` / `reparent` / `add_component` / `find_component` / `remove_component` / `save_scene`）。
 - prefab create mode の mutation op（`set` / `insert_array_element` / `remove_array_element`）は `component` selector ではなく、create mode 中に確保した component `$handle` を `target` に指定して適用する。
+- material / ScriptableObject の open mode mutation は root asset `$asset` を `target` に指定し、create mode では `create_asset` が返す asset `$handle` を `target` に指定して適用する。
+- scene mode は予約済み `$scene` handle を root parent として使い、hierarchy op の `parent` に指定する。scene 内 mutation op は `add_component` / `find_component` が返す component `$handle` を `target` に指定して適用する。
 - `patch apply` は `--out-report` 指定時に結果 envelope を JSON ファイルに保存する（`--confirm` 時は必須）。
 - `patch apply` は非 dry-run 時に `--confirm` と `--change-reason` を要求し、JSON ターゲット（`.json`）は内蔵バックエンドで実編集する。
 - `patch apply` は `--attestation-file` から期待値（sha256 / signature）を読み取って適用前照合できる（CLI 引数の `--plan-sha256` / `--plan-signature` が優先）。
@@ -718,22 +721,25 @@ before / after diff + validation steps の抜粋:
 ```
 ### 17.7 Unity bridge / runtime
 
-- `tools/unity_patch_bridge.py` は `UNITYTOOL_UNITY_COMMAND` を使って Unity batchmode コマンドを実行し、JSON リクエスト / レスポンスファイルを介して結果を返す（mutation op の `value` を Unity 側で扱える型情報へ正規化し、prefab create mode の hierarchy / component op と `save` も中継する）。
+- `tools/unity_patch_bridge.py` は `UNITYTOOL_UNITY_COMMAND` を使って Unity batchmode コマンドを実行し、JSON リクエスト / レスポンスファイルを介して結果を返す（mutation op の `value` を Unity 側で扱える型情報へ正規化し、prefab create mode の hierarchy / component op、material / ScriptableObject create mode の `create_asset`、scene open/create mode の hierarchy / prefab instantiate / component op、および `save` / `save_scene` を中継する）。
 - `tools/unity_patch_bridge.py` の外部 request は `plan_version: 2` + `resources[]` + `ops[]` を受け付け、resource ごとに現在の Unity executeMethod へ分解して適用する。
-- `tools/unity_patch_bridge.py` の mutation op は open mode では `component`, create mode では component `$handle` の `target` を受け付ける。
+- `tools/unity_patch_bridge.py` の mutation op は prefab open mode では `component`、material / ScriptableObject open mode では root asset `$asset` の `target`、scene mode では component `$handle` の `target`、create mode では component / asset `$handle` の `target` を受け付ける。
 - `tools/unity_patch_bridge.py` は Unity 起動前に `ops` を検証し、`set` の `value` 欠落や配列操作の `index` 欠落などを `BRIDGE_REQUEST_SCHEMA` で fail-fast 停止する。
 - `tools/unity_patch_bridge.py` は `UNITYTOOL_UNITY_PROJECT_PATH` / `UNITYTOOL_UNITY_EXECUTE_METHOD` / `UNITYTOOL_UNITY_TIMEOUT_SEC` / `UNITYTOOL_UNITY_LOG_FILE` で実行設定を制御できる。
 - `tools/unity_patch_bridge.py` は Unity 応答の `success/severity/code/message/data/diagnostics` を厳密検証し、欠落・型不一致時は `BRIDGE_UNITY_RESPONSE_SCHEMA` で fail-fast 停止する。
+- `unitytool/mcp/serialized_object.py` の resource dispatch は `json` / `prefab` / `asset` / `material` / `scene` の adapter ごとに分離し、Unity 側に渡す resource plan は常に kind / mode を明示した bridge request へ正規化する。
 - `scripts/unity_bridge_smoke.py` は patch plan から `tools/unity_patch_bridge.py` を end-to-end 実行し、Unity 実行環境の上書き・期待成功 / 失敗判定・コード検証（`--expected-code`）・適用件数検証（`--expected-applied` または `--expect-applied-from-plan`）・レスポンス保存（`--out`）をまとめて検証できる。bridge 応答は `success/severity/code/message/data/diagnostics` を厳密検証し、欠落・型不一致時は fail-fast で停止する。
-- `tools/unity/PrefabSentinel.UnityPatchBridge.cs` は Unity 側 `-executeMethod` 実装として `.prefab` ターゲットの open mode `set` / `insert_array_element` / `remove_array_element` と、create mode の root / hierarchy / component op（`$handle` 参照）および `save` を適用する（mutation 時の `component` は一意一致必須、component 曖昧時は候補パス付きで fail-fast）。
+- `tools/unity/PrefabSentinel.UnityPatchBridge.cs` は Unity 側 `-executeMethod` 実装として `.prefab` の open mode `set` / `insert_array_element` / `remove_array_element`、`.mat` / `.asset` の open mode root asset mutation、`.unity` の open/create mode `open_scene` / `create_scene` / hierarchy / `instantiate_prefab` / component op / `save_scene`、および create mode の prefab root / hierarchy / component op、material / ScriptableObject の `create_asset`、`$handle` 参照 mutation、`save` を適用する（prefab mutation 時の `component` は一意一致必須、component 曖昧時は候補パス付きで fail-fast）。
+- `unitytool/mcp/runtime_validation.py` は `UNITYTOOL_UNITY_COMMAND` が設定されている場合、`UNITYTOOL_UNITY_PROJECT_PATH` / `UNITYTOOL_RUNTIME_EXECUTE_METHOD` / `UNITYTOOL_UNITY_TIMEOUT_SEC` / `UNITYTOOL_UNITY_LOG_FILE` を使って Unity batchmode を起動し、JSON リクエスト / レスポンスで `compile_udonsharp` と `run_clientsim` を実行する。未設定環境では `RUN_COMPILE_SKIPPED` / `RUN_CLIENTSIM_SKIPPED` を返して fail-fast で未配線を明示する。
+- `tools/unity/PrefabSentinel.UnityRuntimeValidationBridge.cs` は runtime validation 用の Unity 側 `-executeMethod` 実装で、UdonSharp compile と ClientSim 起動を行い、`success/severity/code/message/data/diagnostics` 形式の応答を返す。
 - `component` セレクタは `TypeName@Hierarchy/Path` 形式を受け付け、同型コンポーネントが複数ある場合に GameObject 階層で明示的に絞り込める。
 - `set` の値デコードは `int/float/bool/string/null` に加えて `Character` / `LayerMask` / `ArraySize`、`enum`、`Color`、`Vector2/3/4`、`Vector2Int/3Int`、`Rect/RectInt`、`Bounds/BoundsInt`、`Quaternion`、`AnimationCurve`、`Gradient`、`ObjectReference` / `ExposedReference`（`value_kind=json` の `{guid,file_id}`）、`ManagedReference`（`value_kind=json`、必要時 `{"__type":"Namespace.Type, Assembly"}` ヒント対応）、`Generic`（カスタム構造体の `value_json` 反映）を扱う。
 - `AnimationCurve` は `value_kind=json` で `{ "keys":[{"time":0.0,"value":1.0,"in_tangent":0.0,"out_tangent":0.0}], "pre_wrap_mode":1, "post_wrap_mode":1 }` 形式を受け付ける（`value_kind=null` で null 設定）。
 - `Gradient` は `value_kind=json` で `{ "color_keys":[{"color":{"r":1,"g":1,"b":1,"a":1},"time":0.0}], "alpha_keys":[{"alpha":1.0,"time":0.0}], "mode":0 }` 形式を受け付ける（`value_kind=null` で null 設定）。
 - 配列操作パスの診断は `.Array.data` 形式を厳密検証し、`.Array.size` / index 付き誤指定時はヒント付きで停止する。
 - fixed buffer 配列に対する `insert_array_element` / `remove_array_element` は未対応として明示的に fail-fast 停止し、要素更新は `set` で個別要素パスを指定する方針とする。
-- `validate runtime` は log 分類ベースの scaffold を実装済みで、`--scene` 存在確認、`BROKEN_PPTR` / `UDON_NULLREF` などの分類、`assert_no_critical_errors` 判定までを返す。
-- `validate runtime` の compile / ClientSim 実行は現時点では `RUN_COMPILE_SKIPPED` / `RUN_CLIENTSIM_SKIPPED` として明示的に未配線を返す。
+- patch plan v2 は任意の `postconditions` 配列を受け付け、`patch apply` 完了前に検証する。現状の対応型は `asset_exists`（`resource` または `path`）と `broken_refs`（`scope`, `expected_count`, `exclude_patterns`, `ignore_asset_guids`）で、不一致時は fail-fast で停止する。
+- `validate runtime` は `compile_udonsharp` / `run_clientsim` / `collect_unity_console` / `classify_errors` / `assert_no_critical_errors` を順に実行する。Unity batchmode 実行が設定されていれば UdonSharp compile と ClientSim を実行し、未設定環境では skip 応答を返したうえで log 分類へ進む。
 - `validate bridge-smoke` は patch plan を bridge request へ変換して `tools/unity_patch_bridge.py` を実行し、`--expect-failure` 判定・`--expected-code` の `response.code` 検証・`--expected-applied` / `--expect-applied-from-plan` の `response.data.applied` 検証・`--out` 保存までを CLI 本体から実行できる（code 検証有効時は出力 `data` に `expected_code` / `actual_code` / `code_matches`、apply 検証有効時は `expected_applied` / `expected_applied_source` / `actual_applied` / `applied_matches` を付与。`--expect-applied-from-plan` は plan 全体の `ops` 件数を使い、`--expect-failure` 指定時に自動スキップ）。
 - `report export --format md` は `VALIDATE_RUNTIME_RESULT` payload を入力した場合、Runtime Validation 要約（分類件数・severity 内訳・カテゴリ表）を追加出力する。
 

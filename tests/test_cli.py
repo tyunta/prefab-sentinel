@@ -22,6 +22,46 @@ def _write(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
+def _write_fake_runtime_runner(path: Path) -> None:
+    path.write_text(
+        """
+import json
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+
+def arg_value(name: str) -> str:
+    for index, value in enumerate(args[:-1]):
+        if value == name:
+            return args[index + 1]
+    raise SystemExit(f"missing argument: {name}")
+
+request_path = Path(arg_value("-unitytoolRuntimeRequest"))
+response_path = Path(arg_value("-unitytoolRuntimeResponse"))
+request = json.loads(request_path.read_text(encoding="utf-8"))
+action = request.get("action", "")
+
+payload = {
+    "success": True,
+    "severity": "info",
+    "code": "RUN_COMPILE_OK" if action == "compile_udonsharp" else "RUN_CLIENTSIM_OK",
+    "message": action,
+    "data": {
+        "udon_program_count": 2 if action == "compile_udonsharp" else 0,
+        "clientsim_ready": action == "run_clientsim",
+        "executed": True,
+        "read_only": False,
+    },
+    "diagnostics": [],
+}
+
+response_path.write_text(json.dumps(payload), encoding="utf-8")
+""".strip(),
+        encoding="utf-8",
+    )
+
+
 class CliTests(unittest.TestCase):
     def run_cli(self, argv: list[str]) -> tuple[int, str]:
         buf = io.StringIO()
@@ -97,6 +137,50 @@ GameObject:
         step_codes = [step["result"]["code"] for step in payload["data"]["steps"]]
         self.assertIn("RUN_LOG_COLLECTED", step_codes)
         self.assertIn("RUN001", step_codes)
+
+    def test_validate_runtime_runs_unity_when_configured(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            scene = root / "Assets" / "Scenes" / "Smoke.unity"
+            runner = root / "unity_runner.py"
+            _write(
+                scene,
+                """%YAML 1.1
+--- !u!1 &1
+GameObject:
+  m_Name: Smoke
+""",
+            )
+            _write_fake_runtime_runner(runner)
+
+            with patch.dict(
+                os.environ,
+                {
+                    "UNITYTOOL_UNITY_COMMAND": f'"{sys.executable}" "{runner}"',
+                    "UNITYTOOL_UNITY_PROJECT_PATH": str(root),
+                },
+                clear=False,
+            ):
+                exit_code, output = self.run_cli(
+                    [
+                        "validate",
+                        "runtime",
+                        "--scene",
+                        str(scene),
+                    ]
+                )
+
+        payload = json.loads(output)
+        self.assertEqual(0, exit_code)
+        self.assertTrue(payload["success"])
+        self.assertEqual("VALIDATE_RUNTIME_RESULT", payload["code"])
+        steps = {step["step"]: step["result"] for step in payload["data"]["steps"]}
+        step_codes = [step["code"] for step in steps.values()]
+        self.assertIn("RUN_COMPILE_OK", step_codes)
+        self.assertIn("RUN_CLIENTSIM_OK", step_codes)
+        self.assertIn("RUN_ASSERT_OK", step_codes)
+        self.assertEqual(root.resolve().as_posix(), steps["compile_udonsharp"]["data"]["project_root"])
+        self.assertEqual(root.resolve().as_posix(), steps["run_clientsim"]["data"]["project_root"])
 
     def test_validate_bridge_smoke_runs_bridge_script(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1626,6 +1710,64 @@ raise SystemExit(0)
             self.assertEqual(10, json.loads(left.read_text(encoding="utf-8"))["nested"]["value"])
             self.assertEqual(20, json.loads(right.read_text(encoding="utf-8"))["nested"]["value"])
 
+    def test_patch_apply_confirm_enforces_asset_exists_postcondition(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            target = root / "state.json"
+            target.write_text(json.dumps({"nested": {"value": 1}}), encoding="utf-8")
+            plan = root / "patch.json"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "plan_version": 2,
+                        "resources": [
+                            {
+                                "id": "state",
+                                "kind": "json",
+                                "path": str(target),
+                                "mode": "open",
+                            }
+                        ],
+                        "ops": [
+                            {
+                                "resource": "state",
+                                "op": "set",
+                                "component": "Example.Component",
+                                "path": "nested.value",
+                                "value": 5,
+                            }
+                        ],
+                        "postconditions": [
+                            {
+                                "type": "asset_exists",
+                                "resource": "state",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            out_report = root / "reports" / "patch_result.json"
+            exit_code, output = self.run_cli(
+                [
+                    "patch",
+                    "apply",
+                    "--plan",
+                    str(plan),
+                    "--confirm",
+                    "--out-report",
+                    str(out_report),
+                    "--change-reason",
+                    "test postconditions",
+                ]
+            )
+
+            payload = json.loads(output)
+            self.assertEqual(0, exit_code)
+            self.assertTrue(payload["success"])
+            step_codes = [step["result"]["code"] for step in payload["data"]["steps"]]
+            self.assertIn("POST_ASSET_EXISTS_OK", step_codes)
+
     def test_patch_apply_confirm_runs_preflight_and_runtime_when_requested(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -2108,6 +2250,190 @@ print(
             self.assertEqual("set", request_ops[2]["op"])
             self.assertEqual("$root_collider", request_ops[2]["target"])
             self.assertEqual("m_IsTrigger", request_ops[2]["path"])
+
+    def test_patch_apply_confirm_uses_bridge_env_for_material_create_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            bridge = root / "bridge.py"
+            bridge.write_text(
+                """
+import json
+import sys
+
+request = json.load(sys.stdin)
+print(
+    json.dumps(
+        {
+            "success": True,
+            "severity": "info",
+            "code": "SER_APPLY_OK",
+            "message": "Bridge apply completed.",
+            "data": {
+                "target": request.get("target", ""),
+                "mode": request.get("resources", [{}])[0].get("mode", ""),
+                "kind": request.get("resources", [{}])[0].get("kind", ""),
+                "request_ops": request.get("ops", []),
+                "op_count": len(request.get("ops", [])),
+                "applied": len(request.get("ops", [])),
+                "read_only": False,
+                "executed": True,
+            },
+            "diagnostics": [],
+        }
+    )
+)
+""".strip(),
+                encoding="utf-8",
+            )
+            plan = root / "patch.json"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "plan_version": 2,
+                        "resources": [
+                            {
+                                "id": "material",
+                                "kind": "material",
+                                "path": str(root / "Assets" / "Generated" / "New.mat"),
+                                "mode": "create",
+                            }
+                        ],
+                        "ops": [
+                            {
+                                "resource": "material",
+                                "op": "create_asset",
+                                "shader": "Standard",
+                                "result": "generated_material",
+                            },
+                            {
+                                "resource": "material",
+                                "op": "set",
+                                "target": "$generated_material",
+                                "path": "m_Name",
+                                "value": "GeneratedMaterial",
+                            },
+                            {"resource": "material", "op": "save"},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            bridge_cmd = f'"{sys.executable}" "{bridge}"'
+            with patch.dict(os.environ, {"UNITYTOOL_PATCH_BRIDGE": bridge_cmd}, clear=False):
+                exit_code, output = self.run_cli(
+                    [
+                        "patch",
+                        "apply",
+                        "--plan",
+                        str(plan),
+                        "--confirm",
+                        "--out-report",
+                        str(root / "reports" / "patch_result.json"),
+                        "--change-reason",
+                        "test bridge material create",
+                    ]
+                )
+
+            payload = json.loads(output)
+            self.assertEqual(0, exit_code)
+            self.assertTrue(payload["success"])
+            result = payload["data"]["steps"][-1]["result"]["data"]
+            self.assertEqual("create", result["mode"])
+            self.assertEqual("material", result["kind"])
+            self.assertEqual("create_asset", result["request_ops"][0]["op"])
+            self.assertEqual("Standard", result["request_ops"][0]["shader"])
+
+    def test_patch_apply_confirm_uses_bridge_env_for_scene_create_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            bridge = root / "bridge.py"
+            bridge.write_text(
+                """
+import json
+import sys
+
+request = json.load(sys.stdin)
+print(
+    json.dumps(
+        {
+            "success": True,
+            "severity": "info",
+            "code": "SER_APPLY_OK",
+            "message": "Bridge apply completed.",
+            "data": {
+                "target": request.get("target", ""),
+                "mode": request.get("resources", [{}])[0].get("mode", ""),
+                "kind": request.get("resources", [{}])[0].get("kind", ""),
+                "request_ops": request.get("ops", []),
+                "op_count": len(request.get("ops", [])),
+                "applied": len(request.get("ops", [])),
+                "read_only": False,
+                "executed": True,
+            },
+            "diagnostics": [],
+        }
+    )
+)
+""".strip(),
+                encoding="utf-8",
+            )
+            plan = root / "patch.json"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "plan_version": 2,
+                        "resources": [
+                            {
+                                "id": "scene",
+                                "kind": "scene",
+                                "path": str(root / "Assets" / "Generated" / "New.unity"),
+                                "mode": "create",
+                            }
+                        ],
+                        "ops": [
+                            {"resource": "scene", "op": "create_scene"},
+                            {
+                                "resource": "scene",
+                                "op": "instantiate_prefab",
+                                "prefab": "Assets/Prefabs/Example.prefab",
+                                "parent": "$scene",
+                                "result": "instance_root",
+                            },
+                            {"resource": "scene", "op": "save_scene"},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            bridge_cmd = f'"{sys.executable}" "{bridge}"'
+            with patch.dict(os.environ, {"UNITYTOOL_PATCH_BRIDGE": bridge_cmd}, clear=False):
+                exit_code, output = self.run_cli(
+                    [
+                        "patch",
+                        "apply",
+                        "--plan",
+                        str(plan),
+                        "--confirm",
+                        "--out-report",
+                        str(root / "reports" / "patch_result.json"),
+                        "--change-reason",
+                        "test bridge scene create",
+                    ]
+                )
+
+            payload = json.loads(output)
+            self.assertEqual(0, exit_code)
+            self.assertTrue(payload["success"])
+            result = payload["data"]["steps"][-1]["result"]["data"]
+            self.assertEqual("create", result["mode"])
+            self.assertEqual("scene", result["kind"])
+            self.assertEqual("instantiate_prefab", result["request_ops"][1]["op"])
+            self.assertEqual(
+                "Assets/Prefabs/Example.prefab",
+                result["request_ops"][1]["prefab"],
+            )
 
     def test_patch_apply_invalid_plan_returns_parser_error(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -34,5 +34,16 @@
       "path": "items.Array.data",
       "index": 0
     }
+  ],
+  "postconditions": [
+    {
+      "type": "asset_exists",
+      "resource": "variant"
+    },
+    {
+      "type": "broken_refs",
+      "scope": "Assets/Example",
+      "expected_count": 0
+    }
   ]
 }

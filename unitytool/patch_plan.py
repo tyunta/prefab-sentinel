@@ -81,6 +81,7 @@ def _normalize_v1_plan(payload: dict[str, Any]) -> dict[str, Any]:
             }
         ],
         "ops": [{**deepcopy(op), "resource": resource_id} for op in ops],
+        "postconditions": [],
     }
 
 
@@ -103,10 +104,15 @@ def normalize_patch_plan(payload: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(ops, list):
             raise _error("ops", "must be an array.")
 
+        postconditions = payload.get("postconditions", [])
+        if not isinstance(postconditions, list):
+            raise _error("postconditions", "must be an array when provided.")
+
         normalized = {
             "plan_version": PLAN_VERSION,
             "resources": [_normalize_resource(resource, index) for index, resource in enumerate(resources)],
             "ops": [deepcopy(op) for op in ops],
+            "postconditions": [deepcopy(postcondition) for postcondition in postconditions],
         }
 
     resource_ids: set[str] = set()
@@ -131,6 +137,17 @@ def normalize_patch_plan(payload: dict[str, Any]) -> dict[str, Any]:
                 f"references unknown resource id '{resource_id}'.",
             )
         op["resource"] = resource_id
+
+    for index, postcondition in enumerate(normalized.get("postconditions", [])):
+        if not isinstance(postcondition, dict):
+            raise _error(f"postconditions[{index}]", "must be an object.")
+        postcondition_type = postcondition.get("type")
+        if not isinstance(postcondition_type, str) or not postcondition_type.strip():
+            raise _error(
+                f"postconditions[{index}].type",
+                "must be a non-empty string.",
+            )
+        postcondition["type"] = postcondition_type.strip()
 
     return normalized
 

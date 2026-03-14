@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import os
 import shlex
@@ -34,6 +35,8 @@ _PREFAB_CREATE_OPS = {
     "save",
 }
 _ROOT_HANDLE = "root"
+_ASSET_HANDLE = "asset"
+_SCENE_HANDLE = "scene"
 _UNITY_BRIDGE_PROTOCOL_VERSION = PLAN_VERSION
 _UNITY_BRIDGE_SUPPORTED_SUFFIXES = {
     ".prefab",
@@ -69,6 +72,191 @@ _UNITY_BRIDGE_KIND_BY_SUFFIX = {
 }
 
 
+@dataclass(frozen=True)
+class _ResourcePlanContext:
+    target: str
+    kind: str
+    mode: str
+    target_path: Path
+    ops: list[dict[str, Any]]
+
+
+class _ResourceAdapter:
+    supported_kind = ""
+    supported_modes = frozenset({"open"})
+
+    def supports(self, context: _ResourcePlanContext) -> bool:
+        return (
+            context.kind == self.supported_kind
+            and context.mode in self.supported_modes
+        )
+
+    def dry_run(
+        self,
+        owner: "SerializedObjectMcp",
+        context: _ResourcePlanContext,
+    ) -> ToolResponse:
+        raise NotImplementedError
+
+    def apply(
+        self,
+        owner: "SerializedObjectMcp",
+        context: _ResourcePlanContext,
+    ) -> ToolResponse:
+        raise NotImplementedError
+
+
+class _JsonResourceAdapter(_ResourceAdapter):
+    supported_kind = "json"
+
+    def dry_run(
+        self,
+        owner: "SerializedObjectMcp",
+        context: _ResourcePlanContext,
+    ) -> ToolResponse:
+        return owner.dry_run_patch(target=context.target, ops=context.ops)
+
+    def apply(
+        self,
+        owner: "SerializedObjectMcp",
+        context: _ResourcePlanContext,
+    ) -> ToolResponse:
+        return owner.apply_and_save(target=context.target, ops=context.ops)
+
+
+class _PrefabResourceAdapter(_ResourceAdapter):
+    supported_kind = "prefab"
+    supported_modes = frozenset({"open", "create"})
+
+    def dry_run(
+        self,
+        owner: "SerializedObjectMcp",
+        context: _ResourcePlanContext,
+    ) -> ToolResponse:
+        if context.mode == "open":
+            return owner.dry_run_patch(target=context.target, ops=context.ops)
+        diagnostics, preview = owner._validate_prefab_create_ops(
+            target=context.target,
+            ops=context.ops,
+        )
+        if diagnostics:
+            return owner._resource_plan_invalid_response(
+                context=context,
+                diagnostics=diagnostics,
+                read_only=True,
+            )
+        return owner._resource_plan_preview_response(context=context, preview=preview)
+
+    def apply(
+        self,
+        owner: "SerializedObjectMcp",
+        context: _ResourcePlanContext,
+    ) -> ToolResponse:
+        dry_run = self.dry_run(owner, context)
+        if not dry_run.success:
+            return owner._resource_plan_apply_invalid_response(
+                context=context,
+                diagnostics=dry_run.diagnostics,
+            )
+        return owner._apply_with_unity_bridge(
+            target_path=context.target_path,
+            ops=context.ops,
+            resource_kind=context.kind,
+            resource_mode=context.mode,
+        )
+
+
+class _BridgeBackedAssetResourceAdapter(_ResourceAdapter):
+    supported_modes = frozenset({"open", "create"})
+
+    def dry_run(
+        self,
+        owner: "SerializedObjectMcp",
+        context: _ResourcePlanContext,
+    ) -> ToolResponse:
+        if context.mode == "open":
+            return owner.dry_run_patch(target=context.target, ops=context.ops)
+        diagnostics, preview = owner._validate_asset_create_ops(
+            target=context.target,
+            kind=context.kind,
+            ops=context.ops,
+        )
+        if diagnostics:
+            return owner._resource_plan_invalid_response(
+                context=context,
+                diagnostics=diagnostics,
+                read_only=True,
+            )
+        return owner._resource_plan_preview_response(context=context, preview=preview)
+
+    def apply(
+        self,
+        owner: "SerializedObjectMcp",
+        context: _ResourcePlanContext,
+    ) -> ToolResponse:
+        dry_run = self.dry_run(owner, context)
+        if not dry_run.success:
+            return owner._resource_plan_apply_invalid_response(
+                context=context,
+                diagnostics=dry_run.diagnostics,
+            )
+        return owner._apply_with_unity_bridge(
+            target_path=context.target_path,
+            ops=context.ops,
+            resource_kind=context.kind,
+            resource_mode=context.mode,
+        )
+
+
+class _AssetResourceAdapter(_BridgeBackedAssetResourceAdapter):
+    supported_kind = "asset"
+
+
+class _MaterialResourceAdapter(_BridgeBackedAssetResourceAdapter):
+    supported_kind = "material"
+
+
+class _SceneResourceAdapter(_ResourceAdapter):
+    supported_kind = "scene"
+    supported_modes = frozenset({"open", "create"})
+
+    def dry_run(
+        self,
+        owner: "SerializedObjectMcp",
+        context: _ResourcePlanContext,
+    ) -> ToolResponse:
+        diagnostics, preview = owner._validate_scene_ops(
+            target=context.target,
+            mode=context.mode,
+            ops=context.ops,
+        )
+        if diagnostics:
+            return owner._resource_plan_invalid_response(
+                context=context,
+                diagnostics=diagnostics,
+                read_only=True,
+            )
+        return owner._resource_plan_preview_response(context=context, preview=preview)
+
+    def apply(
+        self,
+        owner: "SerializedObjectMcp",
+        context: _ResourcePlanContext,
+    ) -> ToolResponse:
+        dry_run = self.dry_run(owner, context)
+        if not dry_run.success:
+            return owner._resource_plan_apply_invalid_response(
+                context=context,
+                diagnostics=dry_run.diagnostics,
+            )
+        return owner._apply_with_unity_bridge(
+            target_path=context.target_path,
+            ops=context.ops,
+            resource_kind=context.kind,
+            resource_mode=context.mode,
+        )
+
+
 class SerializedObjectMcp:
     """Serialized-object MCP scaffold with plan validation and dry-run preview."""
 
@@ -90,6 +278,13 @@ class SerializedObjectMcp:
         except (TypeError, ValueError):
             timeout = 120.0
         self.bridge_timeout_sec = max(1.0, timeout)
+        self._resource_adapters: tuple[_ResourceAdapter, ...] = (
+            _JsonResourceAdapter(),
+            _PrefabResourceAdapter(),
+            _AssetResourceAdapter(),
+            _MaterialResourceAdapter(),
+            _SceneResourceAdapter(),
+        )
 
     def _load_bridge_command_from_env(self) -> tuple[str, ...] | None:
         raw = os.getenv("UNITYTOOL_PATCH_BRIDGE", "").strip()
@@ -125,6 +320,134 @@ class SerializedObjectMcp:
 
     def _infer_bridge_resource_kind(self, target_path: Path) -> str:
         return _UNITY_BRIDGE_KIND_BY_SUFFIX.get(target_path.suffix.lower(), "asset")
+
+    def _infer_resource_kind(self, target_path: Path) -> str:
+        if target_path.suffix.lower() == ".json":
+            return "json"
+        return self._infer_bridge_resource_kind(target_path)
+
+    def _resolve_resource_context(
+        self,
+        resource: dict[str, Any],
+        ops: list[dict[str, Any]],
+    ) -> _ResourcePlanContext:
+        target = str(resource.get("path", "")).strip()
+        kind = str(resource.get("kind", "")).strip().lower()
+        target_path = Path(target) if target else Path()
+        if not kind and target:
+            kind = self._infer_resource_kind(target_path)
+        mode = str(resource.get("mode", "open")).strip().lower() or "open"
+        return _ResourcePlanContext(
+            target=target,
+            kind=kind,
+            mode=mode,
+            target_path=target_path,
+            ops=ops,
+        )
+
+    def _select_resource_adapter(
+        self,
+        context: _ResourcePlanContext,
+    ) -> _ResourceAdapter | None:
+        for adapter in self._resource_adapters:
+            if adapter.supports(context):
+                return adapter
+        return None
+
+    def _resource_plan_invalid_response(
+        self,
+        *,
+        context: _ResourcePlanContext,
+        diagnostics: list[Diagnostic],
+        read_only: bool,
+    ) -> ToolResponse:
+        return ToolResponse(
+            success=False,
+            severity=Severity.ERROR,
+            code="SER_PLAN_INVALID",
+            message="Patch plan schema validation failed.",
+            data={
+                "target": context.target,
+                "kind": context.kind,
+                "mode": context.mode,
+                "op_count": len(context.ops),
+                "read_only": read_only,
+            },
+            diagnostics=diagnostics,
+        )
+
+    def _resource_plan_apply_invalid_response(
+        self,
+        *,
+        context: _ResourcePlanContext,
+        diagnostics: list[Diagnostic],
+    ) -> ToolResponse:
+        return ToolResponse(
+            success=False,
+            severity=Severity.ERROR,
+            code="SER_PLAN_INVALID",
+            message="Patch plan schema validation failed.",
+            data={
+                "target": context.target,
+                "kind": context.kind,
+                "mode": context.mode,
+                "op_count": len(context.ops),
+                "applied": 0,
+                "read_only": False,
+                "executed": False,
+            },
+            diagnostics=diagnostics,
+        )
+
+    def _resource_plan_preview_response(
+        self,
+        *,
+        context: _ResourcePlanContext,
+        preview: list[dict[str, Any]],
+    ) -> ToolResponse:
+        return ToolResponse(
+            success=True,
+            severity=Severity.INFO,
+            code="SER_DRY_RUN_OK",
+            message="dry_run_patch generated a patch preview.",
+            data={
+                "target": context.target,
+                "kind": context.kind,
+                "mode": context.mode,
+                "op_count": len(context.ops),
+                "applied": 0,
+                "diff": preview,
+                "read_only": True,
+            },
+            diagnostics=[],
+        )
+
+    def _unsupported_resource_plan_response(
+        self,
+        *,
+        context: _ResourcePlanContext,
+        read_only: bool,
+    ) -> ToolResponse:
+        target_value = context.target
+        if not read_only and context.target:
+            target_value = str(self._resolve_target_path(context.target))
+        data = {
+            "target": target_value,
+            "kind": context.kind,
+            "mode": context.mode,
+            "op_count": len(context.ops),
+            "read_only": read_only,
+        }
+        if not read_only:
+            data.update({"applied": 0, "executed": False})
+        return ToolResponse(
+            success=False,
+            severity=Severity.ERROR,
+            code="SER_UNSUPPORTED_TARGET",
+            message="Resource mode/kind combination is not supported by the current backend.",
+            data=data,
+            diagnostics=[],
+        )
 
     def _build_unity_bridge_request(
         self,
@@ -387,6 +710,110 @@ class SerializedObjectMcp:
 
         return self._parse_bridge_response(payload, target_path=target_path, ops=ops)
 
+    def _normalize_handle_name(self, raw: object) -> str:
+        if not isinstance(raw, str):
+            return ""
+        normalized = raw.strip()
+        if normalized.startswith("$"):
+            normalized = normalized[1:]
+        return normalized.strip()
+
+    def _validate_result_handle(
+        self,
+        *,
+        target: str,
+        index: int,
+        op: dict[str, Any],
+        known_handles: dict[str, str],
+        diagnostics: list[Diagnostic],
+    ) -> str | None:
+        if "result" not in op:
+            return None
+        handle_name = self._normalize_handle_name(op.get("result"))
+        if not handle_name:
+            diagnostics.append(
+                Diagnostic(
+                    path=target,
+                    location=f"ops[{index}].result",
+                    detail="schema_error",
+                    evidence="result must be a non-empty string when provided",
+                )
+            )
+            return None
+        if handle_name in known_handles:
+            diagnostics.append(
+                Diagnostic(
+                    path=target,
+                    location=f"ops[{index}].result",
+                    detail="schema_error",
+                    evidence=f"handle '{handle_name}' is already defined",
+                )
+            )
+            return None
+        return handle_name
+
+    def _require_handle_ref(
+        self,
+        *,
+        target: str,
+        index: int,
+        field: str,
+        op: dict[str, Any],
+        known_handles: dict[str, str],
+        diagnostics: list[Diagnostic],
+        expected_kind: str | set[str] | tuple[str, ...] | None = None,
+    ) -> str | None:
+        handle_name = self._normalize_handle_name(op.get(field))
+        if not handle_name:
+            diagnostics.append(
+                Diagnostic(
+                    path=target,
+                    location=f"ops[{index}].{field}",
+                    detail="schema_error",
+                    evidence=f"{field} must reference a handle",
+                )
+            )
+            return None
+        if handle_name not in known_handles:
+            diagnostics.append(
+                Diagnostic(
+                    path=target,
+                    location=f"ops[{index}].{field}",
+                    detail="schema_error",
+                    evidence=f"unknown handle '{handle_name}'",
+                )
+            )
+            return None
+        actual_kind = known_handles[handle_name]
+        if expected_kind is not None:
+            expected_kinds = (
+                {expected_kind}
+                if isinstance(expected_kind, str)
+                else set(expected_kind)
+            )
+        else:
+            expected_kinds = None
+        if expected_kinds is not None and actual_kind not in expected_kinds:
+            if len(expected_kinds) == 1:
+                expected_text = next(iter(expected_kinds)).replace("_", " ")
+            else:
+                expected_text = " or ".join(
+                    kind.replace("_", " ") for kind in sorted(expected_kinds)
+                )
+            diagnostics.append(
+                Diagnostic(
+                    path=target,
+                    location=f"ops[{index}].{field}",
+                    detail="schema_error",
+                    evidence=(
+                        f"handle '{handle_name}' must reference a "
+                        f"{expected_text}"
+                    ),
+                )
+            )
+            return None
+        return handle_name
+
     def _validate_prefab_create_ops(
         self,
         target: str,
@@ -429,84 +856,6 @@ class SerializedObjectMcp:
         saved = False
         root_name = Path(target).stem or "PrefabRoot"
         known_handles: dict[str, str] = {}
-
-        def _normalize_handle_name(raw: object) -> str:
-            if not isinstance(raw, str):
-                return ""
-            normalized = raw.strip()
-            if normalized.startswith("$"):
-                normalized = normalized[1:]
-            return normalized.strip()
-
-        def _validate_result_handle(index: int, op: dict[str, Any]) -> str | None:
-            if "result" not in op:
-                return None
-            handle_name = _normalize_handle_name(op.get("result"))
-            if not handle_name:
-                diagnostics.append(
-                    Diagnostic(
-                        path=target,
-                        location=f"ops[{index}].result",
-                        detail="schema_error",
-                        evidence="result must be a non-empty string when provided",
-                    )
-                )
-                return None
-            if handle_name in known_handles:
-                diagnostics.append(
-                    Diagnostic(
-                        path=target,
-                        location=f"ops[{index}].result",
-                        detail="schema_error",
-                        evidence=f"handle '{handle_name}' is already defined",
-                    )
-                )
-                return None
-            return handle_name
-
-        def _require_handle_ref(
-            index: int,
-            field: str,
-            op: dict[str, Any],
-            *,
-            expected_kind: str | None = None,
-        ) -> str | None:
-            handle_name = _normalize_handle_name(op.get(field))
-            if not handle_name:
-                diagnostics.append(
-                    Diagnostic(
-                        path=target,
-                        location=f"ops[{index}].{field}",
-                        detail="schema_error",
-                        evidence=f"{field} must reference a handle",
-                    )
-                )
-                return None
-            if handle_name not in known_handles:
-                diagnostics.append(
-                    Diagnostic(
-                        path=target,
-                        location=f"ops[{index}].{field}",
-                        detail="schema_error",
-                        evidence=f"unknown handle '{handle_name}'",
-                    )
-                )
-                return None
-            actual_kind = known_handles[handle_name]
-            if expected_kind is not None and actual_kind != expected_kind:
-                diagnostics.append(
-                    Diagnostic(
-                        path=target,
-                        location=f"ops[{index}].{field}",
-                        detail="schema_error",
-                        evidence=(
-                            f"handle '{handle_name}' must reference a "
-                            f"{expected_kind.replace('_', ' ')}"
-                        ),
-                    )
-                )
-                return None
-            return handle_name
 
         for index, op in enumerate(ops):
             if not isinstance(op, dict):
@@ -559,7 +908,13 @@ class SerializedObjectMcp:
                         )
                         continue
                     root_name = name_value.strip()
-                result_handle = _validate_result_handle(index, op)
+                result_handle = self._validate_result_handle(
+                    target=target,
+                    index=index,
+                    op=op,
+                    known_handles=known_handles,
+                    diagnostics=diagnostics,
+                )
                 if result_handle and result_handle != _ROOT_HANDLE:
                     known_handles[result_handle] = "game_object"
                 preview.append(
@@ -598,13 +953,22 @@ class SerializedObjectMcp:
                         )
                     )
                     continue
-                parent_handle = _require_handle_ref(
-                    index,
-                    "parent",
-                    op,
+                parent_handle = self._require_handle_ref(
+                    target=target,
+                    index=index,
+                    field="parent",
+                    op=op,
+                    known_handles=known_handles,
+                    diagnostics=diagnostics,
                     expected_kind="game_object",
                 )
-                result_handle = _validate_result_handle(index, op)
+                result_handle = self._validate_result_handle(
+                    target=target,
+                    index=index,
+                    op=op,
+                    known_handles=known_handles,
+                    diagnostics=diagnostics,
+                )
                 if parent_handle is None or ("result" in op and result_handle is None):
                     continue
                 if result_handle:
@@ -624,10 +988,13 @@ class SerializedObjectMcp:
                 continue
 
             if op_name == "rename_object":
-                object_handle = _require_handle_ref(
-                    index,
-                    "target",
-                    op,
+                object_handle = self._require_handle_ref(
+                    target=target,
+                    index=index,
+                    field="target",
+                    op=op,
+                    known_handles=known_handles,
+                    diagnostics=diagnostics,
                     expected_kind="game_object",
                 )
                 name_value = op.get("name")
@@ -653,16 +1020,22 @@ class SerializedObjectMcp:
                 continue
 
             if op_name == "reparent":
-                object_handle = _require_handle_ref(
-                    index,
-                    "target",
-                    op,
+                object_handle = self._require_handle_ref(
+                    target=target,
+                    index=index,
+                    field="target",
+                    op=op,
+                    known_handles=known_handles,
+                    diagnostics=diagnostics,
                     expected_kind="game_object",
                 )
-                parent_handle = _require_handle_ref(
-                    index,
-                    "parent",
-                    op,
+                parent_handle = self._require_handle_ref(
+                    target=target,
+                    index=index,
+                    field="parent",
+                    op=op,
+                    known_handles=known_handles,
+                    diagnostics=diagnostics,
                     expected_kind="game_object",
                 )
                 if object_handle is None or parent_handle is None:
@@ -707,10 +1080,13 @@ class SerializedObjectMcp:
                         )
                     )
                     continue
-                object_handle = _require_handle_ref(
-                    index,
-                    "target",
-                    op,
+                object_handle = self._require_handle_ref(
+                    target=target,
+                    index=index,
+                    field="target",
+                    op=op,
+                    known_handles=known_handles,
+                    diagnostics=diagnostics,
                     expected_kind="game_object",
                 )
                 type_name = op.get("type")
@@ -726,7 +1102,13 @@ class SerializedObjectMcp:
                         )
                     )
                     continue
-                result_handle = _validate_result_handle(index, op)
+                result_handle = self._validate_result_handle(
+                    target=target,
+                    index=index,
+                    op=op,
+                    known_handles=known_handles,
+                    diagnostics=diagnostics,
+                )
                 if "result" in op and result_handle is None:
                     continue
                 if result_handle:
@@ -746,10 +1128,13 @@ class SerializedObjectMcp:
                 continue
 
             if op_name == "remove_component":
-                component_handle = _require_handle_ref(
-                    index,
-                    "target",
-                    op,
+                component_handle = self._require_handle_ref(
+                    target=target,
+                    index=index,
+                    field="target",
+                    op=op,
+                    known_handles=known_handles,
+                    diagnostics=diagnostics,
                     expected_kind="component",
                 )
                 if component_handle is None:
@@ -764,10 +1149,13 @@ class SerializedObjectMcp:
                 continue
 
             if op_name in _SUPPORTED_OPS:
-                component_handle = _require_handle_ref(
-                    index,
-                    "target",
-                    op,
+                component_handle = self._require_handle_ref(
+                    target=target,
+                    index=index,
+                    field="target",
+                    op=op,
+                    known_handles=known_handles,
+                    diagnostics=diagnostics,
                     expected_kind="component",
                 )
                 property_path = str(op.get("path", "")).strip()
@@ -902,6 +1290,971 @@ class SerializedObjectMcp:
                     location="ops",
                     detail="schema_error",
                     evidence="create mode requires a save operation",
+                )
+            )
+        return diagnostics, preview
+
+    def _validate_asset_open_ops(
+        self,
+        *,
+        target: str,
+        kind: str,
+        ops: list[dict[str, Any]],
+    ) -> tuple[list[Diagnostic], list[dict[str, Any]]]:
+        diagnostics: list[Diagnostic] = []
+        preview: list[dict[str, Any]] = []
+        suffix = ".mat" if kind == "material" else ".asset"
+        if not target:
+            diagnostics.append(
+                Diagnostic(
+                    path="",
+                    location="target",
+                    detail="schema_error",
+                    evidence=f"target path is required for {kind} open mode",
+                )
+            )
+            return diagnostics, preview
+        if Path(target).suffix.lower() != suffix:
+            diagnostics.append(
+                Diagnostic(
+                    path=target,
+                    location="target",
+                    detail="schema_error",
+                    evidence=f"{kind} open mode requires a {suffix} target path",
+                )
+            )
+            return diagnostics, preview
+        if not ops:
+            diagnostics.append(
+                Diagnostic(
+                    path=target,
+                    location="ops",
+                    detail="schema_error",
+                    evidence="ops must contain at least one operation",
+                )
+            )
+            return diagnostics, preview
+
+        known_handles = {_ASSET_HANDLE: "asset"}
+        for index, op in enumerate(ops):
+            if not isinstance(op, dict):
+                diagnostics.append(
+                    Diagnostic(
+                        path=target,
+                        location=f"ops[{index}]",
+                        detail="schema_error",
+                        evidence="operation must be an object",
+                    )
+                )
+                continue
+
+            op_name = str(op.get("op", "")).strip()
+            if op_name not in _SUPPORTED_OPS:
+                diagnostics.append(
+                    Diagnostic(
+                        path=target,
+                        location=f"ops[{index}].op",
+                        detail="schema_error",
+                        evidence=f"unsupported asset open op '{op_name}'",
+                    )
+                )
+                continue
+
+            asset_handle = self._require_handle_ref(
+                target=target,
+                index=index,
+                field="target",
+                op=op,
+                known_handles=known_handles,
+                diagnostics=diagnostics,
+                expected_kind="asset",
+            )
+            property_path = str(op.get("path", "")).strip()
+            if asset_handle is None:
+                continue
+            if not property_path:
+                diagnostics.append(
+                    Diagnostic(
+                        path=target,
+                        location=f"ops[{index}].path",
+                        detail="schema_error",
+                        evidence="path is required",
+                    )
+                )
+                continue
+
+            if op_name == "set":
+                if "value" not in op:
+                    diagnostics.append(
+                        Diagnostic(
+                            path=target,
+                            location=f"ops[{index}].value",
+                            detail="schema_error",
+                            evidence="value is required for set",
+                        )
+                    )
+                    continue
+                preview.append(
+                    {
+                        "op": op_name,
+                        "before": {"handle": asset_handle, "path": property_path},
+                        "after": {
+                            "handle": asset_handle,
+                            "path": property_path,
+                            "value": deepcopy(op.get("value")),
+                        },
+                    }
+                )
+                continue
+
+            op_index = op.get("index")
+            if isinstance(op_index, bool) or not isinstance(op_index, int):
+                diagnostics.append(
+                    Diagnostic(
+                        path=target,
+                        location=f"ops[{index}].index",
+                        detail="schema_error",
+                        evidence="index must be an integer",
+                    )
+                )
+                continue
+            entry = {
+                "op": op_name,
+                "before": {
+                    "handle": asset_handle,
+                    "path": property_path,
+                    "index": op_index,
+                },
+                "after": {
+                    "handle": asset_handle,
+                    "path": property_path,
+                    "index": op_index,
+                },
+            }
+            if op_name == "insert_array_element" and "value" in op:
+                entry["after"]["value"] = deepcopy(op.get("value"))
+            preview.append(entry)
+
+        return diagnostics, preview
+
+    def _validate_asset_create_ops(
+        self,
+        *,
+        target: str,
+        kind: str,
+        ops: list[dict[str, Any]],
+    ) -> tuple[list[Diagnostic], list[dict[str, Any]]]:
+        diagnostics: list[Diagnostic] = []
+        preview: list[dict[str, Any]] = []
+        suffix = ".mat" if kind == "material" else ".asset"
+        if not target:
+            diagnostics.append(
+                Diagnostic(
+                    path="",
+                    location="resources[].path",
+                    detail="schema_error",
+                    evidence=f"target path is required for {kind} create mode",
+                )
+            )
+            return diagnostics, preview
+        if Path(target).suffix.lower() != suffix:
+            diagnostics.append(
+                Diagnostic(
+                    path=target,
+                    location="resources[].path",
+                    detail="schema_error",
+                    evidence=f"{kind} create mode requires a {suffix} target path",
+                )
+            )
+            return diagnostics, preview
+        if not ops:
+            diagnostics.append(
+                Diagnostic(
+                    path=target,
+                    location="ops",
+                    detail="schema_error",
+                    evidence="ops must contain at least one operation",
+                )
+            )
+            return diagnostics, preview
+
+        created = False
+        saved = False
+        known_handles: dict[str, str] = {}
+        for index, op in enumerate(ops):
+            if not isinstance(op, dict):
+                diagnostics.append(
+                    Diagnostic(
+                        path=target,
+                        location=f"ops[{index}]",
+                        detail="schema_error",
+                        evidence="operation must be an object",
+                    )
+                )
+                continue
+
+            op_name = str(op.get("op", "")).strip()
+            if op_name == "create_asset":
+                if created:
+                    diagnostics.append(
+                        Diagnostic(
+                            path=target,
+                            location=f"ops[{index}].op",
+                            detail="schema_error",
+                            evidence="asset root may be created only once",
+                        )
+                    )
+                    continue
+                created = True
+                known_handles[_ASSET_HANDLE] = "asset"
+                result_handle = self._validate_result_handle(
+                    target=target,
+                    index=index,
+                    op=op,
+                    known_handles=known_handles,
+                    diagnostics=diagnostics,
+                )
+                if result_handle and result_handle != _ASSET_HANDLE:
+                    known_handles[result_handle] = "asset"
+                name_value = op.get("name")
+                if name_value is not None and (
+                    not isinstance(name_value, str) or not name_value.strip()
+                ):
+                    diagnostics.append(
+                        Diagnostic(
+                            path=target,
+                            location=f"ops[{index}].name",
+                            detail="schema_error",
+                            evidence="name must be a non-empty string when provided",
+                        )
+                    )
+                    continue
+                asset_name = (
+                    name_value.strip()
+                    if isinstance(name_value, str) and name_value.strip()
+                    else Path(target).stem
+                )
+
+                if kind == "material":
+                    shader_name = op.get("shader")
+                    if not isinstance(shader_name, str) or not shader_name.strip():
+                        diagnostics.append(
+                            Diagnostic(
+                                path=target,
+                                location=f"ops[{index}].shader",
+                                detail="schema_error",
+                                evidence="shader is required for create_asset on material resources",
+                            )
+                        )
+                        continue
+                    type_name = op.get("type")
+                    if type_name is not None and (
+                        not isinstance(type_name, str) or not type_name.strip()
+                    ):
+                        diagnostics.append(
+                            Diagnostic(
+                                path=target,
+                                location=f"ops[{index}].type",
+                                detail="schema_error",
+                                evidence="type must be a non-empty string when provided",
+                            )
+                        )
+                        continue
+                    preview.append(
+                        {
+                            "op": op_name,
+                            "before": "(missing)",
+                            "after": {
+                                "path": target,
+                                "type": type_name.strip()
+                                if isinstance(type_name, str) and type_name.strip()
+                                else "UnityEngine.Material",
+                                "shader": shader_name.strip(),
+                                "handle": result_handle or _ASSET_HANDLE,
+                                "kind": "asset",
+                                "name": asset_name,
+                            },
+                        }
+                    )
+                    continue
+
+                type_name = op.get("type")
+                if not isinstance(type_name, str) or not type_name.strip():
+                    diagnostics.append(
+                        Diagnostic(
+                            path=target,
+                            location=f"ops[{index}].type",
+                            detail="schema_error",
+                            evidence="type is required for create_asset on asset resources",
+                        )
+                    )
+                    continue
+                preview.append(
+                    {
+                        "op": op_name,
+                        "before": "(missing)",
+                        "after": {
+                            "path": target,
+                            "type": type_name.strip(),
+                            "handle": result_handle or _ASSET_HANDLE,
+                            "kind": "asset",
+                            "name": asset_name,
+                        },
+                    }
+                )
+                continue
+
+            if op_name in _SUPPORTED_OPS:
+                if not created:
+                    diagnostics.append(
+                        Diagnostic(
+                            path=target,
+                            location=f"ops[{index}].op",
+                            detail="schema_error",
+                            evidence=f"{op_name} requires a create_asset operation first",
+                        )
+                    )
+                    continue
+                asset_handle = self._require_handle_ref(
+                    target=target,
+                    index=index,
+                    field="target",
+                    op=op,
+                    known_handles=known_handles,
+                    diagnostics=diagnostics,
+                    expected_kind="asset",
+                )
+                property_path = str(op.get("path", "")).strip()
+                if asset_handle is None:
+                    continue
+                if not property_path:
+                    diagnostics.append(
+                        Diagnostic(
+                            path=target,
+                            location=f"ops[{index}].path",
+                            detail="schema_error",
+                            evidence="path is required",
+                        )
+                    )
+                    continue
+                if op_name == "set":
+                    if "value" not in op:
+                        diagnostics.append(
+                            Diagnostic(
+                                path=target,
+                                location=f"ops[{index}].value",
+                                detail="schema_error",
+                                evidence="value is required for set",
+                            )
+                        )
+                        continue
+                    preview.append(
+                        {
+                            "op": op_name,
+                            "before": {"handle": asset_handle, "path": property_path},
+                            "after": {
+                                "handle": asset_handle,
+                                "path": property_path,
+                                "value": deepcopy(op.get("value")),
+                            },
+                        }
+                    )
+                    continue
+
+                op_index = op.get("index")
+                if isinstance(op_index, bool) or not isinstance(op_index, int):
+                    diagnostics.append(
+                        Diagnostic(
+                            path=target,
+                            location=f"ops[{index}].index",
+                            detail="schema_error",
+                            evidence="index must be an integer",
+                        )
+                    )
+                    continue
+                entry = {
+                    "op": op_name,
+                    "before": {
+                        "handle": asset_handle,
+                        "path": property_path,
+                        "index": op_index,
+                    },
+                    "after": {
+                        "handle": asset_handle,
+                        "path": property_path,
+                        "index": op_index,
+                    },
+                }
+                if op_name == "insert_array_element" and "value" in op:
+                    entry["after"]["value"] = deepcopy(op.get("value"))
+                preview.append(entry)
+                continue
+
+            if op_name == "save":
+                if saved:
+                    diagnostics.append(
+                        Diagnostic(
+                            path=target,
+                            location=f"ops[{index}].op",
+                            detail="schema_error",
+                            evidence="save may appear only once",
+                        )
+                    )
+                    continue
+                if not created:
+                    diagnostics.append(
+                        Diagnostic(
+                            path=target,
+                            location=f"ops[{index}].op",
+                            detail="schema_error",
+                            evidence="save requires a create_asset operation first",
+                        )
+                    )
+                    continue
+                if index != len(ops) - 1:
+                    diagnostics.append(
+                        Diagnostic(
+                            path=target,
+                            location=f"ops[{index}].op",
+                            detail="schema_error",
+                            evidence="save must be the final operation in create mode",
+                        )
+                    )
+                    continue
+                saved = True
+                preview.append(
+                    {
+                        "op": op_name,
+                        "before": "(unsaved)",
+                        "after": {"path": target},
+                    }
+                )
+                continue
+
+            diagnostics.append(
+                Diagnostic(
+                    path=target,
+                    location=f"ops[{index}].op",
+                    detail="schema_error",
+                    evidence=f"unsupported {kind} create op '{op_name}'",
+                )
+            )
+
+        if not created:
+            diagnostics.append(
+                Diagnostic(
+                    path=target,
+                    location="ops",
+                    detail="schema_error",
+                    evidence="create mode requires a create_asset operation",
+                )
+            )
+        if not saved:
+            diagnostics.append(
+                Diagnostic(
+                    path=target,
+                    location="ops",
+                    detail="schema_error",
+                    evidence="create mode requires a save operation",
+                )
+            )
+        return diagnostics, preview
+
+    def _validate_scene_ops(
+        self,
+        *,
+        target: str,
+        mode: str,
+        ops: list[dict[str, Any]],
+    ) -> tuple[list[Diagnostic], list[dict[str, Any]]]:
+        diagnostics: list[Diagnostic] = []
+        preview: list[dict[str, Any]] = []
+        if not target:
+            diagnostics.append(
+                Diagnostic(
+                    path="",
+                    location="resources[].path" if mode == "create" else "target",
+                    detail="schema_error",
+                    evidence=f"target path is required for scene {mode} mode",
+                )
+            )
+            return diagnostics, preview
+        if Path(target).suffix.lower() != ".unity":
+            diagnostics.append(
+                Diagnostic(
+                    path=target,
+                    location="resources[].path" if mode == "create" else "target",
+                    detail="schema_error",
+                    evidence=f"scene {mode} mode requires a .unity target path",
+                )
+            )
+            return diagnostics, preview
+        if not ops:
+            diagnostics.append(
+                Diagnostic(
+                    path=target,
+                    location="ops",
+                    detail="schema_error",
+                    evidence="ops must contain at least one operation",
+                )
+            )
+            return diagnostics, preview
+
+        expected_first_op = "create_scene" if mode == "create" else "open_scene"
+        known_handles: dict[str, str] = {_SCENE_HANDLE: "scene"}
+        scene_initialized = False
+        saved = False
+
+        for index, op in enumerate(ops):
+            if not isinstance(op, dict):
+                diagnostics.append(
+                    Diagnostic(
+                        path=target,
+                        location=f"ops[{index}]",
+                        detail="schema_error",
+                        evidence="operation must be an object",
+                    )
+                )
+                continue
+
+            op_name = str(op.get("op", "")).strip()
+            if index == 0:
+                if op_name != expected_first_op:
+                    diagnostics.append(
+                        Diagnostic(
+                            path=target,
+                            location="ops[0].op",
+                            detail="schema_error",
+                            evidence=f"scene {mode} mode must start with {expected_first_op}",
+                        )
+                    )
+                    continue
+                scene_initialized = True
+                preview.append(
+                    {
+                        "op": op_name,
+                        "before": "(closed)" if mode == "open" else "(missing)",
+                        "after": {"path": target, "handle": _SCENE_HANDLE, "kind": "scene"},
+                    }
+                )
+                continue
+
+            if op_name in {"create_scene", "open_scene"}:
+                diagnostics.append(
+                    Diagnostic(
+                        path=target,
+                        location=f"ops[{index}].op",
+                        detail="schema_error",
+                        evidence=f"{op_name} may appear only as the first operation",
+                    )
+                )
+                continue
+
+            if op_name == "create_game_object":
+                if not scene_initialized:
+                    diagnostics.append(
+                        Diagnostic(
+                            path=target,
+                            location=f"ops[{index}].op",
+                            detail="schema_error",
+                            evidence="create_game_object requires an opened scene first",
+                        )
+                    )
+                    continue
+                name_value = op.get("name")
+                if not isinstance(name_value, str) or not name_value.strip():
+                    diagnostics.append(
+                        Diagnostic(
+                            path=target,
+                            location=f"ops[{index}].name",
+                            detail="schema_error",
+                            evidence="name is required for create_game_object",
+                        )
+                    )
+                    continue
+                parent_handle = self._require_handle_ref(
+                    target=target,
+                    index=index,
+                    field="parent",
+                    op=op,
+                    known_handles=known_handles,
+                    diagnostics=diagnostics,
+                    expected_kind={"scene", "game_object"},
+                )
+                result_handle = self._validate_result_handle(
+                    target=target,
+                    index=index,
+                    op=op,
+                    known_handles=known_handles,
+                    diagnostics=diagnostics,
+                )
+                if parent_handle is None or ("result" in op and result_handle is None):
+                    continue
+                if result_handle:
+                    known_handles[result_handle] = "game_object"
+                preview.append(
+                    {
+                        "op": op_name,
+                        "before": "(missing)",
+                        "after": {
+                            "name": name_value.strip(),
+                            "parent": parent_handle,
+                            "handle": result_handle or "(anonymous)",
+                            "kind": "game_object",
+                        },
+                    }
+                )
+                continue
+
+            if op_name == "instantiate_prefab":
+                if not scene_initialized:
+                    diagnostics.append(
+                        Diagnostic(
+                            path=target,
+                            location=f"ops[{index}].op",
+                            detail="schema_error",
+                            evidence="instantiate_prefab requires an opened scene first",
+                        )
+                    )
+                    continue
+                prefab_path = str(op.get("prefab", "")).strip()
+                if not prefab_path:
+                    diagnostics.append(
+                        Diagnostic(
+                            path=target,
+                            location=f"ops[{index}].prefab",
+                            detail="schema_error",
+                            evidence="prefab is required for instantiate_prefab",
+                        )
+                    )
+                    continue
+                parent_handle = self._require_handle_ref(
+                    target=target,
+                    index=index,
+                    field="parent",
+                    op=op,
+                    known_handles=known_handles,
+                    diagnostics=diagnostics,
+                    expected_kind={"scene", "game_object"},
+                )
+                result_handle = self._validate_result_handle(
+                    target=target,
+                    index=index,
+                    op=op,
+                    known_handles=known_handles,
+                    diagnostics=diagnostics,
+                )
+                if parent_handle is None or ("result" in op and result_handle is None):
+                    continue
+                if result_handle:
+                    known_handles[result_handle] = "game_object"
+                preview.append(
+                    {
+                        "op": op_name,
+                        "before": "(missing)",
+                        "after": {
+                            "prefab": prefab_path,
+                            "parent": parent_handle,
+                            "handle": result_handle or "(anonymous)",
+                            "kind": "game_object",
+                        },
+                    }
+                )
+                continue
+
+            if op_name == "rename_object":
+                object_handle = self._require_handle_ref(
+                    target=target,
+                    index=index,
+                    field="target",
+                    op=op,
+                    known_handles=known_handles,
+                    diagnostics=diagnostics,
+                    expected_kind="game_object",
+                )
+                name_value = op.get("name")
+                if object_handle is None:
+                    continue
+                if not isinstance(name_value, str) or not name_value.strip():
+                    diagnostics.append(
+                        Diagnostic(
+                            path=target,
+                            location=f"ops[{index}].name",
+                            detail="schema_error",
+                            evidence="name is required for rename_object",
+                        )
+                    )
+                    continue
+                preview.append(
+                    {
+                        "op": op_name,
+                        "before": {"handle": object_handle},
+                        "after": {"handle": object_handle, "name": name_value.strip()},
+                    }
+                )
+                continue
+
+            if op_name == "reparent":
+                object_handle = self._require_handle_ref(
+                    target=target,
+                    index=index,
+                    field="target",
+                    op=op,
+                    known_handles=known_handles,
+                    diagnostics=diagnostics,
+                    expected_kind="game_object",
+                )
+                parent_handle = self._require_handle_ref(
+                    target=target,
+                    index=index,
+                    field="parent",
+                    op=op,
+                    known_handles=known_handles,
+                    diagnostics=diagnostics,
+                    expected_kind={"scene", "game_object"},
+                )
+                if object_handle is None or parent_handle is None:
+                    continue
+                if object_handle == parent_handle:
+                    diagnostics.append(
+                        Diagnostic(
+                            path=target,
+                            location=f"ops[{index}]",
+                            detail="schema_error",
+                            evidence="target and parent handles must differ",
+                        )
+                    )
+                    continue
+                preview.append(
+                    {
+                        "op": op_name,
+                        "before": {"handle": object_handle},
+                        "after": {"handle": object_handle, "parent": parent_handle},
+                    }
+                )
+                continue
+
+            if op_name in {"add_component", "find_component"}:
+                if not scene_initialized:
+                    diagnostics.append(
+                        Diagnostic(
+                            path=target,
+                            location=f"ops[{index}].op",
+                            detail="schema_error",
+                            evidence=f"{op_name} requires an opened scene first",
+                        )
+                    )
+                    continue
+                object_handle = self._require_handle_ref(
+                    target=target,
+                    index=index,
+                    field="target",
+                    op=op,
+                    known_handles=known_handles,
+                    diagnostics=diagnostics,
+                    expected_kind="game_object",
+                )
+                type_name = op.get("type")
+                if object_handle is None:
+                    continue
+                if not isinstance(type_name, str) or not type_name.strip():
+                    diagnostics.append(
+                        Diagnostic(
+                            path=target,
+                            location=f"ops[{index}].type",
+                            detail="schema_error",
+                            evidence=f"type is required for {op_name}",
+                        )
+                    )
+                    continue
+                result_handle = self._validate_result_handle(
+                    target=target,
+                    index=index,
+                    op=op,
+                    known_handles=known_handles,
+                    diagnostics=diagnostics,
+                )
+                if "result" in op and result_handle is None:
+                    continue
+                if result_handle:
+                    known_handles[result_handle] = "component"
+                preview.append(
+                    {
+                        "op": op_name,
+                        "before": "(missing)" if op_name == "add_component" else {"target": object_handle},
+                        "after": {
+                            "target": object_handle,
+                            "type": type_name.strip(),
+                            "handle": result_handle or "(anonymous)",
+                            "kind": "component",
+                        },
+                    }
+                )
+                continue
+
+            if op_name == "remove_component":
+                component_handle = self._require_handle_ref(
+                    target=target,
+                    index=index,
+                    field="target",
+                    op=op,
+                    known_handles=known_handles,
+                    diagnostics=diagnostics,
+                    expected_kind="component",
+                )
+                if component_handle is None:
+                    continue
+                preview.append(
+                    {
+                        "op": op_name,
+                        "before": {"handle": component_handle, "kind": "component"},
+                        "after": "(removed)",
+                    }
+                )
+                continue
+
+            if op_name in _SUPPORTED_OPS:
+                component_handle = self._require_handle_ref(
+                    target=target,
+                    index=index,
+                    field="target",
+                    op=op,
+                    known_handles=known_handles,
+                    diagnostics=diagnostics,
+                    expected_kind="component",
+                )
+                property_path = str(op.get("path", "")).strip()
+                if component_handle is None:
+                    continue
+                if not property_path:
+                    diagnostics.append(
+                        Diagnostic(
+                            path=target,
+                            location=f"ops[{index}].path",
+                            detail="schema_error",
+                            evidence="path is required",
+                        )
+                    )
+                    continue
+                if op_name == "set":
+                    if "value" not in op:
+                        diagnostics.append(
+                            Diagnostic(
+                                path=target,
+                                location=f"ops[{index}].value",
+                                detail="schema_error",
+                                evidence="value is required for set",
+                            )
+                        )
+                        continue
+                    preview.append(
+                        {
+                            "op": op_name,
+                            "before": {"handle": component_handle, "path": property_path},
+                            "after": {
+                                "handle": component_handle,
+                                "path": property_path,
+                                "value": deepcopy(op.get("value")),
+                            },
+                        }
+                    )
+                    continue
+
+                op_index = op.get("index")
+                if isinstance(op_index, bool) or not isinstance(op_index, int):
+                    diagnostics.append(
+                        Diagnostic(
+                            path=target,
+                            location=f"ops[{index}].index",
+                            detail="schema_error",
+                            evidence="index must be an integer",
+                        )
+                    )
+                    continue
+                entry = {
+                    "op": op_name,
+                    "before": {
+                        "handle": component_handle,
+                        "path": property_path,
+                        "index": op_index,
+                    },
+                    "after": {
+                        "handle": component_handle,
+                        "path": property_path,
+                        "index": op_index,
+                    },
+                }
+                if op_name == "insert_array_element" and "value" in op:
+                    entry["after"]["value"] = deepcopy(op.get("value"))
+                preview.append(entry)
+                continue
+
+            if op_name == "save_scene":
+                if not scene_initialized:
+                    diagnostics.append(
+                        Diagnostic(
+                            path=target,
+                            location=f"ops[{index}].op",
+                            detail="schema_error",
+                            evidence="save_scene requires an opened scene first",
+                        )
+                    )
+                    continue
+                if saved:
+                    diagnostics.append(
+                        Diagnostic(
+                            path=target,
+                            location=f"ops[{index}].op",
+                            detail="schema_error",
+                            evidence="save_scene may appear only once",
+                        )
+                    )
+                    continue
+                if index != len(ops) - 1:
+                    diagnostics.append(
+                        Diagnostic(
+                            path=target,
+                            location=f"ops[{index}].op",
+                            detail="schema_error",
+                            evidence="save_scene must be the final operation in scene mode",
+                        )
+                    )
+                    continue
+                saved = True
+                preview.append(
+                    {
+                        "op": op_name,
+                        "before": "(unsaved)",
+                        "after": {"path": target},
+                    }
+                )
+                continue
+
+            diagnostics.append(
+                Diagnostic(
+                    path=target,
+                    location=f"ops[{index}].op",
+                    detail="schema_error",
+                    evidence=f"unsupported scene op '{op_name}'",
+                )
+            )
+
+        if not scene_initialized:
+            diagnostics.append(
+                Diagnostic(
+                    path=target,
+                    location="ops",
+                    detail="schema_error",
+                    evidence=f"scene {mode} mode requires {expected_first_op}",
+                )
+            )
+        if not saved:
+            diagnostics.append(
+                Diagnostic(
+                    path=target,
+                    location="ops",
+                    detail="schema_error",
+                    evidence="scene mode requires a save_scene operation",
                 )
             )
         return diagnostics, preview
@@ -1182,6 +2535,71 @@ class SerializedObjectMcp:
                 diagnostics=diagnostics,
             )
 
+        target_path = Path(str(target).strip())
+        inferred_kind = (
+            self._infer_bridge_resource_kind(target_path)
+            if target_path.suffix.lower() in {".mat", ".asset", ".unity"}
+            else ""
+        )
+        if inferred_kind == "scene":
+            diagnostics, preview = self._validate_scene_ops(
+                target=target,
+                mode="open",
+                ops=ops,
+            )
+            if diagnostics:
+                return ToolResponse(
+                    success=False,
+                    severity=Severity.ERROR,
+                    code="SER_PLAN_INVALID",
+                    message="Patch plan schema validation failed.",
+                    data={"target": target, "op_count": len(ops), "read_only": True},
+                    diagnostics=diagnostics,
+                )
+            return ToolResponse(
+                success=True,
+                severity=Severity.INFO,
+                code="SER_DRY_RUN_OK",
+                message="dry_run_patch generated a patch preview.",
+                data={
+                    "target": target,
+                    "op_count": len(ops),
+                    "applied": 0,
+                    "diff": preview,
+                    "read_only": True,
+                },
+                diagnostics=[],
+            )
+        if inferred_kind in {"asset", "material"}:
+            diagnostics, preview = self._validate_asset_open_ops(
+                target=target,
+                kind=inferred_kind,
+                ops=ops,
+            )
+            if diagnostics:
+                return ToolResponse(
+                    success=False,
+                    severity=Severity.ERROR,
+                    code="SER_PLAN_INVALID",
+                    message="Patch plan schema validation failed.",
+                    data={"target": target, "op_count": len(ops), "read_only": True},
+                    diagnostics=diagnostics,
+                )
+            return ToolResponse(
+                success=True,
+                severity=Severity.INFO,
+                code="SER_DRY_RUN_OK",
+                message="dry_run_patch generated a patch preview.",
+                data={
+                    "target": target,
+                    "op_count": len(ops),
+                    "applied": 0,
+                    "diff": preview,
+                    "read_only": True,
+                },
+                diagnostics=[],
+            )
+
         preview: list[dict[str, Any]] = []
         for index, op in enumerate(ops):
             if not isinstance(op, dict):
@@ -1228,61 +2646,14 @@ class SerializedObjectMcp:
         resource: dict[str, Any],
         ops: list[dict[str, Any]],
     ) -> ToolResponse:
-        target = str(resource.get("path", "")).strip()
-        kind = str(resource.get("kind", "")).strip().lower()
-        mode = str(resource.get("mode", "open")).strip().lower() or "open"
-
-        if mode == "open":
-            return self.dry_run_patch(target=target, ops=ops)
-
-        if kind == "prefab" and mode == "create":
-            diagnostics, preview = self._validate_prefab_create_ops(target=target, ops=ops)
-            if diagnostics:
-                return ToolResponse(
-                    success=False,
-                    severity=Severity.ERROR,
-                    code="SER_PLAN_INVALID",
-                    message="Patch plan schema validation failed.",
-                    data={
-                        "target": target,
-                        "kind": kind,
-                        "mode": mode,
-                        "op_count": len(ops),
-                        "read_only": True,
-                    },
-                    diagnostics=diagnostics,
-                )
-            return ToolResponse(
-                success=True,
-                severity=Severity.INFO,
-                code="SER_DRY_RUN_OK",
-                message="dry_run_patch generated a patch preview.",
-                data={
-                    "target": target,
-                    "kind": kind,
-                    "mode": mode,
-                    "op_count": len(ops),
-                    "applied": 0,
-                    "diff": preview,
-                    "read_only": True,
-                },
-                diagnostics=[],
+        context = self._resolve_resource_context(resource, ops)
+        adapter = self._select_resource_adapter(context)
+        if adapter is None:
+            return self._unsupported_resource_plan_response(
+                context=context,
+                read_only=True,
             )
-
-        return ToolResponse(
-            success=False,
-            severity=Severity.ERROR,
-            code="SER_UNSUPPORTED_TARGET",
-            message="Resource mode/kind combination is not supported by the current backend.",
-            data={
-                "target": target,
-                "kind": kind,
-                "mode": mode,
-                "op_count": len(ops),
-                "read_only": True,
-            },
-            diagnostics=[],
-        )
+        return adapter.dry_run(self, context)
 
     def apply_and_save(self, target: str, ops: list[dict[str, Any]]) -> ToolResponse:
         dry_run = self.dry_run_patch(target=target, ops=ops)
@@ -1446,54 +2817,19 @@ class SerializedObjectMcp:
         resource: dict[str, Any],
         ops: list[dict[str, Any]],
     ) -> ToolResponse:
-        target = str(resource.get("path", "")).strip()
-        kind = str(resource.get("kind", "")).strip().lower()
-        mode = str(resource.get("mode", "open")).strip().lower() or "open"
-
-        if mode == "open":
-            return self.apply_and_save(target=target, ops=ops)
-
-        dry_run = self.dry_run_resource_plan(resource=resource, ops=ops)
-        if not dry_run.success:
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="SER_PLAN_INVALID",
-                message="Patch plan schema validation failed.",
-                data={
-                    "target": target,
-                    "kind": kind,
-                    "mode": mode,
-                    "op_count": len(ops),
-                    "applied": 0,
-                    "read_only": False,
-                    "executed": False,
-                },
-                diagnostics=dry_run.diagnostics,
+        context = self._resolve_resource_context(resource, ops)
+        if context.target:
+            context = _ResourcePlanContext(
+                target=context.target,
+                kind=context.kind,
+                mode=context.mode,
+                target_path=self._resolve_target_path(context.target),
+                ops=context.ops,
             )
-
-        target_path = self._resolve_target_path(target)
-        if kind == "prefab" and mode == "create":
-            return self._apply_with_unity_bridge(
-                target_path=target_path,
-                ops=ops,
-                resource_kind=kind,
-                resource_mode=mode,
+        adapter = self._select_resource_adapter(context)
+        if adapter is None:
+            return self._unsupported_resource_plan_response(
+                context=context,
+                read_only=False,
             )
-
-        return ToolResponse(
-            success=False,
-            severity=Severity.ERROR,
-            code="SER_UNSUPPORTED_TARGET",
-            message="Resource mode/kind combination is not supported by the current backend.",
-            data={
-                "target": str(target_path),
-                "kind": kind,
-                "mode": mode,
-                "op_count": len(ops),
-                "applied": 0,
-                "read_only": False,
-                "executed": False,
-            },
-            diagnostics=[],
-        )
+        return adapter.apply(self, context)

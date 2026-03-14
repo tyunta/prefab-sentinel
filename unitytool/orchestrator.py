@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 import uuid
 
 from unitytool.contracts import Severity, ToolResponse, max_severity
@@ -295,6 +296,10 @@ class Phase1Orchestrator:
     ) -> ToolResponse:
         compile_step = self.runtime_validation.compile_udonsharp()
         run_step = self.runtime_validation.run_clientsim(scene_path, profile)
+        runtime_read_only = all(
+            bool(step.data.get("read_only", True))
+            for step in (compile_step, run_step)
+        )
 
         steps = [
             ("compile_udonsharp", compile_step),
@@ -310,7 +315,7 @@ class Phase1Orchestrator:
                 data={
                     "scene_path": scene_path,
                     "profile": profile,
-                    "read_only": True,
+                    "read_only": runtime_read_only,
                     "fail_fast_triggered": True,
                     "steps": [
                         {"step": name, "result": step.to_dict()} for name, step in steps
@@ -348,15 +353,269 @@ class Phase1Orchestrator:
             success=success,
             severity=severity,
             code="VALIDATE_RUNTIME_RESULT",
-            message="validate.runtime pipeline completed (log-based scaffold).",
+            message="validate.runtime pipeline completed.",
             data={
                 "scene_path": scene_path,
                 "profile": profile,
-                "read_only": True,
+                "read_only": all(
+                    bool(step.data.get("read_only", True))
+                    for _, step in steps
+                ),
                 "fail_fast_triggered": False,
                 "steps": [{"step": name, "result": step.to_dict()} for name, step in steps],
             },
             diagnostics=diagnostics,
+        )
+
+    def _validate_postcondition_schema(
+        self,
+        postcondition: object,
+        *,
+        resource_ids: set[str],
+    ) -> ToolResponse:
+        if not isinstance(postcondition, dict):
+            return ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code="POST_SCHEMA_ERROR",
+                message="Postcondition must be an object.",
+                data={"read_only": True, "executed": False},
+                diagnostics=[],
+            )
+
+        postcondition_type = str(postcondition.get("type", "")).strip()
+        if not postcondition_type:
+            return ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code="POST_SCHEMA_ERROR",
+                message="Postcondition type is required.",
+                data={"read_only": True, "executed": False},
+                diagnostics=[],
+            )
+
+        if postcondition_type == "asset_exists":
+            resource_id = str(postcondition.get("resource", "")).strip()
+            explicit_path = str(postcondition.get("path", "")).strip()
+            if bool(resource_id) == bool(explicit_path):
+                return ToolResponse(
+                    success=False,
+                    severity=Severity.ERROR,
+                    code="POST_SCHEMA_ERROR",
+                    message="asset_exists requires exactly one of 'resource' or 'path'.",
+                    data={"type": postcondition_type, "read_only": True, "executed": False},
+                    diagnostics=[],
+                )
+            if resource_id and resource_id not in resource_ids:
+                return ToolResponse(
+                    success=False,
+                    severity=Severity.ERROR,
+                    code="POST_SCHEMA_ERROR",
+                    message="asset_exists references an unknown resource id.",
+                    data={
+                        "type": postcondition_type,
+                        "resource": resource_id,
+                        "read_only": True,
+                        "executed": False,
+                    },
+                    diagnostics=[],
+                )
+            return ToolResponse(
+                success=True,
+                severity=Severity.INFO,
+                code="POST_SCHEMA_OK",
+                message="Postcondition schema validated.",
+                data={"type": postcondition_type, "read_only": True, "executed": False},
+                diagnostics=[],
+            )
+
+        if postcondition_type == "broken_refs":
+            scope = str(postcondition.get("scope", "")).strip()
+            if not scope:
+                return ToolResponse(
+                    success=False,
+                    severity=Severity.ERROR,
+                    code="POST_SCHEMA_ERROR",
+                    message="broken_refs requires a non-empty 'scope'.",
+                    data={"type": postcondition_type, "read_only": True, "executed": False},
+                    diagnostics=[],
+                )
+            expected_count = postcondition.get("expected_count", 0)
+            if not isinstance(expected_count, int) or expected_count < 0:
+                return ToolResponse(
+                    success=False,
+                    severity=Severity.ERROR,
+                    code="POST_SCHEMA_ERROR",
+                    message="broken_refs.expected_count must be a non-negative integer.",
+                    data={
+                        "type": postcondition_type,
+                        "scope": scope,
+                        "read_only": True,
+                        "executed": False,
+                    },
+                    diagnostics=[],
+                )
+            for field_name in ("exclude_patterns", "ignore_asset_guids"):
+                values = postcondition.get(field_name, [])
+                if not isinstance(values, list) or any(
+                    not isinstance(value, str) for value in values
+                ):
+                    return ToolResponse(
+                        success=False,
+                        severity=Severity.ERROR,
+                        code="POST_SCHEMA_ERROR",
+                        message=f"broken_refs.{field_name} must be an array of strings.",
+                        data={
+                            "type": postcondition_type,
+                            "scope": scope,
+                            "read_only": True,
+                            "executed": False,
+                        },
+                        diagnostics=[],
+                    )
+            max_diagnostics = postcondition.get("max_diagnostics", 200)
+            if not isinstance(max_diagnostics, int) or max_diagnostics < 0:
+                return ToolResponse(
+                    success=False,
+                    severity=Severity.ERROR,
+                    code="POST_SCHEMA_ERROR",
+                    message="broken_refs.max_diagnostics must be a non-negative integer.",
+                    data={
+                        "type": postcondition_type,
+                        "scope": scope,
+                        "read_only": True,
+                        "executed": False,
+                    },
+                    diagnostics=[],
+                )
+            return ToolResponse(
+                success=True,
+                severity=Severity.INFO,
+                code="POST_SCHEMA_OK",
+                message="Postcondition schema validated.",
+                data={"type": postcondition_type, "scope": scope, "read_only": True, "executed": False},
+                diagnostics=[],
+            )
+
+        return ToolResponse(
+            success=False,
+            severity=Severity.ERROR,
+            code="POST_SCHEMA_ERROR",
+            message="Postcondition type is not supported.",
+            data={
+                "type": postcondition_type,
+                "read_only": True,
+                "executed": False,
+            },
+            diagnostics=[],
+        )
+
+    def _evaluate_postcondition(
+        self,
+        postcondition: dict[str, Any],
+        *,
+        resource_map: dict[str, dict[str, Any]],
+    ) -> ToolResponse:
+        postcondition_type = str(postcondition.get("type", "")).strip()
+        if postcondition_type == "asset_exists":
+            resource_id = str(postcondition.get("resource", "")).strip()
+            if resource_id:
+                target = str(resource_map[resource_id].get("path", "")).strip()
+            else:
+                target = str(postcondition.get("path", "")).strip()
+            target_path = self.serialized_object._resolve_target_path(target)
+            exists = target_path.exists()
+            if not exists:
+                return ToolResponse(
+                    success=False,
+                    severity=Severity.ERROR,
+                    code="POST_ASSET_EXISTS_FAILED",
+                    message="asset_exists postcondition failed because the target path was not created.",
+                    data={
+                        "type": postcondition_type,
+                        "resource": resource_id or None,
+                        "path": str(target_path),
+                        "exists": False,
+                        "read_only": True,
+                        "executed": True,
+                    },
+                    diagnostics=[],
+                )
+            return ToolResponse(
+                success=True,
+                severity=Severity.INFO,
+                code="POST_ASSET_EXISTS_OK",
+                message="asset_exists postcondition passed.",
+                data={
+                    "type": postcondition_type,
+                    "resource": resource_id or None,
+                    "path": str(target_path),
+                    "exists": True,
+                    "read_only": True,
+                    "executed": True,
+                },
+                diagnostics=[],
+            )
+
+        scope = str(postcondition.get("scope", "")).strip()
+        expected_count = int(postcondition.get("expected_count", 0))
+        scan = self.reference_resolver.scan_broken_references(
+            scope=scope,
+            include_diagnostics=bool(postcondition.get("include_diagnostics", False)),
+            max_diagnostics=int(postcondition.get("max_diagnostics", 200)),
+            exclude_patterns=tuple(postcondition.get("exclude_patterns", [])),
+            ignore_asset_guids=tuple(postcondition.get("ignore_asset_guids", [])),
+        )
+        if scan.code in {"REF404", "REF001"}:
+            return ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code="POST_BROKEN_REFS_ERROR",
+                message="broken_refs postcondition could not be evaluated.",
+                data={
+                    "type": postcondition_type,
+                    "scope": scope,
+                    "expected_count": expected_count,
+                    "read_only": True,
+                    "executed": True,
+                    "scan_code": scan.code,
+                },
+                diagnostics=scan.diagnostics,
+            )
+
+        actual_count = int(scan.data.get("broken_count", 0))
+        if actual_count != expected_count:
+            return ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code="POST_BROKEN_REFS_FAILED",
+                message="broken_refs postcondition failed.",
+                data={
+                    "type": postcondition_type,
+                    "scope": scope,
+                    "expected_count": expected_count,
+                    "actual_count": actual_count,
+                    "scan_code": scan.code,
+                    "read_only": True,
+                    "executed": True,
+                },
+                diagnostics=scan.diagnostics,
+            )
+        return ToolResponse(
+            success=True,
+            severity=Severity.INFO,
+            code="POST_BROKEN_REFS_OK",
+            message="broken_refs postcondition passed.",
+            data={
+                "type": postcondition_type,
+                "scope": scope,
+                "expected_count": expected_count,
+                "actual_count": actual_count,
+                "scan_code": scan.code,
+                "read_only": True,
+                "executed": True,
+            },
+            diagnostics=scan.diagnostics,
         )
 
     def patch_apply(
@@ -377,6 +636,10 @@ class Phase1Orchestrator:
     ) -> ToolResponse:
         normalized_plan = normalize_patch_plan(plan)
         resource_batches = iter_resource_batches(normalized_plan)
+        resource_map = {
+            str(resource.get("id", "")): resource for resource, _ in resource_batches
+        }
+        postconditions = list(normalized_plan.get("postconditions", []))
         resource_count = len(resource_batches)
         targets = [str(resource.get("path", "")) for resource, _ in resource_batches]
         primary_target = targets[0] if resource_count == 1 else None
@@ -437,6 +700,7 @@ class Phase1Orchestrator:
                     "runtime_since_timestamp": runtime_since_timestamp,
                     "runtime_allow_warnings": runtime_allow_warnings,
                     "runtime_max_diagnostics": runtime_max_diagnostics,
+                    "postcondition_count": len(postconditions),
                     "read_only": not write_executed,
                     "fail_fast_triggered": fail_fast,
                     "steps": [
@@ -446,6 +710,25 @@ class Phase1Orchestrator:
                 },
                 diagnostics=diagnostics,
             )
+
+        resource_ids = set(resource_map)
+        for index, postcondition in enumerate(postconditions):
+            schema_step = self._validate_postcondition_schema(
+                postcondition,
+                resource_ids=resource_ids,
+            )
+            if not schema_step.success:
+                step_type = (
+                    postcondition.get("type", "").strip()
+                    if isinstance(postcondition, dict)
+                    else ""
+                )
+                step_label = step_type or "invalid"
+                steps.append((f"postcondition_schema:{step_label}[{index}]", schema_step))
+                return _finalize(
+                    "patch.apply stopped by fail-fast policy due to invalid postcondition schema.",
+                    fail_fast=True,
+                )
 
         for resource, ops in resource_batches:
             target = str(resource.get("path", ""))
@@ -555,6 +838,19 @@ class Phase1Orchestrator:
             if assert_step.severity in (Severity.ERROR, Severity.CRITICAL):
                 return _finalize(
                     "patch.apply stopped by fail-fast policy due to runtime assertion failure.",
+                    fail_fast=True,
+                )
+
+        for index, postcondition in enumerate(postconditions):
+            evaluated = self._evaluate_postcondition(
+                postcondition,
+                resource_map=resource_map,
+            )
+            post_type = str(postcondition.get("type", "")).strip() or "unknown"
+            steps.append((f"postcondition:{post_type}[{index}]", evaluated))
+            if evaluated.severity in (Severity.ERROR, Severity.CRITICAL):
+                return _finalize(
+                    "patch.apply stopped by fail-fast policy due to postcondition failure.",
                     fail_fast=True,
                 )
 

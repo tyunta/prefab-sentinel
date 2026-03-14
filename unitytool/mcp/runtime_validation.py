@@ -1,11 +1,27 @@
 from __future__ import annotations
 
+import json
+import os
 import re
+import shlex
+import subprocess
+import tempfile
 from collections import Counter
 from pathlib import Path
+from typing import Any
 
 from unitytool.contracts import Diagnostic, Severity, ToolResponse, max_severity
 from unitytool.unity_assets import decode_text_file, find_project_root, resolve_scope_path
+
+UNITY_COMMAND_ENV = "UNITYTOOL_UNITY_COMMAND"
+UNITY_PROJECT_PATH_ENV = "UNITYTOOL_UNITY_PROJECT_PATH"
+UNITY_RUNTIME_EXECUTE_METHOD_ENV = "UNITYTOOL_RUNTIME_EXECUTE_METHOD"
+UNITY_TIMEOUT_SEC_ENV = "UNITYTOOL_UNITY_TIMEOUT_SEC"
+UNITY_LOG_FILE_ENV = "UNITYTOOL_UNITY_LOG_FILE"
+
+DEFAULT_RUNTIME_EXECUTE_METHOD = "PrefabSentinel.UnityRuntimeValidationBridge.RunFromJson"
+DEFAULT_TIMEOUT_SEC = 300
+RUNTIME_PROTOCOL_VERSION = 1
 
 _LOG_PATTERNS: tuple[tuple[str, Severity, re.Pattern[str]], ...] = (
     (
@@ -42,8 +58,30 @@ _LOG_PATTERNS: tuple[tuple[str, Severity, re.Pattern[str]], ...] = (
 )
 
 
+def _split_command(command_raw: str) -> tuple[list[str], str | None]:
+    try:
+        parts = shlex.split(command_raw)
+    except ValueError as exc:
+        return [], str(exc)
+    command = [part.strip() for part in parts if part.strip()]
+    if not command:
+        return [], "command is empty after parsing"
+    return command, None
+
+
+def _coerce_severity(value: object) -> Severity | None:
+    if isinstance(value, Severity):
+        return value
+    if isinstance(value, str):
+        try:
+            return Severity(value)
+        except ValueError:
+            return None
+    return None
+
+
 class RuntimeValidationMcp:
-    """Runtime validation MCP interface for scaffolded log-based checks."""
+    """Runtime validation MCP interface for log-based checks plus Unity batchmode hooks."""
 
     TOOL_NAME = "runtime-validation-mcp"
 
@@ -56,43 +94,441 @@ class RuntimeValidationMcp:
         except ValueError:
             return path.resolve().as_posix()
 
-    def compile_udonsharp(self, project_root: str | None = None) -> ToolResponse:
-        target_root = self.project_root if project_root is None else resolve_scope_path(
-            project_root, self.project_root
+    def _default_runtime_root(self) -> Path:
+        configured_root = os.environ.get(UNITY_PROJECT_PATH_ENV, "").strip()
+        if configured_root:
+            return Path(configured_root).expanduser()
+        return self.project_root
+
+    def _skip_response(
+        self,
+        *,
+        code: str,
+        message: str,
+        data: dict[str, Any],
+    ) -> ToolResponse:
+        return ToolResponse(
+            success=True,
+            severity=Severity.WARNING,
+            code=code,
+            message=message,
+            data={**data, "read_only": True, "executed": False},
+            diagnostics=[],
         )
-        if not (target_root / "Assets").exists():
-            return ToolResponse(
-                success=True,
-                severity=Severity.WARNING,
-                code="RUN_COMPILE_SKIPPED",
-                message=(
-                    "compile_udonsharp skipped because project root does not contain Assets."
-                ),
+
+    def _load_runtime_config(self, *, default_project_root: Path) -> tuple[dict[str, Any] | None, ToolResponse | None]:
+        command_raw = os.environ.get(UNITY_COMMAND_ENV, "").strip()
+        if not command_raw:
+            return None, None
+
+        command, split_error = _split_command(command_raw)
+        if split_error is not None:
+            return None, ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code="RUN_CONFIG_ERROR",
+                message="Unity runtime command cannot be parsed.",
                 data={
-                    "project_root": str(target_root),
+                    "command_raw": command_raw,
+                    "error": split_error,
                     "read_only": True,
                     "executed": False,
                 },
                 diagnostics=[],
             )
 
+        timeout_raw = os.environ.get(UNITY_TIMEOUT_SEC_ENV, str(DEFAULT_TIMEOUT_SEC)).strip()
+        try:
+            timeout_sec = int(timeout_raw)
+        except ValueError:
+            timeout_sec = -1
+        if timeout_sec <= 0:
+            return None, ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code="RUN_CONFIG_ERROR",
+                message=f"{UNITY_TIMEOUT_SEC_ENV} must be a positive integer.",
+                data={
+                    "received_timeout": timeout_raw,
+                    "read_only": True,
+                    "executed": False,
+                },
+                diagnostics=[],
+            )
+
+        project_path = Path(
+            os.environ.get(UNITY_PROJECT_PATH_ENV, str(default_project_root)).strip()
+            or str(default_project_root)
+        )
+        if not project_path.exists():
+            return None, ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code="RUN_CONFIG_ERROR",
+                message="Unity project path does not exist.",
+                data={
+                    "project_path": str(project_path),
+                    "read_only": True,
+                    "executed": False,
+                },
+                diagnostics=[],
+            )
+
+        execute_method = (
+            os.environ.get(UNITY_RUNTIME_EXECUTE_METHOD_ENV, DEFAULT_RUNTIME_EXECUTE_METHOD).strip()
+            or DEFAULT_RUNTIME_EXECUTE_METHOD
+        )
+        log_path = Path(os.environ.get(UNITY_LOG_FILE_ENV, "").strip()) if os.environ.get(UNITY_LOG_FILE_ENV, "").strip() else project_path / "Logs" / "Editor.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+
+        return {
+            "command": command,
+            "project_path": project_path,
+            "execute_method": execute_method,
+            "timeout_sec": timeout_sec,
+            "log_path": log_path,
+        }, None
+
+    def _build_runtime_command(
+        self,
+        *,
+        config: dict[str, Any],
+        request_path: Path,
+        response_path: Path,
+    ) -> list[str]:
+        return [
+            *list(config["command"]),
+            "-batchmode",
+            "-projectPath",
+            str(config["project_path"]),
+            "-executeMethod",
+            str(config["execute_method"]),
+            "-logFile",
+            str(config["log_path"]),
+            "-unitytoolRuntimeRequest",
+            str(request_path),
+            "-unitytoolRuntimeResponse",
+            str(response_path),
+        ]
+
+    def _parse_runtime_response(
+        self,
+        payload: object,
+        *,
+        action: str,
+        project_root: Path,
+        scene_path: str | None,
+        profile: str | None,
+        log_path: Path,
+    ) -> ToolResponse:
+        base_data = {
+            "action": action,
+            "project_root": self._relative(project_root),
+            "scene_path": scene_path,
+            "profile": profile,
+            "log_path": self._relative(log_path),
+        }
+        if not isinstance(payload, dict):
+            return ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code="RUN_PROTOCOL_ERROR",
+                message="Unity runtime response root must be an object.",
+                data={**base_data, "read_only": True, "executed": False},
+                diagnostics=[],
+            )
+
+        success = payload.get("success")
+        severity = _coerce_severity(payload.get("severity"))
+        code = payload.get("code")
+        message = payload.get("message")
+        data = payload.get("data")
+        diagnostics_payload = payload.get("diagnostics")
+        if not isinstance(success, bool):
+            return ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code="RUN_PROTOCOL_ERROR",
+                message="Unity runtime response field 'success' must be a boolean.",
+                data={**base_data, "read_only": True, "executed": False},
+                diagnostics=[],
+            )
+        if severity is None:
+            return ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code="RUN_PROTOCOL_ERROR",
+                message="Unity runtime response field 'severity' is invalid.",
+                data={**base_data, "read_only": True, "executed": False},
+                diagnostics=[],
+            )
+        if not isinstance(code, str) or not code.strip():
+            return ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code="RUN_PROTOCOL_ERROR",
+                message="Unity runtime response field 'code' must be a non-empty string.",
+                data={**base_data, "read_only": True, "executed": False},
+                diagnostics=[],
+            )
+        if not isinstance(message, str):
+            return ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code="RUN_PROTOCOL_ERROR",
+                message="Unity runtime response field 'message' must be a string.",
+                data={**base_data, "read_only": True, "executed": False},
+                diagnostics=[],
+            )
+        if not isinstance(data, dict):
+            return ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code="RUN_PROTOCOL_ERROR",
+                message="Unity runtime response field 'data' must be an object.",
+                data={**base_data, "read_only": True, "executed": False},
+                diagnostics=[],
+            )
+        if not isinstance(diagnostics_payload, list):
+            return ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code="RUN_PROTOCOL_ERROR",
+                message="Unity runtime response field 'diagnostics' must be an array.",
+                data={**base_data, "read_only": True, "executed": False},
+                diagnostics=[],
+            )
+
+        diagnostics: list[Diagnostic] = []
+        for entry in diagnostics_payload:
+            if not isinstance(entry, dict):
+                return ToolResponse(
+                    success=False,
+                    severity=Severity.ERROR,
+                    code="RUN_PROTOCOL_ERROR",
+                    message="Unity runtime diagnostics entries must be objects.",
+                    data={**base_data, "read_only": True, "executed": False},
+                    diagnostics=[],
+                )
+            diagnostics.append(
+                Diagnostic(
+                    path=str(entry.get("path", "")),
+                    location=str(entry.get("location", "")),
+                    detail=str(entry.get("detail", "")),
+                    evidence=str(entry.get("evidence", "")),
+                )
+            )
+
         return ToolResponse(
-            success=True,
-            severity=Severity.INFO,
-            code="RUN_COMPILE_SKIPPED",
-            message=(
-                "compile_udonsharp is scaffolded only; Unity batchmode compile is not wired."
-            ),
-            data={
-                "project_root": self._relative(target_root),
-                "read_only": True,
-                "executed": False,
-            },
-            diagnostics=[],
+            success=success,
+            severity=severity,
+            code=code.strip(),
+            message=message,
+            data={**base_data, **data},
+            diagnostics=diagnostics,
+        )
+
+    def _invoke_unity_runtime(
+        self,
+        *,
+        action: str,
+        target_root: Path,
+        scene_path: str | None = None,
+        profile: str | None = None,
+    ) -> ToolResponse:
+        config, config_error = self._load_runtime_config(default_project_root=target_root)
+        if config_error is not None:
+            return config_error
+        if config is None:
+            skip_code = "RUN_COMPILE_SKIPPED" if action == "compile_udonsharp" else "RUN_CLIENTSIM_SKIPPED"
+            skip_message = (
+                "compile_udonsharp skipped because Unity batchmode execution is not configured."
+                if action == "compile_udonsharp"
+                else "run_clientsim skipped because Unity batchmode execution is not configured."
+            )
+            skip_data: dict[str, Any] = {"project_root": self._relative(target_root)}
+            if scene_path is not None:
+                skip_data["scene_path"] = scene_path
+            if profile is not None:
+                skip_data["profile"] = profile
+            return self._skip_response(code=skip_code, message=skip_message, data=skip_data)
+
+        with tempfile.TemporaryDirectory(prefix="unitytool-runtime-") as temp_dir:
+            temp_root = Path(temp_dir)
+            request_path = temp_root / "request.json"
+            response_path = temp_root / "response.json"
+            payload = {
+                "protocol_version": RUNTIME_PROTOCOL_VERSION,
+                "action": action,
+                "project_root": str(target_root),
+                "scene_path": scene_path or "",
+                "profile": profile or "",
+                "timeout_sec": int(config["timeout_sec"]),
+            }
+            request_path.write_text(
+                json.dumps(payload, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            command = self._build_runtime_command(
+                config=config,
+                request_path=request_path,
+                response_path=response_path,
+            )
+
+            try:
+                completed = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=int(config["timeout_sec"]),
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as exc:
+                failure_code = "RUN_COMPILE_FAILED" if action == "compile_udonsharp" else "RUN002"
+                failure_message = (
+                    "Unity batchmode compile timed out."
+                    if action == "compile_udonsharp"
+                    else "Unity ClientSim batchmode execution timed out."
+                )
+                return ToolResponse(
+                    success=False,
+                    severity=Severity.ERROR,
+                    code=failure_code,
+                    message=failure_message,
+                    data={
+                        "action": action,
+                        "project_root": self._relative(target_root),
+                        "scene_path": scene_path,
+                        "profile": profile,
+                        "command": command,
+                        "timeout_sec": int(config["timeout_sec"]),
+                        "error": str(exc),
+                        "log_path": self._relative(Path(config["log_path"])),
+                        "read_only": False,
+                        "executed": False,
+                    },
+                    diagnostics=[],
+                )
+            except OSError as exc:
+                failure_code = "RUN_COMPILE_FAILED" if action == "compile_udonsharp" else "RUN002"
+                failure_message = (
+                    "Failed to start Unity batchmode compile process."
+                    if action == "compile_udonsharp"
+                    else "Failed to start Unity ClientSim batchmode process."
+                )
+                return ToolResponse(
+                    success=False,
+                    severity=Severity.ERROR,
+                    code=failure_code,
+                    message=failure_message,
+                    data={
+                        "action": action,
+                        "project_root": self._relative(target_root),
+                        "scene_path": scene_path,
+                        "profile": profile,
+                        "command": command,
+                        "error": str(exc),
+                        "log_path": self._relative(Path(config["log_path"])),
+                        "read_only": False,
+                        "executed": False,
+                    },
+                    diagnostics=[],
+                )
+
+            if response_path.exists():
+                try:
+                    response_payload = json.loads(response_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError) as exc:
+                    response_payload = None
+                    response_error = str(exc)
+                else:
+                    response_error = None
+            else:
+                response_payload = None
+                response_error = None
+
+            if response_payload is not None:
+                response = self._parse_runtime_response(
+                    response_payload,
+                    action=action,
+                    project_root=target_root,
+                    scene_path=scene_path,
+                    profile=profile,
+                    log_path=Path(config["log_path"]),
+                )
+                if completed.returncode != 0 and response.success:
+                    return ToolResponse(
+                        success=False,
+                        severity=Severity.ERROR,
+                        code="RUN_PROTOCOL_ERROR",
+                        message="Unity runtime returned success payload but exited with a non-zero code.",
+                        data={
+                            "action": action,
+                            "project_root": self._relative(target_root),
+                            "scene_path": scene_path,
+                            "profile": profile,
+                            "returncode": completed.returncode,
+                            "stdout": completed.stdout,
+                            "stderr": completed.stderr,
+                            "log_path": self._relative(Path(config["log_path"])),
+                            "read_only": False,
+                            "executed": True,
+                        },
+                        diagnostics=[],
+                    )
+                return response
+
+            failure_code = "RUN_COMPILE_FAILED" if action == "compile_udonsharp" else "RUN002"
+            failure_message = (
+                "Unity batchmode compile did not produce a valid response."
+                if action == "compile_udonsharp"
+                else "Unity ClientSim batchmode execution did not produce a valid response."
+            )
+            return ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code=failure_code,
+                message=failure_message,
+                data={
+                    "action": action,
+                    "project_root": self._relative(target_root),
+                    "scene_path": scene_path,
+                    "profile": profile,
+                    "command": command,
+                    "returncode": completed.returncode,
+                    "stdout": completed.stdout,
+                    "stderr": completed.stderr,
+                    "response_error": response_error,
+                    "response_path": str(response_path),
+                    "log_path": self._relative(Path(config["log_path"])),
+                    "read_only": False,
+                    "executed": completed.returncode == 0,
+                },
+                diagnostics=[],
+            )
+
+    def compile_udonsharp(self, project_root: str | None = None) -> ToolResponse:
+        target_root = (
+            self._default_runtime_root()
+            if project_root is None
+            else resolve_scope_path(project_root, self.project_root)
+        )
+        if not (target_root / "Assets").exists():
+            return self._skip_response(
+                code="RUN_COMPILE_SKIPPED",
+                message="compile_udonsharp skipped because project root does not contain Assets.",
+                data={"project_root": str(target_root)},
+            )
+        return self._invoke_unity_runtime(
+            action="compile_udonsharp",
+            target_root=target_root,
         )
 
     def run_clientsim(self, scene_path: str, profile: str) -> ToolResponse:
-        scene = resolve_scope_path(scene_path, self.project_root)
+        target_root = self._default_runtime_root()
+        scene = resolve_scope_path(scene_path, target_root)
         if not scene.exists():
             return ToolResponse(
                 success=False,
@@ -122,18 +558,11 @@ class RuntimeValidationMcp:
                 diagnostics=[],
             )
 
-        return ToolResponse(
-            success=True,
-            severity=Severity.INFO,
-            code="RUN_CLIENTSIM_SKIPPED",
-            message="run_clientsim is scaffolded only; Unity ClientSim execution is not wired.",
-            data={
-                "scene_path": self._relative(scene),
-                "profile": profile,
-                "read_only": True,
-                "executed": False,
-            },
-            diagnostics=[],
+        return self._invoke_unity_runtime(
+            action="run_clientsim",
+            target_root=target_root,
+            scene_path=self._relative(scene),
+            profile=profile,
         )
 
     def collect_unity_console(
@@ -143,9 +572,9 @@ class RuntimeValidationMcp:
         max_lines: int = 4000,
     ) -> ToolResponse:
         log_path = (
-            resolve_scope_path(log_file, self.project_root)
+            resolve_scope_path(log_file, self._default_runtime_root())
             if log_file
-            else self.project_root / "Logs" / "Editor.log"
+            else self._default_runtime_root() / "Logs" / "Editor.log"
         )
         if not log_path.exists():
             return ToolResponse(

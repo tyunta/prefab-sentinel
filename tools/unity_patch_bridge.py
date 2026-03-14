@@ -36,15 +36,20 @@ SUPPORTED_OP_NAMES = {
     "set",
     "insert_array_element",
     "remove_array_element",
+    "create_asset",
+    "create_scene",
+    "open_scene",
     "create_prefab",
     "create_root",
     "create_game_object",
+    "instantiate_prefab",
     "rename_object",
     "reparent",
     "add_component",
     "find_component",
     "remove_component",
     "save",
+    "save_scene",
 }
 _SEVERITY_ORDER = {"info": 0, "warning": 1, "error": 2, "critical": 3}
 
@@ -227,7 +232,19 @@ def _normalize_bridge_op(op: object) -> object:
     if not isinstance(op, dict):
         return op
     normalized: dict[str, object] = {}
-    for key in ("op", "component", "path", "index", "name", "result", "parent", "target", "type"):
+    for key in (
+        "op",
+        "component",
+        "path",
+        "index",
+        "name",
+        "result",
+        "parent",
+        "target",
+        "type",
+        "shader",
+        "prefab",
+    ):
         if key in op:
             normalized[key] = op[key]
 
@@ -263,6 +280,31 @@ def _validate_bridge_ops(
         if op_name not in SUPPORTED_OP_NAMES:
             return {"location": f"{location}.op", "error": f"unsupported op '{op_name}'"}
 
+        if op_name == "create_asset":
+            type_name = op.get("type")
+            shader_name = op.get("shader")
+            has_type = isinstance(type_name, str) and bool(type_name.strip())
+            has_shader = isinstance(shader_name, str) and bool(shader_name.strip())
+            if "type" in op and not has_type:
+                return {
+                    "location": f"{location}.type",
+                    "error": "create_asset 'type' must be a non-empty string when provided",
+                }
+            if "shader" in op and not has_shader:
+                return {
+                    "location": f"{location}.shader",
+                    "error": "create_asset 'shader' must be a non-empty string when provided",
+                }
+            if not has_type and not has_shader:
+                return {
+                    "location": location,
+                    "error": "create_asset requires a non-empty 'type' or 'shader'",
+                }
+            continue
+
+        if op_name in {"create_scene", "open_scene"}:
+            continue
+
         if op_name == "create_prefab":
             name = op.get("name")
             if name is not None and (not isinstance(name, str) or not name.strip()):
@@ -293,6 +335,21 @@ def _validate_bridge_ops(
                 return {
                     "location": f"{location}.parent",
                     "error": "create_game_object requires a non-empty 'parent'",
+                }
+            continue
+
+        if op_name == "instantiate_prefab":
+            prefab = op.get("prefab")
+            parent = op.get("parent")
+            if not isinstance(prefab, str) or not prefab.strip():
+                return {
+                    "location": f"{location}.prefab",
+                    "error": "instantiate_prefab requires a non-empty 'prefab'",
+                }
+            if not isinstance(parent, str) or not parent.strip():
+                return {
+                    "location": f"{location}.parent",
+                    "error": "instantiate_prefab requires a non-empty 'parent'",
                 }
             continue
 
@@ -350,7 +407,7 @@ def _validate_bridge_ops(
                 }
             continue
 
-        if op_name == "save":
+        if op_name in {"save", "save_scene"}:
             continue
 
         component = op.get("component")

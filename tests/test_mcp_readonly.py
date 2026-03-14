@@ -3,10 +3,12 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from unitytool.orchestrator import Phase1Orchestrator
 from unitytool.mcp.prefab_variant import PrefabVariantMcp
@@ -28,6 +30,71 @@ CROSS_PROJECT_GUID = "dddddddddddddddddddddddddddddddd"
 def _write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
+
+
+def _write_fake_runtime_runner(path: Path) -> None:
+    path.write_text(
+        """
+import json
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+
+def arg_value(name: str) -> str:
+    for index, value in enumerate(args[:-1]):
+        if value == name:
+            return args[index + 1]
+    raise SystemExit(f"missing argument: {name}")
+
+request_path = Path(arg_value("-unitytoolRuntimeRequest"))
+response_path = Path(arg_value("-unitytoolRuntimeResponse"))
+request = json.loads(request_path.read_text(encoding="utf-8"))
+action = request.get("action", "")
+
+if action == "compile_udonsharp":
+    payload = {
+        "success": True,
+        "severity": "info",
+        "code": "RUN_COMPILE_OK",
+        "message": "compile ok",
+        "data": {
+            "udon_program_count": 3,
+            "executed": True,
+            "read_only": False,
+        },
+        "diagnostics": [],
+    }
+elif action == "run_clientsim":
+    payload = {
+        "success": True,
+        "severity": "info",
+        "code": "RUN_CLIENTSIM_OK",
+        "message": "clientsim ok",
+        "data": {
+            "clientsim_ready": True,
+            "executed": True,
+            "read_only": False,
+        },
+        "diagnostics": [],
+    }
+else:
+    payload = {
+        "success": False,
+        "severity": "error",
+        "code": "RUN_PROTOCOL_ERROR",
+        "message": f"unexpected action: {action}",
+        "data": {
+            "executed": False,
+            "read_only": True,
+        },
+        "diagnostics": [],
+    }
+
+response_path.write_text(json.dumps(payload), encoding="utf-8")
+""".strip(),
+        encoding="utf-8",
+    )
 
 
 def _create_sample_project(root: Path) -> None:
@@ -287,6 +354,41 @@ class PrefabVariantMcpTests(unittest.TestCase):
 
 
 class RuntimeValidationMcpTests(unittest.TestCase):
+    def test_compile_udonsharp_returns_skip_without_runtime_env(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_sample_project(root)
+            mcp = RuntimeValidationMcp(project_root=root)
+
+            with patch.dict(os.environ, {}, clear=True):
+                response = mcp.compile_udonsharp()
+
+            self.assertTrue(response.success)
+            self.assertEqual("RUN_COMPILE_SKIPPED", response.code)
+
+    def test_compile_udonsharp_runs_unity_command_when_configured(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_sample_project(root)
+            runner = root / "unity_runner.py"
+            _write_fake_runtime_runner(runner)
+            mcp = RuntimeValidationMcp(project_root=root)
+
+            with patch.dict(
+                os.environ,
+                {
+                    "UNITYTOOL_UNITY_COMMAND": f'"{sys.executable}" "{runner}"',
+                    "UNITYTOOL_UNITY_PROJECT_PATH": str(root),
+                },
+                clear=False,
+            ):
+                response = mcp.compile_udonsharp()
+
+            self.assertTrue(response.success)
+            self.assertEqual("RUN_COMPILE_OK", response.code)
+            self.assertEqual(3, response.data["udon_program_count"])
+            self.assertTrue(response.data["executed"])
+
     def test_run_clientsim_returns_missing_scene_error(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -297,6 +399,38 @@ class RuntimeValidationMcpTests(unittest.TestCase):
 
             self.assertFalse(response.success)
             self.assertEqual("RUN002", response.code)
+
+    def test_run_clientsim_runs_unity_command_when_configured(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_sample_project(root)
+            _write(
+                root / "Assets" / "Scenes" / "Smoke.unity",
+                """%YAML 1.1
+--- !u!1 &1
+GameObject:
+  m_Name: Smoke
+""",
+            )
+            runner = root / "unity_runner.py"
+            _write_fake_runtime_runner(runner)
+            mcp = RuntimeValidationMcp(project_root=root)
+
+            with patch.dict(
+                os.environ,
+                {
+                    "UNITYTOOL_UNITY_COMMAND": f'"{sys.executable}" "{runner}"',
+                    "UNITYTOOL_UNITY_PROJECT_PATH": str(root),
+                },
+                clear=False,
+            ):
+                response = mcp.run_clientsim("Assets/Scenes/Smoke.unity", "default")
+
+            self.assertTrue(response.success)
+            self.assertEqual("RUN_CLIENTSIM_OK", response.code)
+            self.assertTrue(response.data["clientsim_ready"])
+            self.assertTrue(response.data["executed"])
+            self.assertEqual(".", response.data["project_root"])
 
     def test_classify_errors_detects_known_categories(self) -> None:
         mcp = RuntimeValidationMcp(project_root=Path.cwd())
@@ -348,6 +482,45 @@ GameObject:
             self.assertIn("RUN_LOG_COLLECTED", step_codes)
             self.assertIn("RUN001", step_codes)
 
+    def test_orchestrator_validate_runtime_pipeline_uses_runtime_runner_when_configured(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_sample_project(root)
+            _write(
+                root / "Assets" / "Scenes" / "Smoke.unity",
+                """%YAML 1.1
+--- !u!1 &1
+GameObject:
+  m_Name: Smoke
+""",
+            )
+            runner = root / "unity_runner.py"
+            _write_fake_runtime_runner(runner)
+
+            orchestrator = Phase1Orchestrator.default(project_root=root)
+            with patch.dict(
+                os.environ,
+                {
+                    "UNITYTOOL_UNITY_COMMAND": f'"{sys.executable}" "{runner}"',
+                    "UNITYTOOL_UNITY_PROJECT_PATH": str(root),
+                },
+                clear=False,
+            ):
+                response = orchestrator.validate_runtime(
+                    scene_path="Assets/Scenes/Smoke.unity",
+                )
+
+            self.assertTrue(response.success)
+            self.assertEqual("VALIDATE_RUNTIME_RESULT", response.code)
+            step_codes = [
+                step["result"]["code"]
+                for step in response.data["steps"]
+                if isinstance(step, dict) and isinstance(step.get("result"), dict)
+            ]
+            self.assertIn("RUN_COMPILE_OK", step_codes)
+            self.assertIn("RUN_CLIENTSIM_OK", step_codes)
+            self.assertIn("RUN_ASSERT_OK", step_codes)
+
 
 class SerializedObjectMcpTests(unittest.TestCase):
     def test_load_patch_plan_normalizes_v2_resources(self) -> None:
@@ -387,6 +560,12 @@ class SerializedObjectMcpTests(unittest.TestCase):
                                 "value": True,
                             },
                         ],
+                        "postconditions": [
+                            {
+                                "type": "asset_exists",
+                                "resource": "second",
+                            }
+                        ],
                     }
                 ),
                 encoding="utf-8",
@@ -399,6 +578,10 @@ class SerializedObjectMcpTests(unittest.TestCase):
             self.assertEqual("first", loaded["resources"][0]["id"])
             self.assertEqual("json", loaded["resources"][0]["kind"])
             self.assertEqual("second", loaded["ops"][1]["resource"])
+            self.assertEqual(
+                [{"type": "asset_exists", "resource": "second"}],
+                loaded["postconditions"],
+            )
 
     def test_compute_patch_plan_sha256_returns_expected_digest(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -456,6 +639,24 @@ class SerializedObjectMcpTests(unittest.TestCase):
         self.assertFalse(response.success)
         self.assertEqual("SER_PLAN_INVALID", response.code)
         self.assertTrue(response.diagnostics)
+
+    def test_dry_run_patch_supports_material_asset_root_mutation_ops(self) -> None:
+        mcp = SerializedObjectMcp()
+        response = mcp.dry_run_patch(
+            target="Assets/Generated/Material.mat",
+            ops=[
+                {
+                    "op": "set",
+                    "target": "$asset",
+                    "path": "m_Name",
+                    "value": "GeneratedMaterial",
+                }
+            ],
+        )
+
+        self.assertTrue(response.success)
+        self.assertEqual("SER_DRY_RUN_OK", response.code)
+        self.assertEqual(1, len(response.data["diff"]))
 
     def test_dry_run_resource_plan_supports_prefab_create_mode(self) -> None:
         mcp = SerializedObjectMcp()
@@ -583,6 +784,126 @@ class SerializedObjectMcpTests(unittest.TestCase):
         self.assertEqual("SER_DRY_RUN_OK", response.code)
         self.assertEqual(5, len(response.data["diff"]))
 
+    def test_dry_run_resource_plan_supports_material_create_mode(self) -> None:
+        mcp = SerializedObjectMcp()
+        response = mcp.dry_run_resource_plan(
+            resource={
+                "id": "material",
+                "kind": "material",
+                "path": "Assets/Generated/New.mat",
+                "mode": "create",
+            },
+            ops=[
+                {
+                    "op": "create_asset",
+                    "shader": "Standard",
+                    "result": "generated_material",
+                },
+                {
+                    "op": "set",
+                    "target": "$generated_material",
+                    "path": "m_Name",
+                    "value": "GeneratedMaterial",
+                },
+                {"op": "save"},
+            ],
+        )
+
+        self.assertTrue(response.success)
+        self.assertEqual("SER_DRY_RUN_OK", response.code)
+        self.assertEqual(3, len(response.data["diff"]))
+
+    def test_dry_run_resource_plan_supports_scriptable_object_create_mode(self) -> None:
+        mcp = SerializedObjectMcp()
+        response = mcp.dry_run_resource_plan(
+            resource={
+                "id": "data",
+                "kind": "asset",
+                "path": "Assets/Generated/New.asset",
+                "mode": "create",
+            },
+            ops=[
+                {
+                    "op": "create_asset",
+                    "type": "Example.GeneratedData",
+                    "result": "generated_asset",
+                },
+                {
+                    "op": "set",
+                    "target": "$generated_asset",
+                    "path": "m_Name",
+                    "value": "GeneratedData",
+                },
+                {"op": "save"},
+            ],
+        )
+
+        self.assertTrue(response.success)
+        self.assertEqual("SER_DRY_RUN_OK", response.code)
+        self.assertEqual(3, len(response.data["diff"]))
+
+    def test_dry_run_resource_plan_supports_scene_create_mode(self) -> None:
+        mcp = SerializedObjectMcp()
+        response = mcp.dry_run_resource_plan(
+            resource={
+                "id": "scene",
+                "kind": "scene",
+                "path": "Assets/Generated/New.unity",
+                "mode": "create",
+            },
+            ops=[
+                {"op": "create_scene"},
+                {
+                    "op": "create_game_object",
+                    "name": "RootA",
+                    "parent": "$scene",
+                    "result": "root_a",
+                },
+                {
+                    "op": "add_component",
+                    "target": "$root_a",
+                    "type": "UnityEngine.BoxCollider",
+                    "result": "root_collider",
+                },
+                {
+                    "op": "set",
+                    "target": "$root_collider",
+                    "path": "m_IsTrigger",
+                    "value": True,
+                },
+                {"op": "save_scene"},
+            ],
+        )
+
+        self.assertTrue(response.success)
+        self.assertEqual("SER_DRY_RUN_OK", response.code)
+        self.assertEqual(5, len(response.data["diff"]))
+
+    def test_dry_run_resource_plan_supports_scene_open_mode(self) -> None:
+        mcp = SerializedObjectMcp()
+        response = mcp.dry_run_resource_plan(
+            resource={
+                "id": "scene",
+                "kind": "scene",
+                "path": "Assets/Generated/Existing.unity",
+                "mode": "open",
+            },
+            ops=[
+                {"op": "open_scene"},
+                {
+                    "op": "create_game_object",
+                    "name": "RootA",
+                    "parent": "$scene",
+                    "result": "root_a",
+                },
+                {"op": "save_scene"},
+            ],
+        )
+
+        self.assertTrue(response.success)
+        self.assertEqual("SER_DRY_RUN_OK", response.code)
+        self.assertEqual(3, len(response.data["diff"]))
+
     def test_dry_run_resource_plan_rejects_non_prefab_target_for_create_mode(self) -> None:
         mcp = SerializedObjectMcp()
         response = mcp.dry_run_resource_plan(
@@ -595,6 +916,49 @@ class SerializedObjectMcpTests(unittest.TestCase):
             ops=[
                 {"op": "create_prefab", "name": "GeneratedRoot"},
                 {"op": "save"},
+            ],
+        )
+
+        self.assertFalse(response.success)
+        self.assertEqual("SER_PLAN_INVALID", response.code)
+        self.assertTrue(response.diagnostics)
+
+    def test_dry_run_resource_plan_rejects_material_create_without_shader(self) -> None:
+        mcp = SerializedObjectMcp()
+        response = mcp.dry_run_resource_plan(
+            resource={
+                "id": "material",
+                "kind": "material",
+                "path": "Assets/Generated/New.mat",
+                "mode": "create",
+            },
+            ops=[
+                {"op": "create_asset", "result": "generated_material"},
+                {"op": "save"},
+            ],
+        )
+
+        self.assertFalse(response.success)
+        self.assertEqual("SER_PLAN_INVALID", response.code)
+        self.assertTrue(response.diagnostics)
+
+    def test_dry_run_resource_plan_rejects_scene_instantiate_prefab_without_prefab(self) -> None:
+        mcp = SerializedObjectMcp()
+        response = mcp.dry_run_resource_plan(
+            resource={
+                "id": "scene",
+                "kind": "scene",
+                "path": "Assets/Generated/New.unity",
+                "mode": "create",
+            },
+            ops=[
+                {"op": "create_scene"},
+                {
+                    "op": "instantiate_prefab",
+                    "parent": "$scene",
+                    "result": "instance_root",
+                },
+                {"op": "save_scene"},
             ],
         )
 
@@ -712,6 +1076,38 @@ class SerializedObjectMcpTests(unittest.TestCase):
             updated = json.loads(target.read_text(encoding="utf-8"))
             self.assertEqual({"items": [0, 2], "nested": {"value": 42}}, updated)
 
+    def test_apply_resource_plan_updates_open_json_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            target = root / "state.json"
+            target.write_text(
+                json.dumps({"nested": {"value": 10}}),
+                encoding="utf-8",
+            )
+
+            mcp = SerializedObjectMcp()
+            response = mcp.apply_resource_plan(
+                resource={
+                    "path": str(target),
+                    "mode": "open",
+                },
+                ops=[
+                    {
+                        "op": "set",
+                        "component": "Example.Component",
+                        "path": "nested.value",
+                        "value": 42,
+                    }
+                ],
+            )
+
+            self.assertTrue(response.success)
+            self.assertEqual("SER_APPLY_OK", response.code)
+            self.assertEqual(
+                42,
+                json.loads(target.read_text(encoding="utf-8"))["nested"]["value"],
+            )
+
     def test_apply_and_save_rejects_non_json_target(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -784,6 +1180,58 @@ print(
             self.assertTrue(response.success)
             self.assertEqual("SER_APPLY_OK", response.code)
             self.assertEqual(1, response.data["applied"])
+
+    def test_apply_and_save_uses_unity_bridge_for_material_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            target = root / "state.mat"
+            target.write_text("%YAML 1.1\n", encoding="utf-8")
+            bridge = root / "bridge.py"
+            bridge.write_text(
+                """
+import json
+import sys
+
+request = json.load(sys.stdin)
+print(
+    json.dumps(
+        {
+            "success": True,
+            "severity": "info",
+            "code": "SER_APPLY_OK",
+            "message": "Bridge apply completed.",
+            "data": {
+                "target": request.get("target", ""),
+                "resource_kind": request.get("resources", [{}])[0].get("kind", ""),
+                "op_count": len(request.get("ops", [])),
+                "applied": len(request.get("ops", [])),
+                "read_only": False,
+                "executed": True,
+            },
+            "diagnostics": [],
+        }
+    )
+)
+""".strip(),
+                encoding="utf-8",
+            )
+
+            mcp = SerializedObjectMcp(bridge_command=(sys.executable, str(bridge)))
+            response = mcp.apply_and_save(
+                target=str(target),
+                ops=[
+                    {
+                        "op": "set",
+                        "target": "$asset",
+                        "path": "m_Name",
+                        "value": "GeneratedMaterial",
+                    }
+                ],
+            )
+
+            self.assertTrue(response.success)
+            self.assertEqual("SER_APPLY_OK", response.code)
+            self.assertEqual("material", response.data["resource_kind"])
 
     def test_apply_and_save_rejects_bridge_protocol_version_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1100,6 +1548,258 @@ print(
             self.assertEqual("$root_collider", response.data["request_ops"][2]["target"])
             self.assertEqual("m_IsTrigger", response.data["request_ops"][2]["path"])
 
+    def test_apply_resource_plan_forwards_material_create_ops_to_bridge(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            bridge = root / "bridge.py"
+            bridge.write_text(
+                """
+import json
+import sys
+
+request = json.load(sys.stdin)
+print(
+    json.dumps(
+        {
+            "success": True,
+            "severity": "info",
+            "code": "SER_APPLY_OK",
+            "message": "Bridge apply completed.",
+            "data": {
+                "target": request.get("target", ""),
+                "mode": request.get("resources", [{}])[0].get("mode", ""),
+                "kind": request.get("resources", [{}])[0].get("kind", ""),
+                "op_count": len(request.get("ops", [])),
+                "applied": len(request.get("ops", [])),
+                "request_ops": request.get("ops", []),
+                "read_only": False,
+                "executed": True,
+            },
+            "diagnostics": [],
+        }
+    )
+)
+""".strip(),
+                encoding="utf-8",
+            )
+
+            mcp = SerializedObjectMcp(bridge_command=(sys.executable, str(bridge)))
+            response = mcp.apply_resource_plan(
+                resource={
+                    "id": "material",
+                    "kind": "material",
+                    "path": str(root / "Assets" / "Generated" / "New.mat"),
+                    "mode": "create",
+                },
+                ops=[
+                    {
+                        "op": "create_asset",
+                        "shader": "Standard",
+                        "result": "generated_material",
+                    },
+                    {
+                        "op": "set",
+                        "target": "$generated_material",
+                        "path": "m_Name",
+                        "value": "GeneratedMaterial",
+                    },
+                    {"op": "save"},
+                ],
+            )
+
+            self.assertTrue(response.success)
+            self.assertEqual("SER_APPLY_OK", response.code)
+            self.assertEqual("create", response.data["mode"])
+            self.assertEqual("material", response.data["kind"])
+            self.assertEqual("create_asset", response.data["request_ops"][0]["op"])
+            self.assertEqual("Standard", response.data["request_ops"][0]["shader"])
+
+    def test_apply_resource_plan_forwards_material_open_ops_to_bridge(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            bridge = root / "bridge.py"
+            bridge.write_text(
+                """
+import json
+import sys
+
+request = json.load(sys.stdin)
+print(
+    json.dumps(
+        {
+            "success": True,
+            "severity": "info",
+            "code": "SER_APPLY_OK",
+            "message": "Bridge apply completed.",
+            "data": {
+                "target": request.get("target", ""),
+                "mode": request.get("resources", [{}])[0].get("mode", ""),
+                "kind": request.get("resources", [{}])[0].get("kind", ""),
+                "op_count": len(request.get("ops", [])),
+                "applied": len(request.get("ops", [])),
+                "request_ops": request.get("ops", []),
+                "read_only": False,
+                "executed": True,
+            },
+            "diagnostics": [],
+        }
+    )
+)
+""".strip(),
+                encoding="utf-8",
+            )
+
+            mcp = SerializedObjectMcp(bridge_command=(sys.executable, str(bridge)))
+            response = mcp.apply_resource_plan(
+                resource={
+                    "id": "material",
+                    "kind": "material",
+                    "path": str(root / "Assets" / "Generated" / "Existing.mat"),
+                    "mode": "open",
+                },
+                ops=[
+                    {
+                        "op": "set",
+                        "target": "$asset",
+                        "path": "m_Name",
+                        "value": "ExistingMaterial",
+                    }
+                ],
+            )
+
+            self.assertTrue(response.success)
+            self.assertEqual("SER_APPLY_OK", response.code)
+            self.assertEqual("open", response.data["mode"])
+            self.assertEqual("material", response.data["kind"])
+            self.assertEqual("$asset", response.data["request_ops"][0]["target"])
+
+    def test_apply_resource_plan_forwards_scene_create_ops_to_bridge(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            bridge = root / "bridge.py"
+            bridge.write_text(
+                """
+import json
+import sys
+
+request = json.load(sys.stdin)
+print(
+    json.dumps(
+        {
+            "success": True,
+            "severity": "info",
+            "code": "SER_APPLY_OK",
+            "message": "Bridge apply completed.",
+            "data": {
+                "target": request.get("target", ""),
+                "mode": request.get("resources", [{}])[0].get("mode", ""),
+                "kind": request.get("resources", [{}])[0].get("kind", ""),
+                "op_count": len(request.get("ops", [])),
+                "applied": len(request.get("ops", [])),
+                "request_ops": request.get("ops", []),
+                "read_only": False,
+                "executed": True,
+            },
+            "diagnostics": [],
+        }
+    )
+)
+""".strip(),
+                encoding="utf-8",
+            )
+
+            mcp = SerializedObjectMcp(bridge_command=(sys.executable, str(bridge)))
+            response = mcp.apply_resource_plan(
+                resource={
+                    "id": "scene",
+                    "kind": "scene",
+                    "path": str(root / "Assets" / "Generated" / "New.unity"),
+                    "mode": "create",
+                },
+                ops=[
+                    {"op": "create_scene"},
+                    {
+                        "op": "instantiate_prefab",
+                        "prefab": "Assets/Prefabs/Example.prefab",
+                        "parent": "$scene",
+                        "result": "instance_root",
+                    },
+                    {"op": "save_scene"},
+                ],
+            )
+
+            self.assertTrue(response.success)
+            self.assertEqual("SER_APPLY_OK", response.code)
+            self.assertEqual("create", response.data["mode"])
+            self.assertEqual("scene", response.data["kind"])
+            self.assertEqual("instantiate_prefab", response.data["request_ops"][1]["op"])
+            self.assertEqual(
+                "Assets/Prefabs/Example.prefab",
+                response.data["request_ops"][1]["prefab"],
+            )
+
+    def test_apply_resource_plan_forwards_scene_open_ops_to_bridge(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            bridge = root / "bridge.py"
+            bridge.write_text(
+                """
+import json
+import sys
+
+request = json.load(sys.stdin)
+print(
+    json.dumps(
+        {
+            "success": True,
+            "severity": "info",
+            "code": "SER_APPLY_OK",
+            "message": "Bridge apply completed.",
+            "data": {
+                "target": request.get("target", ""),
+                "mode": request.get("resources", [{}])[0].get("mode", ""),
+                "kind": request.get("resources", [{}])[0].get("kind", ""),
+                "op_count": len(request.get("ops", [])),
+                "applied": len(request.get("ops", [])),
+                "request_ops": request.get("ops", []),
+                "read_only": False,
+                "executed": True,
+            },
+            "diagnostics": [],
+        }
+    )
+)
+""".strip(),
+                encoding="utf-8",
+            )
+
+            mcp = SerializedObjectMcp(bridge_command=(sys.executable, str(bridge)))
+            response = mcp.apply_resource_plan(
+                resource={
+                    "id": "scene",
+                    "kind": "scene",
+                    "path": str(root / "Assets" / "Generated" / "Existing.unity"),
+                    "mode": "open",
+                },
+                ops=[
+                    {"op": "open_scene"},
+                    {
+                        "op": "create_game_object",
+                        "name": "GeneratedRoot",
+                        "parent": "$scene",
+                        "result": "generated_root",
+                    },
+                    {"op": "save_scene"},
+                ],
+            )
+
+            self.assertTrue(response.success)
+            self.assertEqual("SER_APPLY_OK", response.code)
+            self.assertEqual("open", response.data["mode"])
+            self.assertEqual("scene", response.data["kind"])
+            self.assertEqual("open_scene", response.data["request_ops"][0]["op"])
+            self.assertEqual("$scene", response.data["request_ops"][1]["parent"])
+
     def test_orchestrator_patch_apply_confirm_gate(self) -> None:
         orchestrator = Phase1Orchestrator.default()
         response = orchestrator.patch_apply(
@@ -1153,6 +1853,99 @@ print(
             self.assertEqual("PATCH_APPLY_RESULT", response.code)
             step_codes = [step["result"]["code"] for step in response.data["steps"]]
             self.assertIn("SER_APPLY_OK", step_codes)
+
+    def test_orchestrator_patch_apply_enforces_asset_exists_postcondition(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            target = root / "state.json"
+            target.write_text(
+                json.dumps({"nested": {"value": 10}}),
+                encoding="utf-8",
+            )
+
+            orchestrator = Phase1Orchestrator.default(project_root=root)
+            response = orchestrator.patch_apply(
+                plan={
+                    "plan_version": 2,
+                    "resources": [
+                        {
+                            "id": "state",
+                            "kind": "json",
+                            "path": str(target),
+                            "mode": "open",
+                        }
+                    ],
+                    "ops": [
+                        {
+                            "resource": "state",
+                            "op": "set",
+                            "component": "Example.Component",
+                            "path": "nested.value",
+                            "value": 42,
+                        }
+                    ],
+                    "postconditions": [
+                        {
+                            "type": "asset_exists",
+                            "resource": "state",
+                        }
+                    ],
+                },
+                dry_run=False,
+                confirm=True,
+            )
+
+            self.assertTrue(response.success)
+            step_codes = [step["result"]["code"] for step in response.data["steps"]]
+            self.assertIn("POST_ASSET_EXISTS_OK", step_codes)
+
+    def test_orchestrator_patch_apply_fails_broken_refs_postcondition(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_sample_project(root)
+            target = root / "state.json"
+            target.write_text(
+                json.dumps({"nested": {"value": 10}}),
+                encoding="utf-8",
+            )
+
+            orchestrator = Phase1Orchestrator.default(project_root=root)
+            response = orchestrator.patch_apply(
+                plan={
+                    "plan_version": 2,
+                    "resources": [
+                        {
+                            "id": "state",
+                            "kind": "json",
+                            "path": str(target),
+                            "mode": "open",
+                        }
+                    ],
+                    "ops": [
+                        {
+                            "resource": "state",
+                            "op": "set",
+                            "component": "Example.Component",
+                            "path": "nested.value",
+                            "value": 42,
+                        }
+                    ],
+                    "postconditions": [
+                        {
+                            "type": "broken_refs",
+                            "scope": "Assets",
+                            "expected_count": 0,
+                        }
+                    ],
+                },
+                dry_run=False,
+                confirm=True,
+            )
+
+            self.assertFalse(response.success)
+            self.assertTrue(response.data["fail_fast_triggered"])
+            step_codes = [step["result"]["code"] for step in response.data["steps"]]
+            self.assertIn("POST_BROKEN_REFS_FAILED", step_codes)
 
     def test_orchestrator_patch_apply_stops_on_preflight_reference_error(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
