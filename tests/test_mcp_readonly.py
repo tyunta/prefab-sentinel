@@ -457,6 +457,45 @@ class SerializedObjectMcpTests(unittest.TestCase):
         self.assertEqual("SER_PLAN_INVALID", response.code)
         self.assertTrue(response.diagnostics)
 
+    def test_dry_run_resource_plan_supports_prefab_create_mode(self) -> None:
+        mcp = SerializedObjectMcp()
+        response = mcp.dry_run_resource_plan(
+            resource={
+                "id": "prefab",
+                "kind": "prefab",
+                "path": "Assets/Generated/New.prefab",
+                "mode": "create",
+            },
+            ops=[
+                {"op": "create_prefab", "name": "GeneratedRoot"},
+                {"op": "save"},
+            ],
+        )
+
+        self.assertTrue(response.success)
+        self.assertEqual("SER_DRY_RUN_OK", response.code)
+        self.assertEqual("create", response.data["mode"])
+        self.assertEqual(2, len(response.data["diff"]))
+
+    def test_dry_run_resource_plan_rejects_non_prefab_target_for_create_mode(self) -> None:
+        mcp = SerializedObjectMcp()
+        response = mcp.dry_run_resource_plan(
+            resource={
+                "id": "prefab",
+                "kind": "prefab",
+                "path": "Assets/Generated/New.asset",
+                "mode": "create",
+            },
+            ops=[
+                {"op": "create_prefab", "name": "GeneratedRoot"},
+                {"op": "save"},
+            ],
+        )
+
+        self.assertFalse(response.success)
+        self.assertEqual("SER_PLAN_INVALID", response.code)
+        self.assertTrue(response.diagnostics)
+
     def test_apply_and_save_updates_json_target(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -636,6 +675,58 @@ print(
 
             self.assertFalse(response.success)
             self.assertEqual("SER_BRIDGE_DENIED", response.code)
+
+    def test_apply_resource_plan_uses_unity_bridge_for_prefab_create_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            bridge = root / "bridge.py"
+            bridge.write_text(
+                """
+import json
+import sys
+
+request = json.load(sys.stdin)
+print(
+    json.dumps(
+        {
+            "success": True,
+            "severity": "info",
+            "code": "SER_APPLY_OK",
+            "message": "Bridge apply completed.",
+            "data": {
+                "target": request.get("target", ""),
+                "mode": request.get("resources", [{}])[0].get("mode", ""),
+                "op_count": len(request.get("ops", [])),
+                "applied": len(request.get("ops", [])),
+                "read_only": False,
+                "executed": True,
+            },
+            "diagnostics": [],
+        }
+    )
+)
+""".strip(),
+                encoding="utf-8",
+            )
+
+            mcp = SerializedObjectMcp(bridge_command=(sys.executable, str(bridge)))
+            response = mcp.apply_resource_plan(
+                resource={
+                    "id": "prefab",
+                    "kind": "prefab",
+                    "path": str(root / "Assets" / "Generated" / "New.prefab"),
+                    "mode": "create",
+                },
+                ops=[
+                    {"op": "create_prefab", "name": "GeneratedRoot"},
+                    {"op": "save"},
+                ],
+            )
+
+            self.assertTrue(response.success)
+            self.assertEqual("SER_APPLY_OK", response.code)
+            self.assertEqual("create", response.data["mode"])
+            self.assertEqual(2, response.data["applied"])
 
     def test_orchestrator_patch_apply_confirm_gate(self) -> None:
         orchestrator = Phase1Orchestrator.default()

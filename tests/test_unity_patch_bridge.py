@@ -249,6 +249,76 @@ response_path.write_text(
         self.assertEqual("Assets/Left.prefab", result["data"]["resources"][0]["path"])
         self.assertEqual("Assets/Right.prefab", result["data"]["resources"][1]["path"])
 
+    def test_reference_bridge_passes_prefab_create_mode_to_unity_request(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            unity_runner = root / "fake_unity_create.py"
+            unity_runner.write_text(
+                """
+import json
+import sys
+from pathlib import Path
+
+def _arg(flag: str) -> str:
+    args = sys.argv[1:]
+    idx = args.index(flag)
+    return args[idx + 1]
+
+request_path = Path(_arg("-unitytoolPatchRequest"))
+response_path = Path(_arg("-unitytoolPatchResponse"))
+request = json.loads(request_path.read_text(encoding="utf-8"))
+response_path.write_text(
+    json.dumps(
+        {
+            "protocol_version": 1,
+            "success": True,
+            "severity": "info",
+            "code": "SER_APPLY_OK",
+            "message": "Captured request payload.",
+            "data": {
+                "applied": len(request.get("ops", [])),
+                "request_mode": request.get("mode"),
+                "request_kind": request.get("kind"),
+                "request_ops": request.get("ops", []),
+            },
+            "diagnostics": [],
+        }
+    ),
+    encoding="utf-8",
+)
+""".strip(),
+                encoding="utf-8",
+            )
+
+            result = self._run_bridge(
+                {
+                    "protocol_version": 2,
+                    "plan_version": 2,
+                    "resources": [
+                        {
+                            "id": "prefab",
+                            "kind": "prefab",
+                            "path": "Assets/Generated/New.prefab",
+                            "mode": "create",
+                        }
+                    ],
+                    "ops": [
+                        {"resource": "prefab", "op": "create_prefab", "name": "GeneratedRoot"},
+                        {"resource": "prefab", "op": "save"},
+                    ],
+                },
+                env_overrides={
+                    "UNITYTOOL_UNITY_COMMAND": f'"{sys.executable}" "{unity_runner}"',
+                    "UNITYTOOL_UNITY_PROJECT_PATH": str(root),
+                },
+            )
+
+        self.assertTrue(result["success"])
+        self.assertEqual("create", result["data"]["request_mode"])
+        self.assertEqual("prefab", result["data"]["request_kind"])
+        self.assertEqual("create_prefab", result["data"]["request_ops"][0]["op"])
+        self.assertEqual("GeneratedRoot", result["data"]["request_ops"][0]["name"])
+
     def test_reference_bridge_rejects_unity_response_missing_fields(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

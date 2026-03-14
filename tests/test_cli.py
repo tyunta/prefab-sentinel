@@ -1756,6 +1756,82 @@ print(
             step_codes = [step["result"]["code"] for step in payload["data"]["steps"]]
             self.assertIn("SER_APPLY_OK", step_codes)
 
+    def test_patch_apply_confirm_uses_bridge_env_for_prefab_create_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            bridge = root / "bridge.py"
+            bridge.write_text(
+                """
+import json
+import sys
+
+request = json.load(sys.stdin)
+print(
+    json.dumps(
+        {
+            "success": True,
+            "severity": "info",
+            "code": "SER_APPLY_OK",
+            "message": "Bridge apply completed.",
+            "data": {
+                "target": request.get("target", ""),
+                "mode": request.get("resources", [{}])[0].get("mode", ""),
+                "op_count": len(request.get("ops", [])),
+                "applied": len(request.get("ops", [])),
+                "read_only": False,
+                "executed": True,
+            },
+            "diagnostics": [],
+        }
+    )
+)
+""".strip(),
+                encoding="utf-8",
+            )
+            plan = root / "patch.json"
+            plan.write_text(
+                json.dumps(
+                    {
+                        "plan_version": 2,
+                        "resources": [
+                            {
+                                "id": "prefab",
+                                "kind": "prefab",
+                                "path": str(root / "Assets" / "Generated" / "New.prefab"),
+                                "mode": "create",
+                            }
+                        ],
+                        "ops": [
+                            {"resource": "prefab", "op": "create_prefab", "name": "GeneratedRoot"},
+                            {"resource": "prefab", "op": "save"},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            bridge_cmd = f'"{sys.executable}" "{bridge}"'
+            with patch.dict(os.environ, {"UNITYTOOL_PATCH_BRIDGE": bridge_cmd}, clear=False):
+                exit_code, output = self.run_cli(
+                    [
+                        "patch",
+                        "apply",
+                        "--plan",
+                        str(plan),
+                        "--confirm",
+                        "--out-report",
+                        str(root / "reports" / "patch_result.json"),
+                        "--change-reason",
+                        "test bridge prefab create",
+                    ]
+                )
+
+            payload = json.loads(output)
+            self.assertEqual(0, exit_code)
+            self.assertTrue(payload["success"])
+            self.assertEqual(1, payload["data"]["resource_count"])
+            self.assertEqual("create", payload["data"]["steps"][-1]["result"]["data"]["mode"])
+
     def test_patch_apply_invalid_plan_returns_parser_error(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

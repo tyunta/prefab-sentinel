@@ -19,6 +19,7 @@ from unitytool.patch_plan import (
 from unitytool.unity_assets import decode_text_file
 
 _SUPPORTED_OPS = {"set", "insert_array_element", "remove_array_element"}
+_PREFAB_CREATE_OPS = {"create_prefab", "save"}
 _UNITY_BRIDGE_PROTOCOL_VERSION = PLAN_VERSION
 _UNITY_BRIDGE_SUPPORTED_SUFFIXES = {
     ".prefab",
@@ -115,6 +116,9 @@ class SerializedObjectMcp:
         self,
         target_path: Path,
         ops: list[dict[str, Any]],
+        *,
+        resource_kind: str | None = None,
+        resource_mode: str = "open",
     ) -> dict[str, Any]:
         resource_id = "target"
         bridged_ops = [{**deepcopy(op), "resource": resource_id} for op in ops]
@@ -124,9 +128,9 @@ class SerializedObjectMcp:
                 "resources": [
                     {
                         "id": resource_id,
-                        "kind": self._infer_bridge_resource_kind(target_path),
+                        "kind": resource_kind or self._infer_bridge_resource_kind(target_path),
                         "path": str(target_path),
-                        "mode": "open",
+                        "mode": resource_mode,
                     }
                 ],
                 "ops": bridged_ops,
@@ -220,6 +224,9 @@ class SerializedObjectMcp:
         self,
         target_path: Path,
         ops: list[dict[str, Any]],
+        *,
+        resource_kind: str | None = None,
+        resource_mode: str = "open",
     ) -> ToolResponse:
         if self.bridge_command_error:
             return ToolResponse(
@@ -273,7 +280,12 @@ class SerializedObjectMcp:
             )
 
         request_payload = {
-            **self._build_unity_bridge_request(target_path=target_path, ops=ops),
+            **self._build_unity_bridge_request(
+                target_path=target_path,
+                ops=ops,
+                resource_kind=resource_kind,
+                resource_mode=resource_mode,
+            ),
         }
         try:
             completed = subprocess.run(
@@ -360,6 +372,144 @@ class SerializedObjectMcp:
             )
 
         return self._parse_bridge_response(payload, target_path=target_path, ops=ops)
+
+    def _validate_prefab_create_ops(
+        self,
+        target: str,
+        ops: list[dict[str, Any]],
+    ) -> tuple[list[Diagnostic], list[dict[str, Any]]]:
+        diagnostics: list[Diagnostic] = []
+        preview: list[dict[str, Any]] = []
+        if not target:
+            diagnostics.append(
+                Diagnostic(
+                    path="",
+                    location="resources[].path",
+                    detail="schema_error",
+                    evidence="target path is required for prefab create mode",
+                )
+            )
+            return diagnostics, preview
+        if Path(target).suffix.lower() != ".prefab":
+            diagnostics.append(
+                Diagnostic(
+                    path=target,
+                    location="resources[].path",
+                    detail="schema_error",
+                    evidence="prefab create mode requires a .prefab target path",
+                )
+            )
+            return diagnostics, preview
+        if not ops:
+            diagnostics.append(
+                Diagnostic(
+                    path=target,
+                    location="ops",
+                    detail="schema_error",
+                    evidence="ops must contain at least one operation",
+                )
+            )
+            return diagnostics, preview
+
+        created = False
+        saved = False
+        root_name = Path(target).stem or "PrefabRoot"
+        for index, op in enumerate(ops):
+            if not isinstance(op, dict):
+                diagnostics.append(
+                    Diagnostic(
+                        path=target,
+                        location=f"ops[{index}]",
+                        detail="schema_error",
+                        evidence="operation must be an object",
+                    )
+                )
+                continue
+
+            op_name = str(op.get("op", "")).strip()
+            if op_name == "create_prefab":
+                if created:
+                    diagnostics.append(
+                        Diagnostic(
+                            path=target,
+                            location=f"ops[{index}].op",
+                            detail="schema_error",
+                            evidence="create_prefab may appear only once",
+                        )
+                    )
+                    continue
+                created = True
+                name_value = op.get("name")
+                if name_value is not None:
+                    if not isinstance(name_value, str) or not name_value.strip():
+                        diagnostics.append(
+                            Diagnostic(
+                                path=target,
+                                location=f"ops[{index}].name",
+                                detail="schema_error",
+                                evidence="name must be a non-empty string when provided",
+                            )
+                        )
+                        continue
+                    root_name = name_value.strip()
+                preview.append(
+                    {
+                        "op": op_name,
+                        "before": "(missing)",
+                        "after": {"path": target, "root_name": root_name},
+                    }
+                )
+                continue
+
+            if op_name == "save":
+                if saved:
+                    diagnostics.append(
+                        Diagnostic(
+                            path=target,
+                            location=f"ops[{index}].op",
+                            detail="schema_error",
+                            evidence="save may appear only once",
+                        )
+                    )
+                    continue
+                saved = True
+                preview.append(
+                    {
+                        "op": op_name,
+                        "before": "(unsaved)",
+                        "after": {"path": target},
+                    }
+                )
+                continue
+
+            diagnostics.append(
+                Diagnostic(
+                    path=target,
+                    location=f"ops[{index}].op",
+                    detail="schema_error",
+                    evidence=f"unsupported prefab create op '{op_name}'",
+                )
+            )
+
+        if not created:
+            diagnostics.append(
+                Diagnostic(
+                    path=target,
+                    location="ops",
+                    detail="schema_error",
+                    evidence="create mode requires a create_prefab operation",
+                )
+            )
+        if not saved:
+            diagnostics.append(
+                Diagnostic(
+                    path=target,
+                    location="ops",
+                    detail="schema_error",
+                    evidence="create mode requires a save operation",
+                )
+            )
+        return diagnostics, preview
 
     def _validate_op(
         self,
@@ -678,6 +828,67 @@ class SerializedObjectMcp:
             diagnostics=[],
         )
 
+    def dry_run_resource_plan(
+        self,
+        resource: dict[str, Any],
+        ops: list[dict[str, Any]],
+    ) -> ToolResponse:
+        target = str(resource.get("path", "")).strip()
+        kind = str(resource.get("kind", "")).strip().lower()
+        mode = str(resource.get("mode", "open")).strip().lower() or "open"
+
+        if mode == "open":
+            return self.dry_run_patch(target=target, ops=ops)
+
+        if kind == "prefab" and mode == "create":
+            diagnostics, preview = self._validate_prefab_create_ops(target=target, ops=ops)
+            if diagnostics:
+                return ToolResponse(
+                    success=False,
+                    severity=Severity.ERROR,
+                    code="SER_PLAN_INVALID",
+                    message="Patch plan schema validation failed.",
+                    data={
+                        "target": target,
+                        "kind": kind,
+                        "mode": mode,
+                        "op_count": len(ops),
+                        "read_only": True,
+                    },
+                    diagnostics=diagnostics,
+                )
+            return ToolResponse(
+                success=True,
+                severity=Severity.INFO,
+                code="SER_DRY_RUN_OK",
+                message="dry_run_patch generated a patch preview.",
+                data={
+                    "target": target,
+                    "kind": kind,
+                    "mode": mode,
+                    "op_count": len(ops),
+                    "applied": 0,
+                    "diff": preview,
+                    "read_only": True,
+                },
+                diagnostics=[],
+            )
+
+        return ToolResponse(
+            success=False,
+            severity=Severity.ERROR,
+            code="SER_UNSUPPORTED_TARGET",
+            message="Resource mode/kind combination is not supported by the current backend.",
+            data={
+                "target": target,
+                "kind": kind,
+                "mode": mode,
+                "op_count": len(ops),
+                "read_only": True,
+            },
+            diagnostics=[],
+        )
+
     def apply_and_save(self, target: str, ops: list[dict[str, Any]]) -> ToolResponse:
         dry_run = self.dry_run_patch(target=target, ops=ops)
         if not dry_run.success:
@@ -831,6 +1042,63 @@ class SerializedObjectMcp:
                 "diff": applied_ops,
                 "read_only": False,
                 "executed": True,
+            },
+            diagnostics=[],
+        )
+
+    def apply_resource_plan(
+        self,
+        resource: dict[str, Any],
+        ops: list[dict[str, Any]],
+    ) -> ToolResponse:
+        target = str(resource.get("path", "")).strip()
+        kind = str(resource.get("kind", "")).strip().lower()
+        mode = str(resource.get("mode", "open")).strip().lower() or "open"
+
+        if mode == "open":
+            return self.apply_and_save(target=target, ops=ops)
+
+        dry_run = self.dry_run_resource_plan(resource=resource, ops=ops)
+        if not dry_run.success:
+            return ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code="SER_PLAN_INVALID",
+                message="Patch plan schema validation failed.",
+                data={
+                    "target": target,
+                    "kind": kind,
+                    "mode": mode,
+                    "op_count": len(ops),
+                    "applied": 0,
+                    "read_only": False,
+                    "executed": False,
+                },
+                diagnostics=dry_run.diagnostics,
+            )
+
+        target_path = self._resolve_target_path(target)
+        if kind == "prefab" and mode == "create":
+            return self._apply_with_unity_bridge(
+                target_path=target_path,
+                ops=ops,
+                resource_kind=kind,
+                resource_mode=mode,
+            )
+
+        return ToolResponse(
+            success=False,
+            severity=Severity.ERROR,
+            code="SER_UNSUPPORTED_TARGET",
+            message="Resource mode/kind combination is not supported by the current backend.",
+            data={
+                "target": str(target_path),
+                "kind": kind,
+                "mode": mode,
+                "op_count": len(ops),
+                "applied": 0,
+                "read_only": False,
+                "executed": False,
             },
             diagnostics=[],
         )

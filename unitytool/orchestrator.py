@@ -449,7 +449,7 @@ class Phase1Orchestrator:
 
         for resource, ops in resource_batches:
             target = str(resource.get("path", ""))
-            dry_step = self.serialized_object.dry_run_patch(target=target, ops=ops)
+            dry_step = self.serialized_object.dry_run_resource_plan(resource=resource, ops=ops)
             steps.append((_step_name("dry_run_patch", str(resource.get("id", ""))), dry_step))
             if dry_step.severity in (Severity.ERROR, Severity.CRITICAL):
                 return _finalize(
@@ -495,8 +495,9 @@ class Phase1Orchestrator:
             resource_id = str(resource.get("id", ""))
             target = str(resource.get("path", ""))
             target_suffix = Path(target).suffix.lower()
+            resource_mode = str(resource.get("mode", "open")).strip().lower() or "open"
 
-            if target_suffix == ".prefab":
+            if target_suffix == ".prefab" and resource_mode == "open":
                 overrides_step = self.prefab_variant.list_overrides(target)
                 steps.append(
                     (_step_name("list_overrides_preflight", resource_id), overrides_step)
@@ -507,7 +508,7 @@ class Phase1Orchestrator:
                         fail_fast=True,
                     )
 
-            apply_step = self.serialized_object.apply_and_save(target=target, ops=ops)
+            apply_step = self.serialized_object.apply_resource_plan(resource=resource, ops=ops)
             steps.append((_step_name("apply_and_save", resource_id), apply_step))
             if apply_step.severity in (Severity.ERROR, Severity.CRITICAL):
                 return _finalize("patch.apply completed with errors.", fail_fast=False)

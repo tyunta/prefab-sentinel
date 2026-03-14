@@ -29,6 +29,8 @@ namespace PrefabSentinel
         {
             public int protocol_version = 0;
             public string target = string.Empty;
+            public string kind = string.Empty;
+            public string mode = "open";
             public PatchOp[] ops = Array.Empty<PatchOp>();
         }
 
@@ -36,6 +38,7 @@ namespace PrefabSentinel
         private sealed class PatchOp
         {
             public string op = string.Empty;
+            public string name = string.Empty;
             public string component = string.Empty;
             public string path = string.Empty;
             public int index = 0;
@@ -310,9 +313,14 @@ namespace PrefabSentinel
                 return;
             }
 
+            string mode = string.IsNullOrWhiteSpace(request.mode)
+                ? "open"
+                : request.mode.Trim();
+            bool createMode = string.Equals(mode, "create", StringComparison.OrdinalIgnoreCase);
+
             string assetPath;
             string resolveError;
-            if (!TryResolveAssetPath(request.target, out assetPath, out resolveError))
+            if (!TryResolveAssetPath(request.target, createMode, out assetPath, out resolveError))
             {
                 WriteResponseSafe(
                     responsePath,
@@ -339,6 +347,12 @@ namespace PrefabSentinel
                         executed: false
                     )
                 );
+                return;
+            }
+
+            if (createMode)
+            {
+                WriteResponseSafe(responsePath, ApplyPrefabCreateOperations(request, assetPath));
                 return;
             }
 
@@ -445,8 +459,213 @@ namespace PrefabSentinel
             }
         }
 
+        private static BridgeResponse ApplyPrefabCreateOperations(BridgeRequest request, string assetPath)
+        {
+            int applied = 0;
+            List<BridgeDiagnostic> diagnostics = new List<BridgeDiagnostic>();
+            GameObject prefabRoot = null;
+            bool saved = false;
+            try
+            {
+                if (File.Exists(Path.Combine(Path.GetFullPath(Path.Combine(Application.dataPath, "..")), assetPath)))
+                {
+                    return BuildError(
+                        "UNITY_BRIDGE_TARGET_EXISTS",
+                        "target file already exists.",
+                        request.target,
+                        request.ops.Length,
+                        executed: false
+                    );
+                }
+
+                string fullAssetPath = Path.Combine(
+                    Path.GetFullPath(Path.Combine(Application.dataPath, "..")),
+                    assetPath
+                );
+                string parentDir = Path.GetDirectoryName(fullAssetPath);
+                if (string.IsNullOrWhiteSpace(parentDir) || !Directory.Exists(parentDir))
+                {
+                    return BuildError(
+                        "UNITY_BRIDGE_TARGET_PATH",
+                        "target directory was not found.",
+                        request.target,
+                        request.ops.Length,
+                        executed: false
+                    );
+                }
+
+                for (int i = 0; i < request.ops.Length; i++)
+                {
+                    PatchOp op = request.ops[i];
+                    string opName = (op?.op ?? string.Empty).Trim();
+                    if (string.Equals(opName, "create_prefab", StringComparison.Ordinal))
+                    {
+                        if (prefabRoot != null)
+                        {
+                            diagnostics.Add(
+                                new BridgeDiagnostic
+                                {
+                                    path = request.target,
+                                    location = $"ops[{i}].op",
+                                    detail = "schema_error",
+                                    evidence = "create_prefab may appear only once"
+                                }
+                            );
+                            return BuildError(
+                                "UNITY_BRIDGE_SCHEMA",
+                                "Invalid prefab create plan.",
+                                request.target,
+                                request.ops.Length,
+                                executed: false,
+                                applied: applied,
+                                diagnostics: diagnostics.ToArray()
+                            );
+                        }
+
+                        string rootName = string.IsNullOrWhiteSpace(op.name)
+                            ? Path.GetFileNameWithoutExtension(assetPath)
+                            : op.name.Trim();
+                        prefabRoot = new GameObject(rootName);
+                        applied += 1;
+                        continue;
+                    }
+
+                    if (string.Equals(opName, "save", StringComparison.Ordinal))
+                    {
+                        if (prefabRoot == null)
+                        {
+                            diagnostics.Add(
+                                new BridgeDiagnostic
+                                {
+                                    path = request.target,
+                                    location = $"ops[{i}].op",
+                                    detail = "schema_error",
+                                    evidence = "save requires create_prefab first"
+                                }
+                            );
+                            return BuildError(
+                                "UNITY_BRIDGE_SCHEMA",
+                                "Invalid prefab create plan.",
+                                request.target,
+                                request.ops.Length,
+                                executed: false,
+                                applied: applied,
+                                diagnostics: diagnostics.ToArray()
+                            );
+                        }
+
+                        GameObject savedPrefab = PrefabUtility.SaveAsPrefabAsset(prefabRoot, assetPath);
+                        if (savedPrefab == null)
+                        {
+                            diagnostics.Add(
+                                new BridgeDiagnostic
+                                {
+                                    path = request.target,
+                                    location = $"ops[{i}].op",
+                                    detail = "apply_error",
+                                    evidence = "PrefabUtility.SaveAsPrefabAsset returned null"
+                                }
+                            );
+                            return BuildError(
+                                "UNITY_BRIDGE_APPLY",
+                                "Failed to save prefab asset.",
+                                request.target,
+                                request.ops.Length,
+                                executed: true,
+                                applied: applied,
+                                diagnostics: diagnostics.ToArray()
+                            );
+                        }
+                        AssetDatabase.SaveAssets();
+                        saved = true;
+                        applied += 1;
+                        continue;
+                    }
+
+                    diagnostics.Add(
+                        new BridgeDiagnostic
+                        {
+                            path = request.target,
+                            location = $"ops[{i}].op",
+                            detail = "schema_error",
+                            evidence = $"unsupported prefab create op '{opName}'"
+                        }
+                    );
+                    return BuildError(
+                        "UNITY_BRIDGE_SCHEMA",
+                        "Invalid prefab create plan.",
+                        request.target,
+                        request.ops.Length,
+                        executed: false,
+                        applied: applied,
+                        diagnostics: diagnostics.ToArray()
+                    );
+                }
+
+                if (prefabRoot == null || !saved)
+                {
+                    return BuildError(
+                        "UNITY_BRIDGE_SCHEMA",
+                        "Prefab create mode requires create_prefab and save operations.",
+                        request.target,
+                        request.ops.Length,
+                        executed: false,
+                        applied: applied
+                    );
+                }
+
+                return new BridgeResponse
+                {
+                    protocol_version = ProtocolVersion,
+                    success = true,
+                    severity = "info",
+                    code = "SER_APPLY_OK",
+                    message = "Prefab create plan applied via Unity executeMethod.",
+                    data = new BridgeData
+                    {
+                        target = request.target,
+                        op_count = request.ops.Length,
+                        applied = applied,
+                        read_only = false,
+                        executed = true,
+                        protocol_version = ProtocolVersion
+                    },
+                    diagnostics = Array.Empty<BridgeDiagnostic>()
+                };
+            }
+            catch (Exception ex)
+            {
+                diagnostics.Add(
+                    new BridgeDiagnostic
+                    {
+                        path = request.target,
+                        location = "apply",
+                        detail = "exception",
+                        evidence = ex.ToString()
+                    }
+                );
+                return BuildError(
+                    "UNITY_BRIDGE_APPLY_EXCEPTION",
+                    $"Unexpected apply exception: {ex.Message}",
+                    request.target,
+                    request.ops.Length,
+                    executed: true,
+                    applied: applied,
+                    diagnostics: diagnostics.ToArray()
+                );
+            }
+            finally
+            {
+                if (prefabRoot != null)
+                {
+                    UnityEngine.Object.DestroyImmediate(prefabRoot);
+                }
+            }
+        }
+
         private static bool TryResolveAssetPath(
             string target,
+            bool allowMissing,
             out string assetPath,
             out string error
         )
@@ -479,7 +698,7 @@ namespace PrefabSentinel
                 error = "target must resolve to an Assets/ path.";
                 return false;
             }
-            if (!File.Exists(Path.Combine(projectRoot, assetPath)))
+            if (!allowMissing && !File.Exists(Path.Combine(projectRoot, assetPath)))
             {
                 error = "target file was not found.";
                 return false;

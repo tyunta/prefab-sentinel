@@ -644,7 +644,7 @@ uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel sug
 - `patch attest` は plan の sha256 と任意の署名を attestation JSON として出力できる（`--unsigned` / `--out`）。
 - `patch verify` は SHA-256 / HMAC-SHA256 の一致検証を行い、検証失敗時は非 0 終了コードを返す（`--format json` / `text`）。
 - `patch verify` は `--attestation-file` から期待値を読み取って照合できる。
-- `patch apply` は plan JSON のスキーマ検証と `dry_run_patch` プレビューを実装済み（`set` / `insert_array_element` / `remove_array_element`）。
+- `patch apply` は plan JSON のスキーマ検証と `dry_run_patch` プレビューを実装済み（open mode: `set` / `insert_array_element` / `remove_array_element`、prefab create mode: `create_prefab` / `save`）。
 - `patch apply` は `--out-report` 指定時に結果 envelope を JSON ファイルに保存する（`--confirm` 時は必須）。
 - `patch apply` は非 dry-run 時に `--confirm` と `--change-reason` を要求し、JSON ターゲット（`.json`）は内蔵バックエンドで実編集する。
 - `patch apply` は `--attestation-file` から期待値（sha256 / signature）を読み取って適用前照合できる（CLI 引数の `--plan-sha256` / `--plan-signature` が優先）。
@@ -715,13 +715,13 @@ before / after diff + validation steps の抜粋:
 ```
 ### 17.7 Unity bridge / runtime
 
-- `tools/unity_patch_bridge.py` は `UNITYTOOL_UNITY_COMMAND` を使って Unity batchmode コマンドを実行し、JSON リクエスト / レスポンスファイルを介して結果を返す（`set` / `insert_array_element` の `value` を Unity 側で扱える型情報へ正規化）。
+- `tools/unity_patch_bridge.py` は `UNITYTOOL_UNITY_COMMAND` を使って Unity batchmode コマンドを実行し、JSON リクエスト / レスポンスファイルを介して結果を返す（mutation op の `value` を Unity 側で扱える型情報へ正規化し、prefab create mode の `create_prefab` / `save` も中継する）。
 - `tools/unity_patch_bridge.py` の外部 request は `plan_version: 2` + `resources[]` + `ops[]` を受け付け、resource ごとに現在の Unity executeMethod へ分解して適用する。
 - `tools/unity_patch_bridge.py` は Unity 起動前に `ops` を検証し、`set` の `value` 欠落や配列操作の `index` 欠落などを `BRIDGE_REQUEST_SCHEMA` で fail-fast 停止する。
 - `tools/unity_patch_bridge.py` は `UNITYTOOL_UNITY_PROJECT_PATH` / `UNITYTOOL_UNITY_EXECUTE_METHOD` / `UNITYTOOL_UNITY_TIMEOUT_SEC` / `UNITYTOOL_UNITY_LOG_FILE` で実行設定を制御できる。
 - `tools/unity_patch_bridge.py` は Unity 応答の `success/severity/code/message/data/diagnostics` を厳密検証し、欠落・型不一致時は `BRIDGE_UNITY_RESPONSE_SCHEMA` で fail-fast 停止する。
 - `scripts/unity_bridge_smoke.py` は patch plan から `tools/unity_patch_bridge.py` を end-to-end 実行し、Unity 実行環境の上書き・期待成功 / 失敗判定・コード検証（`--expected-code`）・適用件数検証（`--expected-applied` または `--expect-applied-from-plan`）・レスポンス保存（`--out`）をまとめて検証できる。bridge 応答は `success/severity/code/message/data/diagnostics` を厳密検証し、欠落・型不一致時は fail-fast で停止する。
-- `tools/unity/PrefabSentinel.UnityPatchBridge.cs` は Unity 側 `-executeMethod` 実装として `.prefab` ターゲットの `set` / `insert_array_element` / `remove_array_element` を SerializedObject 経由で適用する（`component` は一意一致必須、component 曖昧時は候補パス付きで fail-fast）。
+- `tools/unity/PrefabSentinel.UnityPatchBridge.cs` は Unity 側 `-executeMethod` 実装として `.prefab` ターゲットの open mode `set` / `insert_array_element` / `remove_array_element` と、create mode `create_prefab` / `save` を適用する（mutation 時の `component` は一意一致必須、component 曖昧時は候補パス付きで fail-fast）。
 - `component` セレクタは `TypeName@Hierarchy/Path` 形式を受け付け、同型コンポーネントが複数ある場合に GameObject 階層で明示的に絞り込める。
 - `set` の値デコードは `int/float/bool/string/null` に加えて `Character` / `LayerMask` / `ArraySize`、`enum`、`Color`、`Vector2/3/4`、`Vector2Int/3Int`、`Rect/RectInt`、`Bounds/BoundsInt`、`Quaternion`、`AnimationCurve`、`Gradient`、`ObjectReference` / `ExposedReference`（`value_kind=json` の `{guid,file_id}`）、`ManagedReference`（`value_kind=json`、必要時 `{"__type":"Namespace.Type, Assembly"}` ヒント対応）、`Generic`（カスタム構造体の `value_json` 反映）を扱う。
 - `AnimationCurve` は `value_kind=json` で `{ "keys":[{"time":0.0,"value":1.0,"in_tangent":0.0,"out_tangent":0.0}], "pre_wrap_mode":1, "post_wrap_mode":1 }` 形式を受け付ける（`value_kind=null` で null 設定）。

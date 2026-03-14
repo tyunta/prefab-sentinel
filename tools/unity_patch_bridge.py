@@ -32,7 +32,13 @@ UNITY_LOG_FILE_ENV = "UNITYTOOL_UNITY_LOG_FILE"
 DEFAULT_EXECUTE_METHOD = "PrefabSentinel.UnityPatchBridge.ApplyFromJson"
 DEFAULT_TIMEOUT_SEC = 120
 VALID_SEVERITIES = {"info", "warning", "error", "critical"}
-SUPPORTED_OP_NAMES = {"set", "insert_array_element", "remove_array_element"}
+SUPPORTED_OP_NAMES = {
+    "set",
+    "insert_array_element",
+    "remove_array_element",
+    "create_prefab",
+    "save",
+}
 _SEVERITY_ORDER = {"info": 0, "warning": 1, "error": 2, "critical": 3}
 
 
@@ -214,7 +220,7 @@ def _normalize_bridge_op(op: object) -> object:
     if not isinstance(op, dict):
         return op
     normalized: dict[str, object] = {}
-    for key in ("op", "component", "path", "index"):
+    for key in ("op", "component", "path", "index", "name"):
         if key in op:
             normalized[key] = op[key]
 
@@ -249,6 +255,18 @@ def _validate_bridge_ops(
         op_name = str(op.get("op", "")).strip()
         if op_name not in SUPPORTED_OP_NAMES:
             return {"location": f"{location}.op", "error": f"unsupported op '{op_name}'"}
+
+        if op_name == "create_prefab":
+            name = op.get("name")
+            if name is not None and (not isinstance(name, str) or not name.strip()):
+                return {
+                    "location": f"{location}.name",
+                    "error": "create_prefab 'name' must be a non-empty string when provided",
+                }
+            continue
+
+        if op_name == "save":
+            continue
 
         component = op.get("component")
         if not isinstance(component, str) or not component.strip():
@@ -388,6 +406,8 @@ def _run_unity_for_resource(
         request_payload = {
             "protocol_version": _UNITY_EXECUTE_METHOD_PROTOCOL_VERSION,
             "target": target,
+            "kind": resource.get("kind", ""),
+            "mode": resource.get("mode", "open"),
             "ops": _normalize_bridge_ops(ops),
         }
         request_path.write_text(
