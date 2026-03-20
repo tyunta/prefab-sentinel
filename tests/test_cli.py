@@ -13,53 +13,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from prefab_sentinel import cli
+from tests.bridge_test_helpers import write_fake_runtime_runner, write_file
 
 MISSING_GUID = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-
-
-def _write(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
-
-
-def _write_fake_runtime_runner(path: Path) -> None:
-    path.write_text(
-        """
-import json
-import sys
-from pathlib import Path
-
-args = sys.argv[1:]
-
-def arg_value(name: str) -> str:
-    for index, value in enumerate(args[:-1]):
-        if value == name:
-            return args[index + 1]
-    raise SystemExit(f"missing argument: {name}")
-
-request_path = Path(arg_value("-sentinelRuntimeRequest"))
-response_path = Path(arg_value("-sentinelRuntimeResponse"))
-request = json.loads(request_path.read_text(encoding="utf-8"))
-action = request.get("action", "")
-
-payload = {
-    "success": True,
-    "severity": "info",
-    "code": "RUN_COMPILE_OK" if action == "compile_udonsharp" else "RUN_CLIENTSIM_OK",
-    "message": action,
-    "data": {
-        "udon_program_count": 2 if action == "compile_udonsharp" else 0,
-        "clientsim_ready": action == "run_clientsim",
-        "executed": True,
-        "read_only": False,
-    },
-    "diagnostics": [],
-}
-
-response_path.write_text(json.dumps(payload), encoding="utf-8")
-""".strip(),
-        encoding="utf-8",
-    )
 
 
 class CliTests(unittest.TestCase):
@@ -109,7 +65,7 @@ class CliTests(unittest.TestCase):
             root = Path(temp_dir)
             scene = root / "Smoke.unity"
             log = root / "Editor.log"
-            _write(
+            write_file(
                 scene,
                 """%YAML 1.1
 --- !u!1 &1
@@ -117,7 +73,7 @@ GameObject:
   m_Name: Smoke
 """,
             )
-            _write(log, "NullReferenceException in UdonBehaviour\n")
+            write_file(log, "NullReferenceException in UdonBehaviour\n")
 
             exit_code, output = self.run_cli(
                 [
@@ -143,7 +99,7 @@ GameObject:
             root = Path(temp_dir)
             scene = root / "Assets" / "Scenes" / "Smoke.unity"
             runner = root / "unity_runner.py"
-            _write(
+            write_file(
                 scene,
                 """%YAML 1.1
 --- !u!1 &1
@@ -151,7 +107,7 @@ GameObject:
   m_Name: Smoke
 """,
             )
-            _write_fake_runtime_runner(runner)
+            write_fake_runtime_runner(runner)
 
             with patch.dict(
                 os.environ,
@@ -1767,7 +1723,7 @@ raise SystemExit(0)
             assets = root / "Assets"
             assets.mkdir(parents=True, exist_ok=True)
             scene = assets / "Smoke.unity"
-            _write(scene, "%YAML 1.1\n")
+            write_file(scene, "%YAML 1.1\n")
             target = root / "state.json"
             target.write_text(
                 json.dumps({"nested": {"value": 10}}),
@@ -2529,7 +2485,7 @@ print(
     def test_suggest_ignore_guids_writes_ignore_guid_file(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
-            _write(
+            write_file(
                 root / "Assets" / "Ref.prefab",
                 f"""%YAML 1.1
 --- !u!1001 &100100000
@@ -2588,7 +2544,7 @@ PrefabInstance:
     def test_suggest_ignore_guids_blocks_ci_write_on_disallowed_branch(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
-            _write(
+            write_file(
                 root / "Assets" / "Ref.prefab",
                 f"""%YAML 1.1
 --- !u!1001 &100100000
@@ -2622,7 +2578,7 @@ PrefabInstance:
     def test_suggest_ignore_guids_allows_ci_write_on_main(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
-            _write(
+            write_file(
                 root / "Assets" / "Ref.prefab",
                 f"""%YAML 1.1
 --- !u!1001 &100100000

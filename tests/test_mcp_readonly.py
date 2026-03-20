@@ -20,6 +20,7 @@ from prefab_sentinel.patch_plan import (
     compute_patch_plan_sha256,
     load_patch_plan,
 )
+from tests.bridge_test_helpers import write_fake_runtime_runner, write_file
 
 BASE_GUID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 MISSING_GUID = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -27,78 +28,8 @@ VARIANT_GUID = "cccccccccccccccccccccccccccccccc"
 CROSS_PROJECT_GUID = "dddddddddddddddddddddddddddddddd"
 
 
-def _write(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
-
-
-def _write_fake_runtime_runner(path: Path) -> None:
-    path.write_text(
-        """
-import json
-import sys
-from pathlib import Path
-
-args = sys.argv[1:]
-
-def arg_value(name: str) -> str:
-    for index, value in enumerate(args[:-1]):
-        if value == name:
-            return args[index + 1]
-    raise SystemExit(f"missing argument: {name}")
-
-request_path = Path(arg_value("-sentinelRuntimeRequest"))
-response_path = Path(arg_value("-sentinelRuntimeResponse"))
-request = json.loads(request_path.read_text(encoding="utf-8"))
-action = request.get("action", "")
-
-if action == "compile_udonsharp":
-    payload = {
-        "success": True,
-        "severity": "info",
-        "code": "RUN_COMPILE_OK",
-        "message": "compile ok",
-        "data": {
-            "udon_program_count": 3,
-            "executed": True,
-            "read_only": False,
-        },
-        "diagnostics": [],
-    }
-elif action == "run_clientsim":
-    payload = {
-        "success": True,
-        "severity": "info",
-        "code": "RUN_CLIENTSIM_OK",
-        "message": "clientsim ok",
-        "data": {
-            "clientsim_ready": True,
-            "executed": True,
-            "read_only": False,
-        },
-        "diagnostics": [],
-    }
-else:
-    payload = {
-        "success": False,
-        "severity": "error",
-        "code": "RUN_PROTOCOL_ERROR",
-        "message": f"unexpected action: {action}",
-        "data": {
-            "executed": False,
-            "read_only": True,
-        },
-        "diagnostics": [],
-    }
-
-response_path.write_text(json.dumps(payload), encoding="utf-8")
-""".strip(),
-        encoding="utf-8",
-    )
-
-
 def _create_sample_project(root: Path) -> None:
-    _write(
+    write_file(
         root / "Assets" / "Base.prefab",
         """%YAML 1.1
 --- !u!1 &100100000
@@ -106,13 +37,13 @@ GameObject:
   m_Name: Base
 """,
     )
-    _write(
+    write_file(
         root / "Assets" / "Base.prefab.meta",
         f"""fileFormatVersion: 2
 guid: {BASE_GUID}
 """,
     )
-    _write(
+    write_file(
         root / "Assets" / "Variant.prefab",
         f"""%YAML 1.1
 --- !u!1001 &100100000
@@ -144,7 +75,7 @@ PrefabInstance:
   m_LocalRef: {{fileID: 999999}}
 """,
     )
-    _write(
+    write_file(
         root / "Assets" / "Variant.prefab.meta",
         f"""fileFormatVersion: 2
 guid: {VARIANT_GUID}
@@ -265,7 +196,7 @@ class ReferenceResolverMcpTests(unittest.TestCase):
             repo_root = Path(temp_dir)
             avatar_root = repo_root / "sample" / "avatar"
             world_root = repo_root / "sample" / "world"
-            _write(
+            write_file(
                 avatar_root / "Assets" / "Ref.prefab",
                 f"""%YAML 1.1
 --- !u!1001 &100100000
@@ -273,20 +204,20 @@ PrefabInstance:
   m_SourcePrefab: {{fileID: 11400000, guid: {CROSS_PROJECT_GUID}, type: 3}}
 """,
             )
-            _write(
+            write_file(
                 avatar_root / "Assets" / "Ref.prefab.meta",
                 f"""fileFormatVersion: 2
 guid: {VARIANT_GUID}
 """,
             )
-            _write(
+            write_file(
                 world_root / "Assets" / "WorldOnly.asset",
                 """%YAML 1.1
 --- !u!114 &11400000
 MonoBehaviour:
 """,
             )
-            _write(
+            write_file(
                 world_root / "Assets" / "WorldOnly.asset.meta",
                 f"""fileFormatVersion: 2
 guid: {CROSS_PROJECT_GUID}
@@ -304,7 +235,7 @@ guid: {CROSS_PROJECT_GUID}
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             _create_sample_project(root)
-            _write(
+            write_file(
                 root / "Library" / "Noise.prefab",
                 f"""%YAML 1.1
 --- !u!1001 &100100000
@@ -371,7 +302,7 @@ class RuntimeValidationMcpTests(unittest.TestCase):
             root = Path(temp_dir)
             _create_sample_project(root)
             runner = root / "unity_runner.py"
-            _write_fake_runtime_runner(runner)
+            write_fake_runtime_runner(runner)
             mcp = RuntimeValidationMcp(project_root=root)
 
             with patch.dict(
@@ -404,7 +335,7 @@ class RuntimeValidationMcpTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             _create_sample_project(root)
-            _write(
+            write_file(
                 root / "Assets" / "Scenes" / "Smoke.unity",
                 """%YAML 1.1
 --- !u!1 &1
@@ -413,7 +344,7 @@ GameObject:
 """,
             )
             runner = root / "unity_runner.py"
-            _write_fake_runtime_runner(runner)
+            write_fake_runtime_runner(runner)
             mcp = RuntimeValidationMcp(project_root=root)
 
             with patch.dict(
@@ -452,7 +383,7 @@ GameObject:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             _create_sample_project(root)
-            _write(
+            write_file(
                 root / "Assets" / "Scenes" / "Smoke.unity",
                 """%YAML 1.1
 --- !u!1 &1
@@ -460,7 +391,7 @@ GameObject:
   m_Name: Smoke
 """,
             )
-            _write(
+            write_file(
                 root / "Logs" / "Editor.log",
                 "NullReferenceException in UdonBehaviour\n",
             )
@@ -486,7 +417,7 @@ GameObject:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             _create_sample_project(root)
-            _write(
+            write_file(
                 root / "Assets" / "Scenes" / "Smoke.unity",
                 """%YAML 1.1
 --- !u!1 &1
@@ -495,7 +426,7 @@ GameObject:
 """,
             )
             runner = root / "unity_runner.py"
-            _write_fake_runtime_runner(runner)
+            write_fake_runtime_runner(runner)
 
             orchestrator = Phase1Orchestrator.default(project_root=root)
             with patch.dict(
