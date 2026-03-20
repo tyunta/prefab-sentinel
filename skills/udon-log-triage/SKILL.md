@@ -17,10 +17,18 @@ Reduce runtime failures by classifying logs, mapping errors to assets, and contr
 
 ## Commands
 ```bash
+# Batchmode (default)
 prefab-sentinel validate runtime --scene "Assets/Scenes/Smoke.unity"
+
+# Editor Bridge mode (Unity Editor running)
+export UNITYTOOL_BRIDGE_MODE=editor
+export UNITYTOOL_BRIDGE_WATCH_DIR=/mnt/d/VRC/World/EditorBridge
+prefab-sentinel validate runtime --scene "Assets/Scenes/Smoke.unity"
+
 prefab-sentinel inspect where-used --asset-or-guid "Assets/SomeAsset.prefab" --scope "Assets"
 ```
 
 ## Guardrails
-- If Unity runtime is unavailable, mark the task as pending and stop after classification steps.
+- If Unity runtime is unavailable (no batchmode command and no Editor Bridge), mark the task as pending and stop after classification steps.
 - Do not apply changes without audit logs (`--confirm --out-report --change-reason`).
+- WSL environments: project_root and scene_path are auto-converted to Windows format for Unity; watch_dir is auto-converted to WSL format for Python I/O.
