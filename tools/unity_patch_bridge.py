@@ -13,8 +13,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from prefab_sentinel.patch_plan import PLAN_VERSION as PROTOCOL_VERSION
-from prefab_sentinel.patch_plan import iter_resource_batches, normalize_patch_plan
+from prefab_sentinel.patch_plan import PLAN_VERSION as PROTOCOL_VERSION, iter_resource_batches, normalize_patch_plan
 
 _UNITY_EXECUTE_METHOD_PROTOCOL_VERSION = PROTOCOL_VERSION
 SUPPORTED_SUFFIXES = {
