@@ -344,7 +344,7 @@ Assumption: one primary implementer, one sprint is roughly one to two weeks, and
 - Multi-scene editing.
 - Advanced merge/conflict workflows.
 
-### Sprint 6. Runtime Verification Closure — SCAFFOLD ONLY
+### Sprint 6. Runtime Verification Closure — PARTIAL
 
 **Priority**
 - `P1`
@@ -394,7 +394,7 @@ Assumption: one primary implementer, one sprint is roughly one to two weeks, and
 - `Authoring Alpha`: Sprint 1 complete. **REACHED**
 - `Prefab Authoring MVP`: Sprint 3 complete. **REACHED** — 37 integration tests (24 open-mode + 13 create-mode) all passing.
 - `Generic Asset Authoring Beta`: Sprint 5 complete. **REACHED** — material/scene create-mode tests included.
-- `Verified Authoring Beta`: Sprint 6 complete. Pending runtime verification wiring.
+- `Verified Authoring Beta`: Sprint 6 complete. **PARTIAL** — C# bridge compiles, `compile_udonsharp` verified in batchmode, `run_clientsim` graceful-skips in batchmode (requires play mode). Remaining: `--runtime-scene` Python-side wiring.
 - `Architecture Stabilization`: Sprint 7 complete. **REACHED** (adapter split + postconditions done).
 
 ## Authoring Tool Issue Drafts

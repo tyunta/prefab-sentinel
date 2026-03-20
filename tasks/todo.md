@@ -50,3 +50,13 @@
 - [x] Align protocol version to v2 across Python bridge, C# bridge, and test harness.
 - [x] Add 13 create-mode integration tests (prefab/material/scene). Total: 37 Unity + 261 Python.
 - [x] Update README / IDEAS_AND_ROADMAP / todo.md.
+- [x] Add 4 variant E2E quality gate tests. Total: 41 Unity + 261 Python.
+
+## Phase 3: Runtime Verification Bridge
+
+- [x] Fix CS1626 (yield-in-try-catch) in `UnityRuntimeValidationBridge.cs` `Run()` method — GuardCoroutine pattern.
+- [x] Fix CS1626 in `ExecuteClientSim()` — restructure try-catch-finally into outer try-finally with inner try-catch blocks.
+- [x] Fix `DontDestroyOnLoad` crash in batchmode — guard with `Application.isPlaying`.
+- [x] Add batchmode detection for `run_clientsim` — graceful skip (ClientSim requires play mode).
+- [x] Verify `compile_udonsharp` in Unity batchmode (avatar project: `RUN_COMPILE_SKIPPED`, no UdonSharp).
+- [x] Verify `run_clientsim` in Unity batchmode (avatar project: `RUN_CLIENTSIM_SKIPPED`, batchmode skip).

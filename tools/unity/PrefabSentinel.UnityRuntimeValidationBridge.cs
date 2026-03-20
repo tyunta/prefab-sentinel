@@ -138,6 +138,19 @@ namespace PrefabSentinel
 
             if (string.Equals(request.action, "run_clientsim", StringComparison.Ordinal))
             {
+                if (Application.isBatchMode)
+                {
+                    ExitWithResponse(
+                        responsePath,
+                        BuildSkip(
+                            code: "RUN_CLIENTSIM_SKIPPED",
+                            message: "ClientSim requires play mode; skipped in batchmode.",
+                            request: request
+                        )
+                    );
+                    return;
+                }
+
                 RuntimeValidationRunner.Begin(request, responsePath);
                 return;
             }
@@ -505,7 +518,10 @@ namespace PrefabSentinel
         public static void Begin(UnityRuntimeValidationBridge.RuntimeRequest request, string responsePath)
         {
             GameObject host = new GameObject("__PrefabSentinelRuntimeValidationRunner");
-            DontDestroyOnLoad(host);
+            if (Application.isPlaying)
+            {
+                DontDestroyOnLoad(host);
+            }
             RuntimeValidationRunner runner = host.AddComponent<RuntimeValidationRunner>();
             runner._request = request;
             runner._responsePath = responsePath ?? string.Empty;
@@ -525,26 +541,19 @@ namespace PrefabSentinel
         private IEnumerator Run()
         {
             UnityRuntimeValidationBridge.RuntimeResponse response = null;
-            try
-            {
-                yield return ExecuteClientSim(result => response = result);
-                Finish(
-                    response ?? UnityRuntimeValidationBridge.BuildError(
-                        code: "RUN002",
-                        message: "ClientSim runner completed without producing a response.",
-                        request: _request,
-                        diagnostics: Array.Empty<UnityRuntimeValidationBridge.RuntimeDiagnostic>(),
-                        readOnly: false,
-                        executed: true
-                    )
-                );
-            }
-            catch (Exception ex)
+            Exception caught = null;
+            yield return GuardCoroutine(
+                ExecuteClientSim(result => response = result),
+                () => { },
+                ex => caught = ex
+            );
+
+            if (caught != null)
             {
                 Finish(
                     UnityRuntimeValidationBridge.BuildError(
                         code: "RUN002",
-                        message: $"Unexpected ClientSim exception: {ex.Message}",
+                        message: $"Unexpected ClientSim exception: {caught.Message}",
                         request: _request,
                         diagnostics: new[]
                         {
@@ -552,14 +561,26 @@ namespace PrefabSentinel
                             {
                                 location = "run_clientsim",
                                 detail = "exception",
-                                evidence = ex.ToString()
+                                evidence = caught.ToString()
                             }
                         },
                         readOnly: false,
                         executed: true
                     )
                 );
+                yield break;
             }
+
+            Finish(
+                response ?? UnityRuntimeValidationBridge.BuildError(
+                    code: "RUN002",
+                    message: "ClientSim runner completed without producing a response.",
+                    request: _request,
+                    diagnostics: Array.Empty<UnityRuntimeValidationBridge.RuntimeDiagnostic>(),
+                    readOnly: false,
+                    executed: true
+                )
+            );
         }
 
         private IEnumerator ExecuteClientSim(Action<UnityRuntimeValidationBridge.RuntimeResponse> complete)
@@ -619,23 +640,105 @@ namespace PrefabSentinel
                 yield break;
             }
 
+            // Hoist variables needed across try-catch / yield boundaries
+            object instance = null;
+            bool initComplete = false;
+            Exception initFailure = null;
+            Coroutine active = null;
+            double deadline = 0;
+
+            // Outer try-finally (no catch) — yield return is legal here.
+            // Inner try-catch blocks handle TargetInvocationException without yield return.
             try
             {
-                Scene openedScene = EditorSceneManager.OpenScene(sceneAssetPath, OpenSceneMode.Single);
-                if (!openedScene.IsValid() || !openedScene.isLoaded)
+                // Phase 1: Setup (may throw TargetInvocationException from reflection)
+                try
+                {
+                    Scene openedScene = EditorSceneManager.OpenScene(sceneAssetPath, OpenSceneMode.Single);
+                    if (!openedScene.IsValid() || !openedScene.isLoaded)
+                    {
+                        complete(
+                            UnityRuntimeValidationBridge.BuildError(
+                                code: "RUN002",
+                                message: "Failed to open runtime validation scene.",
+                                request: _request,
+                                diagnostics: new[]
+                                {
+                                    new UnityRuntimeValidationBridge.RuntimeDiagnostic
+                                    {
+                                        location = "scene_path",
+                                        detail = "apply_error",
+                                        evidence = sceneAssetPath
+                                    }
+                                },
+                                readOnly: false,
+                                executed: true
+                            )
+                        );
+                        yield break;
+                    }
+
+                    object settings = Activator.CreateInstance(clientSimSettingsType);
+                    UnityRuntimeValidationBridge.SetFieldIfPresent(settings, "enableClientSim", true);
+                    UnityRuntimeValidationBridge.SetFieldIfPresent(settings, "displayLogs", true);
+                    UnityRuntimeValidationBridge.SetFieldIfPresent(settings, "deleteEditorOnly", true);
+                    UnityRuntimeValidationBridge.SetFieldIfPresent(settings, "spawnPlayer", true);
+                    UnityRuntimeValidationBridge.SetFieldIfPresent(settings, "hideMenuOnLaunch", true);
+                    UnityRuntimeValidationBridge.SetFieldIfPresent(settings, "initializationDelay", 0f);
+
+                    removeInstance.Invoke(null, null);
+                    createInstance.Invoke(null, new object[] { settings, null });
+
+                    UnityEngine.Object[] foundInstances = Resources.FindObjectsOfTypeAll(clientSimMainType);
+                    if (foundInstances == null || foundInstances.Length == 0)
+                    {
+                        complete(
+                            UnityRuntimeValidationBridge.BuildError(
+                                code: "RUN002",
+                                message: "ClientSim instance was not created for the target scene.",
+                                request: _request,
+                                diagnostics: Array.Empty<UnityRuntimeValidationBridge.RuntimeDiagnostic>(),
+                                readOnly: false,
+                                executed: true
+                            )
+                        );
+                        yield break;
+                    }
+
+                    instance = foundInstances[0];
+                    IEnumerator initRoutine = initializeClientSim.Invoke(instance, null) as IEnumerator;
+                    if (initRoutine == null)
+                    {
+                        complete(
+                            UnityRuntimeValidationBridge.BuildError(
+                                code: "RUN002",
+                                message: "ClientSim initialization coroutine was not available.",
+                                request: _request,
+                                diagnostics: Array.Empty<UnityRuntimeValidationBridge.RuntimeDiagnostic>(),
+                                readOnly: false,
+                                executed: true
+                            )
+                        );
+                        yield break;
+                    }
+
+                    active = StartCoroutine(GuardCoroutine(initRoutine, () => initComplete = true, ex => initFailure = ex));
+                    deadline = EditorApplication.timeSinceStartup + Math.Max(_request.timeout_sec, 1);
+                }
+                catch (TargetInvocationException ex)
                 {
                     complete(
                         UnityRuntimeValidationBridge.BuildError(
                             code: "RUN002",
-                            message: "Failed to open runtime validation scene.",
+                            message: $"ClientSim startup threw an exception: {ex.InnerException?.Message ?? ex.Message}",
                             request: _request,
                             diagnostics: new[]
                             {
                                 new UnityRuntimeValidationBridge.RuntimeDiagnostic
                                 {
-                                    location = "scene_path",
-                                    detail = "apply_error",
-                                    evidence = sceneAssetPath
+                                    location = "run_clientsim",
+                                    detail = "exception",
+                                    evidence = (ex.InnerException ?? ex).ToString()
                                 }
                             },
                             readOnly: false,
@@ -645,59 +748,13 @@ namespace PrefabSentinel
                     yield break;
                 }
 
-                object settings = Activator.CreateInstance(clientSimSettingsType);
-                UnityRuntimeValidationBridge.SetFieldIfPresent(settings, "enableClientSim", true);
-                UnityRuntimeValidationBridge.SetFieldIfPresent(settings, "displayLogs", true);
-                UnityRuntimeValidationBridge.SetFieldIfPresent(settings, "deleteEditorOnly", true);
-                UnityRuntimeValidationBridge.SetFieldIfPresent(settings, "spawnPlayer", true);
-                UnityRuntimeValidationBridge.SetFieldIfPresent(settings, "hideMenuOnLaunch", true);
-                UnityRuntimeValidationBridge.SetFieldIfPresent(settings, "initializationDelay", 0f);
-
-                removeInstance.Invoke(null, null);
-                createInstance.Invoke(null, new object[] { settings, null });
-
-                UnityEngine.Object[] foundInstances = Resources.FindObjectsOfTypeAll(clientSimMainType);
-                if (foundInstances == null || foundInstances.Length == 0)
-                {
-                    complete(
-                        UnityRuntimeValidationBridge.BuildError(
-                            code: "RUN002",
-                            message: "ClientSim instance was not created for the target scene.",
-                            request: _request,
-                            diagnostics: Array.Empty<UnityRuntimeValidationBridge.RuntimeDiagnostic>(),
-                            readOnly: false,
-                            executed: true
-                        )
-                    );
-                    yield break;
-                }
-
-                object instance = foundInstances[0];
-                IEnumerator initRoutine = initializeClientSim.Invoke(instance, null) as IEnumerator;
-                if (initRoutine == null)
-                {
-                    complete(
-                        UnityRuntimeValidationBridge.BuildError(
-                            code: "RUN002",
-                            message: "ClientSim initialization coroutine was not available.",
-                            request: _request,
-                            diagnostics: Array.Empty<UnityRuntimeValidationBridge.RuntimeDiagnostic>(),
-                            readOnly: false,
-                            executed: true
-                        )
-                    );
-                    yield break;
-                }
-
-                bool initComplete = false;
-                Exception initFailure = null;
-                Coroutine active = StartCoroutine(GuardCoroutine(initRoutine, () => initComplete = true, ex => initFailure = ex));
-                double deadline = EditorApplication.timeSinceStartup + Math.Max(_request.timeout_sec, 1);
+                // Phase 2: Wait for init (yield return — legal in outer try-finally)
                 while (!initComplete && initFailure == null && EditorApplication.timeSinceStartup < deadline)
                 {
                     yield return null;
                 }
 
+                // Phase 3: Post-init checks (no yield return)
                 if (!initComplete && initFailure == null)
                 {
                     if (active != null)
@@ -749,51 +806,55 @@ namespace PrefabSentinel
                     yield break;
                 }
 
-                bool ready = Convert.ToBoolean(isNetworkReady.Invoke(instance, null));
-                if (!ready)
+                // isNetworkReady reflection call may throw — wrap in inner try-catch
+                try
+                {
+                    bool ready = Convert.ToBoolean(isNetworkReady.Invoke(instance, null));
+                    if (!ready)
+                    {
+                        complete(
+                            UnityRuntimeValidationBridge.BuildError(
+                                code: "RUN002",
+                                message: "ClientSim coroutine completed without reaching ready state.",
+                                request: _request,
+                                diagnostics: Array.Empty<UnityRuntimeValidationBridge.RuntimeDiagnostic>(),
+                                readOnly: false,
+                                executed: true
+                            )
+                        );
+                        yield break;
+                    }
+
+                    complete(
+                        UnityRuntimeValidationBridge.BuildSuccess(
+                            code: "RUN_CLIENTSIM_OK",
+                            message: "ClientSim smoke completed in Unity batchmode.",
+                            request: _request,
+                            clientSimReady: true
+                        )
+                    );
+                }
+                catch (TargetInvocationException ex)
                 {
                     complete(
                         UnityRuntimeValidationBridge.BuildError(
                             code: "RUN002",
-                            message: "ClientSim coroutine completed without reaching ready state.",
+                            message: $"ClientSim ready-check threw an exception: {ex.InnerException?.Message ?? ex.Message}",
                             request: _request,
-                            diagnostics: Array.Empty<UnityRuntimeValidationBridge.RuntimeDiagnostic>(),
+                            diagnostics: new[]
+                            {
+                                new UnityRuntimeValidationBridge.RuntimeDiagnostic
+                                {
+                                    location = "run_clientsim",
+                                    detail = "exception",
+                                    evidence = (ex.InnerException ?? ex).ToString()
+                                }
+                            },
                             readOnly: false,
                             executed: true
                         )
                     );
-                    yield break;
                 }
-
-                complete(
-                    UnityRuntimeValidationBridge.BuildSuccess(
-                        code: "RUN_CLIENTSIM_OK",
-                        message: "ClientSim smoke completed in Unity batchmode.",
-                        request: _request,
-                        clientSimReady: true
-                    )
-                );
-            }
-            catch (TargetInvocationException ex)
-            {
-                complete(
-                    UnityRuntimeValidationBridge.BuildError(
-                        code: "RUN002",
-                        message: $"ClientSim startup threw an exception: {ex.InnerException?.Message ?? ex.Message}",
-                        request: _request,
-                        diagnostics: new[]
-                        {
-                            new UnityRuntimeValidationBridge.RuntimeDiagnostic
-                            {
-                                location = "run_clientsim",
-                                detail = "exception",
-                                evidence = (ex.InnerException ?? ex).ToString()
-                            }
-                        },
-                        readOnly: false,
-                        executed: true
-                    )
-                );
             }
             finally
             {
