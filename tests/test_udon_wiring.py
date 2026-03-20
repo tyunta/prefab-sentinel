@@ -8,10 +8,12 @@ from prefab_sentinel.contracts import Severity
 from prefab_sentinel.udon_wiring import (
     SKIP_FIELDS,
     UDON_BEHAVIOUR_GUID,
-    YamlBlock,
-    _parse_game_objects,
     _parse_monobehaviour_fields,
     analyze_wiring,
+)
+from prefab_sentinel.unity_yaml_parser import (
+    YamlBlock,
+    parse_game_objects,
     split_yaml_blocks,
 )
 
@@ -430,14 +432,14 @@ class ParseMonoBehaviourFieldsTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# _parse_game_objects tests
+# parse_game_objects tests
 # ---------------------------------------------------------------------------
 
 
 class ParseGameObjectsTests(unittest.TestCase):
     def test_extracts_name_and_components(self) -> None:
         blocks = split_yaml_blocks(BASIC_MONOBEHAVIOUR)
-        gos = _parse_game_objects(blocks)
+        gos = parse_game_objects(blocks)
         self.assertIn("100000", gos)
         go = gos["100000"]
         self.assertEqual(go.name, "TestObject")
