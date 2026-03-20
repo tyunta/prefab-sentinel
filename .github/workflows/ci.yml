@@ -8,6 +8,28 @@ on:
   workflow_dispatch:
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install lint dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[lint]"
+
+      - name: Ruff check
+        run: ruff check prefab_sentinel/ tests/ scripts/ tools/
+
+      - name: Mypy
+        run: mypy prefab_sentinel/
+
   unit-tests:
     runs-on: ubuntu-latest
     steps:

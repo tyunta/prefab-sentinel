@@ -5,16 +5,42 @@ build-backend = "hatchling.build"
 [project]
 name = "prefab-sentinel"
 version = "0.1.67"
-description = "Phase 1 scaffold for Prefab Sentinel CLI and MCP contracts."
+description = "Prefab Sentinel CLI and MCP contracts for safe Unity Prefab/Scene editing."
 requires-python = ">=3.11"
 readme = "README.md"
 dependencies = []
 
 [project.optional-dependencies]
 test = ["unittest-parallel>=1.6,<2"]
+lint = ["ruff>=0.8", "mypy>=1.13"]
 
 [project.scripts]
 prefab-sentinel = "prefab_sentinel.cli:main"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "UP", "B", "SIM"]
+ignore = ["E501", "SIM103", "SIM117"]
+per-file-ignores = {"scripts/*" = ["E402", "B905"], "tools/*" = ["E402"]}
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+check_untyped_defs = true
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = [
+    "prefab_sentinel.mcp.serialized_object",
+    "prefab_sentinel.mcp.reference_resolver",
+    "prefab_sentinel.mcp.prefab_variant",
+    "prefab_sentinel.cli",
+]
+disable_error_code = ["arg-type", "index", "assignment", "var-annotated", "no-redef"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["prefab_sentinel"]
