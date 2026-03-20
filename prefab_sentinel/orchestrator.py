@@ -6,12 +6,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from prefab_sentinel.contracts import Severity, ToolResponse, max_severity
+from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse, max_severity
 from prefab_sentinel.mcp.prefab_variant import PrefabVariantMcp
 from prefab_sentinel.mcp.reference_resolver import ReferenceResolverMcp
 from prefab_sentinel.mcp.runtime_validation import RuntimeValidationMcp
 from prefab_sentinel.mcp.serialized_object import SerializedObjectMcp
 from prefab_sentinel.patch_plan import count_plan_ops, iter_resource_batches, normalize_patch_plan
+from prefab_sentinel.udon_wiring import analyze_wiring
+from prefab_sentinel.unity_assets import decode_text_file
 
 
 @dataclass(slots=True)
@@ -113,6 +115,79 @@ class Phase1Orchestrator:
                 ],
             },
             diagnostics=step.diagnostics,
+        )
+
+    def inspect_wiring(
+        self,
+        target_path: str,
+        *,
+        udon_only: bool = False,
+    ) -> ToolResponse:
+        path = Path(target_path)
+        if not path.exists():
+            return ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code="INSPECT_WIRING_FILE_NOT_FOUND",
+                message=f"Target file does not exist: {target_path}",
+                data={"target_path": target_path, "read_only": True},
+                diagnostics=[],
+            )
+
+        try:
+            text = decode_text_file(path)
+        except (OSError, UnicodeDecodeError) as exc:
+            return ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code="INSPECT_WIRING_READ_ERROR",
+                message=f"Failed to read target file: {exc}",
+                data={"target_path": target_path, "read_only": True},
+                diagnostics=[],
+            )
+
+        result = analyze_wiring(text, target_path, udon_only=udon_only)
+        diagnostics: list[Diagnostic] = (
+            result.null_references
+            + result.internal_broken_refs
+            + result.duplicate_references
+        )
+        success = result.max_severity not in (Severity.ERROR, Severity.CRITICAL)
+        component_summaries = [
+            {
+                "file_id": comp.file_id,
+                "game_object_file_id": comp.game_object_file_id,
+                "script_guid": comp.script_guid,
+                "is_udon_sharp": comp.is_udon_sharp,
+                "field_count": len(comp.fields),
+                "fields": [
+                    {
+                        "name": f.name,
+                        "file_id": f.file_id,
+                        "guid": f.guid,
+                        "line": f.line,
+                    }
+                    for f in comp.fields
+                ],
+            }
+            for comp in result.components
+        ]
+        return ToolResponse(
+            success=success,
+            severity=result.max_severity,
+            code="INSPECT_WIRING_RESULT",
+            message="inspect.wiring completed (read-only).",
+            data={
+                "target_path": target_path,
+                "udon_only": udon_only,
+                "read_only": True,
+                "component_count": len(result.components),
+                "null_reference_count": len(result.null_references),
+                "internal_broken_ref_count": len(result.internal_broken_refs),
+                "duplicate_reference_count": len(result.duplicate_references),
+                "components": component_summaries,
+            },
+            diagnostics=diagnostics,
         )
 
     def validate_refs(

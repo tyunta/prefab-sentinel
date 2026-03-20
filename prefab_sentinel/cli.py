@@ -90,6 +90,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     inspect_where_used.add_argument("--format", choices=("json", "md"), default="json")
 
+    inspect_wiring = inspect_sub.add_parser(
+        "wiring",
+        help="Inspect MonoBehaviour field wiring (null refs, broken fileIDs, duplicates).",
+    )
+    inspect_wiring.add_argument("--path", required=True, help="Path to target .prefab / .unity / .asset file.")
+    inspect_wiring.add_argument(
+        "--udon-only",
+        action="store_true",
+        help="Only inspect UdonSharp-backed MonoBehaviours.",
+    )
+    inspect_wiring.add_argument("--format", choices=("json", "md"), default="json")
+
     validate_parser = subparsers.add_parser("validate", help="Validation commands.")
     validate_sub = validate_parser.add_subparsers(dest="validate_command", required=True)
     validate_refs = validate_sub.add_parser("refs", help="Validate broken references in scope.")
@@ -747,6 +759,14 @@ def main(argv: list[str] | None = None) -> int:
             scope=args.scope,
             exclude_patterns=tuple(args.exclude),
             max_usages=args.max_usages,
+        )
+        _emit_payload(response.to_dict(), args.format)
+        return 0
+
+    if args.command == "inspect" and args.inspect_command == "wiring":
+        response = orchestrator.inspect_wiring(
+            target_path=args.path,
+            udon_only=args.udon_only,
         )
         _emit_payload(response.to_dict(), args.format)
         return 0

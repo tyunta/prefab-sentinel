@@ -529,6 +529,7 @@ uv run python -m pytest tests/ -v
 | `scripts/unity_bridge_smoke.py` | `tests/test_unity_bridge_smoke.py` |
 | `tools/unity_patch_bridge.py` | `tests/test_unity_patch_bridge.py` |
 | `scripts/bridge_smoke_samples.py` | `tests/test_bridge_smoke_samples.py` |
+| `prefab_sentinel/udon_wiring.py` | `tests/test_udon_wiring.py` |
 
 ### 14.2 統合
 - Base/Variant/Sceneの三層編集
