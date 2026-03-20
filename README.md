@@ -80,6 +80,8 @@ uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel --h
 
 ### 今すぐできること（Unity不要）
 - 参照破損の検出: `validate refs --scope ...` で Broken PPtr / missing fileID を検出
+- 構造検証: `validate structure --path ...` で fileID重複 / Transform不整合 / 孤立 / 欠損コンポーネントを検出（stripped Transform は偽陽性を排除）
+- 配線検査: `inspect wiring --path ...` で MonoBehaviour のフィールド配線を検査（`game_object_name`, `script_name` 付き、重複参照は same-component / cross-component を分類）
 - Variant観察: `inspect variant --path ...` で prefab chain / overrides / 実効値を可視化
 - 参照逆引き: `inspect where-used --asset-or-guid ... --scope ...` で利用箇所を列挙
 - ignore候補抽出: `suggest ignore-guids --scope ...` で候補GUIDを `decision_required` として提示

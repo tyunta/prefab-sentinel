@@ -15,7 +15,11 @@ from prefab_sentinel.mcp.serialized_object import SerializedObjectMcp
 from prefab_sentinel.patch_plan import count_plan_ops, iter_resource_batches, normalize_patch_plan
 from prefab_sentinel.structure_validator import validate_structure
 from prefab_sentinel.udon_wiring import analyze_wiring
-from prefab_sentinel.unity_assets import decode_text_file
+from prefab_sentinel.unity_assets import (
+    collect_project_guid_index,
+    decode_text_file,
+    find_project_root,
+)
 
 
 @dataclass(slots=True)
@@ -162,11 +166,29 @@ class Phase1Orchestrator:
             + result.duplicate_references
         )
         success = result.max_severity not in (Severity.ERROR, Severity.CRITICAL)
+
+        def _go_name(comp_go_fid: str) -> str:
+            go = result.game_objects.get(comp_go_fid)
+            return go.name if go and go.name else ""
+
+        # Best-effort GUID→script name resolution
+        guid_to_name: dict[str, str] = {}
+        try:
+            proj_root = find_project_root(Path(target_path))
+            guid_index = collect_project_guid_index(proj_root, include_package_cache=False)
+            for guid, asset_path in guid_index.items():
+                if asset_path.suffix == ".cs":
+                    guid_to_name[guid] = asset_path.stem
+        except Exception:
+            pass  # best-effort: leave guid_to_name empty
+
         component_summaries = [
             {
                 "file_id": comp.file_id,
                 "game_object_file_id": comp.game_object_file_id,
+                "game_object_name": _go_name(comp.game_object_file_id),
                 "script_guid": comp.script_guid,
+                "script_name": guid_to_name.get(comp.script_guid, ""),
                 "is_udon_sharp": comp.is_udon_sharp,
                 "field_count": len(comp.fields),
                 "fields": [

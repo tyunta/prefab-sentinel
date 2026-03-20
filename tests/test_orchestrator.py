@@ -111,6 +111,65 @@ class InspectVariantTests(unittest.TestCase):
         self.assertEqual(Severity.WARNING, result.severity)
 
 
+class InspectWiringTests(unittest.TestCase):
+    def test_script_name_and_game_object_name(self) -> None:
+        """inspect_wiring should include script_name and game_object_name in component summaries."""
+        import tempfile
+        from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
+
+        text = (
+            YAML_HEADER
+            + make_gameobject("100", "MyObj", ["200"])
+            + make_monobehaviour("200", "100", guid="aabbccdd11223344aabbccdd11223344")
+            + "  someField: {fileID: 100}\n"
+        )
+        with tempfile.NamedTemporaryFile(suffix=".prefab", mode="w", delete=False) as f:
+            f.write(text)
+            f.flush()
+            orch = _make_orchestrator()
+            # Mock find_project_root and collect_project_guid_index
+            with patch(
+                "prefab_sentinel.orchestrator.find_project_root",
+                return_value=Path("/fake"),
+            ), patch(
+                "prefab_sentinel.orchestrator.collect_project_guid_index",
+                return_value={"aabbccdd11223344aabbccdd11223344": Path("/fake/Assets/Scripts/MyScript.cs")},
+            ):
+                result = orch.inspect_wiring(f.name)
+
+        self.assertTrue(result.success)
+        comps = result.data["components"]
+        self.assertEqual(len(comps), 1)
+        self.assertEqual(comps[0]["game_object_name"], "MyObj")
+        self.assertEqual(comps[0]["script_name"], "MyScript")
+
+    def test_script_name_empty_on_project_root_failure(self) -> None:
+        """script_name should be empty when project root cannot be determined."""
+        import tempfile
+        from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
+
+        text = (
+            YAML_HEADER
+            + make_gameobject("100", "Obj", ["200"])
+            + make_monobehaviour("200", "100")
+            + "  ref: {fileID: 100}\n"
+        )
+        with tempfile.NamedTemporaryFile(suffix=".prefab", mode="w", delete=False) as f:
+            f.write(text)
+            f.flush()
+            orch = _make_orchestrator()
+            with patch(
+                "prefab_sentinel.orchestrator.find_project_root",
+                side_effect=Exception("no project root"),
+            ):
+                result = orch.inspect_wiring(f.name)
+
+        self.assertTrue(result.success)
+        comps = result.data["components"]
+        self.assertEqual(len(comps), 1)
+        self.assertEqual(comps[0]["script_name"], "")
+
+
 class InspectWhereUsedTests(unittest.TestCase):
     def test_passthrough(self) -> None:
         orch = _make_orchestrator()

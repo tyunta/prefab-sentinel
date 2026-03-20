@@ -232,6 +232,31 @@ MonoBehaviour:
   validRef: {fileID: 700000}
 """
 
+SAME_COMPONENT_DUPLICATE = """\
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &800000
+GameObject:
+  m_ObjectHideFlags: 0
+  m_Name: SameDupObj
+  m_Component:
+  - component: {fileID: 800001}
+--- !u!114 &800001
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 800000}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: aabbccdd11223344aabbccdd11223344, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  fieldA: {fileID: 800000}
+  fieldB: {fileID: 800000}
+"""
+
 NESTED_STRUCT = """\
 %YAML 1.1
 %TAG !u! tag:unity3d.com,2011:
@@ -521,10 +546,33 @@ class AnalyzeWiringTests(unittest.TestCase):
         self.assertEqual(len(result.null_references), 0)
         self.assertEqual(len(result.internal_broken_refs), 0)
 
+    def test_game_objects_populated(self) -> None:
+        result = analyze_wiring(BASIC_MONOBEHAVIOUR, "test.prefab")
+        self.assertIn("100000", result.game_objects)
+        self.assertEqual(result.game_objects["100000"].name, "TestObject")
+
+    def test_game_objects_empty_when_no_components(self) -> None:
+        result = analyze_wiring("", "test.prefab")
+        self.assertEqual(result.game_objects, {})
+
     def test_array_null_ref_detected(self) -> None:
         result = analyze_wiring(ARRAY_FIELDS, "test.prefab")
         null_names = [d.detail for d in result.null_references]
         self.assertTrue(any("targets" in n for n in null_names))
+
+    def test_same_component_duplicate_is_warning(self) -> None:
+        result = analyze_wiring(SAME_COMPONENT_DUPLICATE, "test.prefab")
+        same_diags = [d for d in result.duplicate_references if "[same-component]" in d.detail]
+        self.assertGreater(len(same_diags), 0)
+        # Same-component duplicates should raise severity to WARNING
+        self.assertEqual(result.max_severity, Severity.WARNING)
+
+    def test_cross_component_duplicate_is_info(self) -> None:
+        result = analyze_wiring(DUPLICATE_REF, "test.prefab")
+        cross_diags = [d for d in result.duplicate_references if "[cross-component]" in d.detail]
+        self.assertGreater(len(cross_diags), 0)
+        # Cross-component duplicates should remain INFO
+        self.assertEqual(result.max_severity, Severity.INFO)
 
 
 if __name__ == "__main__":

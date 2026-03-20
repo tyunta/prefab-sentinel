@@ -72,6 +72,7 @@ class WiringResult:
     duplicate_references: list[Diagnostic]
     internal_broken_refs: list[Diagnostic]
     max_severity: Severity
+    game_objects: dict[str, GameObjectInfo]
 
 
 # ---------------------------------------------------------------------------
@@ -214,6 +215,7 @@ def analyze_wiring(
             duplicate_references=[],
             internal_broken_refs=[],
             max_severity=Severity.INFO,
+            game_objects=game_objects,
         )
 
     null_references: list[Diagnostic] = []
@@ -263,16 +265,35 @@ def analyze_wiring(
     for (target_fid, _target_guid), sources in ref_targets.items():
         if len(sources) < 2:
             continue
+        # Group by component to distinguish same-component vs cross-component
+        by_component: dict[str, list[str]] = {}
+        for cid, fname in sources:
+            by_component.setdefault(cid, []).append(fname)
+
         source_labels = [f"fileID:{cid}.{fname}" for cid, fname in sources]
-        duplicate_refs.append(
-            Diagnostic(
-                path=file_path,
-                location=f"fileID:{target_fid}",
-                detail=f"Duplicate reference target from {len(sources)} fields: {', '.join(source_labels)}",
-                evidence=f"{{fileID: {target_fid}}}",
+        has_same_component = any(len(fields) >= 2 for fields in by_component.values())
+        is_cross_component = len(by_component) >= 2
+
+        if has_same_component:
+            duplicate_refs.append(
+                Diagnostic(
+                    path=file_path,
+                    location=f"fileID:{target_fid}",
+                    detail=f"[same-component] Duplicate reference target from {len(sources)} fields: {', '.join(source_labels)}",
+                    evidence=f"{{fileID: {target_fid}}}",
+                )
             )
-        )
-        severities.append(Severity.INFO)
+            severities.append(Severity.WARNING)
+        if is_cross_component:
+            duplicate_refs.append(
+                Diagnostic(
+                    path=file_path,
+                    location=f"fileID:{target_fid}",
+                    detail=f"[cross-component] Duplicate reference target from {len(sources)} fields: {', '.join(source_labels)}",
+                    evidence=f"{{fileID: {target_fid}}}",
+                )
+            )
+            severities.append(Severity.INFO)
 
     overall = max_severity(severities) if severities else Severity.INFO
 
@@ -282,4 +303,5 @@ def analyze_wiring(
         duplicate_references=duplicate_refs,
         internal_broken_refs=internal_broken,
         max_severity=overall,
+        game_objects=game_objects,
     )
