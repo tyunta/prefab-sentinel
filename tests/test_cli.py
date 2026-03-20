@@ -2644,6 +2644,82 @@ PrefabInstance:
             content = dst.read_text(encoding="utf-8")
             self.assertIn("# Prefab Sentinel Validation Report", content)
 
+    def test_report_export_writes_csv(self) -> None:
+        payload = {
+            "success": False,
+            "severity": "error",
+            "code": "VALIDATE_REFS_RESULT",
+            "message": "broken",
+            "data": {"scope": "Assets/demo"},
+            "diagnostics": [
+                {
+                    "path": "Assets/Foo.prefab",
+                    "location": "10:5",
+                    "detail": "missing_asset",
+                    "evidence": "guid abc not found",
+                },
+            ],
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            src = temp / "input.json"
+            dst = temp / "out.csv"
+            src.write_text(json.dumps(payload), encoding="utf-8")
+
+            exit_code, output = self.run_cli(
+                [
+                    "report",
+                    "export",
+                    "--input",
+                    str(src),
+                    "--format",
+                    "csv",
+                    "--out",
+                    str(dst),
+                ]
+            )
+
+            self.assertEqual(0, exit_code)
+            self.assertIn("Exported report:", output)
+            self.assertTrue(dst.exists())
+            content = dst.read_text(encoding="utf-8")
+            self.assertIn("path,location,detail,evidence", content)
+            self.assertIn("Assets/Foo.prefab", content)
+
+    def test_report_export_csv_with_summary(self) -> None:
+        payload = {
+            "success": True,
+            "severity": "info",
+            "code": "REF_SCAN_OK",
+            "message": "ok",
+            "data": {"scanned_files": 10, "scanned_references": 100},
+            "diagnostics": [],
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            src = temp / "input.json"
+            dst = temp / "out.csv"
+            src.write_text(json.dumps(payload), encoding="utf-8")
+
+            exit_code, _ = self.run_cli(
+                [
+                    "report",
+                    "export",
+                    "--input",
+                    str(src),
+                    "--format",
+                    "csv",
+                    "--out",
+                    str(dst),
+                    "--csv-include-summary",
+                ]
+            )
+
+            self.assertEqual(0, exit_code)
+            content = dst.read_text(encoding="utf-8")
+            self.assertIn("key,value", content)
+            self.assertIn("scanned_files,10", content)
+
     def test_report_smoke_history_writes_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)

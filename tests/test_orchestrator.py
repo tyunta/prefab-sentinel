@@ -111,6 +111,95 @@ class InspectVariantTests(unittest.TestCase):
         self.assertEqual(Severity.WARNING, result.severity)
 
 
+class FileTypeGuardTests(unittest.TestCase):
+    def test_inspect_wiring_warns_on_controller_file(self) -> None:
+        import tempfile
+
+        text = "--- !u!91 &100\nAnimatorController:\n  m_Name: Test\n"
+        with tempfile.NamedTemporaryFile(suffix=".controller", mode="w", delete=False) as f:
+            f.write(text)
+            f.flush()
+            orch = _make_orchestrator()
+            result = orch.inspect_wiring(f.name)
+        self.assertTrue(result.success)
+        self.assertEqual(Severity.WARNING, result.severity)
+        self.assertEqual("INSPECT_WIRING_NO_MONOBEHAVIOURS", result.code)
+        self.assertEqual(".controller", result.data["file_type"])
+
+    def test_inspect_wiring_warns_on_anim_file(self) -> None:
+        import tempfile
+
+        text = "--- !u!74 &100\nAnimationClip:\n  m_Name: Test\n"
+        with tempfile.NamedTemporaryFile(suffix=".anim", mode="w", delete=False) as f:
+            f.write(text)
+            f.flush()
+            orch = _make_orchestrator()
+            result = orch.inspect_wiring(f.name)
+        self.assertTrue(result.success)
+        self.assertEqual(Severity.WARNING, result.severity)
+        self.assertEqual("INSPECT_WIRING_NO_MONOBEHAVIOURS", result.code)
+
+    def test_inspect_hierarchy_warns_on_anim_file(self) -> None:
+        import tempfile
+
+        text = "--- !u!74 &100\nAnimationClip:\n  m_Name: Test\n"
+        with tempfile.NamedTemporaryFile(suffix=".anim", mode="w", delete=False) as f:
+            f.write(text)
+            f.flush()
+            orch = _make_orchestrator()
+            result = orch.inspect_hierarchy(f.name)
+        self.assertTrue(result.success)
+        self.assertEqual(Severity.WARNING, result.severity)
+        self.assertEqual("INSPECT_HIERARCHY_NO_GAMEOBJECTS", result.code)
+        self.assertEqual(".anim", result.data["file_type"])
+
+    def test_inspect_structure_annotates_checks_on_controller_file(self) -> None:
+        import tempfile
+
+        text = "--- !u!91 &100\nAnimatorController:\n  m_Name: Test\n"
+        with tempfile.NamedTemporaryFile(suffix=".controller", mode="w", delete=False) as f:
+            f.write(text)
+            f.flush()
+            orch = _make_orchestrator()
+            result = orch.inspect_structure(f.name)
+        self.assertTrue(result.success)
+        self.assertEqual(["duplicate_file_id"], result.data["checks_performed"])
+        self.assertIn("transform_consistency", result.data["checks_skipped"])
+        self.assertIn(".controller", result.data["skip_reason"])
+
+    def test_inspect_structure_all_checks_on_prefab(self) -> None:
+        import tempfile
+        from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_transform
+
+        text = YAML_HEADER + make_gameobject("100", "Root", ["200"]) + make_transform("200", "100")
+        with tempfile.NamedTemporaryFile(suffix=".prefab", mode="w", delete=False) as f:
+            f.write(text)
+            f.flush()
+            orch = _make_orchestrator()
+            result = orch.inspect_structure(f.name)
+        self.assertTrue(result.success)
+        self.assertEqual(4, len(result.data["checks_performed"]))
+        self.assertEqual([], result.data["checks_skipped"])
+        self.assertEqual("", result.data["skip_reason"])
+
+    def test_inspect_wiring_normal_on_prefab(self) -> None:
+        """Prefab files should proceed normally, not trigger the guard."""
+        import tempfile
+        from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
+
+        text = YAML_HEADER + make_gameobject("100", "Obj", ["200"]) + make_monobehaviour("200", "100")
+        with tempfile.NamedTemporaryFile(suffix=".prefab", mode="w", delete=False) as f:
+            f.write(text)
+            f.flush()
+            orch = _make_orchestrator()
+            with patch(
+                "prefab_sentinel.orchestrator.find_project_root",
+                side_effect=Exception("no project"),
+            ):
+                result = orch.inspect_wiring(f.name)
+        self.assertEqual("INSPECT_WIRING_RESULT", result.code)
+
+
 class InspectWiringTests(unittest.TestCase):
     def test_script_name_and_game_object_name(self) -> None:
         """inspect_wiring should include script_name and game_object_name in component summaries."""

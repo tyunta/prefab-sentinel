@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import csv
+import io
 import unittest
 
-from prefab_sentinel.reporting import render_markdown_report
+from prefab_sentinel.reporting import render_csv_report, render_markdown_report
 
 
 class ReportingTests(unittest.TestCase):
@@ -162,6 +164,146 @@ class ReportingTests(unittest.TestCase):
         self.assertIn("Matched Issues: 3", rendered)
         self.assertIn("| UDON_NULLREF | 2 |", rendered)
         self.assertIn("| BROKEN_PPTR | 1 |", rendered)
+
+
+    def test_render_markdown_report_shows_asset_name_in_noise_section(self) -> None:
+        payload = {
+            "success": False,
+            "severity": "error",
+            "code": "VALIDATE_REFS_RESULT",
+            "message": "broken refs detected.",
+            "data": {
+                "steps": [
+                    {
+                        "step": "scan_broken_references",
+                        "result": {
+                            "data": {
+                                "categories_occurrences": {
+                                    "missing_asset": 50,
+                                    "missing_local_id": 0,
+                                },
+                                "ignored_missing_asset_occurrences": 10,
+                                "skipped_external_prefab_fileid_checks": 0,
+                                "top_missing_asset_guids": [
+                                    {
+                                        "guid": "aaaa" * 8,
+                                        "occurrences": 50,
+                                        "asset_name": "Packages/com.unity.textmeshpro/TMP.cs",
+                                    }
+                                ],
+                                "top_ignored_missing_asset_guids": [
+                                    {
+                                        "guid": "bbbb" * 8,
+                                        "occurrences": 10,
+                                        "asset_name": "Assets/Old/Removed.mat",
+                                    }
+                                ],
+                            }
+                        },
+                    }
+                ]
+            },
+            "diagnostics": [],
+        }
+
+        rendered = render_markdown_report(payload)
+
+        self.assertIn(
+            "Top Missing Asset GUID: "
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "
+            "(Packages/com.unity.textmeshpro/TMP.cs) (50)",
+            rendered,
+        )
+        self.assertIn(
+            "Top Ignored Missing Asset GUID: "
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb "
+            "(Assets/Old/Removed.mat) (10)",
+            rendered,
+        )
+
+
+class CsvReportTests(unittest.TestCase):
+    def test_render_csv_report_diagnostics_only(self) -> None:
+        payload = {
+            "success": False,
+            "severity": "error",
+            "code": "VALIDATE_REFS_RESULT",
+            "message": "broken",
+            "data": {},
+            "diagnostics": [
+                {
+                    "path": "Assets/Foo.prefab",
+                    "location": "10:5",
+                    "detail": "missing_asset",
+                    "evidence": "guid abc not found",
+                },
+                {
+                    "path": "Assets/Bar.unity",
+                    "location": "20:3",
+                    "detail": "missing_local_id",
+                    "evidence": "fileID 123 not found",
+                },
+            ],
+        }
+
+        result = render_csv_report(payload)
+        reader = csv.reader(io.StringIO(result))
+        rows = list(reader)
+
+        self.assertEqual(rows[0], ["path", "location", "detail", "evidence"])
+        self.assertEqual(rows[1][0], "Assets/Foo.prefab")
+        self.assertEqual(rows[1][2], "missing_asset")
+        self.assertEqual(rows[2][0], "Assets/Bar.unity")
+        self.assertEqual(len(rows), 3)
+
+    def test_render_csv_report_with_summary(self) -> None:
+        payload = {
+            "success": True,
+            "severity": "info",
+            "code": "REF_SCAN_OK",
+            "message": "No broken references.",
+            "data": {
+                "scanned_files": 42,
+                "scanned_references": 1000,
+                "broken_count": 0,
+                "broken_occurrences": 0,
+            },
+            "diagnostics": [],
+        }
+
+        result = render_csv_report(payload, include_summary=True)
+        lines = result.split("\n")
+
+        # Summary section starts with key,value header
+        self.assertIn("key,value", lines[0])
+        # Contains metadata
+        self.assertIn("success,True", result)
+        self.assertIn("scanned_files,42", result)
+
+        # Blank line separates summary from diagnostics
+        reader = csv.reader(io.StringIO(result))
+        rows = list(reader)
+        # After summary rows + blank line, diagnostics header is present
+        diag_header_found = any(row == ["path", "location", "detail", "evidence"] for row in rows)
+        self.assertTrue(diag_header_found)
+
+    def test_render_csv_report_empty_diagnostics(self) -> None:
+        payload = {
+            "success": True,
+            "severity": "info",
+            "code": "OK",
+            "message": "ok",
+            "data": {},
+            "diagnostics": [],
+        }
+
+        result = render_csv_report(payload)
+        reader = csv.reader(io.StringIO(result))
+        rows = list(reader)
+
+        # Only the header row
+        self.assertEqual(rows[0], ["path", "location", "detail", "evidence"])
+        self.assertEqual(len([r for r in rows if r]), 1)
 
 
 if __name__ == "__main__":

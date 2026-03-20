@@ -94,7 +94,11 @@ def build_parser() -> argparse.ArgumentParser:
         "wiring",
         help="Inspect MonoBehaviour field wiring (null refs, broken fileIDs, duplicates).",
     )
-    inspect_wiring.add_argument("--path", required=True, help="Path to target .prefab / .unity / .asset file.")
+    inspect_wiring.add_argument(
+        "--path",
+        required=True,
+        help="Path to target .prefab / .unity / .asset file. Other Unity YAML files are accepted but return a guidance warning.",
+    )
     inspect_wiring.add_argument(
         "--udon-only",
         action="store_true",
@@ -106,7 +110,11 @@ def build_parser() -> argparse.ArgumentParser:
         "hierarchy",
         help="Display GameObject hierarchy tree of a Unity YAML file.",
     )
-    inspect_hierarchy.add_argument("--path", required=True, help="Path to target .prefab / .unity / .asset file.")
+    inspect_hierarchy.add_argument(
+        "--path",
+        required=True,
+        help="Path to target .prefab / .unity / .asset file. Other Unity YAML files are accepted but return a guidance warning.",
+    )
     inspect_hierarchy.add_argument(
         "--depth",
         type=int,
@@ -126,7 +134,11 @@ def build_parser() -> argparse.ArgumentParser:
         "structure",
         help="Validate internal YAML structure (fileID duplicates, Transform consistency, component refs).",
     )
-    validate_structure.add_argument("--path", required=True, help="Path to target .prefab / .unity / .asset file.")
+    validate_structure.add_argument(
+        "--path",
+        required=True,
+        help="Path to any Unity YAML file. Full checks on .prefab / .unity / .asset; fileID duplicate check only on other types.",
+    )
     validate_structure.add_argument("--format", choices=("json", "md"), default="json")
 
     validate_refs = validate_sub.add_parser("refs", help="Validate broken references in scope.")
@@ -583,7 +595,7 @@ def build_parser() -> argparse.ArgumentParser:
     report_sub = report_parser.add_subparsers(dest="report_command", required=True)
     report_export = report_sub.add_parser("export", help="Export a stored JSON report.")
     report_export.add_argument("--input", required=True, help="Input report JSON path.")
-    report_export.add_argument("--format", choices=("json", "md"), required=True)
+    report_export.add_argument("--format", choices=("json", "md", "csv"), required=True)
     report_export.add_argument("--out", required=True, help="Output report path.")
     report_export.add_argument(
         "--md-max-usages",
@@ -606,6 +618,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--md-omit-steps",
         action="store_true",
         help="When --format md, omit all steps arrays from payload data.",
+    )
+    report_export.add_argument(
+        "--csv-include-summary",
+        action="store_true",
+        help="When --format csv, prepend envelope metadata rows before diagnostics table.",
     )
     report_smoke_history = report_sub.add_parser(
         "smoke-history",
@@ -1387,6 +1404,7 @@ def main(argv: list[str] | None = None) -> int:
             fmt=args.format,
             md_max_usages=md_max_usages,
             md_max_steps=md_max_steps,
+            csv_include_summary=args.csv_include_summary,
         )
         print(f"Exported report: {output}")
         return 0

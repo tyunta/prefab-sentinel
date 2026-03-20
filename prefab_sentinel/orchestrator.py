@@ -16,6 +16,7 @@ from prefab_sentinel.patch_plan import count_plan_ops, iter_resource_batches, no
 from prefab_sentinel.structure_validator import validate_structure
 from prefab_sentinel.udon_wiring import analyze_wiring
 from prefab_sentinel.unity_assets import (
+    GAMEOBJECT_BEARING_SUFFIXES,
     collect_project_guid_index,
     decode_text_file,
     find_project_root,
@@ -159,6 +160,21 @@ class Phase1Orchestrator:
             return text_or_error
         text = text_or_error
 
+        suffix = Path(target_path).suffix.lower()
+        if suffix not in GAMEOBJECT_BEARING_SUFFIXES:
+            return ToolResponse(
+                success=True,
+                severity=Severity.WARNING,
+                code="INSPECT_WIRING_NO_MONOBEHAVIOURS",
+                message=(
+                    f"inspect.wiring is not applicable to {suffix} files "
+                    f"(no MonoBehaviour components). "
+                    f"Use validate refs to check external reference integrity."
+                ),
+                data={"target_path": target_path, "file_type": suffix, "read_only": True},
+                diagnostics=[],
+            )
+
         result = analyze_wiring(text, target_path, udon_only=udon_only)
         diagnostics: list[Diagnostic] = (
             result.null_references
@@ -233,6 +249,21 @@ class Phase1Orchestrator:
             return text_or_error
         text = text_or_error
 
+        suffix = Path(target_path).suffix.lower()
+        if suffix not in GAMEOBJECT_BEARING_SUFFIXES:
+            return ToolResponse(
+                success=True,
+                severity=Severity.WARNING,
+                code="INSPECT_HIERARCHY_NO_GAMEOBJECTS",
+                message=(
+                    f"inspect.hierarchy is not applicable to {suffix} files "
+                    f"(no GameObject/Transform structure). "
+                    f"Use validate refs to check external reference integrity."
+                ),
+                data={"target_path": target_path, "file_type": suffix, "read_only": True},
+                diagnostics=[],
+            )
+
         result = analyze_hierarchy(text)
         tree_text = format_tree(
             result,
@@ -284,6 +315,18 @@ class Phase1Orchestrator:
             + result.orphaned_transforms
         )
         success = result.max_severity not in (Severity.ERROR, Severity.CRITICAL)
+
+        suffix = Path(target_path).suffix.lower()
+        all_checks = ["duplicate_file_id", "transform_consistency", "missing_components", "orphaned_transforms"]
+        if suffix in GAMEOBJECT_BEARING_SUFFIXES:
+            checks_performed = all_checks
+            checks_skipped: list[str] = []
+            skip_reason = ""
+        else:
+            checks_performed = ["duplicate_file_id"]
+            checks_skipped = ["transform_consistency", "missing_components", "orphaned_transforms"]
+            skip_reason = f"File type {suffix} has no GameObject/Transform structure"
+
         return ToolResponse(
             success=success,
             severity=result.max_severity,
@@ -296,6 +339,9 @@ class Phase1Orchestrator:
                 "transform_inconsistency_count": len(result.transform_inconsistencies),
                 "missing_component_count": len(result.missing_components),
                 "orphaned_transform_count": len(result.orphaned_transforms),
+                "checks_performed": checks_performed,
+                "checks_skipped": checks_skipped,
+                "skip_reason": skip_reason,
             },
             diagnostics=diagnostics,
         )
@@ -387,13 +433,15 @@ class Phase1Orchestrator:
                 if missing_asset_occurrences > 0
                 else 0.0
             )
-            candidates.append(
-                {
-                    "guid": item.get("guid", ""),
-                    "occurrences": occurrences,
-                    "share_of_missing_asset_occurrences": round(share, 6),
-                }
-            )
+            entry: dict[str, object] = {
+                "guid": item.get("guid", ""),
+                "occurrences": occurrences,
+                "share_of_missing_asset_occurrences": round(share, 6),
+            }
+            asset_name = item.get("asset_name", "")
+            if asset_name:
+                entry["asset_name"] = asset_name
+            candidates.append(entry)
             if len(candidates) >= effective_max_items:
                 break
 
@@ -402,6 +450,7 @@ class Phase1Orchestrator:
                 "action": "ignore_guid",
                 "guid": item.get("guid", ""),
                 "occurrences": item.get("occurrences", 0),
+                **({"asset_name": item["asset_name"]} if item.get("asset_name") else {}),
             }
             for item in candidates
         ]

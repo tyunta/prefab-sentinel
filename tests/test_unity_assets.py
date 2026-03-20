@@ -455,5 +455,60 @@ class ResolveScopePathTests(unittest.TestCase):
         self.assertEqual(result, Path("/absolute/path").resolve())
 
 
+class ResolveGuidToAssetNameTests(unittest.TestCase):
+    def test_known_guid_returns_relative_path(self) -> None:
+        from prefab_sentinel.unity_assets import resolve_guid_to_asset_name
+
+        proj = Path("/project")
+        index = {"aabb" * 8: Path("/project/Assets/Scripts/Foo.cs")}
+        result = resolve_guid_to_asset_name("aabb" * 8, index, proj)
+        self.assertEqual(result, "Assets/Scripts/Foo.cs")
+
+    def test_unknown_guid_returns_empty(self) -> None:
+        from prefab_sentinel.unity_assets import resolve_guid_to_asset_name
+
+        result = resolve_guid_to_asset_name("dead" * 8, {}, Path("/project"))
+        self.assertEqual(result, "")
+
+    def test_no_project_root_returns_posix_path(self) -> None:
+        from prefab_sentinel.unity_assets import resolve_guid_to_asset_name
+
+        index = {"aabb" * 8: Path("/some/Assets/Foo.cs")}
+        result = resolve_guid_to_asset_name("aabb" * 8, index)
+        self.assertIn("Foo.cs", result)
+
+    def test_normalizes_guid_case(self) -> None:
+        from prefab_sentinel.unity_assets import resolve_guid_to_asset_name
+
+        index = {"aabb" * 8: Path("/project/Assets/Bar.cs")}
+        result = resolve_guid_to_asset_name("AABB" * 8, index, Path("/project"))
+        self.assertEqual(result, "Assets/Bar.cs")
+
+
+class CollectPackageGuidNamesTests(unittest.TestCase):
+    def test_returns_package_names_from_lock_file(self) -> None:
+        from prefab_sentinel.unity_assets import collect_package_guid_names
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pkg_dir = Path(tmpdir) / "Packages"
+            pkg_dir.mkdir()
+            lock = pkg_dir / "packages-lock.json"
+            lock.write_text(
+                '{"dependencies": {"com.unity.textmeshpro": {"version": "3.0.0"}, '
+                '"com.unity.ugui": {"version": "1.0.0"}}}',
+                encoding="utf-8",
+            )
+            result = collect_package_guid_names(Path(tmpdir))
+        self.assertIn("com.unity.textmeshpro", result)
+        self.assertIn("com.unity.ugui", result)
+
+    def test_missing_lock_file_returns_empty(self) -> None:
+        from prefab_sentinel.unity_assets import collect_package_guid_names
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = collect_package_guid_names(Path(tmpdir))
+        self.assertEqual(result, {})
+
+
 if __name__ == "__main__":
     unittest.main()

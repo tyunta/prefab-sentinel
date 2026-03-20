@@ -18,6 +18,7 @@ from prefab_sentinel.unity_assets import (
     iter_references,
     looks_like_guid,
     normalize_guid,
+    resolve_guid_to_asset_name,
     resolve_scope_path,
 )
 
@@ -468,11 +469,23 @@ class ReferenceResolverMcp:
                     "missing_local_id": raw_counts["missing_local_id"],
                 },
                 "top_missing_asset_guids": [
-                    {"guid": guid, "occurrences": count}
+                    {
+                        "guid": guid,
+                        "occurrences": count,
+                        "asset_name": resolve_guid_to_asset_name(
+                            guid, guid_map, scan_project_root,
+                        ),
+                    }
                     for guid, count in missing_asset_guid_occurrences.most_common(top_guid_limit)
                 ],
                 "top_ignored_missing_asset_guids": [
-                    {"guid": guid, "occurrences": count}
+                    {
+                        "guid": guid,
+                        "occurrences": count,
+                        "asset_name": resolve_guid_to_asset_name(
+                            guid, guid_map, scan_project_root,
+                        ),
+                    }
                     for guid, count in ignored_missing_asset_guid_occurrences.most_common(
                         top_guid_limit
                     )

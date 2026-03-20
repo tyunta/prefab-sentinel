@@ -9,22 +9,11 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from prefab_sentinel.plan_builder import PatchPlanBuilder
-from prefab_sentinel.unity_assets import (
-    UNITY_BUILTIN_EXTRA_GUID,
-    UNITY_DEFAULT_RESOURCES_GUID,
+from prefab_sentinel.builtin_assets import (
+    BUILTIN_DEFAULT_MATERIAL,
+    BUILTIN_SPHERE_MESH,
 )
-
-BUILTIN_SPHERE_MESH: dict[str, Any] = {
-    "fileID": 10207,
-    "guid": UNITY_DEFAULT_RESOURCES_GUID,  # Library/unity default resources
-    "type": 0,
-}
-BUILTIN_DEFAULT_MATERIAL: dict[str, Any] = {
-    "fileID": 10303,
-    "guid": UNITY_BUILTIN_EXTRA_GUID,  # Resources/unity_builtin_extra
-    "type": 0,
-}
+from prefab_sentinel.plan_builder import PatchPlanBuilder
 
 _AXIS_COMPONENTS: dict[str, tuple[str, str]] = {
     "xz": ("x", "z"),

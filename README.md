@@ -79,9 +79,9 @@ uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel --h
 ### 1.1 できることと効果
 
 ### 今すぐできること（Unity不要）
-- 参照破損の検出: `validate refs --scope ...` で Broken PPtr / missing fileID を検出
-- 構造検証: `validate structure --path ...` で fileID重複 / Transform不整合 / 孤立 / 欠損コンポーネントを検出（stripped Transform は偽陽性を排除）
-- 配線検査: `inspect wiring --path ...` で MonoBehaviour のフィールド配線を検査（`game_object_name`, `script_name` 付き、重複参照は same-component / cross-component を分類）
+- 参照破損の検出: `validate refs --scope ...` で Broken PPtr / missing fileID を検出（`.anim` / `.controller` / `.overridecontroller` を含む全 Unity YAML ファイル対応）
+- 構造検証: `validate structure --path ...` で fileID重複 / Transform不整合 / 孤立 / 欠損コンポーネントを検出（stripped Transform は偽陽性を排除。`.anim` / `.controller` は fileID 重複チェックのみ実施）
+- 配線検査: `inspect wiring --path ...` で MonoBehaviour のフィールド配線を検査（`game_object_name`, `script_name` 付き、重複参照は same-component / cross-component を分類。`.prefab` / `.unity` / `.asset` 専用）
 - Variant観察: `inspect variant --path ...` で prefab chain / overrides / 実効値を可視化
 - 参照逆引き: `inspect where-used --asset-or-guid ... --scope ...` で利用箇所を列挙
 - ignore候補抽出: `suggest ignore-guids --scope ...` で候補GUIDを `decision_required` として提示
@@ -663,10 +663,14 @@ uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel sug
 
 ### 17.2 レポート / ignore-guid
 
-- `report export` は JSON レポートを Markdown / JSON に変換して保存する。
+- `report export` は JSON レポートを Markdown / JSON / CSV に変換して保存する。
+- `report export --format csv` は diagnostics テーブル（`path, location, detail, evidence`）を CSV 形式で出力する。
+- `report export --format csv --csv-include-summary` でエンベロープメタデータ行（success, severity, code, message, scanned_files 等）を diagnostics テーブルの前に追加できる。
 - `--ignore-guid-file` は UTF-8 テキスト（1行1GUID、`#` 以降コメント可）を受け付ける。未指定時は `<scope>/config/ignore_guids.txt` を参照し、存在しなければ無視する。
 - `suggest ignore-guids` は `--out-ignore-guid-file` で候補 GUID を 1 行 1 件で保存できる（`replace` / `append`）。
-- `report export --format md` では、`scan_broken_references` データが含まれる場合に Noise Reduction サマリーを先頭に出力する。
+- `suggest ignore-guids` の候補出力には、GUID に対応するアセットパス（`asset_name`）がベストエフォートで付記される。
+- `validate refs` の `top_missing_asset_guids` / `top_ignored_missing_asset_guids` には、GUID→アセットパスのベストエフォート解決結果（`asset_name`）が含まれる。
+- `report export --format md` では、`scan_broken_references` データが含まれる場合に Noise Reduction サマリーを先頭に出力する。Noise Reduction の Top GUID 表示には `asset_name` が付記される。
 - `report export --format md` は `--md-max-usages N` / `--md-omit-usages` で `usages` 配列を軽量化できる。
 - `report export --format md` は `--md-max-steps N` / `--md-omit-steps` で `steps` 配列を軽量化できる。
 ### 17.3 ベンチマーク
@@ -836,6 +840,8 @@ uv run prefab-sentinel report export --input reports/input.json --format md --ou
 uv run prefab-sentinel report export --input reports/input.json --format md --out reports/latest.md --md-omit-usages
 uv run prefab-sentinel report export --input reports/input.json --format md --out reports/latest.md --md-max-steps 20
 uv run prefab-sentinel report export --input reports/input.json --format md --out reports/latest.md --md-omit-steps
+uv run prefab-sentinel report export --input reports/input.json --format csv --out reports/latest.csv
+uv run prefab-sentinel report export --input reports/input.json --format csv --out reports/latest.csv --csv-include-summary
 uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel report export --input reports/input.json --format json --out reports/latest.json
 ```
 

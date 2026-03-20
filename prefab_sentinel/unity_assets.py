@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import bisect
+import json
 import os
 import re
 from dataclasses import dataclass
@@ -19,6 +20,9 @@ UNITY_TEXT_ASSET_SUFFIXES = {
     ".flare",
     ".physicmaterial",
 }
+
+# File types that contain GameObject/Transform hierarchy and MonoBehaviour wiring
+GAMEOBJECT_BEARING_SUFFIXES = frozenset({".prefab", ".unity", ".asset"})
 
 GUID_PATTERN = re.compile(r"\bguid:\s*([0-9a-fA-F]{32})\b")
 LOCAL_FILE_ID_PATTERN = re.compile(r"^--- !u!\d+ &(-?\d+)", re.MULTILINE)
@@ -181,3 +185,53 @@ def resolve_scope_path(scope: str, project_root: Path) -> Path:
     if not scope_path.is_absolute():
         scope_path = project_root / scope_path
     return scope_path.resolve()
+
+
+def _read_json_file(path: Path) -> dict[str, object] | None:
+    """Read a JSON file, returning None on failure or non-object content."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
+def collect_package_guid_names(project_root: Path) -> dict[str, str]:
+    """Map package registry names from Packages/packages-lock.json.
+
+    Returns ``{package_name: package_name}`` for installed packages.
+    This provides human-readable context when ``Library/PackageCache`` is
+    unavailable (e.g. WSL environments or fresh clones).
+    """
+    lock_path = project_root / "Packages" / "packages-lock.json"
+    lock_data = _read_json_file(lock_path)
+    if not lock_data:
+        return {}
+    deps = lock_data.get("dependencies", {})
+    if not isinstance(deps, dict):
+        return {}
+    return {name: name for name in deps if isinstance(name, str)}
+
+
+def resolve_guid_to_asset_name(
+    guid: str,
+    guid_index: dict[str, Path],
+    project_root: Path | None = None,
+) -> str:
+    """Best-effort GUID→human-readable asset name resolution.
+
+    Resolution order:
+    1. GUID index (meta file scan) → relative asset path
+    2. Empty string if unresolvable
+    """
+    asset_path = guid_index.get(normalize_guid(guid))
+    if asset_path is None:
+        return ""
+    if project_root is not None:
+        try:
+            return asset_path.resolve().relative_to(project_root.resolve()).as_posix()
+        except ValueError:
+            pass
+    return asset_path.as_posix()
