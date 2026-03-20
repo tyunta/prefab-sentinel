@@ -14,21 +14,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v4
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Install lint dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[lint]"
+        run: uv sync --extra lint
 
       - name: Ruff check
-        run: ruff check prefab_sentinel/ tests/ scripts/ tools/
+        run: uv run ruff check prefab_sentinel/ tests/ scripts/ tools/
 
       - name: Mypy
-        run: mypy prefab_sentinel/
+        run: uv run mypy prefab_sentinel/
 
   unit-tests:
     runs-on: ubuntu-latest
@@ -36,18 +37,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v4
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install Package
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[test]"
+      - name: Install test dependencies
+        run: uv sync --extra test
 
       - name: Run Unit Tests
-        run: python scripts/run_unit_tests.py
+        run: uv run python scripts/run_unit_tests.py
 
   bridge-smoke-contract:
     runs-on: ubuntu-latest
@@ -56,19 +58,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v4
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Install Package
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e .
+        run: uv sync
 
       - name: Run Bridge Smoke Batch (Expected Failure Contract)
         run: |
-          prefab-sentinel validate smoke-batch \
+          uv run prefab-sentinel validate smoke-batch \
             --targets all \
             --avatar-plan config/patch_plan.example.json \
             --world-plan config/patch_plan.example.json \
@@ -83,7 +86,7 @@ jobs:
 
       - name: Build Bridge Smoke Decision Table Artifacts
         run: |
-          prefab-sentinel report smoke-history \
+          uv run prefab-sentinel report smoke-history \
             --inputs reports/bridge_smoke/summary.json \
             --duration-percentile 90 \
             --out reports/bridge_smoke/history.csv \
@@ -101,6 +104,7 @@ jobs:
             --min-profile-timeout-coverage-pct-per-target 100
 
       - name: Upload Bridge Smoke Artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: bridge-smoke-reports
@@ -113,20 +117,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v4
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Install Package
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e .
+        run: uv sync
 
       - name: Run Integration Test Contract (Expected Failure)
         run: |
           set +e
-          prefab-sentinel validate integration-tests \
+          uv run prefab-sentinel validate integration-tests \
             --unity-command /nonexistent/Unity.exe \
             --unity-project-path /tmp/fake_project \
             --out-dir reports/integration \
