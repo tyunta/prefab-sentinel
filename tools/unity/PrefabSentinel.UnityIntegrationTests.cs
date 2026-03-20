@@ -207,6 +207,11 @@ namespace PrefabSentinel
                     ("CreateScene_InstantiatePrefab", Test_CreateScene_InstantiatePrefab),
                     ("CreateScene_HierarchyWithComponents", Test_CreateScene_HierarchyWithComponents),
                     ("CreateScene_MissingCreateSceneRejected", Test_CreateScene_MissingCreateSceneRejected),
+                    // Variant E2E quality gates
+                    ("Variant_SetOverrideProperty", Test_Variant_SetOverrideProperty),
+                    ("Variant_MultipleOverrides", Test_Variant_MultipleOverrides),
+                    ("Variant_OverridePersistsAfterSave", Test_Variant_OverridePersistsAfterSave),
+                    ("Variant_InheritBaseChange", Test_Variant_InheritBaseChange),
                 };
 
                 var results = new List<TestCaseResult>();
@@ -287,6 +292,33 @@ namespace PrefabSentinel
             var mat = new Material(shader) { name = "OriginalMaterialName" };
             AssetDatabase.CreateAsset(mat, path);
             return path;
+        }
+
+        /// <summary>
+        /// Creates a Prefab Variant of the given base prefab.
+        /// Saving a connected instance produces a variant that tracks the source prefab.
+        /// </summary>
+        private static string CreateVariantFrom(string basePrefabPath)
+        {
+            string variantPath = TestAssetDir + "/TestVariant.prefab";
+            DeleteIfExists(variantPath);
+
+            var basePrefab = AssetDatabase.LoadAssetAtPath<GameObject>(basePrefabPath);
+            if (basePrefab == null) return null;
+
+            var instance = (GameObject)PrefabUtility.InstantiatePrefab(basePrefab);
+            if (instance == null) return null;
+
+            try
+            {
+                PrefabUtility.SaveAsPrefabAsset(instance, variantPath);
+                AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+                return variantPath;
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(instance);
+            }
         }
 
         private static void CleanupTestAssets()
@@ -1245,6 +1277,127 @@ namespace PrefabSentinel
                 + "]";
             var resp = RunBridge(BuildCreateSceneRequest(target, ops));
             return AssertBridgeFailure(name, resp, null) ?? Pass(name);
+        }
+
+        // ----------------------------------------------------------------
+        // Test cases: variant E2E quality gates
+        // ----------------------------------------------------------------
+
+        private static TestCaseResult Test_Variant_SetOverrideProperty(string prefabPath, string materialPath)
+        {
+            const string name = "Variant_SetOverrideProperty";
+            string variantPath = CreateVariantFrom(prefabPath);
+            if (variantPath == null) return Fail(name, "Failed to create variant fixture.");
+
+            // Verify it's a Prefab Variant
+            var variantGO = AssetDatabase.LoadAssetAtPath<GameObject>(variantPath);
+            if (variantGO == null) return Fail(name, "Could not load variant.");
+            if (PrefabUtility.GetPrefabAssetType(variantGO) != PrefabAssetType.Variant)
+                return Fail(name, $"Expected PrefabAssetType.Variant, got {PrefabUtility.GetPrefabAssetType(variantGO)}.");
+
+            // Mutate variant via bridge: set BoxCollider.m_IsTrigger = true
+            string ops = "[" + SetOp("BoxCollider", "m_IsTrigger", "bool", "bool", "true") + "]";
+            var resp = RunBridge(BuildPrefabRequest(variantPath, ops));
+            var err = AssertBridgeSuccess(name, resp, 1);
+            if (err != null) return err;
+
+            // Verify variant has the override value
+            var variantProp = GetPrefabProperty(variantPath, "BoxCollider", "m_IsTrigger");
+            if (variantProp == null) return Fail(name, "Could not read m_IsTrigger on variant.");
+            if (!variantProp.boolValue) return Fail(name, "Expected variant m_IsTrigger=true.");
+
+            // Verify base is unchanged
+            var baseProp = GetPrefabProperty(prefabPath, "BoxCollider", "m_IsTrigger");
+            if (baseProp == null) return Fail(name, "Could not read m_IsTrigger on base.");
+            if (baseProp.boolValue) return Fail(name, "Base m_IsTrigger should still be false.");
+
+            return Pass(name);
+        }
+
+        private static TestCaseResult Test_Variant_MultipleOverrides(string prefabPath, string materialPath)
+        {
+            const string name = "Variant_MultipleOverrides";
+            string variantPath = CreateVariantFrom(prefabPath);
+            if (variantPath == null) return Fail(name, "Failed to create variant fixture.");
+
+            // Apply two overrides in a single bridge call
+            string ops = "["
+                + SetOp("BoxCollider", "m_IsTrigger", "bool", "bool", "true") + ","
+                + SetOp("AudioSource", "m_Volume", "float", "float", "0.25")
+                + "]";
+            var resp = RunBridge(BuildPrefabRequest(variantPath, ops));
+            var err = AssertBridgeSuccess(name, resp, 2);
+            if (err != null) return err;
+
+            // Verify both overrides on variant
+            var triggerProp = GetPrefabProperty(variantPath, "BoxCollider", "m_IsTrigger");
+            if (triggerProp == null) return Fail(name, "Could not read m_IsTrigger on variant.");
+            if (!triggerProp.boolValue) return Fail(name, "Expected variant m_IsTrigger=true.");
+
+            var volumeProp = GetPrefabProperty(variantPath, "AudioSource", "m_Volume");
+            if (volumeProp == null) return Fail(name, "Could not read m_Volume on variant.");
+            if (Math.Abs(volumeProp.floatValue - 0.25f) > 0.001f)
+                return Fail(name, $"Expected variant m_Volume=0.25, got {volumeProp.floatValue}.");
+
+            // Verify base values unchanged
+            var baseVolume = GetPrefabProperty(prefabPath, "AudioSource", "m_Volume");
+            if (baseVolume == null) return Fail(name, "Could not read m_Volume on base.");
+            if (Math.Abs(baseVolume.floatValue - 1.0f) > 0.001f)
+                return Fail(name, $"Base m_Volume should still be 1.0, got {baseVolume.floatValue}.");
+
+            return Pass(name);
+        }
+
+        private static TestCaseResult Test_Variant_OverridePersistsAfterSave(string prefabPath, string materialPath)
+        {
+            const string name = "Variant_OverridePersistsAfterSave";
+            string variantPath = CreateVariantFrom(prefabPath);
+            if (variantPath == null) return Fail(name, "Failed to create variant fixture.");
+
+            // Set override
+            string ops = "[" + SetOp("BoxCollider", "m_IsTrigger", "bool", "bool", "true") + "]";
+            var resp = RunBridge(BuildPrefabRequest(variantPath, ops));
+            var err = AssertBridgeSuccess(name, resp, 1);
+            if (err != null) return err;
+
+            // Force save and reimport
+            AssetDatabase.SaveAssets();
+            AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+            Resources.UnloadAsset(AssetDatabase.LoadAssetAtPath<GameObject>(variantPath));
+            AssetDatabase.ImportAsset(variantPath, ImportAssetOptions.ForceUpdate);
+
+            // Reload and verify override persists
+            var prop = GetPrefabProperty(variantPath, "BoxCollider", "m_IsTrigger");
+            if (prop == null) return Fail(name, "Could not read m_IsTrigger after reopen.");
+            if (!prop.boolValue) return Fail(name, "Variant override did not persist after save/reopen.");
+
+            return Pass(name);
+        }
+
+        private static TestCaseResult Test_Variant_InheritBaseChange(string prefabPath, string materialPath)
+        {
+            const string name = "Variant_InheritBaseChange";
+            string variantPath = CreateVariantFrom(prefabPath);
+            if (variantPath == null) return Fail(name, "Failed to create variant fixture.");
+
+            // Variant has no overrides — it mirrors base.
+            // Mutate BASE via bridge: set m_IsTrigger = true
+            string ops = "[" + SetOp("BoxCollider", "m_IsTrigger", "bool", "bool", "true") + "]";
+            var resp = RunBridge(BuildPrefabRequest(prefabPath, ops));
+            var err = AssertBridgeSuccess(name, resp, 1);
+            if (err != null) return err;
+
+            // Refresh to propagate base change to variant
+            AssetDatabase.SaveAssets();
+            AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+
+            // Variant should inherit the base change (no override blocks it)
+            var variantProp = GetPrefabProperty(variantPath, "BoxCollider", "m_IsTrigger");
+            if (variantProp == null) return Fail(name, "Could not read m_IsTrigger on variant.");
+            if (!variantProp.boolValue)
+                return Fail(name, "Variant should inherit m_IsTrigger=true from mutated base.");
+
+            return Pass(name);
         }
 
         // ----------------------------------------------------------------
