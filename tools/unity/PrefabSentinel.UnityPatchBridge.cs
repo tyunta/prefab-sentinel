@@ -4637,9 +4637,19 @@ namespace PrefabSentinel
             for (int i = 0; i < KnownBuiltinAssets.Length; i++)
             {
                 BuiltinAssetEntry entry = KnownBuiltinAssets[i];
-                UnityEngine.Object candidate = entry.isExtra
-                    ? AssetDatabase.GetBuiltinExtraResource(entry.type, entry.name)
-                    : Resources.GetBuiltinResource(entry.type, entry.name);
+                UnityEngine.Object candidate;
+                try
+                {
+                    candidate = entry.isExtra
+                        ? AssetDatabase.GetBuiltinExtraResource(entry.type, entry.name)
+                        : Resources.GetBuiltinResource(entry.type, entry.name);
+                }
+                catch (System.ArgumentException)
+                {
+                    // Deprecated assets (e.g. Arial.ttf in Unity 2022.3+) throw ArgumentException.
+                    // Skip and continue to next entry.
+                    continue;
+                }
                 if (candidate == null) continue;
                 string cGuid;
                 long cId;
