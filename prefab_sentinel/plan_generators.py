@@ -10,17 +10,19 @@ import math
 from typing import Any
 
 from prefab_sentinel.plan_builder import PatchPlanBuilder
+from prefab_sentinel.unity_assets import (
+    UNITY_BUILTIN_EXTRA_GUID,
+    UNITY_DEFAULT_RESOURCES_GUID,
+)
 
-# Unity built-in asset references (engine resources GUID).
-_BUILTIN_GUID = "0000000000000000e000000000000000"
 BUILTIN_SPHERE_MESH: dict[str, Any] = {
     "fileID": 10207,
-    "guid": _BUILTIN_GUID,
+    "guid": UNITY_DEFAULT_RESOURCES_GUID,  # Library/unity default resources
     "type": 0,
 }
 BUILTIN_DEFAULT_MATERIAL: dict[str, Any] = {
     "fileID": 10303,
-    "guid": _BUILTIN_GUID,
+    "guid": UNITY_BUILTIN_EXTRA_GUID,  # Resources/unity_builtin_extra
     "type": 0,
 }
 
