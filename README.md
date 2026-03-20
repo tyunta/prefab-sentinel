@@ -429,22 +429,12 @@ Udonログを根拠に修正候補を最短で絞る。
 
 ## 12. 実装ロードマップ
 
-### Phase 1（最短価値）
-- reference-resolver-mcp
-- prefab-variant-mcp（read系中心）
-- variant-safe-edit skill（検査のみ）
+Phase 1〜4 は全て実装完了。詳細な完了状況は `docs/IDEAS_AND_ROADMAP.md` を参照。
 
-### Phase 2（編集安定化）
-- unity-serialized-object-mcp（write対応）
-- dry-run + rollback
-
-### Phase 3（実行検証統合）
-- runtime-validation-mcp
-- エラー分類器
-
-### Phase 4（運用高度化）
-- 自動修復提案
-- KPIダッシュボード
+- **Phase 1（最短価値）**: reference-resolver-mcp, prefab-variant-mcp, variant-safe-edit skill — COMPLETE
+- **Phase 2（編集安定化）**: unity-serialized-object-mcp（write対応）, dry-run + rollback — COMPLETE
+- **Phase 3（実行検証統合）**: runtime-validation-mcp, エラー分類器 — COMPLETE
+- **Phase 4（運用高度化）**: 自動修復提案, MCP境界整理, オーケストレーター — COMPLETE
 
 ---
 
@@ -512,9 +502,7 @@ prefab-sentinel validate smoke-batch --targets all --out-dir "reports/bridge_smo
 prefab-sentinel report export --format md --out reports/latest.md
 ```
 
-### 17.1 Phase 1 Scaffold 実行方法（現行実装）
-
-Phase 1では read-only 検査系の CLI 骨格のみ提供する。
+### 17.1 CLI 実行方法
 
 - ローカル実行は `uv run`、可搬実行は `uvx --from git+https://github.com/tyunta/prefab-sentinel.git` を使用する
 - CLI名は `prefab-sentinel` を正規とする
@@ -638,7 +626,7 @@ uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel sug
 - `prefab-sentinel report smoke-history` は code アサーション情報（`expected_code` / `actual_code` / `code_matches`）と apply アサーション情報（`expected_applied` / `expected_applied_source` / `actual_applied` / `applied_matches`）を CSV 出力に含め、Markdown には target 別の `code_mismatches` / `code_pass_pct` と `applied_mismatches` / `applied_pass_pct`、さらに `observed_timeout_breaches` / `observed_timeout_coverage_pct` を表示する。
 - `prefab-sentinel report smoke-history --max-code-mismatches N --min-code-pass-pct P --max-applied-mismatches N --min-applied-pass-pct P --max-observed-timeout-breaches N --min-observed-timeout-coverage-pct P --max-observed-timeout-breaches-per-target N --min-observed-timeout-coverage-pct-per-target P --max-profile-timeout-breaches N --min-profile-timeout-coverage-pct P --max-profile-timeout-breaches-per-target N --min-profile-timeout-coverage-pct-per-target P` は code / apply アサーション品質ゲート、観測 timeout 品質ゲート（全体 + target 別の `duration_sec > unity_timeout_sec`）、および timeout profile 品質ゲート（全体 + target 別の `timeout_breach_count` / `timeout_coverage_pct`）を有効化し、閾値違反時は CSV / Markdown を出力したうえで exit code 1 を返す。
 - `scripts/run_unit_tests.py` は `unittest-parallel` を使って unit test を並列実行する共通入口で、既定では `-s tests -t . -v -j 0` を使う。`python -m pip install -e ".[test]"` または `uv run --extra test python scripts/run_unit_tests.py` で実行できる。追加引数はそのまま `python -m unittest_parallel` に渡すので、`python scripts/run_unit_tests.py -j 4 -k patch_apply` のように絞り込みや job 数調整もできる。
-- `.github/workflows/ci.yml` は `python scripts/run_unit_tests.py` と `bridge-smoke-contract`（`prefab-sentinel validate smoke-batch` の expected-failure + expected-code 実行 + `prefab-sentinel report smoke-history` の code / timeout / profile 品質ゲート（`max_code_mismatches=0` / `min_code_pass_pct=100` / `max_observed_timeout_breaches=0` / `min_observed_timeout_coverage_pct=100` / `max_observed_timeout_breaches_per_target=0` / `min_observed_timeout_coverage_pct_per_target=100` / `max_profile_timeout_breaches=0` / `min_profile_timeout_coverage_pct=100` / `max_profile_timeout_breaches_per_target=0` / `min_profile_timeout_coverage_pct_per_target=100`）付き decision table / timeout profile 生成 + artifact 保存）を自動実行する。
+- `.github/workflows/ci.yml` は `lint`（`ruff check` + `mypy`）、`python scripts/run_unit_tests.py`、`bridge-smoke-contract`（`prefab-sentinel validate smoke-batch` の expected-failure + expected-code 実行 + `prefab-sentinel report smoke-history` の code / timeout / profile 品質ゲート（`max_code_mismatches=0` / `min_code_pass_pct=100` / `max_observed_timeout_breaches=0` / `min_observed_timeout_coverage_pct=100` / `max_observed_timeout_breaches_per_target=0` / `min_observed_timeout_coverage_pct_per_target=100` / `max_profile_timeout_breaches=0` / `min_profile_timeout_coverage_pct=100` / `max_profile_timeout_breaches_per_target=0` / `min_profile_timeout_coverage_pct_per_target=100`）付き decision table / timeout profile 生成 + artifact 保存）を自動実行する。
 - `.github/workflows/unity-smoke.yml` は `workflow_dispatch` 専用で self-hosted Windows Unity ランナー上の実 Unity smoke（`prefab-sentinel validate smoke-batch` 非期待失敗モード）を実行し、`unity-smoke-summary` / `unity-smoke-avatar` / `unity-smoke-world` の分割 artifact で保存する。`unity-smoke-summary` には `summary.json` / `summary.md` に加えて `history.csv` / `history.md` / `timeout_profile.json`（`prefab-sentinel report smoke-history` 生成）を含む。`targets`（`all|avatar|world`）と入力パスの preflight 検証を備え、`timeout_profile_path` + `unity_timeout_sec` + `avatar/world` 個別 timeout 入力で batchmode timeout を調整できる。`history_duration_percentile` / `history_timeout_multiplier` / `history_timeout_slack_sec` / `history_timeout_min_sec` / `history_timeout_round_sec` で timeout profile policy ノブを workflow_dispatch から調整でき、これらの数値範囲は preflight で fail-fast 検証される。`avatar_expected_code` / `world_expected_code` 入力で target 別 code assertion を有効化でき、`max_code_mismatches` / `min_code_pass_pct` で smoke-history の code 品質ゲートを任意で有効化できる。`expect_applied_from_plan=true`（既定）では plan `ops` 件数を適用件数として自動検証でき、`max_applied_mismatches=0` / `min_applied_pass_pct=100` / `max_observed_timeout_breaches=0` / `min_observed_timeout_coverage_pct=100` / `max_observed_timeout_breaches_per_target=0` / `min_observed_timeout_coverage_pct_per_target=100` / `max_profile_timeout_breaches=0` / `min_profile_timeout_coverage_pct=100` / `max_profile_timeout_breaches_per_target=0` / `min_profile_timeout_coverage_pct_per_target=100`（既定）で smoke-history の品質ゲートも有効化される。さらに `run_window_start_utc_hour` / `run_window_end_utc_hour` を指定すると、UTC 実行ウィンドウ外では smoke 実行をスキップできる。
 - 実 Unity 用のサンプルプロジェクトは sibling ディレクトリ `../UnityTool_sample` にあり、avatar 用と world 用の両方を含む前提で運用する。
 ### 17.5 Patch / attestation
@@ -753,9 +741,8 @@ uv run prefab-sentinel report export --input reports/input.json --format md --ou
 uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel report export --input reports/input.json --format json --out reports/latest.json
 ```
 
-### 17.8 Phase 1 read-only 範囲
+### 17.8 read-only 検査コマンド詳細
 
-- 現行 Phase 1 では read-only 解析を実装済み。
 - `inspect variant` は Prefab chain / overrides / stale 候補（重複 override・`Array.size` 不整合）を返す。
 - `inspect where-used` は GUID / asset の参照元を scope 指定で検索し、`max_usages` 超過分を `truncated_usages` に集計する。
 - `validate refs` は `missing_asset` / `missing_local_id` を検出する。
@@ -770,7 +757,7 @@ uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel rep
 - `--ignore-guid` / `--ignore-guid-file` で missing GUID を一時的に無視でき、集計は `ignored_missing_asset_occurrences` / `top_ignored_missing_asset_guids` で確認できる。
 - 候補採用を継続運用する場合は `--out-ignore-guid-file` で ignore リストへ追記して再利用できる。
 - `where_used` も同じ既定除外を適用し、`Library` など非本番スコープを走査しない。
-- 書き込み操作（apply / repair / runtime 検証）は引き続き次フェーズ対象。
+- 書き込み操作は `patch apply --confirm`、Unity bridge 経由の `.prefab` / `.unity` 適用、`validate runtime` で利用可能。
 
 ---
 

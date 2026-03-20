@@ -439,9 +439,8 @@ sys.stdout.write(json.dumps({"success": False, "severity": "error", "code": "FAI
         self.assertNotIn("expected_applied", payload["data"])
 
     def test_main_rejects_negative_expected_applied_argument(self) -> None:
-        with redirect_stderr(io.StringIO()):
-            with self.assertRaises(SystemExit):
-                main(["--plan", "ignored.json", "--expected-applied", "-1"])
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            main(["--plan", "ignored.json", "--expected-applied", "-1"])
 
     def test_script_entrypoint_runs_when_invoked_by_path(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

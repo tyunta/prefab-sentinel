@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
-from pathlib import Path
 import subprocess
 import sys
+from datetime import UTC, datetime
+from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 BENCHMARK_REFS_SCRIPT = SCRIPT_DIR / "benchmark_refs.py"
@@ -329,7 +329,7 @@ def _run_or_raise(command: list[str]) -> None:
 def _build_tag(custom_tag: str | None) -> str:
     if custom_tag:
         return custom_tag
-    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
 def main(argv: list[str] | None = None) -> int:

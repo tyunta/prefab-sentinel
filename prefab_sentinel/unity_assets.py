@@ -6,7 +6,6 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-
 UNITY_TEXT_ASSET_SUFFIXES = {
     ".prefab",
     ".unity",

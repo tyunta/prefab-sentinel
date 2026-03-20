@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
 import os
 import shlex
 import subprocess
 from copy import deepcopy
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -13,9 +13,6 @@ from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse
 from prefab_sentinel.patch_plan import (
     PLAN_VERSION,
     build_bridge_request,
-    compute_patch_plan_hmac_sha256,
-    compute_patch_plan_sha256,
-    load_patch_plan,
 )
 from prefab_sentinel.unity_assets import decode_text_file
 
@@ -93,14 +90,14 @@ class _ResourceAdapter:
 
     def dry_run(
         self,
-        owner: "SerializedObjectMcp",
+        owner: SerializedObjectMcp,
         context: _ResourcePlanContext,
     ) -> ToolResponse:
         raise NotImplementedError
 
     def apply(
         self,
-        owner: "SerializedObjectMcp",
+        owner: SerializedObjectMcp,
         context: _ResourcePlanContext,
     ) -> ToolResponse:
         raise NotImplementedError
@@ -111,14 +108,14 @@ class _JsonResourceAdapter(_ResourceAdapter):
 
     def dry_run(
         self,
-        owner: "SerializedObjectMcp",
+        owner: SerializedObjectMcp,
         context: _ResourcePlanContext,
     ) -> ToolResponse:
         return owner.dry_run_patch(target=context.target, ops=context.ops)
 
     def apply(
         self,
-        owner: "SerializedObjectMcp",
+        owner: SerializedObjectMcp,
         context: _ResourcePlanContext,
     ) -> ToolResponse:
         return owner.apply_and_save(target=context.target, ops=context.ops)
@@ -130,7 +127,7 @@ class _PrefabResourceAdapter(_ResourceAdapter):
 
     def dry_run(
         self,
-        owner: "SerializedObjectMcp",
+        owner: SerializedObjectMcp,
         context: _ResourcePlanContext,
     ) -> ToolResponse:
         if context.mode == "open":
@@ -149,7 +146,7 @@ class _PrefabResourceAdapter(_ResourceAdapter):
 
     def apply(
         self,
-        owner: "SerializedObjectMcp",
+        owner: SerializedObjectMcp,
         context: _ResourcePlanContext,
     ) -> ToolResponse:
         dry_run = self.dry_run(owner, context)
@@ -171,7 +168,7 @@ class _BridgeBackedAssetResourceAdapter(_ResourceAdapter):
 
     def dry_run(
         self,
-        owner: "SerializedObjectMcp",
+        owner: SerializedObjectMcp,
         context: _ResourcePlanContext,
     ) -> ToolResponse:
         if context.mode == "open":
@@ -191,7 +188,7 @@ class _BridgeBackedAssetResourceAdapter(_ResourceAdapter):
 
     def apply(
         self,
-        owner: "SerializedObjectMcp",
+        owner: SerializedObjectMcp,
         context: _ResourcePlanContext,
     ) -> ToolResponse:
         dry_run = self.dry_run(owner, context)
@@ -222,7 +219,7 @@ class _SceneResourceAdapter(_ResourceAdapter):
 
     def dry_run(
         self,
-        owner: "SerializedObjectMcp",
+        owner: SerializedObjectMcp,
         context: _ResourcePlanContext,
     ) -> ToolResponse:
         diagnostics, preview = owner._validate_scene_ops(
@@ -240,7 +237,7 @@ class _SceneResourceAdapter(_ResourceAdapter):
 
     def apply(
         self,
-        owner: "SerializedObjectMcp",
+        owner: SerializedObjectMcp,
         context: _ResourcePlanContext,
     ) -> ToolResponse:
         dry_run = self.dry_run(owner, context)

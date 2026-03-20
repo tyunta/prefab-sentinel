@@ -269,7 +269,7 @@ def _load_timeout_profile_map(timeout_profile_path: Path) -> dict[str, int]:
             raise ValueError("timeout profile target must be avatar/world.")
         recommended_raw = item.get("recommended_timeout_sec")
         try:
-            recommended = int(recommended_raw)
+            recommended = int(recommended_raw)  # type: ignore[arg-type]
         except (TypeError, ValueError):
             raise ValueError("recommended_timeout_sec must be an integer.") from None
         if recommended <= 0:
@@ -631,7 +631,7 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
 
     failed_cases = [item for item in results if not item["matched_expectation"]]
     all_passed = len(failed_cases) == 0
-    summary_payload = {
+    summary_payload: dict[str, Any] = {
         "success": all_passed,
         "severity": "info" if all_passed else "error",
         "code": "SMOKE_BATCH_OK" if all_passed else "SMOKE_BATCH_FAILED",

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-import uuid
 
 from prefab_sentinel.contracts import Severity, ToolResponse, max_severity
 from prefab_sentinel.mcp.prefab_variant import PrefabVariantMcp
@@ -22,7 +22,7 @@ class Phase1Orchestrator:
     serialized_object: SerializedObjectMcp
 
     @classmethod
-    def default(cls, project_root: Path | None = None) -> "Phase1Orchestrator":
+    def default(cls, project_root: Path | None = None) -> Phase1Orchestrator:
         return cls(
             reference_resolver=ReferenceResolverMcp(project_root=project_root),
             prefab_variant=PrefabVariantMcp(project_root=project_root),
@@ -647,7 +647,7 @@ class Phase1Orchestrator:
 
         steps: list[tuple[str, ToolResponse]] = []
         execution_id = uuid.uuid4().hex
-        executed_at_utc = datetime.now(timezone.utc).isoformat()
+        executed_at_utc = datetime.now(UTC).isoformat()
         normalized_reason = change_reason.strip() if change_reason else None
 
         def _step_name(base: str, resource_id: str) -> str:

@@ -866,16 +866,14 @@ raise SystemExit(0)
         self.assertEqual("default_override", case["timeout_source"])
 
     def test_main_rejects_non_positive_timeout_argument(self) -> None:
-        with redirect_stderr(StringIO()):
-            with self.assertRaises(SystemExit) as raised:
-                main(["--unity-timeout-sec", "0"])
+        with redirect_stderr(StringIO()), self.assertRaises(SystemExit) as raised:
+            main(["--unity-timeout-sec", "0"])
 
         self.assertEqual(2, raised.exception.code)
 
     def test_main_rejects_negative_expected_applied_argument(self) -> None:
-        with redirect_stderr(StringIO()):
-            with self.assertRaises(SystemExit) as raised:
-                main(["--avatar-expected-applied", "-1"])
+        with redirect_stderr(StringIO()), self.assertRaises(SystemExit) as raised:
+            main(["--avatar-expected-applied", "-1"])
 
         self.assertEqual(2, raised.exception.code)
 

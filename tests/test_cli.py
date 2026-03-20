@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import hmac
 import hashlib
+import hmac
 import io
 import json
 import os
@@ -446,18 +446,17 @@ sys.stdout.write(json.dumps({"success": False, "severity": "error", "code": "BRI
         self.assertNotIn("expected_applied", payload["data"])
 
     def test_validate_bridge_smoke_rejects_negative_expected_applied(self) -> None:
-        with redirect_stderr(io.StringIO()):
-            with self.assertRaises(SystemExit):
-                self.run_cli(
-                    [
-                        "validate",
-                        "bridge-smoke",
-                        "--plan",
-                        "ignored.json",
-                        "--expected-applied",
-                        "-1",
-                    ]
-                )
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            self.run_cli(
+                [
+                    "validate",
+                    "bridge-smoke",
+                    "--plan",
+                    "ignored.json",
+                    "--expected-applied",
+                    "-1",
+                ]
+            )
 
     def test_validate_smoke_batch_runs_and_writes_summary(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -652,28 +651,27 @@ raise SystemExit(0)
 """.strip(),
                 encoding="utf-8",
             )
-            with redirect_stderr(io.StringIO()):
-                with self.assertRaises(SystemExit):
-                    self.run_cli(
-                        [
-                            "validate",
-                            "smoke-batch",
-                            "--targets",
-                            "avatar",
-                            "--avatar-plan",
-                            str(plan),
-                            "--avatar-project-path",
-                            str(project),
-                            "--smoke-script",
-                            str(smoke_script),
-                            "--python",
-                            sys.executable,
-                            "--bridge-script",
-                            "tools/unity_patch_bridge.py",
-                            "--avatar-expected-code",
-                            "   ",
-                        ]
-                    )
+            with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                self.run_cli(
+                    [
+                        "validate",
+                        "smoke-batch",
+                        "--targets",
+                        "avatar",
+                        "--avatar-plan",
+                        str(plan),
+                        "--avatar-project-path",
+                        str(project),
+                        "--smoke-script",
+                        str(smoke_script),
+                        "--python",
+                        sys.executable,
+                        "--bridge-script",
+                        "tools/unity_patch_bridge.py",
+                        "--avatar-expected-code",
+                        "   ",
+                    ]
+                )
 
     def test_validate_smoke_batch_infers_expected_applied_from_plan(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1070,19 +1068,18 @@ raise SystemExit(0)
                 encoding="utf-8",
             )
             attestation.write_text(json.dumps({"data": {}}), encoding="utf-8")
-            with redirect_stderr(io.StringIO()):
-                with self.assertRaises(SystemExit):
-                    self.run_cli(
-                        [
-                            "patch",
-                            "apply",
-                            "--plan",
-                            str(plan),
-                            "--dry-run",
-                            "--attestation-file",
-                            str(attestation),
-                        ]
-                    )
+            with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                self.run_cli(
+                    [
+                        "patch",
+                        "apply",
+                        "--plan",
+                        str(plan),
+                        "--dry-run",
+                        "--attestation-file",
+                        str(attestation),
+                    ]
+                )
 
     def test_patch_apply_rejects_plan_signature_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1168,19 +1165,18 @@ raise SystemExit(0)
                 ),
                 encoding="utf-8",
             )
-            with redirect_stderr(io.StringIO()):
-                with self.assertRaises(SystemExit):
-                    self.run_cli(
-                        [
-                            "patch",
-                            "apply",
-                            "--plan",
-                            str(plan),
-                            "--dry-run",
-                            "--out-report",
-                            str(out_report_dir),
-                        ]
-                    )
+            with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                self.run_cli(
+                    [
+                        "patch",
+                        "apply",
+                        "--plan",
+                        str(plan),
+                        "--dry-run",
+                        "--out-report",
+                        str(out_report_dir),
+                    ]
+                )
 
     def test_patch_apply_rejects_plan_sha256_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1202,19 +1198,18 @@ raise SystemExit(0)
                 ),
                 encoding="utf-8",
             )
-            with redirect_stderr(io.StringIO()):
-                with self.assertRaises(SystemExit):
-                    self.run_cli(
-                        [
-                            "patch",
-                            "apply",
-                            "--plan",
-                            str(plan),
-                            "--dry-run",
-                            "--plan-sha256",
-                            "0" * 64,
-                        ]
-                    )
+            with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                self.run_cli(
+                    [
+                        "patch",
+                        "apply",
+                        "--plan",
+                        str(plan),
+                        "--dry-run",
+                        "--plan-sha256",
+                        "0" * 64,
+                    ]
+                )
 
     def test_patch_sign_outputs_signature_text(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1253,7 +1248,7 @@ raise SystemExit(0)
             )
             key_file.write_text("file-signing-key\n", encoding="utf-8")
             expected = hmac.new(
-                "file-signing-key".encode("utf-8"),
+                b"file-signing-key",
                 plan.read_bytes(),
                 hashlib.sha256,
             ).hexdigest()
@@ -1369,7 +1364,7 @@ raise SystemExit(0)
             )
             key_file.write_text("verify-signing-key\n", encoding="utf-8")
             expected_signature = hmac.new(
-                "verify-signing-key".encode("utf-8"),
+                b"verify-signing-key",
                 plan.read_bytes(),
                 hashlib.sha256,
             ).hexdigest()
@@ -1539,11 +1534,10 @@ raise SystemExit(0)
                 ),
                 encoding="utf-8",
             )
-            with redirect_stderr(io.StringIO()):
-                with self.assertRaises(SystemExit):
-                    self.run_cli(
-                        ["patch", "apply", "--plan", str(plan), "--confirm", "--change-reason", "test"]
-                    )
+            with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                self.run_cli(
+                    ["patch", "apply", "--plan", str(plan), "--confirm", "--change-reason", "test"]
+                )
 
     def test_patch_apply_confirm_requires_change_reason(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1566,19 +1560,18 @@ raise SystemExit(0)
                 ),
                 encoding="utf-8",
             )
-            with redirect_stderr(io.StringIO()):
-                with self.assertRaises(SystemExit):
-                    self.run_cli(
-                        [
-                            "patch",
-                            "apply",
-                            "--plan",
-                            str(plan),
-                            "--confirm",
-                            "--out-report",
-                            str(out_report),
-                        ]
-                    )
+            with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                self.run_cli(
+                    [
+                        "patch",
+                        "apply",
+                        "--plan",
+                        str(plan),
+                        "--confirm",
+                        "--out-report",
+                        str(out_report),
+                    ]
+                )
 
     def test_patch_apply_confirm_updates_json_target(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2440,9 +2433,8 @@ print(
             root = Path(temp_dir)
             plan = root / "patch.json"
             plan.write_text("[]", encoding="utf-8")
-            with redirect_stderr(io.StringIO()):
-                with self.assertRaises(SystemExit):
-                    self.run_cli(["patch", "apply", "--plan", str(plan), "--dry-run"])
+            with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                self.run_cli(["patch", "apply", "--plan", str(plan), "--dry-run"])
 
     def test_inspect_where_used_returns_missing_scope_error(self) -> None:
         exit_code, output = self.run_cli(
@@ -2609,25 +2601,23 @@ PrefabInstance:
                 os.environ,
                 {"CI": "true", "GITHUB_REF_NAME": "feature/test"},
                 clear=False,
-            ):
-                with redirect_stderr(io.StringIO()):
-                    with self.assertRaises(SystemExit):
-                        self.run_cli(
-                            [
-                                "suggest",
-                                "ignore-guids",
-                                "--scope",
-                                str(root / "Assets"),
-                                "--min-occurrences",
-                                "1",
-                                "--max-items",
-                                "10",
-                                "--out-ignore-guid-file",
-                                str(out_file),
-                                "--out-ignore-guid-mode",
-                                "replace",
-                            ]
-                        )
+            ), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                self.run_cli(
+                    [
+                        "suggest",
+                        "ignore-guids",
+                        "--scope",
+                        str(root / "Assets"),
+                        "--min-occurrences",
+                        "1",
+                        "--max-items",
+                        "10",
+                        "--out-ignore-guid-file",
+                        str(out_file),
+                        "--out-ignore-guid-mode",
+                        "replace",
+                    ]
+                )
 
     def test_suggest_ignore_guids_allows_ci_write_on_main(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -10,12 +10,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from prefab_sentinel.orchestrator import Phase1Orchestrator
 from prefab_sentinel.mcp.prefab_variant import PrefabVariantMcp
 from prefab_sentinel.mcp.reference_resolver import ReferenceResolverMcp
 from prefab_sentinel.mcp.runtime_validation import RuntimeValidationMcp
-from prefab_sentinel.mcp.serialized_object import (
-    SerializedObjectMcp,
+from prefab_sentinel.mcp.serialized_object import SerializedObjectMcp
+from prefab_sentinel.orchestrator import Phase1Orchestrator
+from prefab_sentinel.patch_plan import (
     compute_patch_plan_hmac_sha256,
     compute_patch_plan_sha256,
     load_patch_plan,

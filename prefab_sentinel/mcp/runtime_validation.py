@@ -397,17 +397,15 @@ class RuntimeValidationMcp:
                     diagnostics=[],
                 )
 
+            response_error: str | None = None
             if response_path.exists():
                 try:
                     response_payload = json.loads(response_path.read_text(encoding="utf-8"))
                 except (OSError, json.JSONDecodeError) as exc:
                     response_payload = None
                     response_error = str(exc)
-                else:
-                    response_error = None
             else:
                 response_payload = None
-                response_error = None
 
             if response_payload is not None:
                 response = self._parse_runtime_response(

@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 
 from prefab_sentinel.patch_plan import (
-    PLAN_VERSION as PROTOCOL_VERSION,
     build_bridge_request as _build_bridge_request_impl,
     count_plan_ops,
     load_patch_plan as _load_patch_plan_impl,

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import argparse
-from fnmatch import fnmatch
 import json
 import os
 import re
 import sys
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
 
@@ -17,24 +17,36 @@ from prefab_sentinel.bridge_smoke import (
     UNITY_TIMEOUT_SEC_ENV,
     build_bridge_env,
     build_bridge_request,
+)
+from prefab_sentinel.bridge_smoke import (
     load_patch_plan as load_bridge_smoke_plan,
+)
+from prefab_sentinel.bridge_smoke import (
     resolve_expected_applied as resolve_bridge_expected_applied,
+)
+from prefab_sentinel.bridge_smoke import (
     run_bridge as run_bridge_smoke,
+)
+from prefab_sentinel.bridge_smoke import (
     validate_expectation as validate_bridge_smoke_expectation,
 )
-from prefab_sentinel.mcp.serialized_object import (
+from prefab_sentinel.orchestrator import Phase1Orchestrator
+from prefab_sentinel.patch_plan import (
     compute_patch_plan_hmac_sha256,
     compute_patch_plan_sha256,
     load_patch_plan,
 )
-from prefab_sentinel.orchestrator import Phase1Orchestrator
 from prefab_sentinel.reporting import export_report, render_markdown_report
 from prefab_sentinel.smoke_batch import (
     add_arguments as add_smoke_batch_arguments,
+)
+from prefab_sentinel.smoke_batch import (
     run_from_args as run_smoke_batch_from_args,
 )
 from prefab_sentinel.smoke_history import (
     add_arguments as add_smoke_history_arguments,
+)
+from prefab_sentinel.smoke_history import (
     run_from_args as run_smoke_history_from_args,
 )
 from prefab_sentinel.unity_assets import find_project_root, resolve_scope_path
@@ -48,7 +60,7 @@ _CI_BRANCH_ENV = "UNITYTOOL_CI_BRANCH"
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="prefab-sentinel",
-        description="Prefab Sentinel Phase 1 scaffold CLI.",
+        description="Prefab Sentinel CLI for safe Unity Prefab/Scene editing.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 

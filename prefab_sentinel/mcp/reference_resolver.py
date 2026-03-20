@@ -10,8 +10,8 @@ from prefab_sentinel.unity_assets import (
     DEFAULT_EXCLUDED_DIR_NAMES,
     collect_project_guid_index,
     decode_text_file,
-    extract_meta_guid,
     extract_local_file_ids,
+    extract_meta_guid,
     find_project_root,
     is_unity_builtin_guid,
     is_unity_text_asset,
@@ -20,6 +20,7 @@ from prefab_sentinel.unity_assets import (
     normalize_guid,
     resolve_scope_path,
 )
+
 
 class ReferenceResolverMcp:
     """Read-only reference resolver MCP interface for Phase 1."""

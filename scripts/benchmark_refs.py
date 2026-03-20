@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import argparse
 import csv
-from datetime import datetime, timezone
 import json
 import math
 import statistics
 import subprocess
 import sys
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -212,7 +212,7 @@ def main(argv: list[str] | None = None) -> int:
         "command": command,
     }
     if args.include_generated_date:
-        summary["generated_at_utc"] = datetime.now(timezone.utc).replace(
+        summary["generated_at_utc"] = datetime.now(UTC).replace(
             microsecond=0
         ).isoformat().replace("+00:00", "Z")
 

@@ -8,8 +8,8 @@ from io import StringIO
 from pathlib import Path
 
 from scripts.smoke_summary_to_csv import (
-    _build_timeout_profiles,
     _build_target_stats,
+    _build_timeout_profiles,
     _expand_inputs,
     _is_smoke_batch_summary,
     _percentile,
@@ -763,172 +763,161 @@ class SmokeSummaryToCsvTests(unittest.TestCase):
         self.assertTrue(out_exists)
 
     def test_main_rejects_invalid_timeout_profile_arguments(self) -> None:
-        with redirect_stderr(StringIO()):
-            with self.assertRaises(SystemExit) as raised:
-                main(
-                    [
-                        "--inputs",
-                        "missing.json",
-                        "--out",
-                        "out.csv",
-                        "--timeout-multiplier",
-                        "0.9",
-                    ]
-                )
+        with redirect_stderr(StringIO()), self.assertRaises(SystemExit) as raised:
+            main(
+                [
+                    "--inputs",
+                    "missing.json",
+                    "--out",
+                    "out.csv",
+                    "--timeout-multiplier",
+                    "0.9",
+                ]
+            )
 
         self.assertEqual(2, raised.exception.code)
 
     def test_main_rejects_invalid_observed_timeout_threshold_arguments(self) -> None:
-        with redirect_stderr(StringIO()):
-            with self.assertRaises(SystemExit) as raised_breaches:
-                main(
-                    [
-                        "--inputs",
-                        "missing.json",
-                        "--out",
-                        "out.csv",
-                        "--max-observed-timeout-breaches",
-                        "-1",
-                    ]
-                )
+        with redirect_stderr(StringIO()), self.assertRaises(SystemExit) as raised_breaches:
+            main(
+                [
+                    "--inputs",
+                    "missing.json",
+                    "--out",
+                    "out.csv",
+                    "--max-observed-timeout-breaches",
+                    "-1",
+                ]
+            )
 
         self.assertEqual(2, raised_breaches.exception.code)
 
-        with redirect_stderr(StringIO()):
-            with self.assertRaises(SystemExit) as raised_breaches_per_target:
-                main(
-                    [
-                        "--inputs",
-                        "missing.json",
-                        "--out",
-                        "out.csv",
-                        "--max-observed-timeout-breaches-per-target",
-                        "-1",
-                    ]
-                )
+        with redirect_stderr(StringIO()), self.assertRaises(SystemExit) as raised_breaches_per_target:
+            main(
+                [
+                    "--inputs",
+                    "missing.json",
+                    "--out",
+                    "out.csv",
+                    "--max-observed-timeout-breaches-per-target",
+                    "-1",
+                ]
+            )
 
         self.assertEqual(2, raised_breaches_per_target.exception.code)
 
-        with redirect_stderr(StringIO()):
-            with self.assertRaises(SystemExit) as raised_coverage_per_target:
-                main(
-                    [
-                        "--inputs",
-                        "missing.json",
-                        "--out",
-                        "out.csv",
-                        "--min-observed-timeout-coverage-pct-per-target",
-                        "101",
-                    ]
-                )
+        with redirect_stderr(StringIO()), self.assertRaises(SystemExit) as raised_coverage_per_target:
+            main(
+                [
+                    "--inputs",
+                    "missing.json",
+                    "--out",
+                    "out.csv",
+                    "--min-observed-timeout-coverage-pct-per-target",
+                    "101",
+                ]
+            )
 
         self.assertEqual(2, raised_coverage_per_target.exception.code)
 
     def test_main_rejects_invalid_applied_threshold_arguments(self) -> None:
-        with redirect_stderr(StringIO()):
-            with self.assertRaises(SystemExit) as raised:
-                main(
-                    [
-                        "--inputs",
-                        "missing.json",
-                        "--out",
-                        "out.csv",
-                        "--max-applied-mismatches",
-                        "-1",
-                    ]
-                )
+        with redirect_stderr(StringIO()), self.assertRaises(SystemExit) as raised:
+            main(
+                [
+                    "--inputs",
+                    "missing.json",
+                    "--out",
+                    "out.csv",
+                    "--max-applied-mismatches",
+                    "-1",
+                ]
+            )
 
         self.assertEqual(2, raised.exception.code)
 
     def test_main_rejects_invalid_code_threshold_arguments(self) -> None:
-        with redirect_stderr(StringIO()):
-            with self.assertRaises(SystemExit) as raised_mismatch:
-                main(
-                    [
-                        "--inputs",
-                        "missing.json",
-                        "--out",
-                        "out.csv",
-                        "--max-code-mismatches",
-                        "-1",
-                    ]
-                )
+        with redirect_stderr(StringIO()), self.assertRaises(SystemExit) as raised_mismatch:
+            main(
+                [
+                    "--inputs",
+                    "missing.json",
+                    "--out",
+                    "out.csv",
+                    "--max-code-mismatches",
+                    "-1",
+                ]
+            )
 
         self.assertEqual(2, raised_mismatch.exception.code)
 
-        with redirect_stderr(StringIO()):
-            with self.assertRaises(SystemExit) as raised_pass_pct:
-                main(
-                    [
-                        "--inputs",
-                        "missing.json",
-                        "--out",
-                        "out.csv",
-                        "--min-code-pass-pct",
-                        "101",
-                    ]
-                )
+        with redirect_stderr(StringIO()), self.assertRaises(SystemExit) as raised_pass_pct:
+            main(
+                [
+                    "--inputs",
+                    "missing.json",
+                    "--out",
+                    "out.csv",
+                    "--min-code-pass-pct",
+                    "101",
+                ]
+            )
 
         self.assertEqual(2, raised_pass_pct.exception.code)
 
     def test_main_rejects_invalid_profile_timeout_threshold_arguments(self) -> None:
-        with redirect_stderr(StringIO()):
-            with self.assertRaises(SystemExit) as raised_breaches:
-                main(
-                    [
-                        "--inputs",
-                        "missing.json",
-                        "--out",
-                        "out.csv",
-                        "--max-profile-timeout-breaches",
-                        "-1",
-                    ]
-                )
+        with redirect_stderr(StringIO()), self.assertRaises(SystemExit) as raised_breaches:
+            main(
+                [
+                    "--inputs",
+                    "missing.json",
+                    "--out",
+                    "out.csv",
+                    "--max-profile-timeout-breaches",
+                    "-1",
+                ]
+            )
 
         self.assertEqual(2, raised_breaches.exception.code)
 
-        with redirect_stderr(StringIO()):
-            with self.assertRaises(SystemExit) as raised_coverage:
-                main(
-                    [
-                        "--inputs",
-                        "missing.json",
-                        "--out",
-                        "out.csv",
-                        "--min-profile-timeout-coverage-pct",
-                        "101",
-                    ]
-                )
+        with redirect_stderr(StringIO()), self.assertRaises(SystemExit) as raised_coverage:
+            main(
+                [
+                    "--inputs",
+                    "missing.json",
+                    "--out",
+                    "out.csv",
+                    "--min-profile-timeout-coverage-pct",
+                    "101",
+                ]
+            )
 
         self.assertEqual(2, raised_coverage.exception.code)
 
-        with redirect_stderr(StringIO()):
-            with self.assertRaises(SystemExit) as raised_breaches_per_target:
-                main(
-                    [
-                        "--inputs",
-                        "missing.json",
-                        "--out",
-                        "out.csv",
-                        "--max-profile-timeout-breaches-per-target",
-                        "-1",
-                    ]
-                )
+        with redirect_stderr(StringIO()), self.assertRaises(SystemExit) as raised_breaches_per_target:
+            main(
+                [
+                    "--inputs",
+                    "missing.json",
+                    "--out",
+                    "out.csv",
+                    "--max-profile-timeout-breaches-per-target",
+                    "-1",
+                ]
+            )
 
         self.assertEqual(2, raised_breaches_per_target.exception.code)
 
-        with redirect_stderr(StringIO()):
-            with self.assertRaises(SystemExit) as raised_coverage_per_target:
-                main(
-                    [
-                        "--inputs",
-                        "missing.json",
-                        "--out",
-                        "out.csv",
-                        "--min-profile-timeout-coverage-pct-per-target",
-                        "101",
-                    ]
-                )
+        with redirect_stderr(StringIO()), self.assertRaises(SystemExit) as raised_coverage_per_target:
+            main(
+                [
+                    "--inputs",
+                    "missing.json",
+                    "--out",
+                    "out.csv",
+                    "--min-profile-timeout-coverage-pct-per-target",
+                    "101",
+                ]
+            )
 
         self.assertEqual(2, raised_coverage_per_target.exception.code)
 
