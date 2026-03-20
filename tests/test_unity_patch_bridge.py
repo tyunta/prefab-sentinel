@@ -1524,6 +1524,97 @@ class EditorBridgeModeTests(unittest.TestCase):
         # Batchmode path: missing UNITY_COMMAND
         self.assertEqual("BRIDGE_UNITY_COMMAND_MISSING", result["code"])
 
+    def test_editor_mode_target_path_converted_to_windows(self) -> None:
+        """In editor bridge mode, the target in the request JSON must be a Windows path."""
+        import threading
+
+        with tempfile.TemporaryDirectory() as watch_dir:
+            watch_path = Path(watch_dir)
+            captured_target: list[str] = []
+
+            def fake_watcher() -> None:
+                for _ in range(50):
+                    candidates = list(watch_path.glob("*.request.json"))
+                    if candidates:
+                        request_file = candidates[0]
+                        request_data = json.loads(
+                            request_file.read_text(encoding="utf-8")
+                        )
+                        captured_target.append(request_data.get("target", ""))
+                        base = request_file.name.replace(".request.json", "")
+                        response_file = watch_path / f"{base}.response.json"
+                        response_file.write_text(
+                            json.dumps(
+                                {
+                                    "protocol_version": 2,
+                                    "success": True,
+                                    "severity": "info",
+                                    "code": "SER_APPLY_OK",
+                                    "message": "Applied.",
+                                    "data": {"applied": 0},
+                                    "diagnostics": [],
+                                }
+                            ),
+                            encoding="utf-8",
+                        )
+                        return
+                    import time
+
+                    time.sleep(0.1)
+
+            watcher_thread = threading.Thread(target=fake_watcher, daemon=True)
+            watcher_thread.start()
+
+            wsl_path = "/mnt/d/VRC/World/Assets/Test.prefab"
+            result = self._run_bridge(
+                {
+                    "protocol_version": 2,
+                    "plan_version": 2,
+                    "resources": [
+                        {
+                            "id": "prefab",
+                            "kind": "prefab",
+                            "path": wsl_path,
+                            "mode": "open",
+                        }
+                    ],
+                    "ops": [],
+                },
+                env_overrides={
+                    "UNITYTOOL_BRIDGE_MODE": "editor",
+                    "UNITYTOOL_BRIDGE_WATCH_DIR": watch_dir,
+                    "UNITYTOOL_UNITY_TIMEOUT_SEC": "10",
+                },
+            )
+            watcher_thread.join(timeout=5)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(1, len(captured_target))
+        # to_windows_path converts /mnt/d/... to D:\... on WSL; on non-WSL it's a no-op
+        from prefab_sentinel.wsl_compat import to_windows_path
+
+        expected_target = to_windows_path(wsl_path)
+        self.assertEqual(expected_target, captured_target[0])
+
+    def test_editor_mode_watch_dir_accepts_windows_path(self) -> None:
+        """Watch dir should be normalised via to_wsl_path, so Windows paths work on WSL."""
+        with tempfile.TemporaryDirectory() as native_dir:
+            result = self._run_bridge(
+                {
+                    "protocol_version": 2,
+                    "target": "Assets/Test.prefab",
+                    "ops": [],
+                },
+                env_overrides={
+                    "UNITYTOOL_BRIDGE_MODE": "editor",
+                    "UNITYTOOL_BRIDGE_WATCH_DIR": native_dir,
+                    "UNITYTOOL_UNITY_TIMEOUT_SEC": "2",
+                },
+            )
+        # Timeout is expected (no watcher), but the error should be TIMEOUT, not a write failure
+        self.assertFalse(result["success"])
+        self.assertEqual("BRIDGE_EDITOR_TIMEOUT", result["code"])
+
     def test_explicit_batchmode_requires_unity_command(self) -> None:
         result = self._run_bridge(
             {

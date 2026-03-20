@@ -498,7 +498,7 @@ class RuntimeValidationMcp:
                 diagnostics=[],
             )
 
-        watch_dir = Path(watch_dir_raw)
+        watch_dir = Path(to_wsl_path(watch_dir_raw))
         timeout_raw = os.environ.get(UNITY_TIMEOUT_SEC_ENV, str(DEFAULT_TIMEOUT_SEC)).strip()
         try:
             timeout_sec = int(timeout_raw)
@@ -526,8 +526,8 @@ class RuntimeValidationMcp:
         payload = {
             "protocol_version": RUNTIME_PROTOCOL_VERSION,
             "action": action,
-            "project_root": str(target_root),
-            "scene_path": scene_path or "",
+            "project_root": to_windows_path(str(target_root)),
+            "scene_path": to_windows_path(scene_path) if scene_path else "",
             "profile": profile or "",
             "timeout_sec": timeout_sec,
         }

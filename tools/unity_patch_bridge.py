@@ -538,7 +538,7 @@ def _run_via_editor_bridge(
     ops: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """Write a request file to watch_dir and poll for the response."""
-    target = str(resource.get("path", "")).strip()
+    target = to_windows_path(str(resource.get("path", "")).strip())
     request_id = uuid.uuid4().hex
     request_file = watch_dir / f"{request_id}.request.json"
     response_file = watch_dir / f"{request_id}.response.json"
@@ -886,7 +886,7 @@ def main() -> int:
                     message=f"{BRIDGE_WATCH_DIR_ENV} is required when {BRIDGE_MODE_ENV}=editor.",
                 )
             )
-        watch_dir = Path(watch_dir_raw)
+        watch_dir = Path(to_wsl_path(watch_dir_raw))
         responses = [
             _run_via_editor_bridge(
                 watch_dir=watch_dir,
