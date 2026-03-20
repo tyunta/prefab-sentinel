@@ -429,48 +429,24 @@ def _render_markdown_summary(payload: dict[str, Any]) -> str:
         "| case | matched | expected_code | actual_code | code_matches | expected_applied | expected_source | actual_applied | applied_matches | attempts | duration_sec | timeout_sec | timeout_source | exit_code | response_code | response_path | unity_log_file |",
         "| --- | --- | --- | --- | --- | ---: | --- | ---: | --- | ---: | ---: | ---: | --- | ---: | --- | --- | --- |",
     ]
+    def _cell(val: Any) -> Any:
+        return "" if val is None else val
+
     for case in cases:
-        timeout_sec = case.get("unity_timeout_sec")
-        if timeout_sec is None:
-            timeout_sec = ""
-        duration_sec = case.get("duration_sec")
-        if duration_sec is None:
-            duration_sec = ""
-        expected_applied = case.get("expected_applied")
-        if expected_applied is None:
-            expected_applied = ""
-        expected_applied_source = case.get("expected_applied_source")
-        if expected_applied_source is None:
-            expected_applied_source = ""
-        actual_applied = case.get("actual_applied")
-        if actual_applied is None:
-            actual_applied = ""
-        applied_matches = case.get("applied_matches")
-        if applied_matches is None:
-            applied_matches = ""
-        expected_code = case.get("expected_code")
-        if expected_code is None:
-            expected_code = ""
-        actual_code = case.get("actual_code")
-        if actual_code is None:
-            actual_code = ""
-        code_matches = case.get("code_matches")
-        if code_matches is None:
-            code_matches = ""
         lines.append(
             "| {name} | {matched} | {expected_code} | {actual_code} | {code_matches} | {expected_applied} | {expected_applied_source} | {actual_applied} | {applied_matches} | {attempts} | {duration_sec} | {timeout_sec} | {timeout_source} | {exit_code} | {response_code} | {response_path} | {unity_log_file} |".format(
                 name=case.get("name", ""),
                 matched=case.get("matched_expectation", False),
-                expected_code=expected_code,
-                actual_code=actual_code,
-                code_matches=code_matches,
-                expected_applied=expected_applied,
-                expected_applied_source=expected_applied_source,
-                actual_applied=actual_applied,
-                applied_matches=applied_matches,
+                expected_code=_cell(case.get("expected_code")),
+                actual_code=_cell(case.get("actual_code")),
+                code_matches=_cell(case.get("code_matches")),
+                expected_applied=_cell(case.get("expected_applied")),
+                expected_applied_source=_cell(case.get("expected_applied_source")),
+                actual_applied=_cell(case.get("actual_applied")),
+                applied_matches=_cell(case.get("applied_matches")),
                 attempts=case.get("attempts", 1),
-                duration_sec=duration_sec,
-                timeout_sec=timeout_sec,
+                duration_sec=_cell(case.get("duration_sec")),
+                timeout_sec=_cell(case.get("unity_timeout_sec")),
                 timeout_source=case.get("timeout_source", ""),
                 exit_code=case.get("exit_code", ""),
                 response_code=case.get("response_code", ""),
@@ -654,13 +630,14 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
         )
 
     failed_cases = [item for item in results if not item["matched_expectation"]]
+    all_passed = len(failed_cases) == 0
     summary_payload = {
-        "success": len(failed_cases) == 0,
-        "severity": "info" if len(failed_cases) == 0 else "error",
-        "code": "SMOKE_BATCH_OK" if len(failed_cases) == 0 else "SMOKE_BATCH_FAILED",
+        "success": all_passed,
+        "severity": "info" if all_passed else "error",
+        "code": "SMOKE_BATCH_OK" if all_passed else "SMOKE_BATCH_FAILED",
         "message": (
             "All bridge smoke cases matched expectations."
-            if len(failed_cases) == 0
+            if all_passed
             else "Some bridge smoke cases failed to match expectations."
         ),
         "data": {

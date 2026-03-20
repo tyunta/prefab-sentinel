@@ -79,7 +79,6 @@ def build_unity_command(
     log_path: Path,
     *,
     execute_method: str = _DEFAULT_EXECUTE_METHOD,
-    timeout_sec: int = _DEFAULT_TIMEOUT_SEC,
 ) -> list[str]:
     """Build the batchmode command list."""
     base = shlex.split(unity_command)
@@ -118,7 +117,6 @@ def run_integration_tests(
         project_path,
         results_path,
         log_path,
-        timeout_sec=timeout_sec,
     )
 
     try:

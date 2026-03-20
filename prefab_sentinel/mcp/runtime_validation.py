@@ -178,7 +178,8 @@ class RuntimeValidationMcp:
             os.environ.get(UNITY_RUNTIME_EXECUTE_METHOD_ENV, DEFAULT_RUNTIME_EXECUTE_METHOD).strip()
             or DEFAULT_RUNTIME_EXECUTE_METHOD
         )
-        log_path = Path(os.environ.get(UNITY_LOG_FILE_ENV, "").strip()) if os.environ.get(UNITY_LOG_FILE_ENV, "").strip() else project_path / "Logs" / "Editor.log"
+        log_path_raw = os.environ.get(UNITY_LOG_FILE_ENV, "").strip()
+        log_path = Path(log_path_raw) if log_path_raw else project_path / "Logs" / "Editor.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
 
         return {
@@ -197,7 +198,7 @@ class RuntimeValidationMcp:
         response_path: Path,
     ) -> list[str]:
         return [
-            *list(config["command"]),
+            *config["command"],
             "-batchmode",
             "-projectPath",
             str(config["project_path"]),
@@ -210,6 +211,17 @@ class RuntimeValidationMcp:
             "-sentinelRuntimeResponse",
             str(response_path),
         ]
+
+    @staticmethod
+    def _protocol_error(message: str, base_data: dict[str, Any]) -> ToolResponse:
+        return ToolResponse(
+            success=False,
+            severity=Severity.ERROR,
+            code="RUN_PROTOCOL_ERROR",
+            message=message,
+            data={**base_data, "read_only": True, "executed": False},
+            diagnostics=[],
+        )
 
     def _parse_runtime_response(
         self,
@@ -229,14 +241,7 @@ class RuntimeValidationMcp:
             "log_path": self._relative(log_path),
         }
         if not isinstance(payload, dict):
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="RUN_PROTOCOL_ERROR",
-                message="Unity runtime response root must be an object.",
-                data={**base_data, "read_only": True, "executed": False},
-                diagnostics=[],
-            )
+            return self._protocol_error("Unity runtime response root must be an object.", base_data)
 
         success = payload.get("success")
         severity = _coerce_severity(payload.get("severity"))
@@ -245,71 +250,22 @@ class RuntimeValidationMcp:
         data = payload.get("data")
         diagnostics_payload = payload.get("diagnostics")
         if not isinstance(success, bool):
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="RUN_PROTOCOL_ERROR",
-                message="Unity runtime response field 'success' must be a boolean.",
-                data={**base_data, "read_only": True, "executed": False},
-                diagnostics=[],
-            )
+            return self._protocol_error("Unity runtime response field 'success' must be a boolean.", base_data)
         if severity is None:
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="RUN_PROTOCOL_ERROR",
-                message="Unity runtime response field 'severity' is invalid.",
-                data={**base_data, "read_only": True, "executed": False},
-                diagnostics=[],
-            )
+            return self._protocol_error("Unity runtime response field 'severity' is invalid.", base_data)
         if not isinstance(code, str) or not code.strip():
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="RUN_PROTOCOL_ERROR",
-                message="Unity runtime response field 'code' must be a non-empty string.",
-                data={**base_data, "read_only": True, "executed": False},
-                diagnostics=[],
-            )
+            return self._protocol_error("Unity runtime response field 'code' must be a non-empty string.", base_data)
         if not isinstance(message, str):
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="RUN_PROTOCOL_ERROR",
-                message="Unity runtime response field 'message' must be a string.",
-                data={**base_data, "read_only": True, "executed": False},
-                diagnostics=[],
-            )
+            return self._protocol_error("Unity runtime response field 'message' must be a string.", base_data)
         if not isinstance(data, dict):
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="RUN_PROTOCOL_ERROR",
-                message="Unity runtime response field 'data' must be an object.",
-                data={**base_data, "read_only": True, "executed": False},
-                diagnostics=[],
-            )
+            return self._protocol_error("Unity runtime response field 'data' must be an object.", base_data)
         if not isinstance(diagnostics_payload, list):
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="RUN_PROTOCOL_ERROR",
-                message="Unity runtime response field 'diagnostics' must be an array.",
-                data={**base_data, "read_only": True, "executed": False},
-                diagnostics=[],
-            )
+            return self._protocol_error("Unity runtime response field 'diagnostics' must be an array.", base_data)
 
         diagnostics: list[Diagnostic] = []
         for entry in diagnostics_payload:
             if not isinstance(entry, dict):
-                return ToolResponse(
-                    success=False,
-                    severity=Severity.ERROR,
-                    code="RUN_PROTOCOL_ERROR",
-                    message="Unity runtime diagnostics entries must be objects.",
-                    data={**base_data, "read_only": True, "executed": False},
-                    diagnostics=[],
-                )
+                return self._protocol_error("Unity runtime diagnostics entries must be objects.", base_data)
             diagnostics.append(
                 Diagnostic(
                     path=str(entry.get("path", "")),
@@ -327,6 +283,10 @@ class RuntimeValidationMcp:
             data={**base_data, **data},
             diagnostics=diagnostics,
         )
+
+    @staticmethod
+    def _failure_code(action: str) -> str:
+        return "RUN_COMPILE_FAILED" if action == "compile_udonsharp" else "RUN002"
 
     def _invoke_unity_runtime(
         self,
@@ -386,7 +346,7 @@ class RuntimeValidationMcp:
                     check=False,
                 )
             except subprocess.TimeoutExpired as exc:
-                failure_code = "RUN_COMPILE_FAILED" if action == "compile_udonsharp" else "RUN002"
+                failure_code = self._failure_code(action)
                 failure_message = (
                     "Unity batchmode compile timed out."
                     if action == "compile_udonsharp"
@@ -412,7 +372,7 @@ class RuntimeValidationMcp:
                     diagnostics=[],
                 )
             except OSError as exc:
-                failure_code = "RUN_COMPILE_FAILED" if action == "compile_udonsharp" else "RUN002"
+                failure_code = self._failure_code(action)
                 failure_message = (
                     "Failed to start Unity batchmode compile process."
                     if action == "compile_udonsharp"
@@ -480,7 +440,7 @@ class RuntimeValidationMcp:
                     )
                 return response
 
-            failure_code = "RUN_COMPILE_FAILED" if action == "compile_udonsharp" else "RUN002"
+            failure_code = self._failure_code(action)
             failure_message = (
                 "Unity batchmode compile did not produce a valid response."
                 if action == "compile_udonsharp"
