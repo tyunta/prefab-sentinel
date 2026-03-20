@@ -1,0 +1,41 @@
+{
+  "plan_version": 2,
+  "resources": [
+    {
+      "id": "world_material",
+      "kind": "material",
+      "path": "Assets/PrefabSentinelSmoke/GeneratedWorld.mat",
+      "mode": "create"
+    }
+  ],
+  "ops": [
+    {
+      "resource": "world_material",
+      "op": "create_asset",
+      "shader": "Standard",
+      "result": "generated_material"
+    },
+    {
+      "resource": "world_material",
+      "op": "set",
+      "target": "$generated_material",
+      "path": "m_Name",
+      "value": "PrefabSentinelWorldSmoke"
+    },
+    {
+      "resource": "world_material",
+      "op": "save"
+    }
+  ],
+  "postconditions": [
+    {
+      "type": "asset_exists",
+      "resource": "world_material"
+    },
+    {
+      "type": "broken_refs",
+      "scope": "Assets/PrefabSentinelSmoke",
+      "expected_count": 0
+    }
+  ]
+}

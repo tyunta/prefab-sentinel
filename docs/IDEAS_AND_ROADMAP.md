@@ -111,13 +111,13 @@
 - Added smoke runner unit tests:
   - `tests/test_unity_bridge_smoke.py`
 - Added shared bridge smoke library + CLI command:
-  - `unitytool/bridge_smoke.py` (shared contract/exec logic for script + CLI)
+  - `prefab_sentinel/bridge_smoke.py` (shared contract/exec logic for script + CLI)
   - `prefab-sentinel validate bridge-smoke ...` (`--expect-failure` / `--expected-code` / `--expected-applied` / `--expect-applied-from-plan` / `--out` supported)
   - output `data` now includes code assertion evidence (`expected_code` / `actual_code` / `code_matches`) and apply assertion evidence (`expected_applied` / `expected_applied_source` / `actual_applied` / `applied_matches`) when each assertion is enabled
   - CLI tests: `tests/test_cli.py` (`bridge-smoke` success + expectation mismatch)
 - Added smoke automation runner for sample avatar/world:
   - `scripts/bridge_smoke_samples.py`
-  - `unitytool/smoke_batch.py` (shared logic for script + CLI)
+  - `prefab_sentinel/smoke_batch.py` (shared logic for script + CLI)
   - exposed as CLI command: `prefab-sentinel validate smoke-batch ...`
   - supports per-target response-code assertions (`--avatar-expected-code` / `--world-expected-code`)
   - supports timeout profile input (`--timeout-profile`) for history-based default timeout selection
@@ -174,9 +174,15 @@
 - `report export --format md` supports `--md-max-steps` / `--md-omit-steps` to trim large `data.steps`.
 
 ## Next Executable Tasks
-- Extend Unity executeMethod apply coverage:
-  - Unity-side integration tests against sample prefab assets (batchmode assertions)
-  - fixed buffer element update cases (`set` with indexed element paths) as Unity-side integration assertions
+- ~~Extend Unity executeMethod apply coverage:~~
+  - ~~Unity-side integration tests against sample prefab assets (batchmode assertions)~~
+  - ~~fixed buffer element update cases (`set` with indexed element paths) as Unity-side integration assertions~~
+- Added Unity integration test harness:
+  - `tools/unity/PrefabSentinel.UnityIntegrationTests.cs` (24 test cases: set/insert/remove/error/persistence)
+  - `prefab_sentinel/integration_tests.py` + `scripts/unity_integration_tests.py` (Python orchestrator)
+  - CLI: `prefab-sentinel validate integration-tests`
+  - CI: `.github/workflows/unity-integration.yml` (workflow_dispatch, self-hosted Windows)
+  - Production refactor: `ApplyFromPaths` extracted from `ApplyFromJson` for in-process test invocation
 - Add Unity smoke hardening:
   - validate timeout policy knobs (`--timeout-multiplier` / `--timeout-slack-sec`) against accumulated real Unity runner history
 
@@ -724,9 +730,9 @@ The IDs below are draft planning IDs, not GitHub issue numbers.
 - [x] Decide whether CI can auto-apply ignore-guid updates (allowed with explicit output flag).
 
 ### Phase 2: Unity ExecuteMethod Coverage
-- [ ] Add Unity-side integration tests for `set` / `insert_array_element` / `remove_array_element`.
-- [ ] Add fixed buffer indexed element test cases (`set` with indexed element paths).
-- [ ] Automate batchmode assertions and capture Unity logs as artifacts.
+- [x] Add Unity-side integration tests for `set` / `insert_array_element` / `remove_array_element`.
+- [x] Add fixed buffer indexed element test cases (`set` with indexed element paths).
+- [x] Automate batchmode assertions and capture Unity logs as artifacts.
 
 ### Phase 3: Smoke Hardening
 - [ ] Collect real Unity runner history data for timeout tuning.

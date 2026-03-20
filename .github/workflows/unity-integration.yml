@@ -1,0 +1,63 @@
+name: unity-integration
+
+on:
+  workflow_dispatch:
+    inputs:
+      unity_command:
+        description: "Path to Unity.exe used for batchmode."
+        required: true
+        type: string
+      unity_project_path:
+        description: "Unity project directory for integration tests."
+        required: false
+        default: "../UnityTool_sample/avatar"
+        type: string
+      unity_timeout_sec:
+        description: "Batchmode timeout (seconds)."
+        required: false
+        default: "300"
+        type: string
+
+jobs:
+  integration-tests:
+    runs-on: [self-hosted, windows]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package
+        run: pip install -e ".[test]"
+
+      - name: Validate inputs
+        shell: pwsh
+        run: |
+          $unityCmd = "${{ inputs.unity_command }}"
+          $projectPath = "${{ inputs.unity_project_path }}"
+          if (-not (Test-Path $unityCmd)) {
+            Write-Error "Unity command not found: $unityCmd"
+            exit 1
+          }
+          $resolved = Resolve-Path $projectPath -ErrorAction SilentlyContinue
+          if (-not $resolved) {
+            Write-Error "Unity project path does not exist: $projectPath"
+            exit 1
+          }
+
+      - name: Run integration tests
+        run: >
+          prefab-sentinel validate integration-tests
+          --unity-command "${{ inputs.unity_command }}"
+          --unity-project-path "${{ inputs.unity_project_path }}"
+          --out-dir reports/integration
+          --timeout-sec ${{ inputs.unity_timeout_sec }}
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unity-integration-results
+          path: reports/integration/
+          if-no-files-found: warn
