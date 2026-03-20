@@ -56,8 +56,11 @@ uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel --h
 Claude Code Plugin として導入すると、Claude Code から `/prefab-sentinel:guide` 等のスキルを直接利用できる。
 
 ```bash
-# インストール
-claude plugin add tyunta/prefab-sentinel
+# マーケットプレイス登録
+/plugin marketplace add tyunta/prefab-sentinel
+
+# プラグインインストール
+/plugin install prefab-sentinel@tyunta-prefab-sentinel
 ```
 
 **利用可能なスキル:**

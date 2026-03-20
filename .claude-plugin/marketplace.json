@@ -1,0 +1,13 @@
+{
+  "name": "tyunta-prefab-sentinel",
+  "owner": {
+    "name": "tyunta"
+  },
+  "plugins": [
+    {
+      "name": "prefab-sentinel",
+      "source": "./",
+      "description": "Unity Prefab/Scene/Asset の検査・編集・参照修復ツール"
+    }
+  ]
+}
