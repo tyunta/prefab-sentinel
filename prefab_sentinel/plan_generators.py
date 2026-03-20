@@ -60,7 +60,7 @@ def generate_circle_layout(
 
     b = PatchPlanBuilder()
     b.create_prefab_resource(id=resource_id, path=output_path)
-    b.create_prefab(root_name, result="$root")
+    b.create_prefab(root_name)
 
     for i in range(count):
         child_name = child_name_pattern.format(name=child_base_name, index=i)

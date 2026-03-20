@@ -70,6 +70,17 @@ class CircleLayoutGeneratorTests(unittest.TestCase):
         self.assertAlmostEqual(3.0 * math.cos(2.0 * math.pi * 3 / 12), pos_x_op_3["value"], places=6)
         self.assertAlmostEqual(3.0 * math.sin(2.0 * math.pi * 3 / 12), pos_z_op_3["value"], places=6)
 
+    def test_create_prefab_op_has_no_result_key(self) -> None:
+        plan = generate_circle_layout(
+            output_path="Assets/C.prefab",
+            root_name="C",
+            count=1,
+            radius=1.0,
+        )
+        create_op = plan["ops"][0]
+        self.assertEqual("create_prefab", create_op["op"])
+        self.assertNotIn("result", create_op)
+
     def test_result_passes_normalize(self) -> None:
         plan = generate_circle_layout(
             output_path="Assets/Circle.prefab",
