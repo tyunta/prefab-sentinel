@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from unitytool.contracts import Severity, max_severity
+from prefab_sentinel.contracts import Severity, max_severity
 
 
 class ContractTests(unittest.TestCase):

@@ -113,8 +113,8 @@ def _arg(flag: str) -> str:
     idx = args.index(flag)
     return args[idx + 1]
 
-request_path = Path(_arg("-unitytoolPatchRequest"))
-response_path = Path(_arg("-unitytoolPatchResponse"))
+request_path = Path(_arg("-sentinelPatchRequest"))
+response_path = Path(_arg("-sentinelPatchResponse"))
 request = json.loads(request_path.read_text(encoding="utf-8"))
 response_path.write_text(
     json.dumps(
@@ -176,8 +176,8 @@ def _arg(flag: str) -> str:
     idx = args.index(flag)
     return args[idx + 1]
 
-request_path = Path(_arg("-unitytoolPatchRequest"))
-response_path = Path(_arg("-unitytoolPatchResponse"))
+request_path = Path(_arg("-sentinelPatchRequest"))
+response_path = Path(_arg("-sentinelPatchResponse"))
 request = json.loads(request_path.read_text(encoding="utf-8"))
 response_path.write_text(
     json.dumps(
@@ -264,8 +264,8 @@ def _arg(flag: str) -> str:
     idx = args.index(flag)
     return args[idx + 1]
 
-request_path = Path(_arg("-unitytoolPatchRequest"))
-response_path = Path(_arg("-unitytoolPatchResponse"))
+request_path = Path(_arg("-sentinelPatchRequest"))
+response_path = Path(_arg("-sentinelPatchResponse"))
 request = json.loads(request_path.read_text(encoding="utf-8"))
 response_path.write_text(
     json.dumps(
@@ -334,8 +334,8 @@ def _arg(flag: str) -> str:
     idx = args.index(flag)
     return args[idx + 1]
 
-request_path = Path(_arg("-unitytoolPatchRequest"))
-response_path = Path(_arg("-unitytoolPatchResponse"))
+request_path = Path(_arg("-sentinelPatchRequest"))
+response_path = Path(_arg("-sentinelPatchResponse"))
 request = json.loads(request_path.read_text(encoding="utf-8"))
 response_path.write_text(
     json.dumps(
@@ -417,8 +417,8 @@ def _arg(flag: str) -> str:
     idx = args.index(flag)
     return args[idx + 1]
 
-request_path = Path(_arg("-unitytoolPatchRequest"))
-response_path = Path(_arg("-unitytoolPatchResponse"))
+request_path = Path(_arg("-sentinelPatchRequest"))
+response_path = Path(_arg("-sentinelPatchResponse"))
 request = json.loads(request_path.read_text(encoding="utf-8"))
 response_path.write_text(
     json.dumps(
@@ -502,8 +502,8 @@ def _arg(flag: str) -> str:
     idx = args.index(flag)
     return args[idx + 1]
 
-request_path = Path(_arg("-unitytoolPatchRequest"))
-response_path = Path(_arg("-unitytoolPatchResponse"))
+request_path = Path(_arg("-sentinelPatchRequest"))
+response_path = Path(_arg("-sentinelPatchResponse"))
 request = json.loads(request_path.read_text(encoding="utf-8"))
 response_path.write_text(
     json.dumps(
@@ -585,8 +585,8 @@ def _arg(flag: str) -> str:
     idx = args.index(flag)
     return args[idx + 1]
 
-request_path = Path(_arg("-unitytoolPatchRequest"))
-response_path = Path(_arg("-unitytoolPatchResponse"))
+request_path = Path(_arg("-sentinelPatchRequest"))
+response_path = Path(_arg("-sentinelPatchResponse"))
 request = json.loads(request_path.read_text(encoding="utf-8"))
 response_path.write_text(
     json.dumps(
@@ -669,8 +669,8 @@ def _arg(flag: str) -> str:
     idx = args.index(flag)
     return args[idx + 1]
 
-request_path = Path(_arg("-unitytoolPatchRequest"))
-response_path = Path(_arg("-unitytoolPatchResponse"))
+request_path = Path(_arg("-sentinelPatchRequest"))
+response_path = Path(_arg("-sentinelPatchResponse"))
 request = json.loads(request_path.read_text(encoding="utf-8"))
 response_path.write_text(
     json.dumps(
@@ -745,8 +745,8 @@ def _arg(flag: str) -> str:
     idx = args.index(flag)
     return args[idx + 1]
 
-request_path = Path(_arg("-unitytoolPatchRequest"))
-response_path = Path(_arg("-unitytoolPatchResponse"))
+request_path = Path(_arg("-sentinelPatchRequest"))
+response_path = Path(_arg("-sentinelPatchResponse"))
 request = json.loads(request_path.read_text(encoding="utf-8"))
 response_path.write_text(
     json.dumps(
@@ -824,8 +824,8 @@ def _arg(flag: str) -> str:
     idx = args.index(flag)
     return args[idx + 1]
 
-request_path = Path(_arg("-unitytoolPatchRequest"))
-response_path = Path(_arg("-unitytoolPatchResponse"))
+request_path = Path(_arg("-sentinelPatchRequest"))
+response_path = Path(_arg("-sentinelPatchResponse"))
 request = json.loads(request_path.read_text(encoding="utf-8"))
 response_path.write_text(
     json.dumps(
@@ -923,7 +923,7 @@ def _arg(flag: str) -> str:
     idx = args.index(flag)
     return args[idx + 1]
 
-response_path = Path(_arg("-unitytoolPatchResponse"))
+response_path = Path(_arg("-sentinelPatchResponse"))
 response_path.write_text(
     json.dumps(
         {
@@ -972,7 +972,7 @@ def _arg(flag: str) -> str:
     idx = args.index(flag)
     return args[idx + 1]
 
-response_path = Path(_arg("-unitytoolPatchResponse"))
+response_path = Path(_arg("-sentinelPatchResponse"))
 response_path.write_text(
     json.dumps(
         {
@@ -1022,8 +1022,8 @@ def _arg(flag: str) -> str:
     idx = args.index(flag)
     return args[idx + 1]
 
-request_path = Path(_arg("-unitytoolPatchRequest"))
-response_path = Path(_arg("-unitytoolPatchResponse"))
+request_path = Path(_arg("-sentinelPatchRequest"))
+response_path = Path(_arg("-sentinelPatchResponse"))
 request = json.loads(request_path.read_text(encoding="utf-8"))
 response_path.write_text(
     json.dumps(

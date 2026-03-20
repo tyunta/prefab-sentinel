@@ -10,8 +10,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from unitytool.contracts import Diagnostic, Severity, ToolResponse, max_severity
-from unitytool.unity_assets import decode_text_file, find_project_root, resolve_scope_path
+from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse, max_severity
+from prefab_sentinel.unity_assets import decode_text_file, find_project_root, resolve_scope_path
 
 UNITY_COMMAND_ENV = "UNITYTOOL_UNITY_COMMAND"
 UNITY_PROJECT_PATH_ENV = "UNITYTOOL_UNITY_PROJECT_PATH"
@@ -205,9 +205,9 @@ class RuntimeValidationMcp:
             str(config["execute_method"]),
             "-logFile",
             str(config["log_path"]),
-            "-unitytoolRuntimeRequest",
+            "-sentinelRuntimeRequest",
             str(request_path),
-            "-unitytoolRuntimeResponse",
+            "-sentinelRuntimeResponse",
             str(response_path),
         ]
 
@@ -353,7 +353,7 @@ class RuntimeValidationMcp:
                 skip_data["profile"] = profile
             return self._skip_response(code=skip_code, message=skip_message, data=skip_data)
 
-        with tempfile.TemporaryDirectory(prefix="unitytool-runtime-") as temp_dir:
+        with tempfile.TemporaryDirectory(prefix="prefab-sentinel-runtime-") as temp_dir:
             temp_root = Path(temp_dir)
             request_path = temp_root / "request.json"
             response_path = temp_root / "response.json"

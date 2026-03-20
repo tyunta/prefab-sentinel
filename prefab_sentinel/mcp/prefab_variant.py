@@ -5,8 +5,8 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
-from unitytool.contracts import Diagnostic, Severity, ToolResponse
-from unitytool.unity_assets import (
+from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse
+from prefab_sentinel.unity_assets import (
     SOURCE_PREFAB_PATTERN,
     collect_project_guid_index,
     decode_text_file,

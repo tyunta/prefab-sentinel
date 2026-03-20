@@ -13,7 +13,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from unitytool.patch_plan import PLAN_VERSION as PROTOCOL_VERSION, iter_resource_batches, normalize_patch_plan
+from prefab_sentinel.patch_plan import PLAN_VERSION as PROTOCOL_VERSION, iter_resource_batches, normalize_patch_plan
 
 _UNITY_EXECUTE_METHOD_PROTOCOL_VERSION = 1
 SUPPORTED_SUFFIXES = {
@@ -107,9 +107,9 @@ def _build_unity_command(
         execute_method,
         "-logFile",
         log_path,
-        "-unitytoolPatchRequest",
+        "-sentinelPatchRequest",
         request_path,
-        "-unitytoolPatchResponse",
+        "-sentinelPatchResponse",
         response_path,
     ]
 
@@ -545,7 +545,7 @@ def _run_unity_for_resource(
     ops: list[dict[str, Any]],
 ) -> dict[str, Any]:
     target = str(resource.get("path", "")).strip()
-    with tempfile.TemporaryDirectory(prefix="unitytool-bridge-") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="prefab-sentinel-bridge-") as temp_dir:
         temp_root = Path(temp_dir)
         request_path = temp_root / "request.json"
         response_path = temp_root / "response.json"

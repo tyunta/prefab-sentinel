@@ -12,7 +12,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from unitytool import cli
+from prefab_sentinel import cli
 
 MISSING_GUID = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
@@ -37,8 +37,8 @@ def arg_value(name: str) -> str:
             return args[index + 1]
     raise SystemExit(f"missing argument: {name}")
 
-request_path = Path(arg_value("-unitytoolRuntimeRequest"))
-response_path = Path(arg_value("-unitytoolRuntimeResponse"))
+request_path = Path(arg_value("-sentinelRuntimeRequest"))
+response_path = Path(arg_value("-sentinelRuntimeResponse"))
 request = json.loads(request_path.read_text(encoding="utf-8"))
 action = request.get("action", "")
 

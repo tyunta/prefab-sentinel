@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from unitytool.reporting import render_markdown_report
+from prefab_sentinel.reporting import render_markdown_report
 
 
 class ReportingTests(unittest.TestCase):

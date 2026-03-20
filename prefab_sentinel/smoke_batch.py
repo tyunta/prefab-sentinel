@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from unitytool.bridge_smoke import load_patch_plan
+from prefab_sentinel.bridge_smoke import load_patch_plan
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _PROJECT_SMOKE_SCRIPT = _PROJECT_ROOT / "scripts" / "unity_bridge_smoke.py"
@@ -20,6 +20,24 @@ UNITY_BRIDGE_SMOKE_SCRIPT = (
 )
 DEFAULT_EXECUTE_METHOD = "PrefabSentinel.UnityPatchBridge.ApplyFromJson"
 DEFAULT_OUT_DIR = Path("reports") / "bridge_smoke"
+_SIBLING_SAMPLE_ROOT_NAME = "UnityTool_sample"
+_DEFAULT_PLAN_BY_TARGET = {
+    "avatar": "avatar_prefab_create.json",
+    "world": "world_material_create.json",
+}
+
+
+def _default_sample_root() -> Path:
+    return _PROJECT_ROOT.parent / _SIBLING_SAMPLE_ROOT_NAME
+
+
+def _default_plan_path(target: str) -> Path:
+    filename = _DEFAULT_PLAN_BY_TARGET[target]
+    return _PROJECT_ROOT / "config" / "bridge_smoke" / filename
+
+
+def _default_project_path(target: str) -> Path:
+    return _default_sample_root() / target
 
 
 @dataclass(frozen=True)
@@ -42,22 +60,22 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--avatar-plan",
-        default=str(Path("sample") / "avatar" / "config" / "prefab_patch_plan.json"),
+        default=str(_default_plan_path("avatar")),
         help="Patch plan for avatar target.",
     )
     parser.add_argument(
         "--world-plan",
-        default=str(Path("sample") / "world" / "config" / "prefab_patch_plan.json"),
+        default=str(_default_plan_path("world")),
         help="Patch plan for world target.",
     )
     parser.add_argument(
         "--avatar-project-path",
-        default=str(Path("sample") / "avatar"),
+        default=str(_default_project_path("avatar")),
         help="Unity project path for avatar target.",
     )
     parser.add_argument(
         "--world-project-path",
-        default=str(Path("sample") / "world"),
+        default=str(_default_project_path("world")),
         help="Unity project path for world target.",
     )
     parser.add_argument(

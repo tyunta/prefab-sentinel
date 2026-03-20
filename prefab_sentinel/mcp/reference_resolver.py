@@ -5,8 +5,8 @@ import os
 from collections import Counter
 from pathlib import Path
 
-from unitytool.contracts import Diagnostic, Severity, ToolResponse
-from unitytool.unity_assets import (
+from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse
+from prefab_sentinel.unity_assets import (
     DEFAULT_EXCLUDED_DIR_NAMES,
     collect_project_guid_index,
     decode_text_file,

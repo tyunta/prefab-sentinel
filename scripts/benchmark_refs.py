@@ -70,7 +70,7 @@ def _build_command(args: argparse.Namespace) -> list[str]:
     cmd = [
         sys.executable,
         "-m",
-        "unitytool",
+        "prefab_sentinel",
         "validate",
         "refs",
         "--scope",

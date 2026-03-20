@@ -17,8 +17,8 @@ namespace PrefabSentinel
     public static class UnityRuntimeValidationBridge
     {
         private const int ProtocolVersion = 1;
-        private const string RequestArg = "-unitytoolRuntimeRequest";
-        private const string ResponseArg = "-unitytoolRuntimeResponse";
+        private const string RequestArg = "-sentinelRuntimeRequest";
+        private const string ResponseArg = "-sentinelRuntimeResponse";
         private const string DefaultProjectRootName = "project";
 
         [Serializable]

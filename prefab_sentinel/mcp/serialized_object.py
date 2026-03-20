@@ -9,15 +9,15 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from unitytool.contracts import Diagnostic, Severity, ToolResponse
-from unitytool.patch_plan import (
+from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse
+from prefab_sentinel.patch_plan import (
     PLAN_VERSION,
     build_bridge_request,
     compute_patch_plan_hmac_sha256,
     compute_patch_plan_sha256,
     load_patch_plan,
 )
-from unitytool.unity_assets import decode_text_file
+from prefab_sentinel.unity_assets import decode_text_file
 
 _SUPPORTED_OPS = {"set", "insert_array_element", "remove_array_element"}
 _PREFAB_CREATE_OPS = {
@@ -56,10 +56,10 @@ _UNITY_BRIDGE_ALLOWED_COMMANDS = {
     "uvx",
     "uv.exe",
     "uvx.exe",
-    "unitytool-unity-bridge",
-    "unitytool-unity-bridge.exe",
-    "unitytool-unity-serialized-object-bridge",
-    "unitytool-unity-serialized-object-bridge.exe",
+    "prefab-sentinel-unity-bridge",
+    "prefab-sentinel-unity-bridge.exe",
+    "prefab-sentinel-unity-serialized-object-bridge",
+    "prefab-sentinel-unity-serialized-object-bridge.exe",
 }
 
 _UNITY_BRIDGE_KIND_BY_SUFFIX = {

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 # Backward-compatible script entrypoint that re-exports helper functions
 # used by existing tests and local automation.
-from unitytool.smoke_batch import (
+from prefab_sentinel.smoke_batch import (
     SmokeCase,
     _build_smoke_command,
     _render_markdown_summary,

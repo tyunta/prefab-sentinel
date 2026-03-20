@@ -12,7 +12,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from unitytool.bridge_smoke import (
+from prefab_sentinel.bridge_smoke import (
     PROTOCOL_VERSION,
     UNITY_COMMAND_ENV,
     UNITY_EXECUTE_METHOD_ENV,

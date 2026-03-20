@@ -16,8 +16,8 @@ namespace PrefabSentinel
     public static class UnityPatchBridge
     {
         private const int ProtocolVersion = 1;
-        private const string RequestArg = "-unitytoolPatchRequest";
-        private const string ResponseArg = "-unitytoolPatchResponse";
+        private const string RequestArg = "-sentinelPatchRequest";
+        private const string ResponseArg = "-sentinelPatchResponse";
         private const string ArrayDataSuffix = ".Array.data";
         private const string SceneHandleName = "scene";
         private const string AssetHandleName = "asset";
@@ -253,6 +253,16 @@ namespace PrefabSentinel
                 return;
             }
 
+            ApplyFromPaths(requestPath, responsePath);
+        }
+
+        /// <summary>
+        /// Core bridge logic: reads request JSON, routes to the appropriate handler, writes response JSON.
+        /// Extracted from <see cref="ApplyFromJson"/> so that integration tests can invoke it
+        /// directly without relying on command-line arguments.
+        /// </summary>
+        public static void ApplyFromPaths(string requestPath, string responsePath)
+        {
             BridgeRequest request;
             try
             {

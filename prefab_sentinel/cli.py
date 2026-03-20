@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from unitytool.bridge_smoke import (
+from prefab_sentinel.bridge_smoke import (
     UNITY_COMMAND_ENV,
     UNITY_EXECUTE_METHOD_ENV,
     UNITY_LOG_FILE_ENV,
@@ -22,22 +22,22 @@ from unitytool.bridge_smoke import (
     run_bridge as run_bridge_smoke,
     validate_expectation as validate_bridge_smoke_expectation,
 )
-from unitytool.mcp.serialized_object import (
+from prefab_sentinel.mcp.serialized_object import (
     compute_patch_plan_hmac_sha256,
     compute_patch_plan_sha256,
     load_patch_plan,
 )
-from unitytool.orchestrator import Phase1Orchestrator
-from unitytool.reporting import export_report, render_markdown_report
-from unitytool.smoke_batch import (
+from prefab_sentinel.orchestrator import Phase1Orchestrator
+from prefab_sentinel.reporting import export_report, render_markdown_report
+from prefab_sentinel.smoke_batch import (
     add_arguments as add_smoke_batch_arguments,
     run_from_args as run_smoke_batch_from_args,
 )
-from unitytool.smoke_history import (
+from prefab_sentinel.smoke_history import (
     add_arguments as add_smoke_history_arguments,
     run_from_args as run_smoke_history_from_args,
 )
-from unitytool.unity_assets import find_project_root, resolve_scope_path
+from prefab_sentinel.unity_assets import find_project_root, resolve_scope_path
 
 _DEFAULT_PLAN_SIGNING_KEY_ENV = "UNITYTOOL_PLAN_SIGNING_KEY"
 _DEFAULT_IGNORE_GUID_BRANCH_ALLOWLIST = ("main", "release/*")
@@ -234,6 +234,37 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run smoke cases for avatar/world targets and write batch summaries.",
     )
     add_smoke_batch_arguments(validate_smoke_batch)
+
+    validate_integration = validate_sub.add_parser(
+        "integration-tests",
+        help="Run Unity C# integration tests for bridge operations.",
+    )
+    validate_integration.add_argument(
+        "--unity-command",
+        required=True,
+        help="Path to Unity executable.",
+    )
+    validate_integration.add_argument(
+        "--unity-project-path",
+        required=True,
+        help="Unity project directory to run tests in.",
+    )
+    validate_integration.add_argument(
+        "--out-dir",
+        default="reports/integration",
+        help="Output directory for results and logs (default: reports/integration).",
+    )
+    validate_integration.add_argument(
+        "--timeout-sec",
+        type=int,
+        default=300,
+        help="Batchmode timeout in seconds (default: 300).",
+    )
+    validate_integration.add_argument(
+        "--skip-deploy",
+        action="store_true",
+        help="Skip deploying C# files (use if already in project).",
+    )
 
     suggest_parser = subparsers.add_parser("suggest", help="Suggestion commands.")
     suggest_sub = suggest_parser.add_subparsers(dest="suggest_command", required=True)
@@ -815,6 +846,49 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "validate" and args.validate_command == "smoke-batch":
         return run_smoke_batch_from_args(args, parser)
+
+    if args.command == "validate" and args.validate_command == "integration-tests":
+        from prefab_sentinel.integration_tests import (
+            deploy_test_files,
+            extract_unity_log_errors,
+            run_integration_tests,
+        )
+        project_path = Path(args.unity_project_path).resolve()
+        out_dir = Path(args.out_dir).resolve()
+        if not project_path.is_dir():
+            parser.error(f"Unity project path does not exist: {project_path}")
+        if not args.skip_deploy:
+            try:
+                deploy_test_files(project_path)
+            except FileNotFoundError as exc:
+                parser.error(str(exc))
+        try:
+            results = run_integration_tests(
+                args.unity_command,
+                project_path,
+                out_dir,
+                timeout_sec=args.timeout_sec,
+            )
+        except RuntimeError as exc:
+            payload = {
+                "success": False,
+                "severity": "error",
+                "code": "INTEGRATION_TEST_LAUNCH_ERROR",
+                "message": str(exc),
+                "data": {},
+                "diagnostics": [],
+            }
+            log_path = out_dir / "unity_integration.log"
+            errors = extract_unity_log_errors(log_path, max_lines=20)
+            if errors:
+                payload["diagnostics"] = [
+                    {"detail": "unity_log_error", "evidence": line}
+                    for line in errors
+                ]
+            _emit_payload(payload, "json")
+            return 1
+        _emit_payload(results, "json")
+        return 0 if results.get("success") else 1
 
     if args.command == "suggest" and args.suggest_command == "ignore-guids":
         ignore_guid_file = _resolve_ignore_guid_file(

@@ -14,7 +14,7 @@ dependencies = []
 test = ["unittest-parallel>=1.6,<2"]
 
 [project.scripts]
-prefab-sentinel = "unitytool.cli:main"
+prefab-sentinel = "prefab_sentinel.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["unitytool"]
+packages = ["prefab_sentinel"]

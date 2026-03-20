@@ -10,11 +10,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from unitytool.orchestrator import Phase1Orchestrator
-from unitytool.mcp.prefab_variant import PrefabVariantMcp
-from unitytool.mcp.reference_resolver import ReferenceResolverMcp
-from unitytool.mcp.runtime_validation import RuntimeValidationMcp
-from unitytool.mcp.serialized_object import (
+from prefab_sentinel.orchestrator import Phase1Orchestrator
+from prefab_sentinel.mcp.prefab_variant import PrefabVariantMcp
+from prefab_sentinel.mcp.reference_resolver import ReferenceResolverMcp
+from prefab_sentinel.mcp.runtime_validation import RuntimeValidationMcp
+from prefab_sentinel.mcp.serialized_object import (
     SerializedObjectMcp,
     compute_patch_plan_hmac_sha256,
     compute_patch_plan_sha256,
@@ -47,8 +47,8 @@ def arg_value(name: str) -> str:
             return args[index + 1]
     raise SystemExit(f"missing argument: {name}")
 
-request_path = Path(arg_value("-unitytoolRuntimeRequest"))
-response_path = Path(arg_value("-unitytoolRuntimeResponse"))
+request_path = Path(arg_value("-sentinelRuntimeRequest"))
+response_path = Path(arg_value("-sentinelRuntimeResponse"))
 request = json.loads(request_path.read_text(encoding="utf-8"))
 action = request.get("action", "")
 

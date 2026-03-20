@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from unitytool.patch_plan import (
+from prefab_sentinel.patch_plan import (
     PLAN_VERSION as PROTOCOL_VERSION,
     build_bridge_request as _build_bridge_request_impl,
     count_plan_ops,

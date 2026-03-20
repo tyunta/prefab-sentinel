@@ -6,12 +6,12 @@ from pathlib import Path
 from typing import Any
 import uuid
 
-from unitytool.contracts import Severity, ToolResponse, max_severity
-from unitytool.mcp.prefab_variant import PrefabVariantMcp
-from unitytool.mcp.reference_resolver import ReferenceResolverMcp
-from unitytool.mcp.runtime_validation import RuntimeValidationMcp
-from unitytool.mcp.serialized_object import SerializedObjectMcp
-from unitytool.patch_plan import count_plan_ops, iter_resource_batches, normalize_patch_plan
+from prefab_sentinel.contracts import Severity, ToolResponse, max_severity
+from prefab_sentinel.mcp.prefab_variant import PrefabVariantMcp
+from prefab_sentinel.mcp.reference_resolver import ReferenceResolverMcp
+from prefab_sentinel.mcp.runtime_validation import RuntimeValidationMcp
+from prefab_sentinel.mcp.serialized_object import SerializedObjectMcp
+from prefab_sentinel.patch_plan import count_plan_ops, iter_resource_batches, normalize_patch_plan
 
 
 @dataclass(slots=True)

@@ -7,12 +7,14 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 from scripts.bridge_smoke_samples import (
     SmokeCase,
     _build_smoke_command,
     _render_markdown_summary,
     _resolve_targets,
+    build_parser,
     main,
 )
 
@@ -53,6 +55,29 @@ class BridgeSmokeSamplesTests(unittest.TestCase):
         self.assertIn("--expect-failure", command)
         self.assertIn("--expected-code", command)
         self.assertIn("BRIDGE_FAIL", command)
+
+    def test_build_parser_defaults_to_sibling_sample_root_when_present(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir) / "repo"
+            sibling_root = Path(temp_dir) / "UnityTool_sample"
+            repo_root.mkdir(parents=True, exist_ok=True)
+            (sibling_root / "avatar").mkdir(parents=True, exist_ok=True)
+            (sibling_root / "world").mkdir(parents=True, exist_ok=True)
+
+            with patch("prefab_sentinel.smoke_batch._PROJECT_ROOT", repo_root):
+                parser = build_parser()
+                args = parser.parse_args([])
+
+        self.assertEqual(
+            str(repo_root / "config" / "bridge_smoke" / "avatar_prefab_create.json"),
+            args.avatar_plan,
+        )
+        self.assertEqual(
+            str(repo_root / "config" / "bridge_smoke" / "world_material_create.json"),
+            args.world_plan,
+        )
+        self.assertEqual(str(sibling_root / "avatar"), args.avatar_project_path)
+        self.assertEqual(str(sibling_root / "world"), args.world_project_path)
 
     def test_render_markdown_summary_contains_case_rows(self) -> None:
         markdown = _render_markdown_summary(
