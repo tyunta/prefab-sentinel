@@ -270,30 +270,12 @@ namespace PrefabSentinel
                     udonProgramCount: programCount
                 );
             }
-            catch (TargetInvocationException ex)
-            {
-                return BuildError(
-                    code: "RUN_COMPILE_FAILED",
-                    message: $"UdonSharp compile threw an exception: {ex.InnerException?.Message ?? ex.Message}",
-                    request: request,
-                    diagnostics: new[]
-                    {
-                        new RuntimeDiagnostic
-                        {
-                            location = "compile_udonsharp",
-                            detail = "exception",
-                            evidence = (ex.InnerException ?? ex).ToString()
-                        }
-                    },
-                    readOnly: false,
-                    executed: true
-                );
-            }
             catch (Exception ex)
             {
+                Exception inner = (ex as TargetInvocationException)?.InnerException ?? ex;
                 return BuildError(
                     code: "RUN_COMPILE_FAILED",
-                    message: $"Unexpected compile exception: {ex.Message}",
+                    message: $"UdonSharp compile threw an exception: {inner.Message}",
                     request: request,
                     diagnostics: new[]
                     {
@@ -301,13 +283,34 @@ namespace PrefabSentinel
                         {
                             location = "compile_udonsharp",
                             detail = "exception",
-                            evidence = ex.ToString()
+                            evidence = inner.ToString()
                         }
                     },
                     readOnly: false,
                     executed: true
                 );
             }
+        }
+
+        private static RuntimeData BuildData(
+            RuntimeRequest request,
+            bool readOnly,
+            bool executed,
+            int udonProgramCount = 0,
+            bool clientSimReady = false
+        )
+        {
+            return new RuntimeData
+            {
+                project_root = string.IsNullOrWhiteSpace(request.project_root) ? DefaultProjectRootName : request.project_root,
+                scene_path = request.scene_path ?? string.Empty,
+                profile = request.profile ?? string.Empty,
+                timeout_sec = request.timeout_sec,
+                udon_program_count = udonProgramCount,
+                clientsim_ready = clientSimReady,
+                read_only = readOnly,
+                executed = executed,
+            };
         }
 
         internal static RuntimeResponse BuildSkip(string code, string message, RuntimeRequest request)
@@ -318,15 +321,7 @@ namespace PrefabSentinel
                 severity = "warning",
                 code = code,
                 message = message,
-                data = new RuntimeData
-                {
-                    project_root = string.IsNullOrWhiteSpace(request.project_root) ? DefaultProjectRootName : request.project_root,
-                    scene_path = request.scene_path ?? string.Empty,
-                    profile = request.profile ?? string.Empty,
-                    timeout_sec = request.timeout_sec,
-                    read_only = true,
-                    executed = false,
-                },
+                data = BuildData(request, readOnly: true, executed: false),
                 diagnostics = Array.Empty<RuntimeDiagnostic>(),
             };
         }
@@ -345,17 +340,7 @@ namespace PrefabSentinel
                 severity = "info",
                 code = code,
                 message = message,
-                data = new RuntimeData
-                {
-                    project_root = string.IsNullOrWhiteSpace(request.project_root) ? DefaultProjectRootName : request.project_root,
-                    scene_path = request.scene_path ?? string.Empty,
-                    profile = request.profile ?? string.Empty,
-                    timeout_sec = request.timeout_sec,
-                    udon_program_count = udonProgramCount,
-                    clientsim_ready = clientSimReady,
-                    read_only = false,
-                    executed = true,
-                },
+                data = BuildData(request, readOnly: false, executed: true, udonProgramCount: udonProgramCount, clientSimReady: clientSimReady),
                 diagnostics = Array.Empty<RuntimeDiagnostic>(),
             };
         }
@@ -377,17 +362,7 @@ namespace PrefabSentinel
                 severity = "error",
                 code = code,
                 message = message,
-                data = new RuntimeData
-                {
-                    project_root = string.IsNullOrWhiteSpace(request.project_root) ? DefaultProjectRootName : request.project_root,
-                    scene_path = request.scene_path ?? string.Empty,
-                    profile = request.profile ?? string.Empty,
-                    timeout_sec = request.timeout_sec,
-                    udon_program_count = udonProgramCount,
-                    clientsim_ready = clientSimReady,
-                    read_only = readOnly,
-                    executed = executed,
-                },
+                data = BuildData(request, readOnly: readOnly, executed: executed, udonProgramCount: udonProgramCount, clientSimReady: clientSimReady),
                 diagnostics = diagnostics ?? Array.Empty<RuntimeDiagnostic>(),
             };
         }
@@ -464,7 +439,8 @@ namespace PrefabSentinel
                         ? Path.Combine(Application.dataPath, "..")
                         : request.project_root
                 ).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-                if (!fullScenePath.StartsWith(fullProjectRoot, StringComparison.OrdinalIgnoreCase))
+                if (!fullScenePath.StartsWith(fullProjectRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(fullScenePath, fullProjectRoot, StringComparison.OrdinalIgnoreCase))
                 {
                     error = $"scene path is outside the Unity project root: '{rawScenePath}'";
                     return false;
@@ -550,37 +526,11 @@ namespace PrefabSentinel
 
             if (caught != null)
             {
-                Finish(
-                    UnityRuntimeValidationBridge.BuildError(
-                        code: "RUN002",
-                        message: $"Unexpected ClientSim exception: {caught.Message}",
-                        request: _request,
-                        diagnostics: new[]
-                        {
-                            new UnityRuntimeValidationBridge.RuntimeDiagnostic
-                            {
-                                location = "run_clientsim",
-                                detail = "exception",
-                                evidence = caught.ToString()
-                            }
-                        },
-                        readOnly: false,
-                        executed: true
-                    )
-                );
+                Finish(ClientSimError($"Unexpected ClientSim exception: {caught.Message}", DiagFrom("run_clientsim", "exception", caught.ToString())));
                 yield break;
             }
 
-            Finish(
-                response ?? UnityRuntimeValidationBridge.BuildError(
-                    code: "RUN002",
-                    message: "ClientSim runner completed without producing a response.",
-                    request: _request,
-                    diagnostics: Array.Empty<UnityRuntimeValidationBridge.RuntimeDiagnostic>(),
-                    readOnly: false,
-                    executed: true
-                )
-            );
+            Finish(response ?? ClientSimError("ClientSim runner completed without producing a response."));
         }
 
         private IEnumerator ExecuteClientSim(Action<UnityRuntimeValidationBridge.RuntimeResponse> complete)
@@ -594,15 +544,7 @@ namespace PrefabSentinel
                         code: "RUN002",
                         message: "ClientSim scene path is invalid.",
                         request: _request,
-                        diagnostics: new[]
-                        {
-                            new UnityRuntimeValidationBridge.RuntimeDiagnostic
-                            {
-                                location = "scene_path",
-                                detail = "schema_error",
-                                evidence = sceneError
-                            }
-                        },
+                        diagnostics: DiagFrom("scene_path", "schema_error", sceneError),
                         readOnly: true,
                         executed: false
                     )
@@ -657,24 +599,7 @@ namespace PrefabSentinel
                     Scene openedScene = EditorSceneManager.OpenScene(sceneAssetPath, OpenSceneMode.Single);
                     if (!openedScene.IsValid() || !openedScene.isLoaded)
                     {
-                        complete(
-                            UnityRuntimeValidationBridge.BuildError(
-                                code: "RUN002",
-                                message: "Failed to open runtime validation scene.",
-                                request: _request,
-                                diagnostics: new[]
-                                {
-                                    new UnityRuntimeValidationBridge.RuntimeDiagnostic
-                                    {
-                                        location = "scene_path",
-                                        detail = "apply_error",
-                                        evidence = sceneAssetPath
-                                    }
-                                },
-                                readOnly: false,
-                                executed: true
-                            )
-                        );
+                        complete(ClientSimError("Failed to open runtime validation scene.", DiagFrom("scene_path", "apply_error", sceneAssetPath)));
                         yield break;
                     }
 
@@ -692,16 +617,7 @@ namespace PrefabSentinel
                     UnityEngine.Object[] foundInstances = Resources.FindObjectsOfTypeAll(clientSimMainType);
                     if (foundInstances == null || foundInstances.Length == 0)
                     {
-                        complete(
-                            UnityRuntimeValidationBridge.BuildError(
-                                code: "RUN002",
-                                message: "ClientSim instance was not created for the target scene.",
-                                request: _request,
-                                diagnostics: Array.Empty<UnityRuntimeValidationBridge.RuntimeDiagnostic>(),
-                                readOnly: false,
-                                executed: true
-                            )
-                        );
+                        complete(ClientSimError("ClientSim instance was not created for the target scene."));
                         yield break;
                     }
 
@@ -709,16 +625,7 @@ namespace PrefabSentinel
                     IEnumerator initRoutine = initializeClientSim.Invoke(instance, null) as IEnumerator;
                     if (initRoutine == null)
                     {
-                        complete(
-                            UnityRuntimeValidationBridge.BuildError(
-                                code: "RUN002",
-                                message: "ClientSim initialization coroutine was not available.",
-                                request: _request,
-                                diagnostics: Array.Empty<UnityRuntimeValidationBridge.RuntimeDiagnostic>(),
-                                readOnly: false,
-                                executed: true
-                            )
-                        );
+                        complete(ClientSimError("ClientSim initialization coroutine was not available."));
                         yield break;
                     }
 
@@ -727,24 +634,8 @@ namespace PrefabSentinel
                 }
                 catch (TargetInvocationException ex)
                 {
-                    complete(
-                        UnityRuntimeValidationBridge.BuildError(
-                            code: "RUN002",
-                            message: $"ClientSim startup threw an exception: {ex.InnerException?.Message ?? ex.Message}",
-                            request: _request,
-                            diagnostics: new[]
-                            {
-                                new UnityRuntimeValidationBridge.RuntimeDiagnostic
-                                {
-                                    location = "run_clientsim",
-                                    detail = "exception",
-                                    evidence = (ex.InnerException ?? ex).ToString()
-                                }
-                            },
-                            readOnly: false,
-                            executed: true
-                        )
-                    );
+                    Exception inner = ex.InnerException ?? ex;
+                    complete(ClientSimError($"ClientSim startup threw an exception: {inner.Message}", DiagFrom("run_clientsim", "exception", inner.ToString())));
                     yield break;
                 }
 
@@ -762,47 +653,13 @@ namespace PrefabSentinel
                         StopCoroutine(active);
                     }
 
-                    complete(
-                        UnityRuntimeValidationBridge.BuildError(
-                            code: "RUN002",
-                            message: "ClientSim initialization timed out.",
-                            request: _request,
-                            diagnostics: new[]
-                            {
-                                new UnityRuntimeValidationBridge.RuntimeDiagnostic
-                                {
-                                    location = "run_clientsim",
-                                    detail = "timeout",
-                                    evidence = $"timeout_sec={_request.timeout_sec}"
-                                }
-                            },
-                            readOnly: false,
-                            executed: true
-                        )
-                    );
+                    complete(ClientSimError("ClientSim initialization timed out.", DiagFrom("run_clientsim", "timeout", $"timeout_sec={_request.timeout_sec}")));
                     yield break;
                 }
 
                 if (initFailure != null)
                 {
-                    complete(
-                        UnityRuntimeValidationBridge.BuildError(
-                            code: "RUN002",
-                            message: $"ClientSim initialization failed: {initFailure.Message}",
-                            request: _request,
-                            diagnostics: new[]
-                            {
-                                new UnityRuntimeValidationBridge.RuntimeDiagnostic
-                                {
-                                    location = "run_clientsim",
-                                    detail = "exception",
-                                    evidence = initFailure.ToString()
-                                }
-                            },
-                            readOnly: false,
-                            executed: true
-                        )
-                    );
+                    complete(ClientSimError($"ClientSim initialization failed: {initFailure.Message}", DiagFrom("run_clientsim", "exception", initFailure.ToString())));
                     yield break;
                 }
 
@@ -812,16 +669,7 @@ namespace PrefabSentinel
                     bool ready = Convert.ToBoolean(isNetworkReady.Invoke(instance, null));
                     if (!ready)
                     {
-                        complete(
-                            UnityRuntimeValidationBridge.BuildError(
-                                code: "RUN002",
-                                message: "ClientSim coroutine completed without reaching ready state.",
-                                request: _request,
-                                diagnostics: Array.Empty<UnityRuntimeValidationBridge.RuntimeDiagnostic>(),
-                                readOnly: false,
-                                executed: true
-                            )
-                        );
+                        complete(ClientSimError("ClientSim coroutine completed without reaching ready state."));
                         yield break;
                     }
 
@@ -836,24 +684,8 @@ namespace PrefabSentinel
                 }
                 catch (TargetInvocationException ex)
                 {
-                    complete(
-                        UnityRuntimeValidationBridge.BuildError(
-                            code: "RUN002",
-                            message: $"ClientSim ready-check threw an exception: {ex.InnerException?.Message ?? ex.Message}",
-                            request: _request,
-                            diagnostics: new[]
-                            {
-                                new UnityRuntimeValidationBridge.RuntimeDiagnostic
-                                {
-                                    location = "run_clientsim",
-                                    detail = "exception",
-                                    evidence = (ex.InnerException ?? ex).ToString()
-                                }
-                            },
-                            readOnly: false,
-                            executed: true
-                        )
-                    );
+                    Exception inner = ex.InnerException ?? ex;
+                    complete(ClientSimError($"ClientSim ready-check threw an exception: {inner.Message}", DiagFrom("run_clientsim", "exception", inner.ToString())));
                 }
             }
             finally
@@ -894,13 +726,38 @@ namespace PrefabSentinel
             }
         }
 
+        private UnityRuntimeValidationBridge.RuntimeResponse ClientSimError(
+            string message,
+            UnityRuntimeValidationBridge.RuntimeDiagnostic[] diagnostics = null
+        )
+        {
+            return UnityRuntimeValidationBridge.BuildError(
+                code: "RUN002",
+                message: message,
+                request: _request,
+                diagnostics: diagnostics ?? Array.Empty<UnityRuntimeValidationBridge.RuntimeDiagnostic>(),
+                readOnly: false,
+                executed: true
+            );
+        }
+
+        private static UnityRuntimeValidationBridge.RuntimeDiagnostic[] DiagFrom(string location, string detail, string evidence)
+        {
+            return new[]
+            {
+                new UnityRuntimeValidationBridge.RuntimeDiagnostic
+                {
+                    location = location,
+                    detail = detail,
+                    evidence = evidence
+                }
+            };
+        }
+
         private void Finish(UnityRuntimeValidationBridge.RuntimeResponse response)
         {
+            // ExitWithResponse calls EditorApplication.Exit — no code after it will execute.
             UnityRuntimeValidationBridge.ExitWithResponse(_responsePath, response);
-            if (this != null && gameObject != null)
-            {
-                DestroyImmediate(gameObject);
-            }
         }
     }
 }

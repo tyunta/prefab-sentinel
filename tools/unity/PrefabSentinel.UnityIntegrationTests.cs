@@ -426,26 +426,6 @@ namespace PrefabSentinel
                 + "}";
         }
 
-        private static string InsertOp(string component, string path, int index)
-        {
-            return "{"
-                + $"\"op\":\"insert_array_element\","
-                + $"\"component\":\"{EscapeJsonString(component)}\","
-                + $"\"path\":\"{EscapeJsonString(path)}\","
-                + $"\"index\":{index}"
-                + "}";
-        }
-
-        private static string RemoveOp(string component, string path, int index)
-        {
-            return "{"
-                + $"\"op\":\"remove_array_element\","
-                + $"\"component\":\"{EscapeJsonString(component)}\","
-                + $"\"path\":\"{EscapeJsonString(path)}\","
-                + $"\"index\":{index}"
-                + "}";
-        }
-
         // ----------------------------------------------------------------
         // Property readback helpers
         // ----------------------------------------------------------------
@@ -567,23 +547,8 @@ namespace PrefabSentinel
         private static TestCaseResult Test_Set_StringProperty(string prefabPath, string materialPath)
         {
             const string name = "Set_StringProperty";
-            // m_TagString on the root GameObject is accessible via the prefab's root transform parent
-            string ops = "[" + SetOp("BoxCollider", "m_Material.m_Name", "string", "string", "TestMaterial") + "]";
-            // Use a more reliably accessible string: AudioSource clip name would need a clip.
-            // Instead, test by setting m_Name on a component is not standard.
-            // Use the root GameObject name via the special path.
-            // Actually, let's set a string property on the AudioSource output mixer group reference name.
-            // The safest string property is to target the BoxCollider's material name, but that's a reference.
-            // Let's use a different approach: set m_Tag on the root via a Transform component.
-
-            // BoxCollider doesn't have string properties easily testable. Use a workaround:
-            // Target the root GameObject's name which is m_Name on the GameObject itself.
-            // The bridge resolves component selectors, so this doesn't apply to GameObject directly.
-            // Skip string property on prefab component, test via material instead.
-
-            // Test string set via material asset (m_Name is a string on material)
-            // Asset open-mode ops require "target":"$asset" to resolve the handle
-            string matOps = "[" + SetOp("", "m_Name", "string", "string", "RenamedMaterial") + "]";
+            // Test string set via material asset (m_Name is a string on material).
+            // Asset open-mode ops require "target":"$asset" to resolve the handle.
             var matReq = BuildRequest(materialPath, "material", "open",
                 "[{\"op\":\"set\",\"target\":\"$asset\",\"path\":\"m_Name\",\"value_kind\":\"string\",\"value_string\":\"RenamedMaterial\"}]");
             var resp = RunBridge(matReq);
@@ -663,7 +628,6 @@ namespace PrefabSentinel
         {
             const string name = "Set_ObjectReference_Json";
             // Set BoxCollider.m_Material (PhysicMaterial ref) to null via JSON null reference
-            string refJson = "{\\\"instanceID\\\":0}";
             string ops = "[{\"op\":\"set\","
                 + "\"component\":\"BoxCollider\","
                 + "\"path\":\"m_Material\","
@@ -778,10 +742,6 @@ namespace PrefabSentinel
         private static TestCaseResult Test_InsertArrayElement_WithValue(string prefabPath, string materialPath)
         {
             const string name = "InsertArrayElement_WithValue";
-            var sizeProp = GetAssetProperty(materialPath, "m_SavedProperties.m_Floats.Array.size");
-            if (sizeProp == null) return Fail(name, "Cannot read array size.");
-            int before = sizeProp.intValue;
-
             // Insert at index 0 with a value set afterward
             string ops = "["
                 + "{\"op\":\"insert_array_element\",\"target\":\"$asset\","

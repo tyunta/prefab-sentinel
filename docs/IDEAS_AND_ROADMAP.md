@@ -669,7 +669,7 @@ The IDs below are draft planning IDs, not GitHub issue numbers.
 - `A07`
 - `A09`
 
-### A11. Wire compile_udonsharp and run_clientsim to real Unity execution — SCAFFOLD ONLY
+### A11. Wire compile_udonsharp and run_clientsim to real Unity execution — COMPLETE
 
 **Background**
 - The current runtime validation layer classifies logs but skips actual compile and ClientSim execution.
