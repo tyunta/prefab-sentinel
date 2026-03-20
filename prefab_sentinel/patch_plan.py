@@ -201,5 +201,8 @@ def build_bridge_request(plan: dict[str, Any]) -> dict[str, Any]:
     }
     resources = request["resources"]
     if len(resources) == 1 and isinstance(resources[0], dict):
-        request["target"] = resources[0].get("path", "")
+        r = resources[0]
+        request["target"] = r.get("path", "")
+        request["kind"] = r.get("kind", "")
+        request["mode"] = r.get("mode", "open")
     return request

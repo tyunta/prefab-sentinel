@@ -15,7 +15,7 @@ namespace PrefabSentinel
     /// </summary>
     public static class UnityPatchBridge
     {
-        private const int ProtocolVersion = 1;
+        private const int ProtocolVersion = 2;
         private const string RequestArg = "-sentinelPatchRequest";
         private const string ResponseArg = "-sentinelPatchResponse";
         private const string ArrayDataSuffix = ".Array.data";

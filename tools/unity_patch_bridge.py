@@ -15,7 +15,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from prefab_sentinel.patch_plan import PLAN_VERSION as PROTOCOL_VERSION, iter_resource_batches, normalize_patch_plan
 
-_UNITY_EXECUTE_METHOD_PROTOCOL_VERSION = 1
+_UNITY_EXECUTE_METHOD_PROTOCOL_VERSION = PROTOCOL_VERSION
 SUPPORTED_SUFFIXES = {
     ".prefab",
     ".unity",

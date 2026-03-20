@@ -174,24 +174,46 @@
 - `report export --format md` supports `--md-max-steps` / `--md-omit-steps` to trim large `data.steps`.
 
 ## Next Executable Tasks
-- ~~Extend Unity executeMethod apply coverage:~~
-  - ~~Unity-side integration tests against sample prefab assets (batchmode assertions)~~
-  - ~~fixed buffer element update cases (`set` with indexed element paths) as Unity-side integration assertions~~
-- Added Unity integration test harness:
-  - `tools/unity/PrefabSentinel.UnityIntegrationTests.cs` (24 test cases: set/insert/remove/error/persistence)
+
+### P0: Protocol version alignment
+- C# bridge is `ProtocolVersion = 1`, Python sends `protocol_version: 2`.
+- Reconcile: bump C# to v2, update request schema to accept `resources[]` envelope, keep v1 open-mode backward compat.
+- Update integration test harness `ProtocolVersion` constant to match.
+
+### P0: Create-mode integration tests
+- Current 24 integration tests cover open-mode only (set/insert/remove/error/persistence).
+- Add create-mode E2E tests: create prefab → hierarchy → components → mutate → save → reopen → validate.
+- Add create-mode asset tests: create material → set properties → save → reopen.
+- Add create-mode scene tests: create scene → instantiate prefab → save → reopen.
+- Extend `PrefabSentinel.UnityIntegrationTests.cs` with new test methods.
+
+### P1: Smoke hardening
+- Validate timeout policy knobs (`--timeout-multiplier` / `--timeout-slack-sec`) against accumulated real Unity runner history.
+
+### P1: E2E integration quality gates
+- Base / Variant / Scene edit E2E tests.
+- Broken PPtr and Udon nullref regression fixtures.
+- CI gates: Broken PPtr 0, Variant override 100%, Udon runtime critical 0.
+
+### P2: Runtime verification wiring
+- Replace `RUN_COMPILE_SKIPPED` / `RUN_CLIENTSIM_SKIPPED` with real Unity batchmode execution.
+- Wire `compile_udonsharp` and `run_clientsim` to actual Unity commands when environment is configured.
+
+### Completed
+- ~~Extend Unity executeMethod apply coverage~~
+- Unity integration test harness (24 open-mode tests, all passing):
+  - `tools/unity/PrefabSentinel.UnityIntegrationTests.cs`
   - `prefab_sentinel/integration_tests.py` + `scripts/unity_integration_tests.py` (Python orchestrator)
   - CLI: `prefab-sentinel validate integration-tests`
   - CI: `.github/workflows/unity-integration.yml` (workflow_dispatch, self-hosted Windows)
   - Production refactor: `ApplyFromPaths` extracted from `ApplyFromJson` for in-process test invocation
-- Add Unity smoke hardening:
-  - validate timeout policy knobs (`--timeout-multiplier` / `--timeout-slack-sec`) against accumulated real Unity runner history
 
 ## Authoring Tool Sprint Plan
 
 This section converts the generic Unity asset authoring roadmap into prioritized implementation sprints.
 Assumption: one primary implementer, one sprint is roughly one to two weeks, and later sprints do not start until the exit criteria of the current sprint are satisfied.
 
-### Sprint 1. Foundation And Compatibility
+### Sprint 1. Foundation And Compatibility — COMPLETE
 
 **Priority**
 - `P0`
@@ -220,7 +242,7 @@ Assumption: one primary implementer, one sprint is roughly one to two weeks, and
 - Scene support.
 - Runtime validation execution changes.
 
-### Sprint 2. Prefab Creation Core
+### Sprint 2. Prefab Creation Core — COMPLETE
 
 **Priority**
 - `P0`
@@ -248,7 +270,7 @@ Assumption: one primary implementer, one sprint is roughly one to two weeks, and
 - Scene authoring.
 - Runtime verification.
 
-### Sprint 3. Prefab Authoring MVP Hardening
+### Sprint 3. Prefab Authoring MVP Hardening — PARTIAL (integration tests pending)
 
 **Priority**
 - `P0`
@@ -275,7 +297,7 @@ Assumption: one primary implementer, one sprint is roughly one to two weeks, and
 - Scene flows.
 - Real runtime compile and ClientSim execution.
 
-### Sprint 4. Asset Family Expansion
+### Sprint 4. Asset Family Expansion — COMPLETE
 
 **Priority**
 - `P1`
@@ -301,7 +323,7 @@ Assumption: one primary implementer, one sprint is roughly one to two weeks, and
 - Runtime execution.
 - Asset-family adapter split.
 
-### Sprint 5. Scene Authoring Beta
+### Sprint 5. Scene Authoring Beta — COMPLETE
 
 **Priority**
 - `P1`
@@ -326,7 +348,7 @@ Assumption: one primary implementer, one sprint is roughly one to two weeks, and
 - Multi-scene editing.
 - Advanced merge/conflict workflows.
 
-### Sprint 6. Runtime Verification Closure
+### Sprint 6. Runtime Verification Closure — SCAFFOLD ONLY
 
 **Priority**
 - `P1`
@@ -351,7 +373,7 @@ Assumption: one primary implementer, one sprint is roughly one to two weeks, and
 - Adapter refactoring.
 - New asset-family support.
 
-### Sprint 7. Architecture Hardening And Postconditions
+### Sprint 7. Architecture Hardening And Postconditions — COMPLETE
 
 **Priority**
 - `P2`
@@ -373,18 +395,18 @@ Assumption: one primary implementer, one sprint is roughly one to two weeks, and
 - Adapter dispatch and postcondition evaluation are covered by unit and integration tests.
 
 **Release checkpoints**
-- `Authoring Alpha`: Sprint 1 complete.
-- `Prefab Authoring MVP`: Sprint 3 complete.
-- `Generic Asset Authoring Beta`: Sprint 5 complete.
-- `Verified Authoring Beta`: Sprint 6 complete.
-- `Architecture Stabilization`: Sprint 7 complete.
+- `Authoring Alpha`: Sprint 1 complete. **REACHED**
+- `Prefab Authoring MVP`: Sprint 3 complete. **BLOCKED** — protocol version alignment + create-mode integration tests needed.
+- `Generic Asset Authoring Beta`: Sprint 5 complete. **BLOCKED** — same prerequisite as MVP.
+- `Verified Authoring Beta`: Sprint 6 complete. Pending runtime verification wiring.
+- `Architecture Stabilization`: Sprint 7 complete. **REACHED** (adapter split + postconditions done).
 
 ## Authoring Tool Issue Drafts
 
 This section keeps the issue-sized backlog that the sprint plan above is built from.
 The IDs below are draft planning IDs, not GitHub issue numbers.
 
-### A01. Add authoring plan v2 schema and normalizer
+### A01. Add authoring plan v2 schema and normalizer — COMPLETE
 
 **Background**
 - The current plan model is `target + ops[]`, which assumes a single existing asset target.
@@ -411,7 +433,7 @@ The IDs below are draft planning IDs, not GitHub issue numbers.
 **Depends on**
 - None.
 
-### A02. Execute normalized authoring plans in the orchestrator
+### A02. Execute normalized authoring plans in the orchestrator — COMPLETE
 
 **Background**
 - The current orchestrator executes a linear patch flow that expects one `target` and one `ops[]` array.
@@ -438,7 +460,7 @@ The IDs below are draft planning IDs, not GitHub issue numbers.
 **Depends on**
 - `A01`
 
-### A03. Add resource and handle context to the Unity bridge protocol
+### A03. Add resource and handle context to the Unity bridge protocol — COMPLETE (protocol version mismatch pending)
 
 **Background**
 - The current bridge protocol passes one `target` and raw `ops[]`.
@@ -465,7 +487,7 @@ The IDs below are draft planning IDs, not GitHub issue numbers.
 - `A01`
 - `A02`
 
-### A04. Create prefab resources and save them from authoring plans
+### A04. Create prefab resources and save them from authoring plans — COMPLETE
 
 **Background**
 - The current Unity executeMethod path edits existing prefabs only.
@@ -491,7 +513,7 @@ The IDs below are draft planning IDs, not GitHub issue numbers.
 **Depends on**
 - `A03`
 
-### A05. Add GameObject hierarchy authoring operations
+### A05. Add GameObject hierarchy authoring operations — COMPLETE
 
 **Background**
 - Creating a prefab is not enough; authoring needs a hierarchy model.
@@ -517,7 +539,7 @@ The IDs below are draft planning IDs, not GitHub issue numbers.
 **Depends on**
 - `A04`
 
-### A06. Add component lifecycle operations
+### A06. Add component lifecycle operations — COMPLETE
 
 **Background**
 - Generic authoring must create and remove components, not only mutate properties.
@@ -543,7 +565,7 @@ The IDs below are draft planning IDs, not GitHub issue numbers.
 **Depends on**
 - `A05`
 
-### A07. Port property mutation ops to v2 handles
+### A07. Port property mutation ops to v2 handles — COMPLETE
 
 **Background**
 - Existing mutation coverage is useful and should not be discarded.
@@ -569,7 +591,7 @@ The IDs below are draft planning IDs, not GitHub issue numbers.
 **Depends on**
 - `A06`
 
-### A08. Add prefab authoring end-to-end tests
+### A08. Add prefab authoring end-to-end tests — PARTIAL (open-mode 24/24 passing, create-mode pending)
 
 **Background**
 - Prefab authoring MVP is only credible if create, mutate, save, reopen, and validate all work together.
@@ -598,7 +620,7 @@ The IDs below are draft planning IDs, not GitHub issue numbers.
 - `A06`
 - `A07`
 
-### A09. Support ScriptableObject and Material authoring
+### A09. Support ScriptableObject and Material authoring — COMPLETE
 
 **Background**
 - Prefabs alone are not enough for a generic authoring tool.
@@ -625,7 +647,7 @@ The IDs below are draft planning IDs, not GitHub issue numbers.
 - `A03`
 - `A07`
 
-### A10. Add scene authoring MVP
+### A10. Add scene authoring MVP — COMPLETE
 
 **Background**
 - A generic Unity authoring tool eventually needs scene-level assembly, not only asset-level mutation.
@@ -654,7 +676,7 @@ The IDs below are draft planning IDs, not GitHub issue numbers.
 - `A07`
 - `A09`
 
-### A11. Wire compile_udonsharp and run_clientsim to real Unity execution
+### A11. Wire compile_udonsharp and run_clientsim to real Unity execution — SCAFFOLD ONLY
 
 **Background**
 - The current runtime validation layer classifies logs but skips actual compile and ClientSim execution.
@@ -680,7 +702,7 @@ The IDs below are draft planning IDs, not GitHub issue numbers.
 **Depends on**
 - `A10`
 
-### A12. Split asset-family adapters and add postcondition verification
+### A12. Split asset-family adapters and add postcondition verification — COMPLETE
 
 **Background**
 - As authoring coverage expands, one large backend will become brittle.
@@ -718,6 +740,7 @@ The IDs below are draft planning IDs, not GitHub issue numbers.
 - `patch apply` is write-enabled only for explicit `--confirm`.
 - JSON targets use built-in backend; Unity targets require external bridge command (`UNITYTOOL_PATCH_BRIDGE`).
 - Continue fail-fast for invalid input and missing required paths.
+- **Protocol version mismatch (2026-03-20):** Python sends `protocol_version: 2` (`PLAN_VERSION`), C# bridge expects `ProtocolVersion = 1`. Open-mode integration tests work because the test harness hardcodes v1. Create-mode authoring through the Python orchestrator will fail until C# is bumped to v2. This is the top-priority blocker for Prefab Authoring MVP.
 
 ## Completion Plan
 ### Phase 0: Scope And Criteria
@@ -729,35 +752,43 @@ The IDs below are draft planning IDs, not GitHub issue numbers.
 - [x] Decide ignore-guid file policy (Option B, per-scope config).
 - [x] Decide whether CI can auto-apply ignore-guid updates (allowed with explicit output flag).
 
-### Phase 2: Unity ExecuteMethod Coverage
+### Phase 2: Unity ExecuteMethod Coverage — COMPLETE
 - [x] Add Unity-side integration tests for `set` / `insert_array_element` / `remove_array_element`.
 - [x] Add fixed buffer indexed element test cases (`set` with indexed element paths).
 - [x] Automate batchmode assertions and capture Unity logs as artifacts.
+- [x] 24 open-mode integration tests passing (2026-03-20).
+
+### Phase 2.5: Protocol And Create-Mode Verification — NEXT
+- [ ] Bump C# bridge `ProtocolVersion` from 1 to 2; accept v2 `resources[]` envelope.
+- [ ] Add create-mode integration tests (prefab, material, scene).
+- [ ] Verify Python→C# create-mode E2E with real Unity batchmode.
 
 ### Phase 3: Smoke Hardening
 - [ ] Collect real Unity runner history data for timeout tuning.
 - [ ] Validate timeout policy knobs (`--timeout-multiplier`, `--timeout-slack-sec`) against history.
 - [ ] Update defaults/constraints and add regression checks.
 
-### Phase 4: MCP Boundaries And Orchestrator
+### Phase 4: MCP Boundaries And Orchestrator — COMPLETE
 - [x] Verify MCP responsibility split (serialized-object / prefab-variant / reference-resolver / runtime-validation).
 - [x] Ensure CLI orchestrator enforces dependency order and stop conditions.
 - [x] Emit audit log with change reason, target, before/after diff, validation report.
 - [x] Enforce `safe_fix` vs `decision_required` handling in workflow (suggest ignore-guids returns decision_required).
 
-### Phase 5: End-to-End Pipeline
+### Phase 5: End-to-End Pipeline — COMPLETE
 - [x] Preflight: `list_overrides` + `scan_broken_references` for scope (when scope/target provided).
 - [x] Patch flow: `dry_run_patch` -> `apply_and_save` (confirm gate).
 - [x] Post-apply: `compile_udonsharp` + `run_clientsim` with log classification (when runtime scene provided).
 - [x] Fail-fast on any `critical` or `error` and route to decision queue.
 
-### Phase 6: Quality Gates And Tests
-- [x] Unit tests: propertyPath resolution, array bounds, reference reverse lookup.
+### Phase 6: Quality Gates And Tests — PARTIAL
+- [x] Unit tests: propertyPath resolution, array bounds, reference reverse lookup. (261 tests passing)
+- [x] Open-mode integration tests: set/insert/remove/error/persistence. (24 tests passing)
+- [ ] Create-mode integration tests: prefab/material/scene create E2E.
 - [ ] Integration tests: Base / Variant / Scene edit E2E.
 - [ ] Regression tests: Broken PPtr and Udon nullref fixtures.
 - [ ] CI gates: Broken PPtr 0, Variant override 100%, Udon runtime critical 0.
 
-### Phase 7: Documentation And Examples
+### Phase 7: Documentation And Examples — COMPLETE
 - [x] Sync README policy sections and add plan/attestation/allowlist examples.
 - [x] Include sample before/after diffs + validation report artifacts.
 - [x] Update roadmap status when tasks complete.

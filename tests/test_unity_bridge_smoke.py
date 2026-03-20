@@ -59,6 +59,8 @@ class UnityBridgeSmokeTests(unittest.TestCase):
         self.assertEqual(2, request["protocol_version"])
         self.assertEqual(2, request["plan_version"])
         self.assertEqual("Assets/Test.prefab", request["target"])
+        self.assertEqual("prefab", request["kind"])
+        self.assertEqual("open", request["mode"])
         self.assertEqual(
             [{"id": "variant", "kind": "prefab", "path": "Assets/Test.prefab", "mode": "open"}],
             request["resources"],

@@ -18,7 +18,7 @@ namespace PrefabSentinel
     {
         private const string TestArgOutputPath = "-sentinelTestOutputPath";
         private const string TestAssetDir = "Assets/PrefabSentinelIntegrationTests";
-        private const int ProtocolVersion = 1;
+        private const int ProtocolVersion = 2;
 
         // ----------------------------------------------------------------
         // Result data model (JSON-serializable)

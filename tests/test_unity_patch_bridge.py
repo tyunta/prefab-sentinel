@@ -119,7 +119,7 @@ request = json.loads(request_path.read_text(encoding="utf-8"))
 response_path.write_text(
     json.dumps(
         {
-            "protocol_version": 1,
+            "protocol_version": 2,
             "success": True,
             "severity": "info",
             "code": "SER_APPLY_OK",
@@ -182,7 +182,7 @@ request = json.loads(request_path.read_text(encoding="utf-8"))
 response_path.write_text(
     json.dumps(
         {
-            "protocol_version": 1,
+            "protocol_version": 2,
             "success": True,
             "severity": "info",
             "code": "SER_APPLY_OK",
@@ -270,7 +270,7 @@ request = json.loads(request_path.read_text(encoding="utf-8"))
 response_path.write_text(
     json.dumps(
         {
-            "protocol_version": 1,
+            "protocol_version": 2,
             "success": True,
             "severity": "info",
             "code": "SER_APPLY_OK",
@@ -340,7 +340,7 @@ request = json.loads(request_path.read_text(encoding="utf-8"))
 response_path.write_text(
     json.dumps(
         {
-            "protocol_version": 1,
+            "protocol_version": 2,
             "success": True,
             "severity": "info",
             "code": "SER_APPLY_OK",
@@ -423,7 +423,7 @@ request = json.loads(request_path.read_text(encoding="utf-8"))
 response_path.write_text(
     json.dumps(
         {
-            "protocol_version": 1,
+            "protocol_version": 2,
             "success": True,
             "severity": "info",
             "code": "SER_APPLY_OK",
@@ -508,7 +508,7 @@ request = json.loads(request_path.read_text(encoding="utf-8"))
 response_path.write_text(
     json.dumps(
         {
-            "protocol_version": 1,
+            "protocol_version": 2,
             "success": True,
             "severity": "info",
             "code": "SER_APPLY_OK",
@@ -591,7 +591,7 @@ request = json.loads(request_path.read_text(encoding="utf-8"))
 response_path.write_text(
     json.dumps(
         {
-            "protocol_version": 1,
+            "protocol_version": 2,
             "success": True,
             "severity": "info",
             "code": "SER_APPLY_OK",
@@ -675,7 +675,7 @@ request = json.loads(request_path.read_text(encoding="utf-8"))
 response_path.write_text(
     json.dumps(
         {
-            "protocol_version": 1,
+            "protocol_version": 2,
             "success": True,
             "severity": "info",
             "code": "SER_APPLY_OK",
@@ -751,7 +751,7 @@ request = json.loads(request_path.read_text(encoding="utf-8"))
 response_path.write_text(
     json.dumps(
         {
-            "protocol_version": 1,
+            "protocol_version": 2,
             "success": True,
             "severity": "info",
             "code": "SER_APPLY_OK",
@@ -830,7 +830,7 @@ request = json.loads(request_path.read_text(encoding="utf-8"))
 response_path.write_text(
     json.dumps(
         {
-            "protocol_version": 1,
+            "protocol_version": 2,
             "success": True,
             "severity": "info",
             "code": "SER_APPLY_OK",
@@ -927,7 +927,7 @@ response_path = Path(_arg("-sentinelPatchResponse"))
 response_path.write_text(
     json.dumps(
         {
-            "protocol_version": 1,
+            "protocol_version": 2,
             "success": True,
             "severity": "info",
             "code": "SER_APPLY_OK",
@@ -976,7 +976,7 @@ response_path = Path(_arg("-sentinelPatchResponse"))
 response_path.write_text(
     json.dumps(
         {
-            "protocol_version": 1,
+            "protocol_version": 2,
             "success": True,
             "severity": "notice",
             "code": "SER_APPLY_OK",
@@ -1028,7 +1028,7 @@ request = json.loads(request_path.read_text(encoding="utf-8"))
 response_path.write_text(
     json.dumps(
         {
-            "protocol_version": 1,
+            "protocol_version": 2,
             "success": True,
             "severity": "info",
             "code": "SER_APPLY_OK",
