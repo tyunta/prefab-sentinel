@@ -123,15 +123,11 @@ def iter_references(text: str, include_location: bool = True) -> list[ReferenceM
     return refs
 
 
-def collect_project_guid_index(
-    project_root: Path,
-    excluded_dir_names: set[str] | None = None,
-) -> dict[str, Path]:
-    excluded = {
-        name.lower() for name in (excluded_dir_names or DEFAULT_EXCLUDED_DIR_NAMES)
-    }
-    index: dict[str, Path] = {}
-    for root, dirnames, filenames in os.walk(project_root):
+PACKAGE_CACHE_REL = Path("Library") / "PackageCache"
+
+
+def _scan_meta_files(scan_root: Path, excluded: set[str], index: dict[str, Path]) -> None:
+    for root, dirnames, filenames in os.walk(scan_root):
         dirnames[:] = [dirname for dirname in dirnames if dirname.lower() not in excluded]
         for filename in filenames:
             if not filename.lower().endswith(".meta"):
@@ -145,6 +141,25 @@ def collect_project_guid_index(
                 continue
             asset_path = meta.with_suffix("")
             index[guid] = asset_path
+
+
+def collect_project_guid_index(
+    project_root: Path,
+    excluded_dir_names: set[str] | None = None,
+    *,
+    include_package_cache: bool = True,
+) -> dict[str, Path]:
+    excluded = {
+        name.lower() for name in (excluded_dir_names or DEFAULT_EXCLUDED_DIR_NAMES)
+    }
+    index: dict[str, Path] = {}
+    _scan_meta_files(project_root, excluded, index)
+
+    if include_package_cache:
+        pkg_cache = project_root / PACKAGE_CACHE_REL
+        if pkg_cache.is_dir():
+            _scan_meta_files(pkg_cache, set(), index)
+
     return index
 
 

@@ -373,6 +373,44 @@ class CollectProjectGuidIndexTests(unittest.TestCase):
             index = collect_project_guid_index(Path(tmpdir))
         self.assertEqual(len(index), 0)
 
+    def test_package_cache_included_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            pkg = root / "Library" / "PackageCache" / "com.unity.ugui@1.0.0"
+            pkg.mkdir(parents=True)
+            meta = pkg / "Image.cs.meta"
+            meta.write_text("guid: aaaaaaaabbbbbbbbccccccccdddddddd\n", encoding="utf-8")
+            index = collect_project_guid_index(root)
+        self.assertIn("aaaaaaaabbbbbbbbccccccccdddddddd", index)
+
+    def test_package_cache_excluded_when_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            pkg = root / "Library" / "PackageCache" / "com.unity.ugui@1.0.0"
+            pkg.mkdir(parents=True)
+            meta = pkg / "Image.cs.meta"
+            meta.write_text("guid: aaaaaaaabbbbbbbbccccccccdddddddd\n", encoding="utf-8")
+            index = collect_project_guid_index(root, include_package_cache=False)
+        self.assertEqual(len(index), 0)
+
+    def test_library_still_excluded_outside_package_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            lib = root / "Library"
+            lib.mkdir()
+            meta = lib / "random.meta"
+            meta.write_text("guid: 11111111222222223333333344444444\n", encoding="utf-8")
+            # Library/ root is excluded, only PackageCache subfolder is scanned
+            index = collect_project_guid_index(root)
+        self.assertNotIn("11111111222222223333333344444444", index)
+
+    def test_package_cache_no_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            # No Library/PackageCache exists — should not error
+            index = collect_project_guid_index(root)
+        self.assertEqual(len(index), 0)
+
 
 class FindProjectRootTests(unittest.TestCase):
     def test_directory_with_assets(self) -> None:
