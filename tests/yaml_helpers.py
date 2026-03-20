@@ -43,6 +43,11 @@ def make_transform(
     )
 
 
+def make_stripped_transform(file_id: str, *, is_rect: bool = False) -> str:
+    class_id = "224" if is_rect else "4"
+    return f"--- !u!{class_id} &{file_id} stripped\n"
+
+
 def make_meshfilter(file_id: str, go_file_id: str) -> str:
     return (
         f"--- !u!33 &{file_id}\n"

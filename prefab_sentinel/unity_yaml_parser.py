@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-DOCUMENT_HEADER_PATTERN = re.compile(r"^--- !u!(\d+) &(-?\d+)", re.MULTILINE)
+DOCUMENT_HEADER_PATTERN = re.compile(r"^--- !u!(\d+) &(-?\d+)( stripped)?", re.MULTILINE)
 
 # Well-known Unity class IDs
 CLASS_ID_GAMEOBJECT = "1"
@@ -31,6 +31,7 @@ class YamlBlock:
     file_id: str
     text: str
     start_line: int
+    is_stripped: bool = False
 
 
 @dataclass(slots=True)
@@ -82,18 +83,30 @@ def split_yaml_blocks(text: str) -> list[YamlBlock]:
     if not text.strip():
         return []
 
-    headers: list[tuple[int, str, str, int]] = []
+    headers: list[tuple[int, str, str, int, bool]] = []
     for match in DOCUMENT_HEADER_PATTERN.finditer(text):
         line_number = text.count("\n", 0, match.start()) + 1
-        headers.append((match.start(), match.group(1), match.group(2), line_number))
+        is_stripped = match.group(3) is not None
+        headers.append((match.start(), match.group(1), match.group(2), line_number, is_stripped))
 
     blocks: list[YamlBlock] = []
-    for i, (start, class_id, file_id, start_line) in enumerate(headers):
+    for i, (start, class_id, file_id, start_line, is_stripped) in enumerate(headers):
         end = headers[i + 1][0] if i + 1 < len(headers) else len(text)
         blocks.append(
-            YamlBlock(class_id=class_id, file_id=file_id, text=text[start:end], start_line=start_line)
+            YamlBlock(
+                class_id=class_id,
+                file_id=file_id,
+                text=text[start:end],
+                start_line=start_line,
+                is_stripped=is_stripped,
+            )
         )
     return blocks
+
+
+def get_stripped_file_ids(blocks: list[YamlBlock]) -> frozenset[str]:
+    """Return file IDs of all stripped blocks."""
+    return frozenset(block.file_id for block in blocks if block.is_stripped)
 
 
 def parse_game_objects(blocks: list[YamlBlock]) -> dict[str, GameObjectInfo]:
@@ -125,6 +138,8 @@ def parse_transforms(blocks: list[YamlBlock]) -> dict[str, TransformInfo]:
     result: dict[str, TransformInfo] = {}
     for block in blocks:
         if block.class_id not in TRANSFORM_CLASS_IDS:
+            continue
+        if block.is_stripped:
             continue
         go_fid = ""
         father_fid = ""

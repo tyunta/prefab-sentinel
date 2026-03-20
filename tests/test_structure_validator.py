@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from prefab_sentinel.contracts import Severity
 from prefab_sentinel.structure_validator import validate_structure
-from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_transform
+from tests.yaml_helpers import (
+    YAML_HEADER,
+    make_gameobject,
+    make_stripped_transform,
+    make_transform,
+)
 
 # ---------------------------------------------------------------------------
 # Empty / clean cases
@@ -180,6 +185,52 @@ class TestOrphanedTransforms:
         )
         result = validate_structure(text, "test.prefab")
         assert result.orphaned_transforms == []
+
+
+# ---------------------------------------------------------------------------
+# Stripped transforms
+# ---------------------------------------------------------------------------
+
+
+class TestStrippedTransforms:
+    def test_stripped_child_not_reported_as_inconsistency(self) -> None:
+        """Parent lists a stripped child — no error because stripped has no m_Father."""
+        text = (
+            YAML_HEADER
+            + make_gameobject("100", "Root", ["200"])
+            + make_transform("200", "100", children_file_ids=["500"])
+            + make_stripped_transform("500")
+        )
+        result = validate_structure(text, "test.prefab")
+        assert result.transform_inconsistencies == []
+        assert result.max_severity == Severity.INFO
+
+    def test_stripped_transform_not_orphan(self) -> None:
+        """A transform whose father is stripped should not be orphaned."""
+        text = (
+            YAML_HEADER
+            + make_stripped_transform("800")
+            + make_gameobject("100", "Child", ["200"])
+            + make_transform("200", "100", father_file_id="800")
+        )
+        result = validate_structure(text, "test.prefab")
+        assert result.orphaned_transforms == []
+        assert result.transform_inconsistencies == []
+
+    def test_mixed_stripped_and_normal_clean(self) -> None:
+        """Mixed stripped and normal transforms with valid wiring produce no errors."""
+        text = (
+            YAML_HEADER
+            + make_stripped_transform("900")
+            + make_gameobject("100", "Root", ["200"])
+            + make_transform("200", "100", father_file_id="900", children_file_ids=["400"])
+            + make_gameobject("300", "Child", ["400"])
+            + make_transform("400", "300", father_file_id="200")
+        )
+        result = validate_structure(text, "test.prefab")
+        assert result.transform_inconsistencies == []
+        assert result.orphaned_transforms == []
+        assert result.max_severity == Severity.INFO
 
 
 # ---------------------------------------------------------------------------

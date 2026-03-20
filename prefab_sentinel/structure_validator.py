@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 from prefab_sentinel.contracts import Diagnostic, Severity, max_severity
 from prefab_sentinel.unity_yaml_parser import (
+    get_stripped_file_ids,
     parse_game_objects,
     parse_transforms,
     split_yaml_blocks,
@@ -59,6 +60,7 @@ def validate_structure(text: str, file_path: str) -> StructureResult:
 
     # --- Parse structures ---
     all_file_ids = {block.file_id for block in blocks}
+    stripped_ids = get_stripped_file_ids(blocks)
     game_objects = parse_game_objects(blocks)
     transforms = parse_transforms(blocks)
 
@@ -67,7 +69,7 @@ def validate_structure(text: str, file_path: str) -> StructureResult:
 
     for t in transforms.values():
         # Check: if t has a father, the father's children should contain t
-        if t.father_file_id not in ("0", ""):
+        if t.father_file_id not in ("0", "") and t.father_file_id not in stripped_ids:
             father = transforms.get(t.father_file_id)
             if father is None:
                 transform_diags.append(
@@ -93,6 +95,8 @@ def validate_structure(text: str, file_path: str) -> StructureResult:
 
         # Check: each child should reference this transform as father
         for child_fid in t.children_file_ids:
+            if child_fid in stripped_ids:
+                continue  # child is stripped — no bidirectional check possible
             child = transforms.get(child_fid)
             if child is None:
                 transform_diags.append(
@@ -135,7 +139,8 @@ def validate_structure(text: str, file_path: str) -> StructureResult:
     for t in transforms.values():
         is_root = t.father_file_id in ("0", "")
         has_valid_father = t.father_file_id in transforms
-        if not is_root and not has_valid_father:
+        father_is_stripped = t.father_file_id in stripped_ids
+        if not is_root and not has_valid_father and not father_is_stripped:
             orphaned_diags.append(
                 Diagnostic(
                     path=file_path,

@@ -294,6 +294,19 @@ class SplitYamlBlocksTests(unittest.TestCase):
         self.assertEqual(len(blocks), 1)
         self.assertEqual(blocks[0].file_id, "-1234567890")
 
+    def test_stripped_block_sets_is_stripped(self) -> None:
+        text = "--- !u!4 &1234 stripped\nTransform:\n  m_Father: {fileID: 0}\n"
+        blocks = split_yaml_blocks(text)
+        self.assertEqual(len(blocks), 1)
+        self.assertTrue(blocks[0].is_stripped)
+        self.assertEqual(blocks[0].file_id, "1234")
+
+    def test_non_stripped_block_is_false(self) -> None:
+        text = "--- !u!4 &1234\nTransform:\n  m_Father: {fileID: 0}\n"
+        blocks = split_yaml_blocks(text)
+        self.assertEqual(len(blocks), 1)
+        self.assertFalse(blocks[0].is_stripped)
+
     def test_block_start_lines(self) -> None:
         blocks = split_yaml_blocks(BASIC_MONOBEHAVIOUR)
         # First block starts on the line with "--- !u!1 &100000"
