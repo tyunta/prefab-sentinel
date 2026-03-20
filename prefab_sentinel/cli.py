@@ -102,8 +102,33 @@ def build_parser() -> argparse.ArgumentParser:
     )
     inspect_wiring.add_argument("--format", choices=("json", "md"), default="json")
 
+    inspect_hierarchy = inspect_sub.add_parser(
+        "hierarchy",
+        help="Display GameObject hierarchy tree of a Unity YAML file.",
+    )
+    inspect_hierarchy.add_argument("--path", required=True, help="Path to target .prefab / .unity / .asset file.")
+    inspect_hierarchy.add_argument(
+        "--depth",
+        type=int,
+        default=None,
+        help="Maximum tree depth to display.",
+    )
+    inspect_hierarchy.add_argument(
+        "--no-components",
+        action="store_true",
+        help="Hide component annotations (shown by default).",
+    )
+    inspect_hierarchy.add_argument("--format", choices=("json", "md"), default="json")
+
     validate_parser = subparsers.add_parser("validate", help="Validation commands.")
     validate_sub = validate_parser.add_subparsers(dest="validate_command", required=True)
+    validate_structure = validate_sub.add_parser(
+        "structure",
+        help="Validate internal YAML structure (fileID duplicates, Transform consistency, component refs).",
+    )
+    validate_structure.add_argument("--path", required=True, help="Path to target .prefab / .unity / .asset file.")
+    validate_structure.add_argument("--format", choices=("json", "md"), default="json")
+
     validate_refs = validate_sub.add_parser("refs", help="Validate broken references in scope.")
     validate_refs.add_argument("--scope", required=True, help="Asset scope path.")
     validate_refs.add_argument(
@@ -767,6 +792,23 @@ def main(argv: list[str] | None = None) -> int:
         response = orchestrator.inspect_wiring(
             target_path=args.path,
             udon_only=args.udon_only,
+        )
+        _emit_payload(response.to_dict(), args.format)
+        return 0
+
+    if args.command == "inspect" and args.inspect_command == "hierarchy":
+        show_components = not args.no_components
+        response = orchestrator.inspect_hierarchy(
+            target_path=args.path,
+            max_depth=args.depth,
+            show_components=show_components,
+        )
+        _emit_payload(response.to_dict(), args.format)
+        return 0
+
+    if args.command == "validate" and args.validate_command == "structure":
+        response = orchestrator.inspect_structure(
+            target_path=args.path,
         )
         _emit_payload(response.to_dict(), args.format)
         return 0

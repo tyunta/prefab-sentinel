@@ -7,11 +7,13 @@ from pathlib import Path
 from typing import Any
 
 from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse, max_severity
+from prefab_sentinel.hierarchy import HierarchyNode, analyze_hierarchy, format_tree
 from prefab_sentinel.mcp.prefab_variant import PrefabVariantMcp
 from prefab_sentinel.mcp.reference_resolver import ReferenceResolverMcp
 from prefab_sentinel.mcp.runtime_validation import RuntimeValidationMcp
 from prefab_sentinel.mcp.serialized_object import SerializedObjectMcp
 from prefab_sentinel.patch_plan import count_plan_ops, iter_resource_batches, normalize_patch_plan
+from prefab_sentinel.structure_validator import validate_structure
 from prefab_sentinel.udon_wiring import analyze_wiring
 from prefab_sentinel.unity_assets import decode_text_file
 
@@ -117,34 +119,41 @@ class Phase1Orchestrator:
             diagnostics=step.diagnostics,
         )
 
+    @staticmethod
+    def _read_target_file(target_path: str, code_prefix: str) -> ToolResponse | str:
+        """Read a Unity YAML file, returning text on success or an error ToolResponse."""
+        path = Path(target_path)
+        if not path.exists():
+            return ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code=f"{code_prefix}_FILE_NOT_FOUND",
+                message=f"Target file does not exist: {target_path}",
+                data={"target_path": target_path, "read_only": True},
+                diagnostics=[],
+            )
+        try:
+            return decode_text_file(path)
+        except (OSError, UnicodeDecodeError) as exc:
+            return ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code=f"{code_prefix}_READ_ERROR",
+                message=f"Failed to read target file: {exc}",
+                data={"target_path": target_path, "read_only": True},
+                diagnostics=[],
+            )
+
     def inspect_wiring(
         self,
         target_path: str,
         *,
         udon_only: bool = False,
     ) -> ToolResponse:
-        path = Path(target_path)
-        if not path.exists():
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="INSPECT_WIRING_FILE_NOT_FOUND",
-                message=f"Target file does not exist: {target_path}",
-                data={"target_path": target_path, "read_only": True},
-                diagnostics=[],
-            )
-
-        try:
-            text = decode_text_file(path)
-        except (OSError, UnicodeDecodeError) as exc:
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="INSPECT_WIRING_READ_ERROR",
-                message=f"Failed to read target file: {exc}",
-                data={"target_path": target_path, "read_only": True},
-                diagnostics=[],
-            )
+        text_or_error = self._read_target_file(target_path, "INSPECT_WIRING")
+        if isinstance(text_or_error, ToolResponse):
+            return text_or_error
+        text = text_or_error
 
         result = analyze_wiring(text, target_path, udon_only=udon_only)
         diagnostics: list[Diagnostic] = (
@@ -186,6 +195,85 @@ class Phase1Orchestrator:
                 "internal_broken_ref_count": len(result.internal_broken_refs),
                 "duplicate_reference_count": len(result.duplicate_references),
                 "components": component_summaries,
+            },
+            diagnostics=diagnostics,
+        )
+
+    def inspect_hierarchy(
+        self,
+        target_path: str,
+        *,
+        max_depth: int | None = None,
+        show_components: bool = True,
+    ) -> ToolResponse:
+        text_or_error = self._read_target_file(target_path, "INSPECT_HIERARCHY")
+        if isinstance(text_or_error, ToolResponse):
+            return text_or_error
+        text = text_or_error
+
+        result = analyze_hierarchy(text)
+        tree_text = format_tree(
+            result,
+            max_depth=max_depth,
+            show_components=show_components,
+        )
+
+        def _serialize_node(node: HierarchyNode) -> dict[str, object]:
+            return {
+                "file_id": node.file_id,
+                "name": node.name,
+                "depth": node.depth,
+                "components": node.components,
+                "children": [_serialize_node(c) for c in node.children],
+            }
+
+        return ToolResponse(
+            success=True,
+            severity=Severity.INFO,
+            code="INSPECT_HIERARCHY_RESULT",
+            message="inspect.hierarchy completed (read-only).",
+            data={
+                "target_path": target_path,
+                "read_only": True,
+                "total_game_objects": result.total_game_objects,
+                "total_components": result.total_components,
+                "max_depth": result.max_depth,
+                "root_count": len(result.roots),
+                "tree": tree_text,
+                "roots": [_serialize_node(r) for r in result.roots],
+            },
+            diagnostics=[],
+        )
+
+    def inspect_structure(
+        self,
+        target_path: str,
+    ) -> ToolResponse:
+        text_or_error = self._read_target_file(target_path, "VALIDATE_STRUCTURE")
+        if isinstance(text_or_error, ToolResponse):
+            return text_or_error
+        text = text_or_error
+
+        result = validate_structure(text, target_path)
+        diagnostics: list[Diagnostic] = (
+            result.duplicate_file_ids
+            + result.transform_inconsistencies
+            + result.missing_components
+            + result.orphaned_transforms
+        )
+        success = result.max_severity not in (Severity.ERROR, Severity.CRITICAL)
+        return ToolResponse(
+            success=success,
+            severity=result.max_severity,
+            code="VALIDATE_STRUCTURE_RESULT",
+            message="validate.structure completed (read-only).",
+            data={
+                "target_path": target_path,
+                "read_only": True,
+                "duplicate_file_id_count": len(result.duplicate_file_ids),
+                "transform_inconsistency_count": len(result.transform_inconsistencies),
+                "missing_component_count": len(result.missing_components),
+                "orphaned_transform_count": len(result.orphaned_transforms),
             },
             diagnostics=diagnostics,
         )
