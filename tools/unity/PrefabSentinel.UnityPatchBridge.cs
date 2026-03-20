@@ -4584,10 +4584,74 @@ namespace PrefabSentinel
             BuiltinExtraResourcesPath,
         };
 
+        private readonly struct BuiltinAssetEntry
+        {
+            public readonly System.Type type;
+            public readonly string name;
+            public readonly bool isExtra; // true = unity_builtin_extra, false = unity default resources
+
+            public BuiltinAssetEntry(System.Type type, string name, bool isExtra)
+            {
+                this.type = type;
+                this.name = name;
+                this.isExtra = isExtra;
+            }
+        }
+
+        private static readonly BuiltinAssetEntry[] KnownBuiltinAssets = new[]
+        {
+            // Resources/unity_builtin_extra — Materials
+            new BuiltinAssetEntry(typeof(Material), "Default-Material.mat", true),
+            new BuiltinAssetEntry(typeof(Material), "Default-Particle.mat", true),
+            new BuiltinAssetEntry(typeof(Material), "Default-Line.mat", true),
+            new BuiltinAssetEntry(typeof(Material), "Default-Diffuse.mat", true),
+            new BuiltinAssetEntry(typeof(Material), "Default-Skybox.mat", true),
+            new BuiltinAssetEntry(typeof(Material), "Sprites-Default.mat", true),
+            new BuiltinAssetEntry(typeof(Material), "Sprites-Mask.mat", true),
+            new BuiltinAssetEntry(typeof(Material), "Default-Terrain-Standard.mat", true),
+            new BuiltinAssetEntry(typeof(Material), "Default-Terrain-Diffuse.mat", true),
+            new BuiltinAssetEntry(typeof(Material), "Default-Terrain-Specular.mat", true),
+            // Resources/unity_builtin_extra — Fonts
+            new BuiltinAssetEntry(typeof(Font), "Arial.ttf", true),
+            new BuiltinAssetEntry(typeof(Font), "LegacyRuntime.ttf", true),
+            // Library/unity default resources — Meshes (safety net)
+            new BuiltinAssetEntry(typeof(Mesh), "Sphere.fbx", false),
+            new BuiltinAssetEntry(typeof(Mesh), "Cube.fbx", false),
+            new BuiltinAssetEntry(typeof(Mesh), "Cylinder.fbx", false),
+            new BuiltinAssetEntry(typeof(Mesh), "Capsule.fbx", false),
+            new BuiltinAssetEntry(typeof(Mesh), "Plane.fbx", false),
+            new BuiltinAssetEntry(typeof(Mesh), "Quad.fbx", false),
+        };
+
         private static bool IsBuiltinAssetPath(string assetPath)
         {
             return string.Equals(assetPath, BuiltinDefaultResourcesPath, StringComparison.Ordinal)
                 || string.Equals(assetPath, BuiltinExtraResourcesPath, StringComparison.Ordinal);
+        }
+
+        private static bool TryLoadBuiltinAssetByName(
+            string guid, long fileID,
+            out UnityEngine.Object value)
+        {
+            value = null;
+            for (int i = 0; i < KnownBuiltinAssets.Length; i++)
+            {
+                BuiltinAssetEntry entry = KnownBuiltinAssets[i];
+                UnityEngine.Object candidate = entry.isExtra
+                    ? AssetDatabase.GetBuiltinExtraResource(entry.type, entry.name)
+                    : Resources.GetBuiltinResource(entry.type, entry.name);
+                if (candidate == null) continue;
+                string cGuid;
+                long cId;
+                if (AssetDatabase.TryGetGUIDAndLocalFileIdentifier(candidate, out cGuid, out cId)
+                    && string.Equals(cGuid, guid, StringComparison.OrdinalIgnoreCase)
+                    && cId == fileID)
+                {
+                    value = candidate;
+                    return true;
+                }
+            }
+            return false;
         }
 
         // assetPath: kept for call-site compatibility; search uses BuiltinAssetPaths instead
@@ -4602,6 +4666,7 @@ namespace PrefabSentinel
             for (int p = 0; p < BuiltinAssetPaths.Length; p++)
             {
                 UnityEngine.Object[] candidates = AssetDatabase.LoadAllAssetsAtPath(BuiltinAssetPaths[p]);
+                Debug.Log($"[PrefabSentinel] LoadAllAssetsAtPath(\"{BuiltinAssetPaths[p]}\") returned {candidates.Length} candidates (searching guid={guid}, fileID={fileID})");
                 for (int i = 0; i < candidates.Length; i++)
                 {
                     if (candidates[i] == null) continue;
@@ -4616,8 +4681,17 @@ namespace PrefabSentinel
                     }
                 }
             }
-            // 2. Fallback: search all loaded objects
+            // 2. Try name-based loading from known builtin assets table
+            //    LoadAllAssetsAtPath may return empty for unity_builtin_extra
+            //    in Editor Bridge context due to lazy loading.
+            if (TryLoadBuiltinAssetByName(guid, fileID, out value))
+            {
+                Debug.Log($"[PrefabSentinel] Resolved builtin asset via name-based loading: guid={guid}, fileID={fileID}, asset={value.name}");
+                return true;
+            }
+            // 3. Fallback: search all loaded objects
             UnityEngine.Object[] all = Resources.FindObjectsOfTypeAll<UnityEngine.Object>();
+            Debug.Log($"[PrefabSentinel] FindObjectsOfTypeAll fallback: {all.Length} objects (searching guid={guid}, fileID={fileID})");
             for (int i = 0; i < all.Length; i++)
             {
                 if (all[i] == null) continue;
