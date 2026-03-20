@@ -261,7 +261,7 @@ Assumption: one primary implementer, one sprint is roughly one to two weeks, and
 - Scene authoring.
 - Runtime verification.
 
-### Sprint 3. Prefab Authoring MVP Hardening — PARTIAL (integration tests pending)
+### Sprint 3. Prefab Authoring MVP Hardening — COMPLETE
 
 **Priority**
 - `P0`
@@ -387,8 +387,8 @@ Assumption: one primary implementer, one sprint is roughly one to two weeks, and
 
 **Release checkpoints**
 - `Authoring Alpha`: Sprint 1 complete. **REACHED**
-- `Prefab Authoring MVP`: Sprint 3 complete. **BLOCKED** — protocol version alignment + create-mode integration tests needed.
-- `Generic Asset Authoring Beta`: Sprint 5 complete. **BLOCKED** — same prerequisite as MVP.
+- `Prefab Authoring MVP`: Sprint 3 complete. **REACHED** — 37 integration tests (24 open-mode + 13 create-mode) all passing.
+- `Generic Asset Authoring Beta`: Sprint 5 complete. **REACHED** — material/scene create-mode tests included.
 - `Verified Authoring Beta`: Sprint 6 complete. Pending runtime verification wiring.
 - `Architecture Stabilization`: Sprint 7 complete. **REACHED** (adapter split + postconditions done).
 
@@ -582,7 +582,7 @@ The IDs below are draft planning IDs, not GitHub issue numbers.
 **Depends on**
 - `A06`
 
-### A08. Add prefab authoring end-to-end tests — PARTIAL (open-mode 24/24 passing, create-mode pending)
+### A08. Add prefab authoring end-to-end tests — COMPLETE
 
 **Background**
 - Prefab authoring MVP is only credible if create, mutate, save, reopen, and validate all work together.
