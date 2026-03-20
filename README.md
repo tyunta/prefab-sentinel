@@ -69,6 +69,9 @@ claude plugin add tyunta/prefab-sentinel
 | variant-safe-edit | `/prefab-sentinel:variant-safe-edit` | Prefab Variant の安全な編集ワークフロー |
 | udon-log-triage | `/prefab-sentinel:udon-log-triage` | ランタイムログのトリアージワークフロー |
 
+**CLI の呼び出し:**
+各スキル内のコマンドは `${CLAUDE_PLUGIN_ROOT}`（Plugin インストールディレクトリに展開されるテンプレート変数）を使ってローカルから実行される。ネットワークアクセス不要。
+
 **個人コマンドファイルからの移行:**
 `~/.claude/commands/prefab-sentinel.md` を手動配置していた場合、Plugin インストール後は冗長になるため削除可能。Plugin 側（`/prefab-sentinel:guide`）と個人コマンド（`/prefab-sentinel`）は名前空間が異なるため共存も可能。
 

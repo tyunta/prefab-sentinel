@@ -5,6 +5,12 @@ description: Broken reference repair workflow using reference-resolver MCP and w
 
 # Prefab Reference Repair
 
+## 呼び出し方
+```bash
+uvx --from "${CLAUDE_PLUGIN_ROOT}" prefab-sentinel <command>
+```
+以下のコマンド例では `prefab-sentinel` を上記で読み替える。
+
 ## Overview
 Detect and repair broken references while avoiding unsafe auto-fixes.
 

@@ -14,8 +14,9 @@ Unity プロジェクトで Prefab/Scene/Asset の検査・編集・参照修復
 
 ## 呼び出し方
 ```bash
-uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel <command>
+uvx --from "${CLAUDE_PLUGIN_ROOT}" prefab-sentinel <command>
 ```
+以下のコマンド例では `prefab-sentinel` を上記で読み替える。
 
 ## 主要コマンド
 ```bash

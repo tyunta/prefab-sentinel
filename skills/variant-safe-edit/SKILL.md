@@ -5,6 +5,12 @@ description: Safe prefab variant editing workflow using Prefab Sentinel MCP/CLI 
 
 # Variant Safe Edit
 
+## 呼び出し方
+```bash
+uvx --from "${CLAUDE_PLUGIN_ROOT}" prefab-sentinel <command>
+```
+以下のコマンド例では `prefab-sentinel` を上記で読み替える。
+
 ## Overview
 Provide a deterministic, fail-fast workflow for variant edits with auditability and reference safety.
 

@@ -5,6 +5,12 @@ description: Udon/ClientSim log triage workflow using runtime-validation MCP to 
 
 # Udon Log Triage
 
+## 呼び出し方
+```bash
+uvx --from "${CLAUDE_PLUGIN_ROOT}" prefab-sentinel <command>
+```
+以下のコマンド例では `prefab-sentinel` を上記で読み替える。
+
 ## Overview
 Reduce runtime failures by classifying logs, mapping errors to assets, and controlling fixes.
 
