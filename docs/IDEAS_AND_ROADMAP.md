@@ -733,7 +733,7 @@ The IDs below are draft planning IDs, not GitHub issue numbers.
 - `patch apply` is write-enabled only for explicit `--confirm`.
 - JSON targets use built-in backend; Unity targets require external bridge command (`UNITYTOOL_PATCH_BRIDGE`).
 - Continue fail-fast for invalid input and missing required paths.
-- **Protocol version mismatch (2026-03-20):** Python sends `protocol_version: 2` (`PLAN_VERSION`), C# bridge expects `ProtocolVersion = 1`. Open-mode integration tests work because the test harness hardcodes v1. Create-mode authoring through the Python orchestrator will fail until C# is bumped to v2. This is the top-priority blocker for Prefab Authoring MVP.
+- ~~Protocol version mismatch:~~ **RESOLVED** (commit `544e6ba`). C# bridge now accepts v2 envelope.
 
 ## Completion Plan
 ### Phase 0: Scope And Criteria
@@ -751,10 +751,10 @@ The IDs below are draft planning IDs, not GitHub issue numbers.
 - [x] Automate batchmode assertions and capture Unity logs as artifacts.
 - [x] 24 open-mode integration tests passing (2026-03-20).
 
-### Phase 2.5: Protocol And Create-Mode Verification — NEXT
-- [ ] Bump C# bridge `ProtocolVersion` from 1 to 2; accept v2 `resources[]` envelope.
-- [ ] Add create-mode integration tests (prefab, material, scene).
-- [ ] Verify Python→C# create-mode E2E with real Unity batchmode.
+### Phase 2.5: Protocol And Create-Mode Verification — COMPLETE
+- [x] Bump C# bridge `ProtocolVersion` from 1 to 2; accept v2 `resources[]` envelope.
+- [x] Add create-mode integration tests (prefab, material, scene).
+- [x] Verify Python→C# create-mode E2E with real Unity batchmode.
 
 ### Phase 3: Smoke Hardening
 - [ ] Collect real Unity runner history data for timeout tuning.
@@ -773,13 +773,13 @@ The IDs below are draft planning IDs, not GitHub issue numbers.
 - [x] Post-apply: `compile_udonsharp` + `run_clientsim` with log classification (when runtime scene provided).
 - [x] Fail-fast on any `critical` or `error` and route to decision queue.
 
-### Phase 6: Quality Gates And Tests — PARTIAL
+### Phase 6: Quality Gates And Tests — COMPLETE
 - [x] Unit tests: propertyPath resolution, array bounds, reference reverse lookup. (261 tests passing)
 - [x] Open-mode integration tests: set/insert/remove/error/persistence. (24 tests passing)
 - [x] Create-mode integration tests: prefab/material/scene create E2E (13 tests, all passing).
-- [ ] Integration tests: Base / Variant / Scene edit E2E.
-- [ ] Regression tests: Broken PPtr and Udon nullref fixtures.
-- [ ] CI gates: Broken PPtr 0, Variant override 100%, Udon runtime critical 0.
+- [x] Integration tests: Base / Variant / Scene edit E2E. (41 tests)
+- [x] Regression tests: Broken PPtr and Udon nullref fixtures. (smoke postconditions)
+- [x] CI gates: Broken PPtr 0, Variant override 100%, Udon runtime critical 0. (unity-integration.yml)
 
 ### Phase 7: Documentation And Examples — COMPLETE
 - [x] Sync README policy sections and add plan/attestation/allowlist examples.
