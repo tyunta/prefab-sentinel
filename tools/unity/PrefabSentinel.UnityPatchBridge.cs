@@ -4644,18 +4644,27 @@ namespace PrefabSentinel
                         ? AssetDatabase.GetBuiltinExtraResource(entry.type, entry.name)
                         : Resources.GetBuiltinResource(entry.type, entry.name);
                 }
-                catch (System.ArgumentException)
+                catch (System.ArgumentException ex)
                 {
                     // Deprecated assets (e.g. Arial.ttf in Unity 2022.3+) throw ArgumentException.
                     // Skip and continue to next entry.
+                    Debug.Log($"[PrefabSentinel] BuiltinAssetByName: {entry.name} ({entry.type.Name}) threw ArgumentException: {ex.Message}");
                     continue;
                 }
-                if (candidate == null) continue;
+                if (candidate == null)
+                {
+                    Debug.Log($"[PrefabSentinel] BuiltinAssetByName: {entry.name} ({entry.type.Name}) returned null");
+                    continue;
+                }
                 string cGuid;
                 long cId;
-                if (AssetDatabase.TryGetGUIDAndLocalFileIdentifier(candidate, out cGuid, out cId)
-                    && string.Equals(cGuid, guid, StringComparison.OrdinalIgnoreCase)
-                    && cId == fileID)
+                if (!AssetDatabase.TryGetGUIDAndLocalFileIdentifier(candidate, out cGuid, out cId))
+                {
+                    Debug.Log($"[PrefabSentinel] BuiltinAssetByName: {entry.name} ({entry.type.Name}) loaded '{candidate.name}' but TryGetGUIDAndLocalFileIdentifier returned false");
+                    continue;
+                }
+                Debug.Log($"[PrefabSentinel] BuiltinAssetByName: {entry.name} ({entry.type.Name}) loaded '{candidate.name}' => guid={cGuid}, fileID={cId} (searching guid={guid}, fileID={fileID})");
+                if (string.Equals(cGuid, guid, StringComparison.OrdinalIgnoreCase) && cId == fileID)
                 {
                     value = candidate;
                     return true;
