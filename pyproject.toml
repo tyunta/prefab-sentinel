@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "prefab-sentinel"
-version = "0.1.67"
+version = "0.2.0"
 description = "Prefab Sentinel CLI and MCP contracts for safe Unity Prefab/Scene editing."
 requires-python = ">=3.11"
 readme = "README.md"
