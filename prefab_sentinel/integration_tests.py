@@ -14,11 +14,12 @@ This module provides:
 from __future__ import annotations
 
 import json
-import shlex
 import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
+
+from prefab_sentinel.wsl_compat import needs_windows_paths, split_unity_command, to_windows_path
 
 VALID_SEVERITIES = frozenset({"info", "warning", "error", "critical"})
 
@@ -79,20 +80,30 @@ def build_unity_command(
     *,
     execute_method: str = _DEFAULT_EXECUTE_METHOD,
 ) -> list[str]:
-    """Build the batchmode command list."""
-    base = shlex.split(unity_command)
+    """Build the batchmode command list.
+
+    On WSL, paths are converted to Windows format when the command targets
+    a ``.exe`` executable.  The Unity command string is parsed with
+    :func:`~prefab_sentinel.wsl_compat.split_unity_command` so that
+    unquoted spaces in WSL paths (e.g. ``/mnt/c/Program Files/...``) are
+    handled correctly.
+    """
+    base, err = split_unity_command(unity_command)
+    if err:
+        raise ValueError(f"Failed to parse Unity command: {err}")
+    _wp = to_windows_path if needs_windows_paths(base) else lambda p: p
     return [
         *base,
         "-batchmode",
         "-quit",
         "-projectPath",
-        str(project_path),
+        _wp(str(project_path)),
         "-executeMethod",
         execute_method,
         "-logFile",
-        str(log_path),
+        _wp(str(log_path)),
         "-sentinelTestOutputPath",
-        str(output_path),
+        _wp(str(output_path)),
     ]
 
 

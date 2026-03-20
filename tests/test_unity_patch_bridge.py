@@ -1307,6 +1307,237 @@ raise SystemExit(9)
         self.assertFalse(result["success"])
         self.assertEqual("BRIDGE_UNITY_FAILED", result["code"])
 
+    def test_reference_bridge_sends_target_path_in_unity_request(self) -> None:
+        """Verify that the target path from the resource is forwarded in the Unity request JSON."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            unity_runner = root / "fake_unity_target.py"
+            unity_runner.write_text(
+                """
+import json
+import sys
+from pathlib import Path
+
+def _arg(flag: str) -> str:
+    args = sys.argv[1:]
+    idx = args.index(flag)
+    return args[idx + 1]
+
+request_path = Path(_arg("-sentinelPatchRequest"))
+response_path = Path(_arg("-sentinelPatchResponse"))
+request = json.loads(request_path.read_text(encoding="utf-8"))
+response_path.write_text(
+    json.dumps(
+        {
+            "protocol_version": 2,
+            "success": True,
+            "severity": "info",
+            "code": "SER_APPLY_OK",
+            "message": "Captured request target.",
+            "data": {
+                "applied": 0,
+                "request_target": request.get("target", ""),
+            },
+            "diagnostics": [],
+        }
+    ),
+    encoding="utf-8",
+)
+""".strip(),
+                encoding="utf-8",
+            )
+
+            wsl_abs_path = "/mnt/d/VRChatProject/World_TEST/Assets/Test.prefab"
+            result = self._run_bridge(
+                {
+                    "protocol_version": 2,
+                    "plan_version": 2,
+                    "resources": [
+                        {
+                            "id": "prefab",
+                            "kind": "prefab",
+                            "path": wsl_abs_path,
+                            "mode": "open",
+                        }
+                    ],
+                    "ops": [],
+                },
+                env_overrides={
+                    "UNITYTOOL_UNITY_COMMAND": f'"{sys.executable}" "{unity_runner}"',
+                    "UNITYTOOL_UNITY_PROJECT_PATH": str(root),
+                },
+            )
+
+        self.assertTrue(result["success"])
+        # When command is not .exe, _wp is no-op — target passes through unchanged
+        self.assertEqual(wsl_abs_path, result["data"]["request_target"])
+
+
+class EditorBridgeModeTests(unittest.TestCase):
+    """Tests for UNITYTOOL_BRIDGE_MODE=editor file-watcher dispatch."""
+
+    def _bridge_path(self) -> Path:
+        return Path("tools") / "unity_patch_bridge.py"
+
+    def _run_bridge(
+        self,
+        payload: dict[str, object],
+        *,
+        env_overrides: dict[str, str] | None = None,
+    ) -> dict[str, object]:
+        env = os.environ.copy()
+        env.pop("UNITYTOOL_UNITY_COMMAND", None)
+        env.pop("UNITYTOOL_UNITY_PROJECT_PATH", None)
+        env.pop("UNITYTOOL_UNITY_EXECUTE_METHOD", None)
+        env.pop("UNITYTOOL_UNITY_TIMEOUT_SEC", None)
+        env.pop("UNITYTOOL_UNITY_LOG_FILE", None)
+        env.pop("UNITYTOOL_BRIDGE_MODE", None)
+        env.pop("UNITYTOOL_BRIDGE_WATCH_DIR", None)
+        if env_overrides:
+            env.update(env_overrides)
+        completed = subprocess.run(
+            [sys.executable, str(self._bridge_path())],
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+            check=False,
+        )
+        self.assertEqual(0, completed.returncode, msg=completed.stderr)
+        return json.loads(completed.stdout)
+
+    def test_editor_mode_requires_watch_dir(self) -> None:
+        result = self._run_bridge(
+            {
+                "protocol_version": 2,
+                "target": "Assets/Test.prefab",
+                "ops": [],
+            },
+            env_overrides={
+                "UNITYTOOL_BRIDGE_MODE": "editor",
+            },
+        )
+        self.assertFalse(result["success"])
+        self.assertEqual("BRIDGE_WATCH_DIR_MISSING", result["code"])
+
+    def test_editor_mode_timeout_without_watcher(self) -> None:
+        with tempfile.TemporaryDirectory() as watch_dir:
+            result = self._run_bridge(
+                {
+                    "protocol_version": 2,
+                    "target": "Assets/Test.prefab",
+                    "ops": [],
+                },
+                env_overrides={
+                    "UNITYTOOL_BRIDGE_MODE": "editor",
+                    "UNITYTOOL_BRIDGE_WATCH_DIR": watch_dir,
+                    "UNITYTOOL_UNITY_TIMEOUT_SEC": "2",
+                },
+            )
+        self.assertFalse(result["success"])
+        self.assertEqual("BRIDGE_EDITOR_TIMEOUT", result["code"])
+
+    def test_editor_mode_writes_request_and_reads_response(self) -> None:
+        import threading
+
+        with tempfile.TemporaryDirectory() as watch_dir:
+            watch_path = Path(watch_dir)
+            response_written = threading.Event()
+
+            def fake_watcher() -> None:
+                """Simulate Unity EditorBridge: poll for request, write response."""
+                for _ in range(50):
+                    candidates = list(watch_path.glob("*.request.json"))
+                    if candidates:
+                        request_file = candidates[0]
+                        request_data = json.loads(
+                            request_file.read_text(encoding="utf-8")
+                        )
+                        base = request_file.name.replace(".request.json", "")
+                        response_file = watch_path / f"{base}.response.json"
+                        response_file.write_text(
+                            json.dumps(
+                                {
+                                    "protocol_version": 2,
+                                    "success": True,
+                                    "severity": "info",
+                                    "code": "SER_APPLY_OK",
+                                    "message": "Applied via editor bridge.",
+                                    "data": {
+                                        "applied": len(
+                                            request_data.get("ops", [])
+                                        ),
+                                    },
+                                    "diagnostics": [],
+                                }
+                            ),
+                            encoding="utf-8",
+                        )
+                        response_written.set()
+                        return
+                    import time
+
+                    time.sleep(0.1)
+
+            watcher_thread = threading.Thread(target=fake_watcher, daemon=True)
+            watcher_thread.start()
+
+            result = self._run_bridge(
+                {
+                    "protocol_version": 2,
+                    "target": "Assets/Test.prefab",
+                    "ops": [
+                        {
+                            "op": "set",
+                            "component": "Example.Component",
+                            "path": "enabled",
+                            "value": True,
+                        }
+                    ],
+                },
+                env_overrides={
+                    "UNITYTOOL_BRIDGE_MODE": "editor",
+                    "UNITYTOOL_BRIDGE_WATCH_DIR": watch_dir,
+                    "UNITYTOOL_UNITY_TIMEOUT_SEC": "10",
+                },
+            )
+
+            watcher_thread.join(timeout=5)
+
+        self.assertTrue(result["success"])
+        self.assertEqual("SER_APPLY_OK", result["code"])
+        self.assertEqual(1, result["data"]["applied"])
+        self.assertEqual("editor", result["data"]["bridge_mode"])
+
+    def test_default_mode_is_batchmode(self) -> None:
+        """When UNITYTOOL_BRIDGE_MODE is not set, batchmode requires UNITY_COMMAND."""
+        result = self._run_bridge(
+            {
+                "protocol_version": 2,
+                "target": "Assets/Test.prefab",
+                "ops": [],
+            },
+        )
+        self.assertFalse(result["success"])
+        # Batchmode path: missing UNITY_COMMAND
+        self.assertEqual("BRIDGE_UNITY_COMMAND_MISSING", result["code"])
+
+    def test_explicit_batchmode_requires_unity_command(self) -> None:
+        result = self._run_bridge(
+            {
+                "protocol_version": 2,
+                "target": "Assets/Test.prefab",
+                "ops": [],
+            },
+            env_overrides={
+                "UNITYTOOL_BRIDGE_MODE": "batchmode",
+            },
+        )
+        self.assertFalse(result["success"])
+        self.assertEqual("BRIDGE_UNITY_COMMAND_MISSING", result["code"])
+
 
 if __name__ == "__main__":
     unittest.main()

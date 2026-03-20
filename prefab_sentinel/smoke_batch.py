@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from prefab_sentinel.bridge_smoke import load_patch_plan
+from prefab_sentinel.wsl_compat import to_wsl_path
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _PROJECT_SMOKE_SCRIPT = _PROJECT_ROOT / "scripts" / "unity_bridge_smoke.py"
@@ -25,6 +26,16 @@ _DEFAULT_PLAN_BY_TARGET = {
     "avatar": "avatar_prefab_create.json",
     "world": "world_material_create.json",
 }
+
+
+def _wsl_path_exists(p: Path) -> bool:
+    """Check if *p* exists, trying WSL path conversion for Windows paths."""
+    if p.exists():
+        return True
+    converted = to_wsl_path(str(p))
+    if converted != str(p):
+        return Path(converted).exists()
+    return False
 
 
 def _default_sample_root() -> Path:
@@ -518,7 +529,7 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
     timeout_profile_overrides: dict[str, int] = {}
     if args.timeout_profile:
         timeout_profile_path = Path(args.timeout_profile)
-        if not timeout_profile_path.exists():
+        if not _wsl_path_exists(timeout_profile_path):
             parser.error(f"--timeout-profile not found: {timeout_profile_path}")
         try:
             timeout_profile_overrides = _load_timeout_profile_map(timeout_profile_path)
@@ -533,9 +544,9 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
     cases = _build_cases(args)
     results: list[dict[str, Any]] = []
     for case in cases:
-        if not case.plan.exists():
+        if not _wsl_path_exists(case.plan):
             raise FileNotFoundError(f"Plan not found for {case.name}: {case.plan}")
-        if not case.project_path.exists():
+        if not _wsl_path_exists(case.project_path):
             raise FileNotFoundError(
                 f"Project path not found for {case.name}: {case.project_path}"
             )

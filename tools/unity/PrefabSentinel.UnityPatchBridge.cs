@@ -5122,13 +5122,20 @@ namespace PrefabSentinel
                     {
                         Directory.CreateDirectory(dir);
                     }
-                    File.WriteAllText(responsePath, JsonUtility.ToJson(response));
+                    string json = JsonUtility.ToJson(response);
+                    string tmpPath = responsePath + ".tmp";
+                    File.WriteAllText(tmpPath, json);
+                    if (File.Exists(responsePath)) File.Delete(responsePath);
+                    File.Move(tmpPath, responsePath);
                     return;
                 }
             }
             catch (Exception ex)
             {
                 Debug.LogError($"[PrefabSentinel] Failed to write bridge response: {ex}");
+                // Fallback: direct write if atomic rename failed.
+                try { File.WriteAllText(responsePath, JsonUtility.ToJson(response)); }
+                catch { /* best effort */ }
                 return;
             }
 

@@ -1,17 +1,20 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
-import shlex
 import subprocess
 import tempfile
+import time
+import uuid
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
 from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse, max_severity
 from prefab_sentinel.unity_assets import decode_text_file, find_project_root, resolve_scope_path
+from prefab_sentinel.wsl_compat import needs_windows_paths, split_unity_command, to_windows_path, to_wsl_path
 
 UNITY_COMMAND_ENV = "UNITYTOOL_UNITY_COMMAND"
 UNITY_PROJECT_PATH_ENV = "UNITYTOOL_UNITY_PROJECT_PATH"
@@ -22,6 +25,9 @@ UNITY_LOG_FILE_ENV = "UNITYTOOL_UNITY_LOG_FILE"
 DEFAULT_RUNTIME_EXECUTE_METHOD = "PrefabSentinel.UnityRuntimeValidationBridge.RunFromJson"
 DEFAULT_TIMEOUT_SEC = 300
 RUNTIME_PROTOCOL_VERSION = 1
+BRIDGE_MODE_ENV = "UNITYTOOL_BRIDGE_MODE"
+BRIDGE_WATCH_DIR_ENV = "UNITYTOOL_BRIDGE_WATCH_DIR"
+_DEFAULT_EDITOR_POLL_INTERVAL = 1.0
 
 _LOG_PATTERNS: tuple[tuple[str, Severity, re.Pattern[str]], ...] = (
     (
@@ -57,16 +63,6 @@ _LOG_PATTERNS: tuple[tuple[str, Severity, re.Pattern[str]], ...] = (
     ),
 )
 
-
-def _split_command(command_raw: str) -> tuple[list[str], str | None]:
-    try:
-        parts = shlex.split(command_raw)
-    except ValueError as exc:
-        return [], str(exc)
-    command = [part.strip() for part in parts if part.strip()]
-    if not command:
-        return [], "command is empty after parsing"
-    return command, None
 
 
 def _coerce_severity(value: object) -> Severity | None:
@@ -121,7 +117,7 @@ class RuntimeValidationMcp:
         if not command_raw:
             return None, None
 
-        command, split_error = _split_command(command_raw)
+        command, split_error = split_unity_command(command_raw)
         if split_error is not None:
             return None, ToolResponse(
                 success=False,
@@ -156,10 +152,8 @@ class RuntimeValidationMcp:
                 diagnostics=[],
             )
 
-        project_path = Path(
-            os.environ.get(UNITY_PROJECT_PATH_ENV, str(default_project_root)).strip()
-            or str(default_project_root)
-        )
+        project_path_raw = os.environ.get(UNITY_PROJECT_PATH_ENV, "").strip()
+        project_path = Path(to_wsl_path(project_path_raw)) if project_path_raw else default_project_root
         if not project_path.exists():
             return None, ToolResponse(
                 success=False,
@@ -197,19 +191,21 @@ class RuntimeValidationMcp:
         request_path: Path,
         response_path: Path,
     ) -> list[str]:
+        cmd = config["command"]
+        _wp = to_windows_path if needs_windows_paths(cmd) else lambda p: p
         return [
-            *config["command"],
+            *cmd,
             "-batchmode",
             "-projectPath",
-            str(config["project_path"]),
+            _wp(str(config["project_path"])),
             "-executeMethod",
             str(config["execute_method"]),
             "-logFile",
-            str(config["log_path"]),
+            _wp(str(config["log_path"])),
             "-sentinelRuntimeRequest",
-            str(request_path),
+            _wp(str(request_path)),
             "-sentinelRuntimeResponse",
-            str(response_path),
+            _wp(str(response_path)),
         ]
 
     @staticmethod
@@ -296,6 +292,16 @@ class RuntimeValidationMcp:
         scene_path: str | None = None,
         profile: str | None = None,
     ) -> ToolResponse:
+        bridge_mode = os.environ.get(BRIDGE_MODE_ENV, "batchmode").strip().lower()
+
+        if bridge_mode == "editor":
+            return self._invoke_via_editor_bridge(
+                action=action,
+                target_root=target_root,
+                scene_path=scene_path,
+                profile=profile,
+            )
+
         config, config_error = self._load_runtime_config(default_project_root=target_root)
         if config_error is not None:
             return config_error
@@ -466,6 +472,155 @@ class RuntimeValidationMcp:
                 },
                 diagnostics=[],
             )
+
+    def _invoke_via_editor_bridge(
+        self,
+        *,
+        action: str,
+        target_root: Path,
+        scene_path: str | None = None,
+        profile: str | None = None,
+    ) -> ToolResponse:
+        """Send a runtime validation request via the editor bridge file watcher."""
+        watch_dir_raw = os.environ.get(BRIDGE_WATCH_DIR_ENV, "").strip()
+        if not watch_dir_raw:
+            return ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code="RUN_CONFIG_ERROR",
+                message=f"{BRIDGE_WATCH_DIR_ENV} is required when {BRIDGE_MODE_ENV}=editor.",
+                data={
+                    "action": action,
+                    "project_root": self._relative(target_root),
+                    "read_only": True,
+                    "executed": False,
+                },
+                diagnostics=[],
+            )
+
+        watch_dir = Path(watch_dir_raw)
+        timeout_raw = os.environ.get(UNITY_TIMEOUT_SEC_ENV, str(DEFAULT_TIMEOUT_SEC)).strip()
+        try:
+            timeout_sec = int(timeout_raw)
+        except ValueError:
+            timeout_sec = -1
+        if timeout_sec <= 0:
+            return ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code="RUN_CONFIG_ERROR",
+                message=f"{UNITY_TIMEOUT_SEC_ENV} must be a positive integer.",
+                data={
+                    "received_timeout": timeout_raw,
+                    "read_only": True,
+                    "executed": False,
+                },
+                diagnostics=[],
+            )
+
+        request_id = uuid.uuid4().hex
+        request_file = watch_dir / f"{request_id}.request.json"
+        response_file = watch_dir / f"{request_id}.response.json"
+        tmp_file = Path(str(request_file) + ".tmp")
+
+        payload = {
+            "protocol_version": RUNTIME_PROTOCOL_VERSION,
+            "action": action,
+            "project_root": str(target_root),
+            "scene_path": scene_path or "",
+            "profile": profile or "",
+            "timeout_sec": timeout_sec,
+        }
+
+        try:
+            watch_dir.mkdir(parents=True, exist_ok=True)
+            tmp_file.write_text(
+                json.dumps(payload, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            tmp_file.rename(request_file)
+        except OSError as exc:
+            return ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code="RUN_EDITOR_BRIDGE_WRITE",
+                message="Failed to write editor bridge runtime request file.",
+                data={
+                    "action": action,
+                    "project_root": self._relative(target_root),
+                    "request_file": str(request_file),
+                    "error": str(exc),
+                    "read_only": True,
+                    "executed": False,
+                },
+                diagnostics=[],
+            )
+
+        deadline = time.monotonic() + timeout_sec
+        while time.monotonic() < deadline:
+            if response_file.exists():
+                try:
+                    raw = response_file.read_text(encoding="utf-8")
+                    response_payload = json.loads(raw)
+                except (OSError, json.JSONDecodeError) as exc:
+                    return ToolResponse(
+                        success=False,
+                        severity=Severity.ERROR,
+                        code="RUN_EDITOR_BRIDGE_RESPONSE",
+                        message="Editor bridge runtime response file could not be read.",
+                        data={
+                            "action": action,
+                            "project_root": self._relative(target_root),
+                            "response_file": str(response_file),
+                            "error": str(exc),
+                            "read_only": False,
+                            "executed": False,
+                        },
+                        diagnostics=[],
+                    )
+                finally:
+                    self._try_delete(request_file)
+                    self._try_delete(response_file)
+
+                log_path_raw = os.environ.get(UNITY_LOG_FILE_ENV, "").strip()
+                log_path = Path(log_path_raw) if log_path_raw else target_root / "Logs" / "Editor.log"
+                return self._parse_runtime_response(
+                    response_payload,
+                    action=action,
+                    project_root=target_root,
+                    scene_path=scene_path,
+                    profile=profile,
+                    log_path=log_path,
+                )
+
+            time.sleep(_DEFAULT_EDITOR_POLL_INTERVAL)
+
+        # Timeout — clean up.
+        self._try_delete(request_file)
+        failure_code = self._failure_code(action)
+        return ToolResponse(
+            success=False,
+            severity=Severity.ERROR,
+            code=failure_code,
+            message="Editor bridge runtime response timed out.",
+            data={
+                "action": action,
+                "project_root": self._relative(target_root),
+                "scene_path": scene_path,
+                "profile": profile,
+                "timeout_sec": timeout_sec,
+                "request_file": str(request_file),
+                "bridge_mode": "editor",
+                "read_only": False,
+                "executed": False,
+            },
+            diagnostics=[],
+        )
+
+    @staticmethod
+    def _try_delete(path: Path) -> None:
+        with contextlib.suppress(OSError):
+            path.unlink(missing_ok=True)
 
     def compile_udonsharp(self, project_root: str | None = None) -> ToolResponse:
         target_root = (

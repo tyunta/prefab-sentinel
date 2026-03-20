@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import json
-import sys
 import tempfile
 import unittest
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from unittest.mock import MagicMock, patch
 
 from prefab_sentinel.integration_tests import (
     _CS_FILES,
@@ -18,6 +16,7 @@ from prefab_sentinel.integration_tests import (
     parse_integration_results,
     run_integration_tests,
 )
+from prefab_sentinel.wsl_compat import is_wsl
 
 
 class DeployTests(unittest.TestCase):
@@ -56,7 +55,14 @@ class DeployTests(unittest.TestCase):
 class BuildCommandTests(unittest.TestCase):
     """Tests for build_unity_command."""
 
-    def test_build_command_shape(self):
+    def setUp(self) -> None:
+        is_wsl.cache_clear()
+
+    def tearDown(self) -> None:
+        is_wsl.cache_clear()
+
+    @patch("prefab_sentinel.wsl_compat.is_wsl", return_value=False)
+    def test_build_command_shape(self, _mock_wsl):
         cmd = build_unity_command(
             "Unity.exe",
             Path("/project"),
@@ -70,6 +76,35 @@ class BuildCommandTests(unittest.TestCase):
         self.assertIn("-sentinelTestOutputPath", cmd)
         idx = cmd.index("-sentinelTestOutputPath")
         self.assertEqual(cmd[idx + 1], str(Path("/out/results.json")))
+
+    @patch("prefab_sentinel.wsl_compat.is_wsl", return_value=True)
+    @patch("prefab_sentinel.wsl_compat.subprocess.run")
+    def test_build_command_converts_paths_on_wsl(self, mock_run, _mock_wsl):
+        """On WSL with .exe command, paths are converted to Windows format."""
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="D:\\Project\n"
+        )
+        cmd = build_unity_command(
+            "Unity.exe",
+            Path("/mnt/d/Project"),
+            Path("/tmp/results.json"),
+            Path("/tmp/unity.log"),
+        )
+        # All path arguments should have been passed through to_windows_path
+        idx_project = cmd.index("-projectPath")
+        self.assertEqual(cmd[idx_project + 1], "D:\\Project")
+
+    @patch("prefab_sentinel.wsl_compat.is_wsl", return_value=False)
+    def test_build_command_no_conversion_off_wsl(self, _mock_wsl):
+        """Off WSL, paths are passed through unchanged."""
+        cmd = build_unity_command(
+            "Unity.exe",
+            Path("/mnt/d/Project"),
+            Path("/tmp/results.json"),
+            Path("/tmp/unity.log"),
+        )
+        idx_project = cmd.index("-projectPath")
+        self.assertEqual(cmd[idx_project + 1], "/mnt/d/Project")
 
 
 class ParseResultsTests(unittest.TestCase):

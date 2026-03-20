@@ -76,6 +76,14 @@ namespace PrefabSentinel
                 return;
             }
 
+            RunFromPaths(requestPath, responsePath);
+        }
+
+        /// <summary>
+        /// File-based entry point callable from EditorBridge (no EditorApplication.Exit).
+        /// </summary>
+        public static void RunFromPaths(string requestPath, string responsePath)
+        {
             RuntimeRequest request;
             try
             {
@@ -84,7 +92,7 @@ namespace PrefabSentinel
             }
             catch (Exception ex)
             {
-                ExitWithResponse(
+                WriteResponse(
                     responsePath,
                     BuildError(
                         code: "RUN_PROTOCOL_ERROR",
@@ -103,12 +111,13 @@ namespace PrefabSentinel
                         executed: false
                     )
                 );
+                if (Application.isBatchMode) EditorApplication.Exit(1);
                 return;
             }
 
             if (request == null || request.protocol_version != ProtocolVersion)
             {
-                ExitWithResponse(
+                WriteResponse(
                     responsePath,
                     BuildError(
                         code: "RUN_PROTOCOL_ERROR",
@@ -127,12 +136,15 @@ namespace PrefabSentinel
                         executed: false
                     )
                 );
+                if (Application.isBatchMode) EditorApplication.Exit(1);
                 return;
             }
 
             if (string.Equals(request.action, "compile_udonsharp", StringComparison.Ordinal))
             {
-                ExitWithResponse(responsePath, ExecuteCompile(request));
+                RuntimeResponse compileResponse = ExecuteCompile(request);
+                WriteResponse(responsePath, compileResponse);
+                if (Application.isBatchMode) EditorApplication.Exit(compileResponse.success ? 0 : 1);
                 return;
             }
 
@@ -140,7 +152,7 @@ namespace PrefabSentinel
             {
                 if (Application.isBatchMode)
                 {
-                    ExitWithResponse(
+                    WriteResponse(
                         responsePath,
                         BuildSkip(
                             code: "RUN_CLIENTSIM_SKIPPED",
@@ -148,6 +160,7 @@ namespace PrefabSentinel
                             request: request
                         )
                     );
+                    EditorApplication.Exit(0);
                     return;
                 }
 
@@ -155,7 +168,7 @@ namespace PrefabSentinel
                 return;
             }
 
-            ExitWithResponse(
+            WriteResponse(
                 responsePath,
                 BuildError(
                     code: "RUN_PROTOCOL_ERROR",
@@ -174,22 +187,32 @@ namespace PrefabSentinel
                     executed: false
                 )
             );
+            if (Application.isBatchMode) EditorApplication.Exit(1);
         }
 
-        internal static void ExitWithResponse(string responsePath, RuntimeResponse response)
+        internal static void WriteResponse(string responsePath, RuntimeResponse response)
         {
             try
             {
-                File.WriteAllText(responsePath, JsonUtility.ToJson(response));
+                string json = JsonUtility.ToJson(response);
+                string tmpPath = responsePath + ".tmp";
+                File.WriteAllText(tmpPath, json);
+                if (File.Exists(responsePath)) File.Delete(responsePath);
+                File.Move(tmpPath, responsePath);
             }
             catch (Exception ex)
             {
                 Debug.LogError($"Failed to write runtime validation response: {ex}");
-                EditorApplication.Exit(1);
-                return;
+                // Fallback: direct write if atomic rename failed.
+                try { File.WriteAllText(responsePath, JsonUtility.ToJson(response)); }
+                catch { /* best effort */ }
             }
+        }
 
-            EditorApplication.Exit(0);
+        internal static void ExitWithResponse(string responsePath, RuntimeResponse response)
+        {
+            WriteResponse(responsePath, response);
+            EditorApplication.Exit(response.success ? 0 : 1);
         }
 
         internal static RuntimeResponse ExecuteCompile(RuntimeRequest request)
@@ -756,8 +779,16 @@ namespace PrefabSentinel
 
         private void Finish(UnityRuntimeValidationBridge.RuntimeResponse response)
         {
-            // ExitWithResponse calls EditorApplication.Exit — no code after it will execute.
-            UnityRuntimeValidationBridge.ExitWithResponse(_responsePath, response);
+            if (Application.isBatchMode)
+            {
+                // ExitWithResponse calls EditorApplication.Exit — no code after it will execute.
+                UnityRuntimeValidationBridge.ExitWithResponse(_responsePath, response);
+            }
+            else
+            {
+                // Editor bridge mode: write response without exiting the editor.
+                UnityRuntimeValidationBridge.WriteResponse(_responsePath, response);
+            }
         }
     }
 }

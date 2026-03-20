@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock, patch
 
 from prefab_sentinel.smoke_batch import (
     SmokeCase,
@@ -15,7 +16,9 @@ from prefab_sentinel.smoke_batch import (
     _render_markdown_summary,
     _resolve_case_unity_timeout_sec,
     _resolve_targets,
+    _wsl_path_exists,
 )
+from prefab_sentinel.wsl_compat import is_wsl
 
 
 def _make_case(
@@ -429,6 +432,44 @@ class RenderMarkdownSummaryTests(unittest.TestCase):
         }
         md = _render_markdown_summary(payload)
         self.assertIn("| avatar |", md)
+
+
+class WslPathExistsTests(unittest.TestCase):
+    """Tests for _wsl_path_exists WSL-aware existence check."""
+
+    def setUp(self) -> None:
+        is_wsl.cache_clear()
+
+    def tearDown(self) -> None:
+        is_wsl.cache_clear()
+
+    def test_existing_posix_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "exists.txt"
+            p.write_text("ok", encoding="utf-8")
+            self.assertTrue(_wsl_path_exists(p))
+
+    def test_nonexistent_path(self) -> None:
+        self.assertFalse(_wsl_path_exists(Path("/nonexistent/path")))
+
+    @patch("prefab_sentinel.wsl_compat.is_wsl", return_value=True)
+    @patch("prefab_sentinel.wsl_compat.subprocess.run")
+    def test_windows_path_converted_on_wsl(self, mock_run, _mock_wsl) -> None:
+        """Windows path that doesn't exist directly is converted via wslpath."""
+        with tempfile.TemporaryDirectory() as tmp:
+            real_file = Path(tmp) / "project" / "file.txt"
+            real_file.parent.mkdir(parents=True)
+            real_file.write_text("ok", encoding="utf-8")
+            mock_run.return_value = MagicMock(
+                returncode=0, stdout=f"{real_file}\n"
+            )
+            # Pass a fake Windows path that won't exist directly
+            self.assertTrue(_wsl_path_exists(Path("D:/fake/project/file.txt")))
+
+    @patch("prefab_sentinel.smoke_batch.to_wsl_path", return_value="D:/same/path")
+    def test_no_conversion_when_path_unchanged(self, _mock_to_wsl) -> None:
+        """When to_wsl_path returns the same string, only one existence check."""
+        self.assertFalse(_wsl_path_exists(Path("D:/same/path")))
 
 
 if __name__ == "__main__":

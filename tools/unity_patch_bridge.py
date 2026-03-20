@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
-import shlex
 import subprocess
 import sys
 import tempfile
+import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +16,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from prefab_sentinel.patch_plan import PLAN_VERSION as PROTOCOL_VERSION, iter_resource_batches, normalize_patch_plan
+from prefab_sentinel.wsl_compat import needs_windows_paths, split_unity_command, to_windows_path, to_wsl_path
 
 _UNITY_EXECUTE_METHOD_PROTOCOL_VERSION = PROTOCOL_VERSION
 SUPPORTED_SUFFIXES = {
@@ -29,8 +32,11 @@ UNITY_PROJECT_PATH_ENV = "UNITYTOOL_UNITY_PROJECT_PATH"
 UNITY_EXECUTE_METHOD_ENV = "UNITYTOOL_UNITY_EXECUTE_METHOD"
 UNITY_TIMEOUT_SEC_ENV = "UNITYTOOL_UNITY_TIMEOUT_SEC"
 UNITY_LOG_FILE_ENV = "UNITYTOOL_UNITY_LOG_FILE"
+BRIDGE_MODE_ENV = "UNITYTOOL_BRIDGE_MODE"
+BRIDGE_WATCH_DIR_ENV = "UNITYTOOL_BRIDGE_WATCH_DIR"
 DEFAULT_EXECUTE_METHOD = "PrefabSentinel.UnityPatchBridge.ApplyFromJson"
 DEFAULT_TIMEOUT_SEC = 120
+DEFAULT_EDITOR_POLL_INTERVAL = 1.0
 VALID_SEVERITIES = {"info", "warning", "error", "critical"}
 SUPPORTED_OP_NAMES = {
     "set",
@@ -76,16 +82,6 @@ def _error_response(
         "diagnostics": [],
     }
 
-
-def _split_command(command_raw: str) -> tuple[list[str], str | None]:
-    try:
-        parts = shlex.split(command_raw)
-    except ValueError as exc:
-        return [], str(exc)
-    command = [part.strip() for part in parts if part.strip()]
-    if not command:
-        return [], "command is empty after parsing"
-    return command, None
 
 
 def _build_unity_command(
@@ -534,6 +530,111 @@ def _finalize_bridge_plan_response(
     }
 
 
+def _run_via_editor_bridge(
+    *,
+    watch_dir: Path,
+    timeout_sec: int,
+    resource: dict[str, Any],
+    ops: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Write a request file to watch_dir and poll for the response."""
+    target = str(resource.get("path", "")).strip()
+    request_id = uuid.uuid4().hex
+    request_file = watch_dir / f"{request_id}.request.json"
+    response_file = watch_dir / f"{request_id}.response.json"
+    tmp_file = Path(str(request_file) + ".tmp")
+
+    request_payload = {
+        "protocol_version": _UNITY_EXECUTE_METHOD_PROTOCOL_VERSION,
+        "target": target,
+        "kind": resource.get("kind", ""),
+        "mode": resource.get("mode", "open"),
+        "ops": _normalize_bridge_ops(ops),
+    }
+
+    # Atomic write: .tmp → rename to avoid partial reads by the watcher.
+    try:
+        watch_dir.mkdir(parents=True, exist_ok=True)
+        tmp_file.write_text(
+            json.dumps(request_payload, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        tmp_file.rename(request_file)
+    except OSError as exc:
+        return _error_response(
+            code="BRIDGE_EDITOR_WRITE",
+            message="Failed to write editor bridge request file.",
+            data={
+                "resource_id": resource.get("id"),
+                "target": target,
+                "request_file": str(request_file),
+                "error": str(exc),
+            },
+        )
+
+    # Poll for response.
+    deadline = time.monotonic() + timeout_sec
+    while time.monotonic() < deadline:
+        if response_file.exists():
+            try:
+                raw = response_file.read_text(encoding="utf-8")
+                unity_payload = json.loads(raw)
+            except (OSError, json.JSONDecodeError) as exc:
+                return _error_response(
+                    code="BRIDGE_EDITOR_RESPONSE_READ",
+                    message="Editor bridge response file could not be read.",
+                    data={
+                        "resource_id": resource.get("id"),
+                        "target": target,
+                        "response_file": str(response_file),
+                        "error": str(exc),
+                    },
+                )
+            finally:
+                _try_delete(request_file)
+                _try_delete(response_file)
+
+            if not isinstance(unity_payload, dict):
+                return _error_response(
+                    code="BRIDGE_UNITY_RESPONSE_SCHEMA",
+                    message="Editor bridge response root must be an object.",
+                    data={"resource_id": resource.get("id"), "target": target},
+                )
+
+            response = _finalize_unity_response(
+                payload=unity_payload,
+                target=target,
+                op_count=len(ops),
+            )
+            data = response.get("data", {})
+            if isinstance(data, dict):
+                data.setdefault("resource_id", resource.get("id"))
+                data.setdefault("resource_kind", resource.get("kind"))
+                data.setdefault("resource_mode", resource.get("mode"))
+                data["bridge_mode"] = "editor"
+            return response
+
+        time.sleep(DEFAULT_EDITOR_POLL_INTERVAL)
+
+    # Timeout — clean up request file.
+    _try_delete(request_file)
+    return _error_response(
+        code="BRIDGE_EDITOR_TIMEOUT",
+        message="Editor bridge response timed out.",
+        data={
+            "resource_id": resource.get("id"),
+            "target": target,
+            "timeout_sec": timeout_sec,
+            "request_file": str(request_file),
+        },
+    )
+
+
+def _try_delete(path: Path) -> None:
+    with contextlib.suppress(OSError):
+        path.unlink(missing_ok=True)
+
+
 def _run_unity_for_resource(
     *,
     base_command: list[str],
@@ -545,6 +646,7 @@ def _run_unity_for_resource(
     ops: list[dict[str, Any]],
 ) -> dict[str, Any]:
     target = str(resource.get("path", "")).strip()
+    _wp = to_windows_path if needs_windows_paths(base_command) else lambda p: p
     with tempfile.TemporaryDirectory(prefix="prefab-sentinel-bridge-") as temp_dir:
         temp_root = Path(temp_dir)
         request_path = temp_root / "request.json"
@@ -553,7 +655,7 @@ def _run_unity_for_resource(
 
         request_payload = {
             "protocol_version": _UNITY_EXECUTE_METHOD_PROTOCOL_VERSION,
-            "target": target,
+            "target": _wp(target),
             "kind": resource.get("kind", ""),
             "mode": resource.get("mode", "open"),
             "ops": _normalize_bridge_ops(ops),
@@ -565,11 +667,11 @@ def _run_unity_for_resource(
 
         command = _build_unity_command(
             base_command=base_command,
-            project_path=str(project_path),
+            project_path=_wp(str(project_path)),
             execute_method=execute_method,
-            request_path=str(request_path),
-            response_path=str(response_path),
-            log_path=str(log_path),
+            request_path=_wp(str(request_path)),
+            response_path=_wp(str(response_path)),
+            log_path=_wp(str(log_path)),
         )
 
         try:
@@ -759,24 +861,7 @@ def main() -> int:
                 )
             )
 
-    command_raw = os.environ.get(UNITY_COMMAND_ENV, "").strip()
-    if not command_raw:
-        return _emit(
-            _error_response(
-                code="BRIDGE_UNITY_COMMAND_MISSING",
-                message=f"{UNITY_COMMAND_ENV} is not configured.",
-            )
-        )
-
-    base_command, split_error = _split_command(command_raw)
-    if split_error:
-        return _emit(
-            _error_response(
-                code="BRIDGE_UNITY_COMMAND_INVALID",
-                message="Unity command cannot be parsed.",
-                data={"error": split_error},
-            )
-        )
+    bridge_mode = os.environ.get(BRIDGE_MODE_ENV, "batchmode").strip().lower()
 
     timeout_raw = os.environ.get(UNITY_TIMEOUT_SEC_ENV, str(DEFAULT_TIMEOUT_SEC)).strip()
     try:
@@ -792,34 +877,72 @@ def main() -> int:
             )
         )
 
-    execute_method = os.environ.get(UNITY_EXECUTE_METHOD_ENV, DEFAULT_EXECUTE_METHOD).strip()
-    if not execute_method:
-        execute_method = DEFAULT_EXECUTE_METHOD
-    project_path = Path(
-        os.environ.get(UNITY_PROJECT_PATH_ENV, str(Path.cwd())).strip() or str(Path.cwd())
-    )
-    if not project_path.exists():
-        return _emit(
-            _error_response(
-                code="BRIDGE_PROJECT_PATH_MISSING",
-                message="Unity project path does not exist.",
-                data={"project_path": str(project_path)},
+    if bridge_mode == "editor":
+        watch_dir_raw = os.environ.get(BRIDGE_WATCH_DIR_ENV, "").strip()
+        if not watch_dir_raw:
+            return _emit(
+                _error_response(
+                    code="BRIDGE_WATCH_DIR_MISSING",
+                    message=f"{BRIDGE_WATCH_DIR_ENV} is required when {BRIDGE_MODE_ENV}=editor.",
+                )
             )
-        )
+        watch_dir = Path(watch_dir_raw)
+        responses = [
+            _run_via_editor_bridge(
+                watch_dir=watch_dir,
+                timeout_sec=timeout_sec,
+                resource=resource,
+                ops=resource_ops,
+            )
+            for resource, resource_ops in resource_batches
+        ]
+    else:
+        command_raw = os.environ.get(UNITY_COMMAND_ENV, "").strip()
+        if not command_raw:
+            return _emit(
+                _error_response(
+                    code="BRIDGE_UNITY_COMMAND_MISSING",
+                    message=f"{UNITY_COMMAND_ENV} is not configured.",
+                )
+            )
 
-    log_path_raw = os.environ.get(UNITY_LOG_FILE_ENV, "").strip()
-    responses = [
-        _run_unity_for_resource(
-            base_command=base_command,
-            project_path=project_path,
-            execute_method=execute_method,
-            timeout_sec=timeout_sec,
-            log_path_raw=log_path_raw,
-            resource=resource,
-            ops=resource_ops,
-        )
-        for resource, resource_ops in resource_batches
-    ]
+        base_command, split_error = split_unity_command(command_raw)
+        if split_error:
+            return _emit(
+                _error_response(
+                    code="BRIDGE_UNITY_COMMAND_INVALID",
+                    message="Unity command cannot be parsed.",
+                    data={"error": split_error},
+                )
+            )
+
+        execute_method = os.environ.get(UNITY_EXECUTE_METHOD_ENV, DEFAULT_EXECUTE_METHOD).strip()
+        if not execute_method:
+            execute_method = DEFAULT_EXECUTE_METHOD
+        project_path_raw = os.environ.get(UNITY_PROJECT_PATH_ENV, "").strip()
+        project_path = Path(to_wsl_path(project_path_raw)) if project_path_raw else Path.cwd()
+        if not project_path.exists():
+            return _emit(
+                _error_response(
+                    code="BRIDGE_PROJECT_PATH_MISSING",
+                    message="Unity project path does not exist.",
+                    data={"project_path": str(project_path)},
+                )
+            )
+
+        log_path_raw = os.environ.get(UNITY_LOG_FILE_ENV, "").strip()
+        responses = [
+            _run_unity_for_resource(
+                base_command=base_command,
+                project_path=project_path,
+                execute_method=execute_method,
+                timeout_sec=timeout_sec,
+                log_path_raw=log_path_raw,
+                resource=resource,
+                ops=resource_ops,
+            )
+            for resource, resource_ops in resource_batches
+        ]
 
     return _emit(
         _finalize_bridge_plan_response(

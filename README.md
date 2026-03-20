@@ -733,6 +733,13 @@ uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel sug
 - `patch apply` は Unity ターゲット（`.prefab` / `.unity` / `.asset` など）に対して `UNITYTOOL_PATCH_BRIDGE` 経由の外部 bridge を使って適用できる。
 - `patch apply` は Unity bridge 未設定時に Unity ターゲットを `SER_UNSUPPORTED_TARGET` で停止する（Unity YAML の直接編集は行わない）。
 - `UNITYTOOL_PATCH_BRIDGE` は JSON 入力（stdin） / JSON 出力（stdout）の bridge コマンドを指定する（外部 bridge request `protocol_version: 2`）。
+- `patch generate circle` はパッチ計画を自動生成する。円形配置の子オブジェクトを持つ Prefab を作成する計画を出力する（`--output` / `--count` / `--radius` 必須、`--root-name` / `--child-name` / `--scale` / `--axis` / `--out` 任意）。生成結果は `normalize_patch_plan()` で検証済み。
+
+```bash
+# パッチ計画の自動生成（circle レイアウト）
+uv run prefab-sentinel patch generate circle --output Assets/Circle.prefab --root-name Circle --count 12 --radius 3.0 --out circle_plan.json
+uv run prefab-sentinel patch generate circle --output Assets/Ring.prefab --count 8 --radius 2.0 --child-name Node --scale 0.5 --axis xy
+```
 
 ### 17.6 `patch apply --confirm --out-report` の出力例
 
@@ -797,12 +804,18 @@ before / after diff + validation steps の抜粋:
 - `tools/unity_patch_bridge.py` の mutation op は prefab open mode では `component`、material / ScriptableObject open mode では root asset `$asset` の `target`、scene mode では component `$handle` の `target`、create mode では component / asset `$handle` の `target` を受け付ける。
 - `tools/unity_patch_bridge.py` は Unity 起動前に `ops` を検証し、`set` の `value` 欠落や配列操作の `index` 欠落などを `BRIDGE_REQUEST_SCHEMA` で fail-fast 停止する。
 - `tools/unity_patch_bridge.py` は `UNITYTOOL_UNITY_PROJECT_PATH` / `UNITYTOOL_UNITY_EXECUTE_METHOD` / `UNITYTOOL_UNITY_TIMEOUT_SEC` / `UNITYTOOL_UNITY_LOG_FILE` で実行設定を制御できる。
+- WSL 環境対応: `prefab_sentinel/wsl_compat.py` が WSL 検出・パス変換（`wslpath` 経由）・スペース入りパスの復元を提供し、`unity_patch_bridge.py` と `runtime_validation.py` から利用する。`UNITYTOOL_UNITY_PROJECT_PATH` は Windows パス（`D:/...`）でも WSL パス（`/mnt/d/...`）でも受け付ける。Unity.exe（`.exe`）実行時のみ引数パスを Windows 形式に変換し、非 `.exe` コマンド（テスト用 Python スクリプト等）では変換しない。`wslpath` 不在時はグレースフル・デグレードする。
 - `tools/unity_patch_bridge.py` は Unity 応答の `success/severity/code/message/data/diagnostics` を厳密検証し、欠落・型不一致時は `BRIDGE_UNITY_RESPONSE_SCHEMA` で fail-fast 停止する。
 - `prefab_sentinel/mcp/serialized_object.py` の resource dispatch は `json` / `prefab` / `asset` / `material` / `scene` の adapter ごとに分離し、Unity 側に渡す resource plan は常に kind / mode を明示した bridge request へ正規化する。
 - `scripts/unity_bridge_smoke.py` は patch plan から `tools/unity_patch_bridge.py` を end-to-end 実行し、Unity 実行環境の上書き・期待成功 / 失敗判定・コード検証（`--expected-code`）・適用件数検証（`--expected-applied` または `--expect-applied-from-plan`）・レスポンス保存（`--out`）をまとめて検証できる。bridge 応答は `success/severity/code/message/data/diagnostics` を厳密検証し、欠落・型不一致時は fail-fast で停止する。
 - `tools/unity/PrefabSentinel.UnityPatchBridge.cs` は Unity 側 `-executeMethod` 実装として `.prefab` の open mode `set` / `insert_array_element` / `remove_array_element`、`.mat` / `.asset` の open mode root asset mutation、`.unity` の open/create mode `open_scene` / `create_scene` / hierarchy / `instantiate_prefab` / component op / `save_scene`、および create mode の prefab root / hierarchy / component op、material / ScriptableObject の `create_asset`、`$handle` 参照 mutation、`save` を適用する（prefab mutation 時の `component` は一意一致必須、component 曖昧時は候補パス付きで fail-fast）。
 - `prefab_sentinel/mcp/runtime_validation.py` は `UNITYTOOL_UNITY_COMMAND` が設定されている場合、`UNITYTOOL_UNITY_PROJECT_PATH` / `UNITYTOOL_RUNTIME_EXECUTE_METHOD` / `UNITYTOOL_UNITY_TIMEOUT_SEC` / `UNITYTOOL_UNITY_LOG_FILE` を使って Unity batchmode を起動し、JSON リクエスト / レスポンスで `compile_udonsharp` と `run_clientsim` を実行する。未設定環境では `RUN_COMPILE_SKIPPED` / `RUN_CLIENTSIM_SKIPPED` を返して fail-fast で未配線を明示する。
-- `tools/unity/PrefabSentinel.UnityRuntimeValidationBridge.cs` は runtime validation 用の Unity 側 `-executeMethod` 実装で、UdonSharp compile と ClientSim 起動を行い、`success/severity/code/message/data/diagnostics` 形式の応答を返す。
+- `tools/unity/PrefabSentinel.UnityRuntimeValidationBridge.cs` は runtime validation 用の Unity 側 `-executeMethod` 実装で、UdonSharp compile と ClientSim 起動を行い、`success/severity/code/message/data/diagnostics` 形式の応答を返す。`RunFromPaths(requestPath, responsePath)` を公開しており、EditorBridge からも呼び出せる。
+- **Editor Bridge モード**: `UNITYTOOL_BRIDGE_MODE=editor` を設定すると、batchmode の代わりにファイル監視ベースの IPC で Unity Editor と通信する。Unity Editor 側では `PrefabSentinel > Editor Bridge` メニューから EditorWindow を開き、watch ディレクトリを設定する。Python 側は `UNITYTOOL_BRIDGE_WATCH_DIR` に `{uuid}.request.json` を書き込み、`{uuid}.response.json` の出現をポーリングする。これにより Unity Editor を閉じずにパッチ適用・ランタイム検証を実行できる。
+  - `tools/unity/PrefabSentinel.EditorBridge.cs`: `EditorApplication.update` で 500ms 間隔ポーリング、`action` フィールドで patch / runtime を自動判別。
+  - `tools/unity_patch_bridge.py`: `UNITYTOOL_BRIDGE_MODE=editor` + `UNITYTOOL_BRIDGE_WATCH_DIR` でファイル書き込み + ポーリング。
+  - `prefab_sentinel/mcp/runtime_validation.py`: 同様の dispatch で `compile_udonsharp` / `run_clientsim` を Editor 経由実行。
+  - アトミック書き込み: `.tmp` → rename で読み取り競合を防止。
 - `component` セレクタは `TypeName@Hierarchy/Path` 形式を受け付け、同型コンポーネントが複数ある場合に GameObject 階層で明示的に絞り込める。
 - `set` の値デコードは `int/float/bool/string/null` に加えて `Character` / `LayerMask` / `ArraySize`、`enum`、`Color`、`Vector2/3/4`、`Vector2Int/3Int`、`Rect/RectInt`、`Bounds/BoundsInt`、`Quaternion`、`AnimationCurve`、`Gradient`、`ObjectReference` / `ExposedReference`（`value_kind=json` の `{guid,file_id}`）、`ManagedReference`（`value_kind=json`、必要時 `{"__type":"Namespace.Type, Assembly"}` ヒント対応）、`Generic`（カスタム構造体の `value_json` 反映）を扱う。
 - `AnimationCurve` は `value_kind=json` で `{ "keys":[{"time":0.0,"value":1.0,"in_tangent":0.0,"out_tangent":0.0}], "pre_wrap_mode":1, "post_wrap_mode":1 }` 形式を受け付ける（`value_kind=null` で null 設定）。
