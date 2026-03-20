@@ -175,18 +175,6 @@
 
 ## Next Executable Tasks
 
-### P0: Protocol version alignment
-- C# bridge is `ProtocolVersion = 1`, Python sends `protocol_version: 2`.
-- Reconcile: bump C# to v2, update request schema to accept `resources[]` envelope, keep v1 open-mode backward compat.
-- Update integration test harness `ProtocolVersion` constant to match.
-
-### P0: Create-mode integration tests
-- Current 24 integration tests cover open-mode only (set/insert/remove/error/persistence).
-- Add create-mode E2E tests: create prefab → hierarchy → components → mutate → save → reopen → validate.
-- Add create-mode asset tests: create material → set properties → save → reopen.
-- Add create-mode scene tests: create scene → instantiate prefab → save → reopen.
-- Extend `PrefabSentinel.UnityIntegrationTests.cs` with new test methods.
-
 ### P1: Smoke hardening
 - Validate timeout policy knobs (`--timeout-multiplier` / `--timeout-slack-sec`) against accumulated real Unity runner history.
 
@@ -201,8 +189,11 @@
 
 ### Completed
 - ~~Extend Unity executeMethod apply coverage~~
-- Unity integration test harness (24 open-mode tests, all passing):
+- Protocol version alignment: C# bridge, Python bridge, integration tests all at v2
+- Unity integration test harness (37 tests, all passing):
   - `tools/unity/PrefabSentinel.UnityIntegrationTests.cs`
+  - 24 open-mode tests: set/insert/remove/error/persistence across prefab and material assets
+  - 13 create-mode tests: prefab (root-only, hierarchy+component, find_component+mutate, rename+reparent, duplicate root rejection), material (Standard shader, named asset, missing shader rejection, already-exists rejection), scene (empty+GO, instantiate prefab, hierarchy+components, missing create_scene rejection)
   - `prefab_sentinel/integration_tests.py` + `scripts/unity_integration_tests.py` (Python orchestrator)
   - CLI: `prefab-sentinel validate integration-tests`
   - CI: `.github/workflows/unity-integration.yml` (workflow_dispatch, self-hosted Windows)
@@ -783,7 +774,7 @@ The IDs below are draft planning IDs, not GitHub issue numbers.
 ### Phase 6: Quality Gates And Tests — PARTIAL
 - [x] Unit tests: propertyPath resolution, array bounds, reference reverse lookup. (261 tests passing)
 - [x] Open-mode integration tests: set/insert/remove/error/persistence. (24 tests passing)
-- [ ] Create-mode integration tests: prefab/material/scene create E2E.
+- [x] Create-mode integration tests: prefab/material/scene create E2E (13 tests, all passing).
 - [ ] Integration tests: Base / Variant / Scene edit E2E.
 - [ ] Regression tests: Broken PPtr and Udon nullref fixtures.
 - [ ] CI gates: Broken PPtr 0, Variant override 100%, Udon runtime critical 0.

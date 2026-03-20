@@ -41,9 +41,12 @@
 ## Phase 2: Unity Integration Test Harness
 
 - [x] Extract `ApplyFromPaths` from `ApplyFromJson` in `UnityPatchBridge.cs`.
-- [x] Create C# test harness `PrefabSentinel.UnityIntegrationTests.cs` (24 test cases).
+- [x] Create C# test harness `PrefabSentinel.UnityIntegrationTests.cs` (24 open-mode tests).
 - [x] Create Python orchestrator `prefab_sentinel/integration_tests.py` + `scripts/unity_integration_tests.py`.
 - [x] Add CLI subcommand `validate integration-tests`.
 - [x] Add Python unit tests `tests/test_integration_tests.py`.
 - [x] Add CI workflow `.github/workflows/unity-integration.yml`.
+- [x] Fix 11 failing Unity integration tests (handle conflicts, property paths, array normalization).
+- [x] Align protocol version to v2 across Python bridge, C# bridge, and test harness.
+- [x] Add 13 create-mode integration tests (prefab/material/scene). Total: 37 Unity + 261 Python.
 - [x] Update README / IDEAS_AND_ROADMAP / todo.md.
