@@ -528,6 +528,57 @@ def build_parser() -> argparse.ArgumentParser:
     )
     patch_verify.add_argument("--format", choices=("json", "text"), default="json")
 
+    patch_generate = patch_sub.add_parser("generate", help="Generate a patch plan from a template.")
+    generate_sub = patch_generate.add_subparsers(dest="generate_command", required=True)
+    generate_circle = generate_sub.add_parser(
+        "circle",
+        help="Generate a circle-layout prefab creation plan.",
+    )
+    generate_circle.add_argument(
+        "--output",
+        required=True,
+        help="Output prefab path (Assets/...).",
+    )
+    generate_circle.add_argument(
+        "--root-name",
+        default=None,
+        help="Root GameObject name (default: inferred from --output filename).",
+    )
+    generate_circle.add_argument(
+        "--count",
+        type=int,
+        required=True,
+        help="Number of child objects.",
+    )
+    generate_circle.add_argument(
+        "--radius",
+        type=float,
+        required=True,
+        help="Circle radius.",
+    )
+    generate_circle.add_argument(
+        "--child-name",
+        default="Sphere",
+        help="Base name for child objects (default: Sphere).",
+    )
+    generate_circle.add_argument(
+        "--scale",
+        type=float,
+        default=1.0,
+        help="Uniform scale for child objects (default: 1.0).",
+    )
+    generate_circle.add_argument(
+        "--axis",
+        choices=("xz", "xy", "yz"),
+        default="xz",
+        help="Rotation plane (default: xz).",
+    )
+    generate_circle.add_argument(
+        "--out",
+        default=None,
+        help="Output plan JSON path (default: stdout).",
+    )
+
     report_parser = subparsers.add_parser("report", help="Report conversion commands.")
     report_sub = report_parser.add_subparsers(dest="report_command", required=True)
     report_export = report_sub.add_parser("export", help="Export a stored JSON report.")
@@ -1284,6 +1335,42 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print("OK" if success else "MISMATCH")
         return 0 if success else 1
+
+    if args.command == "patch" and args.patch_command == "generate":
+        from prefab_sentinel.plan_generators import generate_circle_layout
+
+        if args.generate_command == "circle":
+            root_name = args.root_name
+            if root_name is None:
+                root_name = Path(args.output).stem
+            plan = generate_circle_layout(
+                output_path=args.output,
+                root_name=root_name,
+                count=args.count,
+                radius=args.radius,
+                child_base_name=args.child_name,
+                axis=args.axis,
+                scale=(args.scale, args.scale, args.scale),
+            )
+            plan_json = json.dumps(plan, ensure_ascii=False, indent=2) + "\n"
+            if args.out:
+                out_path = Path(args.out)
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                out_path.write_text(plan_json, encoding="utf-8")
+                print(
+                    json.dumps(
+                        {
+                            "success": True,
+                            "path": str(out_path),
+                            "op_count": len(plan.get("ops", [])),
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                )
+            else:
+                sys.stdout.write(plan_json)
+            return 0
 
     if args.command == "report" and args.report_command == "export":
         input_path = Path(args.input)
