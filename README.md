@@ -51,6 +51,27 @@ uv run mypy prefab_sentinel/
 uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel --help
 ```
 
+### Claude Code Plugin としてのインストール
+
+Claude Code Plugin として導入すると、Claude Code から `/prefab-sentinel:guide` 等のスキルを直接利用できる。
+
+```bash
+# インストール
+claude plugin add tyunta/prefab-sentinel
+```
+
+**利用可能なスキル:**
+
+| スキル | 呼び出し | 説明 |
+|--------|----------|------|
+| guide | `/prefab-sentinel:guide` | CLI リファレンス・コマンド一覧・パッチスキーマ・ブリッジセットアップ |
+| prefab-reference-repair | `/prefab-sentinel:prefab-reference-repair` | 壊れた参照の検出・修復ワークフロー |
+| variant-safe-edit | `/prefab-sentinel:variant-safe-edit` | Prefab Variant の安全な編集ワークフロー |
+| udon-log-triage | `/prefab-sentinel:udon-log-triage` | ランタイムログのトリアージワークフロー |
+
+**個人コマンドファイルからの移行:**
+`~/.claude/commands/prefab-sentinel.md` を手動配置していた場合、Plugin インストール後は冗長になるため削除可能。Plugin 側（`/prefab-sentinel:guide`）と個人コマンド（`/prefab-sentinel`）は名前空間が異なるため共存も可能。
+
 ---
 
 ## 1. やること / やる内容 / やらないこと
