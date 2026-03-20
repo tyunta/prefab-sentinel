@@ -106,7 +106,8 @@ namespace PrefabSentinel
         private sealed class ObjectReferencePayload
         {
             public string guid = string.Empty;
-            public long file_id = 0;
+            public long fileID = 0;   // Unity native format (plan_generators output)
+            public long file_id = 0;  // snake_case format (example plan compat)
         }
 
         [Serializable]
@@ -4574,6 +4575,65 @@ namespace PrefabSentinel
             return true;
         }
 
+        private const string BuiltinDefaultResourcesPath = "Library/unity default resources";
+        private const string BuiltinExtraResourcesPath = "Resources/unity_builtin_extra";
+
+        private static readonly string[] BuiltinAssetPaths = new[]
+        {
+            BuiltinDefaultResourcesPath,
+            BuiltinExtraResourcesPath,
+        };
+
+        private static bool IsBuiltinAssetPath(string assetPath)
+        {
+            return string.Equals(assetPath, BuiltinDefaultResourcesPath, StringComparison.Ordinal)
+                || string.Equals(assetPath, BuiltinExtraResourcesPath, StringComparison.Ordinal);
+        }
+
+        // assetPath: kept for call-site compatibility; search uses BuiltinAssetPaths instead
+        private static bool TryLoadBuiltinAsset(
+            string assetPath, string guid, long fileID,
+            out UnityEngine.Object value)
+        {
+            value = null;
+            // 1. Try LoadAllAssetsAtPath on each known builtin path
+            //    AssetDatabase.GUIDToAssetPath returns only one path, but builtin
+            //    assets are split across two locations, so we search both explicitly.
+            for (int p = 0; p < BuiltinAssetPaths.Length; p++)
+            {
+                UnityEngine.Object[] candidates = AssetDatabase.LoadAllAssetsAtPath(BuiltinAssetPaths[p]);
+                for (int i = 0; i < candidates.Length; i++)
+                {
+                    if (candidates[i] == null) continue;
+                    string cGuid;
+                    long cId;
+                    if (AssetDatabase.TryGetGUIDAndLocalFileIdentifier(candidates[i], out cGuid, out cId)
+                        && string.Equals(cGuid, guid, StringComparison.OrdinalIgnoreCase)
+                        && cId == fileID)
+                    {
+                        value = candidates[i];
+                        return true;
+                    }
+                }
+            }
+            // 2. Fallback: search all loaded objects
+            UnityEngine.Object[] all = Resources.FindObjectsOfTypeAll<UnityEngine.Object>();
+            for (int i = 0; i < all.Length; i++)
+            {
+                if (all[i] == null) continue;
+                string cGuid;
+                long cId;
+                if (AssetDatabase.TryGetGUIDAndLocalFileIdentifier(all[i], out cGuid, out cId)
+                    && string.Equals(cGuid, guid, StringComparison.OrdinalIgnoreCase)
+                    && cId == fileID)
+                {
+                    value = all[i];
+                    return true;
+                }
+            }
+            return false;
+        }
+
         private static bool TryReadObjectReferenceValue(
             PatchOp op,
             string valueKind,
@@ -4606,7 +4666,10 @@ namespace PrefabSentinel
                 error = "ObjectReference value_json requires non-empty guid";
                 return false;
             }
-            if (payload.file_id < 0)
+
+            // Accept both "fileID" (Unity native) and "file_id" (snake_case) JSON keys
+            long effectiveFileId = payload.fileID != 0 ? payload.fileID : payload.file_id;
+            if (effectiveFileId < 0)
             {
                 error = "ObjectReference file_id must be >= 0";
                 return false;
@@ -4619,7 +4682,21 @@ namespace PrefabSentinel
                 return false;
             }
 
-            if (payload.file_id == 0)
+            // Builtin resource paths require special loading
+            if (IsBuiltinAssetPath(assetPath))
+            {
+                if (effectiveFileId == 0)
+                {
+                    error = $"ObjectReference fileID 0 is not valid for builtin path '{assetPath}'";
+                    return false;
+                }
+                if (TryLoadBuiltinAsset(assetPath, guid, effectiveFileId, out value))
+                    return true;
+                error = $"ObjectReference builtin asset not found: guid='{guid}', fileID={effectiveFileId}";
+                return false;
+            }
+
+            if (effectiveFileId == 0)
             {
                 value = AssetDatabase.LoadMainAssetAtPath(assetPath);
                 if (value == null)
@@ -4647,7 +4724,7 @@ namespace PrefabSentinel
                 }
                 if (
                     string.Equals(candidateGuid, guid, StringComparison.OrdinalIgnoreCase)
-                    && localFileId == payload.file_id
+                    && localFileId == effectiveFileId
                 )
                 {
                     value = candidate;
@@ -4655,7 +4732,7 @@ namespace PrefabSentinel
                 }
             }
 
-            error = $"ObjectReference file_id '{payload.file_id}' was not found in asset '{assetPath}'";
+            error = $"ObjectReference file_id '{effectiveFileId}' was not found in asset '{assetPath}'";
             return false;
         }
 
