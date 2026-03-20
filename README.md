@@ -11,6 +11,48 @@
 
 ---
 
+## 0.1 セットアップ
+
+### 前提条件
+- Python 3.11 以上
+- [uv](https://docs.astral.sh/uv/) （パッケージマネージャ）
+
+### インストール
+
+```bash
+# リポジトリのクローン
+git clone https://github.com/tyunta/prefab-sentinel.git
+cd prefab-sentinel
+
+# 依存関係の同期（uv が仮想環境を自動作成）
+uv sync
+
+# 動作確認
+uv run prefab-sentinel --help
+```
+
+### 開発用セットアップ
+
+```bash
+# テスト・lint 依存を含めてインストール
+uv sync --extra test --extra lint
+
+# テスト実行
+uv run python scripts/run_unit_tests.py
+
+# lint 実行
+uv run ruff check prefab_sentinel/ tests/ scripts/ tools/
+uv run mypy prefab_sentinel/
+```
+
+### リモート実行（インストール不要）
+
+```bash
+uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel --help
+```
+
+---
+
 ## 1. やること / やる内容 / やらないこと
 
 ### やること
@@ -450,9 +492,42 @@ Phase 1〜4 は全て実装完了。詳細な完了状況は `docs/IDEAS_AND_ROA
 ## 14. テスト戦略
 
 ### 14.1 ユニット
-- propertyPath解決
-- array操作境界値
-- 参照逆引き
+- propertyPath解決、array操作境界値、参照逆引き
+- patch plan の正規化（v1→v2 変換、リソースバッチ、ブリッジリクエスト構築）
+- bridge response のバリデーション・期待値照合ロジック
+- smoke batch のターゲット解決・タイムアウトプロファイル・コマンド組立
+- smoke history のメトリクス計算・マークダウンレンダリング
+- orchestrator の MCP 連携パイプライン（モック経由）
+
+### テスト実行
+
+```bash
+# 全ユニットテスト（並列実行）
+uv run python scripts/run_unit_tests.py
+
+# 特定テストのみ
+uv run python scripts/run_unit_tests.py -k patch_plan
+
+# pytest 経由（verbose）
+uv run python -m pytest tests/ -v
+```
+
+### テストファイル配置
+
+| ソースモジュール | テストファイル |
+|---|---|
+| `prefab_sentinel/patch_plan.py` | `tests/test_patch_plan.py` |
+| `prefab_sentinel/bridge_smoke.py` | `tests/test_bridge_smoke.py` |
+| `prefab_sentinel/smoke_batch.py` | `tests/test_smoke_batch.py` |
+| `prefab_sentinel/smoke_history.py` | `tests/test_smoke_history.py` |
+| `prefab_sentinel/orchestrator.py` | `tests/test_orchestrator.py` |
+| `prefab_sentinel/contracts.py` | `tests/test_contracts.py` |
+| `prefab_sentinel/cli.py` | `tests/test_cli.py` |
+| `prefab_sentinel/integration_tests.py` | `tests/test_integration_tests.py` |
+| `prefab_sentinel/mcp/*.py` | `tests/test_mcp_readonly.py` |
+| `scripts/unity_bridge_smoke.py` | `tests/test_unity_bridge_smoke.py` |
+| `tools/unity_patch_bridge.py` | `tests/test_unity_patch_bridge.py` |
+| `scripts/bridge_smoke_samples.py` | `tests/test_bridge_smoke_samples.py` |
 
 ### 14.2 統合
 - Base/Variant/Sceneの三層編集
@@ -460,6 +535,11 @@ Phase 1〜4 は全て実装完了。詳細な完了状況は `docs/IDEAS_AND_ROA
 
 ### 14.3 回帰
 - 既知不具合（Broken PPtr, Udon nullref）再現ケースを固定
+
+### 14.4 CI ゲート
+- `ci.yml`: ruff check → mypy → ユニットテスト → bridge smoke contract → integration test contract
+- bridge smoke contract: Unity 未インストール環境で期待エラーコード（`BRIDGE_UNITY_COMMAND_MISSING`）を検証
+- integration test contract: 非ゼロ終了コードを検証
 
 ---
 
