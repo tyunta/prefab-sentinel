@@ -191,6 +191,22 @@ namespace PrefabSentinel
                     ("ProtocolVersionMismatch", Test_ProtocolVersionMismatch),
                     ("Asset_Set_MaterialProperty", Test_Asset_Set_MaterialProperty),
                     ("Set_SaveReopen_Preserves", Test_Set_SaveReopen_Preserves),
+                    // Create-mode: prefab
+                    ("CreatePrefab_RootOnly", Test_CreatePrefab_RootOnly),
+                    ("CreatePrefab_HierarchyWithComponent", Test_CreatePrefab_HierarchyWithComponent),
+                    ("CreatePrefab_FindComponentAndMutate", Test_CreatePrefab_FindComponentAndMutate),
+                    ("CreatePrefab_RenameAndReparent", Test_CreatePrefab_RenameAndReparent),
+                    ("CreatePrefab_DuplicateRootRejected", Test_CreatePrefab_DuplicateRootRejected),
+                    // Create-mode: material
+                    ("CreateMaterial_StandardShader", Test_CreateMaterial_StandardShader),
+                    ("CreateMaterial_SetName", Test_CreateMaterial_SetName),
+                    ("CreateMaterial_MissingShaderRejected", Test_CreateMaterial_MissingShaderRejected),
+                    ("CreateMaterial_AlreadyExistsRejected", Test_CreateMaterial_AlreadyExistsRejected),
+                    // Create-mode: scene
+                    ("CreateScene_EmptyWithGameObject", Test_CreateScene_EmptyWithGameObject),
+                    ("CreateScene_InstantiatePrefab", Test_CreateScene_InstantiatePrefab),
+                    ("CreateScene_HierarchyWithComponents", Test_CreateScene_HierarchyWithComponents),
+                    ("CreateScene_MissingCreateSceneRejected", Test_CreateScene_MissingCreateSceneRejected),
                 };
 
                 var results = new List<TestCaseResult>();
@@ -335,6 +351,27 @@ namespace PrefabSentinel
             return BuildRequest(assetPath, kind, "open", opsArrayJson);
         }
 
+        private static string BuildCreatePrefabRequest(string targetPath, string opsArrayJson)
+        {
+            return BuildRequest(targetPath, "prefab", "create", opsArrayJson);
+        }
+
+        private static string BuildCreateMaterialRequest(string targetPath, string opsArrayJson)
+        {
+            return BuildRequest(targetPath, "material", "create", opsArrayJson);
+        }
+
+        private static string BuildCreateSceneRequest(string targetPath, string opsArrayJson)
+        {
+            return BuildRequest(targetPath, "scene", "create", opsArrayJson);
+        }
+
+        private static void DeleteIfExists(string assetPath)
+        {
+            if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(assetPath) != null)
+                AssetDatabase.DeleteAsset(assetPath);
+        }
+
         private static string SetOp(string component, string path, string valueKind, string valueField, string valueRaw)
         {
             string valueEntry;
@@ -437,6 +474,13 @@ namespace PrefabSentinel
             if (resp.success) return Fail(name, $"Expected failure but got success=true, code={resp.code}.");
             if (!string.IsNullOrEmpty(expectedCode) && resp.code != expectedCode)
                 return Fail(name, $"Expected code={expectedCode}, got {resp.code}.");
+            return null; // no failure
+        }
+
+        private static TestCaseResult AssertCreateSuccess(string name, BridgeResponseReadback resp)
+        {
+            if (resp == null) return Fail(name, "Bridge response is null (response file missing).");
+            if (!resp.success) return Fail(name, $"Bridge returned success=false: code={resp.code}, message={resp.message}");
             return null; // no failure
         }
 
@@ -915,6 +959,292 @@ namespace PrefabSentinel
             if (prop == null) return Fail(name, "Could not read m_IsTrigger after reopen.");
             if (!prop.boolValue) return Fail(name, "m_IsTrigger did not persist after save/reopen.");
             return Pass(name);
+        }
+
+        // ----------------------------------------------------------------
+        // Test cases: create-mode prefab
+        // ----------------------------------------------------------------
+
+        private static TestCaseResult Test_CreatePrefab_RootOnly(string prefabPath, string materialPath)
+        {
+            const string name = "CreatePrefab_RootOnly";
+            string target = TestAssetDir + "/RootOnly.prefab";
+            DeleteIfExists(target);
+
+            string ops = "["
+                + "{\"op\":\"create_prefab\",\"name\":\"RootOnly\"},"
+                + "{\"op\":\"save\"}"
+                + "]";
+            var resp = RunBridge(BuildCreatePrefabRequest(target, ops));
+            var err = AssertCreateSuccess(name, resp);
+            if (err != null) return err;
+
+            var go = AssetDatabase.LoadAssetAtPath<GameObject>(target);
+            if (go == null) return Fail(name, "Created prefab not found on disk.");
+            if (go.name != "RootOnly")
+                return Fail(name, $"Expected name=RootOnly, got {go.name}.");
+            return Pass(name);
+        }
+
+        private static TestCaseResult Test_CreatePrefab_HierarchyWithComponent(string prefabPath, string materialPath)
+        {
+            const string name = "CreatePrefab_HierarchyWithComponent";
+            string target = TestAssetDir + "/Created_Hierarchy.prefab";
+            DeleteIfExists(target);
+
+            string ops = "["
+                + "{\"op\":\"create_prefab\",\"name\":\"HierarchyRoot\"},"
+                + "{\"op\":\"create_game_object\",\"name\":\"Child\",\"parent\":\"$root\",\"result\":\"$child\"},"
+                + "{\"op\":\"add_component\",\"target\":\"$child\",\"type\":\"UnityEngine.BoxCollider\",\"result\":\"$collider\"},"
+                + "{\"op\":\"set\",\"target\":\"$collider\",\"path\":\"m_IsTrigger\",\"value_kind\":\"bool\",\"value_bool\":true},"
+                + "{\"op\":\"save\"}"
+                + "]";
+            var resp = RunBridge(BuildCreatePrefabRequest(target, ops));
+            var err = AssertCreateSuccess(name, resp);
+            if (err != null) return err;
+
+            var go = AssetDatabase.LoadAssetAtPath<GameObject>(target);
+            if (go == null) return Fail(name, "Created prefab not found.");
+            if (go.transform.childCount != 1)
+                return Fail(name, $"Expected 1 child, got {go.transform.childCount}.");
+            var child = go.transform.GetChild(0);
+            if (child.name != "Child")
+                return Fail(name, $"Expected child name=Child, got {child.name}.");
+            var collider = child.GetComponent<BoxCollider>();
+            if (collider == null)
+                return Fail(name, "Child missing BoxCollider.");
+            if (!collider.isTrigger)
+                return Fail(name, "Expected isTrigger=true.");
+            return Pass(name);
+        }
+
+        private static TestCaseResult Test_CreatePrefab_FindComponentAndMutate(string prefabPath, string materialPath)
+        {
+            const string name = "CreatePrefab_FindComponentAndMutate";
+            string target = TestAssetDir + "/Created_FindComp.prefab";
+            DeleteIfExists(target);
+
+            string vecJson = "{\\\"x\\\":1.0,\\\"y\\\":2.0,\\\"z\\\":3.0}";
+            string ops = "["
+                + "{\"op\":\"create_prefab\",\"name\":\"FindCompRoot\"},"
+                + "{\"op\":\"find_component\",\"target\":\"$root\",\"type\":\"UnityEngine.Transform\",\"result\":\"$transform\"},"
+                + "{\"op\":\"set\",\"target\":\"$transform\",\"path\":\"m_LocalPosition\","
+                + "\"value_kind\":\"json\",\"value_json\":\"" + vecJson + "\"},"
+                + "{\"op\":\"save\"}"
+                + "]";
+            var resp = RunBridge(BuildCreatePrefabRequest(target, ops));
+            var err = AssertCreateSuccess(name, resp);
+            if (err != null) return err;
+
+            var go = AssetDatabase.LoadAssetAtPath<GameObject>(target);
+            if (go == null) return Fail(name, "Created prefab not found.");
+            var pos = go.transform.localPosition;
+            if (Math.Abs(pos.x - 1.0f) > 0.001f || Math.Abs(pos.y - 2.0f) > 0.001f || Math.Abs(pos.z - 3.0f) > 0.001f)
+                return Fail(name, $"Expected localPosition=(1,2,3), got ({pos.x},{pos.y},{pos.z}).");
+            return Pass(name);
+        }
+
+        private static TestCaseResult Test_CreatePrefab_RenameAndReparent(string prefabPath, string materialPath)
+        {
+            const string name = "CreatePrefab_RenameAndReparent";
+            string target = TestAssetDir + "/Created_Reparent.prefab";
+            DeleteIfExists(target);
+
+            string ops = "["
+                + "{\"op\":\"create_prefab\",\"name\":\"ReparentRoot\"},"
+                + "{\"op\":\"create_game_object\",\"name\":\"ChildA\",\"parent\":\"$root\",\"result\":\"$childA\"},"
+                + "{\"op\":\"create_game_object\",\"name\":\"ChildB\",\"parent\":\"$root\",\"result\":\"$childB\"},"
+                + "{\"op\":\"rename_object\",\"target\":\"$childA\",\"name\":\"Parent\"},"
+                + "{\"op\":\"reparent\",\"target\":\"$childB\",\"parent\":\"$childA\"},"
+                + "{\"op\":\"save\"}"
+                + "]";
+            var resp = RunBridge(BuildCreatePrefabRequest(target, ops));
+            var err = AssertCreateSuccess(name, resp);
+            if (err != null) return err;
+
+            var go = AssetDatabase.LoadAssetAtPath<GameObject>(target);
+            if (go == null) return Fail(name, "Created prefab not found.");
+            if (go.transform.childCount != 1)
+                return Fail(name, $"Expected 1 root child, got {go.transform.childCount}.");
+            var parent = go.transform.GetChild(0);
+            if (parent.name != "Parent")
+                return Fail(name, $"Expected child name=Parent, got {parent.name}.");
+            if (parent.childCount != 1)
+                return Fail(name, $"Expected 1 grandchild, got {parent.childCount}.");
+            if (parent.GetChild(0).name != "ChildB")
+                return Fail(name, $"Expected grandchild name=ChildB, got {parent.GetChild(0).name}.");
+            return Pass(name);
+        }
+
+        private static TestCaseResult Test_CreatePrefab_DuplicateRootRejected(string prefabPath, string materialPath)
+        {
+            const string name = "CreatePrefab_DuplicateRootRejected";
+            string target = TestAssetDir + "/Created_DupRoot.prefab";
+            DeleteIfExists(target);
+
+            string ops = "["
+                + "{\"op\":\"create_prefab\",\"name\":\"First\"},"
+                + "{\"op\":\"create_prefab\",\"name\":\"Second\"},"
+                + "{\"op\":\"save\"}"
+                + "]";
+            var resp = RunBridge(BuildCreatePrefabRequest(target, ops));
+            return AssertBridgeFailure(name, resp, null) ?? Pass(name);
+        }
+
+        // ----------------------------------------------------------------
+        // Test cases: create-mode material
+        // ----------------------------------------------------------------
+
+        private static TestCaseResult Test_CreateMaterial_StandardShader(string prefabPath, string materialPath)
+        {
+            const string name = "CreateMaterial_StandardShader";
+            string target = TestAssetDir + "/Created_Standard.mat";
+            DeleteIfExists(target);
+
+            string ops = "["
+                + "{\"op\":\"create_asset\",\"shader\":\"Standard\"},"
+                + "{\"op\":\"save\"}"
+                + "]";
+            var resp = RunBridge(BuildCreateMaterialRequest(target, ops));
+            var err = AssertCreateSuccess(name, resp);
+            if (err != null) return err;
+
+            var mat = AssetDatabase.LoadAssetAtPath<Material>(target);
+            if (mat == null) return Fail(name, "Created material not found.");
+            if (mat.shader == null || mat.shader.name != "Standard")
+                return Fail(name, $"Expected Standard shader, got {mat.shader?.name}.");
+            return Pass(name);
+        }
+
+        private static TestCaseResult Test_CreateMaterial_SetName(string prefabPath, string materialPath)
+        {
+            const string name = "CreateMaterial_SetName";
+            string target = TestAssetDir + "/CustomName.mat";
+            DeleteIfExists(target);
+
+            string ops = "["
+                + "{\"op\":\"create_asset\",\"shader\":\"Standard\",\"name\":\"CustomName\"},"
+                + "{\"op\":\"save\"}"
+                + "]";
+            var resp = RunBridge(BuildCreateMaterialRequest(target, ops));
+            var err = AssertCreateSuccess(name, resp);
+            if (err != null) return err;
+
+            var mat = AssetDatabase.LoadAssetAtPath<Material>(target);
+            if (mat == null) return Fail(name, "Created material not found.");
+            if (mat.name != "CustomName")
+                return Fail(name, $"Expected name=CustomName, got {mat.name}.");
+            return Pass(name);
+        }
+
+        private static TestCaseResult Test_CreateMaterial_MissingShaderRejected(string prefabPath, string materialPath)
+        {
+            const string name = "CreateMaterial_MissingShaderRejected";
+            string target = TestAssetDir + "/Created_BadShader.mat";
+            DeleteIfExists(target);
+
+            string ops = "["
+                + "{\"op\":\"create_asset\",\"shader\":\"NoSuchShader_12345\"},"
+                + "{\"op\":\"save\"}"
+                + "]";
+            var resp = RunBridge(BuildCreateMaterialRequest(target, ops));
+            return AssertBridgeFailure(name, resp, null) ?? Pass(name);
+        }
+
+        private static TestCaseResult Test_CreateMaterial_AlreadyExistsRejected(string prefabPath, string materialPath)
+        {
+            const string name = "CreateMaterial_AlreadyExistsRejected";
+            // Target the existing fixture material — creation should be rejected
+            string ops = "["
+                + "{\"op\":\"create_asset\",\"shader\":\"Standard\"},"
+                + "{\"op\":\"save\"}"
+                + "]";
+            var resp = RunBridge(BuildCreateMaterialRequest(materialPath, ops));
+            return AssertBridgeFailure(name, resp, null) ?? Pass(name);
+        }
+
+        // ----------------------------------------------------------------
+        // Test cases: create-mode scene
+        // ----------------------------------------------------------------
+
+        private static TestCaseResult Test_CreateScene_EmptyWithGameObject(string prefabPath, string materialPath)
+        {
+            const string name = "CreateScene_EmptyWithGameObject";
+            string target = TestAssetDir + "/Created_Scene.unity";
+            DeleteIfExists(target);
+
+            string ops = "["
+                + "{\"op\":\"create_scene\"},"
+                + "{\"op\":\"create_game_object\",\"name\":\"Player\",\"parent\":\"$scene\",\"result\":\"$player\"},"
+                + "{\"op\":\"save_scene\"}"
+                + "]";
+            var resp = RunBridge(BuildCreateSceneRequest(target, ops));
+            var err = AssertCreateSuccess(name, resp);
+            if (err != null) return err;
+
+            string fullPath = Path.Combine(Path.GetDirectoryName(Application.dataPath), target);
+            if (!File.Exists(fullPath))
+                return Fail(name, "Scene file not found on disk.");
+            return Pass(name);
+        }
+
+        private static TestCaseResult Test_CreateScene_InstantiatePrefab(string prefabPath, string materialPath)
+        {
+            const string name = "CreateScene_InstantiatePrefab";
+            string target = TestAssetDir + "/Created_SceneInst.unity";
+            DeleteIfExists(target);
+
+            string ops = "["
+                + "{\"op\":\"create_scene\"},"
+                + "{\"op\":\"instantiate_prefab\",\"prefab\":\"" + EscapeJsonString(prefabPath) + "\",\"parent\":\"$scene\",\"result\":\"$instance\"},"
+                + "{\"op\":\"save_scene\"}"
+                + "]";
+            var resp = RunBridge(BuildCreateSceneRequest(target, ops));
+            var err = AssertCreateSuccess(name, resp);
+            if (err != null) return err;
+
+            string fullPath = Path.Combine(Path.GetDirectoryName(Application.dataPath), target);
+            if (!File.Exists(fullPath))
+                return Fail(name, "Scene file not found on disk.");
+            return Pass(name);
+        }
+
+        private static TestCaseResult Test_CreateScene_HierarchyWithComponents(string prefabPath, string materialPath)
+        {
+            const string name = "CreateScene_HierarchyWithComponents";
+            string target = TestAssetDir + "/Created_SceneHier.unity";
+            DeleteIfExists(target);
+
+            string ops = "["
+                + "{\"op\":\"create_scene\"},"
+                + "{\"op\":\"create_game_object\",\"name\":\"Root\",\"parent\":\"$scene\",\"result\":\"$root\"},"
+                + "{\"op\":\"create_game_object\",\"name\":\"Child\",\"parent\":\"$root\",\"result\":\"$child\"},"
+                + "{\"op\":\"add_component\",\"target\":\"$child\",\"type\":\"UnityEngine.BoxCollider\",\"result\":\"$collider\"},"
+                + "{\"op\":\"save_scene\"}"
+                + "]";
+            var resp = RunBridge(BuildCreateSceneRequest(target, ops));
+            var err = AssertCreateSuccess(name, resp);
+            if (err != null) return err;
+
+            string fullPath = Path.Combine(Path.GetDirectoryName(Application.dataPath), target);
+            if (!File.Exists(fullPath))
+                return Fail(name, "Scene file not found on disk.");
+            return Pass(name);
+        }
+
+        private static TestCaseResult Test_CreateScene_MissingCreateSceneRejected(string prefabPath, string materialPath)
+        {
+            const string name = "CreateScene_MissingCreateSceneRejected";
+            string target = TestAssetDir + "/Created_NoCreate.unity";
+            DeleteIfExists(target);
+
+            // Omit create_scene — should fail
+            string ops = "["
+                + "{\"op\":\"create_game_object\",\"name\":\"Orphan\",\"parent\":\"$scene\",\"result\":\"$go\"},"
+                + "{\"op\":\"save_scene\"}"
+                + "]";
+            var resp = RunBridge(BuildCreateSceneRequest(target, ops));
+            return AssertBridgeFailure(name, resp, null) ?? Pass(name);
         }
 
         // ----------------------------------------------------------------
