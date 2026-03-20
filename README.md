@@ -516,6 +516,7 @@ uv run python -m pytest tests/ -v
 
 | ソースモジュール | テストファイル |
 |---|---|
+| `prefab_sentinel/unity_assets.py` | `tests/test_unity_assets.py` |
 | `prefab_sentinel/patch_plan.py` | `tests/test_patch_plan.py` |
 | `prefab_sentinel/bridge_smoke.py` | `tests/test_bridge_smoke.py` |
 | `prefab_sentinel/smoke_batch.py` | `tests/test_smoke_batch.py` |
