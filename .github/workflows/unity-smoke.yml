@@ -182,10 +182,10 @@ jobs:
       - windows
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -533,7 +533,7 @@ jobs:
 
       - name: Upload Unity Smoke Summary
         if: ${{ steps.run_window.outputs.within_window == 'true' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: unity-smoke-summary
           path: |
@@ -546,7 +546,7 @@ jobs:
 
       - name: Upload Unity Smoke Avatar Artifact
         if: ${{ steps.run_window.outputs.within_window == 'true' && (inputs.targets == 'all' || inputs.targets == 'avatar') }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: unity-smoke-avatar
           path: reports/bridge_smoke/avatar
@@ -554,7 +554,7 @@ jobs:
 
       - name: Upload Unity Smoke World Artifact
         if: ${{ steps.run_window.outputs.within_window == 'true' && (inputs.targets == 'all' || inputs.targets == 'world') }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: unity-smoke-world
           path: reports/bridge_smoke/world
