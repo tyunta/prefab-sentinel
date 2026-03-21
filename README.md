@@ -51,7 +51,7 @@ Claude Code Plugin として導入すると、Claude Code から `/prefab-sentin
 
 ### Codex CLI で使う
 
-Codex CLI では `uvx` 経由で CLI を直接実行する。スキルは利用できないが、全 CLI コマンドが使える。
+Codex CLI では `uvx` 経由で CLI を直接実行する。Claude Code Plugin のスキル（`skills/` ディレクトリの SKILL.md）は Codex の `AGENTS.md` に転記すれば同等のワークフローとして利用できる。
 
 ```bash
 # インストール不要で実行
