@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "prefab-sentinel"
-version = "0.2.0"
+version = "0.2.1"
 description = "Prefab Sentinel CLI and MCP contracts for safe Unity Prefab/Scene editing."
 requires-python = ">=3.11"
 readme = "README.md"
@@ -12,7 +12,7 @@ dependencies = []
 
 [project.optional-dependencies]
 test = ["unittest-parallel>=1.6,<2"]
-lint = ["ruff>=0.8", "mypy>=1.13"]
+lint = ["ruff>=0.8", "mypy>=1.13", "bump-my-version>=0.31"]
 
 [project.scripts]
 prefab-sentinel = "prefab_sentinel.cli:main"
@@ -47,3 +47,19 @@ disable_error_code = ["arg-type", "index", "assignment", "var-annotated", "no-re
 
 [tool.hatch.build.targets.wheel]
 packages = ["prefab_sentinel"]
+
+[tool.bumpversion]
+current_version = "0.2.1"
+commit = false
+tag = false
+allow_dirty = true
+
+[[tool.bumpversion.files]]
+filename = "pyproject.toml"
+search = 'version = "{current_version}"'
+replace = 'version = "{new_version}"'
+
+[[tool.bumpversion.files]]
+filename = ".claude-plugin/plugin.json"
+search = '"version": "{current_version}"'
+replace = '"version": "{new_version}"'

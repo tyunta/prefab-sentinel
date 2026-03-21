@@ -55,6 +55,12 @@
 - 運用ルール変更時は本ファイルに追記し、理由を簡潔に残す。
 - 仕様との齟齬が出た場合は README を優先して同期する。
 
+## バージョン管理
+- パッチバンプは git pre-commit hook で自動実行される（`.git/hooks/pre-commit`）。
+- minor/major バンプは手動: `uv run bump-my-version bump minor|major`。
+- スキップ: `SKIP_BUMP=1` 環境変数を設定してコミットする。
+- バージョン記述箇所は `pyproject.toml` と `.claude-plugin/plugin.json` の 2 箇所（`[tool.bumpversion]` で一括管理）。
+
 ## ignore-guid 運用
 - `<scope>/config/ignore_guids.txt` を既定とし、存在しなければ無視する。
 - CI での反映は `--out-ignore-guid-file` 明示指定時かつ許可ブランチのみ。既定は `main` / `release/*`（`UNITYTOOL_IGNORE_GUID_ALLOW_BRANCHES` で上書き可）。

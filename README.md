@@ -45,6 +45,19 @@ uv run ruff check prefab_sentinel/ tests/ scripts/ tools/
 uv run mypy prefab_sentinel/
 ```
 
+### バージョン管理
+
+バージョンは `pyproject.toml` と `.claude-plugin/plugin.json` の 2 箇所に記述され、`bump-my-version` で一括管理される。
+
+| 操作 | コマンド |
+|------|----------|
+| パッチバンプ | コミット時に自動（git pre-commit hook） |
+| マイナーバンプ | `uv run bump-my-version bump minor` |
+| メジャーバンプ | `uv run bump-my-version bump major` |
+| 自動バンプをスキップ | `SKIP_BUMP=1 git commit ...` |
+
+設定は `pyproject.toml` の `[tool.bumpversion]` セクションを参照。
+
 ### リモート実行（インストール不要）
 
 ```bash
