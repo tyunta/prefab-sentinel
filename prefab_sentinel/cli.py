@@ -278,6 +278,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional output JSON path for bridge response.",
     )
     validate_bridge_smoke.add_argument("--format", choices=("json", "md"), default="json")
+    validate_bridge_check = validate_sub.add_parser(
+        "bridge-check",
+        help="Diagnose bridge setup (env vars, C# file placement).",
+    )
+    validate_bridge_check.add_argument(
+        "--format",
+        choices=("json", "text"),
+        default="json",
+        help="Output format: json (default) or text (human-readable summary).",
+    )
     validate_smoke_batch = validate_sub.add_parser(
         "smoke-batch",
         help="Run smoke cases for avatar/world targets and write batch summaries.",
@@ -911,6 +921,16 @@ def main(argv: list[str] | None = None) -> int:
         )
         _emit_payload(response.to_dict(), args.format)
         return 0
+
+    if args.command == "validate" and args.validate_command == "bridge-check":
+        from prefab_sentinel.bridge_check import format_text, run_all_checks
+
+        envelope = run_all_checks()
+        if args.format == "text":
+            print(format_text(envelope))
+        else:
+            print(json.dumps(envelope, ensure_ascii=False, indent=2))
+        return 0 if envelope["success"] else 1
 
     if args.command == "validate" and args.validate_command == "bridge-smoke":
         if args.expected_applied is not None and args.expected_applied < 0:
