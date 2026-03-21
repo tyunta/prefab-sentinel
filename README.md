@@ -16,53 +16,8 @@
 ### 前提条件
 - Python 3.11 以上
 - [uv](https://docs.astral.sh/uv/) （パッケージマネージャ）
-
-### インストール
-
-```bash
-# リポジトリのクローン
-git clone https://github.com/tyunta/prefab-sentinel.git
-cd prefab-sentinel
-
-# 依存関係の同期（uv が仮想環境を自動作成）
-uv sync
-
-# 動作確認
-uv run prefab-sentinel --help
-```
-
-### 開発用セットアップ
-
-```bash
-# テスト・lint 依存を含めてインストール
-uv sync --extra test --extra lint
-
-# テスト実行
-uv run python scripts/run_unit_tests.py
-
-# lint 実行
-uv run ruff check prefab_sentinel/ tests/ scripts/ tools/
-uv run mypy prefab_sentinel/
-```
-
-### バージョン管理
-
-バージョンは `pyproject.toml` と `.claude-plugin/plugin.json` の 2 箇所に記述され、`bump-my-version` で一括管理される。
-
-| 操作 | コマンド |
-|------|----------|
-| パッチバンプ | コミット時に自動（git pre-commit hook） |
-| マイナーバンプ | `uv run bump-my-version bump minor` |
-| メジャーバンプ | `uv run bump-my-version bump major` |
-| 自動バンプをスキップ | `SKIP_BUMP=1 git commit ...` |
-
-設定は `pyproject.toml` の `[tool.bumpversion]` セクションを参照。
-
-### リモート実行（インストール不要）
-
-```bash
-uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel --help
-```
+  - インストール: `curl -LsSf https://astral.sh/uv/install.sh | sh`
+  - 詳細は [uv 公式インストールガイド](https://docs.astral.sh/uv/getting-started/installation/) を参照
 
 ### Claude Code Plugin としてのインストール
 
@@ -93,6 +48,71 @@ Claude Code Plugin として導入すると、Claude Code から `/prefab-sentin
 
 **Unity Bridge セットアップ:**
 パッチ実適用・ランタイム検証に必要な Unity Bridge のセットアップ手順は `/prefab-sentinel:guide` スキルに記載。
+
+### Codex CLI で使う
+
+Codex CLI では `uvx` 経由で CLI を直接実行する。スキルは利用できないが、全 CLI コマンドが使える。
+
+```bash
+# インストール不要で実行
+uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel --help
+```
+
+Codex の `AGENTS.md` に以下のようなルールを追加すると、エージェントが自律的に CLI を呼び出せる。
+
+```markdown
+## prefab-sentinel
+
+Unity Prefab/Scene/Asset の検査・編集には prefab-sentinel CLI を使う。
+
+- 実行: `uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel <command>`
+- 参照検証: `prefab-sentinel validate refs --scope <path>`
+- 構造検証: `prefab-sentinel validate structure --path <path>`
+- パッチ適用: `prefab-sentinel patch apply --plan <plan.json> --dry-run` で確認後 `--confirm` で適用
+```
+
+### リモート実行（インストール不要）
+
+```bash
+uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel --help
+```
+
+### バージョン管理
+
+バージョンは `pyproject.toml` と `.claude-plugin/plugin.json` の 2 箇所に記述され、`bump-my-version` で一括管理される。
+
+| 操作 | コマンド |
+|------|----------|
+| パッチバンプ | コミット時に自動（git pre-commit hook） |
+| マイナーバンプ | `uv run bump-my-version bump minor` |
+| メジャーバンプ | `uv run bump-my-version bump major` |
+| 自動バンプをスキップ | `SKIP_BUMP=1 git commit ...` |
+
+設定は `pyproject.toml` の `[tool.bumpversion]` セクションを参照。
+
+### 開発用セットアップ
+
+```bash
+# リポジトリのクローン
+git clone https://github.com/tyunta/prefab-sentinel.git
+cd prefab-sentinel
+
+# 依存関係の同期（uv が仮想環境を自動作成）
+uv sync
+
+# 動作確認
+uv run prefab-sentinel --help
+
+# テスト・lint 依存を含めてインストール
+uv sync --extra test --extra lint
+
+# テスト実行
+uv run python scripts/run_unit_tests.py
+
+# lint 実行
+uv run ruff check prefab_sentinel/ tests/ scripts/ tools/
+uv run mypy prefab_sentinel/
+```
 
 ---
 
