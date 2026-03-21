@@ -78,6 +78,9 @@ Claude Code Plugin として導入すると、Claude Code から `/prefab-sentin
 **個人コマンドファイルからの移行:**
 `~/.claude/commands/prefab-sentinel.md` を手動配置していた場合、Plugin インストール後は冗長になるため削除可能。Plugin 側（`/prefab-sentinel:guide`）と個人コマンド（`/prefab-sentinel`）は名前空間が異なるため共存も可能。
 
+**Unity Bridge セットアップ:**
+パッチ実適用・ランタイム検証に必要な Unity Bridge のセットアップ手順は `/prefab-sentinel:guide` スキルに記載。
+
 ---
 
 ## 1. やること / やる内容 / やらないこと
@@ -117,6 +120,7 @@ Claude Code Plugin として導入すると、Claude Code から `/prefab-sentin
 - レポート整形: `report export` / `report smoke-history` で結果をMarkdown/CSV化
 
 ### Unity環境があるとできること（現状は保留）
+- Bridge セットアップ診断: `validate bridge-check` で環境変数と C# ファイル配置を検証する
 - 実行時検証: `validate runtime` / `patch apply --runtime-scene` で Udon/ClientSim を含む検証
 - Unity bridge 統合: `.prefab` / `.unity` の apply を `UNITYTOOL_PATCH_BRIDGE` 経由で実行
 - Unity smoke: `validate bridge-smoke` / `validate smoke-batch` でE2Eの動作確認

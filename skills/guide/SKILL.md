@@ -236,6 +236,17 @@ prefab-sentinel report export --input "report.json" --format csv --out "report.c
    prefab-sentinel validate bridge-smoke --plan "config/prefab_patch_plan.json"
    ```
 
+### Bridge セットアップ手順（インタラクティブ）
+
+ユーザーが Bridge セットアップを依頼した場合:
+
+1. `prefab-sentinel validate bridge-check` を実行し現在の状態を診断する
+2. `BC_ENV_*` エラー: ユーザーに Unity プロジェクトパスと Unity 実行ファイルパスを確認する
+3. `BC_CS_*` エラー: `${CLAUDE_PLUGIN_ROOT}/tools/unity/` から C# ファイルを `<UnityProject>/Assets/Editor/` にコピーする
+4. 環境変数を設定する（ユーザーのシェル設定に追記、または Claude Code settings.json に設定）
+5. `prefab-sentinel validate bridge-check` を再実行し全チェック通過を確認する
+6. （任意）`prefab-sentinel validate bridge-smoke --plan config/prefab_patch_plan.json` で E2E 疎通を確認する
+
 ### 環境変数リファレンス
 
 | 変数名 | 説明 | 必須 | デフォルト |

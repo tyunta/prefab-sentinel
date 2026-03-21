@@ -9,3 +9,4 @@ sample/
 
 # Generated reports/artifacts
 reports/
+report-*.md
