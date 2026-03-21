@@ -47,11 +47,13 @@ namespace PrefabSentinel
             _processedCount = 0;
             EditorApplication.update -= OnEditorUpdate;
             EditorApplication.update += OnEditorUpdate;
+            UnityEditorControlBridge.ConsoleLogBuffer.StartCapture();
         }
 
         private void OnDisable()
         {
             EditorApplication.update -= OnEditorUpdate;
+            UnityEditorControlBridge.ConsoleLogBuffer.StopCapture();
         }
 
         private void OnGUI()
@@ -166,7 +168,8 @@ namespace PrefabSentinel
                     || header.action == "select_object"
                     || header.action == "frame_selected"
                     || header.action == "instantiate_to_scene"
-                    || header.action == "ping_object");
+                    || header.action == "ping_object"
+                    || header.action == "capture_console_logs");
 
             if (isRuntime)
             {

@@ -158,7 +158,7 @@ uv run mypy prefab_sentinel/
 - Unity bridge 統合: `.prefab` / `.unity` の apply を `UNITYTOOL_PATCH_BRIDGE` 経由で実行
 - Unity smoke: `validate bridge-smoke` / `validate smoke-batch` でE2Eの動作確認
 - 統合テスト: `validate integration-tests --unity-command ... --unity-project-path ...` で 41 件の bridge ops (open-mode set/insert/remove, create-mode prefab/material/scene, variant override E2E) を Unity batchmode で検証
-- Editor リモート操作（Editor Bridge 常駐時）: `editor screenshot` でビュー取得、`editor select` / `editor frame` でオブジェクト選択・フォーカス、`editor instantiate` で Prefab 配置、`editor ping` でアセットハイライト
+- Editor リモート操作（Editor Bridge 常駐時）: `editor screenshot` でビュー取得、`editor select` / `editor frame` でオブジェクト選択・フォーカス、`editor instantiate` で Prefab 配置、`editor ping` でアセットハイライト、`editor console` で Console ログをテキスト取得（`--classify` で既存パターンマッチ適用可）
 
 ### 何をしたら、どう良いことがあるか（目的別）
 - `validate refs` を回す: 参照破損の早期検出で後工程の失敗を防ぐ

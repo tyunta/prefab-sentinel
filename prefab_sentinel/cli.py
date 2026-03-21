@@ -708,6 +708,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="Asset path to ping (e.g. Assets/Prefabs/Mic.prefab).",
     )
 
+    editor_console = editor_sub.add_parser(
+        "console",
+        help="Capture Unity Console log entries as structured text.",
+    )
+    editor_console.add_argument(
+        "--max-entries",
+        type=int,
+        default=200,
+        help="Maximum number of log entries to retrieve (default: 200).",
+    )
+    editor_console.add_argument(
+        "--filter",
+        choices=("all", "error", "warning", "exception"),
+        default="all",
+        help="Filter by log type (default: all).",
+    )
+    editor_console.add_argument(
+        "--since",
+        type=float,
+        default=0.0,
+        help="Only entries from the last N seconds (0 = no time filter).",
+    )
+    editor_console.add_argument(
+        "--classify",
+        action="store_true",
+        help="Run classify_errors() pattern matching on captured entries.",
+    )
+
     return parser
 
 
@@ -1585,6 +1613,22 @@ def main(argv: list[str] | None = None) -> int:
                 action="ping_object",
                 asset_path=args.asset,
             )
+        elif cmd == "console":
+            result = send_action(
+                action="capture_console_logs",
+                max_entries=args.max_entries,
+                log_type_filter=args.filter,
+                since_seconds=args.since,
+            )
+            if result.get("success") and args.classify:
+                entries = result.get("data", {}).get("entries", [])
+                log_lines = [e.get("message", "") for e in entries]
+                if log_lines:
+                    from prefab_sentinel.mcp.runtime_validation import RuntimeValidationMcp
+
+                    mcp = RuntimeValidationMcp()
+                    classification = mcp.classify_errors(log_lines)
+                    result["classification"] = classification.to_dict()
         else:
             parser.error(f"Unknown editor command: {cmd}")
             return 2

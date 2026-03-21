@@ -33,6 +33,7 @@ SUPPORTED_ACTIONS = frozenset(
         "frame_selected",
         "instantiate_to_scene",
         "ping_object",
+        "capture_console_logs",
     }
 )
 

@@ -171,6 +171,7 @@ class TestSupportedActions(unittest.TestCase):
             "frame_selected",
             "instantiate_to_scene",
             "ping_object",
+            "capture_console_logs",
         }
         self.assertEqual(expected, SUPPORTED_ACTIONS)
 
@@ -227,6 +228,34 @@ class TestCliEditorSubcommands(unittest.TestCase):
         args = parser.parse_args(["editor", "ping", "--asset", "Assets/Prefabs/Mic.prefab"])
         self.assertEqual("ping", args.editor_command)
         self.assertEqual("Assets/Prefabs/Mic.prefab", args.asset)
+
+    def test_editor_console_parser_defaults(self) -> None:
+        from prefab_sentinel.cli import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args(["editor", "console"])
+        self.assertEqual("console", args.editor_command)
+        self.assertEqual(200, args.max_entries)
+        self.assertEqual("all", args.filter)
+        self.assertEqual(0, args.since)
+        self.assertFalse(args.classify)
+
+    def test_editor_console_parser_all_options(self) -> None:
+        from prefab_sentinel.cli import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args([
+            "editor", "console",
+            "--max-entries", "50",
+            "--filter", "error",
+            "--since", "120",
+            "--classify",
+        ])
+        self.assertEqual("console", args.editor_command)
+        self.assertEqual(50, args.max_entries)
+        self.assertEqual("error", args.filter)
+        self.assertEqual(120, args.since)
+        self.assertTrue(args.classify)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using UnityEditor;
 using UnityEngine;
@@ -40,6 +41,11 @@ namespace PrefabSentinel
 
             // ping_object
             public string asset_path = string.Empty;
+
+            // capture_console_logs
+            public int max_entries = 200;
+            public string log_type_filter = "all"; // "all" | "error" | "warning" | "exception"
+            public float since_seconds = 0f;       // 0 = no time filter
         }
 
         [Serializable]
@@ -52,6 +58,15 @@ namespace PrefabSentinel
         }
 
         [Serializable]
+        public sealed class ConsoleLogEntry
+        {
+            public string message = string.Empty;
+            public string stack_trace = string.Empty;
+            public string log_type = string.Empty;
+            public string timestamp = string.Empty;
+        }
+
+        [Serializable]
         public sealed class EditorControlData
         {
             public string output_path = string.Empty;
@@ -60,6 +75,8 @@ namespace PrefabSentinel
             public int height = 0;
             public string selected_object = string.Empty;
             public string instantiated_object = string.Empty;
+            public int total_entries = 0;
+            public ConsoleLogEntry[] entries = Array.Empty<ConsoleLogEntry>();
             public bool read_only = true;
             public bool executed = false;
         }
@@ -119,6 +136,9 @@ namespace PrefabSentinel
                     break;
                 case "ping_object":
                     response = HandlePingObject(request);
+                    break;
+                case "capture_console_logs":
+                    response = HandleCaptureConsoleLogs(request);
                     break;
                 default:
                     response = BuildError(
@@ -336,6 +356,144 @@ namespace PrefabSentinel
             return BuildSuccess("EDITOR_CTRL_PING_OK",
                 $"Pinged: {request.asset_path}",
                 data: new EditorControlData { executed = true });
+        }
+
+        // ── Console Log Buffer ──
+
+        /// <summary>
+        /// Ring buffer that captures Unity console logs via Application.logMessageReceived.
+        /// Managed by EditorBridgeWindow (start/stop tied to window lifecycle).
+        /// </summary>
+        public static class ConsoleLogBuffer
+        {
+            private const int DefaultCapacity = 1000;
+
+            private struct RawEntry
+            {
+                public string message;
+                public string stackTrace;
+                public LogType logType;
+                public double timestamp; // EditorApplication.timeSinceStartup
+            }
+
+            private static RawEntry[] _buffer;
+            private static int _head;
+            private static int _count;
+            private static bool _capturing;
+            private static readonly object _lock = new object();
+
+            public static void StartCapture()
+            {
+                if (_capturing) return;
+                lock (_lock)
+                {
+                    _buffer = new RawEntry[DefaultCapacity];
+                    _head = 0;
+                    _count = 0;
+                    _capturing = true;
+                }
+                Application.logMessageReceived += OnLogMessage;
+            }
+
+            public static void StopCapture()
+            {
+                if (!_capturing) return;
+                Application.logMessageReceived -= OnLogMessage;
+                lock (_lock)
+                {
+                    _capturing = false;
+                }
+            }
+
+            public static bool IsCapturing => _capturing;
+
+            private static void OnLogMessage(string message, string stackTrace, LogType type)
+            {
+                lock (_lock)
+                {
+                    if (!_capturing || _buffer == null) return;
+                    _buffer[_head] = new RawEntry
+                    {
+                        message = message,
+                        stackTrace = stackTrace,
+                        logType = type,
+                        timestamp = EditorApplication.timeSinceStartup,
+                    };
+                    _head = (_head + 1) % _buffer.Length;
+                    if (_count < _buffer.Length) _count++;
+                }
+            }
+
+            /// <summary>
+            /// Snapshot the buffer, applying filters. Returns entries oldest-first.
+            /// </summary>
+            public static List<ConsoleLogEntry> GetEntries(int maxEntries, string logTypeFilter, float sinceSeconds)
+            {
+                var result = new List<ConsoleLogEntry>();
+                lock (_lock)
+                {
+                    if (_buffer == null || _count == 0) return result;
+
+                    double now = EditorApplication.timeSinceStartup;
+                    int start = (_head - _count + _buffer.Length) % _buffer.Length;
+
+                    for (int i = 0; i < _count; i++)
+                    {
+                        var entry = _buffer[(start + i) % _buffer.Length];
+
+                        // Time filter
+                        if (sinceSeconds > 0f && (now - entry.timestamp) > sinceSeconds)
+                            continue;
+
+                        // Type filter
+                        if (!MatchesTypeFilter(entry.logType, logTypeFilter))
+                            continue;
+
+                        result.Add(new ConsoleLogEntry
+                        {
+                            message = entry.message ?? string.Empty,
+                            stack_trace = entry.stackTrace ?? string.Empty,
+                            log_type = entry.logType.ToString(),
+                            timestamp = TimeSpan.FromSeconds(entry.timestamp).ToString(@"hh\:mm\:ss"),
+                        });
+
+                        if (result.Count >= maxEntries) break;
+                    }
+                }
+                return result;
+            }
+
+            private static bool MatchesTypeFilter(LogType type, string filter)
+            {
+                if (string.IsNullOrEmpty(filter) || filter == "all") return true;
+                switch (filter)
+                {
+                    case "error":     return type == LogType.Error || type == LogType.Exception || type == LogType.Assert;
+                    case "warning":   return type == LogType.Warning;
+                    case "exception": return type == LogType.Exception;
+                    default:          return true;
+                }
+            }
+        }
+
+        private static EditorControlResponse HandleCaptureConsoleLogs(EditorControlRequest request)
+        {
+            if (!ConsoleLogBuffer.IsCapturing)
+                return BuildError("EDITOR_CTRL_CONSOLE_NOT_ACTIVE",
+                    "Console log capture is not active. Enable Editor Bridge to start capturing.");
+
+            int maxEntries = request.max_entries > 0 ? request.max_entries : 200;
+            var entries = ConsoleLogBuffer.GetEntries(maxEntries, request.log_type_filter, request.since_seconds);
+
+            return BuildSuccess("EDITOR_CTRL_CONSOLE_OK",
+                $"Captured {entries.Count} log entries",
+                data: new EditorControlData
+                {
+                    total_entries = entries.Count,
+                    entries = entries.ToArray(),
+                    read_only = true,
+                    executed = true,
+                });
         }
 
         // ── Response Builders ──
