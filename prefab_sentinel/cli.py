@@ -9,26 +9,6 @@ from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
 
-from prefab_sentinel.bridge_smoke import (
-    UNITY_COMMAND_ENV,
-    UNITY_EXECUTE_METHOD_ENV,
-    UNITY_LOG_FILE_ENV,
-    UNITY_PROJECT_PATH_ENV,
-    UNITY_TIMEOUT_SEC_ENV,
-    build_bridge_env,
-    build_bridge_request,
-    load_patch_plan as load_bridge_smoke_plan,
-    resolve_expected_applied as resolve_bridge_expected_applied,
-    run_bridge as run_bridge_smoke,
-    validate_expectation as validate_bridge_smoke_expectation,
-)
-from prefab_sentinel.orchestrator import Phase1Orchestrator
-from prefab_sentinel.patch_plan import (
-    compute_patch_plan_hmac_sha256,
-    compute_patch_plan_sha256,
-    load_patch_plan,
-)
-from prefab_sentinel.reporting import export_report, render_markdown_report
 from prefab_sentinel.smoke_batch import (
     add_arguments as add_smoke_batch_arguments,
     run_from_args as run_smoke_batch_from_args,
@@ -37,7 +17,14 @@ from prefab_sentinel.smoke_history import (
     add_arguments as add_smoke_history_arguments,
     run_from_args as run_smoke_history_from_args,
 )
-from prefab_sentinel.unity_assets import find_project_root, resolve_scope_path
+
+# ENV constant names used in parser help strings.
+# Inlined here to avoid eager import of bridge_smoke at module level.
+UNITY_COMMAND_ENV = "UNITYTOOL_UNITY_COMMAND"
+UNITY_PROJECT_PATH_ENV = "UNITYTOOL_UNITY_PROJECT_PATH"
+UNITY_EXECUTE_METHOD_ENV = "UNITYTOOL_UNITY_EXECUTE_METHOD"
+UNITY_TIMEOUT_SEC_ENV = "UNITYTOOL_UNITY_TIMEOUT_SEC"
+UNITY_LOG_FILE_ENV = "UNITYTOOL_UNITY_LOG_FILE"
 
 _DEFAULT_PLAN_SIGNING_KEY_ENV = "UNITYTOOL_PLAN_SIGNING_KEY"
 _DEFAULT_IGNORE_GUID_BRANCH_ALLOWLIST = ("main", "release/*")
@@ -647,6 +634,8 @@ def _emit_payload(payload: dict[str, Any], fmt: str) -> None:
     if fmt == "json":
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
+        from prefab_sentinel.reporting import render_markdown_report
+
         print(render_markdown_report(payload))
 
 
@@ -674,6 +663,8 @@ def _resolve_ignore_guid_file(
         return ignore_guid_file
     if not scope:
         return None
+    from prefab_sentinel.unity_assets import find_project_root, resolve_scope_path
+
     project_root = find_project_root(Path.cwd())
     scope_path = resolve_scope_path(scope, project_root)
     candidate = scope_path / "config" / "ignore_guids.txt"
@@ -849,15 +840,19 @@ def _write_ignore_guid_file(path: Path, guids: list[str], mode: str) -> dict[str
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    orchestrator = Phase1Orchestrator.default()
+
+    def get_orchestrator() -> Phase1Orchestrator:
+        from prefab_sentinel.orchestrator import Phase1Orchestrator
+
+        return Phase1Orchestrator.default()
 
     if args.command == "inspect" and args.inspect_command == "variant":
-        response = orchestrator.inspect_variant(args.path, args.component_filter)
+        response = get_orchestrator().inspect_variant(args.path, args.component_filter)
         _emit_payload(response.to_dict(), args.format)
         return 0
 
     if args.command == "inspect" and args.inspect_command == "where-used":
-        response = orchestrator.inspect_where_used(
+        response = get_orchestrator().inspect_where_used(
             asset_or_guid=args.asset_or_guid,
             scope=args.scope,
             exclude_patterns=tuple(args.exclude),
@@ -867,7 +862,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "inspect" and args.inspect_command == "wiring":
-        response = orchestrator.inspect_wiring(
+        response = get_orchestrator().inspect_wiring(
             target_path=args.path,
             udon_only=args.udon_only,
         )
@@ -876,7 +871,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "inspect" and args.inspect_command == "hierarchy":
         show_components = not args.no_components
-        response = orchestrator.inspect_hierarchy(
+        response = get_orchestrator().inspect_hierarchy(
             target_path=args.path,
             max_depth=args.depth,
             show_components=show_components,
@@ -885,7 +880,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "validate" and args.validate_command == "structure":
-        response = orchestrator.inspect_structure(
+        response = get_orchestrator().inspect_structure(
             target_path=args.path,
         )
         _emit_payload(response.to_dict(), args.format)
@@ -900,7 +895,7 @@ def main(argv: list[str] | None = None) -> int:
             ignore_guids = _load_ignore_guids(args.ignore_guid, ignore_guid_file)
         except OSError as exc:
             parser.error(f"Failed to read --ignore-guid-file: {exc}")
-        response = orchestrator.validate_refs(
+        response = get_orchestrator().validate_refs(
             scope=args.scope,
             details=args.details,
             max_diagnostics=args.max_diagnostics,
@@ -911,7 +906,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "validate" and args.validate_command == "runtime":
-        response = orchestrator.validate_runtime(
+        response = get_orchestrator().validate_runtime(
             scene_path=args.scene,
             profile=args.profile,
             log_file=args.log_file,
@@ -933,6 +928,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if envelope["success"] else 1
 
     if args.command == "validate" and args.validate_command == "bridge-smoke":
+        from prefab_sentinel.bridge_smoke import (
+            build_bridge_env,
+            build_bridge_request,
+            load_patch_plan as load_bridge_smoke_plan,
+            resolve_expected_applied as resolve_bridge_expected_applied,
+            run_bridge as run_bridge_smoke,
+            validate_expectation as validate_bridge_smoke_expectation,
+        )
+
         if args.expected_applied is not None and args.expected_applied < 0:
             parser.error("--expected-applied must be greater than or equal to 0.")
         plan_path = Path(args.plan)
@@ -1049,7 +1053,7 @@ def main(argv: list[str] | None = None) -> int:
             ignore_guids = _load_ignore_guids(args.ignore_guid, ignore_guid_file)
         except OSError as exc:
             parser.error(f"Failed to read --ignore-guid-file: {exc}")
-        response = orchestrator.suggest_ignore_guids(
+        response = get_orchestrator().suggest_ignore_guids(
             scope=args.scope,
             min_occurrences=args.min_occurrences,
             max_items=args.max_items,
@@ -1088,6 +1092,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "patch" and args.patch_command == "apply":
+        from prefab_sentinel.patch_plan import (
+            compute_patch_plan_hmac_sha256,
+            compute_patch_plan_sha256,
+            load_patch_plan,
+        )
+
         plan_path = Path(args.plan)
         if not args.dry_run and args.confirm:
             if not args.out_report:
@@ -1153,7 +1163,7 @@ def main(argv: list[str] | None = None) -> int:
                     "Plan signature mismatch: "
                     f"--plan-signature={expected_signature} does not match actual {plan_signature}."
                 )
-        response = orchestrator.patch_apply(
+        response = get_orchestrator().patch_apply(
             plan=plan,
             dry_run=args.dry_run,
             confirm=args.confirm,
@@ -1184,6 +1194,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "patch" and args.patch_command == "hash":
+        from prefab_sentinel.patch_plan import compute_patch_plan_sha256, load_patch_plan
+
         plan_path = Path(args.plan)
         try:
             load_patch_plan(plan_path)
@@ -1210,6 +1222,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "patch" and args.patch_command == "sign":
+        from prefab_sentinel.patch_plan import (
+            compute_patch_plan_hmac_sha256,
+            load_patch_plan,
+        )
+
         plan_path = Path(args.plan)
         try:
             load_patch_plan(plan_path)
@@ -1237,6 +1254,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "patch" and args.patch_command == "attest":
+        from prefab_sentinel.patch_plan import (
+            compute_patch_plan_hmac_sha256,
+            compute_patch_plan_sha256,
+            load_patch_plan,
+        )
+
         plan_path = Path(args.plan)
         try:
             load_patch_plan(plan_path)
@@ -1281,6 +1304,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "patch" and args.patch_command == "verify":
+        from prefab_sentinel.patch_plan import (
+            compute_patch_plan_hmac_sha256,
+            compute_patch_plan_sha256,
+            load_patch_plan,
+        )
+
         plan_path = Path(args.plan)
         try:
             load_patch_plan(plan_path)
@@ -1410,6 +1439,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
     if args.command == "report" and args.report_command == "export":
+        from prefab_sentinel.reporting import export_report
+
         input_path = Path(args.input)
         payload = json.loads(input_path.read_text(encoding="utf-8"))
         md_max_usages = args.md_max_usages
