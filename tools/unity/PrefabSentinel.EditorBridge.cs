@@ -161,9 +161,20 @@ namespace PrefabSentinel
             bool isRuntime = !string.IsNullOrEmpty(header.action)
                 && (header.action == "compile_udonsharp" || header.action == "run_clientsim");
 
+            bool isEditorControl = !string.IsNullOrEmpty(header.action)
+                && (header.action == "capture_screenshot"
+                    || header.action == "select_object"
+                    || header.action == "frame_selected"
+                    || header.action == "instantiate_to_scene"
+                    || header.action == "ping_object");
+
             if (isRuntime)
             {
                 UnityRuntimeValidationBridge.RunFromPaths(requestPath, responsePath);
+            }
+            else if (isEditorControl)
+            {
+                UnityEditorControlBridge.RunFromPaths(requestPath, responsePath);
             }
             else
             {

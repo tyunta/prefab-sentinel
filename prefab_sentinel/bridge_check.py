@@ -25,6 +25,7 @@ BRIDGE_WATCH_DIR_ENV = "UNITYTOOL_BRIDGE_WATCH_DIR"
 _CS_PATCH_BRIDGE = "PrefabSentinel.UnityPatchBridge.cs"
 _CS_RUNTIME_BRIDGE = "PrefabSentinel.UnityRuntimeValidationBridge.cs"
 _CS_EDITOR_BRIDGE = "PrefabSentinel.EditorBridge.cs"
+_CS_EDITOR_CONTROL_BRIDGE = "PrefabSentinel.UnityEditorControlBridge.cs"
 
 _VALID_BRIDGE_MODES = {"batchmode", "editor"}
 
@@ -188,6 +189,12 @@ def run_all_checks() -> dict[str, Any]:
         check_cs_file(project_path, _CS_RUNTIME_BRIDGE, "BC_CS_RUNTIME_BRIDGE"),
         check_cs_file(
             project_path, _CS_EDITOR_BRIDGE, "BC_CS_EDITOR_BRIDGE", required=False
+        ),
+        check_cs_file(
+            project_path,
+            _CS_EDITOR_CONTROL_BRIDGE,
+            "BC_CS_EDITOR_CONTROL_BRIDGE",
+            required=False,
         ),
         check_bridge_mode(),
         check_watch_dir(),

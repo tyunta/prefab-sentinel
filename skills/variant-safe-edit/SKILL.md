@@ -56,6 +56,11 @@ export UNITYTOOL_UNITY_TIMEOUT_SEC=30
 prefab-sentinel patch apply --plan circle_plan.json \
   --confirm --out-report reports/result.json \
   --change-reason "circle layout generation"
+
+# Apply 後に Scene ビューで目視確認
+prefab-sentinel editor select --path "/Canvas/MicPanel"
+prefab-sentinel editor frame
+prefab-sentinel editor screenshot --view scene
 ```
 
 ## Guardrails

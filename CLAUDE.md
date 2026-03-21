@@ -61,6 +61,12 @@
 - スキップ: `SKIP_BUMP=1` 環境変数を設定してコミットする。
 - バージョン記述箇所は `pyproject.toml` と `.claude-plugin/plugin.json` の 2 箇所（`[tool.bumpversion]` で一括管理）。
 
+## Editor リモート操作の行動規約
+- スクショ（`editor screenshot`）はトリアージの起点として使い、データソースにしない。
+- スクショで見えた情報は `inspect wiring` / `validate refs` で裏取りする。
+- Inspector の表示名と SerializedProperty の `propertyPath` は異なるため、目視だけで patch plan を書かない。
+- Editor 操作は Editor Bridge 常駐が前提。`UNITYTOOL_BRIDGE_MODE=editor` が未設定の場合はエラーで停止する。
+
 ## ignore-guid 運用
 - `<scope>/config/ignore_guids.txt` を既定とし、存在しなければ無視する。
 - CI での反映は `--out-ignore-guid-file` 明示指定時かつ許可ブランチのみ。既定は `main` / `release/*`（`UNITYTOOL_IGNORE_GUID_ALLOW_BRANCHES` で上書き可）。

@@ -627,6 +627,87 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_smoke_history_arguments(report_smoke_history)
 
+    # ── editor (Editor Bridge control) ──
+    editor_parser = subparsers.add_parser(
+        "editor",
+        help="Editor Bridge control commands (requires editor bridge mode).",
+    )
+    editor_sub = editor_parser.add_subparsers(dest="editor_command", required=True)
+
+    editor_screenshot = editor_sub.add_parser(
+        "screenshot",
+        help="Capture Scene or Game view screenshot.",
+    )
+    editor_screenshot.add_argument(
+        "--view",
+        choices=("scene", "game"),
+        default="scene",
+        help="Which view to capture (default: scene).",
+    )
+    editor_screenshot.add_argument(
+        "--width",
+        type=int,
+        default=0,
+        help="Capture width in pixels (0 = current window size).",
+    )
+    editor_screenshot.add_argument(
+        "--height",
+        type=int,
+        default=0,
+        help="Capture height in pixels (0 = current window size).",
+    )
+
+    editor_select = editor_sub.add_parser(
+        "select",
+        help="Select a GameObject in the Hierarchy.",
+    )
+    editor_select.add_argument(
+        "--path",
+        required=True,
+        help="Hierarchy path of the GameObject (e.g. /Canvas/Panel/Button).",
+    )
+
+    editor_frame = editor_sub.add_parser(
+        "frame",
+        help="Frame the selected object in Scene view.",
+    )
+    editor_frame.add_argument(
+        "--zoom",
+        type=float,
+        default=0.0,
+        help="Scene view zoom level (0 = keep current).",
+    )
+
+    editor_instantiate = editor_sub.add_parser(
+        "instantiate",
+        help="Instantiate a Prefab into the current Scene.",
+    )
+    editor_instantiate.add_argument(
+        "--prefab",
+        required=True,
+        help="Asset path of the prefab (e.g. Assets/Prefabs/Mic.prefab).",
+    )
+    editor_instantiate.add_argument(
+        "--parent",
+        default="",
+        help="Hierarchy path of the parent GameObject.",
+    )
+    editor_instantiate.add_argument(
+        "--position",
+        default="",
+        help="Local position as x,y,z (e.g. 0,1.5,0).",
+    )
+
+    editor_ping = editor_sub.add_parser(
+        "ping",
+        help="Ping (highlight) an asset in the Project window.",
+    )
+    editor_ping.add_argument(
+        "--asset",
+        required=True,
+        help="Asset path to ping (e.g. Assets/Prefabs/Mic.prefab).",
+    )
+
     return parser
 
 
@@ -1462,6 +1543,53 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "report" and args.report_command == "smoke-history":
         return run_smoke_history_from_args(args, parser)
+
+    if args.command == "editor":
+        from prefab_sentinel.editor_bridge import send_action
+
+        cmd = args.editor_command
+        if cmd == "screenshot":
+            result = send_action(
+                action="capture_screenshot",
+                view=args.view,
+                width=args.width,
+                height=args.height,
+            )
+        elif cmd == "select":
+            result = send_action(
+                action="select_object",
+                hierarchy_path=args.path,
+            )
+        elif cmd == "frame":
+            result = send_action(
+                action="frame_selected",
+                zoom=args.zoom,
+            )
+        elif cmd == "instantiate":
+            position: list[float] = []
+            if args.position:
+                try:
+                    position = [float(v) for v in args.position.split(",")]
+                    if len(position) != 3:
+                        parser.error(f"--position requires exactly 3 values (x,y,z), got {len(position)}")
+                except ValueError:
+                    parser.error(f"Invalid --position format: {args.position} (expected x,y,z)")
+            result = send_action(
+                action="instantiate_to_scene",
+                prefab_path=args.prefab,
+                parent_path=args.parent,
+                position=position or None,
+            )
+        elif cmd == "ping":
+            result = send_action(
+                action="ping_object",
+                asset_path=args.asset,
+            )
+        else:
+            parser.error(f"Unknown editor command: {cmd}")
+            return 2
+        _emit_payload(result, "json")
+        return 0 if result.get("success") else 1
 
     parser.error("Unknown command.")
     return 2

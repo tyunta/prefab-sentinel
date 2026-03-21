@@ -89,6 +89,16 @@ prefab-sentinel validate runtime --scene "Assets/Scenes/Smoke.unity"
 prefab-sentinel report export --input "report.json" --format md --out "report.md"
 prefab-sentinel report export --input "report.json" --format csv --out "report.csv"
 prefab-sentinel report export --input "report.json" --format csv --out "report.csv" --csv-include-summary
+
+# Editor 操作（Editor Bridge 常駐が必須）
+prefab-sentinel editor screenshot --view scene        # Scene ビューのスクショ取得
+prefab-sentinel editor screenshot --view game          # Game ビューのスクショ取得
+prefab-sentinel editor select --path "/Canvas/Panel"   # Hierarchy 上のオブジェクトを選択
+prefab-sentinel editor frame                           # 選択オブジェクトを Scene ビュー中央に表示
+prefab-sentinel editor frame --zoom 2.0                # ズーム付きフレーム
+prefab-sentinel editor instantiate --prefab "Assets/Prefabs/Mic.prefab"  # Prefab を Scene に配置
+prefab-sentinel editor instantiate --prefab "Assets/Prefabs/Mic.prefab" --parent "/Canvas" --position 0,1.5,0
+prefab-sentinel editor ping --asset "Assets/Prefabs/Mic.prefab"  # Project ウィンドウでアセットをハイライト
 ```
 
 ## パッチ計画 JSON の構造
@@ -175,6 +185,7 @@ prefab-sentinel report export --input "report.json" --format csv --out "report.c
 - **Prefab 新規作成時**（create モード）: patch plan 作成 → dry-run → confirm → validate structure → validate refs
 - **計画自動生成 → 適用**: `patch generate circle` → dry-run → confirm（create モードのパイプライン）
 - **Unity Editor 起動中の適用**: Editor Bridge セットアップ → `UNITYTOOL_BRIDGE_MODE=editor` → 通常通り `patch apply` / `validate runtime`
+- **Editor リモート操作**: `editor select` → `editor frame` で対象を表示 → `editor screenshot` で視覚確認。スクショはトリアージの起点として使い、データソースにしない（必ず `inspect wiring` / `validate refs` で裏取りする）
 - **フィールド配線検査**: inspect wiring → null参照・fileID不整合の特定、重複は same-component（WARNING）/ cross-component（INFO）に分類
 - **階層構造の確認**: inspect hierarchy → ツリー構造・コンポーネント配置の把握
 - **内部構造の検証**: validate structure → fileID重複・Transform整合性・参照欠損の検出
@@ -203,6 +214,9 @@ prefab-sentinel report export --input "report.json" --format csv --out "report.c
 
    # ランタイム検証ブリッジ（validate runtime を使う場合）
    cp tools/unity/PrefabSentinel.UnityRuntimeValidationBridge.cs <UnityProject>/Assets/Editor/
+
+   # Editor 制御ブリッジ（editor screenshot / select / frame 等を使う場合）
+   cp tools/unity/PrefabSentinel.UnityEditorControlBridge.cs <UnityProject>/Assets/Editor/
    ```
 
 2. **環境変数を設定**
