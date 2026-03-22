@@ -218,6 +218,8 @@ def _encode_bridge_value(value: object) -> dict[str, object]:
         return {"value_kind": "float", "value_float": value}
     if isinstance(value, str):
         return {"value_kind": "string", "value_string": value}
+    if isinstance(value, dict) and "handle" in value and len(value) == 1:
+        return {"value_kind": "handle", "value_string": str(value["handle"])}
     return {
         "value_kind": "json",
         "value_json": json.dumps(value, ensure_ascii=False),

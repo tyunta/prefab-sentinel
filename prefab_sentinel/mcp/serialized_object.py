@@ -260,6 +260,26 @@ class _SceneResourceAdapter(_ResourceAdapter):
         )
 
 
+def _check_handle_value(
+    value: object,
+    known_handles: dict[str, str],
+    target: str,
+    index: int,
+) -> Diagnostic | None:
+    """Return a diagnostic if *value* is a ``{"handle": "..."}`` referencing an unknown handle."""
+    if not (isinstance(value, dict) and "handle" in value and len(value) == 1):
+        return None
+    handle_name = str(value["handle"]).lstrip("$").strip()
+    if handle_name in known_handles:
+        return None
+    return Diagnostic(
+        path=target,
+        location=f"ops[{index}].value.handle",
+        detail="schema_error",
+        evidence=f"handle '{handle_name}' is not defined by any prior op in this plan",
+    )
+
+
 class SerializedObjectMcp:
     """Serialized-object MCP scaffold with plan validation and dry-run preview."""
 
@@ -1190,6 +1210,11 @@ class SerializedObjectMcp:
                             )
                         )
                         continue
+                    value = op.get("value")
+                    bad_handle = _check_handle_value(value, known_handles, target, index)
+                    if bad_handle is not None:
+                        diagnostics.append(bad_handle)
+                        continue
                     preview.append(
                         {
                             "op": op_name,
@@ -1197,7 +1222,7 @@ class SerializedObjectMcp:
                             "after": {
                                 "handle": component_handle,
                                 "path": property_path,
-                                "value": deepcopy(op.get("value")),
+                                "value": deepcopy(value),
                             },
                         }
                     )
@@ -1228,7 +1253,12 @@ class SerializedObjectMcp:
                     },
                 }
                 if op_name == "insert_array_element" and "value" in op:
-                    entry["after"]["value"] = deepcopy(op.get("value"))
+                    arr_value = op.get("value")
+                    bad_handle = _check_handle_value(arr_value, known_handles, target, index)
+                    if bad_handle is not None:
+                        diagnostics.append(bad_handle)
+                        continue
+                    entry["after"]["value"] = deepcopy(arr_value)
                 preview.append(entry)
                 continue
 
@@ -2155,6 +2185,11 @@ class SerializedObjectMcp:
                             )
                         )
                         continue
+                    value = op.get("value")
+                    bad_handle = _check_handle_value(value, known_handles, target, index)
+                    if bad_handle is not None:
+                        diagnostics.append(bad_handle)
+                        continue
                     preview.append(
                         {
                             "op": op_name,
@@ -2162,7 +2197,7 @@ class SerializedObjectMcp:
                             "after": {
                                 "handle": component_handle,
                                 "path": property_path,
-                                "value": deepcopy(op.get("value")),
+                                "value": deepcopy(value),
                             },
                         }
                     )
@@ -2193,7 +2228,12 @@ class SerializedObjectMcp:
                     },
                 }
                 if op_name == "insert_array_element" and "value" in op:
-                    entry["after"]["value"] = deepcopy(op.get("value"))
+                    arr_value = op.get("value")
+                    bad_handle = _check_handle_value(arr_value, known_handles, target, index)
+                    if bad_handle is not None:
+                        diagnostics.append(bad_handle)
+                        continue
+                    entry["after"]["value"] = deepcopy(arr_value)
                 preview.append(entry)
                 continue
 

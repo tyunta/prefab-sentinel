@@ -21,6 +21,9 @@ namespace PrefabSentinel
         private const string ArrayDataSuffix = ".Array.data";
         private const string SceneHandleName = "scene";
         private const string AssetHandleName = "asset";
+        [ThreadStatic]
+        private static Dictionary<string, UnityEngine.Object> s_currentHandles;
+
         private static readonly PropertyInfo SerializedPropertyGradientValueProperty = typeof(SerializedProperty)
             .GetProperty("gradientValue", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
         private static readonly PropertyInfo SerializedPropertyIsFixedBufferProperty = typeof(SerializedProperty)
@@ -824,6 +827,22 @@ namespace PrefabSentinel
                                 diagnostics: diagnostics.ToArray()
                             );
                         }
+                        string resultHandle = NormalizeHandle(op.result);
+                        if (!TrySetupUdonSharpBacking(
+                            targetObject, addedComponent, componentType, handles,
+                            resultHandle, request.target, i, diagnostics))
+                        {
+                            UnityEngine.Object.DestroyImmediate(addedComponent);
+                            return BuildError(
+                                "UNITY_BRIDGE_APPLY",
+                                "Failed to setup UdonSharp backing.",
+                                request.target,
+                                request.ops.Length,
+                                executed: true,
+                                applied: applied,
+                                diagnostics: diagnostics.ToArray()
+                            );
+                        }
                         if (!TryRegisterHandle(op.result, addedComponent, handles, request.target, i, diagnostics))
                         {
                             UnityEngine.Object.DestroyImmediate(addedComponent);
@@ -985,17 +1004,25 @@ namespace PrefabSentinel
                                 diagnostics: diagnostics.ToArray()
                             );
                         }
-                        if (!TryApplyMutationOpToComponent(targetComponent, request.target, op, i, diagnostics))
+                        s_currentHandles = handles;
+                        try
                         {
-                            return BuildError(
-                                "UNITY_BRIDGE_APPLY",
-                                "Failed to apply component mutation.",
-                                request.target,
-                                request.ops.Length,
-                                executed: true,
-                                applied: applied,
-                                diagnostics: diagnostics.ToArray()
-                            );
+                            if (!TryApplyMutationOpToComponent(targetComponent, request.target, op, i, diagnostics))
+                            {
+                                return BuildError(
+                                    "UNITY_BRIDGE_APPLY",
+                                    "Failed to apply component mutation.",
+                                    request.target,
+                                    request.ops.Length,
+                                    executed: true,
+                                    applied: applied,
+                                    diagnostics: diagnostics.ToArray()
+                                );
+                            }
+                        }
+                        finally
+                        {
+                            s_currentHandles = null;
                         }
                         applied += 1;
                         continue;
@@ -2546,6 +2573,22 @@ namespace PrefabSentinel
                                 diagnostics: diagnostics.ToArray()
                             );
                         }
+                        string resultHandle = NormalizeHandle(op.result);
+                        if (!TrySetupUdonSharpBacking(
+                            targetObject, addedComponent, componentType, handles,
+                            resultHandle, request.target, i, diagnostics))
+                        {
+                            UnityEngine.Object.DestroyImmediate(addedComponent);
+                            return BuildError(
+                                "UNITY_BRIDGE_APPLY",
+                                "Failed to setup UdonSharp backing.",
+                                request.target,
+                                request.ops.Length,
+                                executed: true,
+                                applied: applied,
+                                diagnostics: diagnostics.ToArray()
+                            );
+                        }
                         if (!TryRegisterHandle(op.result, addedComponent, handles, request.target, i, diagnostics))
                         {
                             UnityEngine.Object.DestroyImmediate(addedComponent);
@@ -2707,17 +2750,25 @@ namespace PrefabSentinel
                                 diagnostics: diagnostics.ToArray()
                             );
                         }
-                        if (!TryApplyMutationOpToComponent(targetComponent, request.target, op, i, diagnostics))
+                        s_currentHandles = handles;
+                        try
                         {
-                            return BuildError(
-                                "UNITY_BRIDGE_APPLY",
-                                "Failed to apply component mutation.",
-                                request.target,
-                                request.ops.Length,
-                                executed: true,
-                                applied: applied,
-                                diagnostics: diagnostics.ToArray()
-                            );
+                            if (!TryApplyMutationOpToComponent(targetComponent, request.target, op, i, diagnostics))
+                            {
+                                return BuildError(
+                                    "UNITY_BRIDGE_APPLY",
+                                    "Failed to apply component mutation.",
+                                    request.target,
+                                    request.ops.Length,
+                                    executed: true,
+                                    applied: applied,
+                                    diagnostics: diagnostics.ToArray()
+                                );
+                            }
+                        }
+                        finally
+                        {
+                            s_currentHandles = null;
                         }
                         applied += 1;
                         continue;
@@ -3018,6 +3069,126 @@ namespace PrefabSentinel
                 return true;
             }
             return TryResolveGameObjectHandle(rawHandle, handles, out parentObject, out error);
+        }
+
+        private static bool TrySetupUdonSharpBacking(
+            GameObject targetObject,
+            Component addedComponent,
+            Type componentType,
+            Dictionary<string, UnityEngine.Object> handles,
+            string handleName,
+            string requestTarget,
+            int opIndex,
+            List<BridgeDiagnostic> diagnostics
+        )
+        {
+            Type usbType = null;
+            foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                usbType = assembly.GetType("UdonSharp.UdonSharpBehaviour", false);
+                if (usbType != null) break;
+            }
+            if (usbType == null || !usbType.IsAssignableFrom(componentType))
+            {
+                return true;
+            }
+
+            Type udonBehaviourType = null;
+            foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                udonBehaviourType = assembly.GetType("VRC.Udon.UdonBehaviour", false);
+                if (udonBehaviourType != null) break;
+            }
+            if (udonBehaviourType == null)
+            {
+                diagnostics.Add(
+                    new BridgeDiagnostic
+                    {
+                        path = requestTarget,
+                        location = $"ops[{opIndex}]",
+                        detail = "apply_error",
+                        evidence = "UdonSharpBehaviour detected but VRC.Udon.UdonBehaviour type not found"
+                    }
+                );
+                return false;
+            }
+
+            Component backing = targetObject.AddComponent(udonBehaviourType);
+            if (backing == null)
+            {
+                diagnostics.Add(
+                    new BridgeDiagnostic
+                    {
+                        path = requestTarget,
+                        location = $"ops[{opIndex}]",
+                        detail = "apply_error",
+                        evidence = "Failed to create backing UdonBehaviour"
+                    }
+                );
+                return false;
+            }
+
+            SerializedObject usbSerialized = new SerializedObject(addedComponent);
+            SerializedProperty backingProp = usbSerialized.FindProperty("_udonSharpBackingUdonBehaviour");
+            if (backingProp != null)
+            {
+                backingProp.objectReferenceValue = backing;
+                usbSerialized.ApplyModifiedPropertiesWithoutUndo();
+            }
+
+            Type programAssetType = null;
+            foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                programAssetType = assembly.GetType("UdonSharp.UdonSharpProgramAsset", false);
+                if (programAssetType != null) break;
+            }
+            if (programAssetType != null)
+            {
+                MethodInfo getAllPrograms = programAssetType.GetMethod(
+                    "GetAllUdonSharpPrograms",
+                    BindingFlags.Public | BindingFlags.Static
+                );
+                if (getAllPrograms != null)
+                {
+                    Array programs = getAllPrograms.Invoke(null, null) as Array;
+                    if (programs != null)
+                    {
+                        PropertyInfo csScriptProp = programAssetType.GetProperty(
+                            "sourceCsScript",
+                            BindingFlags.Public | BindingFlags.Instance
+                        );
+                        foreach (object program in programs)
+                        {
+                            if (csScriptProp == null) continue;
+                            MonoScript script = csScriptProp.GetValue(program) as MonoScript;
+                            if (script != null && script.GetClass() == componentType)
+                            {
+                                SerializedObject backingSO = new SerializedObject(backing);
+                                SerializedProperty programSourceProp =
+                                    backingSO.FindProperty("programSource");
+                                if (programSourceProp != null)
+                                {
+                                    programSourceProp.objectReferenceValue =
+                                        program as UnityEngine.Object;
+                                    backingSO.ApplyModifiedPropertiesWithoutUndo();
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(handleName))
+            {
+                string backingHandle = $"backing_{handleName}";
+                if (!handles.ContainsKey(backingHandle))
+                {
+                    handles[backingHandle] = backing;
+                }
+            }
+
+            return true;
         }
 
         private static bool TryResolveComponentType(
@@ -3835,6 +4006,24 @@ namespace PrefabSentinel
                 }
                 case SerializedPropertyType.ObjectReference:
                 {
+                    if (string.Equals(valueKind, "handle", StringComparison.Ordinal))
+                    {
+                        if (s_currentHandles == null)
+                        {
+                            error = "handle-based ObjectReference is only supported in create mode";
+                            return false;
+                        }
+                        string handleName = (op.value_string ?? string.Empty).Trim();
+                        UnityEngine.Object handleObj;
+                        string handleError;
+                        if (!TryResolveHandle(handleName, s_currentHandles, out handleObj, out handleError))
+                        {
+                            error = $"ObjectReference handle resolution failed: {handleError}";
+                            return false;
+                        }
+                        property.objectReferenceValue = handleObj;
+                        return true;
+                    }
                     UnityEngine.Object referenceValue;
                     if (!TryReadObjectReferenceValue(op, valueKind, out referenceValue, out error))
                     {
@@ -3845,6 +4034,24 @@ namespace PrefabSentinel
                 }
                 case SerializedPropertyType.ExposedReference:
                 {
+                    if (string.Equals(valueKind, "handle", StringComparison.Ordinal))
+                    {
+                        if (s_currentHandles == null)
+                        {
+                            error = "handle-based ExposedReference is only supported in create mode";
+                            return false;
+                        }
+                        string handleName = (op.value_string ?? string.Empty).Trim();
+                        UnityEngine.Object handleObj;
+                        string handleError;
+                        if (!TryResolveHandle(handleName, s_currentHandles, out handleObj, out handleError))
+                        {
+                            error = $"ExposedReference handle resolution failed: {handleError}";
+                            return false;
+                        }
+                        property.exposedReferenceValue = handleObj;
+                        return true;
+                    }
                     UnityEngine.Object referenceValue;
                     if (!TryReadObjectReferenceValue(op, valueKind, out referenceValue, out error))
                     {
