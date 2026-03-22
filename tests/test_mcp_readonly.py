@@ -1116,6 +1116,96 @@ class SerializedObjectMcpTests(unittest.TestCase):
         self.assertEqual("SER_PLAN_INVALID", response.code)
         self.assertTrue(response.diagnostics)
 
+    def test_create_plan_handle_value_in_set(self) -> None:
+        """set op with {"handle": "c_comp"} in create mode should pass dry-run."""
+        mcp = SerializedObjectMcp()
+        response = mcp.dry_run_resource_plan(
+            resource={
+                "id": "prefab",
+                "kind": "prefab",
+                "path": "Assets/Generated/New.prefab",
+                "mode": "create",
+            },
+            ops=[
+                {"op": "create_prefab", "name": "Root"},
+                {
+                    "op": "add_component",
+                    "target": "$root",
+                    "type": "UnityEngine.Camera",
+                    "result": "c_cam",
+                },
+                {
+                    "op": "set",
+                    "target": "$c_cam",
+                    "path": "cameraRef",
+                    "value": {"handle": "c_cam"},
+                },
+                {"op": "save"},
+            ],
+        )
+
+        self.assertTrue(response.success)
+        self.assertEqual("SER_DRY_RUN_OK", response.code)
+
+    def test_create_plan_unknown_handle_in_set(self) -> None:
+        """set op with {"handle": "missing"} should produce schema_error."""
+        mcp = SerializedObjectMcp()
+        response = mcp.dry_run_resource_plan(
+            resource={
+                "id": "prefab",
+                "kind": "prefab",
+                "path": "Assets/Generated/New.prefab",
+                "mode": "create",
+            },
+            ops=[
+                {"op": "create_prefab", "name": "Root"},
+                {
+                    "op": "set",
+                    "target": "$root",
+                    "path": "cameraRef",
+                    "value": {"handle": "missing"},
+                },
+                {"op": "save"},
+            ],
+        )
+
+        self.assertFalse(response.success)
+        self.assertEqual("SER_PLAN_INVALID", response.code)
+        diag_details = [d.detail for d in response.diagnostics]
+        self.assertIn("schema_error", diag_details)
+
+    def test_create_plan_handle_value_in_insert_array(self) -> None:
+        """insert_array_element with {"handle": "c_comp"} in create mode should pass."""
+        mcp = SerializedObjectMcp()
+        response = mcp.dry_run_resource_plan(
+            resource={
+                "id": "prefab",
+                "kind": "prefab",
+                "path": "Assets/Generated/New.prefab",
+                "mode": "create",
+            },
+            ops=[
+                {"op": "create_prefab", "name": "Root"},
+                {
+                    "op": "add_component",
+                    "target": "$root",
+                    "type": "UnityEngine.Camera",
+                    "result": "c_cam",
+                },
+                {
+                    "op": "insert_array_element",
+                    "target": "$c_cam",
+                    "path": "refs.Array.data",
+                    "index": 0,
+                    "value": {"handle": "root"},
+                },
+                {"op": "save"},
+            ],
+        )
+
+        self.assertTrue(response.success)
+        self.assertEqual("SER_DRY_RUN_OK", response.code)
+
     def test_dry_run_resource_plan_rejects_save_before_final_op(self) -> None:
         mcp = SerializedObjectMcp()
         response = mcp.dry_run_resource_plan(

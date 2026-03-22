@@ -1279,6 +1279,104 @@ response_path.write_text(
         self.assertEqual("remove_array_element", request_ops[15]["op"])
         self.assertNotIn("value_kind", request_ops[15])
 
+    def test_reference_bridge_normalizes_handle_value_for_unity_request(self) -> None:
+        """Verify that {"handle": "c_cam"} is encoded as value_kind=handle."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            unity_runner = root / "fake_unity_handle.py"
+            unity_runner.write_text(
+                """
+import json
+import sys
+from pathlib import Path
+
+def _arg(flag: str) -> str:
+    args = sys.argv[1:]
+    idx = args.index(flag)
+    return args[idx + 1]
+
+request_path = Path(_arg("-sentinelPatchRequest"))
+response_path = Path(_arg("-sentinelPatchResponse"))
+request = json.loads(request_path.read_text(encoding="utf-8"))
+response_path.write_text(
+    json.dumps(
+        {
+            "protocol_version": 2,
+            "success": True,
+            "severity": "info",
+            "code": "SER_APPLY_OK",
+            "message": "Captured request payload.",
+            "data": {
+                "applied": len(request.get("ops", [])),
+                "request_ops": request.get("ops", []),
+            },
+            "diagnostics": [],
+        }
+    ),
+    encoding="utf-8",
+)
+""".strip(),
+                encoding="utf-8",
+            )
+
+            result = self._run_bridge(
+                {
+                    "protocol_version": 2,
+                    "plan_version": 2,
+                    "resources": [
+                        {
+                            "id": "prefab",
+                            "kind": "prefab",
+                            "path": "Assets/Generated/New.prefab",
+                            "mode": "create",
+                        }
+                    ],
+                    "ops": [
+                        {"resource": "prefab", "op": "create_prefab", "name": "Root"},
+                        {
+                            "resource": "prefab",
+                            "op": "add_component",
+                            "target": "$root",
+                            "type": "UnityEngine.Camera",
+                            "result": "c_cam",
+                        },
+                        {
+                            "resource": "prefab",
+                            "op": "set",
+                            "target": "$c_cam",
+                            "path": "cameraRef",
+                            "value": {"handle": "c_cam"},
+                        },
+                        {
+                            "resource": "prefab",
+                            "op": "insert_array_element",
+                            "target": "$c_cam",
+                            "path": "refs.Array.data",
+                            "index": 0,
+                            "value": {"handle": "root"},
+                        },
+                        {"resource": "prefab", "op": "save"},
+                    ],
+                },
+                env_overrides={
+                    "UNITYTOOL_UNITY_COMMAND": f'"{sys.executable}" "{unity_runner}"',
+                    "UNITYTOOL_UNITY_PROJECT_PATH": str(root),
+                },
+            )
+
+        self.assertTrue(result["success"])
+        request_ops = result["data"]["request_ops"]
+        # set op with handle value
+        set_op = request_ops[2]
+        self.assertEqual("handle", set_op["value_kind"])
+        self.assertEqual("c_cam", set_op["value_string"])
+        self.assertNotIn("value_json", set_op)
+        # insert_array_element op with handle value
+        insert_op = request_ops[3]
+        self.assertEqual("handle", insert_op["value_kind"])
+        self.assertEqual("root", insert_op["value_string"])
+        self.assertNotIn("value_json", insert_op)
+
     def test_reference_bridge_surfaces_nonzero_unity_exit(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
