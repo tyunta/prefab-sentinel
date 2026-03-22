@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using UnityEditor;
+using UnityEditor.SceneManagement;
 using UnityEngine;
 
 namespace PrefabSentinel
@@ -30,6 +31,7 @@ namespace PrefabSentinel
 
             // select_object
             public string hierarchy_path = string.Empty;
+            public string prefab_asset_path = string.Empty; // non-empty = open Prefab Stage first
 
             // frame_selected
             public float zoom = 0f;         // 0 = keep current
@@ -139,6 +141,9 @@ namespace PrefabSentinel
                     break;
                 case "capture_console_logs":
                     response = HandleCaptureConsoleLogs(request);
+                    break;
+                case "refresh_asset_database":
+                    response = HandleRefreshAssetDatabase();
                     break;
                 default:
                     response = BuildError(
@@ -257,6 +262,40 @@ namespace PrefabSentinel
             if (string.IsNullOrEmpty(request.hierarchy_path))
                 return BuildError("EDITOR_CTRL_MISSING_PATH", "hierarchy_path is required for select_object.");
 
+            // Prefab Stage mode: open the prefab and search within its stage root
+            if (!string.IsNullOrEmpty(request.prefab_asset_path))
+            {
+                var stage = PrefabStageUtility.OpenPrefab(request.prefab_asset_path);
+                if (stage == null)
+                    return BuildError("EDITOR_CTRL_PREFAB_STAGE_FAILED",
+                        $"Failed to open Prefab Stage: {request.prefab_asset_path}");
+
+                var stageRoot = stage.prefabContentsRoot;
+                if (stageRoot == null)
+                    return BuildError("EDITOR_CTRL_PREFAB_STAGE_FAILED",
+                        $"Prefab Stage root is null: {request.prefab_asset_path}");
+
+                // Try finding the child by relative path under the stage root
+                Transform target = stageRoot.transform.Find(request.hierarchy_path);
+                // Also try searching directly if path matches the root name
+                if (target == null && stageRoot.name == request.hierarchy_path)
+                    target = stageRoot.transform;
+
+                if (target == null)
+                    return BuildError("EDITOR_CTRL_OBJECT_NOT_FOUND",
+                        $"GameObject not found in Prefab Stage: {request.hierarchy_path}");
+
+                Selection.activeGameObject = target.gameObject;
+                return BuildSuccess("EDITOR_CTRL_SELECT_OK",
+                    $"Selected in Prefab Stage: {request.hierarchy_path}",
+                    data: new EditorControlData
+                    {
+                        selected_object = request.hierarchy_path,
+                        executed = true
+                    });
+            }
+
+            // Scene mode: search scene hierarchy
             GameObject go = GameObject.Find(request.hierarchy_path);
             if (go == null)
                 return BuildError("EDITOR_CTRL_OBJECT_NOT_FOUND",
@@ -355,6 +394,14 @@ namespace PrefabSentinel
 
             return BuildSuccess("EDITOR_CTRL_PING_OK",
                 $"Pinged: {request.asset_path}",
+                data: new EditorControlData { executed = true });
+        }
+
+        private static EditorControlResponse HandleRefreshAssetDatabase()
+        {
+            AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+            return BuildSuccess("EDITOR_CTRL_REFRESH_OK",
+                "AssetDatabase.Refresh completed",
                 data: new EditorControlData { executed = true });
         }
 

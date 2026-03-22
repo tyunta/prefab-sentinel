@@ -34,6 +34,7 @@ SUPPORTED_ACTIONS = frozenset(
         "instantiate_to_scene",
         "ping_object",
         "capture_console_logs",
+        "refresh_asset_database",
     }
 )
 

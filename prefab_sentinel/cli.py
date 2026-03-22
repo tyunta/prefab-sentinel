@@ -666,6 +666,11 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Hierarchy path of the GameObject (e.g. /Canvas/Panel/Button).",
     )
+    editor_select.add_argument(
+        "--prefab-stage",
+        default="",
+        help="Asset path of a Prefab to open in Prefab Stage before selecting (e.g. Assets/Prefabs/Avatar.prefab).",
+    )
 
     editor_frame = editor_sub.add_parser(
         "frame",
@@ -734,6 +739,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--classify",
         action="store_true",
         help="Run classify_errors() pattern matching on captured entries.",
+    )
+
+    editor_sub.add_parser(
+        "refresh",
+        help="Trigger AssetDatabase.Refresh() in the running Unity Editor.",
     )
 
     return parser
@@ -1584,10 +1594,13 @@ def main(argv: list[str] | None = None) -> int:
                 height=args.height,
             )
         elif cmd == "select":
-            result = send_action(
-                action="select_object",
-                hierarchy_path=args.path,
-            )
+            kwargs: dict[str, Any] = {
+                "action": "select_object",
+                "hierarchy_path": args.path,
+            }
+            if args.prefab_stage:
+                kwargs["prefab_asset_path"] = args.prefab_stage
+            result = send_action(**kwargs)
         elif cmd == "frame":
             result = send_action(
                 action="frame_selected",
@@ -1629,6 +1642,8 @@ def main(argv: list[str] | None = None) -> int:
                     mcp = RuntimeValidationMcp()
                     classification = mcp.classify_errors(log_lines)
                     result["classification"] = classification.to_dict()
+        elif cmd == "refresh":
+            result = send_action(action="refresh_asset_database")
         else:
             parser.error(f"Unknown editor command: {cmd}")
             return 2

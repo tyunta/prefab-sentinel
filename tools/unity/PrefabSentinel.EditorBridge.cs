@@ -169,7 +169,8 @@ namespace PrefabSentinel
                     || header.action == "frame_selected"
                     || header.action == "instantiate_to_scene"
                     || header.action == "ping_object"
-                    || header.action == "capture_console_logs");
+                    || header.action == "capture_console_logs"
+                    || header.action == "refresh_asset_database");
 
             if (isRuntime)
             {

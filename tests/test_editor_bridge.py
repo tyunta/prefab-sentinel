@@ -172,6 +172,7 @@ class TestSupportedActions(unittest.TestCase):
             "instantiate_to_scene",
             "ping_object",
             "capture_console_logs",
+            "refresh_asset_database",
         }
         self.assertEqual(expected, SUPPORTED_ACTIONS)
 
@@ -197,6 +198,20 @@ class TestCliEditorSubcommands(unittest.TestCase):
         args = parser.parse_args(["editor", "select", "--path", "/Canvas/Panel"])
         self.assertEqual("select", args.editor_command)
         self.assertEqual("/Canvas/Panel", args.path)
+        self.assertEqual("", args.prefab_stage)
+
+    def test_editor_select_parser_with_prefab_stage(self) -> None:
+        from prefab_sentinel.cli import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args([
+            "editor", "select",
+            "--path", "Hair_Base",
+            "--prefab-stage", "Assets/Prefabs/Variant.prefab",
+        ])
+        self.assertEqual("select", args.editor_command)
+        self.assertEqual("Hair_Base", args.path)
+        self.assertEqual("Assets/Prefabs/Variant.prefab", args.prefab_stage)
 
     def test_editor_frame_parser(self) -> None:
         from prefab_sentinel.cli import build_parser
@@ -256,6 +271,14 @@ class TestCliEditorSubcommands(unittest.TestCase):
         self.assertEqual("error", args.filter)
         self.assertEqual(120, args.since)
         self.assertTrue(args.classify)
+
+
+    def test_editor_refresh_parser(self) -> None:
+        from prefab_sentinel.cli import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args(["editor", "refresh"])
+        self.assertEqual("refresh", args.editor_command)
 
 
 if __name__ == "__main__":
