@@ -532,6 +532,20 @@ def _finalize_bridge_plan_response(
     }
 
 
+def _to_relative_asset_path(path: str) -> str:
+    """Extract relative ``Assets/...`` path, stripping any absolute prefix.
+
+    Editor Bridge runs inside the same Unity Editor, so relative asset paths
+    are sufficient.  Sending absolute paths causes prefix-mismatch failures
+    when WSL and Windows path normalisation disagree.
+    """
+    normalized = path.replace("\\", "/")
+    idx = normalized.find("Assets/")
+    if idx >= 0:
+        return normalized[idx:]
+    return normalized
+
+
 def _run_via_editor_bridge(
     *,
     watch_dir: Path,
@@ -540,7 +554,7 @@ def _run_via_editor_bridge(
     ops: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """Write a request file to watch_dir and poll for the response."""
-    target = to_windows_path(str(resource.get("path", "")).strip())
+    target = _to_relative_asset_path(str(resource.get("path", "")).strip())
     request_id = uuid.uuid4().hex
     request_file = watch_dir / f"{request_id}.request.json"
     response_file = watch_dir / f"{request_id}.response.json"

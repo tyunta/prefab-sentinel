@@ -1622,8 +1622,8 @@ class EditorBridgeModeTests(unittest.TestCase):
         # Batchmode path: missing UNITY_COMMAND
         self.assertEqual("BRIDGE_UNITY_COMMAND_MISSING", result["code"])
 
-    def test_editor_mode_target_path_converted_to_windows(self) -> None:
-        """In editor bridge mode, the target in the request JSON must be a Windows path."""
+    def test_editor_mode_sends_relative_asset_path(self) -> None:
+        """In editor bridge mode, absolute paths are stripped to relative Assets/... paths."""
         import threading
 
         with tempfile.TemporaryDirectory() as watch_dir:
@@ -1688,11 +1688,8 @@ class EditorBridgeModeTests(unittest.TestCase):
 
         self.assertTrue(result["success"])
         self.assertEqual(1, len(captured_target))
-        # to_windows_path converts /mnt/d/... to D:\... on WSL; on non-WSL it's a no-op
-        from prefab_sentinel.wsl_compat import to_windows_path
-
-        expected_target = to_windows_path(wsl_path)
-        self.assertEqual(expected_target, captured_target[0])
+        # Editor Bridge strips absolute prefix, sends relative Assets/... path
+        self.assertEqual("Assets/Test.prefab", captured_target[0])
 
     def test_editor_mode_watch_dir_accepts_windows_path(self) -> None:
         """Watch dir should be normalised via to_wsl_path, so Windows paths work on WSL."""
