@@ -793,6 +793,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="Trigger AssetDatabase.Refresh() in the running Unity Editor.",
     )
 
+    editor_set_material = editor_sub.add_parser(
+        "set-material",
+        help="Replace a material slot on a Renderer at runtime (non-destructive, Undo-able).",
+    )
+    editor_set_material.add_argument(
+        "--renderer",
+        required=True,
+        help="Hierarchy path to the GameObject with a Renderer (e.g. /Body).",
+    )
+    editor_set_material.add_argument(
+        "--index",
+        type=int,
+        required=True,
+        help="Material slot index (0-based).",
+    )
+    editor_set_material.add_argument(
+        "--material-guid",
+        required=True,
+        help="GUID of the replacement Material asset (32-char hex).",
+    )
+
     return parser
 
 
@@ -1718,6 +1739,13 @@ def main(argv: list[str] | None = None) -> int:
                     result["classification"] = classification.to_dict()
         elif cmd == "refresh":
             result = send_action(action="refresh_asset_database")
+        elif cmd == "set-material":
+            result = send_action(
+                action="set_material",
+                renderer_path=args.renderer,
+                material_index=args.index,
+                material_guid=args.material_guid,
+            )
         else:
             parser.error(f"Unknown editor command: {cmd}")
             return 2

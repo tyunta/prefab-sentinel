@@ -35,6 +35,7 @@ SUPPORTED_ACTIONS = frozenset(
         "ping_object",
         "capture_console_logs",
         "refresh_asset_database",
+        "set_material",
     }
 )
 

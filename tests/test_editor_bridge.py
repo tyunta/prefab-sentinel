@@ -173,6 +173,7 @@ class TestSupportedActions(unittest.TestCase):
             "ping_object",
             "capture_console_logs",
             "refresh_asset_database",
+            "set_material",
         }
         self.assertEqual(expected, SUPPORTED_ACTIONS)
 
@@ -279,6 +280,21 @@ class TestCliEditorSubcommands(unittest.TestCase):
         parser = build_parser()
         args = parser.parse_args(["editor", "refresh"])
         self.assertEqual("refresh", args.editor_command)
+
+    def test_editor_set_material_parser(self) -> None:
+        from prefab_sentinel.cli import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args([
+            "editor", "set-material",
+            "--renderer", "/Body/Mesh",
+            "--index", "1",
+            "--material-guid", "dbb963022c0443144810d86a576e4e50",
+        ])
+        self.assertEqual("set-material", args.editor_command)
+        self.assertEqual("/Body/Mesh", args.renderer)
+        self.assertEqual(1, args.index)
+        self.assertEqual("dbb963022c0443144810d86a576e4e50", args.material_guid)
 
 
 if __name__ == "__main__":

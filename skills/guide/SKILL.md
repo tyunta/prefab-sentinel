@@ -105,6 +105,7 @@ prefab-sentinel editor console --filter error                    # エラー/例
 prefab-sentinel editor console --max-entries 50 --since 60       # 直近60秒の最大50件
 prefab-sentinel editor console --classify                        # 取得後に classify_errors() でパターンマッチ
 prefab-sentinel editor refresh                                   # AssetDatabase.Refresh() をトリガー
+prefab-sentinel editor set-material --renderer "/Body/Mesh" --index 1 --material-guid "dbb963022c044..."  # マテリアルスロット差し替え（非破壊、Undo対応）
 ```
 
 ## パッチ計画 JSON の構造

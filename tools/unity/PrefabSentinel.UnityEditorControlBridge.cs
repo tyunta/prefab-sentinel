@@ -44,6 +44,11 @@ namespace PrefabSentinel
             // ping_object
             public string asset_path = string.Empty;
 
+            // set_material
+            public string renderer_path = string.Empty;
+            public int material_index = -1;
+            public string material_guid = string.Empty;
+
             // capture_console_logs
             public int max_entries = 200;
             public string log_type_filter = "all"; // "all" | "error" | "warning" | "exception"
@@ -144,6 +149,9 @@ namespace PrefabSentinel
                     break;
                 case "refresh_asset_database":
                     response = HandleRefreshAssetDatabase();
+                    break;
+                case "set_material":
+                    response = HandleSetMaterial(request);
                     break;
                 default:
                     response = BuildError(
@@ -403,6 +411,49 @@ namespace PrefabSentinel
             return BuildSuccess("EDITOR_CTRL_REFRESH_OK",
                 "AssetDatabase.Refresh completed",
                 data: new EditorControlData { executed = true });
+        }
+
+        private static EditorControlResponse HandleSetMaterial(EditorControlRequest request)
+        {
+            if (string.IsNullOrEmpty(request.renderer_path))
+                return BuildError("EDITOR_CTRL_SET_MATERIAL_NO_PATH", "renderer_path is required.");
+            if (request.material_index < 0)
+                return BuildError("EDITOR_CTRL_SET_MATERIAL_NO_INDEX", "material_index is required (>= 0).");
+            if (string.IsNullOrEmpty(request.material_guid))
+                return BuildError("EDITOR_CTRL_SET_MATERIAL_NO_GUID", "material_guid is required.");
+
+            var go = GameObject.Find(request.renderer_path);
+            if (go == null)
+                return BuildError("EDITOR_CTRL_SET_MATERIAL_NOT_FOUND",
+                    $"GameObject not found: {request.renderer_path}");
+
+            var renderer = go.GetComponent<Renderer>();
+            if (renderer == null)
+                return BuildError("EDITOR_CTRL_SET_MATERIAL_NO_RENDERER",
+                    $"No Renderer on: {request.renderer_path}");
+
+            var mats = renderer.sharedMaterials;
+            if (request.material_index >= mats.Length)
+                return BuildError("EDITOR_CTRL_SET_MATERIAL_INDEX_OOB",
+                    $"material_index {request.material_index} out of range (length={mats.Length}).");
+
+            string assetPath = AssetDatabase.GUIDToAssetPath(request.material_guid);
+            if (string.IsNullOrEmpty(assetPath))
+                return BuildError("EDITOR_CTRL_SET_MATERIAL_GUID_NOT_FOUND",
+                    $"No asset found for GUID: {request.material_guid}");
+
+            var mat = AssetDatabase.LoadAssetAtPath<Material>(assetPath);
+            if (mat == null)
+                return BuildError("EDITOR_CTRL_SET_MATERIAL_LOAD_FAILED",
+                    $"Failed to load Material at: {assetPath}");
+
+            Undo.RecordObject(renderer, $"PrefabSentinel: Set material[{request.material_index}]");
+            mats[request.material_index] = mat;
+            renderer.sharedMaterials = mats;
+
+            return BuildSuccess("EDITOR_CTRL_SET_MATERIAL_OK",
+                $"Set material[{request.material_index}] to {assetPath}",
+                data: new EditorControlData { executed = true, read_only = false });
         }
 
         // ── Console Log Buffer ──
