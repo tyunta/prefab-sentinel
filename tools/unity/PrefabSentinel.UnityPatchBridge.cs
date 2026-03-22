@@ -462,6 +462,7 @@ namespace PrefabSentinel
 
                 PrefabUtility.SaveAsPrefabAsset(prefabRoot, assetPath);
                 AssetDatabase.SaveAssets();
+                AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
                 return new BridgeResponse
                 {
                     protocol_version = ProtocolVersion,
@@ -1242,6 +1243,7 @@ namespace PrefabSentinel
                             );
                         }
                         AssetDatabase.SaveAssets();
+                        AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
                         saved = true;
                         applied += 1;
                         continue;
@@ -1451,6 +1453,7 @@ namespace PrefabSentinel
 
                 EditorUtility.SetDirty(assetObject);
                 AssetDatabase.SaveAssets();
+                AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
                 UnityEngine.Object reopened = AssetDatabase.LoadMainAssetAtPath(assetPath);
                 if (reopened == null)
                 {
@@ -1908,6 +1911,7 @@ namespace PrefabSentinel
 
                         EditorUtility.SetDirty(assetObject);
                         AssetDatabase.SaveAssets();
+                        AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
                         UnityEngine.Object reopened = AssetDatabase.LoadMainAssetAtPath(assetPath);
                         if (reopened == null)
                         {
@@ -2014,6 +2018,7 @@ namespace PrefabSentinel
                 {
                     AssetDatabase.DeleteAsset(assetPath);
                     AssetDatabase.SaveAssets();
+                    AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
                 }
             }
         }
@@ -2819,6 +2824,7 @@ namespace PrefabSentinel
                             );
                         }
                         AssetDatabase.SaveAssets();
+                        AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
                         Scene reopened = EditorSceneManager.OpenScene(assetPath, OpenSceneMode.Single);
                         if (!reopened.IsValid() || !reopened.isLoaded)
                         {
