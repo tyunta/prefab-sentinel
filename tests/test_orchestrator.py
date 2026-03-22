@@ -259,6 +259,121 @@ class InspectWiringTests(unittest.TestCase):
         self.assertEqual(comps[0]["script_name"], "")
 
 
+class InspectWiringVariantTests(unittest.TestCase):
+    """inspect_wiring should detect Variant prefabs and analyze wiring from the base."""
+
+    BASE_GUID = "aabbccddaabbccddaabbccddaabbccdd"
+
+    def _make_variant_text(self) -> str:
+        return (
+            "%YAML 1.1\n"
+            "--- !u!1001 &100100000\n"
+            "PrefabInstance:\n"
+            f"  m_SourcePrefab: {{fileID: 100100000, guid: {self.BASE_GUID}, type: 3}}\n"
+            "  m_Modification:\n"
+            "    m_Modifications: []\n"
+        )
+
+    def _make_base_text(self) -> str:
+        from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
+
+        return (
+            YAML_HEADER
+            + make_gameobject("100", "BaseObj", ["200"])
+            + make_monobehaviour("200", "100")
+            + "  myRef: {fileID: 100}\n"
+        )
+
+    def test_variant_resolves_base_wiring(self) -> None:
+        import tempfile
+
+        base_text = self._make_base_text()
+        variant_text = self._make_variant_text()
+
+        with tempfile.NamedTemporaryFile(
+            suffix=".prefab", mode="w", delete=False, prefix="base_"
+        ) as base_f:
+            base_f.write(base_text)
+            base_f.flush()
+            base_path = base_f.name
+
+        with tempfile.NamedTemporaryFile(
+            suffix=".prefab", mode="w", delete=False, prefix="variant_"
+        ) as var_f:
+            var_f.write(variant_text)
+            var_f.flush()
+            variant_path = var_f.name
+
+        orch = _make_orchestrator()
+        orch.prefab_variant.resolve_prefab_chain.return_value = _ok_response(
+            "CHAIN_OK",
+            {
+                "chain": [
+                    {"path": variant_path, "guid": "variant_guid"},
+                    {"path": base_path, "guid": self.BASE_GUID},
+                ]
+            },
+        )
+        with patch(
+            "prefab_sentinel.orchestrator.find_project_root",
+            side_effect=Exception("no project"),
+        ):
+            result = orch.inspect_wiring(variant_path)
+
+        self.assertEqual("INSPECT_WIRING_RESULT", result.code)
+        self.assertTrue(result.data.get("is_variant"))
+        self.assertEqual(base_path, result.data.get("base_prefab_path"))
+        # Wiring should come from the base prefab (which has a MonoBehaviour)
+        self.assertGreater(result.data["component_count"], 0)
+
+    def test_non_variant_has_no_variant_fields(self) -> None:
+        import tempfile
+        from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
+
+        text = YAML_HEADER + make_gameobject("100", "Obj", ["200"]) + make_monobehaviour("200", "100")
+        with tempfile.NamedTemporaryFile(suffix=".prefab", mode="w", delete=False) as f:
+            f.write(text)
+            f.flush()
+            orch = _make_orchestrator()
+            with patch(
+                "prefab_sentinel.orchestrator.find_project_root",
+                side_effect=Exception("no project"),
+            ):
+                result = orch.inspect_wiring(f.name)
+
+        self.assertEqual("INSPECT_WIRING_RESULT", result.code)
+        self.assertNotIn("is_variant", result.data)
+        self.assertNotIn("base_prefab_path", result.data)
+
+    def test_variant_chain_resolution_failure_falls_through(self) -> None:
+        """If chain resolution returns no usable base, analyze the variant text as-is."""
+        import tempfile
+
+        variant_text = self._make_variant_text()
+        with tempfile.NamedTemporaryFile(suffix=".prefab", mode="w", delete=False) as f:
+            f.write(variant_text)
+            f.flush()
+            variant_path = f.name
+
+        orch = _make_orchestrator()
+        # Chain returns only the variant itself (no base)
+        orch.prefab_variant.resolve_prefab_chain.return_value = _ok_response(
+            "CHAIN_OK",
+            {"chain": [{"path": variant_path, "guid": "variant_guid"}]},
+        )
+        with patch(
+            "prefab_sentinel.orchestrator.find_project_root",
+            side_effect=Exception("no project"),
+        ):
+            result = orch.inspect_wiring(variant_path)
+
+        self.assertEqual("INSPECT_WIRING_RESULT", result.code)
+        # Should not be marked as variant since no base was found
+        self.assertNotIn("is_variant", result.data)
+        # Component count should be 0 (Variant text has no MonoBehaviours)
+        self.assertEqual(0, result.data["component_count"])
+
+
 class InspectWhereUsedTests(unittest.TestCase):
     def test_passthrough(self) -> None:
         orch = _make_orchestrator()

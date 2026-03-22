@@ -160,6 +160,39 @@ class Phase1Orchestrator:
                 diagnostics=[],
             )
 
+    def _resolve_variant_base(
+        self,
+        text: str,
+        target_path: str,
+        code_prefix: str,
+    ) -> tuple[str, bool, str | None, list[Diagnostic]]:
+        """If *text* is a Variant, resolve the chain and return the base text.
+
+        Returns ``(text, is_variant, base_prefab_path, chain_diagnostics)``.
+        When the file is not a Variant or the base cannot be read, the
+        original *text* is returned unchanged with ``is_variant=False``.
+        """
+        if SOURCE_PREFAB_PATTERN.search(text) is None:
+            return text, False, None, []
+
+        chain_response = self.prefab_variant.resolve_prefab_chain(target_path)
+        chain = chain_response.data.get("chain", [])
+        chain_diagnostics = list(chain_response.diagnostics)
+
+        base_path: str | None = None
+        for entry in reversed(chain):
+            entry_path = entry.get("path", "")
+            if entry_path and entry_path != target_path:
+                base_path = entry_path
+                break
+
+        if base_path:
+            base_text_or_error = self._read_target_file(base_path, code_prefix)
+            if not isinstance(base_text_or_error, ToolResponse):
+                return base_text_or_error, True, base_path, chain_diagnostics
+
+        return text, False, None, chain_diagnostics
+
     def inspect_wiring(
         self,
         target_path: str,
@@ -185,6 +218,10 @@ class Phase1Orchestrator:
                 data={"target_path": target_path, "file_type": suffix, "read_only": True},
                 diagnostics=[],
             )
+
+        text, is_variant, base_prefab_path, _ = self._resolve_variant_base(
+            text, target_path, "INSPECT_WIRING",
+        )
 
         result = analyze_wiring(text, target_path, udon_only=udon_only)
         diagnostics: list[Diagnostic] = (
@@ -230,21 +267,26 @@ class Phase1Orchestrator:
             }
             for comp in result.components
         ]
+        data: dict[str, object] = {
+            "target_path": target_path,
+            "udon_only": udon_only,
+            "read_only": True,
+            "component_count": len(result.components),
+            "null_reference_count": len(result.null_references),
+            "internal_broken_ref_count": len(result.internal_broken_refs),
+            "duplicate_reference_count": len(result.duplicate_references),
+            "components": component_summaries,
+        }
+        if is_variant:
+            data["is_variant"] = True
+            data["base_prefab_path"] = base_prefab_path
+
         return ToolResponse(
             success=success,
             severity=result.max_severity,
             code="INSPECT_WIRING_RESULT",
             message="inspect.wiring completed (read-only).",
-            data={
-                "target_path": target_path,
-                "udon_only": udon_only,
-                "read_only": True,
-                "component_count": len(result.components),
-                "null_reference_count": len(result.null_references),
-                "internal_broken_ref_count": len(result.internal_broken_refs),
-                "duplicate_reference_count": len(result.duplicate_references),
-                "components": component_summaries,
-            },
+            data=data,
             diagnostics=diagnostics,
         )
 
@@ -275,42 +317,23 @@ class Phase1Orchestrator:
                 diagnostics=[],
             )
 
-        # Detect Variant: if m_SourcePrefab exists, resolve base prefab hierarchy
-        is_variant = False
-        base_prefab_path: str | None = None
+        text, is_variant, base_prefab_path, chain_diags = self._resolve_variant_base(
+            text, target_path, "INSPECT_HIERARCHY",
+        )
         override_counts: dict[str, int] | None = None
-        diagnostics: list[Diagnostic] = []
+        diagnostics: list[Diagnostic] = list(chain_diags)
 
-        if SOURCE_PREFAB_PATTERN.search(text) is not None:
-            chain_response = self.prefab_variant.resolve_prefab_chain(target_path)
-            chain = chain_response.data.get("chain", [])
-            diagnostics.extend(chain_response.diagnostics)
-
-            # Find the base prefab (last entry in chain with a non-empty path)
-            base_path: str | None = None
-            for entry in reversed(chain):
-                entry_path = entry.get("path", "")
-                if entry_path and entry_path != target_path:
-                    base_path = entry_path
-                    break
-
-            if base_path:
-                base_text_or_error = self._read_target_file(base_path, "INSPECT_HIERARCHY")
-                if not isinstance(base_text_or_error, ToolResponse):
-                    text = base_text_or_error
-                    is_variant = True
-                    base_prefab_path = base_path
-
-                    # Build override count map from Variant overrides
-                    overrides_response = self.prefab_variant.list_overrides(target_path)
-                    if overrides_response.success:
-                        counts: dict[str, int] = {}
-                        for ov in overrides_response.data.get("overrides", []):
-                            fid = ov.get("target_file_id", "")
-                            if fid:
-                                counts[fid] = counts.get(fid, 0) + 1
-                        override_counts = counts
-                    diagnostics.extend(overrides_response.diagnostics)
+        if is_variant:
+            # Build override count map from Variant overrides
+            overrides_response = self.prefab_variant.list_overrides(target_path)
+            if overrides_response.success:
+                counts: dict[str, int] = {}
+                for ov in overrides_response.data.get("overrides", []):
+                    fid = ov.get("target_file_id", "")
+                    if fid:
+                        counts[fid] = counts.get(fid, 0) + 1
+                override_counts = counts
+            diagnostics.extend(overrides_response.diagnostics)
 
         result = analyze_hierarchy(text, override_counts=override_counts)
         tree_text = format_tree(
