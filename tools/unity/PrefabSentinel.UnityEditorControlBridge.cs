@@ -86,6 +86,17 @@ namespace PrefabSentinel
         }
 
         [Serializable]
+        public sealed class MaterialSlotEntry
+        {
+            public string renderer_path = string.Empty;
+            public string renderer_type = string.Empty;
+            public int slot_index = 0;
+            public string material_name = string.Empty;
+            public string material_asset_path = string.Empty;
+            public string material_guid = string.Empty;
+        }
+
+        [Serializable]
         public sealed class EditorControlData
         {
             public string output_path = string.Empty;
@@ -99,6 +110,7 @@ namespace PrefabSentinel
             public int total_entries = 0;
             public ConsoleLogEntry[] entries = Array.Empty<ConsoleLogEntry>();
             public ChildEntry[] children = Array.Empty<ChildEntry>();
+            public MaterialSlotEntry[] material_slots = Array.Empty<MaterialSlotEntry>();
             public bool read_only = true;
             public bool executed = false;
         }
@@ -173,6 +185,9 @@ namespace PrefabSentinel
                     break;
                 case "list_children":
                     response = HandleListChildren(request);
+                    break;
+                case "list_materials":
+                    response = HandleListMaterials(request);
                     break;
                 default:
                     response = BuildError(
@@ -533,6 +548,61 @@ namespace PrefabSentinel
                 {
                     children = children.ToArray(),
                     total_entries = children.Count,
+                    read_only = true,
+                    executed = true
+                });
+        }
+
+        private static EditorControlResponse HandleListMaterials(EditorControlRequest request)
+        {
+            if (string.IsNullOrEmpty(request.hierarchy_path))
+                return BuildError("EDITOR_CTRL_MISSING_PATH", "hierarchy_path is required for list_materials.");
+
+            GameObject go = GameObject.Find(request.hierarchy_path);
+            if (go == null)
+                return BuildError("EDITOR_CTRL_OBJECT_NOT_FOUND",
+                    $"GameObject not found: {request.hierarchy_path}");
+
+            var renderers = go.GetComponentsInChildren<Renderer>();
+            var slots = new List<MaterialSlotEntry>();
+
+            foreach (var renderer in renderers)
+            {
+                string rendererPath = GetHierarchyPath(renderer.transform);
+                string rendererType = renderer.GetType().Name;
+                var materials = renderer.sharedMaterials;
+
+                for (int i = 0; i < materials.Length; i++)
+                {
+                    var mat = materials[i];
+                    string matName = mat != null ? mat.name : "(none)";
+                    string matAssetPath = "";
+                    string matGuid = "";
+
+                    if (mat != null)
+                    {
+                        matAssetPath = AssetDatabase.GetAssetPath(mat);
+                        matGuid = AssetDatabase.AssetPathToGUID(matAssetPath);
+                    }
+
+                    slots.Add(new MaterialSlotEntry
+                    {
+                        renderer_path = rendererPath,
+                        renderer_type = rendererType,
+                        slot_index = i,
+                        material_name = matName,
+                        material_asset_path = matAssetPath,
+                        material_guid = matGuid
+                    });
+                }
+            }
+
+            return BuildSuccess("EDITOR_CTRL_LIST_MATERIALS_OK",
+                $"Found {slots.Count} material slots on {renderers.Length} renderers under {go.name}",
+                data: new EditorControlData
+                {
+                    material_slots = slots.ToArray(),
+                    total_entries = slots.Count,
                     read_only = true,
                     executed = true
                 });

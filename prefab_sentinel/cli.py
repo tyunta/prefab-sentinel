@@ -845,6 +845,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum depth to traverse (default: 1).",
     )
 
+    editor_list_materials = editor_sub.add_parser(
+        "list-materials",
+        help="List material slots on renderers under a GameObject at runtime.",
+    )
+    editor_list_materials.add_argument(
+        "--path",
+        required=True,
+        help="Hierarchy path to the root GameObject.",
+    )
+
     return parser
 
 
@@ -1789,6 +1799,11 @@ def main(argv: list[str] | None = None) -> int:
                 action="list_children",
                 hierarchy_path=args.path,
                 list_depth=args.depth,
+            )
+        elif cmd == "list-materials":
+            result = send_action(
+                action="list_materials",
+                hierarchy_path=args.path,
             )
         else:
             parser.error(f"Unknown editor command: {cmd}")

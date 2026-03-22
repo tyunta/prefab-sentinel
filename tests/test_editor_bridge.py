@@ -176,6 +176,7 @@ class TestSupportedActions(unittest.TestCase):
             "set_material",
             "delete_object",
             "list_children",
+            "list_materials",
         }
         self.assertEqual(expected, SUPPORTED_ACTIONS)
 
@@ -332,6 +333,17 @@ class TestCliEditorSubcommands(unittest.TestCase):
             "--path", "/AvatarRoot",
         ])
         self.assertEqual(1, args.depth)
+
+    def test_editor_list_materials_parser(self) -> None:
+        from prefab_sentinel.cli import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args([
+            "editor", "list-materials",
+            "--path", "/AvatarRoot/Body",
+        ])
+        self.assertEqual("list-materials", args.editor_command)
+        self.assertEqual("/AvatarRoot/Body", args.path)
 
 
 if __name__ == "__main__":

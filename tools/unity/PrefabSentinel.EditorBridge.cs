@@ -173,7 +173,8 @@ namespace PrefabSentinel
                     || header.action == "refresh_asset_database"
                     || header.action == "set_material"
                     || header.action == "delete_object"
-                    || header.action == "list_children");
+                    || header.action == "list_children"
+                    || header.action == "list_materials");
 
             if (isRuntime)
             {
