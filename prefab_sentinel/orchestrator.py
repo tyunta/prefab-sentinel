@@ -32,11 +32,15 @@ class Phase1Orchestrator:
 
     @classmethod
     def default(cls, project_root: Path | None = None) -> Phase1Orchestrator:
+        pv = PrefabVariantMcp(project_root=project_root)
         return cls(
             reference_resolver=ReferenceResolverMcp(project_root=project_root),
-            prefab_variant=PrefabVariantMcp(project_root=project_root),
+            prefab_variant=pv,
             runtime_validation=RuntimeValidationMcp(project_root=project_root),
-            serialized_object=SerializedObjectMcp(),
+            serialized_object=SerializedObjectMcp(
+                project_root=project_root,
+                prefab_variant=pv,
+            ),
         )
 
     def inspect_variant(

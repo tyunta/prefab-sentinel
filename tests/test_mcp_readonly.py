@@ -2009,5 +2009,158 @@ class OrchestratorSuggestionTests(unittest.TestCase):
             self.assertEqual("where_used", response.data["steps"][0]["step"])
 
 
+class TestSerializedObjectMcpProjectRoot(unittest.TestCase):
+    """P2: _resolve_target_path uses project_root, not CWD."""
+
+    def test_resolve_target_path_uses_project_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_root = Path(temp_dir)
+            assets_dir = project_root / "Assets" / "Tyunta"
+            assets_dir.mkdir(parents=True)
+            (assets_dir / "Test.prefab").write_text("%YAML 1.1\n")
+
+            mcp = SerializedObjectMcp(project_root=project_root)
+            resolved = mcp._resolve_target_path("Assets/Tyunta/Test.prefab")
+            self.assertEqual(resolved, (project_root / "Assets" / "Tyunta" / "Test.prefab").resolve())
+
+    def test_resolve_target_path_no_doubling(self) -> None:
+        """CWD being inside Assets/ must not cause path doubling."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_root = Path(temp_dir)
+            assets_dir = project_root / "Assets" / "Tyunta"
+            assets_dir.mkdir(parents=True)
+            (assets_dir / "Test.prefab").write_text("%YAML 1.1\n")
+
+            mcp = SerializedObjectMcp(project_root=project_root)
+            # Even if CWD were inside Assets/Tyunta, project_root anchors the path
+            resolved = mcp._resolve_target_path("Assets/Tyunta/Test.prefab")
+            path_str = str(resolved)
+            self.assertNotIn("Assets/Tyunta/Assets/Tyunta", path_str.replace("\\", "/"))
+
+    def test_default_orchestrator_passes_project_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_root = Path(temp_dir)
+            (project_root / "Assets").mkdir()
+
+            orchestrator = Phase1Orchestrator.default(project_root=project_root)
+            self.assertEqual(
+                orchestrator.serialized_object.project_root,
+                project_root.resolve(),
+            )
+
+
+class TestBeforeValueResolution(unittest.TestCase):
+    """P1: _validate_op resolves before values from Variant overrides."""
+
+    _VARIANT_YAML = (
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n"
+        "--- !u!1001 &100100000\n"
+        "PrefabInstance:\n"
+        "  m_SourcePrefab: {fileID: 100100000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n"
+        "  m_Modifications:\n"
+        "  - target: {fileID: 42, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n"
+        "    propertyPath: m_Materials.Array.data[0]\n"
+        "    value: \n"
+        "    objectReference: {fileID: 2100000, guid: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, type: 2}\n"
+    )
+
+    def _make_variant(self, tmp: str) -> Path:
+        project_root = Path(tmp)
+        assets = project_root / "Assets"
+        assets.mkdir(parents=True)
+        variant_path = assets / "Variant.prefab"
+        variant_path.write_text(self._VARIANT_YAML)
+        meta = assets / "Variant.prefab.meta"
+        meta.write_text("guid: cccccccccccccccccccccccccccccccc\n")
+        return project_root
+
+    def test_before_shows_existing_override_value(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = self._make_variant(tmp)
+            pv = PrefabVariantMcp(project_root=project_root)
+            mcp = SerializedObjectMcp(project_root=project_root, prefab_variant=pv)
+
+            diagnostics: list = []
+            result = mcp._validate_op(
+                "Assets/Variant.prefab",
+                0,
+                {"op": "set", "component": "42", "path": "m_Materials.Array.data[0]", "value": "new_mat"},
+                diagnostics,
+            )
+            self.assertIsNotNone(result)
+            # The before value should be the objectReference from the override
+            self.assertNotEqual("(unknown)", result["before"])
+            self.assertNotEqual("(unresolved)", result["before"])
+            # Should contain the GUID reference
+            self.assertIn("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", result["before"])
+
+    def test_before_shows_base_default_for_unoverridden_property(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = self._make_variant(tmp)
+            pv = PrefabVariantMcp(project_root=project_root)
+            mcp = SerializedObjectMcp(project_root=project_root, prefab_variant=pv)
+
+            diagnostics: list = []
+            result = mcp._validate_op(
+                "Assets/Variant.prefab",
+                0,
+                {"op": "set", "component": "42", "path": "m_IsActive", "value": 1},
+                diagnostics,
+            )
+            self.assertIsNotNone(result)
+            self.assertEqual("(base-default)", result["before"])
+
+    def test_before_unresolved_without_prefab_variant(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = self._make_variant(tmp)
+            mcp = SerializedObjectMcp(project_root=project_root)
+
+            diagnostics: list = []
+            result = mcp._validate_op(
+                "Assets/Variant.prefab",
+                0,
+                {"op": "set", "component": "42", "path": "m_Materials.Array.data[0]", "value": "new_mat"},
+                diagnostics,
+            )
+            self.assertIsNotNone(result)
+            self.assertEqual("(unresolved)", result["before"])
+
+    def test_before_unresolved_for_non_variant(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            assets = project_root / "Assets"
+            assets.mkdir()
+            prefab = assets / "Base.prefab"
+            prefab.write_text("%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Root\n")
+
+            pv = PrefabVariantMcp(project_root=project_root)
+            mcp = SerializedObjectMcp(project_root=project_root, prefab_variant=pv)
+
+            diagnostics: list = []
+            result = mcp._validate_op(
+                "Assets/Base.prefab",
+                0,
+                {"op": "set", "component": "1", "path": "m_Name", "value": "NewRoot"},
+                diagnostics,
+            )
+            self.assertIsNotNone(result)
+            self.assertEqual("(unresolved)", result["before"])
+
+    def test_cache_cleared_at_dry_run_start(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = self._make_variant(tmp)
+            pv = PrefabVariantMcp(project_root=project_root)
+            mcp = SerializedObjectMcp(project_root=project_root, prefab_variant=pv)
+
+            # Manually seed cache to simulate a previous call
+            mcp._before_cache = {"stale_key": "stale_value"}
+            mcp.dry_run_patch(
+                "Assets/Variant.prefab",
+                [{"op": "set", "component": "42", "path": "m_Materials.Array.data[0]", "value": "x"}],
+            )
+            # Stale key should be gone; cache was rebuilt from scratch
+            self.assertNotIn("stale_key", mcp._before_cache or {})
+
+
 if __name__ == "__main__":
     unittest.main()

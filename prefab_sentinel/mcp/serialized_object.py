@@ -14,7 +14,13 @@ from prefab_sentinel.patch_plan import (
     PLAN_VERSION,
     build_bridge_request,
 )
-from prefab_sentinel.unity_assets import decode_text_file
+from prefab_sentinel.mcp.prefab_variant import PrefabVariantMcp
+from prefab_sentinel.unity_assets import (
+    SOURCE_PREFAB_PATTERN,
+    decode_text_file,
+    find_project_root,
+    resolve_scope_path,
+)
 
 _SUPPORTED_OPS = {"set", "insert_array_element", "remove_array_element"}
 _PREFAB_CREATE_OPS = {
@@ -263,6 +269,8 @@ class SerializedObjectMcp:
         self,
         bridge_command: tuple[str, ...] | None = None,
         bridge_timeout_sec: float = 120.0,
+        project_root: Path | None = None,
+        prefab_variant: PrefabVariantMcp | None = None,
     ) -> None:
         self.bridge_command_error: str | None = None
         self.bridge_command = (
@@ -275,6 +283,9 @@ class SerializedObjectMcp:
         except (TypeError, ValueError):
             timeout = 120.0
         self.bridge_timeout_sec = max(1.0, timeout)
+        self.project_root = find_project_root(project_root or Path.cwd())
+        self._prefab_variant = prefab_variant
+        self._before_cache: dict[str, str] | None = None
         self._resource_adapters: tuple[_ResourceAdapter, ...] = (
             _JsonResourceAdapter(),
             _PrefabResourceAdapter(),
@@ -2313,7 +2324,7 @@ class SerializedObjectMcp:
                 "op": op_name,
                 "component": component,
                 "path": property_path,
-                "before": "(unknown)",
+                "before": self._resolve_before_value(target, component, property_path),
                 "after": op.get("value"),
             }
 
@@ -2365,7 +2376,7 @@ class SerializedObjectMcp:
                 "op": op_name,
                 "component": component,
                 "path": property_path,
-                "before": "(unknown)",
+                "before": self._resolve_before_value(target, component, property_path),
                 "after": {"insert_index": item_index, "value": op.get("value")},
             }
 
@@ -2373,15 +2384,70 @@ class SerializedObjectMcp:
             "op": op_name,
             "component": component,
             "path": property_path,
-            "before": "(unknown)",
+            "before": self._resolve_before_value(target, component, property_path),
             "after": {"remove_index": item_index},
         }
 
+    def _resolve_before_value(
+        self,
+        target: str,
+        component: str,
+        property_path: str,
+    ) -> str:
+        """Best-effort resolution of the current value before a patch op.
+
+        For Prefab Variants with an existing override matching *component* and
+        *property_path*, returns the current override value from
+        ``compute_effective_values()``.  Otherwise returns a labelled
+        placeholder so the caller knows *why* the value could not be resolved.
+        """
+        if self._prefab_variant is None:
+            return "(unresolved)"
+
+        # Build/cache the effective-values lookup for this target.
+        # An empty dict signals "file read but no overrides found" to avoid
+        # re-reading the file for every op on the same target.
+        if self._before_cache is None:
+            try:
+                target_path = resolve_scope_path(target, self.project_root)
+                text = decode_text_file(target_path)
+            except (OSError, UnicodeDecodeError):
+                self._before_cache = {}
+                return "(unresolved)"
+
+            if SOURCE_PREFAB_PATTERN.search(text) is None:
+                self._before_cache = {}
+                return "(unresolved)"
+
+            response = self._prefab_variant.compute_effective_values(target)
+            if not response.success:
+                self._before_cache = {}
+                return "(unresolved)"
+
+            cache: dict[str, str] = {}
+            for entry in response.data.get("effective_values", []):
+                key = f"{entry.get('target_file_id', '')}:{entry.get('property_path', '')}"
+                val = entry.get("value", "")
+                obj_ref = entry.get("object_reference", "")
+                cache[key] = obj_ref if obj_ref and obj_ref != "{fileID: 0}" else val
+            self._before_cache = cache
+
+        if not self._before_cache:
+            # Empty cache = non-Variant or unreadable file (sentinel)
+            return "(unresolved)"
+
+        lookup_key = f"{component}:{property_path}"
+        value = self._before_cache.get(lookup_key)
+        if value is not None:
+            return value
+        return "(base-default)"
+
+    def _clear_before_cache(self) -> None:
+        """Reset the per-target before-value cache."""
+        self._before_cache = None
+
     def _resolve_target_path(self, target: str) -> Path:
-        resolved = Path(target)
-        if not resolved.is_absolute():
-            resolved = Path.cwd() / resolved
-        return resolved.resolve()
+        return resolve_scope_path(target, self.project_root)
 
     def _split_path(self, property_path: str) -> list[str]:
         return [segment for segment in property_path.split(".") if segment]
@@ -2496,6 +2562,7 @@ class SerializedObjectMcp:
         raise ValueError(f"unsupported op '{op_name}'")
 
     def dry_run_patch(self, target: str, ops: list[dict[str, Any]]) -> ToolResponse:
+        self._clear_before_cache()
         diagnostics: list[Diagnostic] = []
         if not str(target).strip():
             diagnostics.append(
