@@ -17,6 +17,7 @@ from prefab_sentinel.structure_validator import validate_structure
 from prefab_sentinel.udon_wiring import analyze_wiring
 from prefab_sentinel.unity_assets import (
     GAMEOBJECT_BEARING_SUFFIXES,
+    SOURCE_PREFAB_PATTERN,
     collect_project_guid_index,
     decode_text_file,
     find_project_root,
@@ -268,7 +269,44 @@ class Phase1Orchestrator:
                 diagnostics=[],
             )
 
-        result = analyze_hierarchy(text)
+        # Detect Variant: if m_SourcePrefab exists, resolve base prefab hierarchy
+        is_variant = False
+        base_prefab_path: str | None = None
+        override_counts: dict[str, int] | None = None
+        diagnostics: list[Diagnostic] = []
+
+        if SOURCE_PREFAB_PATTERN.search(text) is not None:
+            chain_response = self.prefab_variant.resolve_prefab_chain(target_path)
+            chain = chain_response.data.get("chain", [])
+            diagnostics.extend(chain_response.diagnostics)
+
+            # Find the base prefab (last entry in chain with a non-empty path)
+            base_path: str | None = None
+            for entry in reversed(chain):
+                entry_path = entry.get("path", "")
+                if entry_path and entry_path != target_path:
+                    base_path = entry_path
+                    break
+
+            if base_path:
+                base_text_or_error = self._read_target_file(base_path, "INSPECT_HIERARCHY")
+                if not isinstance(base_text_or_error, ToolResponse):
+                    text = base_text_or_error
+                    is_variant = True
+                    base_prefab_path = base_path
+
+                    # Build override count map from Variant overrides
+                    overrides_response = self.prefab_variant.list_overrides(target_path)
+                    if overrides_response.success:
+                        counts: dict[str, int] = {}
+                        for ov in overrides_response.data.get("overrides", []):
+                            fid = ov.get("target_file_id", "")
+                            if fid:
+                                counts[fid] = counts.get(fid, 0) + 1
+                        override_counts = counts
+                    diagnostics.extend(overrides_response.diagnostics)
+
+        result = analyze_hierarchy(text, override_counts=override_counts)
         tree_text = format_tree(
             result,
             max_depth=max_depth,
@@ -276,30 +314,38 @@ class Phase1Orchestrator:
         )
 
         def _serialize_node(node: HierarchyNode) -> dict[str, object]:
-            return {
+            d: dict[str, object] = {
                 "file_id": node.file_id,
                 "name": node.name,
                 "depth": node.depth,
                 "components": node.components,
                 "children": [_serialize_node(c) for c in node.children],
             }
+            if node.override_count > 0:
+                d["override_count"] = node.override_count
+            return d
+
+        data: dict[str, object] = {
+            "target_path": target_path,
+            "read_only": True,
+            "total_game_objects": result.total_game_objects,
+            "total_components": result.total_components,
+            "max_depth": result.max_depth,
+            "root_count": len(result.roots),
+            "tree": tree_text,
+            "roots": [_serialize_node(r) for r in result.roots],
+        }
+        if is_variant:
+            data["is_variant"] = True
+            data["base_prefab_path"] = base_prefab_path
 
         return ToolResponse(
             success=True,
             severity=Severity.INFO,
             code="INSPECT_HIERARCHY_RESULT",
             message="inspect.hierarchy completed (read-only).",
-            data={
-                "target_path": target_path,
-                "read_only": True,
-                "total_game_objects": result.total_game_objects,
-                "total_components": result.total_components,
-                "max_depth": result.max_depth,
-                "root_count": len(result.roots),
-                "tree": tree_text,
-                "roots": [_serialize_node(r) for r in result.roots],
-            },
-            diagnostics=[],
+            data=data,
+            diagnostics=diagnostics,
         )
 
     def inspect_structure(

@@ -54,6 +54,7 @@ class HierarchyNode:
     children: list[HierarchyNode]
     depth: int
     transform: TransformInfo | None
+    override_count: int = 0
 
 
 @dataclass(slots=True)
@@ -82,8 +83,17 @@ def _component_label(
     return None
 
 
-def analyze_hierarchy(text: str) -> HierarchyResult:
-    """Build a hierarchy tree from Unity YAML text."""
+def analyze_hierarchy(
+    text: str,
+    override_counts: dict[str, int] | None = None,
+) -> HierarchyResult:
+    """Build a hierarchy tree from Unity YAML text.
+
+    Args:
+        text: Raw Unity YAML content.
+        override_counts: Optional mapping of fileID -> override count to
+            annotate nodes (used for Variant hierarchy display).
+    """
     blocks = split_yaml_blocks(text)
     game_objects = parse_game_objects(blocks)
     transforms = parse_transforms(blocks)
@@ -116,6 +126,7 @@ def analyze_hierarchy(text: str) -> HierarchyResult:
                 if child_go_fid:
                     child_nodes.append(_build_node(child_go_fid, depth + 1))
 
+        ov_count = (override_counts or {}).get(go_fid, 0)
         return HierarchyNode(
             file_id=go_fid,
             name=name,
@@ -123,6 +134,7 @@ def analyze_hierarchy(text: str) -> HierarchyResult:
             children=child_nodes,
             depth=depth,
             transform=t,
+            override_count=ov_count,
         )
 
     # Identify root GameObjects: those whose Transform has m_Father == "0" or ""
@@ -168,6 +180,8 @@ def format_tree(
         label = node.name
         if show_components and node.components:
             label += f" ({', '.join(node.components)})"
+        if node.override_count > 0:
+            label += f" [overridden: {node.override_count}]"
         if node.depth == 0:
             lines.append(label)
         else:

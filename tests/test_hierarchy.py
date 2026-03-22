@@ -230,3 +230,50 @@ class TestFormatTree:
         lines = tree.split("\n")
         # Multiple roots should have a blank line between them
         assert "" in lines
+
+
+# ---------------------------------------------------------------------------
+# Override annotation tests (P4: Variant hierarchy)
+# ---------------------------------------------------------------------------
+
+
+class TestOverrideAnnotation:
+    def test_override_count_propagates(self) -> None:
+        text = (
+            YAML_HEADER
+            + make_gameobject("100", "Root", ["200"])
+            + make_transform("200", "100", children_file_ids=["400"])
+            + make_gameobject("300", "Child", ["400"])
+            + make_transform("400", "300", father_file_id="200")
+        )
+        override_counts = {"300": 3}
+        result = analyze_hierarchy(text, override_counts=override_counts)
+        assert len(result.roots) == 1
+        child = result.roots[0].children[0]
+        assert child.name == "Child"
+        assert child.override_count == 3
+
+    def test_override_marker_in_tree_text(self) -> None:
+        text = (
+            YAML_HEADER
+            + make_gameobject("100", "Root", ["200"])
+            + make_transform("200", "100", children_file_ids=["400"])
+            + make_gameobject("300", "Child", ["400"])
+            + make_transform("400", "300", father_file_id="200")
+        )
+        override_counts = {"300": 5}
+        result = analyze_hierarchy(text, override_counts=override_counts)
+        tree = format_tree(result)
+        assert "[overridden: 5]" in tree
+        # Root should not have marker
+        assert "Root [overridden" not in tree
+
+    def test_no_override_counts_no_markers(self) -> None:
+        text = (
+            YAML_HEADER
+            + make_gameobject("100", "Root", ["200"])
+            + make_transform("200", "100")
+        )
+        result = analyze_hierarchy(text)
+        tree = format_tree(result)
+        assert "[overridden" not in tree

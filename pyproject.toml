@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "prefab-sentinel"
-version = "0.2.7"
+version = "0.2.8"
 description = "Prefab Sentinel CLI and MCP contracts for safe Unity Prefab/Scene editing."
 requires-python = ">=3.11"
 readme = "README.md"
@@ -49,7 +49,7 @@ disable_error_code = ["arg-type", "index", "assignment", "var-annotated", "no-re
 packages = ["prefab_sentinel"]
 
 [tool.bumpversion]
-current_version = "0.2.7"
+current_version = "0.2.8"
 commit = false
 tag = false
 allow_dirty = true

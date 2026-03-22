@@ -194,7 +194,7 @@ prefab-sentinel editor refresh                                   # AssetDatabase
 - **Editor リモート操作**: `editor select` → `editor frame` で対象を表示 → `editor screenshot` で視覚確認。スクショはトリアージの起点として使い、データソースにしない（必ず `inspect wiring` / `validate refs` で裏取りする）
 - **Console ログ取得**: `editor console` でリアルタイムログをテキスト取得 → `--classify` で既存パターンマッチを適用してトリアージ。batchmode 後の Editor.log 読みではなく、Editor 起動中のバッファからの取得
 - **フィールド配線検査**: inspect wiring → null参照・fileID不整合の特定、重複は same-component（WARNING）/ cross-component（INFO）に分類
-- **階層構造の確認**: inspect hierarchy → ツリー構造・コンポーネント配置の把握
+- **階層構造の確認**: inspect hierarchy → ツリー構造・コンポーネント配置の把握。Variant ファイルではベース Prefab の階層を表示し、オーバーライド付きノードに `[overridden: N]` マーカーを付与
 - **内部構造の検証**: validate structure → fileID重複・Transform整合性・参照欠損の検出
 - **壊れた参照の修復**: validate refs → where-used → suggest ignore-guids → safe_fix / decision_required
 - **ランタイムエラー調査**: validate runtime → ログ分類 → アセット特定 → 修正提案
