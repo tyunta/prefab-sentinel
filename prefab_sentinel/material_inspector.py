@@ -226,6 +226,15 @@ def _inspect_base_materials(
     )
 
 
+def _has_renderer_blocks(text: str) -> bool:
+    """Return True if *text* contains non-stripped renderer YAML blocks."""
+    blocks = split_yaml_blocks(text)
+    return any(
+        b.class_id in RENDERER_CLASS_IDS and not b.is_stripped
+        for b in blocks
+    )
+
+
 def _inspect_variant_materials(
     target_path: str,
     variant_path: Path,
@@ -235,29 +244,48 @@ def _inspect_variant_materials(
 ) -> MaterialInspectionResult:
     """Inspect materials on a Prefab Variant.
 
-    Resolves the base prefab chain, reads renderer material slots from the
-    base, then applies material overrides from the variant's m_Modifications.
+    Resolves the base prefab chain (multi-level), reads renderer material
+    slots from the first ancestor that contains non-stripped renderer blocks,
+    then applies material overrides from the variant's m_Modifications.
     """
-    # Resolve the base prefab
-    source_match = SOURCE_PREFAB_PATTERN.search(variant_text)
+    # Walk the Variant chain to find the first ancestor with renderer blocks.
+    visited: set[str] = set()
+    current_text = variant_text
     base_prefab_path_str: str | None = None
     base_text: str | None = None
     source_guid = ""
+    depth_limit = 12
 
-    if source_match:
-        source_guid = normalize_guid(source_match.group(2))
-        base_path = guid_index.get(source_guid)
-        if base_path and base_path.exists():
-            try:
-                base_prefab_path_str = base_path.resolve().relative_to(
-                    project_root.resolve()
-                ).as_posix()
-            except ValueError:
-                base_prefab_path_str = base_path.as_posix()
-            try:
-                base_text = decode_text_file(base_path)
-            except (OSError, UnicodeDecodeError):
-                base_text = None
+    for _ in range(depth_limit):
+        source_match = SOURCE_PREFAB_PATTERN.search(current_text)
+        if source_match is None:
+            break
+        parent_guid = normalize_guid(source_match.group(2))
+        if parent_guid in visited:
+            break
+        visited.add(parent_guid)
+        # Remember the first source_guid for override parsing
+        if not source_guid:
+            source_guid = parent_guid
+        parent_path = guid_index.get(parent_guid)
+        if parent_path is None or not parent_path.exists():
+            break
+        try:
+            parent_rel = parent_path.resolve().relative_to(
+                project_root.resolve()
+            ).as_posix()
+        except ValueError:
+            parent_rel = parent_path.as_posix()
+        try:
+            parent_text = decode_text_file(parent_path)
+        except (OSError, UnicodeDecodeError):
+            break
+        base_prefab_path_str = parent_rel
+        base_text = parent_text
+        if _has_renderer_blocks(parent_text):
+            break
+        # Continue walking if this level also has no renderer blocks
+        current_text = parent_text
 
     if base_text is None:
         # Cannot resolve base: return empty result

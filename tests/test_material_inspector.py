@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import os
 import tempfile
+import unittest
 from pathlib import Path
-
-import pytest
 
 from prefab_sentinel.material_inspector import (
     MaterialInspectionResult,
@@ -36,6 +35,7 @@ MAT_GUID_B = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2"
 MAT_GUID_C = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa3"
 
 BASE_PREFAB_GUID = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+MID_VARIANT_GUID = "cccccccccccccccccccccccccccccccc"
 
 
 # ---------------------------------------------------------------------------
@@ -43,7 +43,7 @@ BASE_PREFAB_GUID = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 # ---------------------------------------------------------------------------
 
 
-class TestParseRendererMaterials:
+class TestParseRendererMaterials(unittest.TestCase):
     def test_empty_materials(self) -> None:
         block = YamlBlock(
             class_id="137",
@@ -57,7 +57,7 @@ class TestParseRendererMaterials:
             start_line=1,
         )
         result = _parse_renderer_materials(block)
-        assert result == []
+        self.assertEqual(result, [])
 
     def test_single_material(self) -> None:
         block = YamlBlock(
@@ -74,8 +74,8 @@ class TestParseRendererMaterials:
             start_line=1,
         )
         result = _parse_renderer_materials(block)
-        assert len(result) == 1
-        assert result[0] == ("2100000", MAT_GUID_A.lower())
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0], ("2100000", MAT_GUID_A.lower()))
 
     def test_multiple_materials(self) -> None:
         block = YamlBlock(
@@ -93,9 +93,9 @@ class TestParseRendererMaterials:
             start_line=1,
         )
         result = _parse_renderer_materials(block)
-        assert len(result) == 2
-        assert result[0][1] == MAT_GUID_A.lower()
-        assert result[1][1] == MAT_GUID_B.lower()
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0][1], MAT_GUID_A.lower())
+        self.assertEqual(result[1][1], MAT_GUID_B.lower())
 
 
 # ---------------------------------------------------------------------------
@@ -103,7 +103,7 @@ class TestParseRendererMaterials:
 # ---------------------------------------------------------------------------
 
 
-class TestParseMaterialOverrides:
+class TestParseMaterialOverrides(unittest.TestCase):
     def test_no_overrides(self) -> None:
         text = (
             "--- !u!1001 &100100000\n"
@@ -114,7 +114,7 @@ class TestParseMaterialOverrides:
         )
         out: dict[tuple[str, int], str] = {}
         _parse_material_overrides(text, BASE_PREFAB_GUID, out)
-        assert out == {}
+        self.assertEqual(out, {})
 
     def test_single_material_override(self) -> None:
         text = (
@@ -130,8 +130,8 @@ class TestParseMaterialOverrides:
         )
         out: dict[tuple[str, int], str] = {}
         _parse_material_overrides(text, BASE_PREFAB_GUID, out)
-        assert ("42", 0) in out
-        assert out[("42", 0)] == MAT_GUID_C.lower()
+        self.assertIn(("42", 0), out)
+        self.assertEqual(out[("42", 0)], MAT_GUID_C.lower())
 
     def test_multiple_material_overrides(self) -> None:
         text = (
@@ -151,9 +151,9 @@ class TestParseMaterialOverrides:
         )
         out: dict[tuple[str, int], str] = {}
         _parse_material_overrides(text, BASE_PREFAB_GUID, out)
-        assert len(out) == 2
-        assert out[("42", 0)] == MAT_GUID_B.lower()
-        assert out[("42", 1)] == MAT_GUID_C.lower()
+        self.assertEqual(len(out), 2)
+        self.assertEqual(out[("42", 0)], MAT_GUID_B.lower())
+        self.assertEqual(out[("42", 1)], MAT_GUID_C.lower())
 
     def test_non_material_overrides_ignored(self) -> None:
         text = (
@@ -173,7 +173,7 @@ class TestParseMaterialOverrides:
         )
         out: dict[tuple[str, int], str] = {}
         _parse_material_overrides(text, BASE_PREFAB_GUID, out)
-        assert out == {}
+        self.assertEqual(out, {})
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +181,7 @@ class TestParseMaterialOverrides:
 # ---------------------------------------------------------------------------
 
 
-class TestInspectBaseMaterials:
+class TestInspectBaseMaterials(unittest.TestCase):
     def test_single_renderer_with_materials(self) -> None:
         text = (
             YAML_HEADER
@@ -190,16 +190,16 @@ class TestInspectBaseMaterials:
             + make_skinned_mesh_renderer("3", "1", [MAT_GUID_A, MAT_GUID_B])
         )
         result = _inspect_base_materials("Assets/test.prefab", text, Path("/tmp"), {})
-        assert len(result.renderers) == 1
+        self.assertEqual(len(result.renderers), 1)
         r = result.renderers[0]
-        assert r.game_object_name == "Hair_Base"
-        assert r.renderer_type == "SkinnedMeshRenderer"
-        assert len(r.slots) == 2
-        assert r.slots[0].index == 0
-        assert r.slots[0].material_guid == MAT_GUID_A.lower()
-        assert r.slots[1].index == 1
-        assert not r.slots[0].is_override
-        assert not result.is_variant
+        self.assertEqual(r.game_object_name, "Hair_Base")
+        self.assertEqual(r.renderer_type, "SkinnedMeshRenderer")
+        self.assertEqual(len(r.slots), 2)
+        self.assertEqual(r.slots[0].index, 0)
+        self.assertEqual(r.slots[0].material_guid, MAT_GUID_A.lower())
+        self.assertEqual(r.slots[1].index, 1)
+        self.assertFalse(r.slots[0].is_override)
+        self.assertFalse(result.is_variant)
 
     def test_mesh_renderer_detected(self) -> None:
         text = (
@@ -209,8 +209,8 @@ class TestInspectBaseMaterials:
             + make_meshrenderer_with_materials("3", "1", [MAT_GUID_A])
         )
         result = _inspect_base_materials("Assets/test.prefab", text, Path("/tmp"), {})
-        assert len(result.renderers) == 1
-        assert result.renderers[0].renderer_type == "MeshRenderer"
+        self.assertEqual(len(result.renderers), 1)
+        self.assertEqual(result.renderers[0].renderer_type, "MeshRenderer")
 
     def test_no_renderers(self) -> None:
         text = (
@@ -219,7 +219,7 @@ class TestInspectBaseMaterials:
             + make_transform("2", "1")
         )
         result = _inspect_base_materials("Assets/test.prefab", text, Path("/tmp"), {})
-        assert result.renderers == []
+        self.assertEqual(result.renderers, [])
 
     def test_multiple_renderers(self) -> None:
         text = (
@@ -232,10 +232,10 @@ class TestInspectBaseMaterials:
             + make_skinned_mesh_renderer("7", "5", [MAT_GUID_B, MAT_GUID_C])
         )
         result = _inspect_base_materials("Assets/test.prefab", text, Path("/tmp"), {})
-        assert len(result.renderers) == 2
+        self.assertEqual(len(result.renderers), 2)
         names = [r.game_object_name for r in result.renderers]
-        assert "Hair" in names
-        assert "Body" in names
+        self.assertIn("Hair", names)
+        self.assertIn("Body", names)
 
 
 # ---------------------------------------------------------------------------
@@ -243,7 +243,7 @@ class TestInspectBaseMaterials:
 # ---------------------------------------------------------------------------
 
 
-class TestFormatMaterials:
+class TestFormatMaterials(unittest.TestCase):
     def test_empty_renderers(self) -> None:
         result = MaterialInspectionResult(
             target_path="Assets/test.prefab",
@@ -251,7 +251,7 @@ class TestFormatMaterials:
             base_prefab_path=None,
             renderers=[],
         )
-        assert format_materials(result) == "(no renderer components found)"
+        self.assertEqual(format_materials(result), "(no renderer components found)")
 
     def test_base_prefab_format(self) -> None:
         result = MaterialInspectionResult(
@@ -276,11 +276,11 @@ class TestFormatMaterials:
             ],
         )
         text = format_materials(result)
-        assert "Hair (SkinnedMeshRenderer)" in text
-        assert "[0] mat_hair (Assets/Materials/mat_hair.mat)" in text
+        self.assertIn("Hair (SkinnedMeshRenderer)", text)
+        self.assertIn("[0] mat_hair (Assets/Materials/mat_hair.mat)", text)
         # No override/inherited markers for non-variants
-        assert "[override]" not in text
-        assert "[inherited]" not in text
+        self.assertNotIn("[override]", text)
+        self.assertNotIn("[inherited]", text)
 
     def test_variant_format_with_markers(self) -> None:
         result = MaterialInspectionResult(
@@ -312,14 +312,14 @@ class TestFormatMaterials:
             ],
         )
         text = format_materials(result)
-        assert "Hair_Base (SkinnedMeshRenderer)" in text
-        assert "[override]" in text
-        assert "[inherited]" in text
+        self.assertIn("Hair_Base (SkinnedMeshRenderer)", text)
+        self.assertIn("[override]", text)
+        self.assertIn("[inherited]", text)
         lines = text.split("\n")
         # First slot overridden
-        assert "[override]" in lines[1]
+        self.assertIn("[override]", lines[1])
         # Second slot inherited
-        assert "[inherited]" in lines[2]
+        self.assertIn("[inherited]", lines[2])
 
     def test_no_materials_message(self) -> None:
         result = MaterialInspectionResult(
@@ -336,7 +336,7 @@ class TestFormatMaterials:
             ],
         )
         text = format_materials(result)
-        assert "(no materials)" in text
+        self.assertIn("(no materials)", text)
 
 
 # ---------------------------------------------------------------------------
@@ -344,95 +344,177 @@ class TestFormatMaterials:
 # ---------------------------------------------------------------------------
 
 
-class TestInspectMaterialsIntegration:
-    def test_base_prefab_file(self, tmp_path: Path) -> None:
+class TestInspectMaterialsIntegration(unittest.TestCase):
+    def test_base_prefab_file(self) -> None:
         """Write a base prefab to disk, inspect it, verify results."""
-        text = (
-            YAML_HEADER
-            + make_gameobject("1", "MeshObj", ["2", "3"])
-            + make_transform("2", "1")
-            + make_skinned_mesh_renderer("3", "1", [MAT_GUID_A])
-        )
-        # Create a minimal project structure
-        assets_dir = tmp_path / "Assets"
-        assets_dir.mkdir()
-        prefab_path = assets_dir / "test.prefab"
-        prefab_path.write_text(text, encoding="utf-8")
-
-        result = inspect_materials(str(prefab_path), project_root=tmp_path)
-        assert not result.is_variant
-        assert len(result.renderers) == 1
-        assert result.renderers[0].game_object_name == "MeshObj"
-        assert result.renderers[0].renderer_type == "SkinnedMeshRenderer"
-        assert len(result.renderers[0].slots) == 1
-
-    def test_variant_with_material_override(self, tmp_path: Path) -> None:
-        """Write base + variant to disk, verify override detection."""
-        assets_dir = tmp_path / "Assets"
-        assets_dir.mkdir()
-
-        # Write the base prefab
-        base_text = (
-            YAML_HEADER
-            + make_gameobject("1", "Hair", ["2", "3"])
-            + make_transform("2", "1")
-            + make_skinned_mesh_renderer("3", "1", [MAT_GUID_A, MAT_GUID_B])
-        )
-        base_path = assets_dir / "Base.prefab"
-        base_path.write_text(base_text, encoding="utf-8")
-
-        # Write the .meta file for the base prefab
-        meta_path = assets_dir / "Base.prefab.meta"
-        meta_path.write_text(
-            f"fileFormatVersion: 2\nguid: {BASE_PREFAB_GUID}\n",
-            encoding="utf-8",
-        )
-
-        # Write the variant
-        variant_text = (
-            YAML_HEADER
-            + make_prefab_variant(
-                source_guid=BASE_PREFAB_GUID,
-                modifications=[
-                    {
-                        "target": f"{{fileID: 3, guid: {BASE_PREFAB_GUID}, type: 3}}",
-                        "propertyPath": "m_Materials.Array.data[0]",
-                        "value": "",
-                        "objectReference": f"{{fileID: 2100000, guid: {MAT_GUID_C}, type: 2}}",
-                    },
-                ],
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            text = (
+                YAML_HEADER
+                + make_gameobject("1", "MeshObj", ["2", "3"])
+                + make_transform("2", "1")
+                + make_skinned_mesh_renderer("3", "1", [MAT_GUID_A])
             )
-        )
-        variant_path = assets_dir / "Variant.prefab"
-        variant_path.write_text(variant_text, encoding="utf-8")
+            assets_dir = tmp_path / "Assets"
+            assets_dir.mkdir()
+            prefab_path = assets_dir / "test.prefab"
+            prefab_path.write_text(text, encoding="utf-8")
 
-        result = inspect_materials(str(variant_path), project_root=tmp_path)
-        assert result.is_variant
-        assert len(result.renderers) == 1
-        r = result.renderers[0]
-        assert r.game_object_name == "Hair"
-        assert len(r.slots) == 2
-        # Slot 0 is overridden
-        assert r.slots[0].is_override
-        assert r.slots[0].material_guid == MAT_GUID_C.lower()
-        # Slot 1 is inherited
-        assert not r.slots[1].is_override
-        assert r.slots[1].material_guid == MAT_GUID_B.lower()
+            result = inspect_materials(str(prefab_path), project_root=tmp_path)
+            self.assertFalse(result.is_variant)
+            self.assertEqual(len(result.renderers), 1)
+            self.assertEqual(result.renderers[0].game_object_name, "MeshObj")
+            self.assertEqual(result.renderers[0].renderer_type, "SkinnedMeshRenderer")
+            self.assertEqual(len(result.renderers[0].slots), 1)
 
-    def test_stripped_renderer_ignored(self, tmp_path: Path) -> None:
+    def test_variant_with_material_override(self) -> None:
+        """Write base + variant to disk, verify override detection."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            assets_dir = tmp_path / "Assets"
+            assets_dir.mkdir()
+
+            # Write the base prefab
+            base_text = (
+                YAML_HEADER
+                + make_gameobject("1", "Hair", ["2", "3"])
+                + make_transform("2", "1")
+                + make_skinned_mesh_renderer("3", "1", [MAT_GUID_A, MAT_GUID_B])
+            )
+            base_path = assets_dir / "Base.prefab"
+            base_path.write_text(base_text, encoding="utf-8")
+
+            # Write the .meta file for the base prefab
+            meta_path = assets_dir / "Base.prefab.meta"
+            meta_path.write_text(
+                f"fileFormatVersion: 2\nguid: {BASE_PREFAB_GUID}\n",
+                encoding="utf-8",
+            )
+
+            # Write the variant
+            variant_text = (
+                YAML_HEADER
+                + make_prefab_variant(
+                    source_guid=BASE_PREFAB_GUID,
+                    modifications=[
+                        {
+                            "target": f"{{fileID: 3, guid: {BASE_PREFAB_GUID}, type: 3}}",
+                            "propertyPath": "m_Materials.Array.data[0]",
+                            "value": "",
+                            "objectReference": f"{{fileID: 2100000, guid: {MAT_GUID_C}, type: 2}}",
+                        },
+                    ],
+                )
+            )
+            variant_path = assets_dir / "Variant.prefab"
+            variant_path.write_text(variant_text, encoding="utf-8")
+
+            result = inspect_materials(str(variant_path), project_root=tmp_path)
+            self.assertTrue(result.is_variant)
+            self.assertEqual(len(result.renderers), 1)
+            r = result.renderers[0]
+            self.assertEqual(r.game_object_name, "Hair")
+            self.assertEqual(len(r.slots), 2)
+            # Slot 0 is overridden
+            self.assertTrue(r.slots[0].is_override)
+            self.assertEqual(r.slots[0].material_guid, MAT_GUID_C.lower())
+            # Slot 1 is inherited
+            self.assertFalse(r.slots[1].is_override)
+            self.assertEqual(r.slots[1].material_guid, MAT_GUID_B.lower())
+
+    def test_multi_level_variant_chain(self) -> None:
+        """Walk Variant -> Variant -> Base to find renderer blocks."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            assets_dir = tmp_path / "Assets"
+            assets_dir.mkdir()
+
+            # Base prefab with actual renderer blocks
+            base_text = (
+                YAML_HEADER
+                + make_gameobject("1", "Body", ["2", "3"])
+                + make_transform("2", "1")
+                + make_skinned_mesh_renderer("3", "1", [MAT_GUID_A, MAT_GUID_B])
+            )
+            base_path = assets_dir / "Base.prefab"
+            base_path.write_text(base_text, encoding="utf-8")
+            (assets_dir / "Base.prefab.meta").write_text(
+                f"fileFormatVersion: 2\nguid: {BASE_PREFAB_GUID}\n",
+                encoding="utf-8",
+            )
+
+            # Mid-level variant (no renderer blocks, only stripped)
+            mid_text = (
+                YAML_HEADER
+                + "--- !u!137 &3 stripped\n"
+                + "SkinnedMeshRenderer:\n"
+                + "  m_CorrespondingSourceObject: {fileID: 0}\n"
+                + make_prefab_variant(
+                    source_guid=BASE_PREFAB_GUID,
+                    modifications=[],
+                )
+            )
+            mid_path = assets_dir / "Mid.prefab"
+            mid_path.write_text(mid_text, encoding="utf-8")
+            (assets_dir / "Mid.prefab.meta").write_text(
+                f"fileFormatVersion: 2\nguid: {MID_VARIANT_GUID}\n",
+                encoding="utf-8",
+            )
+
+            # Leaf variant pointing to mid-level
+            leaf_text = (
+                YAML_HEADER
+                + "--- !u!137 &3 stripped\n"
+                + "SkinnedMeshRenderer:\n"
+                + "  m_CorrespondingSourceObject: {fileID: 0}\n"
+                + make_prefab_variant(
+                    source_guid=MID_VARIANT_GUID,
+                    modifications=[
+                        {
+                            "target": f"{{fileID: 3, guid: {BASE_PREFAB_GUID}, type: 3}}",
+                            "propertyPath": "m_Materials.Array.data[0]",
+                            "value": "",
+                            "objectReference": f"{{fileID: 2100000, guid: {MAT_GUID_C}, type: 2}}",
+                        },
+                    ],
+                )
+            )
+            leaf_path = assets_dir / "Leaf.prefab"
+            leaf_path.write_text(leaf_text, encoding="utf-8")
+
+            result = inspect_materials(str(leaf_path), project_root=tmp_path)
+            self.assertTrue(result.is_variant)
+            # Should find the renderer from Base.prefab
+            self.assertEqual(len(result.renderers), 1)
+            self.assertEqual(result.renderers[0].game_object_name, "Body")
+            self.assertEqual(len(result.renderers[0].slots), 2)
+            # Slot 0 overridden in leaf
+            self.assertTrue(result.renderers[0].slots[0].is_override)
+            self.assertEqual(result.renderers[0].slots[0].material_guid, MAT_GUID_C.lower())
+            # Slot 1 inherited from base
+            self.assertFalse(result.renderers[0].slots[1].is_override)
+            self.assertEqual(result.renderers[0].slots[1].material_guid, MAT_GUID_B.lower())
+
+    def test_stripped_renderer_ignored(self) -> None:
         """Stripped renderer blocks should be skipped."""
-        text = (
-            YAML_HEADER
-            + make_gameobject("1", "Root", ["2"])
-            + make_transform("2", "1")
-            + "--- !u!137 &3 stripped\n"
-            + "SkinnedMeshRenderer:\n"
-            + "  m_CorrespondingSourceObject: {fileID: 0}\n"
-        )
-        assets_dir = tmp_path / "Assets"
-        assets_dir.mkdir()
-        prefab_path = assets_dir / "test.prefab"
-        prefab_path.write_text(text, encoding="utf-8")
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            text = (
+                YAML_HEADER
+                + make_gameobject("1", "Root", ["2"])
+                + make_transform("2", "1")
+                + "--- !u!137 &3 stripped\n"
+                + "SkinnedMeshRenderer:\n"
+                + "  m_CorrespondingSourceObject: {fileID: 0}\n"
+            )
+            assets_dir = tmp_path / "Assets"
+            assets_dir.mkdir()
+            prefab_path = assets_dir / "test.prefab"
+            prefab_path.write_text(text, encoding="utf-8")
 
-        result = inspect_materials(str(prefab_path), project_root=tmp_path)
-        assert result.renderers == []
+            result = inspect_materials(str(prefab_path), project_root=tmp_path)
+            self.assertEqual(result.renderers, [])
+
+
+if __name__ == "__main__":
+    unittest.main()
