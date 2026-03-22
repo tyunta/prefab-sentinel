@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using UnityEditor;
+using UnityEditor.Compilation;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -198,6 +199,9 @@ namespace PrefabSentinel
                     break;
                 case "refresh_asset_database":
                     response = HandleRefreshAssetDatabase();
+                    break;
+                case "recompile_scripts":
+                    response = HandleRecompileScripts();
                     break;
                 case "set_material":
                     response = HandleSetMaterial(request);
@@ -481,6 +485,19 @@ namespace PrefabSentinel
             AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
             return BuildSuccess("EDITOR_CTRL_REFRESH_OK",
                 "AssetDatabase.Refresh completed",
+                data: new EditorControlData { executed = true });
+        }
+
+        private static EditorControlResponse HandleRecompileScripts()
+        {
+            // Schedule compilation on next frame so that the response JSON
+            // is written to disk before domain reload destroys this context.
+            EditorApplication.delayCall += () =>
+            {
+                CompilationPipeline.RequestScriptCompilation();
+            };
+            return BuildSuccess("EDITOR_CTRL_RECOMPILE_OK",
+                "Script recompilation scheduled (domain reload will follow)",
                 data: new EditorControlData { executed = true });
         }
 

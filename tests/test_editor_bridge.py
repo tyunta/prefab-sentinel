@@ -172,6 +172,7 @@ class TestSupportedActions(unittest.TestCase):
             "instantiate_to_scene",
             "ping_object",
             "capture_console_logs",
+            "recompile_scripts",
             "refresh_asset_database",
             "set_material",
             "delete_object",
@@ -295,6 +296,13 @@ class TestCliEditorSubcommands(unittest.TestCase):
         parser = build_parser()
         args = parser.parse_args(["editor", "refresh"])
         self.assertEqual("refresh", args.editor_command)
+
+    def test_editor_recompile_parser(self) -> None:
+        from prefab_sentinel.cli import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args(["editor", "recompile"])
+        self.assertEqual("recompile", args.editor_command)
 
     def test_editor_set_material_parser(self) -> None:
         from prefab_sentinel.cli import build_parser

@@ -171,6 +171,7 @@ namespace PrefabSentinel
                     || header.action == "ping_object"
                     || header.action == "capture_console_logs"
                     || header.action == "refresh_asset_database"
+                    || header.action == "recompile_scripts"
                     || header.action == "set_material"
                     || header.action == "delete_object"
                     || header.action == "list_children"

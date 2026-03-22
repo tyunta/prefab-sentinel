@@ -808,6 +808,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Trigger AssetDatabase.Refresh() in the running Unity Editor.",
     )
 
+    editor_sub.add_parser(
+        "recompile",
+        help="Trigger C# script recompilation in the running Unity Editor.",
+    )
+
     editor_set_material = editor_sub.add_parser(
         "set-material",
         help="Replace a material slot on a Renderer at runtime (non-destructive, Undo-able).",
@@ -1842,6 +1847,8 @@ def main(argv: list[str] | None = None) -> int:
                     result["classification"] = classification.to_dict()
         elif cmd == "refresh":
             result = send_action(action="refresh_asset_database")
+        elif cmd == "recompile":
+            result = send_action(action="recompile_scripts")
         elif cmd == "set-material":
             result = send_action(
                 action="set_material",
