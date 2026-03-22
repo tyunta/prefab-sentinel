@@ -52,6 +52,21 @@
 - [x] Update README / IDEAS_AND_ROADMAP / todo.md.
 - [x] Add 4 variant E2E quality gate tests. Total: 41 Unity + 261 Python.
 
+## Phase A: ブロンドヘアセッション改善 (2026-03-22)
+
+- [x] P2: パス解決の CWD 非依存化 — `SerializedObjectMcp._resolve_target_path()` を `resolve_scope_path()` に置換
+- [x] P5: `editor refresh` コマンド追加 — `AssetDatabase.Refresh()` をトリガー
+- [x] P6: `editor select` Prefab Stage 対応 — `--prefab-stage` オプションで Prefab 内部オブジェクトを選択
+- [x] P1: dry-run `before` 値の実効値解決 (Phase 1) — Variant オーバーライドの既存値を表示
+- [x] P4: `inspect hierarchy` Variant 対応 — ベース Prefab の階層を表示、オーバーライドをアノテーション
+
+## Phase B: ブロンドヘアセッション改善 (後日)
+
+- [ ] P3: `patch revert` コマンド — Variant の特定オーバーライドを削除して親の値に戻す。Bridge (PrefabUtility.RevertPropertyOverride) 方式を推奨
+- [ ] P7: `inspect materials` コマンド — メッシュごとのマテリアルスロット一覧表示（Variant チェーン考慮）
+- [ ] P8: Game View スクリーンショット — Play Mode 外での Camera.Render() によるレンダリング
+- [ ] P1 Phase 2: Bridge 経由の真の実効値取得 — `read_property_value` アクションで SerializedProperty.FindPropertyRelative() 経由のベース値完全解決
+
 ## Phase 3: Runtime Verification Bridge
 
 - [x] Fix CS1626 (yield-in-try-catch) in `UnityRuntimeValidationBridge.cs` `Run()` method — GuardCoroutine pattern.
