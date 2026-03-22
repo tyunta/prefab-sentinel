@@ -423,6 +423,8 @@ Unity Editor が起動中は batchmode と排他ロックが発生する。Edito
 
 **アーキテクチャ:** Python → `{uuid}.request.json` をアトミック書き込み → EditorBridge がポーリング検出 → `UnityPatchBridge.ApplyFromPaths` or `UnityRuntimeValidationBridge.RunFromPaths` → `{uuid}.response.json` をアトミック書き込み → Python がポーリング読み取り
 
+**注意:** watch ディレクトリに直接 JSON を書く場合、Python orchestrator の `_normalize_bridge_op()` / `_encode_bridge_value()` を経由しないため、`value` フィールドは手動エンコーディングが必要（例: `float` → `{"value_kind": "float", "value_float": 1.5}`、`dict` → `{"value_kind": "json", "value_json": "{...}"}`）。CLI 経由の実行では自動変換される。
+
 ### `patch generate` サブコマンド
 
 円形配置などのパッチ計画を自動生成する。
