@@ -283,5 +283,88 @@ class TestSplitUnityCommand(unittest.TestCase):
         self.assertEqual(["C:/Program Files/Unity.exe"], cmd)
 
 
+class TestResolveScopePathWsl(unittest.TestCase):
+    """Verify that resolve_scope_path converts Windows paths on WSL."""
+
+    def setUp(self) -> None:
+        is_wsl.cache_clear()
+
+    def tearDown(self) -> None:
+        is_wsl.cache_clear()
+
+    @patch("prefab_sentinel.unity_assets.to_wsl_path")
+    def test_windows_scope_converted(self, mock_to_wsl: MagicMock) -> None:
+        """When scope is a Windows path, to_wsl_path is called before Path()."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_to_wsl.return_value = tmpdir
+            from prefab_sentinel.unity_assets import resolve_scope_path
+
+            result = resolve_scope_path("D:/VRChatProject/Assets", Path(tmpdir))
+            mock_to_wsl.assert_called_once_with("D:/VRChatProject/Assets")
+            self.assertEqual(Path(tmpdir).resolve(), result)
+
+    @patch("prefab_sentinel.unity_assets.to_wsl_path", side_effect=lambda p: p)
+    def test_posix_scope_unchanged(self, mock_to_wsl: MagicMock) -> None:
+        """POSIX paths pass through to_wsl_path unchanged."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from prefab_sentinel.unity_assets import resolve_scope_path
+
+            result = resolve_scope_path(tmpdir, Path(tmpdir))
+            mock_to_wsl.assert_called_once_with(tmpdir)
+
+
+class TestFindProjectRootWsl(unittest.TestCase):
+    """Verify that find_project_root converts Windows paths on WSL."""
+
+    def setUp(self) -> None:
+        is_wsl.cache_clear()
+
+    def tearDown(self) -> None:
+        is_wsl.cache_clear()
+
+    @patch("prefab_sentinel.unity_assets.to_wsl_path")
+    def test_windows_start_path_converted(self, mock_to_wsl: MagicMock) -> None:
+        """Windows path passed to find_project_root gets converted via to_wsl_path."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create Assets/ so find_project_root succeeds
+            assets_dir = Path(tmpdir) / "Assets"
+            assets_dir.mkdir()
+            mock_to_wsl.return_value = tmpdir
+
+            from prefab_sentinel.unity_assets import find_project_root
+
+            result = find_project_root(Path("D:/VRChatProject"))
+            mock_to_wsl.assert_called_once_with("D:/VRChatProject")
+            self.assertEqual(Path(tmpdir).resolve(), result)
+
+
+class TestReadTargetFileWsl(unittest.TestCase):
+    """Verify that _read_target_file converts Windows paths on WSL."""
+
+    def setUp(self) -> None:
+        is_wsl.cache_clear()
+
+    def tearDown(self) -> None:
+        is_wsl.cache_clear()
+
+    @patch("prefab_sentinel.orchestrator.to_wsl_path")
+    def test_windows_target_path_converted(self, mock_to_wsl: MagicMock) -> None:
+        """Windows path in _read_target_file gets converted via to_wsl_path."""
+        mock_to_wsl.return_value = "/nonexistent/file.prefab"
+        from prefab_sentinel.orchestrator import Phase1Orchestrator
+
+        result = Phase1Orchestrator._read_target_file("D:/Project/file.prefab", "TEST")
+        mock_to_wsl.assert_called_once_with("D:/Project/file.prefab")
+        # Should return error ToolResponse since file doesn't exist
+        self.assertFalse(result.success)
+        self.assertEqual("TEST_FILE_NOT_FOUND", result.code)
+
+
 if __name__ == "__main__":
     unittest.main()

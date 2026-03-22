@@ -28,6 +28,7 @@ from prefab_sentinel.unity_assets import (
     decode_text_file,
     find_project_root,
 )
+from prefab_sentinel.wsl_compat import to_wsl_path
 
 
 @dataclass(slots=True)
@@ -145,7 +146,7 @@ class Phase1Orchestrator:
     @staticmethod
     def _read_target_file(target_path: str, code_prefix: str) -> ToolResponse | str:
         """Read a Unity YAML file, returning text on success or an error ToolResponse."""
-        path = Path(target_path)
+        path = Path(to_wsl_path(target_path))
         if not path.exists():
             return ToolResponse(
                 success=False,

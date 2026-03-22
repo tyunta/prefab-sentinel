@@ -8,6 +8,8 @@ import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
+from prefab_sentinel.wsl_compat import to_wsl_path
+
 UNITY_TEXT_ASSET_SUFFIXES = {
     ".prefab",
     ".unity",
@@ -172,7 +174,7 @@ def collect_project_guid_index(
 
 
 def find_project_root(start: Path) -> Path:
-    current = start.resolve()
+    current = Path(to_wsl_path(str(start))).resolve()
     if current.is_file():
         current = current.parent
     for candidate in [current, *current.parents]:
@@ -194,7 +196,7 @@ def has_path_doubling(path: str) -> bool:
 
 
 def resolve_scope_path(scope: str, project_root: Path) -> Path:
-    scope_path = Path(scope)
+    scope_path = Path(to_wsl_path(scope))
     if not scope_path.is_absolute():
         scope_path = project_root / scope_path
     resolved = scope_path.resolve()
