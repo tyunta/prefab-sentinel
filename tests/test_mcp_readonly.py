@@ -2048,6 +2048,71 @@ class TestSerializedObjectMcpProjectRoot(unittest.TestCase):
                 project_root.resolve(),
             )
 
+    def test_apply_resource_plan_sends_resolved_path_to_bridge(self) -> None:
+        """Relative Assets/ path must be resolved via project_root before reaching the bridge."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_root = Path(temp_dir)
+            assets_dir = project_root / "Assets" / "Tyunta" / "Materials"
+            assets_dir.mkdir(parents=True)
+
+            # Bridge script that echoes the received target and resource path back
+            bridge = project_root / "bridge.py"
+            bridge.write_text(
+                "import json, sys\n"
+                "req = json.load(sys.stdin)\n"
+                "print(json.dumps({\n"
+                '  "success": True, "severity": "info",\n'
+                '  "code": "SER_APPLY_OK",\n'
+                '  "message": "ok",\n'
+                '  "data": {\n'
+                '    "target": req.get("target", ""),\n'
+                '    "resource_path": req.get("resources", [{}])[0].get("path", ""),\n'
+                '    "op_count": len(req.get("ops", [])),\n'
+                '    "applied": len(req.get("ops", [])),\n'
+                '    "read_only": False, "executed": True,\n'
+                '    "mode": req.get("resources", [{}])[0].get("mode", "open"),\n'
+                "  },\n"
+                '  "diagnostics": [],\n'
+                "}))\n",
+                encoding="utf-8",
+            )
+
+            mcp = SerializedObjectMcp(
+                bridge_command=(sys.executable, str(bridge)),
+                project_root=project_root,
+            )
+            response = mcp.apply_resource_plan(
+                resource={
+                    "id": "mat",
+                    "kind": "material",
+                    "path": "Assets/Tyunta/Materials/Test.mat",
+                    "mode": "create",
+                },
+                ops=[
+                    {"op": "create_asset", "shader": "Standard"},
+                    {"op": "save"},
+                ],
+            )
+
+            self.assertTrue(response.success, response.message)
+            # The resource path sent to the bridge must be the resolved absolute path,
+            # not the raw relative input.
+            resource_path = response.data.get("resource_path", "")
+            self.assertTrue(
+                resource_path.replace("\\", "/").endswith(
+                    "Assets/Tyunta/Materials/Test.mat"
+                ),
+                f"Expected resolved path ending with Assets/Tyunta/Materials/Test.mat, "
+                f"got: {resource_path}",
+            )
+            # Must NOT contain path doubling
+            normalized = resource_path.replace("\\", "/")
+            self.assertNotIn(
+                "Assets/Tyunta/Assets/Tyunta",
+                normalized,
+                f"Path doubling detected in bridge request: {resource_path}",
+            )
+
 
 class TestBeforeValueResolution(unittest.TestCase):
     """P1: _validate_op resolves before values from Variant overrides."""

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import warnings
 from pathlib import Path
 
 from prefab_sentinel.unity_assets import (
@@ -18,6 +19,7 @@ from prefab_sentinel.unity_assets import (
     extract_local_file_ids,
     extract_meta_guid,
     find_project_root,
+    has_path_doubling,
     is_unity_builtin_guid,
     is_unity_text_asset,
     iter_references,
@@ -453,6 +455,39 @@ class ResolveScopePathTests(unittest.TestCase):
     def test_absolute_scope(self) -> None:
         result = resolve_scope_path("/absolute/path", Path("/project"))
         self.assertEqual(result, Path("/absolute/path").resolve())
+
+    def test_warns_on_path_doubling(self) -> None:
+        """resolve_scope_path emits a warning when the resolved path contains doubled Assets/ segments."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Simulate a project_root that already includes "Assets/Tyunta"
+            # and a scope that also starts with "Assets/Tyunta".
+            # This would only happen if project_root was misconfigured.
+            fake_root = Path(temp_dir) / "Assets" / "Tyunta"
+            fake_root.mkdir(parents=True)
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                resolve_scope_path("Assets/Tyunta/Test.prefab", fake_root)
+                doubled_warnings = [
+                    x for x in w if "Path doubling detected" in str(x.message)
+                ]
+                self.assertEqual(len(doubled_warnings), 1)
+
+
+class HasPathDoublingTests(unittest.TestCase):
+    def test_detects_doubled_assets(self) -> None:
+        self.assertTrue(has_path_doubling("Assets/Tyunta/Assets/Tyunta/Materials/foo.mat"))
+
+    def test_no_doubling_for_normal_path(self) -> None:
+        self.assertFalse(has_path_doubling("Assets/Tyunta/Materials/foo.mat"))
+
+    def test_detects_windows_backslash_path(self) -> None:
+        self.assertTrue(has_path_doubling("Assets\\Tyunta\\Assets\\Tyunta\\Materials\\foo.mat"))
+
+    def test_no_doubling_for_absolute_path(self) -> None:
+        self.assertFalse(has_path_doubling("/project/Assets/Tyunta/Materials/foo.mat"))
+
+    def test_detects_case_insensitive(self) -> None:
+        self.assertTrue(has_path_doubling("assets/Tyunta/Assets/Tyunta/Materials/foo.mat"))
 
 
 class ResolveGuidToAssetNameTests(unittest.TestCase):

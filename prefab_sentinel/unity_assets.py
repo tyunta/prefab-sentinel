@@ -4,6 +4,7 @@ import bisect
 import json
 import os
 import re
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -180,11 +181,32 @@ def find_project_root(start: Path) -> Path:
     return current
 
 
+_PATH_DOUBLING_RE = re.compile(r"Assets/.*Assets/", re.IGNORECASE)
+
+
+def has_path_doubling(path: str) -> bool:
+    """Return True if *path* contains a repeated ``Assets/`` segment.
+
+    Detects CWD-dependent path doubling such as
+    ``Assets/Tyunta/Assets/Tyunta/Materials/foo.mat``.
+    """
+    return bool(_PATH_DOUBLING_RE.search(path.replace("\\", "/")))
+
+
 def resolve_scope_path(scope: str, project_root: Path) -> Path:
     scope_path = Path(scope)
     if not scope_path.is_absolute():
         scope_path = project_root / scope_path
-    return scope_path.resolve()
+    resolved = scope_path.resolve()
+    resolved_posix = str(resolved).replace("\\", "/")
+    if has_path_doubling(resolved_posix):
+        warnings.warn(
+            f"Path doubling detected: '{resolved_posix}' contains repeated "
+            f"'Assets/' segments. This usually means the scope was already "
+            f"project-root-relative but was joined with project_root again.",
+            stacklevel=2,
+        )
+    return resolved
 
 
 def _read_json_file(path: Path) -> dict[str, object] | None:
