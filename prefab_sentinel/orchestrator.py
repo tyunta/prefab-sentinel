@@ -8,6 +8,12 @@ from typing import Any
 
 from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse, max_severity
 from prefab_sentinel.hierarchy import HierarchyNode, analyze_hierarchy, format_tree
+from prefab_sentinel.material_inspector import (
+    MaterialSlot,
+    RendererMaterials,
+    format_materials,
+    inspect_materials,
+)
 from prefab_sentinel.mcp.prefab_variant import PrefabVariantMcp
 from prefab_sentinel.mcp.reference_resolver import ReferenceResolverMcp
 from prefab_sentinel.mcp.runtime_validation import RuntimeValidationMcp
@@ -346,6 +352,88 @@ class Phase1Orchestrator:
             message="inspect.hierarchy completed (read-only).",
             data=data,
             diagnostics=diagnostics,
+        )
+
+    def inspect_materials(
+        self,
+        target_path: str,
+    ) -> ToolResponse:
+        """Inspect per-renderer material slot assignments."""
+        text_or_error = self._read_target_file(target_path, "INSPECT_MATERIALS")
+        if isinstance(text_or_error, ToolResponse):
+            return text_or_error
+
+        suffix = Path(target_path).suffix.lower()
+        if suffix not in GAMEOBJECT_BEARING_SUFFIXES:
+            return ToolResponse(
+                success=True,
+                severity=Severity.WARNING,
+                code="INSPECT_MATERIALS_NO_RENDERERS",
+                message=(
+                    f"inspect.materials is not applicable to {suffix} files "
+                    f"(no Renderer components expected)."
+                ),
+                data={"target_path": target_path, "file_type": suffix, "read_only": True},
+                diagnostics=[],
+            )
+
+        try:
+            result = inspect_materials(target_path)
+        except (OSError, UnicodeDecodeError) as exc:
+            return ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code="INSPECT_MATERIALS_READ_ERROR",
+                message=f"Failed to inspect materials: {exc}",
+                data={"target_path": target_path, "read_only": True},
+                diagnostics=[],
+            )
+
+        tree_text = format_materials(result)
+
+        renderer_data = []
+        for renderer in result.renderers:
+            slot_data = [
+                {
+                    "index": slot.index,
+                    "material_name": slot.material_name,
+                    "material_path": slot.material_path,
+                    "material_guid": slot.material_guid,
+                    "is_override": slot.is_override,
+                }
+                for slot in renderer.slots
+            ]
+            renderer_data.append({
+                "game_object_name": renderer.game_object_name,
+                "renderer_type": renderer.renderer_type,
+                "file_id": renderer.file_id,
+                "slot_count": len(renderer.slots),
+                "slots": slot_data,
+            })
+
+        data: dict[str, object] = {
+            "target_path": target_path,
+            "read_only": True,
+            "is_variant": result.is_variant,
+            "renderer_count": len(result.renderers),
+            "total_material_slots": sum(len(r.slots) for r in result.renderers),
+            "tree": tree_text,
+            "renderers": renderer_data,
+        }
+        if result.is_variant:
+            data["base_prefab_path"] = result.base_prefab_path
+            override_count = sum(
+                1 for r in result.renderers for s in r.slots if s.is_override
+            )
+            data["override_count"] = override_count
+
+        return ToolResponse(
+            success=True,
+            severity=Severity.INFO,
+            code="INSPECT_MATERIALS_RESULT",
+            message="inspect.materials completed (read-only).",
+            data=data,
+            diagnostics=[],
         )
 
     def inspect_structure(

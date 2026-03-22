@@ -34,6 +34,7 @@ _CLASS_NAMES: dict[str, str] = {
     "114": "MonoBehaviour",
     "120": "LineRenderer",
     "135": "SphereCollider",
+    "137": "SkinnedMeshRenderer",
     "136": "TrailRenderer",
     "198": "ParticleSystem",
     "199": "ParticleSystemRenderer",

@@ -64,6 +64,82 @@ def make_meshrenderer(file_id: str, go_file_id: str) -> str:
     )
 
 
+def make_skinned_mesh_renderer(
+    file_id: str,
+    go_file_id: str,
+    material_guids: list[str] | None = None,
+) -> str:
+    """Build a SkinnedMeshRenderer block with optional material references."""
+    mats = material_guids or []
+    if mats:
+        mat_lines = "\n".join(
+            f"  - {{fileID: 2100000, guid: {guid}, type: 2}}" for guid in mats
+        )
+        mat_block = f"  m_Materials:\n{mat_lines}"
+    else:
+        mat_block = "  m_Materials: []"
+    return (
+        f"--- !u!137 &{file_id}\n"
+        f"SkinnedMeshRenderer:\n"
+        f"  m_GameObject: {{fileID: {go_file_id}}}\n"
+        f"{mat_block}\n"
+    )
+
+
+def make_meshrenderer_with_materials(
+    file_id: str,
+    go_file_id: str,
+    material_guids: list[str] | None = None,
+) -> str:
+    """Build a MeshRenderer block with optional material references."""
+    mats = material_guids or []
+    if mats:
+        mat_lines = "\n".join(
+            f"  - {{fileID: 2100000, guid: {guid}, type: 2}}" for guid in mats
+        )
+        mat_block = f"  m_Materials:\n{mat_lines}"
+    else:
+        mat_block = "  m_Materials: []"
+    return (
+        f"--- !u!23 &{file_id}\n"
+        f"MeshRenderer:\n"
+        f"  m_GameObject: {{fileID: {go_file_id}}}\n"
+        f"{mat_block}\n"
+    )
+
+
+def make_prefab_variant(
+    source_guid: str,
+    modifications: list[dict[str, str]] | None = None,
+) -> str:
+    """Build a PrefabInstance (variant) block with m_Modifications."""
+    mods = modifications or []
+    if mods:
+        mod_lines = []
+        for mod in mods:
+            target = mod.get("target", "{fileID: 0}")
+            prop = mod.get("propertyPath", "")
+            value = mod.get("value", "")
+            obj_ref = mod.get("objectReference", "{fileID: 0}")
+            mod_lines.append(
+                f"    - target: {target}\n"
+                f"      propertyPath: {prop}\n"
+                f"      value: {value}\n"
+                f"      objectReference: {obj_ref}"
+            )
+        mod_block = "    m_Modifications:\n" + "\n".join(mod_lines)
+    else:
+        mod_block = "    m_Modifications: []"
+    return (
+        f"--- !u!1001 &100100000\n"
+        f"PrefabInstance:\n"
+        f"  m_Modification:\n"
+        f"    m_TransformParent: {{fileID: 0}}\n"
+        f"{mod_block}\n"
+        f"  m_SourcePrefab: {{fileID: 100100000, guid: {source_guid}, type: 3}}\n"
+    )
+
+
 def make_monobehaviour(
     file_id: str,
     go_file_id: str,

@@ -115,6 +115,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     inspect_hierarchy.add_argument("--format", choices=("json", "md"), default="json")
 
+    inspect_materials = inspect_sub.add_parser(
+        "materials",
+        help="Show per-renderer material slot assignments with override/inherited markers.",
+    )
+    inspect_materials.add_argument(
+        "--path",
+        required=True,
+        help="Path to target .prefab / .unity / .asset file.",
+    )
+    inspect_materials.add_argument("--format", choices=("json", "md"), default="json")
+
     validate_parser = subparsers.add_parser("validate", help="Validation commands.")
     validate_sub = validate_parser.add_subparsers(dest="validate_command", required=True)
     validate_structure = validate_sub.add_parser(
@@ -994,6 +1005,13 @@ def main(argv: list[str] | None = None) -> int:
             target_path=args.path,
             max_depth=args.depth,
             show_components=show_components,
+        )
+        _emit_payload(response.to_dict(), args.format)
+        return 0
+
+    if args.command == "inspect" and args.inspect_command == "materials":
+        response = get_orchestrator().inspect_materials(
+            target_path=args.path,
         )
         _emit_payload(response.to_dict(), args.format)
         return 0
