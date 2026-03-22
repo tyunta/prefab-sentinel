@@ -315,6 +315,8 @@ namespace PrefabSentinel
                         $"GameObject not found in Prefab Stage: {request.hierarchy_path}");
 
                 Selection.activeGameObject = target.gameObject;
+                var psv = SceneView.lastActiveSceneView;
+                if (psv != null) { psv.FrameSelected(); psv.Repaint(); }
                 return BuildSuccess("EDITOR_CTRL_SELECT_OK",
                     $"Selected in Prefab Stage: {request.hierarchy_path}",
                     data: new EditorControlData
@@ -331,6 +333,8 @@ namespace PrefabSentinel
                     $"GameObject not found: {request.hierarchy_path}");
 
             Selection.activeGameObject = go;
+            var sv = SceneView.lastActiveSceneView;
+            if (sv != null) { sv.FrameSelected(); sv.Repaint(); }
 
             return BuildSuccess("EDITOR_CTRL_SELECT_OK",
                 $"Selected: {request.hierarchy_path}",
