@@ -2396,10 +2396,12 @@ class SerializedObjectMcp:
     ) -> str:
         """Best-effort resolution of the current value before a patch op.
 
-        For Prefab Variants with an existing override matching *component* and
-        *property_path*, returns the current override value from
-        ``compute_effective_values()``.  Otherwise returns a labelled
-        placeholder so the caller knows *why* the value could not be resolved.
+        Traverses the full Prefab Variant chain (via
+        ``resolve_chain_values()``) so that overrides from parent Variants and
+        property values from the base prefab are included.  The closest
+        (child) override wins.
+
+        Returns a labelled placeholder when the value cannot be resolved.
         """
         if self._prefab_variant is None:
             return "(unresolved)"
@@ -2413,24 +2415,13 @@ class SerializedObjectMcp:
                 text = decode_text_file(target_path)
             except (OSError, UnicodeDecodeError):
                 self._before_cache = {}
-                return "(unresolved)"
+                return "(unresolved: file unreadable)"
 
             if SOURCE_PREFAB_PATTERN.search(text) is None:
                 self._before_cache = {}
-                return "(unresolved)"
+                return "(unresolved: not a variant)"
 
-            response = self._prefab_variant.compute_effective_values(target)
-            if not response.success:
-                self._before_cache = {}
-                return "(unresolved)"
-
-            cache: dict[str, str] = {}
-            for entry in response.data.get("effective_values", []):
-                key = f"{entry.get('target_file_id', '')}:{entry.get('property_path', '')}"
-                val = entry.get("value", "")
-                obj_ref = entry.get("object_reference", "")
-                cache[key] = obj_ref if obj_ref and obj_ref != "{fileID: 0}" else val
-            self._before_cache = cache
+            self._before_cache = self._prefab_variant.resolve_chain_values(target)
 
         if not self._before_cache:
             # Empty cache = non-Variant or unreadable file (sentinel)
@@ -2440,7 +2431,7 @@ class SerializedObjectMcp:
         value = self._before_cache.get(lookup_key)
         if value is not None:
             return value
-        return "(base-default)"
+        return "(unresolved: not found in chain)"
 
     def _clear_before_cache(self) -> None:
         """Reset the per-target before-value cache."""

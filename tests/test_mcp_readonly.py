@@ -2173,7 +2173,7 @@ class TestBeforeValueResolution(unittest.TestCase):
                 diagnostics,
             )
             self.assertIsNotNone(result)
-            self.assertEqual("(base-default)", result["before"])
+            self.assertEqual("(unresolved: not found in chain)", result["before"])
 
     def test_before_unresolved_without_prefab_variant(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2209,7 +2209,7 @@ class TestBeforeValueResolution(unittest.TestCase):
                 diagnostics,
             )
             self.assertIsNotNone(result)
-            self.assertEqual("(unresolved)", result["before"])
+            self.assertEqual("(unresolved: not a variant)", result["before"])
 
     def test_cache_cleared_at_dry_run_start(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2225,6 +2225,195 @@ class TestBeforeValueResolution(unittest.TestCase):
             )
             # Stale key should be gone; cache was rebuilt from scratch
             self.assertNotIn("stale_key", mcp._before_cache or {})
+
+
+class TestChainBeforeValueResolution(unittest.TestCase):
+    """Chain-aware before-value resolution across Variant hierarchy."""
+
+    # Base prefab: contains a MeshRenderer (fileID 42) with m_IsActive and
+    # m_Materials list
+    _BASE_YAML = (
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n"
+        "--- !u!23 &42\n"
+        "MeshRenderer:\n"
+        "  m_IsActive: 1\n"
+        "  m_Materials:\n"
+        "  - {fileID: 2100000, guid: 11111111111111111111111111111111, type: 2}\n"
+        "  - {fileID: 2100000, guid: 22222222222222222222222222222222, type: 2}\n"
+    )
+
+    # Mid-level variant: overrides m_Materials.Array.data[0]
+    _MID_VARIANT_YAML = (
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n"
+        "--- !u!1001 &100100000\n"
+        "PrefabInstance:\n"
+        "  m_SourcePrefab: {fileID: 100100000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaa0000, type: 3}\n"
+        "  m_Modifications:\n"
+        "  - target: {fileID: 42, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaa0000, type: 3}\n"
+        "    propertyPath: m_Materials.Array.data[0]\n"
+        "    value: \n"
+        "    objectReference: {fileID: 2100000, guid: 33333333333333333333333333333333, type: 2}\n"
+    )
+
+    # Leaf variant: overrides m_Materials.Array.data[1] only
+    _LEAF_VARIANT_YAML = (
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n"
+        "--- !u!1001 &100100000\n"
+        "PrefabInstance:\n"
+        "  m_SourcePrefab: {fileID: 100100000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaa1111, type: 3}\n"
+        "  m_Modifications:\n"
+        "  - target: {fileID: 42, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaa1111, type: 3}\n"
+        "    propertyPath: m_Materials.Array.data[1]\n"
+        "    value: \n"
+        "    objectReference: {fileID: 2100000, guid: 44444444444444444444444444444444, type: 2}\n"
+    )
+
+    def _make_chain(self, tmp: str) -> Path:
+        """Create a 3-level chain: Leaf -> Mid -> Base."""
+        project_root = Path(tmp)
+        assets = project_root / "Assets"
+        assets.mkdir(parents=True)
+
+        # Base prefab
+        base = assets / "Base.prefab"
+        base.write_text(self._BASE_YAML)
+        base_meta = assets / "Base.prefab.meta"
+        base_meta.write_text("guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaa0000\n")
+
+        # Mid-level variant
+        mid = assets / "Mid.prefab"
+        mid.write_text(self._MID_VARIANT_YAML)
+        mid_meta = assets / "Mid.prefab.meta"
+        mid_meta.write_text("guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaa1111\n")
+
+        # Leaf variant
+        leaf = assets / "Leaf.prefab"
+        leaf.write_text(self._LEAF_VARIANT_YAML)
+        leaf_meta = assets / "Leaf.prefab.meta"
+        leaf_meta.write_text("guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaa2222\n")
+
+        return project_root
+
+    def test_chain_resolves_parent_override(self) -> None:
+        """Property overridden in parent variant is found via chain walk."""
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = self._make_chain(tmp)
+            pv = PrefabVariantMcp(project_root=project_root)
+            mcp = SerializedObjectMcp(project_root=project_root, prefab_variant=pv)
+
+            diagnostics: list = []
+            result = mcp._validate_op(
+                "Assets/Leaf.prefab",
+                0,
+                {"op": "set", "component": "42", "path": "m_Materials.Array.data[0]", "value": "x"},
+                diagnostics,
+            )
+            self.assertIsNotNone(result)
+            # data[0] is overridden in Mid variant -> should find that value
+            self.assertIn("33333333333333333333333333333333", result["before"])
+
+    def test_chain_resolves_leaf_override(self) -> None:
+        """Property overridden in the leaf variant itself takes precedence."""
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = self._make_chain(tmp)
+            pv = PrefabVariantMcp(project_root=project_root)
+            mcp = SerializedObjectMcp(project_root=project_root, prefab_variant=pv)
+
+            diagnostics: list = []
+            result = mcp._validate_op(
+                "Assets/Leaf.prefab",
+                0,
+                {"op": "set", "component": "42", "path": "m_Materials.Array.data[1]", "value": "x"},
+                diagnostics,
+            )
+            self.assertIsNotNone(result)
+            # data[1] is overridden in the Leaf itself -> should find that value
+            self.assertIn("44444444444444444444444444444444", result["before"])
+
+    def test_chain_resolves_base_prefab_value(self) -> None:
+        """Property not overridden in any variant is read from the base prefab."""
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = self._make_chain(tmp)
+            pv = PrefabVariantMcp(project_root=project_root)
+            mcp = SerializedObjectMcp(project_root=project_root, prefab_variant=pv)
+
+            diagnostics: list = []
+            result = mcp._validate_op(
+                "Assets/Leaf.prefab",
+                0,
+                {"op": "set", "component": "42", "path": "m_IsActive", "value": 0},
+                diagnostics,
+            )
+            self.assertIsNotNone(result)
+            # m_IsActive=1 is in the base prefab, not overridden anywhere
+            self.assertEqual("1", result["before"])
+
+    def test_chain_graceful_on_missing_parent(self) -> None:
+        """Missing parent in chain returns unresolved for unknown properties."""
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            assets = project_root / "Assets"
+            assets.mkdir(parents=True)
+            # Leaf variant pointing to a non-existent parent
+            leaf = assets / "Orphan.prefab"
+            leaf.write_text(self._LEAF_VARIANT_YAML)
+            leaf_meta = assets / "Orphan.prefab.meta"
+            leaf_meta.write_text("guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaa9999\n")
+
+            pv = PrefabVariantMcp(project_root=project_root)
+            mcp = SerializedObjectMcp(project_root=project_root, prefab_variant=pv)
+
+            diagnostics: list = []
+            result = mcp._validate_op(
+                "Assets/Orphan.prefab",
+                0,
+                {"op": "set", "component": "42", "path": "m_IsActive", "value": 0},
+                diagnostics,
+            )
+            self.assertIsNotNone(result)
+            # Parent is missing, m_IsActive not overridden in leaf
+            self.assertIn("unresolved", result["before"])
+
+    def test_resolve_chain_values_returns_all_effective(self) -> None:
+        """resolve_chain_values returns the merged effective map."""
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = self._make_chain(tmp)
+            pv = PrefabVariantMcp(project_root=project_root)
+            values = pv.resolve_chain_values("Assets/Leaf.prefab")
+
+            # Leaf overrides data[1], Mid overrides data[0], Base has m_IsActive
+            self.assertIn("42:m_Materials.Array.data[1]", values)
+            self.assertIn("42:m_Materials.Array.data[0]", values)
+            self.assertIn("42:m_IsActive", values)
+            self.assertEqual("1", values["42:m_IsActive"])
+
+    def test_resolve_chain_values_child_wins(self) -> None:
+        """When both child and parent override the same property, child wins."""
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = self._make_chain(tmp)
+            # Create a 4th level that also overrides data[0]
+            assets = project_root / "Assets"
+            top_yaml = (
+                "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n"
+                "--- !u!1001 &100100000\n"
+                "PrefabInstance:\n"
+                "  m_SourcePrefab: {fileID: 100100000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaa2222, type: 3}\n"
+                "  m_Modifications:\n"
+                "  - target: {fileID: 42, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaa2222, type: 3}\n"
+                "    propertyPath: m_Materials.Array.data[0]\n"
+                "    value: \n"
+                "    objectReference: {fileID: 2100000, guid: 55555555555555555555555555555555, type: 2}\n"
+            )
+            top = assets / "Top.prefab"
+            top.write_text(top_yaml)
+            top_meta = assets / "Top.prefab.meta"
+            top_meta.write_text("guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaa3333\n")
+
+            pv = PrefabVariantMcp(project_root=project_root)
+            values = pv.resolve_chain_values("Assets/Top.prefab")
+
+            # Top overrides data[0] -> should shadow Mid's override
+            self.assertIn("55555555555555555555555555555555", values["42:m_Materials.Array.data[0]"])
 
 
 if __name__ == "__main__":

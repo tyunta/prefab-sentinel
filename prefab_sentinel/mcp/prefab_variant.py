@@ -14,6 +14,7 @@ from prefab_sentinel.unity_assets import (
     normalize_guid,
     resolve_scope_path,
 )
+from prefab_sentinel.unity_yaml_parser import split_yaml_blocks
 
 OVERRIDE_TARGET_PATTERN = re.compile(
     r"target:\s*\{fileID:\s*(-?\d+)(?:,\s*guid:\s*([0-9a-fA-F]{32}))?(?:,\s*type:\s*(-?\d+))?\}"
@@ -433,3 +434,153 @@ class PrefabVariantMcp:
             data={"variant_path": self._relative(path), "stale_count": 0, "read_only": True},
             diagnostics=[],
         )
+
+    # ------------------------------------------------------------------
+    # Chain-aware before-value resolution
+    # ------------------------------------------------------------------
+
+    def resolve_chain_values(
+        self,
+        variant_path: str,
+    ) -> dict[str, str]:
+        """Walk the full Variant chain and return effective override values.
+
+        Returns a dict keyed by ``"{target_file_id}:{property_path}"`` with
+        the effective value (last-write-wins from the *bottom* of the chain).
+        The chain is traversed from the target variant up to the base prefab.
+
+        At each level the ``m_Modifications`` overrides are collected.  Values
+        found in a *closer* (child) variant shadow those from parents.  At the
+        base prefab, property values are extracted directly from the YAML
+        component blocks on a best-effort basis.
+        """
+        path = resolve_scope_path(variant_path, self.project_root)
+        if not path.exists():
+            return {}
+
+        try:
+            text = decode_text_file(path)
+        except (OSError, UnicodeDecodeError):
+            return {}
+
+        if SOURCE_PREFAB_PATTERN.search(text) is None:
+            # Not a variant – nothing to resolve
+            return {}
+
+        # Collect overrides bottom-up.  Child overrides take precedence.
+        result: dict[str, str] = {}
+        visited: set[str] = set()
+        current_text: str | None = text
+        depth_limit = 12
+
+        for _ in range(depth_limit):
+            if current_text is None:
+                break
+
+            # Parse overrides at this level and merge (child wins)
+            entries = self._parse_overrides(current_text)
+            for entry in entries:
+                if not entry.property_path:
+                    continue
+                key = f"{entry.target_file_id}:{entry.property_path}"
+                if key not in result:
+                    obj_ref = entry.object_reference
+                    val = entry.value
+                    result[key] = (
+                        obj_ref if obj_ref and obj_ref != "{fileID: 0}" else val
+                    )
+
+            # Follow m_SourcePrefab to the parent
+            source = SOURCE_PREFAB_PATTERN.search(current_text)
+            if source is None:
+                break
+
+            source_guid = normalize_guid(source.group(2))
+            if source_guid in visited:
+                break
+            visited.add(source_guid)
+
+            target_file = self._guid_map().get(source_guid)
+            if target_file is None:
+                break
+
+            try:
+                current_text = decode_text_file(target_file)
+            except (OSError, UnicodeDecodeError):
+                break
+
+            # If the parent is itself a variant, continue the loop.
+            # If it is a base prefab (no m_SourcePrefab), extract property
+            # values directly from the YAML blocks and stop.
+            if SOURCE_PREFAB_PATTERN.search(current_text) is None:
+                self._merge_base_prefab_values(current_text, result)
+                break
+
+        return result
+
+    def _merge_base_prefab_values(
+        self,
+        base_text: str,
+        result: dict[str, str],
+    ) -> None:
+        """Best-effort extraction of property values from a base prefab.
+
+        For each YAML block (keyed by fileID), scan for simple ``key: value``
+        lines and Unity-style inline references
+        ``{fileID: N, guid: G, type: T}``.  Array elements written as
+        ``m_Foo.Array.data[N]`` are mapped from the YAML list syntax.
+        """
+        blocks = split_yaml_blocks(base_text)
+        for block in blocks:
+            file_id = block.file_id
+            lines = block.text.split("\n")
+            # Track array context for m_Foo list items
+            current_array_field: str | None = None
+            array_index = 0
+
+            for line in lines:
+                stripped = line.strip()
+
+                # Skip document header and blank lines
+                if stripped.startswith("---") or not stripped:
+                    current_array_field = None
+                    continue
+
+                # Detect list items under an array field
+                if stripped.startswith("- ") and current_array_field is not None:
+                    item_value = stripped[2:].strip()
+                    prop_path = f"{current_array_field}.Array.data[{array_index}]"
+                    key = f"{file_id}:{prop_path}"
+                    if key not in result:
+                        result[key] = item_value
+                    array_index += 1
+                    continue
+
+                # Reset array context on non-list line
+                if not stripped.startswith("- "):
+                    current_array_field = None
+
+                # Simple "field: value" lines
+                if ":" in stripped:
+                    field_part, _, value_part = stripped.partition(":")
+                    field_name = field_part.strip()
+                    value_raw = value_part.strip()
+
+                    # Skip the class name line (e.g. "MeshRenderer:")
+                    if not value_raw and not field_name.startswith("m_"):
+                        continue
+
+                    # Detect start of a YAML list (field with no inline value
+                    # or empty value, followed by "- " items)
+                    if not value_raw and field_name.startswith("m_"):
+                        current_array_field = field_name
+                        array_index = 0
+                        continue
+
+                    # Skip empty "[]" arrays
+                    if value_raw == "[]":
+                        continue
+
+                    key = f"{file_id}:{field_name}"
+                    if key not in result:
+                        result[key] = value_raw
