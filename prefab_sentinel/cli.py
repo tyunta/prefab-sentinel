@@ -732,7 +732,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--zoom",
         type=float,
         default=0.0,
-        help="Scene view zoom level (0 = keep current).",
+        help=(
+            "Scene view distance factor (maps to SceneView.size). "
+            "Larger values zoom OUT, smaller values zoom IN. "
+            "0 = keep current. Typical range: 0.1 (very close) to 5.0 (far away)."
+        ),
+    )
+    editor_frame.add_argument(
+        "--distance",
+        type=float,
+        default=0.0,
+        help="Alias for --zoom (maps to SceneView.size). If both specified, --distance wins.",
     )
 
     editor_instantiate = editor_sub.add_parser(

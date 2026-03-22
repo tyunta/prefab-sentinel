@@ -228,6 +228,15 @@ class TestCliEditorSubcommands(unittest.TestCase):
         self.assertEqual("frame", args.editor_command)
         self.assertAlmostEqual(3.5, args.zoom)
 
+    def test_editor_frame_distance_alias(self) -> None:
+        from prefab_sentinel.cli import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args(["editor", "frame", "--distance", "0.5"])
+        self.assertEqual("frame", args.editor_command)
+        self.assertAlmostEqual(0.5, args.distance)
+        self.assertAlmostEqual(0.0, args.zoom)
+
     def test_editor_instantiate_parser(self) -> None:
         from prefab_sentinel.cli import build_parser
 

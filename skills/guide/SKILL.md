@@ -107,7 +107,8 @@ prefab-sentinel editor screenshot --view game          # Game ビューのスク
 prefab-sentinel editor select --path "/Canvas/Panel"   # Hierarchy 上のオブジェクトを選択
 prefab-sentinel editor select --path "Hair_Base" --prefab-stage "Assets/.../Variant.prefab"  # Prefab Stage 内のオブジェクトを選択
 prefab-sentinel editor frame                           # 選択オブジェクトを Scene ビュー中央に表示
-prefab-sentinel editor frame --zoom 2.0                # ズーム付きフレーム
+prefab-sentinel editor frame --zoom 0.5                # 近づく（小さい値 = ズームイン、SceneView.size にマップ）
+prefab-sentinel editor frame --distance 2.0            # 離れる（大きい値 = ズームアウト）。--zoom のエイリアス
 prefab-sentinel editor instantiate --prefab "Assets/Prefabs/Mic.prefab"  # Prefab を Scene に配置
 prefab-sentinel editor instantiate --prefab "Assets/Prefabs/Mic.prefab" --parent "/Canvas" --position 0,1.5,0
 prefab-sentinel editor ping --asset "Assets/Prefabs/Mic.prefab"  # Project ウィンドウでアセットをハイライト
