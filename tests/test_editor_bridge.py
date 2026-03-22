@@ -177,6 +177,9 @@ class TestSupportedActions(unittest.TestCase):
             "delete_object",
             "list_children",
             "list_materials",
+            "camera",
+            "list_roots",
+            "get_material_property",
         }
         self.assertEqual(expected, SUPPORTED_ACTIONS)
 
@@ -344,6 +347,60 @@ class TestCliEditorSubcommands(unittest.TestCase):
         ])
         self.assertEqual("list-materials", args.editor_command)
         self.assertEqual("/AvatarRoot/Body", args.path)
+
+    def test_editor_get_material_property_parser(self) -> None:
+        from prefab_sentinel.cli import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args([
+            "editor", "get-material-property",
+            "--renderer", "/Body/Mesh",
+            "--index", "0",
+            "--property", "_Color",
+        ])
+        self.assertEqual("get-material-property", args.editor_command)
+        self.assertEqual("/Body/Mesh", args.renderer)
+        self.assertEqual(0, args.index)
+        self.assertEqual("_Color", args.property)
+
+    def test_editor_get_material_property_list_all(self) -> None:
+        from prefab_sentinel.cli import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args([
+            "editor", "get-material-property",
+            "--renderer", "/Body/Mesh",
+            "--index", "0",
+        ])
+        self.assertEqual("get-material-property", args.editor_command)
+        self.assertEqual("", args.property)
+
+    def test_editor_list_roots_parser(self) -> None:
+        from prefab_sentinel.cli import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args(["editor", "list-roots"])
+        self.assertEqual("list-roots", args.editor_command)
+
+    def test_editor_camera_parser(self) -> None:
+        from prefab_sentinel.cli import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args(["editor", "camera", "--yaw", "180", "--pitch", "15", "--distance", "0.5"])
+        self.assertEqual("camera", args.editor_command)
+        self.assertAlmostEqual(180.0, args.yaw)
+        self.assertAlmostEqual(15.0, args.pitch)
+        self.assertAlmostEqual(0.5, args.distance)
+
+    def test_editor_camera_parser_defaults(self) -> None:
+        from prefab_sentinel.cli import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args(["editor", "camera"])
+        self.assertEqual("camera", args.editor_command)
+        self.assertAlmostEqual(0.0, args.yaw)
+        self.assertAlmostEqual(15.0, args.pitch)
+        self.assertAlmostEqual(0.0, args.distance)
 
 
 if __name__ == "__main__":

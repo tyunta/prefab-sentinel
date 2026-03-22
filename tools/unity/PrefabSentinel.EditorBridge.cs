@@ -174,7 +174,10 @@ namespace PrefabSentinel
                     || header.action == "set_material"
                     || header.action == "delete_object"
                     || header.action == "list_children"
-                    || header.action == "list_materials");
+                    || header.action == "list_materials"
+                    || header.action == "camera"
+                    || header.action == "list_roots"
+                    || header.action == "get_material_property");
 
             if (isRuntime)
             {

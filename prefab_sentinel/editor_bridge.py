@@ -39,6 +39,9 @@ SUPPORTED_ACTIONS = frozenset(
         "delete_object",
         "list_children",
         "list_materials",
+        "camera",
+        "list_roots",
+        "get_material_property",
     }
 )
 

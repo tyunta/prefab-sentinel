@@ -855,6 +855,55 @@ def build_parser() -> argparse.ArgumentParser:
         help="Hierarchy path to the root GameObject.",
     )
 
+    editor_sub.add_parser(
+        "list-roots",
+        help="List root GameObjects in the current Scene or Prefab Stage.",
+    )
+
+    editor_get_material_property = editor_sub.add_parser(
+        "get-material-property",
+        help="Read shader property values from a material at runtime.",
+    )
+    editor_get_material_property.add_argument(
+        "--renderer",
+        required=True,
+        help="Hierarchy path to the GameObject with a Renderer.",
+    )
+    editor_get_material_property.add_argument(
+        "--index",
+        type=int,
+        required=True,
+        help="Material slot index (0-based).",
+    )
+    editor_get_material_property.add_argument(
+        "--property",
+        default="",
+        help="Shader property name (e.g. _Color). If omitted, lists all properties.",
+    )
+
+    editor_camera = editor_sub.add_parser(
+        "camera",
+        help="Set Scene View camera orientation (yaw/pitch relative to current pivot).",
+    )
+    editor_camera.add_argument(
+        "--yaw",
+        type=float,
+        default=0.0,
+        help="Yaw angle in degrees (horizontal rotation, 0=front, 180=back).",
+    )
+    editor_camera.add_argument(
+        "--pitch",
+        type=float,
+        default=15.0,
+        help="Pitch angle in degrees (vertical tilt, positive=looking down, default: 15).",
+    )
+    editor_camera.add_argument(
+        "--distance",
+        type=float,
+        default=0.0,
+        help="Scene view distance factor (0 = keep current). Maps to SceneView.size.",
+    )
+
     return parser
 
 
@@ -1740,9 +1789,10 @@ def main(argv: list[str] | None = None) -> int:
                 kwargs["prefab_asset_path"] = args.prefab_stage
             result = send_action(**kwargs)
         elif cmd == "frame":
+            zoom_value = args.distance if args.distance > 0 else args.zoom
             result = send_action(
                 action="frame_selected",
-                zoom=args.zoom,
+                zoom=zoom_value,
             )
         elif cmd == "instantiate":
             position: list[float] = []
@@ -1804,6 +1854,22 @@ def main(argv: list[str] | None = None) -> int:
             result = send_action(
                 action="list_materials",
                 hierarchy_path=args.path,
+            )
+        elif cmd == "list-roots":
+            result = send_action(action="list_roots")
+        elif cmd == "get-material-property":
+            result = send_action(
+                action="get_material_property",
+                renderer_path=args.renderer,
+                material_index=args.index,
+                property_name=args.property,
+            )
+        elif cmd == "camera":
+            result = send_action(
+                action="camera",
+                yaw=args.yaw,
+                pitch=args.pitch,
+                distance=args.distance,
             )
         else:
             parser.error(f"Unknown editor command: {cmd}")

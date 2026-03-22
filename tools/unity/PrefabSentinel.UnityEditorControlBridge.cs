@@ -4,6 +4,7 @@ using System.IO;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 namespace PrefabSentinel
 {
@@ -56,6 +57,14 @@ namespace PrefabSentinel
 
             // list_children
             public int list_depth = 1;
+
+            // camera
+            public float yaw = 0f;
+            public float pitch = 0f;
+            public float distance = 0f;  // 0 = keep current
+
+            // get_material_property
+            public string property_name = string.Empty; // empty = list all properties
         }
 
         [Serializable]
@@ -97,6 +106,14 @@ namespace PrefabSentinel
         }
 
         [Serializable]
+        public sealed class MaterialPropertyEntry
+        {
+            public string property_name = string.Empty;
+            public string property_type = string.Empty;
+            public string value = string.Empty;
+        }
+
+        [Serializable]
         public sealed class EditorControlData
         {
             public string output_path = string.Empty;
@@ -111,6 +128,11 @@ namespace PrefabSentinel
             public ConsoleLogEntry[] entries = Array.Empty<ConsoleLogEntry>();
             public ChildEntry[] children = Array.Empty<ChildEntry>();
             public MaterialSlotEntry[] material_slots = Array.Empty<MaterialSlotEntry>();
+            public MaterialPropertyEntry[] material_properties = Array.Empty<MaterialPropertyEntry>();
+            public string[] root_objects = Array.Empty<string>();
+            public float camera_yaw = 0f;
+            public float camera_pitch = 0f;
+            public float camera_distance = 0f;
             public bool read_only = true;
             public bool executed = false;
         }
@@ -188,6 +210,15 @@ namespace PrefabSentinel
                     break;
                 case "list_materials":
                     response = HandleListMaterials(request);
+                    break;
+                case "camera":
+                    response = HandleCamera(request);
+                    break;
+                case "list_roots":
+                    response = HandleListRoots(request);
+                    break;
+                case "get_material_property":
+                    response = HandleGetMaterialProperty(request);
                     break;
                 default:
                     response = BuildError(
@@ -603,6 +634,177 @@ namespace PrefabSentinel
                 {
                     material_slots = slots.ToArray(),
                     total_entries = slots.Count,
+                    read_only = true,
+                    executed = true
+                });
+        }
+
+        private static EditorControlResponse HandleCamera(EditorControlRequest request)
+        {
+            SceneView sceneView = SceneView.lastActiveSceneView;
+            if (sceneView == null)
+                return BuildError("EDITOR_CTRL_NO_SCENE_VIEW", "No active SceneView found.");
+
+            sceneView.rotation = Quaternion.Euler(request.pitch, request.yaw, 0f);
+
+            if (request.distance > 0f)
+                sceneView.size = request.distance;
+
+            sceneView.Repaint();
+
+            return BuildSuccess("EDITOR_CTRL_CAMERA_OK",
+                $"Camera set: yaw={request.yaw}, pitch={request.pitch}" +
+                (request.distance > 0f ? $", distance={request.distance}" : ""),
+                data: new EditorControlData
+                {
+                    camera_yaw = request.yaw,
+                    camera_pitch = request.pitch,
+                    camera_distance = sceneView.size,
+                    executed = true
+                });
+        }
+
+        private static EditorControlResponse HandleListRoots(EditorControlRequest request)
+        {
+            var prefabStage = PrefabStageUtility.GetCurrentPrefabStage();
+            if (prefabStage != null)
+            {
+                var root = prefabStage.prefabContentsRoot;
+                if (root == null)
+                    return BuildError("EDITOR_CTRL_PREFAB_STAGE_FAILED", "Prefab Stage root is null.");
+
+                return BuildSuccess("EDITOR_CTRL_LIST_ROOTS_OK",
+                    $"Prefab Stage root: {root.name}",
+                    data: new EditorControlData
+                    {
+                        root_objects = new[] { root.name },
+                        children = new[] { new ChildEntry
+                        {
+                            name = root.name,
+                            path = "/" + root.name,
+                            child_count = root.transform.childCount,
+                            depth = 0
+                        }},
+                        total_entries = 1,
+                        read_only = true,
+                        executed = true
+                    });
+            }
+
+            var scene = SceneManager.GetActiveScene();
+            if (!scene.IsValid())
+                return BuildError("EDITOR_CTRL_NO_SCENE", "No valid active scene found.");
+
+            var rootObjects = scene.GetRootGameObjects();
+            var names = new string[rootObjects.Length];
+            var entries = new List<ChildEntry>();
+
+            for (int i = 0; i < rootObjects.Length; i++)
+            {
+                names[i] = rootObjects[i].name;
+                entries.Add(new ChildEntry
+                {
+                    name = rootObjects[i].name,
+                    path = "/" + rootObjects[i].name,
+                    child_count = rootObjects[i].transform.childCount,
+                    depth = 0
+                });
+            }
+
+            return BuildSuccess("EDITOR_CTRL_LIST_ROOTS_OK",
+                $"Found {rootObjects.Length} root objects in scene '{scene.name}'",
+                data: new EditorControlData
+                {
+                    root_objects = names,
+                    children = entries.ToArray(),
+                    total_entries = entries.Count,
+                    read_only = true,
+                    executed = true
+                });
+        }
+
+        private static EditorControlResponse HandleGetMaterialProperty(EditorControlRequest request)
+        {
+            if (string.IsNullOrEmpty(request.renderer_path))
+                return BuildError("EDITOR_CTRL_MISSING_PATH", "renderer_path is required for get_material_property.");
+            if (request.material_index < 0)
+                return BuildError("EDITOR_CTRL_MISSING_INDEX", "material_index is required (>= 0).");
+
+            var go = GameObject.Find(request.renderer_path);
+            if (go == null)
+                return BuildError("EDITOR_CTRL_OBJECT_NOT_FOUND",
+                    $"GameObject not found: {request.renderer_path}");
+
+            var renderer = go.GetComponent<Renderer>();
+            if (renderer == null)
+                return BuildError("EDITOR_CTRL_NO_RENDERER",
+                    $"No Renderer on: {request.renderer_path}");
+
+            var mats = renderer.sharedMaterials;
+            if (request.material_index >= mats.Length)
+                return BuildError("EDITOR_CTRL_INDEX_OOB",
+                    $"material_index {request.material_index} out of range (length={mats.Length}).");
+
+            var mat = mats[request.material_index];
+            if (mat == null)
+                return BuildError("EDITOR_CTRL_MATERIAL_NULL",
+                    $"Material at index {request.material_index} is null.");
+
+            var shader = mat.shader;
+            var properties = new List<MaterialPropertyEntry>();
+            int propCount = shader.GetPropertyCount();
+
+            for (int i = 0; i < propCount; i++)
+            {
+                string propName = shader.GetPropertyName(i);
+                var propType = shader.GetPropertyType(i);
+
+                if (!string.IsNullOrEmpty(request.property_name) && propName != request.property_name)
+                    continue;
+
+                string valueStr;
+                switch (propType)
+                {
+                    case UnityEngine.Rendering.ShaderPropertyType.Color:
+                        valueStr = mat.GetColor(propName).ToString();
+                        break;
+                    case UnityEngine.Rendering.ShaderPropertyType.Float:
+                    case UnityEngine.Rendering.ShaderPropertyType.Range:
+                        valueStr = mat.GetFloat(propName).ToString("G9");
+                        break;
+                    case UnityEngine.Rendering.ShaderPropertyType.Vector:
+                        valueStr = mat.GetVector(propName).ToString();
+                        break;
+                    case UnityEngine.Rendering.ShaderPropertyType.Texture:
+                        var tex = mat.GetTexture(propName);
+                        valueStr = tex != null ? AssetDatabase.GetAssetPath(tex) : "(none)";
+                        break;
+                    case UnityEngine.Rendering.ShaderPropertyType.Int:
+                        valueStr = mat.GetInteger(propName).ToString();
+                        break;
+                    default:
+                        valueStr = "(unknown type)";
+                        break;
+                }
+
+                properties.Add(new MaterialPropertyEntry
+                {
+                    property_name = propName,
+                    property_type = propType.ToString(),
+                    value = valueStr
+                });
+            }
+
+            if (!string.IsNullOrEmpty(request.property_name) && properties.Count == 0)
+                return BuildError("EDITOR_CTRL_PROPERTY_NOT_FOUND",
+                    $"Property '{request.property_name}' not found on shader '{shader.name}'.");
+
+            return BuildSuccess("EDITOR_CTRL_GET_MATERIAL_PROPERTY_OK",
+                $"Found {properties.Count} properties on material '{mat.name}' (shader: {shader.name})",
+                data: new EditorControlData
+                {
+                    material_properties = properties.ToArray(),
+                    total_entries = properties.Count,
                     read_only = true,
                     executed = true
                 });
