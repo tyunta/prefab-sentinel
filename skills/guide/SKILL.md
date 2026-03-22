@@ -130,10 +130,13 @@ prefab-sentinel editor refresh                                   # AssetDatabase
 
 ### open モード — 既存アセットのプロパティ編集
 ```json
-{"resource": "res1", "op": "set", "component": "<fileID>", "path": "m_SomeField", "value": 42}
-{"resource": "res1", "op": "insert_array_element", "component": "<fileID>", "path": "m_Array", "index": 0, "value": "item"}
-{"resource": "res1", "op": "remove_array_element", "component": "<fileID>", "path": "m_Array", "index": 0}
+{"resource": "res1", "op": "set", "component": "<TypeName>", "path": "m_SomeField", "value": 42}
+{"resource": "res1", "op": "insert_array_element", "component": "<TypeName>", "path": "m_Array", "index": 0, "value": "item"}
+{"resource": "res1", "op": "remove_array_element", "component": "<TypeName>", "path": "m_Array", "index": 0}
 ```
+- `component` は **型名セレクタ** で指定する（例: `SkinnedMeshRenderer`, `UnityEngine.MeshFilter`, `MyNamespace.MyComponent`）
+- 同型コンポーネントが複数存在する場合は `TypeName@/hierarchy/path` で曖昧性を解消する（例: `SkinnedMeshRenderer@/Body`）
+- **注意**: YAML の `m_Modifications.target.fileID` や数値 fileID は component セレクタとして使用できない。C# ブリッジは型名でコンポーネントを検索する
 - Unity SerializedProperty 経由で操作するため、path は Unity 内部パスに従う
 - 既存プロパティの値変更・配列操作のみ。構造的な追加（GameObject/Component）は不可
 - `ObjectReference` の `value` は `{"guid": "...", "fileID": 10207}` または `{"guid": "...", "file_id": 10207}` の両形式を受け付ける（Unity ネイティブ `fileID` を優先）
@@ -185,6 +188,27 @@ prefab-sentinel editor refresh                                   # AssetDatabase
 | `insert_array_element` | `target`, `path`, `index`, `value` | — | 配列要素の挿入 |
 | `remove_array_element` | `target`, `path`, `index` | — | 配列要素の削除 |
 | `save` | — | — | 保存（最終 op として1回のみ） |
+
+### scene モード — Scene 編集（Unity 環境必須）
+
+Scene 編集は `open_scene` で開始し、`save_scene` で終了する。この 2 つは必須。
+```json
+{
+  "plan_version": 2,
+  "resources": [
+    {"id": "s1", "kind": "scene", "path": "Assets/Scenes/Main.unity", "mode": "open"}
+  ],
+  "ops": [
+    {"resource": "s1", "op": "open_scene"},
+    {"resource": "s1", "op": "find_component", "target": "$scene", "type": "UnityEngine.Light", "result": "$light"},
+    {"resource": "s1", "op": "set", "target": "$light", "path": "m_Intensity", "value": 2.5},
+    {"resource": "s1", "op": "save_scene"}
+  ]
+}
+```
+- `open_scene` は最初の op として必須。`save_scene` は最後の op として必須（各 1 回のみ）
+- Scene 内のオブジェクト操作は create モードと同じハンドルシステムを使用（`find_component`, `set`, `insert_array_element`, `remove_array_element`）
+- `create_game_object`, `add_component` で Scene への新規追加も可能
 
 ## ワークフロー選択
 - **Prefab 編集時**（open モード）: validate structure → dry-run → confirm → validate refs → validate runtime

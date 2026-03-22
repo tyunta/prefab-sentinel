@@ -2114,6 +2114,63 @@ class TestSerializedObjectMcpProjectRoot(unittest.TestCase):
             )
 
 
+class TestNumericComponentWarning(unittest.TestCase):
+    """Numeric component selectors emit a likely_fileid diagnostic."""
+
+    def test_dry_run_warns_on_numeric_component(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            (project_root / "Assets").mkdir()
+            prefab = project_root / "Assets" / "Test.prefab"
+            prefab.write_text("%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Root\n")
+
+            mcp = SerializedObjectMcp(project_root=project_root)
+            response = mcp.dry_run_patch(
+                "Assets/Test.prefab",
+                [{"op": "set", "component": "9196683876007738779", "path": "m_IsActive", "value": 1}],
+            )
+            fileid_diags = [d for d in response.diagnostics if d.detail == "likely_fileid"]
+            self.assertEqual(len(fileid_diags), 1)
+            self.assertIn("type name", fileid_diags[0].evidence)
+
+    def test_negative_numeric_also_warns(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            (project_root / "Assets").mkdir()
+            prefab = project_root / "Assets" / "Test.prefab"
+            prefab.write_text("%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Root\n")
+
+            mcp = SerializedObjectMcp(project_root=project_root)
+            diagnostics: list = []
+            result = mcp._validate_op(
+                "Assets/Test.prefab", 0,
+                {"op": "set", "component": "-42", "path": "m_IsActive", "value": 1},
+                diagnostics,
+            )
+            fileid_diags = [d for d in diagnostics if d.detail == "likely_fileid"]
+            self.assertEqual(len(fileid_diags), 1)
+            # Op should still proceed (warning, not error)
+            self.assertIsNotNone(result)
+
+    def test_type_name_no_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            (project_root / "Assets").mkdir()
+            prefab = project_root / "Assets" / "Test.prefab"
+            prefab.write_text("%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Root\n")
+
+            mcp = SerializedObjectMcp(project_root=project_root)
+            diagnostics: list = []
+            result = mcp._validate_op(
+                "Assets/Test.prefab", 0,
+                {"op": "set", "component": "SkinnedMeshRenderer", "path": "m_IsActive", "value": 1},
+                diagnostics,
+            )
+            fileid_diags = [d for d in diagnostics if d.detail == "likely_fileid"]
+            self.assertEqual(len(fileid_diags), 0)
+            self.assertIsNotNone(result)
+
+
 class TestBeforeValueResolution(unittest.TestCase):
     """P1: _validate_op resolves before values from Variant overrides."""
 

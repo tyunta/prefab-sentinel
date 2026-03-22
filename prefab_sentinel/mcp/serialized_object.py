@@ -2298,6 +2298,22 @@ class SerializedObjectMcp:
                 )
             )
             return None
+        _bare = component.lstrip("-")
+        if _bare.isdigit():
+            diagnostics.append(
+                Diagnostic(
+                    path=target,
+                    location=f"ops[{index}].component",
+                    detail="likely_fileid",
+                    evidence=(
+                        f"component '{component}' looks like a numeric fileID. "
+                        f"The Unity bridge resolves components by type name "
+                        f"(e.g. 'SkinnedMeshRenderer' or "
+                        f"'TypeName@/hierarchy/path'). Numeric fileIDs will "
+                        f"fail at apply time."
+                    ),
+                )
+            )
         if not property_path:
             diagnostics.append(
                 Diagnostic(
