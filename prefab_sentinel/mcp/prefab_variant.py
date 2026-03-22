@@ -39,6 +39,17 @@ class OverrideEntry:
         return f"{self.target_guid}:{self.target_file_id}"
 
 
+@dataclass(slots=True)
+class ChainValue:
+    """A resolved property value with origin tracking."""
+
+    target_file_id: str
+    property_path: str
+    value: str
+    origin_path: str  # relative path of the Prefab that set this value
+    origin_depth: int  # 0 = the variant itself, 1 = parent, ...
+
+
 class PrefabVariantMcp:
     """Read-only prefab variant MCP interface for Phase 1."""
 
@@ -584,3 +595,212 @@ class PrefabVariantMcp:
                     key = f"{file_id}:{field_name}"
                     if key not in result:
                         result[key] = value_raw
+
+    def resolve_chain_values_with_origin(
+        self,
+        variant_path: str,
+    ) -> ToolResponse:
+        """Walk the full Variant chain and return values with origin annotations.
+
+        Like :meth:`resolve_chain_values` but each value carries the relative
+        path and depth of the Prefab that set it.  ``origin_depth=0`` is the
+        variant itself, ``1`` its parent, and so on up to the base prefab.
+        """
+        path = resolve_scope_path(variant_path, self.project_root)
+        if not path.exists():
+            return ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code="PVR404",
+                message="Variant path does not exist.",
+                data={"variant_path": variant_path, "read_only": True},
+                diagnostics=[],
+            )
+
+        try:
+            text = decode_text_file(path)
+        except (OSError, UnicodeDecodeError):
+            return ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code="PVR_READ_ERROR",
+                message=f"Failed to read variant file: {variant_path}",
+                data={"variant_path": variant_path, "read_only": True},
+                diagnostics=[],
+            )
+
+        if SOURCE_PREFAB_PATTERN.search(text) is None:
+            return ToolResponse(
+                success=True,
+                severity=Severity.INFO,
+                code="PVR_NOT_VARIANT",
+                message="File is not a Variant; no chain to resolve.",
+                data={
+                    "variant_path": variant_path,
+                    "chain": [],
+                    "value_count": 0,
+                    "values": [],
+                    "read_only": True,
+                },
+                diagnostics=[],
+            )
+
+        result: dict[str, ChainValue] = {}
+        chain: list[dict[str, object]] = []
+        visited: set[str] = set()
+        current_text: str | None = text
+        current_path: Path = path
+        depth = 0
+        depth_limit = 12
+
+        for _ in range(depth_limit):
+            if current_text is None:
+                break
+
+            rel = self._relative(current_path)
+            chain.append({"path": rel, "depth": depth})
+
+            entries = self._parse_overrides(current_text)
+            for entry in entries:
+                if not entry.property_path:
+                    continue
+                key = f"{entry.target_file_id}:{entry.property_path}"
+                if key not in result:
+                    obj_ref = entry.object_reference
+                    val = entry.value
+                    effective = (
+                        obj_ref if obj_ref and obj_ref != "{fileID: 0}" else val
+                    )
+                    result[key] = ChainValue(
+                        target_file_id=entry.target_file_id,
+                        property_path=entry.property_path,
+                        value=effective,
+                        origin_path=rel,
+                        origin_depth=depth,
+                    )
+
+            source = SOURCE_PREFAB_PATTERN.search(current_text)
+            if source is None:
+                break
+
+            source_guid = normalize_guid(source.group(2))
+            if source_guid in visited:
+                break
+            visited.add(source_guid)
+
+            target_file = self._guid_map().get(source_guid)
+            if target_file is None:
+                break
+
+            try:
+                current_text = decode_text_file(target_file)
+            except (OSError, UnicodeDecodeError):
+                break
+
+            depth += 1
+            current_path = target_file
+
+            if SOURCE_PREFAB_PATTERN.search(current_text) is None:
+                # Base prefab — extract values with origin tracking
+                base_rel = self._relative(current_path)
+                chain.append({"path": base_rel, "depth": depth})
+                self._merge_base_values_with_origin(
+                    current_text, result, base_rel, depth,
+                )
+                break
+
+        values_list = [
+            {
+                "target_file_id": cv.target_file_id,
+                "property_path": cv.property_path,
+                "value": cv.value,
+                "origin_path": cv.origin_path,
+                "origin_depth": cv.origin_depth,
+            }
+            for cv in result.values()
+        ]
+
+        return ToolResponse(
+            success=True,
+            severity=Severity.INFO,
+            code="PVR_CHAIN_VALUES_WITH_ORIGIN",
+            message=f"Resolved {len(values_list)} values across {len(chain)} chain levels.",
+            data={
+                "variant_path": variant_path,
+                "chain": chain,
+                "value_count": len(values_list),
+                "values": values_list,
+                "read_only": True,
+            },
+            diagnostics=[],
+        )
+
+    def _merge_base_values_with_origin(
+        self,
+        base_text: str,
+        result: dict[str, ChainValue],
+        origin_path: str,
+        origin_depth: int,
+    ) -> None:
+        """Extract base prefab values with origin tracking.
+
+        Same logic as :meth:`_merge_base_prefab_values` but stores
+        :class:`ChainValue` instances instead of plain strings.
+        """
+        blocks = split_yaml_blocks(base_text)
+        for block in blocks:
+            file_id = block.file_id
+            lines = block.text.split("\n")
+            current_array_field: str | None = None
+            array_index = 0
+
+            for line in lines:
+                stripped = line.strip()
+
+                if stripped.startswith("---") or not stripped:
+                    current_array_field = None
+                    continue
+
+                if stripped.startswith("- ") and current_array_field is not None:
+                    item_value = stripped[2:].strip()
+                    prop_path = f"{current_array_field}.Array.data[{array_index}]"
+                    key = f"{file_id}:{prop_path}"
+                    if key not in result:
+                        result[key] = ChainValue(
+                            target_file_id=file_id,
+                            property_path=prop_path,
+                            value=item_value,
+                            origin_path=origin_path,
+                            origin_depth=origin_depth,
+                        )
+                    array_index += 1
+                    continue
+
+                if not stripped.startswith("- "):
+                    current_array_field = None
+
+                if ":" in stripped:
+                    field_part, _, value_part = stripped.partition(":")
+                    field_name = field_part.strip()
+                    value_raw = value_part.strip()
+
+                    if not value_raw and not field_name.startswith("m_"):
+                        continue
+
+                    if not value_raw and field_name.startswith("m_"):
+                        current_array_field = field_name
+                        array_index = 0
+                        continue
+
+                    if value_raw == "[]":
+                        continue
+
+                    key = f"{file_id}:{field_name}"
+                    if key not in result:
+                        result[key] = ChainValue(
+                            target_file_id=file_id,
+                            property_path=field_name,
+                            value=value_raw,
+                            origin_path=origin_path,
+                            origin_depth=origin_depth,
+                        )

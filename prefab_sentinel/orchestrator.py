@@ -54,8 +54,10 @@ class Phase1Orchestrator:
         self,
         variant_path: str,
         component_filter: str | None = None,
+        *,
+        show_origin: bool = False,
     ) -> ToolResponse:
-        named_steps = [
+        named_steps: list[tuple[str, ToolResponse]] = [
             ("resolve_prefab_chain", self.prefab_variant.resolve_prefab_chain(variant_path)),
             ("list_overrides", self.prefab_variant.list_overrides(variant_path, component_filter)),
             (
@@ -64,6 +66,11 @@ class Phase1Orchestrator:
             ),
             ("detect_stale_overrides", self.prefab_variant.detect_stale_overrides(variant_path)),
         ]
+        if show_origin:
+            named_steps.append((
+                "resolve_chain_values_with_origin",
+                self.prefab_variant.resolve_chain_values_with_origin(variant_path),
+            ))
         executed_steps: list[dict[str, object]] = []
         diagnostics = []
         severities = []

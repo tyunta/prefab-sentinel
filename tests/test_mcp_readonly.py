@@ -2473,5 +2473,94 @@ class TestChainBeforeValueResolution(unittest.TestCase):
             self.assertIn("55555555555555555555555555555555", values["42:m_Materials.Array.data[0]"])
 
 
+class TestResolveChainValuesWithOrigin(unittest.TestCase):
+    """Tests for resolve_chain_values_with_origin() origin tracking."""
+
+    # Reuse the same YAML fixtures from TestChainBeforeValueResolution.
+    _BASE_YAML = TestChainBeforeValueResolution._BASE_YAML
+    _MID_VARIANT_YAML = TestChainBeforeValueResolution._MID_VARIANT_YAML
+    _LEAF_VARIANT_YAML = TestChainBeforeValueResolution._LEAF_VARIANT_YAML
+
+    def _make_chain(self, tmp: str) -> Path:
+        return TestChainBeforeValueResolution._make_chain(
+            TestChainBeforeValueResolution(), tmp,
+        )
+
+    def test_origin_tracks_leaf_override(self) -> None:
+        """Value overridden in leaf has origin_depth=0 and leaf path."""
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = self._make_chain(tmp)
+            pv = PrefabVariantMcp(project_root=project_root)
+            response = pv.resolve_chain_values_with_origin("Assets/Leaf.prefab")
+
+            self.assertTrue(response.success)
+            values = response.data["values"]
+            by_key = {
+                f"{v['target_file_id']}:{v['property_path']}": v for v in values
+            }
+
+            data1 = by_key["42:m_Materials.Array.data[1]"]
+            self.assertEqual(0, data1["origin_depth"])
+            self.assertEqual("Assets/Leaf.prefab", data1["origin_path"])
+
+    def test_origin_tracks_mid_override(self) -> None:
+        """Value overridden in mid-level variant has origin_depth=1."""
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = self._make_chain(tmp)
+            pv = PrefabVariantMcp(project_root=project_root)
+            response = pv.resolve_chain_values_with_origin("Assets/Leaf.prefab")
+
+            values = response.data["values"]
+            by_key = {
+                f"{v['target_file_id']}:{v['property_path']}": v for v in values
+            }
+
+            data0 = by_key["42:m_Materials.Array.data[0]"]
+            self.assertEqual(1, data0["origin_depth"])
+            self.assertEqual("Assets/Mid.prefab", data0["origin_path"])
+
+    def test_origin_tracks_base_value(self) -> None:
+        """Value from base prefab has the highest origin_depth."""
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = self._make_chain(tmp)
+            pv = PrefabVariantMcp(project_root=project_root)
+            response = pv.resolve_chain_values_with_origin("Assets/Leaf.prefab")
+
+            values = response.data["values"]
+            by_key = {
+                f"{v['target_file_id']}:{v['property_path']}": v for v in values
+            }
+
+            is_active = by_key["42:m_IsActive"]
+            self.assertEqual(2, is_active["origin_depth"])
+            self.assertEqual("Assets/Base.prefab", is_active["origin_path"])
+            self.assertEqual("1", is_active["value"])
+
+    def test_chain_list_included(self) -> None:
+        """Response includes chain list with depths."""
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = self._make_chain(tmp)
+            pv = PrefabVariantMcp(project_root=project_root)
+            response = pv.resolve_chain_values_with_origin("Assets/Leaf.prefab")
+
+            chain = response.data["chain"]
+            self.assertEqual(3, len(chain))
+            self.assertEqual("Assets/Leaf.prefab", chain[0]["path"])
+            self.assertEqual(0, chain[0]["depth"])
+            self.assertEqual("Assets/Base.prefab", chain[2]["path"])
+            self.assertEqual(2, chain[2]["depth"])
+
+    def test_non_variant_returns_empty(self) -> None:
+        """Non-variant file returns success with empty values."""
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = self._make_chain(tmp)
+            pv = PrefabVariantMcp(project_root=project_root)
+            response = pv.resolve_chain_values_with_origin("Assets/Base.prefab")
+
+            self.assertTrue(response.success)
+            self.assertEqual("PVR_NOT_VARIANT", response.code)
+            self.assertEqual(0, response.data["value_count"])
+
+
 if __name__ == "__main__":
     unittest.main()

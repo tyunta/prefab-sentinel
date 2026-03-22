@@ -110,6 +110,32 @@ class InspectVariantTests(unittest.TestCase):
         self.assertEqual(4, len(result.data["steps"]))
         self.assertEqual(Severity.WARNING, result.severity)
 
+    def test_show_origin_adds_fifth_step(self) -> None:
+        orch = _make_orchestrator()
+        orch.prefab_variant.resolve_prefab_chain.return_value = _ok_response()
+        orch.prefab_variant.list_overrides.return_value = _ok_response()
+        orch.prefab_variant.compute_effective_values.return_value = _ok_response()
+        orch.prefab_variant.detect_stale_overrides.return_value = _ok_response()
+        orch.prefab_variant.resolve_chain_values_with_origin.return_value = _ok_response()
+
+        result = orch.inspect_variant("Assets/test.prefab", show_origin=True)
+        self.assertTrue(result.success)
+        self.assertEqual(5, len(result.data["steps"]))
+        self.assertEqual(
+            "resolve_chain_values_with_origin", result.data["steps"][4]["step"],
+        )
+
+    def test_show_origin_false_keeps_four_steps(self) -> None:
+        orch = _make_orchestrator()
+        orch.prefab_variant.resolve_prefab_chain.return_value = _ok_response()
+        orch.prefab_variant.list_overrides.return_value = _ok_response()
+        orch.prefab_variant.compute_effective_values.return_value = _ok_response()
+        orch.prefab_variant.detect_stale_overrides.return_value = _ok_response()
+
+        result = orch.inspect_variant("Assets/test.prefab", show_origin=False)
+        self.assertTrue(result.success)
+        self.assertEqual(4, len(result.data["steps"]))
+
 
 class FileTypeGuardTests(unittest.TestCase):
     def test_inspect_wiring_warns_on_controller_file(self) -> None:

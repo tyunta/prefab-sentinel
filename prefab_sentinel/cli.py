@@ -48,6 +48,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional component filter for effective-value inspection.",
     )
+    inspect_variant.add_argument(
+        "--show-origin",
+        action="store_true",
+        help="Include chain-level origin annotations showing which Prefab set each value.",
+    )
     inspect_variant.add_argument("--format", choices=("json", "md"), default="json")
     inspect_where_used = inspect_sub.add_parser(
         "where-used",
@@ -1034,7 +1039,9 @@ def main(argv: list[str] | None = None) -> int:
         return Phase1Orchestrator.default()
 
     if args.command == "inspect" and args.inspect_command == "variant":
-        response = get_orchestrator().inspect_variant(args.path, args.component_filter)
+        response = get_orchestrator().inspect_variant(
+            args.path, args.component_filter, show_origin=args.show_origin,
+        )
         _emit_payload(response.to_dict(), args.format)
         return 0
 
