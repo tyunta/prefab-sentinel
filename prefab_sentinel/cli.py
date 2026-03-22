@@ -599,6 +599,42 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output plan JSON path (default: stdout).",
     )
 
+    patch_revert = patch_sub.add_parser(
+        "revert",
+        help="Revert (remove) property overrides from a Prefab Variant.",
+    )
+    patch_revert.add_argument(
+        "--path",
+        required=True,
+        help="Path to the Variant .prefab file.",
+    )
+    patch_revert.add_argument(
+        "--target",
+        required=True,
+        help="fileID of the target component in the parent prefab.",
+    )
+    patch_revert.add_argument(
+        "--property",
+        required=True,
+        help="propertyPath of the override to revert (e.g. m_Materials.Array.data[0]).",
+    )
+    patch_revert.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be reverted without writing changes.",
+    )
+    patch_revert.add_argument(
+        "--confirm",
+        action="store_true",
+        help="Actually remove the override(s) and write the file.",
+    )
+    patch_revert.add_argument(
+        "--change-reason",
+        default=None,
+        help="Required when using --confirm. Describes why the revert is needed.",
+    )
+    patch_revert.add_argument("--format", choices=("json", "md"), default="json")
+
     report_parser = subparsers.add_parser("report", help="Report conversion commands.")
     report_sub = report_parser.add_subparsers(dest="report_command", required=True)
     report_export = report_sub.add_parser("export", help="Export a stored JSON report.")
@@ -1328,6 +1364,26 @@ def main(argv: list[str] | None = None) -> int:
             except OSError as exc:
                 parser.error(f"Failed to write --out-report: {exc}")
         _emit_payload(payload, args.format)
+        return 0
+
+    if args.command == "patch" and args.patch_command == "revert":
+        from prefab_sentinel.patch_revert import revert_overrides
+
+        if not args.dry_run and args.confirm:
+            if not args.change_reason or not args.change_reason.strip():
+                parser.error("patch revert --confirm requires --change-reason.")
+        if not args.dry_run and not args.confirm:
+            parser.error("patch revert requires either --dry-run or --confirm.")
+
+        response = revert_overrides(
+            variant_path=args.path,
+            target_file_id=args.target,
+            property_path=args.property,
+            dry_run=args.dry_run,
+            confirm=args.confirm,
+            change_reason=args.change_reason,
+        )
+        _emit_payload(response.to_dict(), args.format)
         return 0
 
     if args.command == "patch" and args.patch_command == "hash":
