@@ -819,6 +819,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="GUID of the replacement Material asset (32-char hex).",
     )
 
+    editor_delete = editor_sub.add_parser(
+        "delete",
+        help="Delete a GameObject from the scene hierarchy (Undo-able).",
+    )
+    editor_delete.add_argument(
+        "--path",
+        required=True,
+        help="Hierarchy path to the GameObject to delete.",
+    )
+
+    editor_list_children = editor_sub.add_parser(
+        "list-children",
+        help="List children of a GameObject in the running scene.",
+    )
+    editor_list_children.add_argument(
+        "--path",
+        required=True,
+        help="Hierarchy path to the parent GameObject.",
+    )
+    editor_list_children.add_argument(
+        "--depth",
+        type=int,
+        default=1,
+        help="Maximum depth to traverse (default: 1).",
+    )
+
     return parser
 
 
@@ -1752,6 +1778,17 @@ def main(argv: list[str] | None = None) -> int:
                 renderer_path=args.renderer,
                 material_index=args.index,
                 material_guid=args.material_guid,
+            )
+        elif cmd == "delete":
+            result = send_action(
+                action="delete_object",
+                hierarchy_path=args.path,
+            )
+        elif cmd == "list-children":
+            result = send_action(
+                action="list_children",
+                hierarchy_path=args.path,
+                list_depth=args.depth,
             )
         else:
             parser.error(f"Unknown editor command: {cmd}")

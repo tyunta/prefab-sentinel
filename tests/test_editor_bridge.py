@@ -174,6 +174,8 @@ class TestSupportedActions(unittest.TestCase):
             "capture_console_logs",
             "refresh_asset_database",
             "set_material",
+            "delete_object",
+            "list_children",
         }
         self.assertEqual(expected, SUPPORTED_ACTIONS)
 
@@ -295,6 +297,41 @@ class TestCliEditorSubcommands(unittest.TestCase):
         self.assertEqual("/Body/Mesh", args.renderer)
         self.assertEqual(1, args.index)
         self.assertEqual("dbb963022c0443144810d86a576e4e50", args.material_guid)
+
+
+    def test_editor_delete_parser(self) -> None:
+        from prefab_sentinel.cli import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args([
+            "editor", "delete",
+            "--path", "/AvatarRoot/OldAccessory",
+        ])
+        self.assertEqual("delete", args.editor_command)
+        self.assertEqual("/AvatarRoot/OldAccessory", args.path)
+
+    def test_editor_list_children_parser(self) -> None:
+        from prefab_sentinel.cli import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args([
+            "editor", "list-children",
+            "--path", "/AvatarRoot",
+            "--depth", "2",
+        ])
+        self.assertEqual("list-children", args.editor_command)
+        self.assertEqual("/AvatarRoot", args.path)
+        self.assertEqual(2, args.depth)
+
+    def test_editor_list_children_default_depth(self) -> None:
+        from prefab_sentinel.cli import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args([
+            "editor", "list-children",
+            "--path", "/AvatarRoot",
+        ])
+        self.assertEqual(1, args.depth)
 
 
 if __name__ == "__main__":

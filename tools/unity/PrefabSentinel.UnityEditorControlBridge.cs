@@ -53,6 +53,9 @@ namespace PrefabSentinel
             public int max_entries = 200;
             public string log_type_filter = "all"; // "all" | "error" | "warning" | "exception"
             public float since_seconds = 0f;       // 0 = no time filter
+
+            // list_children
+            public int list_depth = 1;
         }
 
         [Serializable]
@@ -74,6 +77,15 @@ namespace PrefabSentinel
         }
 
         [Serializable]
+        public sealed class ChildEntry
+        {
+            public string name = string.Empty;
+            public string path = string.Empty;
+            public int child_count = 0;
+            public int depth = 0;
+        }
+
+        [Serializable]
         public sealed class EditorControlData
         {
             public string output_path = string.Empty;
@@ -82,8 +94,11 @@ namespace PrefabSentinel
             public int height = 0;
             public string selected_object = string.Empty;
             public string instantiated_object = string.Empty;
+            public string deleted_object = string.Empty;
+            public int deleted_child_count = 0;
             public int total_entries = 0;
             public ConsoleLogEntry[] entries = Array.Empty<ConsoleLogEntry>();
+            public ChildEntry[] children = Array.Empty<ChildEntry>();
             public bool read_only = true;
             public bool executed = false;
         }
@@ -152,6 +167,12 @@ namespace PrefabSentinel
                     break;
                 case "set_material":
                     response = HandleSetMaterial(request);
+                    break;
+                case "delete_object":
+                    response = HandleDeleteObject(request);
+                    break;
+                case "list_children":
+                    response = HandleListChildren(request);
                     break;
                 default:
                     response = BuildError(
@@ -454,6 +475,91 @@ namespace PrefabSentinel
             return BuildSuccess("EDITOR_CTRL_SET_MATERIAL_OK",
                 $"Set material[{request.material_index}] to {assetPath}",
                 data: new EditorControlData { executed = true, read_only = false });
+        }
+
+        private static EditorControlResponse HandleDeleteObject(EditorControlRequest request)
+        {
+            if (string.IsNullOrEmpty(request.hierarchy_path))
+                return BuildError("EDITOR_CTRL_MISSING_PATH", "hierarchy_path is required for delete_object.");
+
+            GameObject go = GameObject.Find(request.hierarchy_path);
+            if (go == null)
+                return BuildError("EDITOR_CTRL_OBJECT_NOT_FOUND",
+                    $"GameObject not found: {request.hierarchy_path}");
+
+            // Prefab instance roots cannot be directly destroyed; unpack first.
+            if (PrefabUtility.IsPartOfPrefabInstance(go)
+                && PrefabUtility.GetOutermostPrefabInstanceRoot(go) == go)
+            {
+                PrefabUtility.UnpackPrefabInstance(go, PrefabUnpackMode.Completely, InteractionMode.AutomatedAction);
+            }
+
+            string name = go.name;
+            int childCount = go.transform.childCount;
+            Undo.DestroyObjectImmediate(go);
+
+            return BuildSuccess("EDITOR_CTRL_DELETE_OK",
+                $"Deleted: {name} ({childCount} children)",
+                data: new EditorControlData
+                {
+                    deleted_object = name,
+                    deleted_child_count = childCount,
+                    read_only = false,
+                    executed = true
+                });
+        }
+
+        private static EditorControlResponse HandleListChildren(EditorControlRequest request)
+        {
+            if (string.IsNullOrEmpty(request.hierarchy_path))
+                return BuildError("EDITOR_CTRL_MISSING_PATH", "hierarchy_path is required for list_children.");
+
+            GameObject go = GameObject.Find(request.hierarchy_path);
+            if (go == null)
+                return BuildError("EDITOR_CTRL_OBJECT_NOT_FOUND",
+                    $"GameObject not found: {request.hierarchy_path}");
+
+            int maxDepth = Math.Min(Math.Max(request.list_depth, 1), 50);
+            var children = new List<ChildEntry>();
+            CollectChildren(go.transform, maxDepth, 0, children);
+
+            return BuildSuccess("EDITOR_CTRL_LIST_CHILDREN_OK",
+                $"Found {children.Count} children under {go.name}",
+                data: new EditorControlData
+                {
+                    children = children.ToArray(),
+                    total_entries = children.Count,
+                    read_only = true,
+                    executed = true
+                });
+        }
+
+        private static void CollectChildren(Transform parent, int maxDepth, int currentDepth, List<ChildEntry> result)
+        {
+            for (int i = 0; i < parent.childCount; i++)
+            {
+                Transform child = parent.GetChild(i);
+                result.Add(new ChildEntry
+                {
+                    name = child.name,
+                    path = GetHierarchyPath(child),
+                    child_count = child.childCount,
+                    depth = currentDepth + 1
+                });
+                if (currentDepth + 1 < maxDepth)
+                    CollectChildren(child, maxDepth, currentDepth + 1, result);
+            }
+        }
+
+        private static string GetHierarchyPath(Transform t)
+        {
+            string path = t.name;
+            while (t.parent != null)
+            {
+                t = t.parent;
+                path = t.name + "/" + path;
+            }
+            return "/" + path;
         }
 
         // ── Console Log Buffer ──

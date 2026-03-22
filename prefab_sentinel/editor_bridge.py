@@ -36,6 +36,8 @@ SUPPORTED_ACTIONS = frozenset(
         "capture_console_logs",
         "refresh_asset_database",
         "set_material",
+        "delete_object",
+        "list_children",
     }
 )
 
