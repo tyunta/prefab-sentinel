@@ -571,6 +571,28 @@ class SerializedObjectMcpTests(unittest.TestCase):
         self.assertEqual("SER_PLAN_INVALID", response.code)
         self.assertTrue(response.diagnostics)
 
+    def test_dry_run_patch_warns_on_unresolved_before(self) -> None:
+        from prefab_sentinel.contracts import Severity
+
+        mcp = SerializedObjectMcp()
+        response = mcp.dry_run_patch(
+            target="Assets/Variant.prefab",
+            ops=[
+                {
+                    "op": "set",
+                    "component": "Example.Component",
+                    "path": "someProperty",
+                    "value": 42,
+                },
+            ],
+        )
+
+        self.assertTrue(response.success)
+        self.assertEqual("SER_DRY_RUN_OK", response.code)
+        self.assertEqual(Severity.WARNING, response.severity)
+        self.assertTrue(response.diagnostics)
+        self.assertEqual("unresolved_before_value", response.diagnostics[0].detail)
+
     def test_dry_run_patch_supports_material_asset_root_mutation_ops(self) -> None:
         mcp = SerializedObjectMcp()
         response = mcp.dry_run_patch(

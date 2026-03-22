@@ -2697,6 +2697,40 @@ class SerializedObjectMcp:
                 diagnostics=diagnostics,
             )
 
+        unresolved_warnings: list[Diagnostic] = []
+        for entry in preview:
+            before_val = entry.get("before", "")
+            if isinstance(before_val, str) and before_val.startswith("(unresolved"):
+                unresolved_warnings.append(
+                    Diagnostic(
+                        path=target,
+                        location=f"{entry.get('component', '')}:{entry.get('path', '')}",
+                        detail="unresolved_before_value",
+                        evidence=(
+                            f"Before value unresolved: {before_val}. "
+                            f"The target file may not exist, or the component path "
+                            f"may be invalid. Verify with 'editor list-children' "
+                            f"if bridge is available."
+                        ),
+                    )
+                )
+
+        if unresolved_warnings:
+            return ToolResponse(
+                success=True,
+                severity=Severity.WARNING,
+                code="SER_DRY_RUN_OK",
+                message="dry_run_patch generated a patch preview with unresolved before values.",
+                data={
+                    "target": target,
+                    "op_count": len(ops),
+                    "applied": 0,
+                    "diff": preview,
+                    "read_only": True,
+                },
+                diagnostics=unresolved_warnings,
+            )
+
         return ToolResponse(
             success=True,
             severity=Severity.INFO,
