@@ -593,6 +593,158 @@ class SerializedObjectMcpTests(unittest.TestCase):
         self.assertTrue(response.diagnostics)
         self.assertEqual("unresolved_before_value", response.diagnostics[0].detail)
 
+    def test_dry_run_array_op_missing_suffix(self) -> None:
+        """insert_array_element with path missing .Array.data should fail."""
+        from prefab_sentinel.contracts import Severity
+
+        mcp = SerializedObjectMcp()
+        response = mcp.dry_run_patch(
+            target="Assets/Variant.prefab",
+            ops=[
+                {
+                    "op": "insert_array_element",
+                    "component": "Example.Component",
+                    "path": "globalSwitches",
+                    "index": 0,
+                    "value": {"fileID": 0},
+                },
+            ],
+        )
+
+        self.assertFalse(response.success)
+        self.assertEqual(Severity.ERROR, response.severity)
+        self.assertTrue(response.diagnostics)
+        self.assertEqual("schema_error", response.diagnostics[0].detail)
+        self.assertIn(".Array.data", response.diagnostics[0].evidence)
+
+    def test_dry_run_array_op_with_suffix(self) -> None:
+        """insert_array_element with correct .Array.data path should pass validation."""
+        mcp = SerializedObjectMcp()
+        response = mcp.dry_run_patch(
+            target="Assets/Variant.prefab",
+            ops=[
+                {
+                    "op": "insert_array_element",
+                    "component": "Example.Component",
+                    "path": "globalSwitches.Array.data",
+                    "index": 0,
+                    "value": {"fileID": 0},
+                },
+            ],
+        )
+
+        self.assertTrue(response.success)
+        self.assertEqual("SER_DRY_RUN_OK", response.code)
+
+    def test_dry_run_remove_array_missing_suffix(self) -> None:
+        """remove_array_element with path missing .Array.data should fail."""
+        from prefab_sentinel.contracts import Severity
+
+        mcp = SerializedObjectMcp()
+        response = mcp.dry_run_patch(
+            target="Assets/Variant.prefab",
+            ops=[
+                {
+                    "op": "remove_array_element",
+                    "component": "Example.Component",
+                    "path": "seats",
+                    "index": 0,
+                },
+            ],
+        )
+
+        self.assertFalse(response.success)
+        self.assertEqual(Severity.ERROR, response.severity)
+        self.assertTrue(response.diagnostics)
+        self.assertEqual("schema_error", response.diagnostics[0].detail)
+        self.assertIn(".Array.data", response.diagnostics[0].evidence)
+
+    def test_dry_run_add_component_in_open_mode(self) -> None:
+        """add_component in open-mode patch should give a helpful create-mode message."""
+        from prefab_sentinel.contracts import Severity
+
+        mcp = SerializedObjectMcp()
+        response = mcp.dry_run_patch(
+            target="Assets/Variant.prefab",
+            ops=[
+                {
+                    "op": "add_component",
+                    "component": "MyScript",
+                    "path": "dummy",
+                },
+            ],
+        )
+
+        self.assertFalse(response.success)
+        self.assertEqual(Severity.ERROR, response.severity)
+        self.assertTrue(response.diagnostics)
+        self.assertIn("create-mode", response.diagnostics[0].evidence)
+
+    def test_dry_run_unknown_op(self) -> None:
+        """Truly unknown op should give generic error."""
+        from prefab_sentinel.contracts import Severity
+
+        mcp = SerializedObjectMcp()
+        response = mcp.dry_run_patch(
+            target="Assets/Variant.prefab",
+            ops=[
+                {
+                    "op": "foobar",
+                    "component": "X",
+                    "path": "y",
+                },
+            ],
+        )
+
+        self.assertFalse(response.success)
+        self.assertEqual(Severity.ERROR, response.severity)
+        self.assertIn("unsupported op", response.diagnostics[0].evidence)
+
+    def test_dry_run_handle_in_value(self) -> None:
+        """set op with handle-like value should produce WARNING."""
+        from prefab_sentinel.contracts import Severity
+
+        mcp = SerializedObjectMcp()
+        response = mcp.dry_run_patch(
+            target="Assets/Variant.prefab",
+            ops=[
+                {
+                    "op": "set",
+                    "component": "Example.Component",
+                    "path": "targetRef",
+                    "value": "$root",
+                },
+            ],
+        )
+
+        self.assertTrue(response.success)
+        self.assertEqual(Severity.WARNING, response.severity)
+        self.assertTrue(response.diagnostics)
+        diag_details = [d.detail for d in response.diagnostics]
+        self.assertIn("handle_in_value", diag_details)
+
+    def test_dry_run_handle_prefix_go(self) -> None:
+        """set op with go_ prefixed value should produce WARNING."""
+        from prefab_sentinel.contracts import Severity
+
+        mcp = SerializedObjectMcp()
+        response = mcp.dry_run_patch(
+            target="Assets/Variant.prefab",
+            ops=[
+                {
+                    "op": "set",
+                    "component": "Example.Component",
+                    "path": "childRef",
+                    "value": "go_child",
+                },
+            ],
+        )
+
+        self.assertTrue(response.success)
+        self.assertEqual(Severity.WARNING, response.severity)
+        diag_details = [d.detail for d in response.diagnostics]
+        self.assertIn("handle_in_value", diag_details)
+
     def test_dry_run_patch_supports_material_asset_root_mutation_ops(self) -> None:
         mcp = SerializedObjectMcp()
         response = mcp.dry_run_patch(

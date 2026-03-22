@@ -292,6 +292,41 @@ MA (Modular Avatar) / NDMF ベースの VRChat アバターでは、コスメテ
 | `/prefab-sentinel:prefab-reference-repair` | 壊れた参照の検出・修復。ignore-guid ポリシーと decision_required ゲート付き | `validate refs` で壊れた GUID/fileID が検出されたとき |
 | `/prefab-sentinel:udon-log-triage` | ランタイム例外・Udon/ClientSim ログエラーの分類→アセット特定→修正提案 | ランタイム例外やログベースのリグレッション発生時 |
 
+## 既知の制約と回避策
+
+### add_component は UdonSharp backing を作らない
+
+bridge の `add_component` は `gameObject.AddComponent<T>()` 相当の処理しかせず、UdonSharp が必要とする backing UdonBehaviour を作らない。UdonSharp コンポーネントの追加は YAML 直接編集か Unity の Add Component で行う。bridge の `add_component` は非 UdonSharp コンポーネント（Camera, VRCStation 等）にのみ使う。
+
+### add_component は open モード不可
+
+`add_component` は create モード専用。既存 Prefab にコンポーネントを追加する bridge 操作は存在しない。dry-run で `"create-mode operation"` エラーが出る。既存 Prefab へのコンポーネント追加は YAML 直接編集で行う。
+
+### 配列パスは `.Array.data` で終わる必要がある
+
+`insert_array_element` / `remove_array_element` のパスは `globalSwitches.Array.data` のように `.Array.data` サフィックスが必須。`globalSwitches` だけでは dry-run で `schema_error` になる。Unity の SerializedProperty が配列要素に `.Array.data[n]` パスを使うため。
+
+### ObjectReference の value にハンドル文字列は使えない
+
+`set` op の `value` に `"$root"` や `"c_camera"` のようなハンドル文字列を渡すとランタイムエラーになる。ハンドルは create モードの `target` / `parent` フィールドでのみ解決される。dry-run で `handle_in_value` 警告が出る。ObjectReference の配線には `{"guid": "...", "fileID": ...}` 形式または null を使う。
+
+### create + open の2段階パイプライン（推奨手順）
+
+UdonSharp Prefab の新規作成は以下の手順が最も安全:
+
+1. **create plan**: 階層構造 + 非 UdonSharp コンポーネント + プリミティブ値 set + save
+2. **YAML 直接編集**: UdonSharp backing UdonBehaviour の追加（bridge では不可）
+3. **open plan (set)**: ObjectReference の内部配線（`{guid, fileID}` 形式）
+4. **open plan (array)**: 配列要素の挿入（`.Array.data` パス）
+5. **validate**: structure → wiring → refs
+
+### UdonSharp の二重構造
+
+UdonSharp コンポーネントは 2 つの MonoBehaviour で構成される。片方だけでは "Selected U# behaviour is not setup" エラーになる。
+
+1. **UdonSharpBehaviour** — C# クラスのフィールドを持つ。`_udonSharpBackingUdonBehaviour` で backing を参照
+2. **Backing UdonBehaviour** — `m_Script: {guid: 45115577ef41a5b4ca741ed302693907}` 固定。`serializedProgramAsset` と `programSource` を持つ
+
 ## 判断ルール
 - `safe_fix`: 一意で決定的な修正のみ自動適用可。
 - `decision_required`: ユーザー合意まで保留。

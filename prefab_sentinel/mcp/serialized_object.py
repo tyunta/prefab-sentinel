@@ -2279,14 +2279,29 @@ class SerializedObjectMcp:
         property_path = str(op.get("path", "")).strip()
 
         if op_name not in _SUPPORTED_OPS:
-            diagnostics.append(
-                Diagnostic(
-                    path=target,
-                    location=f"ops[{index}].op",
-                    detail="schema_error",
-                    evidence=f"unsupported op '{op_name}'",
+            if op_name in _PREFAB_CREATE_OPS:
+                diagnostics.append(
+                    Diagnostic(
+                        path=target,
+                        location=f"ops[{index}].op",
+                        detail="schema_error",
+                        evidence=(
+                            f"'{op_name}' is a create-mode operation and cannot be "
+                            f"used in open-mode patch plans. "
+                            f"To add components to existing prefabs, edit the YAML "
+                            f"directly or use Unity's Add Component menu."
+                        ),
+                    )
                 )
-            )
+            else:
+                diagnostics.append(
+                    Diagnostic(
+                        path=target,
+                        location=f"ops[{index}].op",
+                        detail="schema_error",
+                        evidence=f"unsupported op '{op_name}'",
+                    )
+                )
             return None
         if not component:
             diagnostics.append(
@@ -2336,13 +2351,43 @@ class SerializedObjectMcp:
                     )
                 )
                 return None
-            return {
+            value = op.get("value")
+            entry = {
                 "op": op_name,
                 "component": component,
                 "path": property_path,
                 "before": self._resolve_before_value(target, component, property_path),
-                "after": op.get("value"),
+                "after": value,
             }
+            if isinstance(value, str) and (
+                value.startswith("$")
+                or value.startswith("c_")
+                or value.startswith("go_")
+            ):
+                entry["_warning"] = (
+                    f"Value '{value}' looks like a create-mode handle. "
+                    f"Handle strings are only resolved in 'target'/'parent' fields. "
+                    f"For ObjectReference, use {{\"guid\": \"...\", \"fileID\": ...}} "
+                    f"or null."
+                )
+            return entry
+
+        if op_name in ("insert_array_element", "remove_array_element"):
+            if not property_path.endswith(".Array.data"):
+                diagnostics.append(
+                    Diagnostic(
+                        path=target,
+                        location=f"ops[{index}].path",
+                        detail="schema_error",
+                        evidence=(
+                            f"Array operations require path ending with '.Array.data', "
+                            f"got '{property_path}'. "
+                            f"Example: 'globalSwitches.Array.data' instead of "
+                            f"'globalSwitches'."
+                        ),
+                    )
+                )
+                return None
 
         if "index" not in op:
             diagnostics.append(
@@ -2697,14 +2742,15 @@ class SerializedObjectMcp:
                 diagnostics=diagnostics,
             )
 
-        unresolved_warnings: list[Diagnostic] = []
+        soft_warnings: list[Diagnostic] = []
         for entry in preview:
+            loc = f"{entry.get('component', '')}:{entry.get('path', '')}"
             before_val = entry.get("before", "")
             if isinstance(before_val, str) and before_val.startswith("(unresolved"):
-                unresolved_warnings.append(
+                soft_warnings.append(
                     Diagnostic(
                         path=target,
-                        location=f"{entry.get('component', '')}:{entry.get('path', '')}",
+                        location=loc,
                         detail="unresolved_before_value",
                         evidence=(
                             f"Before value unresolved: {before_val}. "
@@ -2714,13 +2760,23 @@ class SerializedObjectMcp:
                         ),
                     )
                 )
+            warning_msg = entry.pop("_warning", None)
+            if warning_msg:
+                soft_warnings.append(
+                    Diagnostic(
+                        path=target,
+                        location=loc,
+                        detail="handle_in_value",
+                        evidence=warning_msg,
+                    )
+                )
 
-        if unresolved_warnings:
+        if soft_warnings:
             return ToolResponse(
                 success=True,
                 severity=Severity.WARNING,
                 code="SER_DRY_RUN_OK",
-                message="dry_run_patch generated a patch preview with unresolved before values.",
+                message="dry_run_patch generated a patch preview with warnings.",
                 data={
                     "target": target,
                     "op_count": len(ops),
@@ -2728,7 +2784,7 @@ class SerializedObjectMcp:
                     "diff": preview,
                     "read_only": True,
                 },
-                diagnostics=unresolved_warnings,
+                diagnostics=soft_warnings,
             )
 
         return ToolResponse(
