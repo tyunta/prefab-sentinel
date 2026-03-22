@@ -60,12 +60,19 @@
 - [x] P1: dry-run `before` 値の実効値解決 (Phase 1) — Variant オーバーライドの既存値を表示
 - [x] P4: `inspect hierarchy` Variant 対応 — ベース Prefab の階層を表示、オーバーライドをアノテーション
 
-## Phase B: ブロンドヘアセッション改善 (後日)
+## Phase B: ブロンドヘアセッション改善 (実装済み)
 
-- [ ] P3: `patch revert` コマンド — Variant の特定オーバーライドを削除して親の値に戻す。Bridge (PrefabUtility.RevertPropertyOverride) 方式を推奨
-- [ ] P7: `inspect materials` コマンド — メッシュごとのマテリアルスロット一覧表示（Variant チェーン考慮）
+- [x] P3: `patch revert` コマンド — Variant の特定オーバーライドを YAML レベルで削除
+- [x] P7: `inspect materials` コマンド — メッシュごとのマテリアルスロット一覧表示（Variant チェーン考慮）
+- [x] P1 Phase 2: チェーン全体の before 値解決 — `resolve_chain_values()` でベース Prefab まで辿る
+- [x] パス二重化検出 — `has_path_doubling()` + `resolve_scope_path()` の警告
 - [ ] P8: Game View スクリーンショット — Play Mode 外での Camera.Render() によるレンダリング
-- [ ] P1 Phase 2: Bridge 経由の真の実効値取得 — `read_property_value` アクションで SerializedProperty.FindPropertyRelative() 経由のベース値完全解決
+
+## Phase C: 目マテリアル比較セッション改善 (2026-03-22)
+
+- [ ] Issue 1+5: SKILL.md の component セレクタ誤記修正 + Scene パッチ計画ドキュメント追加 + 数値セレクタバリデーション
+- [ ] Issue 2: `inspect wiring` の Variant 対応 — `inspect_hierarchy` パターンを適用
+- [ ] Issue 4: `editor set-material` コマンド — ランタイムでマテリアルスロット差し替え
 
 ## Phase 3: Runtime Verification Bridge
 
