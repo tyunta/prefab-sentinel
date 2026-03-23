@@ -2960,7 +2960,8 @@ class SerializedObjectService:
                 data={
                     "target": str(target_path),
                     "op_count": len(ops),
-                    "applied": len(applied_ops),
+                    "applied": 0,
+                    "attempted": len(applied_ops),
                     "read_only": False,
                     "executed": False,
                 },
@@ -2981,7 +2982,8 @@ class SerializedObjectService:
                 data={
                     "target": str(target_path),
                     "op_count": len(ops),
-                    "applied": len(applied_ops),
+                    "applied": 0,
+                    "attempted": len(applied_ops),
                     "read_only": False,
                     "executed": False,
                     "error": str(exc),
@@ -2997,6 +2999,7 @@ class SerializedObjectService:
                 "target": str(target_path),
                 "op_count": len(ops),
                 "applied": len(applied_ops),
+                "attempted": len(applied_ops),
                 "diff": applied_ops,
                 "read_only": False,
                 "executed": True,
