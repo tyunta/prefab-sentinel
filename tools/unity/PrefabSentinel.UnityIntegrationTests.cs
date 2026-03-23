@@ -88,6 +88,32 @@ namespace PrefabSentinel
         }
 
         // ----------------------------------------------------------------
+        // EditorControl response readback (lightweight)
+        // ----------------------------------------------------------------
+
+        [Serializable]
+        private sealed class EditorControlResponseReadback
+        {
+            public int protocol_version = 0;
+            public bool success = false;
+            public string severity = "error";
+            public string code = string.Empty;
+            public string message = string.Empty;
+            public EditorControlDataReadback data = new EditorControlDataReadback();
+        }
+
+        [Serializable]
+        private sealed class EditorControlDataReadback
+        {
+            public string instantiated_object = string.Empty;
+            public string deleted_object = string.Empty;
+            public int deleted_child_count = 0;
+            public string[] root_objects = Array.Empty<string>();
+            public int total_entries = 0;
+            public bool executed = false;
+        }
+
+        // ----------------------------------------------------------------
         // Entry point
         // ----------------------------------------------------------------
 
@@ -247,6 +273,18 @@ namespace PrefabSentinel
                     // Boundary / guard tests
                     ("Set_NegativeArrayIndex_Rejected", Test_Set_NegativeArrayIndex_Rejected),
                     ("Set_OpenMode_UnsupportedOpRejected", Test_Set_OpenMode_UnsupportedOpRejected),
+                    // EditorControl: batchmode-safe actions
+                    ("EditorCtrl_RefreshAssetDatabase", Test_EditorCtrl_RefreshAssetDatabase),
+                    ("EditorCtrl_ListRoots", Test_EditorCtrl_ListRoots),
+                    ("EditorCtrl_InstantiateToScene", Test_EditorCtrl_InstantiateToScene),
+                    ("EditorCtrl_InstantiateToScene_ParentNotFound", Test_EditorCtrl_InstantiateToScene_ParentNotFound),
+                    ("EditorCtrl_DeleteObject", Test_EditorCtrl_DeleteObject),
+                    ("EditorCtrl_ListChildren", Test_EditorCtrl_ListChildren),
+                    ("EditorCtrl_ListMaterials", Test_EditorCtrl_ListMaterials),
+                    ("EditorCtrl_GetMaterialProperty", Test_EditorCtrl_GetMaterialProperty),
+                    ("EditorCtrl_GetMaterialProperty_NullShader", Test_EditorCtrl_GetMaterialProperty_NullShader),
+                    ("EditorCtrl_SetMaterial", Test_EditorCtrl_SetMaterial),
+                    ("EditorCtrl_PingObject", Test_EditorCtrl_PingObject),
                 };
 
                 var results = new List<TestCaseResult>();
@@ -529,6 +567,55 @@ namespace PrefabSentinel
             if (resp == null) return Fail(name, "Bridge response is null (response file missing).");
             if (!resp.success) return Fail(name, $"Bridge returned success=false: code={resp.code}, message={resp.message}");
             return null; // no failure
+        }
+
+        // ----------------------------------------------------------------
+        // EditorControl bridge helpers
+        // ----------------------------------------------------------------
+
+        private static EditorControlResponseReadback RunEditorControlBridge(string requestJson)
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "PrefabSentinelTests_EC_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+            string requestPath = Path.Combine(tempDir, "request.json");
+            string responsePath = Path.Combine(tempDir, "response.json");
+            try
+            {
+                File.WriteAllText(requestPath, requestJson);
+                UnityEditorControlBridge.RunFromPaths(requestPath, responsePath);
+
+                if (!File.Exists(responsePath))
+                    return null;
+
+                string responseJson = File.ReadAllText(responsePath);
+                return JsonUtility.FromJson<EditorControlResponseReadback>(responseJson);
+            }
+            finally
+            {
+                try { Directory.Delete(tempDir, true); } catch { /* best effort */ }
+            }
+        }
+
+        private static string BuildEditorControlRequest(string action, string extraFields = "")
+        {
+            string extra = string.IsNullOrEmpty(extraFields) ? "" : "," + extraFields;
+            return "{\"protocol_version\":1,\"action\":\"" + EscapeJsonString(action) + "\"" + extra + "}";
+        }
+
+        private static TestCaseResult AssertEditorControlSuccess(string name, EditorControlResponseReadback resp)
+        {
+            if (resp == null) return Fail(name, "EditorControl response is null (response file missing).");
+            if (!resp.success) return Fail(name, $"EditorControl returned success=false: code={resp.code}, message={resp.message}");
+            return null;
+        }
+
+        private static TestCaseResult AssertEditorControlFailure(string name, EditorControlResponseReadback resp, string expectedCode)
+        {
+            if (resp == null) return Fail(name, "EditorControl response is null (response file missing).");
+            if (resp.success) return Fail(name, $"Expected failure but got success=true, code={resp.code}.");
+            if (!string.IsNullOrEmpty(expectedCode) && resp.code != expectedCode)
+                return Fail(name, $"Expected code={expectedCode}, got {resp.code}.");
+            return null;
         }
 
         // ----------------------------------------------------------------
@@ -1973,6 +2060,249 @@ namespace PrefabSentinel
             string ops = "[{\"op\":\"add_component\",\"component\":\"UnityEngine.Rigidbody\"}]";
             var resp = RunBridge(BuildPrefabRequest(prefabPath, ops));
             return AssertBridgeFailure(name, resp, null) ?? Pass(name);
+        }
+
+        // ----------------------------------------------------------------
+        // EditorControl tests
+        // ----------------------------------------------------------------
+
+        private static TestCaseResult Test_EditorCtrl_RefreshAssetDatabase(string prefabPath, string materialPath)
+        {
+            const string name = "EditorCtrl_RefreshAssetDatabase";
+            var resp = RunEditorControlBridge(BuildEditorControlRequest("refresh_asset_database"));
+            return AssertEditorControlSuccess(name, resp) ?? Pass(name);
+        }
+
+        private static TestCaseResult Test_EditorCtrl_ListRoots(string prefabPath, string materialPath)
+        {
+            const string name = "EditorCtrl_ListRoots";
+            var resp = RunEditorControlBridge(BuildEditorControlRequest("list_roots"));
+            var err = AssertEditorControlSuccess(name, resp);
+            if (err != null) return err;
+            if (!resp.data.executed) return Fail(name, "Expected executed=true.");
+            return Pass(name);
+        }
+
+        private static TestCaseResult Test_EditorCtrl_InstantiateToScene(string prefabPath, string materialPath)
+        {
+            const string name = "EditorCtrl_InstantiateToScene";
+            string extra = "\"prefab_path\":\"" + EscapeJsonString(prefabPath) + "\"";
+            var resp = RunEditorControlBridge(BuildEditorControlRequest("instantiate_to_scene", extra));
+            var err = AssertEditorControlSuccess(name, resp);
+            if (err != null) return err;
+
+            string instanceName = resp.data.instantiated_object;
+            if (string.IsNullOrEmpty(instanceName))
+                return Fail(name, "instantiated_object is empty.");
+
+            // Cleanup: destroy the instantiated scene object
+            var go = GameObject.Find("/" + instanceName);
+            if (go != null) UnityEngine.Object.DestroyImmediate(go);
+
+            return Pass(name);
+        }
+
+        private static TestCaseResult Test_EditorCtrl_InstantiateToScene_ParentNotFound(string prefabPath, string materialPath)
+        {
+            const string name = "EditorCtrl_InstantiateToScene_ParentNotFound";
+            string extra = "\"prefab_path\":\"" + EscapeJsonString(prefabPath) + "\","
+                         + "\"parent_path\":\"/NonExistentParent_12345\"";
+            var resp = RunEditorControlBridge(BuildEditorControlRequest("instantiate_to_scene", extra));
+            return AssertEditorControlFailure(name, resp, "EDITOR_CTRL_PARENT_NOT_FOUND") ?? Pass(name);
+        }
+
+        private static TestCaseResult Test_EditorCtrl_DeleteObject(string prefabPath, string materialPath)
+        {
+            const string name = "EditorCtrl_DeleteObject";
+
+            // Instantiate an object to delete
+            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+            if (prefab == null) return Fail(name, "Test prefab not found.");
+            var instance = (GameObject)PrefabUtility.InstantiatePrefab(prefab);
+            if (instance == null) return Fail(name, "Failed to instantiate test prefab.");
+            string instancePath = "/" + instance.name;
+
+            // Delete via EditorControlBridge
+            string extra = "\"hierarchy_path\":\"" + EscapeJsonString(instancePath) + "\"";
+            var resp = RunEditorControlBridge(BuildEditorControlRequest("delete_object", extra));
+            var err = AssertEditorControlSuccess(name, resp);
+            if (err != null)
+            {
+                if (instance != null) UnityEngine.Object.DestroyImmediate(instance);
+                return err;
+            }
+
+            // Verify deletion
+            var check = GameObject.Find(instancePath);
+            if (check != null)
+            {
+                UnityEngine.Object.DestroyImmediate(check);
+                return Fail(name, "Object was not deleted.");
+            }
+            return Pass(name);
+        }
+
+        private static TestCaseResult Test_EditorCtrl_ListChildren(string prefabPath, string materialPath)
+        {
+            const string name = "EditorCtrl_ListChildren";
+
+            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+            if (prefab == null) return Fail(name, "Test prefab not found.");
+            var instance = (GameObject)PrefabUtility.InstantiatePrefab(prefab);
+            if (instance == null) return Fail(name, "Failed to instantiate test prefab.");
+
+            // Add a child object
+            var child = new GameObject("TestChild");
+            child.transform.SetParent(instance.transform, false);
+
+            try
+            {
+                string instancePath = "/" + instance.name;
+                string extra = "\"hierarchy_path\":\"" + EscapeJsonString(instancePath) + "\"";
+                var resp = RunEditorControlBridge(BuildEditorControlRequest("list_children", extra));
+                var err = AssertEditorControlSuccess(name, resp);
+                if (err != null) return err;
+                if (resp.data.total_entries < 1)
+                    return Fail(name, $"Expected at least 1 child, got {resp.data.total_entries}.");
+                return Pass(name);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(instance);
+            }
+        }
+
+        private static TestCaseResult Test_EditorCtrl_ListMaterials(string prefabPath, string materialPath)
+        {
+            const string name = "EditorCtrl_ListMaterials";
+
+            var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            try
+            {
+                string goPath = "/" + go.name;
+                string extra = "\"hierarchy_path\":\"" + EscapeJsonString(goPath) + "\"";
+                var resp = RunEditorControlBridge(BuildEditorControlRequest("list_materials", extra));
+                var err = AssertEditorControlSuccess(name, resp);
+                if (err != null) return err;
+                if (resp.data.total_entries < 1)
+                    return Fail(name, $"Expected at least 1 material slot, got {resp.data.total_entries}.");
+                return Pass(name);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(go);
+            }
+        }
+
+        private static TestCaseResult Test_EditorCtrl_GetMaterialProperty(string prefabPath, string materialPath)
+        {
+            const string name = "EditorCtrl_GetMaterialProperty";
+
+            var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            try
+            {
+                string goPath = "/" + go.name;
+                string extra = "\"renderer_path\":\"" + EscapeJsonString(goPath) + "\","
+                             + "\"material_index\":0";
+                var resp = RunEditorControlBridge(BuildEditorControlRequest("get_material_property", extra));
+                var err = AssertEditorControlSuccess(name, resp);
+                if (err != null) return err;
+                if (resp.data.total_entries < 1)
+                    return Fail(name, $"Expected at least 1 property, got {resp.data.total_entries}.");
+                return Pass(name);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(go);
+            }
+        }
+
+        private static TestCaseResult Test_EditorCtrl_GetMaterialProperty_NullShader(string prefabPath, string materialPath)
+        {
+            const string name = "EditorCtrl_GetMaterialProperty_NullShader";
+
+            var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            Material nullShaderMat = null;
+            try
+            {
+                var renderer = go.GetComponent<Renderer>();
+                nullShaderMat = new Material(renderer.sharedMaterial);
+                nullShaderMat.shader = null;
+
+                // Unity may silently assign a fallback shader; skip test if so
+                if (nullShaderMat.shader != null)
+                {
+                    Debug.LogWarning($"[PrefabSentinel.Tests] {name}: Unity rejected null shader assignment, skipping.");
+                    return Pass(name, "Skipped: Unity does not allow null shader.");
+                }
+
+                renderer.sharedMaterial = nullShaderMat;
+
+                string goPath = "/" + go.name;
+                string extra = "\"renderer_path\":\"" + EscapeJsonString(goPath) + "\","
+                             + "\"material_index\":0";
+                var resp = RunEditorControlBridge(BuildEditorControlRequest("get_material_property", extra));
+                return AssertEditorControlFailure(name, resp, "EDITOR_CTRL_SHADER_NULL") ?? Pass(name);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(go);
+                if (nullShaderMat != null) UnityEngine.Object.DestroyImmediate(nullShaderMat);
+            }
+        }
+
+        private static TestCaseResult Test_EditorCtrl_SetMaterial(string prefabPath, string materialPath)
+        {
+            const string name = "EditorCtrl_SetMaterial";
+
+            // Create a fresh material to avoid stale asset database state
+            string freshMatPath = TestAssetDir + "/SetMaterialTest.mat";
+            DeleteIfExists(freshMatPath);
+            var shader = Shader.Find("Standard");
+            if (shader == null) shader = Shader.Find("Hidden/InternalErrorShader");
+            var freshMat = new Material(shader) { name = "SetMaterialTestMat" };
+            AssetDatabase.CreateAsset(freshMat, freshMatPath);
+            AssetDatabase.SaveAssets();
+            AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+
+            var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            try
+            {
+                string matGuid = AssetDatabase.AssetPathToGUID(freshMatPath);
+                if (string.IsNullOrEmpty(matGuid))
+                    return Fail(name, "Could not resolve test material GUID.");
+
+                string goPath = "/" + go.name;
+                string extra = "\"renderer_path\":\"" + EscapeJsonString(goPath) + "\","
+                             + "\"material_index\":0,"
+                             + "\"material_guid\":\"" + EscapeJsonString(matGuid) + "\"";
+                var resp = RunEditorControlBridge(BuildEditorControlRequest("set_material", extra));
+                var err = AssertEditorControlSuccess(name, resp);
+                if (err != null) return err;
+
+                // Verify the material was changed
+                var renderer = go.GetComponent<Renderer>();
+                var assignedMat = renderer.sharedMaterial;
+                if (assignedMat == null)
+                    return Fail(name, "Material is null after set_material.");
+                string assignedPath = AssetDatabase.GetAssetPath(assignedMat);
+                if (assignedPath != freshMatPath)
+                    return Fail(name, $"Expected material at {freshMatPath}, got {assignedPath}.");
+                return Pass(name);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(go);
+                DeleteIfExists(freshMatPath);
+            }
+        }
+
+        private static TestCaseResult Test_EditorCtrl_PingObject(string prefabPath, string materialPath)
+        {
+            const string name = "EditorCtrl_PingObject";
+            string extra = "\"asset_path\":\"" + EscapeJsonString(prefabPath) + "\"";
+            var resp = RunEditorControlBridge(BuildEditorControlRequest("ping_object", extra));
+            return AssertEditorControlSuccess(name, resp) ?? Pass(name);
         }
 
         // ----------------------------------------------------------------
