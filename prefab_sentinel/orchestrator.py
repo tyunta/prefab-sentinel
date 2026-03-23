@@ -7,7 +7,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse, max_severity
+from prefab_sentinel.contracts import (
+    Diagnostic,
+    Severity,
+    ToolResponse,
+    error_response,
+    max_severity,
+    success_response,
+)
 from prefab_sentinel.hierarchy import HierarchyNode, analyze_hierarchy, format_tree
 from prefab_sentinel.material_inspector import (
     format_materials,
@@ -29,6 +36,8 @@ from prefab_sentinel.unity_assets import (
 )
 from prefab_sentinel.wsl_compat import to_wsl_path
 
+__all__ = ["Phase1Orchestrator"]
+
 
 @dataclass(slots=True)
 class Phase1Orchestrator:
@@ -39,6 +48,14 @@ class Phase1Orchestrator:
 
     @classmethod
     def default(cls, project_root: Path | None = None) -> Phase1Orchestrator:
+        """Create an orchestrator with default-configured service instances.
+
+        Args:
+            project_root: Unity project root. Auto-detected from cwd when ``None``.
+
+        Returns:
+            A fully wired ``Phase1Orchestrator``.
+        """
         pv = PrefabVariantService(project_root=project_root)
         return cls(
             reference_resolver=ReferenceResolverService(project_root=project_root),
@@ -57,6 +74,18 @@ class Phase1Orchestrator:
         *,
         show_origin: bool = False,
     ) -> ToolResponse:
+        """Run the full variant inspection pipeline (read-only).
+
+        Args:
+            variant_path: Path to a ``.prefab`` Variant asset.
+            component_filter: Optional substring to filter overrides by component.
+            show_origin: When ``True``, append chain-values-with-origin step.
+
+        Returns:
+            ``ToolResponse`` with ``data.steps`` containing results from
+            resolve_prefab_chain, list_overrides, compute_effective_values,
+            and detect_stale_overrides sub-steps.
+        """
         named_steps: list[tuple[str, ToolResponse]] = [
             ("resolve_prefab_chain", self.prefab_variant.resolve_prefab_chain(variant_path)),
             ("list_overrides", self.prefab_variant.list_overrides(variant_path, component_filter)),
@@ -111,6 +140,18 @@ class Phase1Orchestrator:
         exclude_patterns: tuple[str, ...] = (),
         max_usages: int = 500,
     ) -> ToolResponse:
+        """Find all files that reference a given asset or GUID (read-only).
+
+        Args:
+            asset_or_guid: Asset path or 32-char GUID to search for.
+            scope: Directory or file path to restrict the search scope.
+            exclude_patterns: Glob patterns for paths to skip.
+            max_usages: Cap on the number of usage entries returned.
+
+        Returns:
+            ``ToolResponse`` with ``data.steps[0].result.data.usages``
+            listing each referencing file, line, and column.
+        """
         step = self.reference_resolver.where_used(
             asset_or_guid=asset_or_guid,
             scope=scope,
@@ -147,21 +188,17 @@ class Phase1Orchestrator:
         """Read a Unity YAML file, returning text on success or an error ToolResponse."""
         path = Path(to_wsl_path(target_path))
         if not path.exists():
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code=f"{code_prefix}_FILE_NOT_FOUND",
-                message=f"Target file does not exist: {target_path}",
+            return error_response(
+                f"{code_prefix}_FILE_NOT_FOUND",
+                f"Target file does not exist: {target_path}",
                 data={"target_path": target_path, "read_only": True},
             )
         try:
             return decode_text_file(path)
         except (OSError, UnicodeDecodeError) as exc:
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code=f"{code_prefix}_READ_ERROR",
-                message=f"Failed to read target file: {exc}",
+            return error_response(
+                f"{code_prefix}_READ_ERROR",
+                f"Failed to read target file: {exc}",
                 data={"target_path": target_path, "read_only": True},
             )
 
@@ -204,6 +241,17 @@ class Phase1Orchestrator:
         *,
         udon_only: bool = False,
     ) -> ToolResponse:
+        """Analyze MonoBehaviour field wiring in a Prefab or Scene (read-only).
+
+        Args:
+            target_path: Path to a ``.prefab`` or ``.unity`` file.
+            udon_only: When ``True``, only report UdonSharp components.
+
+        Returns:
+            ``ToolResponse`` with ``data.components`` listing each
+            MonoBehaviour, its fields, and any null/broken/duplicate
+            reference diagnostics.
+        """
         text_or_error = self._read_target_file(target_path, "INSPECT_WIRING")
         if isinstance(text_or_error, ToolResponse):
             return text_or_error
@@ -211,15 +259,12 @@ class Phase1Orchestrator:
 
         suffix = Path(target_path).suffix.lower()
         if suffix not in GAMEOBJECT_BEARING_SUFFIXES:
-            return ToolResponse(
-                success=True,
+            return success_response(
+                "INSPECT_WIRING_NO_MONOBEHAVIOURS",
+                f"inspect.wiring is not applicable to {suffix} files "
+                f"(no MonoBehaviour components). "
+                f"Use validate refs to check external reference integrity.",
                 severity=Severity.WARNING,
-                code="INSPECT_WIRING_NO_MONOBEHAVIOURS",
-                message=(
-                    f"inspect.wiring is not applicable to {suffix} files "
-                    f"(no MonoBehaviour components). "
-                    f"Use validate refs to check external reference integrity."
-                ),
                 data={"target_path": target_path, "file_type": suffix, "read_only": True},
             )
 
@@ -301,6 +346,17 @@ class Phase1Orchestrator:
         max_depth: int | None = None,
         show_components: bool = True,
     ) -> ToolResponse:
+        """Build the GameObject/Transform hierarchy tree (read-only).
+
+        Args:
+            target_path: Path to a ``.prefab`` or ``.unity`` file.
+            max_depth: Limit the tree depth in the text representation.
+            show_components: Include component names in tree nodes.
+
+        Returns:
+            ``ToolResponse`` with ``data.tree`` (formatted text) and
+            ``data.roots`` (structured hierarchy nodes).
+        """
         text_or_error = self._read_target_file(target_path, "INSPECT_HIERARCHY")
         if isinstance(text_or_error, ToolResponse):
             return text_or_error
@@ -308,15 +364,12 @@ class Phase1Orchestrator:
 
         suffix = Path(target_path).suffix.lower()
         if suffix not in GAMEOBJECT_BEARING_SUFFIXES:
-            return ToolResponse(
-                success=True,
+            return success_response(
+                "INSPECT_HIERARCHY_NO_GAMEOBJECTS",
+                f"inspect.hierarchy is not applicable to {suffix} files "
+                f"(no GameObject/Transform structure). "
+                f"Use validate refs to check external reference integrity.",
                 severity=Severity.WARNING,
-                code="INSPECT_HIERARCHY_NO_GAMEOBJECTS",
-                message=(
-                    f"inspect.hierarchy is not applicable to {suffix} files "
-                    f"(no GameObject/Transform structure). "
-                    f"Use validate refs to check external reference integrity."
-                ),
                 data={"target_path": target_path, "file_type": suffix, "read_only": True},
             )
 
@@ -371,11 +424,9 @@ class Phase1Orchestrator:
             data["is_variant"] = True
             data["base_prefab_path"] = base_prefab_path
 
-        return ToolResponse(
-            success=True,
-            severity=Severity.INFO,
-            code="INSPECT_HIERARCHY_RESULT",
-            message="inspect.hierarchy completed (read-only).",
+        return success_response(
+            "INSPECT_HIERARCHY_RESULT",
+            "inspect.hierarchy completed (read-only).",
             data=data,
             diagnostics=diagnostics,
         )
@@ -384,32 +435,35 @@ class Phase1Orchestrator:
         self,
         target_path: str,
     ) -> ToolResponse:
-        """Inspect per-renderer material slot assignments."""
+        """Inspect per-renderer material slot assignments (read-only).
+
+        Args:
+            target_path: Path to a ``.prefab`` or ``.unity`` file.
+
+        Returns:
+            ``ToolResponse`` with ``data.renderers`` listing each Renderer's
+            material slots, and ``data.tree`` with a formatted text summary.
+        """
         text_or_error = self._read_target_file(target_path, "INSPECT_MATERIALS")
         if isinstance(text_or_error, ToolResponse):
             return text_or_error
 
         suffix = Path(target_path).suffix.lower()
         if suffix not in GAMEOBJECT_BEARING_SUFFIXES:
-            return ToolResponse(
-                success=True,
+            return success_response(
+                "INSPECT_MATERIALS_NO_RENDERERS",
+                f"inspect.materials is not applicable to {suffix} files "
+                f"(no Renderer components expected).",
                 severity=Severity.WARNING,
-                code="INSPECT_MATERIALS_NO_RENDERERS",
-                message=(
-                    f"inspect.materials is not applicable to {suffix} files "
-                    f"(no Renderer components expected)."
-                ),
                 data={"target_path": target_path, "file_type": suffix, "read_only": True},
             )
 
         try:
             result = inspect_materials(target_path)
         except (OSError, UnicodeDecodeError) as exc:
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="INSPECT_MATERIALS_READ_ERROR",
-                message=f"Failed to inspect materials: {exc}",
+            return error_response(
+                "INSPECT_MATERIALS_READ_ERROR",
+                f"Failed to inspect materials: {exc}",
                 data={"target_path": target_path, "read_only": True},
             )
 
@@ -451,11 +505,9 @@ class Phase1Orchestrator:
             )
             data["override_count"] = override_count
 
-        return ToolResponse(
-            success=True,
-            severity=Severity.INFO,
-            code="INSPECT_MATERIALS_RESULT",
-            message="inspect.materials completed (read-only).",
+        return success_response(
+            "INSPECT_MATERIALS_RESULT",
+            "inspect.materials completed (read-only).",
             data=data,
         )
 
@@ -463,6 +515,16 @@ class Phase1Orchestrator:
         self,
         target_path: str,
     ) -> ToolResponse:
+        """Validate internal YAML structure of a Unity asset (read-only).
+
+        Args:
+            target_path: Path to any Unity text asset file.
+
+        Returns:
+            ``ToolResponse`` with diagnostics for duplicate fileIDs,
+            Transform inconsistencies, missing components, and orphaned
+            Transforms.
+        """
         text_or_error = self._read_target_file(target_path, "VALIDATE_STRUCTURE")
         if isinstance(text_or_error, ToolResponse):
             return text_or_error
@@ -515,6 +577,19 @@ class Phase1Orchestrator:
         exclude_patterns: tuple[str, ...] = (),
         ignore_asset_guids: tuple[str, ...] = (),
     ) -> ToolResponse:
+        """Scan for broken GUID/fileID references in scope (read-only).
+
+        Args:
+            scope: Directory or file path to scan.
+            details: When ``True``, include per-reference diagnostics.
+            max_diagnostics: Cap on returned diagnostic entries.
+            exclude_patterns: Glob patterns for paths to skip.
+            ignore_asset_guids: GUIDs to exclude from missing-asset reports.
+
+        Returns:
+            ``ToolResponse`` whose ``data.steps[0].result.data`` contains
+            ``broken_count``, ``scanned_files``, ``categories``, etc.
+        """
         step = self.reference_resolver.scan_broken_references(
             scope=scope,
             include_diagnostics=details,
@@ -555,6 +630,20 @@ class Phase1Orchestrator:
         exclude_patterns: tuple[str, ...] = (),
         ignore_asset_guids: tuple[str, ...] = (),
     ) -> ToolResponse:
+        """Suggest GUIDs that could be added to the ignore list (read-only).
+
+        Args:
+            scope: Directory or file path to scan for broken references.
+            min_occurrences: Minimum occurrence count to qualify as a candidate.
+            max_items: Maximum number of candidate GUIDs to return.
+            exclude_patterns: Glob patterns for paths to skip during scan.
+            ignore_asset_guids: GUIDs already in the ignore list.
+
+        Returns:
+            ``ToolResponse`` with ``data.candidates`` listing GUIDs sorted
+            by occurrence count, and ``data.decision_required`` entries
+            that need user approval before being applied.
+        """
         effective_max_items = max(1, max_items)
         step = self.reference_resolver.scan_broken_references(
             scope=scope,
@@ -688,6 +777,21 @@ class Phase1Orchestrator:
         allow_warnings: bool = False,
         max_diagnostics: int = 200,
     ) -> ToolResponse:
+        """Run the full runtime validation pipeline (compile + ClientSim + log check).
+
+        Args:
+            scene_path: Path to the ``.unity`` scene to validate.
+            profile: ClientSim profile name.
+            log_file: Optional explicit path to Unity Editor.log.
+            since_timestamp: Only classify log lines after this timestamp.
+            allow_warnings: When ``True``, warnings do not fail the assertion.
+            max_diagnostics: Cap on classified diagnostic entries.
+
+        Returns:
+            ``ToolResponse`` with ``data.steps`` containing compile_udonsharp,
+            run_clientsim, collect_unity_console, classify_errors, and
+            assert_no_critical_errors sub-step results.
+        """
         compile_step = self.runtime_validation.compile_udonsharp()
         run_step = self.runtime_validation.run_clientsim(scene_path, profile)
         runtime_read_only = all(
@@ -767,21 +871,17 @@ class Phase1Orchestrator:
         resource_ids: set[str],
     ) -> ToolResponse:
         if not isinstance(postcondition, dict):
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="POST_SCHEMA_ERROR",
-                message="Postcondition must be an object.",
+            return error_response(
+                "POST_SCHEMA_ERROR",
+                "Postcondition must be an object.",
                 data={"read_only": True, "executed": False},
             )
 
         postcondition_type = str(postcondition.get("type", "")).strip()
         if not postcondition_type:
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="POST_SCHEMA_ERROR",
-                message="Postcondition type is required.",
+            return error_response(
+                "POST_SCHEMA_ERROR",
+                "Postcondition type is required.",
                 data={"read_only": True, "executed": False},
             )
 
@@ -789,19 +889,15 @@ class Phase1Orchestrator:
             resource_id = str(postcondition.get("resource", "")).strip()
             explicit_path = str(postcondition.get("path", "")).strip()
             if bool(resource_id) == bool(explicit_path):
-                return ToolResponse(
-                    success=False,
-                    severity=Severity.ERROR,
-                    code="POST_SCHEMA_ERROR",
-                    message="asset_exists requires exactly one of 'resource' or 'path'.",
+                return error_response(
+                    "POST_SCHEMA_ERROR",
+                    "asset_exists requires exactly one of 'resource' or 'path'.",
                     data={"type": postcondition_type, "read_only": True, "executed": False},
                 )
             if resource_id and resource_id not in resource_ids:
-                return ToolResponse(
-                    success=False,
-                    severity=Severity.ERROR,
-                    code="POST_SCHEMA_ERROR",
-                    message="asset_exists references an unknown resource id.",
+                return error_response(
+                    "POST_SCHEMA_ERROR",
+                    "asset_exists references an unknown resource id.",
                     data={
                         "type": postcondition_type,
                         "resource": resource_id,
@@ -809,31 +905,25 @@ class Phase1Orchestrator:
                         "executed": False,
                     },
                 )
-            return ToolResponse(
-                success=True,
-                severity=Severity.INFO,
-                code="POST_SCHEMA_OK",
-                message="Postcondition schema validated.",
+            return success_response(
+                "POST_SCHEMA_OK",
+                "Postcondition schema validated.",
                 data={"type": postcondition_type, "read_only": True, "executed": False},
             )
 
         if postcondition_type == "broken_refs":
             scope = str(postcondition.get("scope", "")).strip()
             if not scope:
-                return ToolResponse(
-                    success=False,
-                    severity=Severity.ERROR,
-                    code="POST_SCHEMA_ERROR",
-                    message="broken_refs requires a non-empty 'scope'.",
+                return error_response(
+                    "POST_SCHEMA_ERROR",
+                    "broken_refs requires a non-empty 'scope'.",
                     data={"type": postcondition_type, "read_only": True, "executed": False},
                 )
             expected_count = postcondition.get("expected_count", 0)
             if not isinstance(expected_count, int) or expected_count < 0:
-                return ToolResponse(
-                    success=False,
-                    severity=Severity.ERROR,
-                    code="POST_SCHEMA_ERROR",
-                    message="broken_refs.expected_count must be a non-negative integer.",
+                return error_response(
+                    "POST_SCHEMA_ERROR",
+                    "broken_refs.expected_count must be a non-negative integer.",
                     data={
                         "type": postcondition_type,
                         "scope": scope,
@@ -846,11 +936,9 @@ class Phase1Orchestrator:
                 if not isinstance(values, list) or any(
                     not isinstance(value, str) for value in values
                 ):
-                    return ToolResponse(
-                        success=False,
-                        severity=Severity.ERROR,
-                        code="POST_SCHEMA_ERROR",
-                        message=f"broken_refs.{field_name} must be an array of strings.",
+                    return error_response(
+                        "POST_SCHEMA_ERROR",
+                        f"broken_refs.{field_name} must be an array of strings.",
                         data={
                             "type": postcondition_type,
                             "scope": scope,
@@ -860,11 +948,9 @@ class Phase1Orchestrator:
                     )
             max_diagnostics = postcondition.get("max_diagnostics", 200)
             if not isinstance(max_diagnostics, int) or max_diagnostics < 0:
-                return ToolResponse(
-                    success=False,
-                    severity=Severity.ERROR,
-                    code="POST_SCHEMA_ERROR",
-                    message="broken_refs.max_diagnostics must be a non-negative integer.",
+                return error_response(
+                    "POST_SCHEMA_ERROR",
+                    "broken_refs.max_diagnostics must be a non-negative integer.",
                     data={
                         "type": postcondition_type,
                         "scope": scope,
@@ -872,19 +958,15 @@ class Phase1Orchestrator:
                         "executed": False,
                     },
                 )
-            return ToolResponse(
-                success=True,
-                severity=Severity.INFO,
-                code="POST_SCHEMA_OK",
-                message="Postcondition schema validated.",
+            return success_response(
+                "POST_SCHEMA_OK",
+                "Postcondition schema validated.",
                 data={"type": postcondition_type, "scope": scope, "read_only": True, "executed": False},
             )
 
-        return ToolResponse(
-            success=False,
-            severity=Severity.ERROR,
-            code="POST_SCHEMA_ERROR",
-            message="Postcondition type is not supported.",
+        return error_response(
+            "POST_SCHEMA_ERROR",
+            "Postcondition type is not supported.",
             data={
                 "type": postcondition_type,
                 "read_only": True,
@@ -908,11 +990,11 @@ class Phase1Orchestrator:
             target_path = self.serialized_object._resolve_target_path(target)
             exists = target_path.exists()
             if not exists:
-                return ToolResponse(
-                    success=False,
-                    severity=Severity.ERROR,
-                    code="POST_ASSET_EXISTS_FAILED",
-                    message="asset_exists postcondition failed because the target path was not created.",
+                return error_response(
+                    "POST_ASSET_EXISTS_FAILED",
+                    "asset_exists postcondition failed: target path was not created."
+                    " Check the preceding patch operations for errors;"
+                    " verify the file was saved successfully.",
                     data={
                         "type": postcondition_type,
                         "resource": resource_id or None,
@@ -922,11 +1004,9 @@ class Phase1Orchestrator:
                         "executed": True,
                     },
                 )
-            return ToolResponse(
-                success=True,
-                severity=Severity.INFO,
-                code="POST_ASSET_EXISTS_OK",
-                message="asset_exists postcondition passed.",
+            return success_response(
+                "POST_ASSET_EXISTS_OK",
+                "asset_exists postcondition passed.",
                 data={
                     "type": postcondition_type,
                     "resource": resource_id or None,
@@ -947,11 +1027,9 @@ class Phase1Orchestrator:
             ignore_asset_guids=tuple(postcondition.get("ignore_asset_guids", [])),
         )
         if scan.code in {"REF404", "REF001"}:
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="POST_BROKEN_REFS_ERROR",
-                message="broken_refs postcondition could not be evaluated.",
+            return error_response(
+                "POST_BROKEN_REFS_ERROR",
+                "broken_refs postcondition could not be evaluated.",
                 data={
                     "type": postcondition_type,
                     "scope": scope,
@@ -965,11 +1043,11 @@ class Phase1Orchestrator:
 
         actual_count = int(scan.data.get("broken_count", 0))
         if actual_count != expected_count:
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="POST_BROKEN_REFS_FAILED",
-                message="broken_refs postcondition failed.",
+            return error_response(
+                "POST_BROKEN_REFS_FAILED",
+                f"broken_refs postcondition failed: expected {expected_count}"
+                f" broken refs but found {actual_count}."
+                f" Run 'validate refs --scope {scope} --details' for full diagnostics.",
                 data={
                     "type": postcondition_type,
                     "scope": scope,
@@ -981,11 +1059,9 @@ class Phase1Orchestrator:
                 },
                 diagnostics=scan.diagnostics,
             )
-        return ToolResponse(
-            success=True,
-            severity=Severity.INFO,
-            code="POST_BROKEN_REFS_OK",
-            message="broken_refs postcondition passed.",
+        return success_response(
+            "POST_BROKEN_REFS_OK",
+            "broken_refs postcondition passed.",
             data={
                 "type": postcondition_type,
                 "scope": scope,
@@ -1014,6 +1090,28 @@ class Phase1Orchestrator:
         runtime_allow_warnings: bool = False,
         runtime_max_diagnostics: int = 200,
     ) -> ToolResponse:
+        """Execute a patch plan through dry-run, apply, and optional post-validation.
+
+        Args:
+            plan: Normalized patch plan dict with ``resources`` and ``ops``.
+            dry_run: When ``True``, validate the plan without applying changes.
+            confirm: Required to be ``True`` for actual writes (safety gate).
+            plan_sha256: Optional SHA-256 digest for plan integrity verification.
+            plan_signature: Optional signature for signed execution plans.
+            change_reason: Human-readable reason for the change (audit trail).
+            scope: Scope path for optional post-apply reference validation.
+            runtime_scene: Scene path for optional post-apply runtime validation.
+            runtime_profile: ClientSim profile for runtime validation.
+            runtime_log_file: Explicit log file path for runtime validation.
+            runtime_since_timestamp: Log timestamp filter for runtime validation.
+            runtime_allow_warnings: Allow warnings in runtime assertion.
+            runtime_max_diagnostics: Cap on runtime diagnostic entries.
+
+        Returns:
+            ``ToolResponse`` with ``data.steps`` containing dry_run_patch,
+            apply_and_save, and optional validate_refs / validate_runtime
+            sub-step results. ``data.execution_id`` provides the audit key.
+        """
         normalized_plan = normalize_patch_plan(plan)
         resource_batches = iter_resource_batches(normalized_plan)
         resource_map = {
@@ -1124,11 +1222,10 @@ class Phase1Orchestrator:
             return _finalize("patch.apply dry-run completed.", fail_fast=False)
 
         if not confirm:
-            confirm_step = ToolResponse(
-                success=False,
+            confirm_step = error_response(
+                "SER_CONFIRM_REQUIRED",
+                "patch.apply requires --confirm when not using --dry-run.",
                 severity=Severity.WARNING,
-                code="SER_CONFIRM_REQUIRED",
-                message="patch.apply requires --confirm when not using --dry-run.",
                 data={
                     "target": primary_target,
                     "targets": targets,

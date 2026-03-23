@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse
+from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse, error_response, success_response
 from prefab_sentinel.patch_plan import (
     PLAN_VERSION,
     build_bridge_request,
@@ -65,6 +65,9 @@ _UNITY_BRIDGE_ALLOWED_COMMANDS = {
     "prefab-sentinel-unity-serialized-object-bridge.exe",
 }
 
+_ARRAY_DATA_SUFFIX = ".Array.data"
+_ARRAY_SIZE_SUFFIX = ".Array.size"
+
 _UNITY_BRIDGE_KIND_BY_SUFFIX = {
     ".prefab": "prefab",
     ".unity": "scene",
@@ -82,6 +85,43 @@ class _ResourcePlanContext:
     mode: str
     target_path: Path
     ops: list[dict[str, Any]]
+
+
+@dataclass
+class _PrefabCreateContext:
+    target: str
+    diagnostics: list[Diagnostic]
+    preview: list[dict[str, Any]]
+    known_handles: dict[str, str]
+    ops: list[dict[str, Any]]
+    created: bool = False
+    saved: bool = False
+    root_name: str = ""
+
+
+@dataclass
+class _AssetCreateContext:
+    target: str
+    kind: str
+    diagnostics: list[Diagnostic]
+    preview: list[dict[str, Any]]
+    known_handles: dict[str, str]
+    ops: list[dict[str, Any]]
+    created: bool = False
+    saved: bool = False
+
+
+@dataclass
+class _SceneContext:
+    target: str
+    mode: str
+    diagnostics: list[Diagnostic]
+    preview: list[dict[str, Any]]
+    known_handles: dict[str, str]
+    ops: list[dict[str, Any]]
+    scene_initialized: bool = False
+    saved: bool = False
+    expected_first_op: str = ""
 
 
 class _ResourceAdapter:
@@ -389,11 +429,9 @@ class SerializedObjectService:
         diagnostics: list[Diagnostic],
         read_only: bool,
     ) -> ToolResponse:
-        return ToolResponse(
-            success=False,
-            severity=Severity.ERROR,
-            code="SER_PLAN_INVALID",
-            message="Patch plan schema validation failed.",
+        return error_response(
+            "SER_PLAN_INVALID",
+            "Patch plan schema validation failed.",
             data={
                 "target": context.target,
                 "kind": context.kind,
@@ -410,11 +448,9 @@ class SerializedObjectService:
         context: _ResourcePlanContext,
         diagnostics: list[Diagnostic],
     ) -> ToolResponse:
-        return ToolResponse(
-            success=False,
-            severity=Severity.ERROR,
-            code="SER_PLAN_INVALID",
-            message="Patch plan schema validation failed.",
+        return error_response(
+            "SER_PLAN_INVALID",
+            "Patch plan schema validation failed.",
             data={
                 "target": context.target,
                 "kind": context.kind,
@@ -433,11 +469,9 @@ class SerializedObjectService:
         context: _ResourcePlanContext,
         preview: list[dict[str, Any]],
     ) -> ToolResponse:
-        return ToolResponse(
-            success=True,
-            severity=Severity.INFO,
-            code="SER_DRY_RUN_OK",
-            message="dry_run_patch generated a patch preview.",
+        return success_response(
+            "SER_DRY_RUN_OK",
+            "dry_run_patch generated a patch preview.",
             data={
                 "target": context.target,
                 "kind": context.kind,
@@ -467,11 +501,9 @@ class SerializedObjectService:
         }
         if not read_only:
             data.update({"applied": 0, "executed": False})
-        return ToolResponse(
-            success=False,
-            severity=Severity.ERROR,
-            code="SER_UNSUPPORTED_TARGET",
-            message="Resource mode/kind combination is not supported by the current backend.",
+        return error_response(
+            "SER_UNSUPPORTED_TARGET",
+            "Resource mode/kind combination is not supported by the current backend.",
             data=data,
         )
 
@@ -507,11 +539,9 @@ class SerializedObjectService:
         ops: list[dict[str, Any]],
     ) -> ToolResponse:
         if not isinstance(payload, dict):
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="SER_BRIDGE_PROTOCOL",
-                message="Unity bridge response must be a JSON object.",
+            return error_response(
+                "SER_BRIDGE_PROTOCOL",
+                "Unity bridge response must be a JSON object.",
                 data={
                     "target": str(target_path),
                     "op_count": len(ops),
@@ -527,11 +557,9 @@ class SerializedObjectService:
         except (TypeError, ValueError):
             protocol_version = -1
         if protocol_version != _UNITY_BRIDGE_PROTOCOL_VERSION:
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="SER_BRIDGE_PROTOCOL_VERSION",
-                message="Unity bridge protocol version mismatch.",
+            return error_response(
+                "SER_BRIDGE_PROTOCOL_VERSION",
+                "Unity bridge protocol version mismatch.",
                 data={
                     "target": str(target_path),
                     "op_count": len(ops),
@@ -590,11 +618,9 @@ class SerializedObjectService:
         resource_mode: str = "open",
     ) -> ToolResponse:
         if self.bridge_command_error:
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="SER_BRIDGE_CONFIG",
-                message="Unity bridge command configuration is invalid.",
+            return error_response(
+                "SER_BRIDGE_CONFIG",
+                "Unity bridge command configuration is invalid.",
                 data={
                     "target": str(target_path),
                     "op_count": len(ops),
@@ -605,14 +631,10 @@ class SerializedObjectService:
                 },
             )
         if not self.bridge_command:
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="SER_UNSUPPORTED_TARGET",
-                message=(
-                    "Non-JSON target requires UNITYTOOL_PATCH_BRIDGE for Unity bridge "
-                    "execution."
-                ),
+            return error_response(
+                "SER_UNSUPPORTED_TARGET",
+                "Non-JSON target requires UNITYTOOL_PATCH_BRIDGE for Unity bridge "
+                "execution.",
                 data={
                     "target": str(target_path),
                     "op_count": len(ops),
@@ -622,11 +644,9 @@ class SerializedObjectService:
                 },
             )
         if not self._is_bridge_command_allowed(self.bridge_command):
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="SER_BRIDGE_DENIED",
-                message="Unity bridge command is not in the allowlist.",
+            return error_response(
+                "SER_BRIDGE_DENIED",
+                "Unity bridge command is not in the allowlist.",
                 data={
                     "target": str(target_path),
                     "op_count": len(ops),
@@ -656,11 +676,9 @@ class SerializedObjectService:
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="SER_BRIDGE_TIMEOUT",
-                message="Unity bridge process timed out.",
+            return error_response(
+                "SER_BRIDGE_TIMEOUT",
+                "Unity bridge process timed out.",
                 data={
                     "target": str(target_path),
                     "op_count": len(ops),
@@ -672,11 +690,9 @@ class SerializedObjectService:
                 },
             )
         except OSError as exc:
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="SER_BRIDGE_EXEC",
-                message="Failed to start Unity bridge process.",
+            return error_response(
+                "SER_BRIDGE_EXEC",
+                "Failed to start Unity bridge process.",
                 data={
                     "target": str(target_path),
                     "op_count": len(ops),
@@ -688,11 +704,9 @@ class SerializedObjectService:
             )
 
         if completed.returncode != 0:
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="SER_BRIDGE_FAILED",
-                message="Unity bridge process returned non-zero exit code.",
+            return error_response(
+                "SER_BRIDGE_FAILED",
+                "Unity bridge process returned non-zero exit code.",
                 data={
                     "target": str(target_path),
                     "op_count": len(ops),
@@ -708,11 +722,9 @@ class SerializedObjectService:
         try:
             payload = json.loads(completed.stdout)
         except json.JSONDecodeError as exc:
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="SER_BRIDGE_PROTOCOL",
-                message="Unity bridge output must be valid JSON.",
+            return error_response(
+                "SER_BRIDGE_PROTOCOL",
+                "Unity bridge output must be valid JSON.",
                 data={
                     "target": str(target_path),
                     "op_count": len(ops),
@@ -869,14 +881,18 @@ class SerializedObjectService:
             )
             return diagnostics, preview
 
-        created = False
-        saved = False
-        root_name = Path(target).stem or "PrefabRoot"
-        known_handles: dict[str, str] = {}
+        ctx = _PrefabCreateContext(
+            target=target,
+            diagnostics=diagnostics,
+            preview=preview,
+            known_handles={},
+            ops=ops,
+            root_name=Path(target).stem or "PrefabRoot",
+        )
 
         for index, op in enumerate(ops):
             if not isinstance(op, dict):
-                diagnostics.append(
+                ctx.diagnostics.append(
                     Diagnostic(
                         path=target,
                         location=f"ops[{index}]",
@@ -888,421 +904,33 @@ class SerializedObjectService:
 
             op_name = str(op.get("op", "")).strip()
             if op_name in {"create_prefab", "create_root"}:
-                if created:
-                    diagnostics.append(
-                        Diagnostic(
-                            path=target,
-                            location=f"ops[{index}].op",
-                            detail="schema_error",
-                            evidence="prefab root may be created only once",
-                        )
+                self._validate_pcreate_root_op(ctx, index, op, op_name)
+            elif op_name == "create_game_object":
+                self._validate_pcreate_game_object_op(ctx, index, op)
+            elif op_name == "rename_object":
+                self._validate_pcreate_rename_object_op(ctx, index, op)
+            elif op_name == "reparent":
+                self._validate_pcreate_reparent_op(ctx, index, op)
+            elif op_name in {"add_component", "find_component"}:
+                self._validate_pcreate_add_component_op(ctx, index, op, op_name)
+            elif op_name == "remove_component":
+                self._validate_pcreate_remove_component_op(ctx, index, op)
+            elif op_name in _SUPPORTED_OPS:
+                self._validate_pcreate_set_op(ctx, index, op, op_name)
+            elif op_name == "save":
+                self._validate_pcreate_save_op(ctx, index, op)
+            else:
+                ctx.diagnostics.append(
+                    Diagnostic(
+                        path=target,
+                        location=f"ops[{index}].op",
+                        detail="schema_error",
+                        evidence=f"unsupported prefab create op '{op_name}'",
                     )
-                    continue
-                created = True
-                known_handles[_ROOT_HANDLE] = "game_object"
-                name_value = op.get("name")
-                if op_name == "create_root":
-                    if not isinstance(name_value, str) or not name_value.strip():
-                        diagnostics.append(
-                            Diagnostic(
-                                path=target,
-                                location=f"ops[{index}].name",
-                                detail="schema_error",
-                                evidence="name is required for create_root",
-                            )
-                        )
-                        continue
-                    root_name = name_value.strip()
-                elif name_value is not None:
-                    if not isinstance(name_value, str) or not name_value.strip():
-                        diagnostics.append(
-                            Diagnostic(
-                                path=target,
-                                location=f"ops[{index}].name",
-                                detail="schema_error",
-                                evidence="name must be a non-empty string when provided",
-                            )
-                        )
-                        continue
-                    root_name = name_value.strip()
-                result_handle = self._validate_result_handle(
-                    target=target,
-                    index=index,
-                    op=op,
-                    known_handles=known_handles,
-                    diagnostics=diagnostics,
                 )
-                if result_handle and result_handle != _ROOT_HANDLE:
-                    known_handles[result_handle] = "game_object"
-                preview.append(
-                    {
-                        "op": op_name,
-                        "before": "(missing)",
-                        "after": {
-                            "path": target,
-                            "root_name": root_name,
-                            "handle": result_handle or _ROOT_HANDLE,
-                            "kind": "game_object",
-                        },
-                    }
-                )
-                continue
 
-            if op_name == "create_game_object":
-                if not created:
-                    diagnostics.append(
-                        Diagnostic(
-                            path=target,
-                            location=f"ops[{index}].op",
-                            detail="schema_error",
-                            evidence="create_game_object requires a prefab root first",
-                        )
-                    )
-                    continue
-                name_value = op.get("name")
-                if not isinstance(name_value, str) or not name_value.strip():
-                    diagnostics.append(
-                        Diagnostic(
-                            path=target,
-                            location=f"ops[{index}].name",
-                            detail="schema_error",
-                            evidence="name is required for create_game_object",
-                        )
-                    )
-                    continue
-                parent_handle = self._require_handle_ref(
-                    target=target,
-                    index=index,
-                    field="parent",
-                    op=op,
-                    known_handles=known_handles,
-                    diagnostics=diagnostics,
-                    expected_kind="game_object",
-                )
-                result_handle = self._validate_result_handle(
-                    target=target,
-                    index=index,
-                    op=op,
-                    known_handles=known_handles,
-                    diagnostics=diagnostics,
-                )
-                if parent_handle is None or ("result" in op and result_handle is None):
-                    continue
-                if result_handle:
-                    known_handles[result_handle] = "game_object"
-                preview.append(
-                    {
-                        "op": op_name,
-                        "before": "(missing)",
-                        "after": {
-                            "name": name_value.strip(),
-                            "parent": parent_handle,
-                            "handle": result_handle or "(anonymous)",
-                            "kind": "game_object",
-                        },
-                    }
-                )
-                continue
-
-            if op_name == "rename_object":
-                object_handle = self._require_handle_ref(
-                    target=target,
-                    index=index,
-                    field="target",
-                    op=op,
-                    known_handles=known_handles,
-                    diagnostics=diagnostics,
-                    expected_kind="game_object",
-                )
-                name_value = op.get("name")
-                if object_handle is None:
-                    continue
-                if not isinstance(name_value, str) or not name_value.strip():
-                    diagnostics.append(
-                        Diagnostic(
-                            path=target,
-                            location=f"ops[{index}].name",
-                            detail="schema_error",
-                            evidence="name is required for rename_object",
-                        )
-                    )
-                    continue
-                preview.append(
-                    {
-                        "op": op_name,
-                        "before": {"handle": object_handle},
-                        "after": {"handle": object_handle, "name": name_value.strip()},
-                    }
-                )
-                continue
-
-            if op_name == "reparent":
-                object_handle = self._require_handle_ref(
-                    target=target,
-                    index=index,
-                    field="target",
-                    op=op,
-                    known_handles=known_handles,
-                    diagnostics=diagnostics,
-                    expected_kind="game_object",
-                )
-                parent_handle = self._require_handle_ref(
-                    target=target,
-                    index=index,
-                    field="parent",
-                    op=op,
-                    known_handles=known_handles,
-                    diagnostics=diagnostics,
-                    expected_kind="game_object",
-                )
-                if object_handle is None or parent_handle is None:
-                    continue
-                if object_handle == _ROOT_HANDLE:
-                    diagnostics.append(
-                        Diagnostic(
-                            path=target,
-                            location=f"ops[{index}].target",
-                            detail="schema_error",
-                            evidence="root handle cannot be reparented",
-                        )
-                    )
-                    continue
-                if object_handle == parent_handle:
-                    diagnostics.append(
-                        Diagnostic(
-                            path=target,
-                            location=f"ops[{index}]",
-                            detail="schema_error",
-                            evidence="target and parent handles must differ",
-                        )
-                    )
-                    continue
-                preview.append(
-                    {
-                        "op": op_name,
-                        "before": {"handle": object_handle},
-                        "after": {"handle": object_handle, "parent": parent_handle},
-                    }
-                )
-                continue
-
-            if op_name in {"add_component", "find_component"}:
-                if not created:
-                    diagnostics.append(
-                        Diagnostic(
-                            path=target,
-                            location=f"ops[{index}].op",
-                            detail="schema_error",
-                            evidence=f"{op_name} requires a prefab root first",
-                        )
-                    )
-                    continue
-                object_handle = self._require_handle_ref(
-                    target=target,
-                    index=index,
-                    field="target",
-                    op=op,
-                    known_handles=known_handles,
-                    diagnostics=diagnostics,
-                    expected_kind="game_object",
-                )
-                type_name = op.get("type")
-                if object_handle is None:
-                    continue
-                if not isinstance(type_name, str) or not type_name.strip():
-                    diagnostics.append(
-                        Diagnostic(
-                            path=target,
-                            location=f"ops[{index}].type",
-                            detail="schema_error",
-                            evidence=f"type is required for {op_name}",
-                        )
-                    )
-                    continue
-                result_handle = self._validate_result_handle(
-                    target=target,
-                    index=index,
-                    op=op,
-                    known_handles=known_handles,
-                    diagnostics=diagnostics,
-                )
-                if "result" in op and result_handle is None:
-                    continue
-                if result_handle:
-                    known_handles[result_handle] = "component"
-                preview.append(
-                    {
-                        "op": op_name,
-                        "before": "(missing)" if op_name == "add_component" else {"target": object_handle},
-                        "after": {
-                            "target": object_handle,
-                            "type": type_name.strip(),
-                            "handle": result_handle or "(anonymous)",
-                            "kind": "component",
-                        },
-                    }
-                )
-                continue
-
-            if op_name == "remove_component":
-                component_handle = self._require_handle_ref(
-                    target=target,
-                    index=index,
-                    field="target",
-                    op=op,
-                    known_handles=known_handles,
-                    diagnostics=diagnostics,
-                    expected_kind="component",
-                )
-                if component_handle is None:
-                    continue
-                preview.append(
-                    {
-                        "op": op_name,
-                        "before": {"handle": component_handle, "kind": "component"},
-                        "after": "(removed)",
-                    }
-                )
-                continue
-
-            if op_name in _SUPPORTED_OPS:
-                component_handle = self._require_handle_ref(
-                    target=target,
-                    index=index,
-                    field="target",
-                    op=op,
-                    known_handles=known_handles,
-                    diagnostics=diagnostics,
-                    expected_kind="component",
-                )
-                property_path = str(op.get("path", "")).strip()
-                if component_handle is None:
-                    continue
-                if not property_path:
-                    diagnostics.append(
-                        Diagnostic(
-                            path=target,
-                            location=f"ops[{index}].path",
-                            detail="schema_error",
-                            evidence="path is required",
-                        )
-                    )
-                    continue
-                if op_name == "set":
-                    if "value" not in op:
-                        diagnostics.append(
-                            Diagnostic(
-                                path=target,
-                                location=f"ops[{index}].value",
-                                detail="schema_error",
-                                evidence="value is required for set",
-                            )
-                        )
-                        continue
-                    value = op.get("value")
-                    bad_handle = _check_handle_value(value, known_handles, target, index)
-                    if bad_handle is not None:
-                        diagnostics.append(bad_handle)
-                        continue
-                    preview.append(
-                        {
-                            "op": op_name,
-                            "before": {"handle": component_handle, "path": property_path},
-                            "after": {
-                                "handle": component_handle,
-                                "path": property_path,
-                                "value": deepcopy(value),
-                            },
-                        }
-                    )
-                    continue
-
-                op_index = op.get("index")
-                if isinstance(op_index, bool) or not isinstance(op_index, int):
-                    diagnostics.append(
-                        Diagnostic(
-                            path=target,
-                            location=f"ops[{index}].index",
-                            detail="schema_error",
-                            evidence="index must be an integer",
-                        )
-                    )
-                    continue
-                entry = {
-                    "op": op_name,
-                    "before": {
-                        "handle": component_handle,
-                        "path": property_path,
-                        "index": op_index,
-                    },
-                    "after": {
-                        "handle": component_handle,
-                        "path": property_path,
-                        "index": op_index,
-                    },
-                }
-                if op_name == "insert_array_element" and "value" in op:
-                    arr_value = op.get("value")
-                    bad_handle = _check_handle_value(arr_value, known_handles, target, index)
-                    if bad_handle is not None:
-                        diagnostics.append(bad_handle)
-                        continue
-                    entry["after"]["value"] = deepcopy(arr_value)
-                preview.append(entry)
-                continue
-
-            if op_name == "save":
-                if saved:
-                    diagnostics.append(
-                        Diagnostic(
-                            path=target,
-                            location=f"ops[{index}].op",
-                            detail="schema_error",
-                            evidence="save may appear only once",
-                        )
-                    )
-                    continue
-                if not created:
-                    diagnostics.append(
-                        Diagnostic(
-                            path=target,
-                            location=f"ops[{index}].op",
-                            detail="schema_error",
-                            evidence="save requires a prefab root first",
-                        )
-                    )
-                    continue
-                if index != len(ops) - 1:
-                    diagnostics.append(
-                        Diagnostic(
-                            path=target,
-                            location=f"ops[{index}].op",
-                            detail="schema_error",
-                            evidence="save must be the final operation in create mode",
-                        )
-                    )
-                    continue
-                saved = True
-                preview.append(
-                    {
-                        "op": op_name,
-                        "before": "(unsaved)",
-                        "after": {"path": target},
-                    }
-                )
-                continue
-
-            diagnostics.append(
-                Diagnostic(
-                    path=target,
-                    location=f"ops[{index}].op",
-                    detail="schema_error",
-                    evidence=f"unsupported prefab create op '{op_name}'",
-                )
-            )
-
-        if not created:
-            diagnostics.append(
+        if not ctx.created:
+            ctx.diagnostics.append(
                 Diagnostic(
                     path=target,
                     location="ops",
@@ -1310,8 +938,8 @@ class SerializedObjectService:
                     evidence="create mode requires a root creation operation",
                 )
             )
-        if not saved:
-            diagnostics.append(
+        if not ctx.saved:
+            ctx.diagnostics.append(
                 Diagnostic(
                     path=target,
                     location="ops",
@@ -1319,7 +947,449 @@ class SerializedObjectService:
                     evidence="create mode requires a save operation",
                 )
             )
-        return diagnostics, preview
+        return ctx.diagnostics, ctx.preview
+
+    # -- prefab create: per-op-type handlers ----------------------------------
+
+    def _validate_pcreate_root_op(
+        self,
+        ctx: _PrefabCreateContext,
+        index: int,
+        op: dict[str, Any],
+        op_name: str,
+    ) -> None:
+        if ctx.created:
+            ctx.diagnostics.append(
+                Diagnostic(
+                    path=ctx.target,
+                    location=f"ops[{index}].op",
+                    detail="schema_error",
+                    evidence="prefab root may be created only once",
+                )
+            )
+            return
+        ctx.created = True
+        ctx.known_handles[_ROOT_HANDLE] = "game_object"
+        name_value = op.get("name")
+        if op_name == "create_root":
+            if not isinstance(name_value, str) or not name_value.strip():
+                ctx.diagnostics.append(
+                    Diagnostic(
+                        path=ctx.target,
+                        location=f"ops[{index}].name",
+                        detail="schema_error",
+                        evidence="name is required for create_root",
+                    )
+                )
+                return
+            ctx.root_name = name_value.strip()
+        elif name_value is not None:
+            if not isinstance(name_value, str) or not name_value.strip():
+                ctx.diagnostics.append(
+                    Diagnostic(
+                        path=ctx.target,
+                        location=f"ops[{index}].name",
+                        detail="schema_error",
+                        evidence="name must be a non-empty string when provided",
+                    )
+                )
+                return
+            ctx.root_name = name_value.strip()
+        result_handle = self._validate_result_handle(
+            target=ctx.target,
+            index=index,
+            op=op,
+            known_handles=ctx.known_handles,
+            diagnostics=ctx.diagnostics,
+        )
+        if result_handle and result_handle != _ROOT_HANDLE:
+            ctx.known_handles[result_handle] = "game_object"
+        ctx.preview.append(
+            {
+                "op": op_name,
+                "before": "(missing)",
+                "after": {
+                    "path": ctx.target,
+                    "root_name": ctx.root_name,
+                    "handle": result_handle or _ROOT_HANDLE,
+                    "kind": "game_object",
+                },
+            }
+        )
+
+    def _validate_pcreate_game_object_op(
+        self,
+        ctx: _PrefabCreateContext,
+        index: int,
+        op: dict[str, Any],
+    ) -> None:
+        if not ctx.created:
+            ctx.diagnostics.append(
+                Diagnostic(
+                    path=ctx.target,
+                    location=f"ops[{index}].op",
+                    detail="schema_error",
+                    evidence="create_game_object requires a prefab root first",
+                )
+            )
+            return
+        name_value = op.get("name")
+        if not isinstance(name_value, str) or not name_value.strip():
+            ctx.diagnostics.append(
+                Diagnostic(
+                    path=ctx.target,
+                    location=f"ops[{index}].name",
+                    detail="schema_error",
+                    evidence="name is required for create_game_object",
+                )
+            )
+            return
+        parent_handle = self._require_handle_ref(
+            target=ctx.target,
+            index=index,
+            field="parent",
+            op=op,
+            known_handles=ctx.known_handles,
+            diagnostics=ctx.diagnostics,
+            expected_kind="game_object",
+        )
+        result_handle = self._validate_result_handle(
+            target=ctx.target,
+            index=index,
+            op=op,
+            known_handles=ctx.known_handles,
+            diagnostics=ctx.diagnostics,
+        )
+        if parent_handle is None or ("result" in op and result_handle is None):
+            return
+        if result_handle:
+            ctx.known_handles[result_handle] = "game_object"
+        ctx.preview.append(
+            {
+                "op": "create_game_object",
+                "before": "(missing)",
+                "after": {
+                    "name": name_value.strip(),
+                    "parent": parent_handle,
+                    "handle": result_handle or "(anonymous)",
+                    "kind": "game_object",
+                },
+            }
+        )
+
+    def _validate_pcreate_rename_object_op(
+        self,
+        ctx: _PrefabCreateContext,
+        index: int,
+        op: dict[str, Any],
+    ) -> None:
+        object_handle = self._require_handle_ref(
+            target=ctx.target,
+            index=index,
+            field="target",
+            op=op,
+            known_handles=ctx.known_handles,
+            diagnostics=ctx.diagnostics,
+            expected_kind="game_object",
+        )
+        name_value = op.get("name")
+        if object_handle is None:
+            return
+        if not isinstance(name_value, str) or not name_value.strip():
+            ctx.diagnostics.append(
+                Diagnostic(
+                    path=ctx.target,
+                    location=f"ops[{index}].name",
+                    detail="schema_error",
+                    evidence="name is required for rename_object",
+                )
+            )
+            return
+        ctx.preview.append(
+            {
+                "op": "rename_object",
+                "before": {"handle": object_handle},
+                "after": {"handle": object_handle, "name": name_value.strip()},
+            }
+        )
+
+    def _validate_pcreate_reparent_op(
+        self,
+        ctx: _PrefabCreateContext,
+        index: int,
+        op: dict[str, Any],
+    ) -> None:
+        object_handle = self._require_handle_ref(
+            target=ctx.target,
+            index=index,
+            field="target",
+            op=op,
+            known_handles=ctx.known_handles,
+            diagnostics=ctx.diagnostics,
+            expected_kind="game_object",
+        )
+        parent_handle = self._require_handle_ref(
+            target=ctx.target,
+            index=index,
+            field="parent",
+            op=op,
+            known_handles=ctx.known_handles,
+            diagnostics=ctx.diagnostics,
+            expected_kind="game_object",
+        )
+        if object_handle is None or parent_handle is None:
+            return
+        if object_handle == _ROOT_HANDLE:
+            ctx.diagnostics.append(
+                Diagnostic(
+                    path=ctx.target,
+                    location=f"ops[{index}].target",
+                    detail="schema_error",
+                    evidence="root handle cannot be reparented",
+                )
+            )
+            return
+        if object_handle == parent_handle:
+            ctx.diagnostics.append(
+                Diagnostic(
+                    path=ctx.target,
+                    location=f"ops[{index}]",
+                    detail="schema_error",
+                    evidence="target and parent handles must differ",
+                )
+            )
+            return
+        ctx.preview.append(
+            {
+                "op": "reparent",
+                "before": {"handle": object_handle},
+                "after": {"handle": object_handle, "parent": parent_handle},
+            }
+        )
+
+    def _validate_pcreate_add_component_op(
+        self,
+        ctx: _PrefabCreateContext,
+        index: int,
+        op: dict[str, Any],
+        op_name: str,
+    ) -> None:
+        if not ctx.created:
+            ctx.diagnostics.append(
+                Diagnostic(
+                    path=ctx.target,
+                    location=f"ops[{index}].op",
+                    detail="schema_error",
+                    evidence=f"{op_name} requires a prefab root first",
+                )
+            )
+            return
+        object_handle = self._require_handle_ref(
+            target=ctx.target,
+            index=index,
+            field="target",
+            op=op,
+            known_handles=ctx.known_handles,
+            diagnostics=ctx.diagnostics,
+            expected_kind="game_object",
+        )
+        type_name = op.get("type")
+        if object_handle is None:
+            return
+        if not isinstance(type_name, str) or not type_name.strip():
+            ctx.diagnostics.append(
+                Diagnostic(
+                    path=ctx.target,
+                    location=f"ops[{index}].type",
+                    detail="schema_error",
+                    evidence=f"type is required for {op_name}",
+                )
+            )
+            return
+        result_handle = self._validate_result_handle(
+            target=ctx.target,
+            index=index,
+            op=op,
+            known_handles=ctx.known_handles,
+            diagnostics=ctx.diagnostics,
+        )
+        if "result" in op and result_handle is None:
+            return
+        if result_handle:
+            ctx.known_handles[result_handle] = "component"
+        ctx.preview.append(
+            {
+                "op": op_name,
+                "before": "(missing)" if op_name == "add_component" else {"target": object_handle},
+                "after": {
+                    "target": object_handle,
+                    "type": type_name.strip(),
+                    "handle": result_handle or "(anonymous)",
+                    "kind": "component",
+                },
+            }
+        )
+
+    def _validate_pcreate_remove_component_op(
+        self,
+        ctx: _PrefabCreateContext,
+        index: int,
+        op: dict[str, Any],
+    ) -> None:
+        component_handle = self._require_handle_ref(
+            target=ctx.target,
+            index=index,
+            field="target",
+            op=op,
+            known_handles=ctx.known_handles,
+            diagnostics=ctx.diagnostics,
+            expected_kind="component",
+        )
+        if component_handle is None:
+            return
+        ctx.preview.append(
+            {
+                "op": "remove_component",
+                "before": {"handle": component_handle, "kind": "component"},
+                "after": "(removed)",
+            }
+        )
+
+    def _validate_pcreate_set_op(
+        self,
+        ctx: _PrefabCreateContext,
+        index: int,
+        op: dict[str, Any],
+        op_name: str,
+    ) -> None:
+        component_handle = self._require_handle_ref(
+            target=ctx.target,
+            index=index,
+            field="target",
+            op=op,
+            known_handles=ctx.known_handles,
+            diagnostics=ctx.diagnostics,
+            expected_kind="component",
+        )
+        property_path = str(op.get("path", "")).strip()
+        if component_handle is None:
+            return
+        if not property_path:
+            ctx.diagnostics.append(
+                Diagnostic(
+                    path=ctx.target,
+                    location=f"ops[{index}].path",
+                    detail="schema_error",
+                    evidence="path is required",
+                )
+            )
+            return
+        if op_name == "set":
+            if "value" not in op:
+                ctx.diagnostics.append(
+                    Diagnostic(
+                        path=ctx.target,
+                        location=f"ops[{index}].value",
+                        detail="schema_error",
+                        evidence="value is required for set",
+                    )
+                )
+                return
+            value = op.get("value")
+            bad_handle = _check_handle_value(value, ctx.known_handles, ctx.target, index)
+            if bad_handle is not None:
+                ctx.diagnostics.append(bad_handle)
+                return
+            ctx.preview.append(
+                {
+                    "op": op_name,
+                    "before": {"handle": component_handle, "path": property_path},
+                    "after": {
+                        "handle": component_handle,
+                        "path": property_path,
+                        "value": deepcopy(value),
+                    },
+                }
+            )
+            return
+
+        op_index = op.get("index")
+        if isinstance(op_index, bool) or not isinstance(op_index, int):
+            ctx.diagnostics.append(
+                Diagnostic(
+                    path=ctx.target,
+                    location=f"ops[{index}].index",
+                    detail="schema_error",
+                    evidence="index must be an integer",
+                )
+            )
+            return
+        entry = {
+            "op": op_name,
+            "before": {
+                "handle": component_handle,
+                "path": property_path,
+                "index": op_index,
+            },
+            "after": {
+                "handle": component_handle,
+                "path": property_path,
+                "index": op_index,
+            },
+        }
+        if op_name == "insert_array_element" and "value" in op:
+            arr_value = op.get("value")
+            bad_handle = _check_handle_value(arr_value, ctx.known_handles, ctx.target, index)
+            if bad_handle is not None:
+                ctx.diagnostics.append(bad_handle)
+                return
+            entry["after"]["value"] = deepcopy(arr_value)
+        ctx.preview.append(entry)
+
+    def _validate_pcreate_save_op(
+        self,
+        ctx: _PrefabCreateContext,
+        index: int,
+        op: dict[str, Any],
+    ) -> None:
+        if ctx.saved:
+            ctx.diagnostics.append(
+                Diagnostic(
+                    path=ctx.target,
+                    location=f"ops[{index}].op",
+                    detail="schema_error",
+                    evidence="save may appear only once",
+                )
+            )
+            return
+        if not ctx.created:
+            ctx.diagnostics.append(
+                Diagnostic(
+                    path=ctx.target,
+                    location=f"ops[{index}].op",
+                    detail="schema_error",
+                    evidence="save requires a prefab root first",
+                )
+            )
+            return
+        if index != len(ctx.ops) - 1:
+            ctx.diagnostics.append(
+                Diagnostic(
+                    path=ctx.target,
+                    location=f"ops[{index}].op",
+                    detail="schema_error",
+                    evidence="save must be the final operation in create mode",
+                )
+            )
+            return
+        ctx.saved = True
+        ctx.preview.append(
+            {
+                "op": "save",
+                "before": "(unsaved)",
+                "after": {"path": ctx.target},
+            }
+        )
 
     def _validate_asset_open_ops(
         self,
@@ -1505,12 +1575,18 @@ class SerializedObjectService:
             )
             return diagnostics, preview
 
-        created = False
-        saved = False
-        known_handles: dict[str, str] = {}
+        ctx = _AssetCreateContext(
+            target=target,
+            kind=kind,
+            diagnostics=diagnostics,
+            preview=preview,
+            known_handles={},
+            ops=ops,
+        )
+
         for index, op in enumerate(ops):
             if not isinstance(op, dict):
-                diagnostics.append(
+                ctx.diagnostics.append(
                     Diagnostic(
                         path=target,
                         location=f"ops[{index}]",
@@ -1522,253 +1598,23 @@ class SerializedObjectService:
 
             op_name = str(op.get("op", "")).strip()
             if op_name == "create_asset":
-                if created:
-                    diagnostics.append(
-                        Diagnostic(
-                            path=target,
-                            location=f"ops[{index}].op",
-                            detail="schema_error",
-                            evidence="asset root may be created only once",
-                        )
+                self._validate_acreate_create_asset_op(ctx, index, op)
+            elif op_name in _SUPPORTED_OPS:
+                self._validate_acreate_set_op(ctx, index, op, op_name)
+            elif op_name == "save":
+                self._validate_acreate_save_op(ctx, index, op)
+            else:
+                ctx.diagnostics.append(
+                    Diagnostic(
+                        path=target,
+                        location=f"ops[{index}].op",
+                        detail="schema_error",
+                        evidence=f"unsupported {kind} create op '{op_name}'",
                     )
-                    continue
-                created = True
-                known_handles[_ASSET_HANDLE] = "asset"
-                result_handle = self._validate_result_handle(
-                    target=target,
-                    index=index,
-                    op=op,
-                    known_handles=known_handles,
-                    diagnostics=diagnostics,
-                )
-                if result_handle and result_handle != _ASSET_HANDLE:
-                    known_handles[result_handle] = "asset"
-                name_value = op.get("name")
-                if name_value is not None and (
-                    not isinstance(name_value, str) or not name_value.strip()
-                ):
-                    diagnostics.append(
-                        Diagnostic(
-                            path=target,
-                            location=f"ops[{index}].name",
-                            detail="schema_error",
-                            evidence="name must be a non-empty string when provided",
-                        )
-                    )
-                    continue
-                asset_name = (
-                    name_value.strip()
-                    if isinstance(name_value, str) and name_value.strip()
-                    else Path(target).stem
                 )
 
-                if kind == "material":
-                    shader_name = op.get("shader")
-                    if not isinstance(shader_name, str) or not shader_name.strip():
-                        diagnostics.append(
-                            Diagnostic(
-                                path=target,
-                                location=f"ops[{index}].shader",
-                                detail="schema_error",
-                                evidence="shader is required for create_asset on material resources",
-                            )
-                        )
-                        continue
-                    type_name = op.get("type")
-                    if type_name is not None and (
-                        not isinstance(type_name, str) or not type_name.strip()
-                    ):
-                        diagnostics.append(
-                            Diagnostic(
-                                path=target,
-                                location=f"ops[{index}].type",
-                                detail="schema_error",
-                                evidence="type must be a non-empty string when provided",
-                            )
-                        )
-                        continue
-                    preview.append(
-                        {
-                            "op": op_name,
-                            "before": "(missing)",
-                            "after": {
-                                "path": target,
-                                "type": type_name.strip()
-                                if isinstance(type_name, str) and type_name.strip()
-                                else "UnityEngine.Material",
-                                "shader": shader_name.strip(),
-                                "handle": result_handle or _ASSET_HANDLE,
-                                "kind": "asset",
-                                "name": asset_name,
-                            },
-                        }
-                    )
-                    continue
-
-                type_name = op.get("type")
-                if not isinstance(type_name, str) or not type_name.strip():
-                    diagnostics.append(
-                        Diagnostic(
-                            path=target,
-                            location=f"ops[{index}].type",
-                            detail="schema_error",
-                            evidence="type is required for create_asset on asset resources",
-                        )
-                    )
-                    continue
-                preview.append(
-                    {
-                        "op": op_name,
-                        "before": "(missing)",
-                        "after": {
-                            "path": target,
-                            "type": type_name.strip(),
-                            "handle": result_handle or _ASSET_HANDLE,
-                            "kind": "asset",
-                            "name": asset_name,
-                        },
-                    }
-                )
-                continue
-
-            if op_name in _SUPPORTED_OPS:
-                if not created:
-                    diagnostics.append(
-                        Diagnostic(
-                            path=target,
-                            location=f"ops[{index}].op",
-                            detail="schema_error",
-                            evidence=f"{op_name} requires a create_asset operation first",
-                        )
-                    )
-                    continue
-                asset_handle = self._require_handle_ref(
-                    target=target,
-                    index=index,
-                    field="target",
-                    op=op,
-                    known_handles=known_handles,
-                    diagnostics=diagnostics,
-                    expected_kind="asset",
-                )
-                property_path = str(op.get("path", "")).strip()
-                if asset_handle is None:
-                    continue
-                if not property_path:
-                    diagnostics.append(
-                        Diagnostic(
-                            path=target,
-                            location=f"ops[{index}].path",
-                            detail="schema_error",
-                            evidence="path is required",
-                        )
-                    )
-                    continue
-                if op_name == "set":
-                    if "value" not in op:
-                        diagnostics.append(
-                            Diagnostic(
-                                path=target,
-                                location=f"ops[{index}].value",
-                                detail="schema_error",
-                                evidence="value is required for set",
-                            )
-                        )
-                        continue
-                    preview.append(
-                        {
-                            "op": op_name,
-                            "before": {"handle": asset_handle, "path": property_path},
-                            "after": {
-                                "handle": asset_handle,
-                                "path": property_path,
-                                "value": deepcopy(op.get("value")),
-                            },
-                        }
-                    )
-                    continue
-
-                op_index = op.get("index")
-                if isinstance(op_index, bool) or not isinstance(op_index, int):
-                    diagnostics.append(
-                        Diagnostic(
-                            path=target,
-                            location=f"ops[{index}].index",
-                            detail="schema_error",
-                            evidence="index must be an integer",
-                        )
-                    )
-                    continue
-                entry = {
-                    "op": op_name,
-                    "before": {
-                        "handle": asset_handle,
-                        "path": property_path,
-                        "index": op_index,
-                    },
-                    "after": {
-                        "handle": asset_handle,
-                        "path": property_path,
-                        "index": op_index,
-                    },
-                }
-                if op_name == "insert_array_element" and "value" in op:
-                    entry["after"]["value"] = deepcopy(op.get("value"))
-                preview.append(entry)
-                continue
-
-            if op_name == "save":
-                if saved:
-                    diagnostics.append(
-                        Diagnostic(
-                            path=target,
-                            location=f"ops[{index}].op",
-                            detail="schema_error",
-                            evidence="save may appear only once",
-                        )
-                    )
-                    continue
-                if not created:
-                    diagnostics.append(
-                        Diagnostic(
-                            path=target,
-                            location=f"ops[{index}].op",
-                            detail="schema_error",
-                            evidence="save requires a create_asset operation first",
-                        )
-                    )
-                    continue
-                if index != len(ops) - 1:
-                    diagnostics.append(
-                        Diagnostic(
-                            path=target,
-                            location=f"ops[{index}].op",
-                            detail="schema_error",
-                            evidence="save must be the final operation in create mode",
-                        )
-                    )
-                    continue
-                saved = True
-                preview.append(
-                    {
-                        "op": op_name,
-                        "before": "(unsaved)",
-                        "after": {"path": target},
-                    }
-                )
-                continue
-
-            diagnostics.append(
-                Diagnostic(
-                    path=target,
-                    location=f"ops[{index}].op",
-                    detail="schema_error",
-                    evidence=f"unsupported {kind} create op '{op_name}'",
-                )
-            )
-
-        if not created:
-            diagnostics.append(
+        if not ctx.created:
+            ctx.diagnostics.append(
                 Diagnostic(
                     path=target,
                     location="ops",
@@ -1776,8 +1622,8 @@ class SerializedObjectService:
                     evidence="create mode requires a create_asset operation",
                 )
             )
-        if not saved:
-            diagnostics.append(
+        if not ctx.saved:
+            ctx.diagnostics.append(
                 Diagnostic(
                     path=target,
                     location="ops",
@@ -1785,7 +1631,259 @@ class SerializedObjectService:
                     evidence="create mode requires a save operation",
                 )
             )
-        return diagnostics, preview
+        return ctx.diagnostics, ctx.preview
+
+    # -- asset create: per-op-type handlers -----------------------------------
+
+    def _validate_acreate_create_asset_op(
+        self,
+        ctx: _AssetCreateContext,
+        index: int,
+        op: dict[str, Any],
+    ) -> None:
+        if ctx.created:
+            ctx.diagnostics.append(
+                Diagnostic(
+                    path=ctx.target,
+                    location=f"ops[{index}].op",
+                    detail="schema_error",
+                    evidence="asset root may be created only once",
+                )
+            )
+            return
+        ctx.created = True
+        ctx.known_handles[_ASSET_HANDLE] = "asset"
+        result_handle = self._validate_result_handle(
+            target=ctx.target,
+            index=index,
+            op=op,
+            known_handles=ctx.known_handles,
+            diagnostics=ctx.diagnostics,
+        )
+        if result_handle and result_handle != _ASSET_HANDLE:
+            ctx.known_handles[result_handle] = "asset"
+        name_value = op.get("name")
+        if name_value is not None and (
+            not isinstance(name_value, str) or not name_value.strip()
+        ):
+            ctx.diagnostics.append(
+                Diagnostic(
+                    path=ctx.target,
+                    location=f"ops[{index}].name",
+                    detail="schema_error",
+                    evidence="name must be a non-empty string when provided",
+                )
+            )
+            return
+        asset_name = (
+            name_value.strip()
+            if isinstance(name_value, str) and name_value.strip()
+            else Path(ctx.target).stem
+        )
+
+        if ctx.kind == "material":
+            shader_name = op.get("shader")
+            if not isinstance(shader_name, str) or not shader_name.strip():
+                ctx.diagnostics.append(
+                    Diagnostic(
+                        path=ctx.target,
+                        location=f"ops[{index}].shader",
+                        detail="schema_error",
+                        evidence="shader is required for create_asset on material resources",
+                    )
+                )
+                return
+            type_name = op.get("type")
+            if type_name is not None and (
+                not isinstance(type_name, str) or not type_name.strip()
+            ):
+                ctx.diagnostics.append(
+                    Diagnostic(
+                        path=ctx.target,
+                        location=f"ops[{index}].type",
+                        detail="schema_error",
+                        evidence="type must be a non-empty string when provided",
+                    )
+                )
+                return
+            ctx.preview.append(
+                {
+                    "op": "create_asset",
+                    "before": "(missing)",
+                    "after": {
+                        "path": ctx.target,
+                        "type": type_name.strip()
+                        if isinstance(type_name, str) and type_name.strip()
+                        else "UnityEngine.Material",
+                        "shader": shader_name.strip(),
+                        "handle": result_handle or _ASSET_HANDLE,
+                        "kind": "asset",
+                        "name": asset_name,
+                    },
+                }
+            )
+            return
+
+        type_name = op.get("type")
+        if not isinstance(type_name, str) or not type_name.strip():
+            ctx.diagnostics.append(
+                Diagnostic(
+                    path=ctx.target,
+                    location=f"ops[{index}].type",
+                    detail="schema_error",
+                    evidence="type is required for create_asset on asset resources",
+                )
+            )
+            return
+        ctx.preview.append(
+            {
+                "op": "create_asset",
+                "before": "(missing)",
+                "after": {
+                    "path": ctx.target,
+                    "type": type_name.strip(),
+                    "handle": result_handle or _ASSET_HANDLE,
+                    "kind": "asset",
+                    "name": asset_name,
+                },
+            }
+        )
+
+    def _validate_acreate_set_op(
+        self,
+        ctx: _AssetCreateContext,
+        index: int,
+        op: dict[str, Any],
+        op_name: str,
+    ) -> None:
+        if not ctx.created:
+            ctx.diagnostics.append(
+                Diagnostic(
+                    path=ctx.target,
+                    location=f"ops[{index}].op",
+                    detail="schema_error",
+                    evidence=f"{op_name} requires a create_asset operation first",
+                )
+            )
+            return
+        asset_handle = self._require_handle_ref(
+            target=ctx.target,
+            index=index,
+            field="target",
+            op=op,
+            known_handles=ctx.known_handles,
+            diagnostics=ctx.diagnostics,
+            expected_kind="asset",
+        )
+        property_path = str(op.get("path", "")).strip()
+        if asset_handle is None:
+            return
+        if not property_path:
+            ctx.diagnostics.append(
+                Diagnostic(
+                    path=ctx.target,
+                    location=f"ops[{index}].path",
+                    detail="schema_error",
+                    evidence="path is required",
+                )
+            )
+            return
+        if op_name == "set":
+            if "value" not in op:
+                ctx.diagnostics.append(
+                    Diagnostic(
+                        path=ctx.target,
+                        location=f"ops[{index}].value",
+                        detail="schema_error",
+                        evidence="value is required for set",
+                    )
+                )
+                return
+            ctx.preview.append(
+                {
+                    "op": op_name,
+                    "before": {"handle": asset_handle, "path": property_path},
+                    "after": {
+                        "handle": asset_handle,
+                        "path": property_path,
+                        "value": deepcopy(op.get("value")),
+                    },
+                }
+            )
+            return
+
+        op_index = op.get("index")
+        if isinstance(op_index, bool) or not isinstance(op_index, int):
+            ctx.diagnostics.append(
+                Diagnostic(
+                    path=ctx.target,
+                    location=f"ops[{index}].index",
+                    detail="schema_error",
+                    evidence="index must be an integer",
+                )
+            )
+            return
+        entry = {
+            "op": op_name,
+            "before": {
+                "handle": asset_handle,
+                "path": property_path,
+                "index": op_index,
+            },
+            "after": {
+                "handle": asset_handle,
+                "path": property_path,
+                "index": op_index,
+            },
+        }
+        if op_name == "insert_array_element" and "value" in op:
+            entry["after"]["value"] = deepcopy(op.get("value"))
+        ctx.preview.append(entry)
+
+    def _validate_acreate_save_op(
+        self,
+        ctx: _AssetCreateContext,
+        index: int,
+        op: dict[str, Any],
+    ) -> None:
+        if ctx.saved:
+            ctx.diagnostics.append(
+                Diagnostic(
+                    path=ctx.target,
+                    location=f"ops[{index}].op",
+                    detail="schema_error",
+                    evidence="save may appear only once",
+                )
+            )
+            return
+        if not ctx.created:
+            ctx.diagnostics.append(
+                Diagnostic(
+                    path=ctx.target,
+                    location=f"ops[{index}].op",
+                    detail="schema_error",
+                    evidence="save requires a create_asset operation first",
+                )
+            )
+            return
+        if index != len(ctx.ops) - 1:
+            ctx.diagnostics.append(
+                Diagnostic(
+                    path=ctx.target,
+                    location=f"ops[{index}].op",
+                    detail="schema_error",
+                    evidence="save must be the final operation in create mode",
+                )
+            )
+            return
+        ctx.saved = True
+        ctx.preview.append(
+            {
+                "op": "save",
+                "before": "(unsaved)",
+                "after": {"path": ctx.target},
+            }
+        )
 
     def _validate_scene_ops(
         self,
@@ -1827,14 +1925,19 @@ class SerializedObjectService:
             )
             return diagnostics, preview
 
-        expected_first_op = "create_scene" if mode == "create" else "open_scene"
-        known_handles: dict[str, str] = {_SCENE_HANDLE: "scene"}
-        scene_initialized = False
-        saved = False
+        ctx = _SceneContext(
+            target=target,
+            mode=mode,
+            diagnostics=diagnostics,
+            preview=preview,
+            known_handles={_SCENE_HANDLE: "scene"},
+            ops=ops,
+            expected_first_op="create_scene" if mode == "create" else "open_scene",
+        )
 
         for index, op in enumerate(ops):
             if not isinstance(op, dict):
-                diagnostics.append(
+                ctx.diagnostics.append(
                     Diagnostic(
                         path=target,
                         location=f"ops[{index}]",
@@ -1846,447 +1949,46 @@ class SerializedObjectService:
 
             op_name = str(op.get("op", "")).strip()
             if index == 0:
-                if op_name != expected_first_op:
-                    diagnostics.append(
-                        Diagnostic(
-                            path=target,
-                            location="ops[0].op",
-                            detail="schema_error",
-                            evidence=f"scene {mode} mode must start with {expected_first_op}",
-                        )
-                    )
-                    continue
-                scene_initialized = True
-                preview.append(
-                    {
-                        "op": op_name,
-                        "before": "(closed)" if mode == "open" else "(missing)",
-                        "after": {"path": target, "handle": _SCENE_HANDLE, "kind": "scene"},
-                    }
-                )
-                continue
-
-            if op_name in {"create_scene", "open_scene"}:
-                diagnostics.append(
+                self._validate_scene_init_op(ctx, index, op, op_name)
+            elif op_name in {"create_scene", "open_scene"}:
+                self._validate_scene_duplicate_init_op(ctx, index, op, op_name)
+            elif op_name == "create_game_object":
+                self._validate_scene_create_game_object_op(ctx, index, op)
+            elif op_name == "instantiate_prefab":
+                self._validate_scene_instantiate_prefab_op(ctx, index, op)
+            elif op_name == "rename_object":
+                self._validate_scene_rename_object_op(ctx, index, op)
+            elif op_name == "reparent":
+                self._validate_scene_reparent_op(ctx, index, op)
+            elif op_name in {"add_component", "find_component"}:
+                self._validate_scene_add_component_op(ctx, index, op, op_name)
+            elif op_name == "remove_component":
+                self._validate_scene_remove_component_op(ctx, index, op)
+            elif op_name in _SUPPORTED_OPS:
+                self._validate_scene_set_op(ctx, index, op, op_name)
+            elif op_name == "save_scene":
+                self._validate_scene_save_op(ctx, index, op)
+            else:
+                ctx.diagnostics.append(
                     Diagnostic(
                         path=target,
                         location=f"ops[{index}].op",
                         detail="schema_error",
-                        evidence=f"{op_name} may appear only as the first operation",
+                        evidence=f"unsupported scene op '{op_name}'",
                     )
                 )
-                continue
 
-            if op_name == "create_game_object":
-                if not scene_initialized:
-                    diagnostics.append(
-                        Diagnostic(
-                            path=target,
-                            location=f"ops[{index}].op",
-                            detail="schema_error",
-                            evidence="create_game_object requires an opened scene first",
-                        )
-                    )
-                    continue
-                name_value = op.get("name")
-                if not isinstance(name_value, str) or not name_value.strip():
-                    diagnostics.append(
-                        Diagnostic(
-                            path=target,
-                            location=f"ops[{index}].name",
-                            detail="schema_error",
-                            evidence="name is required for create_game_object",
-                        )
-                    )
-                    continue
-                parent_handle = self._require_handle_ref(
-                    target=target,
-                    index=index,
-                    field="parent",
-                    op=op,
-                    known_handles=known_handles,
-                    diagnostics=diagnostics,
-                    expected_kind={"scene", "game_object"},
-                )
-                result_handle = self._validate_result_handle(
-                    target=target,
-                    index=index,
-                    op=op,
-                    known_handles=known_handles,
-                    diagnostics=diagnostics,
-                )
-                if parent_handle is None or ("result" in op and result_handle is None):
-                    continue
-                if result_handle:
-                    known_handles[result_handle] = "game_object"
-                preview.append(
-                    {
-                        "op": op_name,
-                        "before": "(missing)",
-                        "after": {
-                            "name": name_value.strip(),
-                            "parent": parent_handle,
-                            "handle": result_handle or "(anonymous)",
-                            "kind": "game_object",
-                        },
-                    }
-                )
-                continue
-
-            if op_name == "instantiate_prefab":
-                if not scene_initialized:
-                    diagnostics.append(
-                        Diagnostic(
-                            path=target,
-                            location=f"ops[{index}].op",
-                            detail="schema_error",
-                            evidence="instantiate_prefab requires an opened scene first",
-                        )
-                    )
-                    continue
-                prefab_path = str(op.get("prefab", "")).strip()
-                if not prefab_path:
-                    diagnostics.append(
-                        Diagnostic(
-                            path=target,
-                            location=f"ops[{index}].prefab",
-                            detail="schema_error",
-                            evidence="prefab is required for instantiate_prefab",
-                        )
-                    )
-                    continue
-                parent_handle = self._require_handle_ref(
-                    target=target,
-                    index=index,
-                    field="parent",
-                    op=op,
-                    known_handles=known_handles,
-                    diagnostics=diagnostics,
-                    expected_kind={"scene", "game_object"},
-                )
-                result_handle = self._validate_result_handle(
-                    target=target,
-                    index=index,
-                    op=op,
-                    known_handles=known_handles,
-                    diagnostics=diagnostics,
-                )
-                if parent_handle is None or ("result" in op and result_handle is None):
-                    continue
-                if result_handle:
-                    known_handles[result_handle] = "game_object"
-                preview.append(
-                    {
-                        "op": op_name,
-                        "before": "(missing)",
-                        "after": {
-                            "prefab": prefab_path,
-                            "parent": parent_handle,
-                            "handle": result_handle or "(anonymous)",
-                            "kind": "game_object",
-                        },
-                    }
-                )
-                continue
-
-            if op_name == "rename_object":
-                object_handle = self._require_handle_ref(
-                    target=target,
-                    index=index,
-                    field="target",
-                    op=op,
-                    known_handles=known_handles,
-                    diagnostics=diagnostics,
-                    expected_kind="game_object",
-                )
-                name_value = op.get("name")
-                if object_handle is None:
-                    continue
-                if not isinstance(name_value, str) or not name_value.strip():
-                    diagnostics.append(
-                        Diagnostic(
-                            path=target,
-                            location=f"ops[{index}].name",
-                            detail="schema_error",
-                            evidence="name is required for rename_object",
-                        )
-                    )
-                    continue
-                preview.append(
-                    {
-                        "op": op_name,
-                        "before": {"handle": object_handle},
-                        "after": {"handle": object_handle, "name": name_value.strip()},
-                    }
-                )
-                continue
-
-            if op_name == "reparent":
-                object_handle = self._require_handle_ref(
-                    target=target,
-                    index=index,
-                    field="target",
-                    op=op,
-                    known_handles=known_handles,
-                    diagnostics=diagnostics,
-                    expected_kind="game_object",
-                )
-                parent_handle = self._require_handle_ref(
-                    target=target,
-                    index=index,
-                    field="parent",
-                    op=op,
-                    known_handles=known_handles,
-                    diagnostics=diagnostics,
-                    expected_kind={"scene", "game_object"},
-                )
-                if object_handle is None or parent_handle is None:
-                    continue
-                if object_handle == parent_handle:
-                    diagnostics.append(
-                        Diagnostic(
-                            path=target,
-                            location=f"ops[{index}]",
-                            detail="schema_error",
-                            evidence="target and parent handles must differ",
-                        )
-                    )
-                    continue
-                preview.append(
-                    {
-                        "op": op_name,
-                        "before": {"handle": object_handle},
-                        "after": {"handle": object_handle, "parent": parent_handle},
-                    }
-                )
-                continue
-
-            if op_name in {"add_component", "find_component"}:
-                if not scene_initialized:
-                    diagnostics.append(
-                        Diagnostic(
-                            path=target,
-                            location=f"ops[{index}].op",
-                            detail="schema_error",
-                            evidence=f"{op_name} requires an opened scene first",
-                        )
-                    )
-                    continue
-                object_handle = self._require_handle_ref(
-                    target=target,
-                    index=index,
-                    field="target",
-                    op=op,
-                    known_handles=known_handles,
-                    diagnostics=diagnostics,
-                    expected_kind="game_object",
-                )
-                type_name = op.get("type")
-                if object_handle is None:
-                    continue
-                if not isinstance(type_name, str) or not type_name.strip():
-                    diagnostics.append(
-                        Diagnostic(
-                            path=target,
-                            location=f"ops[{index}].type",
-                            detail="schema_error",
-                            evidence=f"type is required for {op_name}",
-                        )
-                    )
-                    continue
-                result_handle = self._validate_result_handle(
-                    target=target,
-                    index=index,
-                    op=op,
-                    known_handles=known_handles,
-                    diagnostics=diagnostics,
-                )
-                if "result" in op and result_handle is None:
-                    continue
-                if result_handle:
-                    known_handles[result_handle] = "component"
-                preview.append(
-                    {
-                        "op": op_name,
-                        "before": "(missing)" if op_name == "add_component" else {"target": object_handle},
-                        "after": {
-                            "target": object_handle,
-                            "type": type_name.strip(),
-                            "handle": result_handle or "(anonymous)",
-                            "kind": "component",
-                        },
-                    }
-                )
-                continue
-
-            if op_name == "remove_component":
-                component_handle = self._require_handle_ref(
-                    target=target,
-                    index=index,
-                    field="target",
-                    op=op,
-                    known_handles=known_handles,
-                    diagnostics=diagnostics,
-                    expected_kind="component",
-                )
-                if component_handle is None:
-                    continue
-                preview.append(
-                    {
-                        "op": op_name,
-                        "before": {"handle": component_handle, "kind": "component"},
-                        "after": "(removed)",
-                    }
-                )
-                continue
-
-            if op_name in _SUPPORTED_OPS:
-                component_handle = self._require_handle_ref(
-                    target=target,
-                    index=index,
-                    field="target",
-                    op=op,
-                    known_handles=known_handles,
-                    diagnostics=diagnostics,
-                    expected_kind="component",
-                )
-                property_path = str(op.get("path", "")).strip()
-                if component_handle is None:
-                    continue
-                if not property_path:
-                    diagnostics.append(
-                        Diagnostic(
-                            path=target,
-                            location=f"ops[{index}].path",
-                            detail="schema_error",
-                            evidence="path is required",
-                        )
-                    )
-                    continue
-                if op_name == "set":
-                    if "value" not in op:
-                        diagnostics.append(
-                            Diagnostic(
-                                path=target,
-                                location=f"ops[{index}].value",
-                                detail="schema_error",
-                                evidence="value is required for set",
-                            )
-                        )
-                        continue
-                    value = op.get("value")
-                    bad_handle = _check_handle_value(value, known_handles, target, index)
-                    if bad_handle is not None:
-                        diagnostics.append(bad_handle)
-                        continue
-                    preview.append(
-                        {
-                            "op": op_name,
-                            "before": {"handle": component_handle, "path": property_path},
-                            "after": {
-                                "handle": component_handle,
-                                "path": property_path,
-                                "value": deepcopy(value),
-                            },
-                        }
-                    )
-                    continue
-
-                op_index = op.get("index")
-                if isinstance(op_index, bool) or not isinstance(op_index, int):
-                    diagnostics.append(
-                        Diagnostic(
-                            path=target,
-                            location=f"ops[{index}].index",
-                            detail="schema_error",
-                            evidence="index must be an integer",
-                        )
-                    )
-                    continue
-                entry = {
-                    "op": op_name,
-                    "before": {
-                        "handle": component_handle,
-                        "path": property_path,
-                        "index": op_index,
-                    },
-                    "after": {
-                        "handle": component_handle,
-                        "path": property_path,
-                        "index": op_index,
-                    },
-                }
-                if op_name == "insert_array_element" and "value" in op:
-                    arr_value = op.get("value")
-                    bad_handle = _check_handle_value(arr_value, known_handles, target, index)
-                    if bad_handle is not None:
-                        diagnostics.append(bad_handle)
-                        continue
-                    entry["after"]["value"] = deepcopy(arr_value)
-                preview.append(entry)
-                continue
-
-            if op_name == "save_scene":
-                if not scene_initialized:
-                    diagnostics.append(
-                        Diagnostic(
-                            path=target,
-                            location=f"ops[{index}].op",
-                            detail="schema_error",
-                            evidence="save_scene requires an opened scene first",
-                        )
-                    )
-                    continue
-                if saved:
-                    diagnostics.append(
-                        Diagnostic(
-                            path=target,
-                            location=f"ops[{index}].op",
-                            detail="schema_error",
-                            evidence="save_scene may appear only once",
-                        )
-                    )
-                    continue
-                if index != len(ops) - 1:
-                    diagnostics.append(
-                        Diagnostic(
-                            path=target,
-                            location=f"ops[{index}].op",
-                            detail="schema_error",
-                            evidence="save_scene must be the final operation in scene mode",
-                        )
-                    )
-                    continue
-                saved = True
-                preview.append(
-                    {
-                        "op": op_name,
-                        "before": "(unsaved)",
-                        "after": {"path": target},
-                    }
-                )
-                continue
-
-            diagnostics.append(
-                Diagnostic(
-                    path=target,
-                    location=f"ops[{index}].op",
-                    detail="schema_error",
-                    evidence=f"unsupported scene op '{op_name}'",
-                )
-            )
-
-        if not scene_initialized:
-            diagnostics.append(
+        if not ctx.scene_initialized:
+            ctx.diagnostics.append(
                 Diagnostic(
                     path=target,
                     location="ops",
                     detail="schema_error",
-                    evidence=f"scene {mode} mode requires {expected_first_op}",
+                    evidence=f"scene {mode} mode requires {ctx.expected_first_op}",
                 )
             )
-        if not saved:
-            diagnostics.append(
+        if not ctx.saved:
+            ctx.diagnostics.append(
                 Diagnostic(
                     path=target,
                     location="ops",
@@ -2294,7 +1996,475 @@ class SerializedObjectService:
                     evidence="scene mode requires a save_scene operation",
                 )
             )
-        return diagnostics, preview
+        return ctx.diagnostics, ctx.preview
+
+    # -- scene: per-op-type handlers ------------------------------------------
+
+    def _validate_scene_init_op(
+        self,
+        ctx: _SceneContext,
+        index: int,
+        op: dict[str, Any],
+        op_name: str,
+    ) -> None:
+        if op_name != ctx.expected_first_op:
+            ctx.diagnostics.append(
+                Diagnostic(
+                    path=ctx.target,
+                    location="ops[0].op",
+                    detail="schema_error",
+                    evidence=f"scene {ctx.mode} mode must start with {ctx.expected_first_op}",
+                )
+            )
+            return
+        ctx.scene_initialized = True
+        ctx.preview.append(
+            {
+                "op": op_name,
+                "before": "(closed)" if ctx.mode == "open" else "(missing)",
+                "after": {"path": ctx.target, "handle": _SCENE_HANDLE, "kind": "scene"},
+            }
+        )
+
+    def _validate_scene_duplicate_init_op(
+        self,
+        ctx: _SceneContext,
+        index: int,
+        op: dict[str, Any],
+        op_name: str,
+    ) -> None:
+        ctx.diagnostics.append(
+            Diagnostic(
+                path=ctx.target,
+                location=f"ops[{index}].op",
+                detail="schema_error",
+                evidence=f"{op_name} may appear only as the first operation",
+            )
+        )
+
+    def _validate_scene_create_game_object_op(
+        self,
+        ctx: _SceneContext,
+        index: int,
+        op: dict[str, Any],
+    ) -> None:
+        if not ctx.scene_initialized:
+            ctx.diagnostics.append(
+                Diagnostic(
+                    path=ctx.target,
+                    location=f"ops[{index}].op",
+                    detail="schema_error",
+                    evidence="create_game_object requires an opened scene first",
+                )
+            )
+            return
+        name_value = op.get("name")
+        if not isinstance(name_value, str) or not name_value.strip():
+            ctx.diagnostics.append(
+                Diagnostic(
+                    path=ctx.target,
+                    location=f"ops[{index}].name",
+                    detail="schema_error",
+                    evidence="name is required for create_game_object",
+                )
+            )
+            return
+        parent_handle = self._require_handle_ref(
+            target=ctx.target,
+            index=index,
+            field="parent",
+            op=op,
+            known_handles=ctx.known_handles,
+            diagnostics=ctx.diagnostics,
+            expected_kind={"scene", "game_object"},
+        )
+        result_handle = self._validate_result_handle(
+            target=ctx.target,
+            index=index,
+            op=op,
+            known_handles=ctx.known_handles,
+            diagnostics=ctx.diagnostics,
+        )
+        if parent_handle is None or ("result" in op and result_handle is None):
+            return
+        if result_handle:
+            ctx.known_handles[result_handle] = "game_object"
+        ctx.preview.append(
+            {
+                "op": "create_game_object",
+                "before": "(missing)",
+                "after": {
+                    "name": name_value.strip(),
+                    "parent": parent_handle,
+                    "handle": result_handle or "(anonymous)",
+                    "kind": "game_object",
+                },
+            }
+        )
+
+    def _validate_scene_instantiate_prefab_op(
+        self,
+        ctx: _SceneContext,
+        index: int,
+        op: dict[str, Any],
+    ) -> None:
+        if not ctx.scene_initialized:
+            ctx.diagnostics.append(
+                Diagnostic(
+                    path=ctx.target,
+                    location=f"ops[{index}].op",
+                    detail="schema_error",
+                    evidence="instantiate_prefab requires an opened scene first",
+                )
+            )
+            return
+        prefab_path = str(op.get("prefab", "")).strip()
+        if not prefab_path:
+            ctx.diagnostics.append(
+                Diagnostic(
+                    path=ctx.target,
+                    location=f"ops[{index}].prefab",
+                    detail="schema_error",
+                    evidence="prefab is required for instantiate_prefab",
+                )
+            )
+            return
+        parent_handle = self._require_handle_ref(
+            target=ctx.target,
+            index=index,
+            field="parent",
+            op=op,
+            known_handles=ctx.known_handles,
+            diagnostics=ctx.diagnostics,
+            expected_kind={"scene", "game_object"},
+        )
+        result_handle = self._validate_result_handle(
+            target=ctx.target,
+            index=index,
+            op=op,
+            known_handles=ctx.known_handles,
+            diagnostics=ctx.diagnostics,
+        )
+        if parent_handle is None or ("result" in op and result_handle is None):
+            return
+        if result_handle:
+            ctx.known_handles[result_handle] = "game_object"
+        ctx.preview.append(
+            {
+                "op": "instantiate_prefab",
+                "before": "(missing)",
+                "after": {
+                    "prefab": prefab_path,
+                    "parent": parent_handle,
+                    "handle": result_handle or "(anonymous)",
+                    "kind": "game_object",
+                },
+            }
+        )
+
+    def _validate_scene_rename_object_op(
+        self,
+        ctx: _SceneContext,
+        index: int,
+        op: dict[str, Any],
+    ) -> None:
+        object_handle = self._require_handle_ref(
+            target=ctx.target,
+            index=index,
+            field="target",
+            op=op,
+            known_handles=ctx.known_handles,
+            diagnostics=ctx.diagnostics,
+            expected_kind="game_object",
+        )
+        name_value = op.get("name")
+        if object_handle is None:
+            return
+        if not isinstance(name_value, str) or not name_value.strip():
+            ctx.diagnostics.append(
+                Diagnostic(
+                    path=ctx.target,
+                    location=f"ops[{index}].name",
+                    detail="schema_error",
+                    evidence="name is required for rename_object",
+                )
+            )
+            return
+        ctx.preview.append(
+            {
+                "op": "rename_object",
+                "before": {"handle": object_handle},
+                "after": {"handle": object_handle, "name": name_value.strip()},
+            }
+        )
+
+    def _validate_scene_reparent_op(
+        self,
+        ctx: _SceneContext,
+        index: int,
+        op: dict[str, Any],
+    ) -> None:
+        object_handle = self._require_handle_ref(
+            target=ctx.target,
+            index=index,
+            field="target",
+            op=op,
+            known_handles=ctx.known_handles,
+            diagnostics=ctx.diagnostics,
+            expected_kind="game_object",
+        )
+        parent_handle = self._require_handle_ref(
+            target=ctx.target,
+            index=index,
+            field="parent",
+            op=op,
+            known_handles=ctx.known_handles,
+            diagnostics=ctx.diagnostics,
+            expected_kind={"scene", "game_object"},
+        )
+        if object_handle is None or parent_handle is None:
+            return
+        if object_handle == parent_handle:
+            ctx.diagnostics.append(
+                Diagnostic(
+                    path=ctx.target,
+                    location=f"ops[{index}]",
+                    detail="schema_error",
+                    evidence="target and parent handles must differ",
+                )
+            )
+            return
+        ctx.preview.append(
+            {
+                "op": "reparent",
+                "before": {"handle": object_handle},
+                "after": {"handle": object_handle, "parent": parent_handle},
+            }
+        )
+
+    def _validate_scene_add_component_op(
+        self,
+        ctx: _SceneContext,
+        index: int,
+        op: dict[str, Any],
+        op_name: str,
+    ) -> None:
+        if not ctx.scene_initialized:
+            ctx.diagnostics.append(
+                Diagnostic(
+                    path=ctx.target,
+                    location=f"ops[{index}].op",
+                    detail="schema_error",
+                    evidence=f"{op_name} requires an opened scene first",
+                )
+            )
+            return
+        object_handle = self._require_handle_ref(
+            target=ctx.target,
+            index=index,
+            field="target",
+            op=op,
+            known_handles=ctx.known_handles,
+            diagnostics=ctx.diagnostics,
+            expected_kind="game_object",
+        )
+        type_name = op.get("type")
+        if object_handle is None:
+            return
+        if not isinstance(type_name, str) or not type_name.strip():
+            ctx.diagnostics.append(
+                Diagnostic(
+                    path=ctx.target,
+                    location=f"ops[{index}].type",
+                    detail="schema_error",
+                    evidence=f"type is required for {op_name}",
+                )
+            )
+            return
+        result_handle = self._validate_result_handle(
+            target=ctx.target,
+            index=index,
+            op=op,
+            known_handles=ctx.known_handles,
+            diagnostics=ctx.diagnostics,
+        )
+        if "result" in op and result_handle is None:
+            return
+        if result_handle:
+            ctx.known_handles[result_handle] = "component"
+        ctx.preview.append(
+            {
+                "op": op_name,
+                "before": "(missing)" if op_name == "add_component" else {"target": object_handle},
+                "after": {
+                    "target": object_handle,
+                    "type": type_name.strip(),
+                    "handle": result_handle or "(anonymous)",
+                    "kind": "component",
+                },
+            }
+        )
+
+    def _validate_scene_remove_component_op(
+        self,
+        ctx: _SceneContext,
+        index: int,
+        op: dict[str, Any],
+    ) -> None:
+        component_handle = self._require_handle_ref(
+            target=ctx.target,
+            index=index,
+            field="target",
+            op=op,
+            known_handles=ctx.known_handles,
+            diagnostics=ctx.diagnostics,
+            expected_kind="component",
+        )
+        if component_handle is None:
+            return
+        ctx.preview.append(
+            {
+                "op": "remove_component",
+                "before": {"handle": component_handle, "kind": "component"},
+                "after": "(removed)",
+            }
+        )
+
+    def _validate_scene_set_op(
+        self,
+        ctx: _SceneContext,
+        index: int,
+        op: dict[str, Any],
+        op_name: str,
+    ) -> None:
+        component_handle = self._require_handle_ref(
+            target=ctx.target,
+            index=index,
+            field="target",
+            op=op,
+            known_handles=ctx.known_handles,
+            diagnostics=ctx.diagnostics,
+            expected_kind="component",
+        )
+        property_path = str(op.get("path", "")).strip()
+        if component_handle is None:
+            return
+        if not property_path:
+            ctx.diagnostics.append(
+                Diagnostic(
+                    path=ctx.target,
+                    location=f"ops[{index}].path",
+                    detail="schema_error",
+                    evidence="path is required",
+                )
+            )
+            return
+        if op_name == "set":
+            if "value" not in op:
+                ctx.diagnostics.append(
+                    Diagnostic(
+                        path=ctx.target,
+                        location=f"ops[{index}].value",
+                        detail="schema_error",
+                        evidence="value is required for set",
+                    )
+                )
+                return
+            value = op.get("value")
+            bad_handle = _check_handle_value(value, ctx.known_handles, ctx.target, index)
+            if bad_handle is not None:
+                ctx.diagnostics.append(bad_handle)
+                return
+            ctx.preview.append(
+                {
+                    "op": op_name,
+                    "before": {"handle": component_handle, "path": property_path},
+                    "after": {
+                        "handle": component_handle,
+                        "path": property_path,
+                        "value": deepcopy(value),
+                    },
+                }
+            )
+            return
+
+        op_index = op.get("index")
+        if isinstance(op_index, bool) or not isinstance(op_index, int):
+            ctx.diagnostics.append(
+                Diagnostic(
+                    path=ctx.target,
+                    location=f"ops[{index}].index",
+                    detail="schema_error",
+                    evidence="index must be an integer",
+                )
+            )
+            return
+        entry = {
+            "op": op_name,
+            "before": {
+                "handle": component_handle,
+                "path": property_path,
+                "index": op_index,
+            },
+            "after": {
+                "handle": component_handle,
+                "path": property_path,
+                "index": op_index,
+            },
+        }
+        if op_name == "insert_array_element" and "value" in op:
+            arr_value = op.get("value")
+            bad_handle = _check_handle_value(arr_value, ctx.known_handles, ctx.target, index)
+            if bad_handle is not None:
+                ctx.diagnostics.append(bad_handle)
+                return
+            entry["after"]["value"] = deepcopy(arr_value)
+        ctx.preview.append(entry)
+
+    def _validate_scene_save_op(
+        self,
+        ctx: _SceneContext,
+        index: int,
+        op: dict[str, Any],
+    ) -> None:
+        if not ctx.scene_initialized:
+            ctx.diagnostics.append(
+                Diagnostic(
+                    path=ctx.target,
+                    location=f"ops[{index}].op",
+                    detail="schema_error",
+                    evidence="save_scene requires an opened scene first",
+                )
+            )
+            return
+        if ctx.saved:
+            ctx.diagnostics.append(
+                Diagnostic(
+                    path=ctx.target,
+                    location=f"ops[{index}].op",
+                    detail="schema_error",
+                    evidence="save_scene may appear only once",
+                )
+            )
+            return
+        if index != len(ctx.ops) - 1:
+            ctx.diagnostics.append(
+                Diagnostic(
+                    path=ctx.target,
+                    location=f"ops[{index}].op",
+                    detail="schema_error",
+                    evidence="save_scene must be the final operation in scene mode",
+                )
+            )
+            return
+        ctx.saved = True
+        ctx.preview.append(
+            {
+                "op": "save_scene",
+                "before": "(unsaved)",
+                "after": {"path": ctx.target},
+            }
+        )
 
     def _validate_op(
         self,
@@ -2402,7 +2572,7 @@ class SerializedObjectService:
                 )
             return entry
 
-        if op_name in ("insert_array_element", "remove_array_element") and not property_path.endswith(".Array.data"):
+        if op_name in ("insert_array_element", "remove_array_element") and not property_path.endswith(_ARRAY_DATA_SUFFIX):
             diagnostics.append(
                 Diagnostic(
                     path=target,
@@ -2559,9 +2729,9 @@ class SerializedObjectService:
         return parent, segments[-1]
 
     def _get_array_at_path(self, payload: object, property_path: str) -> list[Any]:
-        if not property_path.endswith(".Array.data"):
-            raise ValueError("array operations require a '.Array.data' path")
-        base_path = property_path[: -len(".Array.data")]
+        if not property_path.endswith(_ARRAY_DATA_SUFFIX):
+            raise ValueError(f"array operations require a '{_ARRAY_DATA_SUFFIX}' path")
+        base_path = property_path[: -len(_ARRAY_DATA_SUFFIX)]
         value = self._walk_dict_path(payload, base_path) if base_path else payload
         if not isinstance(value, list):
             raise TypeError("target path does not resolve to an array")
@@ -2573,11 +2743,11 @@ class SerializedObjectService:
         property_path = str(op.get("path", ""))
 
         if op_name == "set":
-            if property_path.endswith(".Array.size"):
-                base_path = property_path[: -len(".Array.size")]
+            if property_path.endswith(_ARRAY_SIZE_SUFFIX):
+                base_path = property_path[: -len(_ARRAY_SIZE_SUFFIX)]
                 value = self._walk_dict_path(payload, base_path) if base_path else payload
                 if not isinstance(value, list):
-                    raise TypeError("'.Array.size' target must resolve to an array")
+                    raise TypeError(f"'{_ARRAY_SIZE_SUFFIX}' target must resolve to an array")
                 try:
                     new_size = int(op.get("value"))
                 except (TypeError, ValueError) as exc:
@@ -2643,6 +2813,16 @@ class SerializedObjectService:
         raise ValueError(f"unsupported op '{op_name}'")
 
     def dry_run_patch(self, target: str, ops: list[dict[str, Any]]) -> ToolResponse:
+        """Validate a patch plan and generate a diff preview without writing.
+
+        Args:
+            target: File path to the patch target (JSON or Unity asset).
+            ops: List of operation dicts (``set``, ``insert_array_element``, etc.).
+
+        Returns:
+            ``ToolResponse`` with ``data.diff`` containing the before/after
+            preview for each op, or diagnostics on schema validation failure.
+        """
         self._clear_before_cache()
         diagnostics: list[Diagnostic] = []
         if not str(target).strip():
@@ -2654,11 +2834,9 @@ class SerializedObjectService:
                     evidence="target is required",
                 )
             )
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="SER_PLAN_INVALID",
-                message="Patch plan schema validation failed.",
+            return error_response(
+                "SER_PLAN_INVALID",
+                "Patch plan schema validation failed.",
                 data={"target": target, "op_count": 0, "read_only": True},
                 diagnostics=diagnostics,
             )
@@ -2671,11 +2849,9 @@ class SerializedObjectService:
                     evidence="ops must contain at least one operation",
                 )
             )
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="SER_PLAN_INVALID",
-                message="Patch plan schema validation failed.",
+            return error_response(
+                "SER_PLAN_INVALID",
+                "Patch plan schema validation failed.",
                 data={"target": target, "op_count": 0, "read_only": True},
                 diagnostics=diagnostics,
             )
@@ -2693,19 +2869,15 @@ class SerializedObjectService:
                 ops=ops,
             )
             if diagnostics:
-                return ToolResponse(
-                    success=False,
-                    severity=Severity.ERROR,
-                    code="SER_PLAN_INVALID",
-                    message="Patch plan schema validation failed.",
+                return error_response(
+                    "SER_PLAN_INVALID",
+                    "Patch plan schema validation failed.",
                     data={"target": target, "op_count": len(ops), "read_only": True},
                     diagnostics=diagnostics,
                 )
-            return ToolResponse(
-                success=True,
-                severity=Severity.INFO,
-                code="SER_DRY_RUN_OK",
-                message="dry_run_patch generated a patch preview.",
+            return success_response(
+                "SER_DRY_RUN_OK",
+                "dry_run_patch generated a patch preview.",
                 data={
                     "target": target,
                     "op_count": len(ops),
@@ -2721,19 +2893,15 @@ class SerializedObjectService:
                 ops=ops,
             )
             if diagnostics:
-                return ToolResponse(
-                    success=False,
-                    severity=Severity.ERROR,
-                    code="SER_PLAN_INVALID",
-                    message="Patch plan schema validation failed.",
+                return error_response(
+                    "SER_PLAN_INVALID",
+                    "Patch plan schema validation failed.",
                     data={"target": target, "op_count": len(ops), "read_only": True},
                     diagnostics=diagnostics,
                 )
-            return ToolResponse(
-                success=True,
-                severity=Severity.INFO,
-                code="SER_DRY_RUN_OK",
-                message="dry_run_patch generated a patch preview.",
+            return success_response(
+                "SER_DRY_RUN_OK",
+                "dry_run_patch generated a patch preview.",
                 data={
                     "target": target,
                     "op_count": len(ops),
@@ -2760,11 +2928,9 @@ class SerializedObjectService:
                 preview.append(diff_entry)
 
         if diagnostics:
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="SER_PLAN_INVALID",
-                message="Patch plan schema validation failed.",
+            return error_response(
+                "SER_PLAN_INVALID",
+                "Patch plan schema validation failed.",
                 data={"target": target, "op_count": len(ops), "read_only": True},
                 diagnostics=diagnostics,
             )
@@ -2799,11 +2965,10 @@ class SerializedObjectService:
                 )
 
         if soft_warnings:
-            return ToolResponse(
-                success=True,
+            return success_response(
+                "SER_DRY_RUN_OK",
+                "dry_run_patch generated a patch preview with warnings.",
                 severity=Severity.WARNING,
-                code="SER_DRY_RUN_OK",
-                message="dry_run_patch generated a patch preview with warnings.",
                 data={
                     "target": target,
                     "op_count": len(ops),
@@ -2814,11 +2979,9 @@ class SerializedObjectService:
                 diagnostics=soft_warnings,
             )
 
-        return ToolResponse(
-            success=True,
-            severity=Severity.INFO,
-            code="SER_DRY_RUN_OK",
-            message="dry_run_patch generated a patch preview.",
+        return success_response(
+            "SER_DRY_RUN_OK",
+            "dry_run_patch generated a patch preview.",
             data={
                 "target": target,
                 "op_count": len(ops),
@@ -2833,6 +2996,15 @@ class SerializedObjectService:
         resource: dict[str, Any],
         ops: list[dict[str, Any]],
     ) -> ToolResponse:
+        """Validate a resource-level plan and generate a diff preview without writing.
+
+        Args:
+            resource: Resource descriptor dict with ``path``, ``kind``, and ``mode``.
+            ops: List of operation dicts scoped to this resource.
+
+        Returns:
+            ``ToolResponse`` with ``data.diff`` preview, or diagnostics on failure.
+        """
         context = self._resolve_resource_context(resource, ops)
         adapter = self._select_resource_adapter(context)
         if adapter is None:
@@ -2845,22 +3017,23 @@ class SerializedObjectService:
     def apply_and_save(self, target: str, ops: list[dict[str, Any]]) -> ToolResponse:
         """Apply ops to *target* and persist the result.
 
-        Contract:
-            Expects ops that have already been validated by ``dry_run_patch``.
-            All ops are applied to a working copy; on first failure the file is
-            left unchanged (first-failure-aborts semantics).
+        Expects ops already validated by ``dry_run_patch``. All ops are applied
+        to a working copy; on first failure the file is left unchanged
+        (first-failure-aborts semantics).
 
-        Response fields:
-            ``applied`` – number of ops successfully applied (0 on failure).
-            ``executed`` – ``True`` only when the file has been written to disk.
+        Args:
+            target: File path to the patch target (JSON or Unity asset).
+            ops: List of operation dicts (``set``, ``insert_array_element``, etc.).
+
+        Returns:
+            ``ToolResponse`` with ``data.applied`` (count of ops applied, 0 on
+            failure) and ``data.executed`` (``True`` only when written to disk).
         """
         dry_run = self.dry_run_patch(target=target, ops=ops)
         if not dry_run.success:
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="SER_PLAN_INVALID",
-                message="Patch plan schema validation failed.",
+            return error_response(
+                "SER_PLAN_INVALID",
+                "Patch plan schema validation failed.",
                 data={
                     "target": target,
                     "op_count": len(ops),
@@ -2875,11 +3048,9 @@ class SerializedObjectService:
         if target_path.suffix.lower() != ".json":
             if self._is_unity_bridge_target(target_path):
                 return self._apply_with_unity_bridge(target_path=target_path, ops=ops)
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="SER_UNSUPPORTED_TARGET",
-                message="Phase 1 apply backend supports .json or Unity bridge targets only.",
+            return error_response(
+                "SER_UNSUPPORTED_TARGET",
+                "Phase 1 apply backend supports .json or Unity bridge targets only.",
                 data={
                     "target": str(target_path),
                     "op_count": len(ops),
@@ -2889,11 +3060,9 @@ class SerializedObjectService:
                 },
             )
         if not target_path.exists():
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="SER_TARGET_MISSING",
-                message="Patch target file was not found.",
+            return error_response(
+                "SER_TARGET_MISSING",
+                "Patch target file was not found.",
                 data={
                     "target": str(target_path),
                     "op_count": len(ops),
@@ -2906,11 +3075,9 @@ class SerializedObjectService:
         try:
             loaded = json.loads(decode_text_file(target_path))
         except OSError as exc:
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="SER_IO_ERROR",
-                message="Failed to read patch target file.",
+            return error_response(
+                "SER_IO_ERROR",
+                "Failed to read patch target file.",
                 data={
                     "target": str(target_path),
                     "op_count": len(ops),
@@ -2921,11 +3088,9 @@ class SerializedObjectService:
                 },
             )
         except json.JSONDecodeError as exc:
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="SER_TARGET_FORMAT",
-                message="Patch target file must be valid JSON for Phase 1 apply backend.",
+            return error_response(
+                "SER_TARGET_FORMAT",
+                "Patch target file must be valid JSON for Phase 1 apply backend.",
                 data={
                     "target": str(target_path),
                     "op_count": len(ops),
@@ -2953,11 +3118,9 @@ class SerializedObjectService:
                 )
 
         if diagnostics:
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="SER_APPLY_FAILED",
-                message="Patch apply failed. Target was not modified.",
+            return error_response(
+                "SER_APPLY_FAILED",
+                "Patch apply failed. Target was not modified.",
                 data={
                     "target": str(target_path),
                     "op_count": len(ops),
@@ -2975,11 +3138,9 @@ class SerializedObjectService:
                 encoding="utf-8",
             )
         except OSError as exc:
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="SER_IO_ERROR",
-                message="Failed to write patch target file.",
+            return error_response(
+                "SER_IO_ERROR",
+                "Failed to write patch target file.",
                 data={
                     "target": str(target_path),
                     "op_count": len(ops),
@@ -2991,11 +3152,9 @@ class SerializedObjectService:
                 },
             )
 
-        return ToolResponse(
-            success=True,
-            severity=Severity.INFO,
-            code="SER_APPLY_OK",
-            message="Patch apply completed for JSON target.",
+        return success_response(
+            "SER_APPLY_OK",
+            "Patch apply completed for JSON target.",
             data={
                 "target": str(target_path),
                 "op_count": len(ops),
@@ -3012,6 +3171,16 @@ class SerializedObjectService:
         resource: dict[str, Any],
         ops: list[dict[str, Any]],
     ) -> ToolResponse:
+        """Validate and apply a resource-level plan, persisting changes to disk.
+
+        Args:
+            resource: Resource descriptor dict with ``path``, ``kind``, and ``mode``.
+            ops: List of operation dicts scoped to this resource.
+
+        Returns:
+            ``ToolResponse`` with ``data.applied`` count and ``data.executed``
+            flag, or diagnostics on validation/execution failure.
+        """
         context = self._resolve_resource_context(resource, ops)
         if context.target:
             context = _ResourcePlanContext(

@@ -20,7 +20,7 @@ from prefab_sentinel.bridge_constants import (
     UNITY_PROJECT_PATH_ENV,
     UNITY_TIMEOUT_SEC_ENV,
 )
-from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse, max_severity
+from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse, error_response, max_severity, success_response
 from prefab_sentinel.unity_assets import decode_text_file, find_project_root, relative_to_root, resolve_scope_path
 from prefab_sentinel.wsl_compat import needs_windows_paths, split_unity_command, to_windows_path, to_wsl_path
 
@@ -101,11 +101,10 @@ class RuntimeValidationService:
         message: str,
         data: dict[str, Any],
     ) -> ToolResponse:
-        return ToolResponse(
-            success=True,
+        return success_response(
+            code,
+            message,
             severity=Severity.WARNING,
-            code=code,
-            message=message,
             data={**data, "read_only": True, "executed": False},
         )
 
@@ -116,11 +115,9 @@ class RuntimeValidationService:
 
         command, split_error = split_unity_command(command_raw)
         if split_error is not None:
-            return None, ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="RUN_CONFIG_ERROR",
-                message="Unity runtime command cannot be parsed.",
+            return None, error_response(
+                "RUN_CONFIG_ERROR",
+                "Unity runtime command cannot be parsed.",
                 data={
                     "command_raw": command_raw,
                     "error": split_error,
@@ -135,11 +132,9 @@ class RuntimeValidationService:
         except ValueError:
             timeout_sec = -1
         if timeout_sec <= 0:
-            return None, ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="RUN_CONFIG_ERROR",
-                message=f"{UNITY_TIMEOUT_SEC_ENV} must be a positive integer.",
+            return None, error_response(
+                "RUN_CONFIG_ERROR",
+                f"{UNITY_TIMEOUT_SEC_ENV} must be a positive integer.",
                 data={
                     "received_timeout": timeout_raw,
                     "read_only": True,
@@ -150,11 +145,9 @@ class RuntimeValidationService:
         project_path_raw = os.environ.get(UNITY_PROJECT_PATH_ENV, "").strip()
         project_path = Path(to_wsl_path(project_path_raw)) if project_path_raw else default_project_root
         if not project_path.exists():
-            return None, ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="RUN_CONFIG_ERROR",
-                message="Unity project path does not exist.",
+            return None, error_response(
+                "RUN_CONFIG_ERROR",
+                "Unity project path does not exist.",
                 data={
                     "project_path": str(project_path),
                     "read_only": True,
@@ -204,11 +197,9 @@ class RuntimeValidationService:
 
     @staticmethod
     def _protocol_error(message: str, base_data: dict[str, Any]) -> ToolResponse:
-        return ToolResponse(
-            success=False,
-            severity=Severity.ERROR,
-            code="RUN_PROTOCOL_ERROR",
-            message=message,
+        return error_response(
+            "RUN_PROTOCOL_ERROR",
+            message,
             data={**base_data, "read_only": True, "executed": False},
         )
 
@@ -351,11 +342,9 @@ class RuntimeValidationService:
                     if action == "compile_udonsharp"
                     else "Unity ClientSim batchmode execution timed out."
                 )
-                return ToolResponse(
-                    success=False,
-                    severity=Severity.ERROR,
-                    code=failure_code,
-                    message=failure_message,
+                return error_response(
+                    failure_code,
+                    failure_message,
                     data={
                         "action": action,
                         "project_root": self._relative(target_root),
@@ -376,11 +365,9 @@ class RuntimeValidationService:
                     if action == "compile_udonsharp"
                     else "Failed to start Unity ClientSim batchmode process."
                 )
-                return ToolResponse(
-                    success=False,
-                    severity=Severity.ERROR,
-                    code=failure_code,
-                    message=failure_message,
+                return error_response(
+                    failure_code,
+                    failure_message,
                     data={
                         "action": action,
                         "project_root": self._relative(target_root),
@@ -414,11 +401,9 @@ class RuntimeValidationService:
                     log_path=Path(config["log_path"]),
                 )
                 if completed.returncode != 0 and response.success:
-                    return ToolResponse(
-                        success=False,
-                        severity=Severity.ERROR,
-                        code="RUN_PROTOCOL_ERROR",
-                        message="Unity runtime returned success payload but exited with a non-zero code.",
+                    return error_response(
+                        "RUN_PROTOCOL_ERROR",
+                        "Unity runtime returned success payload but exited with a non-zero code.",
                         data={
                             "action": action,
                             "project_root": self._relative(target_root),
@@ -440,11 +425,9 @@ class RuntimeValidationService:
                 if action == "compile_udonsharp"
                 else "Unity ClientSim batchmode execution did not produce a valid response."
             )
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code=failure_code,
-                message=failure_message,
+            return error_response(
+                failure_code,
+                failure_message,
                 data={
                     "action": action,
                     "project_root": self._relative(target_root),
@@ -473,11 +456,9 @@ class RuntimeValidationService:
         """Send a runtime validation request via the editor bridge file watcher."""
         watch_dir_raw = os.environ.get(BRIDGE_WATCH_DIR_ENV, "").strip()
         if not watch_dir_raw:
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="RUN_CONFIG_ERROR",
-                message=f"{BRIDGE_WATCH_DIR_ENV} is required when {BRIDGE_MODE_ENV}=editor.",
+            return error_response(
+                "RUN_CONFIG_ERROR",
+                f"{BRIDGE_WATCH_DIR_ENV} is required when {BRIDGE_MODE_ENV}=editor.",
                 data={
                     "action": action,
                     "project_root": self._relative(target_root),
@@ -493,11 +474,9 @@ class RuntimeValidationService:
         except ValueError:
             timeout_sec = -1
         if timeout_sec <= 0:
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="RUN_CONFIG_ERROR",
-                message=f"{UNITY_TIMEOUT_SEC_ENV} must be a positive integer.",
+            return error_response(
+                "RUN_CONFIG_ERROR",
+                f"{UNITY_TIMEOUT_SEC_ENV} must be a positive integer.",
                 data={
                     "received_timeout": timeout_raw,
                     "read_only": True,
@@ -527,11 +506,9 @@ class RuntimeValidationService:
             )
             tmp_file.rename(request_file)
         except OSError as exc:
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="RUN_EDITOR_BRIDGE_WRITE",
-                message="Failed to write editor bridge runtime request file.",
+            return error_response(
+                "RUN_EDITOR_BRIDGE_WRITE",
+                "Failed to write editor bridge runtime request file.",
                 data={
                     "action": action,
                     "project_root": self._relative(target_root),
@@ -549,11 +526,9 @@ class RuntimeValidationService:
                     raw = response_file.read_text(encoding="utf-8")
                     response_payload = json.loads(raw)
                 except (OSError, json.JSONDecodeError) as exc:
-                    return ToolResponse(
-                        success=False,
-                        severity=Severity.ERROR,
-                        code="RUN_EDITOR_BRIDGE_RESPONSE",
-                        message="Editor bridge runtime response file could not be read.",
+                    return error_response(
+                        "RUN_EDITOR_BRIDGE_RESPONSE",
+                        "Editor bridge runtime response file could not be read.",
                         data={
                             "action": action,
                             "project_root": self._relative(target_root),
@@ -583,11 +558,9 @@ class RuntimeValidationService:
         # Timeout — clean up.
         self._try_delete(request_file)
         failure_code = self._failure_code(action)
-        return ToolResponse(
-            success=False,
-            severity=Severity.ERROR,
-            code=failure_code,
-            message="Editor bridge runtime response timed out.",
+        return error_response(
+            failure_code,
+            "Editor bridge runtime response timed out.",
             data={
                 "action": action,
                 "project_root": self._relative(target_root),
@@ -607,6 +580,16 @@ class RuntimeValidationService:
             path.unlink(missing_ok=True)
 
     def compile_udonsharp(self, project_root: str | None = None) -> ToolResponse:
+        """Trigger an UdonSharp compilation via Unity batchmode or editor bridge.
+
+        Args:
+            project_root: Unity project root path. Uses the configured
+                default when ``None``.
+
+        Returns:
+            ``ToolResponse`` with compile result from the Unity runtime, or
+            a skip response when batchmode is not configured.
+        """
         target_root = (
             self._default_runtime_root()
             if project_root is None
@@ -624,14 +607,21 @@ class RuntimeValidationService:
         )
 
     def run_clientsim(self, scene_path: str, profile: str) -> ToolResponse:
+        """Run a ClientSim session for a scene via Unity batchmode or editor bridge.
+
+        Args:
+            scene_path: Path to the ``.unity`` scene file.
+            profile: ClientSim profile name to use.
+
+        Returns:
+            ``ToolResponse`` with the ClientSim execution result from Unity.
+        """
         target_root = self._default_runtime_root()
         scene = resolve_scope_path(scene_path, target_root)
         if not scene.exists():
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="RUN002",
-                message="Scene path was not found for runtime validation.",
+            return error_response(
+                "RUN002",
+                "Scene path was not found for runtime validation.",
                 data={
                     "scene_path": scene_path,
                     "profile": profile,
@@ -640,11 +630,9 @@ class RuntimeValidationService:
                 },
             )
         if scene.suffix.lower() != ".unity":
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="RUN002",
-                message="Runtime validation requires a .unity scene path.",
+            return error_response(
+                "RUN002",
+                "Runtime validation requires a .unity scene path.",
                 data={
                     "scene_path": scene_path,
                     "profile": profile,
@@ -666,17 +654,26 @@ class RuntimeValidationService:
         since_timestamp: str | None = None,
         max_lines: int = 4000,
     ) -> ToolResponse:
+        """Read Unity Editor.log and return the most recent log lines.
+
+        Args:
+            log_file: Explicit log file path. Falls back to ``<project>/Logs/Editor.log``.
+            since_timestamp: Reserved for future timestamp-based filtering.
+            max_lines: Maximum number of tail lines to return.
+
+        Returns:
+            ``ToolResponse`` with ``data.log_lines`` and ``data.line_count``.
+        """
         log_path = (
             resolve_scope_path(log_file, self._default_runtime_root())
             if log_file
             else self._default_runtime_root() / "Logs" / "Editor.log"
         )
         if not log_path.exists():
-            return ToolResponse(
-                success=True,
+            return success_response(
+                "RUN_LOG_MISSING",
+                "Unity log file was not found; classification uses empty log lines.",
                 severity=Severity.WARNING,
-                code="RUN_LOG_MISSING",
-                message="Unity log file was not found; classification uses empty log lines.",
                 data={
                     "log_path": str(log_path),
                     "line_count": 0,
@@ -689,11 +686,9 @@ class RuntimeValidationService:
         lines = decode_text_file(log_path).splitlines()
         if max_lines > 0 and len(lines) > max_lines:
             lines = lines[-max_lines:]
-        return ToolResponse(
-            success=True,
-            severity=Severity.INFO,
-            code="RUN_LOG_COLLECTED",
-            message="Unity log lines collected.",
+        return success_response(
+            "RUN_LOG_COLLECTED",
+            "Unity log lines collected.",
             data={
                 "log_path": self._relative(log_path),
                 "line_count": len(lines),
@@ -708,6 +703,17 @@ class RuntimeValidationService:
         log_lines: list[str],
         max_diagnostics: int = 200,
     ) -> ToolResponse:
+        """Classify log lines against known Unity error patterns.
+
+        Args:
+            log_lines: Raw log lines (typically from ``collect_unity_console``).
+            max_diagnostics: Maximum number of diagnostic entries to return.
+
+        Returns:
+            ``ToolResponse`` with ``data.categories`` counts and
+            ``data.categories_by_severity`` breakdown. Diagnostics contain
+            the matched line text and category.
+        """
         diagnostics: list[Diagnostic] = []
         counts = Counter[str]()
         severity_hits: list[Severity] = []
@@ -785,17 +791,26 @@ class RuntimeValidationService:
         classification_result: ToolResponse,
         allow_warnings: bool = False,
     ) -> ToolResponse:
+        """Assert that a classification result contains no critical or error issues.
+
+        Args:
+            classification_result: ``ToolResponse`` from ``classify_errors``.
+            allow_warnings: When ``True``, warning-level issues pass the assertion.
+
+        Returns:
+            ``ToolResponse`` with ``success=True`` when the assertion passes,
+            or ``success=False`` with the failing severity counts.
+        """
         severity_counts = classification_result.data.get("categories_by_severity", {})
         critical_count = int(severity_counts.get("critical", 0))
         error_count = int(severity_counts.get("error", 0))
         warning_count = int(severity_counts.get("warning", 0))
 
         if critical_count > 0 or error_count > 0:
-            return ToolResponse(
-                success=False,
+            return error_response(
+                "RUN001",
+                "Runtime assertion failed due to critical/error issues.",
                 severity=Severity.CRITICAL if critical_count > 0 else Severity.ERROR,
-                code="RUN001",
-                message="Runtime assertion failed due to critical/error issues.",
                 data={
                     "critical_count": critical_count,
                     "error_count": error_count,
@@ -806,11 +821,10 @@ class RuntimeValidationService:
             )
 
         if warning_count > 0 and not allow_warnings:
-            return ToolResponse(
-                success=False,
+            return error_response(
+                "RUN_WARNINGS",
+                "Runtime assertion failed because warnings are not allowed.",
                 severity=Severity.WARNING,
-                code="RUN_WARNINGS",
-                message="Runtime assertion failed because warnings are not allowed.",
                 data={
                     "critical_count": critical_count,
                     "error_count": error_count,
@@ -820,11 +834,9 @@ class RuntimeValidationService:
                 },
             )
 
-        return ToolResponse(
-            success=True,
-            severity=Severity.INFO,
-            code="RUN_ASSERT_OK",
-            message="Runtime assertion passed.",
+        return success_response(
+            "RUN_ASSERT_OK",
+            "Runtime assertion passed.",
             data={
                 "critical_count": critical_count,
                 "error_count": error_count,

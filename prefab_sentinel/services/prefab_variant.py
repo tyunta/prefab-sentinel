@@ -5,7 +5,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
-from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse
+from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse, error_response, success_response
 from prefab_sentinel.unity_assets import (
     SOURCE_PREFAB_PATTERN,
     collect_project_guid_index,
@@ -74,11 +74,9 @@ class PrefabVariantService:
             return (
                 None,
                 None,
-                ToolResponse(
-                    success=False,
-                    severity=Severity.ERROR,
-                    code="PVR404",
-                    message="Variant path does not exist.",
+                error_response(
+                    "PVR404",
+                    "Variant path does not exist.",
                     data={"variant_path": variant_path, "read_only": True},
                 ),
             )
@@ -88,11 +86,9 @@ class PrefabVariantService:
             return (
                 None,
                 None,
-                ToolResponse(
-                    success=False,
-                    severity=Severity.ERROR,
-                    code="PVR400",
-                    message="Variant file could not be decoded as UTF-8/CP932.",
+                error_response(
+                    "PVR400",
+                    "Variant file could not be decoded as UTF-8/CP932.",
                     data={"variant_path": variant_path, "read_only": True},
                 ),
             )
@@ -165,12 +161,23 @@ class PrefabVariantService:
         return entries
 
     def resolve_prefab_chain(self, variant_path: str) -> ToolResponse:
+        """Walk the m_SourcePrefab chain from a Variant up to its base Prefab.
+
+        Args:
+            variant_path: Path to a ``.prefab`` Variant asset.
+
+        Returns:
+            ``ToolResponse`` with ``data.chain`` listing each Prefab in
+            the inheritance chain from the variant to the root base.
+        """
         path, text, error = self._load_variant(variant_path)
         if error is not None:
             return error
         if path is None or text is None:
-            return ToolResponse(success=False, severity=Severity.ERROR, code="PVR_INTERNAL",
-                                message="Internal error: load succeeded but path/text is None.", data={})
+            return error_response(
+                "PVR_INTERNAL",
+                "Internal error: load succeeded but path/text is None.",
+            )
 
         chain = [{"path": self._relative(path), "guid": None}]
         diagnostics: list[Diagnostic] = []
@@ -238,11 +245,9 @@ class PrefabVariantService:
             code = "PVR_CHAIN_OK"
             message = "Prefab chain resolved."
 
-        return ToolResponse(
-            success=True,
+        return success_response(
+            code, message,
             severity=severity,
-            code=code,
-            message=message,
             data={"variant_path": self._relative(path), "chain": chain, "read_only": True},
             diagnostics=diagnostics,
         )
@@ -252,12 +257,24 @@ class PrefabVariantService:
         variant_path: str,
         component_filter: str | None = None,
     ) -> ToolResponse:
+        """Extract m_Modifications override entries from a Variant.
+
+        Args:
+            variant_path: Path to a ``.prefab`` Variant asset.
+            component_filter: Optional substring to filter by target or property path.
+
+        Returns:
+            ``ToolResponse`` with ``data.overrides`` listing each override's
+            target_file_id, property_path, value, and object_reference.
+        """
         path, text, error = self._load_variant(variant_path)
         if error is not None:
             return error
         if path is None or text is None:
-            return ToolResponse(success=False, severity=Severity.ERROR, code="PVR_INTERNAL",
-                                message="Internal error: load succeeded but path/text is None.", data={})
+            return error_response(
+                "PVR_INTERNAL",
+                "Internal error: load succeeded but path/text is None.",
+            )
 
         entries = self._parse_overrides(text)
         filtered = entries
@@ -280,11 +297,9 @@ class PrefabVariantService:
             }
             for entry in filtered
         ]
-        return ToolResponse(
-            success=True,
-            severity=Severity.INFO,
-            code="PVR_OVERRIDES_OK",
-            message="Override list extracted.",
+        return success_response(
+            "PVR_OVERRIDES_OK",
+            "Override list extracted.",
             data={
                 "variant_path": self._relative(path),
                 "component_filter": component_filter,
@@ -299,12 +314,24 @@ class PrefabVariantService:
         variant_path: str,
         component_filter: str | None = None,
     ) -> ToolResponse:
+        """Compute effective override values using last-write-wins semantics.
+
+        Args:
+            variant_path: Path to a ``.prefab`` Variant asset.
+            component_filter: Optional substring to filter by target or property path.
+
+        Returns:
+            ``ToolResponse`` with ``data.effective_values`` listing the
+            winning value for each unique target_key + property_path pair.
+        """
         path, text, error = self._load_variant(variant_path)
         if error is not None:
             return error
         if path is None or text is None:
-            return ToolResponse(success=False, severity=Severity.ERROR, code="PVR_INTERNAL",
-                                message="Internal error: load succeeded but path/text is None.", data={})
+            return error_response(
+                "PVR_INTERNAL",
+                "Internal error: load succeeded but path/text is None.",
+            )
 
         entries = self._parse_overrides(text)
         if component_filter:
@@ -330,11 +357,9 @@ class PrefabVariantService:
                 "line": str(entry.line),
             }
 
-        return ToolResponse(
-            success=True,
-            severity=Severity.INFO,
-            code="PVR_EFFECTIVE_OK",
-            message="Effective override values computed by last-write-wins rule.",
+        return success_response(
+            "PVR_EFFECTIVE_OK",
+            "Effective override values computed by last-write-wins rule.",
             data={
                 "variant_path": self._relative(path),
                 "component_filter": component_filter,
@@ -345,12 +370,23 @@ class PrefabVariantService:
         )
 
     def detect_stale_overrides(self, variant_path: str) -> ToolResponse:
+        """Detect duplicate overrides and array size mismatches in a Variant.
+
+        Args:
+            variant_path: Path to a ``.prefab`` Variant asset.
+
+        Returns:
+            ``ToolResponse`` with diagnostics for duplicate_override,
+            empty_property_path, and array_size_mismatch issues.
+        """
         path, text, error = self._load_variant(variant_path)
         if error is not None:
             return error
         if path is None or text is None:
-            return ToolResponse(success=False, severity=Severity.ERROR, code="PVR_INTERNAL",
-                                message="Internal error: load succeeded but path/text is None.", data={})
+            return error_response(
+                "PVR_INTERNAL",
+                "Internal error: load succeeded but path/text is None.",
+            )
 
         entries = self._parse_overrides(text)
         diagnostics: list[Diagnostic] = []
@@ -422,11 +458,10 @@ class PrefabVariantService:
                 )
 
         if diagnostics:
-            return ToolResponse(
-                success=False,
+            return error_response(
+                "PVR001",
+                "Potential stale overrides detected.",
                 severity=Severity.WARNING,
-                code="PVR001",
-                message="Potential stale overrides detected.",
                 data={
                     "variant_path": self._relative(path),
                     "stale_count": len(diagnostics),
@@ -435,11 +470,9 @@ class PrefabVariantService:
                 diagnostics=diagnostics,
             )
 
-        return ToolResponse(
-            success=True,
-            severity=Severity.INFO,
-            code="PVR_STALE_NONE",
-            message="No stale override patterns detected.",
+        return success_response(
+            "PVR_STALE_NONE",
+            "No stale override patterns detected.",
             data={"variant_path": self._relative(path), "stale_count": 0, "read_only": True},
         )
 
@@ -605,9 +638,7 @@ class PrefabVariantService:
         """
         path = resolve_scope_path(variant_path, self.project_root)
         if not path.exists():
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
+            return error_response(
                 code="PVR404",
                 message="Variant path does not exist.",
                 data={"variant_path": variant_path, "read_only": True},
@@ -616,20 +647,16 @@ class PrefabVariantService:
         try:
             text = decode_text_file(path)
         except (OSError, UnicodeDecodeError):
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="PVR_READ_ERROR",
-                message=f"Failed to read variant file: {variant_path}",
+            return error_response(
+                "PVR_READ_ERROR",
+                f"Failed to read variant file: {variant_path}",
                 data={"variant_path": variant_path, "read_only": True},
             )
 
         if SOURCE_PREFAB_PATTERN.search(text) is None:
-            return ToolResponse(
-                success=True,
-                severity=Severity.INFO,
-                code="PVR_NOT_VARIANT",
-                message="File is not a Variant; no chain to resolve.",
+            return success_response(
+                "PVR_NOT_VARIANT",
+                "File is not a Variant; no chain to resolve.",
                 data={
                     "variant_path": variant_path,
                     "chain": [],
@@ -714,11 +741,9 @@ class PrefabVariantService:
             for cv in result.values()
         ]
 
-        return ToolResponse(
-            success=True,
-            severity=Severity.INFO,
-            code="PVR_CHAIN_VALUES_WITH_ORIGIN",
-            message=f"Resolved {len(values_list)} values across {len(chain)} chain levels.",
+        return success_response(
+            "PVR_CHAIN_VALUES_WITH_ORIGIN",
+            f"Resolved {len(values_list)} values across {len(chain)} chain levels.",
             data={
                 "variant_path": variant_path,
                 "chain": chain,

@@ -10,7 +10,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse
+from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse, error_response, success_response
 from prefab_sentinel.services.prefab_variant import OverrideEntry, PrefabVariantService
 from prefab_sentinel.unity_assets import (
     decode_text_file,
@@ -173,42 +173,29 @@ def revert_overrides(
 
     resolved_path = resolve_scope_path(variant_path, root)
     if not resolved_path.exists():
-        return ToolResponse(
-            success=False,
-            severity=Severity.ERROR,
-            code="REVERT_TARGET_NOT_FOUND",
-            message=f"Variant file not found: {variant_path}",
-            data={
-                "variant_path": variant_path,
-                "read_only": True,
-            },
+        return error_response(
+            "REVERT_TARGET_NOT_FOUND",
+            f"Variant file not found: {variant_path}",
+            data={"variant_path": variant_path, "read_only": True},
         )
 
     try:
         text = decode_text_file(resolved_path)
     except (OSError, UnicodeDecodeError) as exc:
-        return ToolResponse(
-            success=False,
-            severity=Severity.ERROR,
-            code="REVERT_READ_ERROR",
-            message=f"Failed to read variant file: {exc}",
-            data={
-                "variant_path": variant_path,
-                "read_only": True,
-            },
+        return error_response(
+            "REVERT_READ_ERROR",
+            f"Failed to read variant file: {exc}",
+            data={"variant_path": variant_path, "read_only": True},
         )
 
     matches = _find_matches(text, target_file_id, property_path, variant_svc)
 
     if not matches:
-        return ToolResponse(
-            success=False,
+        return error_response(
+            "REVERT_NO_MATCH",
+            f"No matching override found for target={target_file_id} "
+            f"propertyPath={property_path}",
             severity=Severity.WARNING,
-            code="REVERT_NO_MATCH",
-            message=(
-                f"No matching override found for target={target_file_id} "
-                f"propertyPath={property_path}"
-            ),
             data={
                 "variant_path": variant_path,
                 "target": target_file_id,
@@ -240,14 +227,10 @@ def revert_overrides(
         })
 
     if dry_run:
-        return ToolResponse(
-            success=True,
-            severity=Severity.INFO,
-            code="REVERT_DRY_RUN",
-            message=(
-                f"Would revert {len(matches)} override(s) for "
-                f"target={target_file_id} propertyPath={property_path}"
-            ),
+        return success_response(
+            "REVERT_DRY_RUN",
+            f"Would revert {len(matches)} override(s) for "
+            f"target={target_file_id} propertyPath={property_path}",
             data={
                 "variant_path": variant_path,
                 "target": target_file_id,
@@ -260,11 +243,10 @@ def revert_overrides(
         )
 
     if not confirm:
-        return ToolResponse(
-            success=False,
+        return error_response(
+            "REVERT_NOT_CONFIRMED",
+            "Revert requires --confirm to write changes.",
             severity=Severity.WARNING,
-            code="REVERT_NOT_CONFIRMED",
-            message="Revert requires --confirm to write changes.",
             data={
                 "variant_path": variant_path,
                 "target": target_file_id,
@@ -284,11 +266,9 @@ def revert_overrides(
     try:
         resolved_path.write_text(new_text, encoding="utf-8")
     except OSError as exc:
-        return ToolResponse(
-            success=False,
-            severity=Severity.ERROR,
-            code="REVERT_WRITE_ERROR",
-            message=f"Failed to write variant file: {exc}",
+        return error_response(
+            "REVERT_WRITE_ERROR",
+            f"Failed to write variant file: {exc}",
             data={
                 "variant_path": variant_path,
                 "target": target_file_id,
@@ -299,14 +279,10 @@ def revert_overrides(
             },
         )
 
-    return ToolResponse(
-        success=True,
-        severity=Severity.INFO,
-        code="REVERT_APPLIED",
-        message=(
-            f"Reverted {len(matches)} override(s) for "
-            f"target={target_file_id} propertyPath={property_path}"
-        ),
+    return success_response(
+        "REVERT_APPLIED",
+        f"Reverted {len(matches)} override(s) for "
+        f"target={target_file_id} propertyPath={property_path}",
         data={
             "variant_path": variant_path,
             "target": target_file_id,
