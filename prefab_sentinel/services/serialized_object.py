@@ -2304,6 +2304,7 @@ class SerializedObjectService:
         diagnostics: list[Diagnostic],
     ) -> dict[str, Any] | None:
         op_name = str(op.get("op", "")).strip()
+        op_label = op_name or "?"
         component = str(op.get("component", "")).strip()
         property_path = str(op.get("path", "")).strip()
 
@@ -2312,7 +2313,7 @@ class SerializedObjectService:
                 diagnostics.append(
                     Diagnostic(
                         path=target,
-                        location=f"ops[{index}].op",
+                        location=f"ops[{index}] ({op_label}).op",
                         detail="schema_error",
                         evidence=(
                             f"'{op_name}' is a create-mode operation and cannot be "
@@ -2326,7 +2327,7 @@ class SerializedObjectService:
                 diagnostics.append(
                     Diagnostic(
                         path=target,
-                        location=f"ops[{index}].op",
+                        location=f"ops[{index}] ({op_label}).op",
                         detail="schema_error",
                         evidence=f"unsupported op '{op_name}'",
                     )
@@ -2336,7 +2337,7 @@ class SerializedObjectService:
             diagnostics.append(
                 Diagnostic(
                     path=target,
-                    location=f"ops[{index}].component",
+                    location=f"ops[{index}] ({op_label}).component",
                     detail="schema_error",
                     evidence="component is required",
                 )
@@ -2347,7 +2348,7 @@ class SerializedObjectService:
             diagnostics.append(
                 Diagnostic(
                     path=target,
-                    location=f"ops[{index}].component",
+                    location=f"ops[{index}] ({op_label}).component",
                     detail="likely_fileid",
                     evidence=(
                         f"component '{component}' looks like a numeric fileID. "
@@ -2362,7 +2363,7 @@ class SerializedObjectService:
             diagnostics.append(
                 Diagnostic(
                     path=target,
-                    location=f"ops[{index}].path",
+                    location=f"ops[{index}] ({op_label}).path",
                     detail="schema_error",
                     evidence="path is required",
                 )
@@ -2374,7 +2375,7 @@ class SerializedObjectService:
                 diagnostics.append(
                     Diagnostic(
                         path=target,
-                        location=f"ops[{index}].value",
+                        location=f"ops[{index}] ({op_label}).value",
                         detail="schema_error",
                         evidence="value is required for set",
                     )
@@ -2405,7 +2406,7 @@ class SerializedObjectService:
             diagnostics.append(
                 Diagnostic(
                     path=target,
-                    location=f"ops[{index}].path",
+                    location=f"ops[{index}] ({op_label}).path",
                     detail="schema_error",
                     evidence=(
                         f"Array operations require path ending with '.Array.data', "
@@ -2421,7 +2422,7 @@ class SerializedObjectService:
             diagnostics.append(
                 Diagnostic(
                     path=target,
-                    location=f"ops[{index}].index",
+                    location=f"ops[{index}] ({op_label}).index",
                     detail="schema_error",
                     evidence=f"index is required for {op_name}",
                 )
@@ -2433,7 +2434,7 @@ class SerializedObjectService:
             diagnostics.append(
                 Diagnostic(
                     path=target,
-                    location=f"ops[{index}].index",
+                    location=f"ops[{index}] ({op_label}).index",
                     detail="schema_error",
                     evidence="index must be an integer",
                 )
@@ -2443,7 +2444,7 @@ class SerializedObjectService:
             diagnostics.append(
                 Diagnostic(
                     path=target,
-                    location=f"ops[{index}].index",
+                    location=f"ops[{index}] ({op_label}).index",
                     detail="schema_error",
                     evidence="index must be >= 0",
                 )
@@ -2455,7 +2456,7 @@ class SerializedObjectService:
                 diagnostics.append(
                     Diagnostic(
                         path=target,
-                        location=f"ops[{index}].value",
+                        location=f"ops[{index}] ({op_label}).value",
                         detail="schema_error",
                         evidence="value is required for insert_array_element",
                     )
