@@ -34,16 +34,18 @@ _IGNORE_GUID_BRANCH_ALLOWLIST_ENV = "UNITYTOOL_IGNORE_GUID_ALLOW_BRANCHES"
 _CI_BRANCH_ENV = "UNITYTOOL_CI_BRANCH"
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="prefab-sentinel",
-        description="Prefab Sentinel CLI for safe Unity Prefab/Scene editing.",
-    )
-    subparsers = parser.add_subparsers(dest="command", required=True)
+# ── build_parser helpers ──────────────────────────────────────────────
 
+
+def _build_inspect_parser(subparsers: argparse._SubParsersAction) -> None:
     inspect_parser = subparsers.add_parser("inspect", help="Inspection commands.")
     inspect_sub = inspect_parser.add_subparsers(dest="inspect_command", required=True)
-    inspect_variant = inspect_sub.add_parser("variant", help="Inspect prefab variant state.")
+    inspect_variant = inspect_sub.add_parser(
+        "variant",
+        help="Inspect prefab variant state.",
+        epilog="Example: prefab-sentinel inspect variant --path Assets/Prefabs/Player.prefab",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     inspect_variant.add_argument("--path", required=True, help="Path to target variant prefab.")
     inspect_variant.add_argument(
         "--component-filter",
@@ -79,7 +81,7 @@ def build_parser() -> argparse.ArgumentParser:
     inspect_where_used.add_argument(
         "--max-usages",
         type=int,
-        default=500,
+        default=500,  # Cap output size for typical IDE/terminal consumption
         help="Maximum usage rows to include in output.",
     )
     inspect_where_used.add_argument("--format", choices=("json", "md"), default="json")
@@ -133,6 +135,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     inspect_materials.add_argument("--format", choices=("json", "md"), default="json")
 
+
+def _build_validate_parser(subparsers: argparse._SubParsersAction) -> None:
     validate_parser = subparsers.add_parser("validate", help="Validation commands.")
     validate_sub = validate_parser.add_subparsers(dest="validate_command", required=True)
     validate_structure = validate_sub.add_parser(
@@ -146,7 +150,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     validate_structure.add_argument("--format", choices=("json", "md"), default="json")
 
-    validate_refs = validate_sub.add_parser("refs", help="Validate broken references in scope.")
+    validate_refs = validate_sub.add_parser(
+        "refs",
+        help="Validate broken references in scope.",
+        epilog="Example: prefab-sentinel validate refs --scope Assets/Prefabs --details",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     validate_refs.add_argument("--scope", required=True, help="Asset scope path.")
     validate_refs.add_argument(
         "--details",
@@ -156,7 +165,7 @@ def build_parser() -> argparse.ArgumentParser:
     validate_refs.add_argument(
         "--max-diagnostics",
         type=int,
-        default=200,
+        default=200,  # Balance detail vs output size; use --max-diagnostics to override
         help="Maximum diagnostics to include when --details is enabled.",
     )
     validate_refs.add_argument(
@@ -208,7 +217,7 @@ def build_parser() -> argparse.ArgumentParser:
     validate_runtime.add_argument(
         "--max-diagnostics",
         type=int,
-        default=200,
+        default=200,  # Balance detail vs output size; use --max-diagnostics to override
         help="Maximum diagnostics to include from runtime log classification.",
     )
     validate_runtime.add_argument("--format", choices=("json", "md"), default="json")
@@ -330,6 +339,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip deploying C# files (use if already in project).",
     )
 
+
+def _build_suggest_parser(subparsers: argparse._SubParsersAction) -> None:
     suggest_parser = subparsers.add_parser("suggest", help="Suggestion commands.")
     suggest_sub = suggest_parser.add_subparsers(dest="suggest_command", required=True)
     suggest_ignore = suggest_sub.add_parser(
@@ -382,9 +393,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     suggest_ignore.add_argument("--format", choices=("json", "md"), default="json")
 
+
+def _build_patch_parser(subparsers: argparse._SubParsersAction) -> None:
     patch_parser = subparsers.add_parser("patch", help="Patch commands.")
     patch_sub = patch_parser.add_subparsers(dest="patch_command", required=True)
-    patch_apply = patch_sub.add_parser("apply", help="Validate/apply a patch plan.")
+    patch_apply = patch_sub.add_parser(
+        "apply",
+        help="Validate/apply a patch plan.",
+        epilog=(
+            "Examples:\n"
+            "  prefab-sentinel patch apply --plan plan.json --dry-run\n"
+            "  prefab-sentinel patch apply --plan plan.json --confirm --change-reason 'fix wiring'"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     patch_apply.add_argument("--plan", required=True, help="Input patch plan JSON path.")
     patch_apply.add_argument(
         "--dry-run",
@@ -463,7 +485,7 @@ def build_parser() -> argparse.ArgumentParser:
     patch_apply.add_argument(
         "--runtime-max-diagnostics",
         type=int,
-        default=200,
+        default=200,  # Balance detail vs output size; use --max-diagnostics to override
         help="Maximum runtime classification diagnostics when --runtime-scene is used.",
     )
     patch_apply.add_argument(
@@ -642,11 +664,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     patch_revert.add_argument("--format", choices=("json", "md"), default="json")
 
+
+def _build_report_parser(subparsers: argparse._SubParsersAction) -> None:
     report_parser = subparsers.add_parser("report", help="Report conversion commands.")
     report_sub = report_parser.add_subparsers(dest="report_command", required=True)
     report_export = report_sub.add_parser("export", help="Export a stored JSON report.")
     report_export.add_argument("--input", required=True, help="Input report JSON path.")
-    report_export.add_argument("--format", choices=("json", "md", "csv"), required=True)
+    report_export.add_argument("--format", choices=("json", "md", "csv"), default="json")
     report_export.add_argument("--out", required=True, help="Output report path.")
     report_export.add_argument(
         "--md-max-usages",
@@ -681,6 +705,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_smoke_history_arguments(report_smoke_history)
 
+
+def _build_editor_parser(subparsers: argparse._SubParsersAction) -> None:
     # ── editor (Editor Bridge control) ──
     editor_parser = subparsers.add_parser(
         "editor",
@@ -926,7 +952,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run UnityPatchBridge integration tests in the running Editor.",
     )
 
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="prefab-sentinel",
+        description="Prefab Sentinel CLI for safe Unity Prefab/Scene editing.",
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    _build_inspect_parser(subparsers)
+    _build_validate_parser(subparsers)
+    _build_suggest_parser(subparsers)
+    _build_patch_parser(subparsers)
+    _build_report_parser(subparsers)
+    _build_editor_parser(subparsers)
     return parser
+
+
+# ── shared helpers ────────────────────────────────────────────────────
 
 
 def _emit_payload(payload: dict[str, Any], fmt: str) -> None:
@@ -1135,6 +1177,791 @@ def _write_ignore_guid_file(path: Path, guids: list[str], mode: str) -> dict[str
     }
 
 
+# ── main() command handlers ──────────────────────────────────────────
+
+
+def _cmd_inspect_variant(args, get_orchestrator, parser) -> int:
+    response = get_orchestrator().inspect_variant(
+        args.path, args.component_filter, show_origin=args.show_origin,
+    )
+    _emit_payload(response.to_dict(), args.format)
+    return 0
+
+
+def _cmd_inspect_where_used(args, get_orchestrator, parser) -> int:
+    response = get_orchestrator().inspect_where_used(
+        asset_or_guid=args.asset_or_guid,
+        scope=args.scope,
+        exclude_patterns=tuple(args.exclude),
+        max_usages=args.max_usages,
+    )
+    _emit_payload(response.to_dict(), args.format)
+    return 0
+
+
+def _cmd_inspect_wiring(args, get_orchestrator, parser) -> int:
+    response = get_orchestrator().inspect_wiring(
+        target_path=args.path,
+        udon_only=args.udon_only,
+    )
+    _emit_payload(response.to_dict(), args.format)
+    return 0
+
+
+def _cmd_inspect_hierarchy(args, get_orchestrator, parser) -> int:
+    show_components = not args.no_components
+    response = get_orchestrator().inspect_hierarchy(
+        target_path=args.path,
+        max_depth=args.depth,
+        show_components=show_components,
+    )
+    _emit_payload(response.to_dict(), args.format)
+    return 0
+
+
+def _cmd_inspect_materials(args, get_orchestrator, parser) -> int:
+    response = get_orchestrator().inspect_materials(
+        target_path=args.path,
+    )
+    _emit_payload(response.to_dict(), args.format)
+    return 0
+
+
+def _cmd_validate_structure(args, get_orchestrator, parser) -> int:
+    response = get_orchestrator().inspect_structure(
+        target_path=args.path,
+    )
+    _emit_payload(response.to_dict(), args.format)
+    return 0
+
+
+def _cmd_validate_refs(args, get_orchestrator, parser) -> int:
+    ignore_guid_file = _resolve_ignore_guid_file(
+        args.ignore_guid_file,
+        args.scope,
+    )
+    try:
+        ignore_guids = _load_ignore_guids(args.ignore_guid, ignore_guid_file)
+    except OSError as exc:
+        parser.error(f"Failed to read --ignore-guid-file: {exc}")
+    response = get_orchestrator().validate_refs(
+        scope=args.scope,
+        details=args.details,
+        max_diagnostics=args.max_diagnostics,
+        exclude_patterns=tuple(args.exclude),
+        ignore_asset_guids=ignore_guids,
+    )
+    _emit_payload(response.to_dict(), args.format)
+    return 0
+
+
+def _cmd_validate_runtime(args, get_orchestrator, parser) -> int:
+    response = get_orchestrator().validate_runtime(
+        scene_path=args.scene,
+        profile=args.profile,
+        log_file=args.log_file,
+        since_timestamp=args.since_timestamp,
+        allow_warnings=args.allow_warnings,
+        max_diagnostics=args.max_diagnostics,
+    )
+    _emit_payload(response.to_dict(), args.format)
+    return 0
+
+
+def _cmd_validate_bridge_check(args, get_orchestrator, parser) -> int:
+    from prefab_sentinel.bridge_check import format_text, run_all_checks
+
+    envelope = run_all_checks()
+    if args.format == "text":
+        print(format_text(envelope))
+    else:
+        print(json.dumps(envelope, ensure_ascii=False, indent=2))
+    return 0 if envelope["success"] else 1
+
+
+def _cmd_validate_bridge_smoke(args, get_orchestrator, parser) -> int:
+    from prefab_sentinel.bridge_smoke import (
+        build_bridge_env,
+        build_bridge_request,
+        load_patch_plan as load_bridge_smoke_plan,
+        resolve_expected_applied as resolve_bridge_expected_applied,
+        run_bridge as run_bridge_smoke,
+        validate_expectation as validate_bridge_smoke_expectation,
+    )
+
+    if args.expected_applied is not None and args.expected_applied < 0:
+        parser.error("--expected-applied must be greater than or equal to 0.")
+    plan_path = Path(args.plan)
+    bridge_script = Path(args.bridge_script)
+    try:
+        plan = load_bridge_smoke_plan(plan_path)
+        expected_applied, expected_applied_source = resolve_bridge_expected_applied(
+            plan=plan,
+            expected_applied=args.expected_applied,
+            expect_applied_from_plan=args.expect_applied_from_plan,
+            expect_failure=args.expect_failure,
+        )
+        request = build_bridge_request(plan)
+        env = build_bridge_env(
+            unity_command=args.unity_command,
+            unity_project_path=args.unity_project_path,
+            unity_execute_method=args.unity_execute_method,
+            unity_timeout_sec=args.unity_timeout_sec,
+            unity_log_file=args.unity_log_file,
+        )
+        payload = run_bridge_smoke(
+            bridge_script=bridge_script,
+            python_executable=args.python,
+            request=request,
+            env=env,
+        )
+    except (OSError, ValueError, RuntimeError) as exc:
+        payload = {
+            "success": False,
+            "severity": "error",
+            "code": "SMOKE_BRIDGE_ERROR",
+            "message": str(exc),
+            "data": {
+                "plan": str(plan_path),
+                "bridge_script": str(bridge_script),
+            },
+            "diagnostics": [],
+        }
+        _emit_payload(payload, args.format)
+        return 1
+
+    matched_expectation = validate_bridge_smoke_expectation(
+        payload,
+        args.expect_failure,
+        expected_applied,
+        expected_applied_source,
+        args.expected_code,
+    )
+    if args.out:
+        output_path = Path(args.out)
+        try:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            parser.error(f"Failed to write --out: {exc}")
+    _emit_payload(payload, args.format)
+    return 0 if matched_expectation else 1
+
+
+def _cmd_validate_smoke_batch(args, get_orchestrator, parser) -> int:
+    return run_smoke_batch_from_args(args, parser)
+
+
+def _cmd_validate_integration_tests(args, get_orchestrator, parser) -> int:
+    from prefab_sentinel.integration_tests import (
+        deploy_test_files,
+        extract_unity_log_errors,
+        run_integration_tests,
+    )
+    project_path = Path(args.unity_project_path).resolve()
+    out_dir = Path(args.out_dir).resolve()
+    if not project_path.is_dir():
+        parser.error(f"Unity project path does not exist: {project_path}")
+    if not args.skip_deploy:
+        try:
+            deploy_test_files(project_path)
+        except FileNotFoundError as exc:
+            parser.error(str(exc))
+    try:
+        results = run_integration_tests(
+            args.unity_command,
+            project_path,
+            out_dir,
+            timeout_sec=args.timeout_sec,
+        )
+    except RuntimeError as exc:
+        payload = {
+            "success": False,
+            "severity": "error",
+            "code": "INTEGRATION_TEST_LAUNCH_ERROR",
+            "message": str(exc),
+            "data": {},
+            "diagnostics": [],
+        }
+        log_path = out_dir / "unity_integration.log"
+        errors = extract_unity_log_errors(log_path, max_lines=20)
+        if errors:
+            payload["diagnostics"] = [
+                {"detail": "unity_log_error", "evidence": line}
+                for line in errors
+            ]
+        _emit_payload(payload, "json")
+        return 1
+    _emit_payload(results, "json")
+    return 0 if results.get("success") else 1
+
+
+def _cmd_suggest_ignore_guids(args, get_orchestrator, parser) -> int:
+    ignore_guid_file = _resolve_ignore_guid_file(
+        args.ignore_guid_file,
+        args.scope,
+    )
+    try:
+        ignore_guids = _load_ignore_guids(args.ignore_guid, ignore_guid_file)
+    except OSError as exc:
+        parser.error(f"Failed to read --ignore-guid-file: {exc}")
+    response = get_orchestrator().suggest_ignore_guids(
+        scope=args.scope,
+        min_occurrences=args.min_occurrences,
+        max_items=args.max_items,
+        exclude_patterns=tuple(args.exclude),
+        ignore_asset_guids=ignore_guids,
+    )
+    payload = response.to_dict()
+    out_ignore_file = args.out_ignore_guid_file
+    if out_ignore_file:
+        _enforce_ci_ignore_guid_policy(parser, out_ignore_file)
+        candidate_guids = [
+            str(item.get("guid", ""))
+            for item in payload.get("data", {}).get("candidates", [])
+            if item.get("guid")
+        ]
+        if candidate_guids:
+            try:
+                file_update = _write_ignore_guid_file(
+                    path=Path(out_ignore_file),
+                    guids=candidate_guids,
+                    mode=args.out_ignore_guid_mode,
+                )
+            except OSError as exc:
+                parser.error(f"Failed to write --out-ignore-guid-file: {exc}")
+            payload.setdefault("data", {})["ignore_file_update"] = file_update
+        else:
+            payload.setdefault("data", {})["ignore_file_update"] = {
+                "path": out_ignore_file,
+                "mode": args.out_ignore_guid_mode,
+                "added": 0,
+                "total": 0,
+                "written": False,
+                "reason": "no_candidates",
+            }
+    _emit_payload(payload, args.format)
+    return 0
+
+
+def _cmd_patch_apply(args, get_orchestrator, parser) -> int:
+    from prefab_sentinel.patch_plan import (
+        compute_patch_plan_hmac_sha256,
+        compute_patch_plan_sha256,
+        load_patch_plan,
+    )
+
+    plan_path = Path(args.plan)
+    if not args.dry_run and args.confirm:
+        if not args.out_report:
+            parser.error(
+                "patch apply --confirm requires --out-report to record the audit log."
+            )
+        if not args.change_reason or not args.change_reason.strip():
+            parser.error("patch apply --confirm requires --change-reason.")
+    try:
+        plan = load_patch_plan(plan_path)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        parser.error(f"Failed to load --plan: {exc}")
+    plan_sha256 = compute_patch_plan_sha256(plan_path)
+    plan_signature = None
+    attested_sha256 = None
+    attested_signature = None
+    if args.attestation_file:
+        attested_sha256, attested_signature = _load_attestation_expectations(
+            parser,
+            args.attestation_file,
+        )
+        if (
+            attested_sha256 is None
+            and attested_signature is None
+            and args.plan_sha256 is None
+            and args.plan_signature is None
+        ):
+            parser.error(
+                "patch apply --attestation-file must include sha256/signature when "
+                "--plan-sha256/--plan-signature are not specified."
+            )
+
+    sha256_input = args.plan_sha256 if args.plan_sha256 is not None else attested_sha256
+    signature_input = (
+        args.plan_signature if args.plan_signature is not None else attested_signature
+    )
+
+    if sha256_input is not None:
+        expected_digest = _normalize_expected_digest(
+            parser,
+            option_name="--plan-sha256",
+            digest=sha256_input,
+        )
+        if expected_digest != plan_sha256:
+            parser.error(
+                "Plan digest mismatch: "
+                f"--plan-sha256={expected_digest} does not match actual {plan_sha256}."
+            )
+    if signature_input is not None:
+        expected_signature = _normalize_expected_digest(
+            parser,
+            option_name="--plan-signature",
+            digest=signature_input,
+        )
+        key = _resolve_signing_key(
+            parser,
+            key_env=args.plan_signing_key_env,
+            key_file=args.plan_signing_key_file,
+        )
+        plan_signature = compute_patch_plan_hmac_sha256(plan_path, key)
+        if expected_signature != plan_signature:
+            parser.error(
+                "Plan signature mismatch: "
+                f"--plan-signature={expected_signature} does not match actual {plan_signature}."
+            )
+    response = get_orchestrator().patch_apply(
+        plan=plan,
+        dry_run=args.dry_run,
+        confirm=args.confirm,
+        plan_sha256=plan_sha256,
+        plan_signature=plan_signature,
+        change_reason=args.change_reason,
+        scope=args.scope,
+        runtime_scene=args.runtime_scene,
+        runtime_profile=args.runtime_profile,
+        runtime_log_file=args.runtime_log_file,
+        runtime_since_timestamp=args.runtime_since_timestamp,
+        runtime_allow_warnings=args.runtime_allow_warnings,
+        runtime_max_diagnostics=args.runtime_max_diagnostics,
+    )
+    payload = response.to_dict()
+    payload.setdefault("data", {})["plan_attestation_file"] = args.attestation_file
+    if args.out_report:
+        report_path = Path(args.out_report)
+        try:
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            parser.error(f"Failed to write --out-report: {exc}")
+    _emit_payload(payload, args.format)
+    return 0
+
+
+def _cmd_patch_revert(args, get_orchestrator, parser) -> int:
+    from prefab_sentinel.patch_revert import revert_overrides
+
+    if not args.dry_run and args.confirm and (not args.change_reason or not args.change_reason.strip()):
+        parser.error("patch revert --confirm requires --change-reason.")
+    if not args.dry_run and not args.confirm:
+        parser.error("patch revert requires either --dry-run or --confirm.")
+
+    response = revert_overrides(
+        variant_path=args.path,
+        target_file_id=args.target,
+        property_path=args.property,
+        dry_run=args.dry_run,
+        confirm=args.confirm,
+        change_reason=args.change_reason,
+    )
+    _emit_payload(response.to_dict(), args.format)
+    return 0
+
+
+def _cmd_patch_hash(args, get_orchestrator, parser) -> int:
+    from prefab_sentinel.patch_plan import compute_patch_plan_sha256, load_patch_plan
+
+    plan_path = Path(args.plan)
+    try:
+        load_patch_plan(plan_path)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        parser.error(f"Failed to load --plan: {exc}")
+    digest = compute_patch_plan_sha256(plan_path)
+    if args.format == "json":
+        print(
+            json.dumps(
+                {
+                    "success": True,
+                    "severity": "info",
+                    "code": "PATCH_PLAN_SHA256",
+                    "message": "Patch plan digest calculated.",
+                    "data": {"plan": str(plan_path), "sha256": digest},
+                    "diagnostics": [],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+    else:
+        print(digest)
+    return 0
+
+
+def _cmd_patch_sign(args, get_orchestrator, parser) -> int:
+    from prefab_sentinel.patch_plan import (
+        compute_patch_plan_hmac_sha256,
+        load_patch_plan,
+    )
+
+    plan_path = Path(args.plan)
+    try:
+        load_patch_plan(plan_path)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        parser.error(f"Failed to load --plan: {exc}")
+    key = _resolve_signing_key(parser, key_env=args.key_env, key_file=args.key_file)
+    signature = compute_patch_plan_hmac_sha256(plan_path, key)
+    if args.format == "json":
+        print(
+            json.dumps(
+                {
+                    "success": True,
+                    "severity": "info",
+                    "code": "PATCH_PLAN_SIGNATURE",
+                    "message": "Patch plan signature calculated.",
+                    "data": {"plan": str(plan_path), "signature": signature},
+                    "diagnostics": [],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+    else:
+        print(signature)
+    return 0
+
+
+def _cmd_patch_attest(args, get_orchestrator, parser) -> int:
+    from prefab_sentinel.patch_plan import (
+        compute_patch_plan_hmac_sha256,
+        compute_patch_plan_sha256,
+        load_patch_plan,
+    )
+
+    plan_path = Path(args.plan)
+    try:
+        load_patch_plan(plan_path)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        parser.error(f"Failed to load --plan: {exc}")
+    sha256 = compute_patch_plan_sha256(plan_path)
+    signature = None
+    if not args.unsigned:
+        key = _resolve_signing_key(parser, key_env=args.key_env, key_file=args.key_file)
+        signature = compute_patch_plan_hmac_sha256(plan_path, key)
+
+    payload = {
+        "success": True,
+        "severity": "info",
+        "code": "PATCH_PLAN_ATTESTATION",
+        "message": "Patch plan attestation generated.",
+        "data": {
+            "plan": str(plan_path),
+            "sha256": sha256,
+            "signature": signature,
+        },
+        "diagnostics": [],
+    }
+    if args.out:
+        output_path = Path(args.out)
+        try:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            parser.error(f"Failed to write --out: {exc}")
+        payload["data"]["attestation_path"] = str(output_path)
+
+    if args.format == "json":
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        print(f"sha256={sha256}")
+        if signature:
+            print(f"signature={signature}")
+    return 0
+
+
+def _cmd_patch_verify(args, get_orchestrator, parser) -> int:
+    from prefab_sentinel.patch_plan import (
+        compute_patch_plan_hmac_sha256,
+        compute_patch_plan_sha256,
+        load_patch_plan,
+    )
+
+    plan_path = Path(args.plan)
+    try:
+        load_patch_plan(plan_path)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        parser.error(f"Failed to load --plan: {exc}")
+    attested_sha256 = None
+    attested_signature = None
+    if args.attestation_file:
+        attested_sha256, attested_signature = _load_attestation_expectations(
+            parser,
+            args.attestation_file,
+        )
+
+    sha256_input = args.sha256 if args.sha256 is not None else attested_sha256
+    signature_input = args.signature if args.signature is not None else attested_signature
+    if sha256_input is None and signature_input is None:
+        parser.error(
+            "patch verify requires at least one expected value: "
+            "--sha256 / --signature / --attestation-file."
+        )
+
+    actual_sha256 = compute_patch_plan_sha256(plan_path)
+    sha256_checked = sha256_input is not None
+    sha256_expected = (
+        _normalize_expected_digest(
+            parser,
+            option_name="--sha256",
+            digest=sha256_input,
+        )
+        if sha256_checked
+        else None
+    )
+    sha256_matched = (actual_sha256 == sha256_expected) if sha256_checked else None
+
+    signature_checked = signature_input is not None
+    signature_expected = (
+        _normalize_expected_digest(
+            parser,
+            option_name="--signature",
+            digest=signature_input,
+        )
+        if signature_checked
+        else None
+    )
+    signature_actual = None
+    signature_matched = None
+    if signature_checked:
+        key = _resolve_signing_key(
+            parser,
+            key_env=args.signing_key_env,
+            key_file=args.signing_key_file,
+        )
+        signature_actual = compute_patch_plan_hmac_sha256(plan_path, key)
+        signature_matched = signature_actual == signature_expected
+
+    checks = [value for value in (sha256_matched, signature_matched) if value is not None]
+    success = all(checks)
+    code = "PATCH_PLAN_VERIFY_OK" if success else "PATCH_PLAN_VERIFY_MISMATCH"
+    message = (
+        "Patch plan verification succeeded."
+        if success
+        else "Patch plan verification failed."
+    )
+    payload = {
+        "success": success,
+        "severity": "info" if success else "error",
+        "code": code,
+        "message": message,
+        "data": {
+            "plan": str(plan_path),
+            "attestation_file": args.attestation_file,
+            "sha256": {
+                "checked": sha256_checked,
+                "expected": sha256_expected,
+                "actual": actual_sha256,
+                "matched": sha256_matched,
+            },
+            "signature": {
+                "checked": signature_checked,
+                "expected": signature_expected,
+                "actual": signature_actual,
+                "matched": signature_matched,
+            },
+        },
+        "diagnostics": [],
+    }
+    if args.format == "json":
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        print("OK" if success else "MISMATCH")
+    return 0 if success else 1
+
+
+def _cmd_patch_generate(args, get_orchestrator, parser) -> int:
+    from prefab_sentinel.plan_generators import generate_circle_layout
+
+    if args.generate_command == "circle":
+        root_name = args.root_name
+        if root_name is None:
+            root_name = Path(args.output).stem
+        plan = generate_circle_layout(
+            output_path=args.output,
+            root_name=root_name,
+            count=args.count,
+            radius=args.radius,
+            child_base_name=args.child_name,
+            axis=args.axis,
+            scale=(args.scale, args.scale, args.scale),
+        )
+        plan_json = json.dumps(plan, ensure_ascii=False, indent=2) + "\n"
+        if args.out:
+            out_path = Path(args.out)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(plan_json, encoding="utf-8")
+            print(
+                json.dumps(
+                    {
+                        "success": True,
+                        "path": str(out_path),
+                        "op_count": len(plan.get("ops", [])),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+        else:
+            sys.stdout.write(plan_json)
+        return 0
+
+
+def _cmd_report_export(args, get_orchestrator, parser) -> int:
+    from prefab_sentinel.reporting import export_report
+
+    input_path = Path(args.input)
+    payload = json.loads(input_path.read_text(encoding="utf-8"))
+    md_max_usages = args.md_max_usages
+    md_max_steps = args.md_max_steps
+    if args.md_omit_usages:
+        md_max_usages = 0
+    if args.md_omit_steps:
+        md_max_steps = 0
+    output = export_report(
+        payload=payload,
+        output_path=args.out,
+        fmt=args.format,
+        md_max_usages=md_max_usages,
+        md_max_steps=md_max_steps,
+        csv_include_summary=args.csv_include_summary,
+    )
+    print(f"Exported report: {output}")
+    return 0
+
+
+def _cmd_report_smoke_history(args, get_orchestrator, parser) -> int:
+    return run_smoke_history_from_args(args, parser)
+
+
+def _cmd_editor(args, get_orchestrator, parser) -> int:
+    from prefab_sentinel.editor_bridge import send_action
+
+    cmd = args.editor_command
+    if cmd == "screenshot":
+        result = send_action(
+            action="capture_screenshot",
+            view=args.view,
+            width=args.width,
+            height=args.height,
+        )
+    elif cmd == "select":
+        kwargs: dict[str, Any] = {
+            "action": "select_object",
+            "hierarchy_path": args.path,
+        }
+        if args.prefab_stage:
+            kwargs["prefab_asset_path"] = args.prefab_stage
+        result = send_action(**kwargs)
+    elif cmd == "frame":
+        zoom_value = args.distance if args.distance > 0 else args.zoom
+        result = send_action(
+            action="frame_selected",
+            zoom=zoom_value,
+        )
+    elif cmd == "instantiate":
+        position: list[float] = []
+        if args.position:
+            try:
+                position = [float(v) for v in args.position.split(",")]
+                if len(position) != 3:
+                    parser.error(f"--position requires exactly 3 values (x,y,z), got {len(position)}")
+            except ValueError:
+                parser.error(f"Invalid --position format: {args.position} (expected x,y,z)")
+        result = send_action(
+            action="instantiate_to_scene",
+            prefab_path=args.prefab,
+            parent_path=args.parent,
+            position=position or None,
+        )
+    elif cmd == "ping":
+        result = send_action(
+            action="ping_object",
+            asset_path=args.asset,
+        )
+    elif cmd == "console":
+        result = send_action(
+            action="capture_console_logs",
+            max_entries=args.max_entries,
+            log_type_filter=args.filter,
+            since_seconds=args.since,
+        )
+        if result.get("success") and args.classify:
+            entries = result.get("data", {}).get("entries", [])
+            log_lines = [e.get("message", "") for e in entries]
+            if log_lines:
+                from prefab_sentinel.services.runtime_validation import RuntimeValidationService
+
+                svc = RuntimeValidationService()
+                classification = svc.classify_errors(log_lines)
+                result["classification"] = classification.to_dict()
+    elif cmd == "refresh":
+        result = send_action(action="refresh_asset_database")
+    elif cmd == "recompile":
+        result = send_action(action="recompile_scripts")
+    elif cmd == "set-material":
+        result = send_action(
+            action="set_material",
+            renderer_path=args.renderer,
+            material_index=args.index,
+            material_guid=args.material_guid,
+        )
+    elif cmd == "delete":
+        result = send_action(
+            action="delete_object",
+            hierarchy_path=args.path,
+        )
+    elif cmd == "list-children":
+        result = send_action(
+            action="list_children",
+            hierarchy_path=args.path,
+            list_depth=args.depth,
+        )
+    elif cmd == "list-materials":
+        result = send_action(
+            action="list_materials",
+            hierarchy_path=args.path,
+        )
+    elif cmd == "list-roots":
+        result = send_action(action="list_roots")
+    elif cmd == "get-material-property":
+        result = send_action(
+            action="get_material_property",
+            renderer_path=args.renderer,
+            material_index=args.index,
+            property_name=args.property,
+        )
+    elif cmd == "camera":
+        result = send_action(
+            action="camera",
+            yaw=args.yaw,
+            pitch=args.pitch,
+            distance=args.distance,
+        )
+    elif cmd == "run-tests":
+        result = send_action(action="run_integration_tests", timeout_sec=300)
+    else:
+        parser.error(f"Unknown editor command: {cmd}")
+    _emit_payload(result, "json")
+    return 0 if result.get("success") else 1
+
+
+# ── main() dispatch ──────────────────────────────────────────────────
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -1145,760 +1972,73 @@ def main(argv: list[str] | None = None) -> int:
         return Phase1Orchestrator.default()
 
     if args.command == "inspect" and args.inspect_command == "variant":
-        response = get_orchestrator().inspect_variant(
-            args.path, args.component_filter, show_origin=args.show_origin,
-        )
-        _emit_payload(response.to_dict(), args.format)
-        return 0
+        return _cmd_inspect_variant(args, get_orchestrator, parser)
 
     if args.command == "inspect" and args.inspect_command == "where-used":
-        response = get_orchestrator().inspect_where_used(
-            asset_or_guid=args.asset_or_guid,
-            scope=args.scope,
-            exclude_patterns=tuple(args.exclude),
-            max_usages=args.max_usages,
-        )
-        _emit_payload(response.to_dict(), args.format)
-        return 0
+        return _cmd_inspect_where_used(args, get_orchestrator, parser)
 
     if args.command == "inspect" and args.inspect_command == "wiring":
-        response = get_orchestrator().inspect_wiring(
-            target_path=args.path,
-            udon_only=args.udon_only,
-        )
-        _emit_payload(response.to_dict(), args.format)
-        return 0
+        return _cmd_inspect_wiring(args, get_orchestrator, parser)
 
     if args.command == "inspect" and args.inspect_command == "hierarchy":
-        show_components = not args.no_components
-        response = get_orchestrator().inspect_hierarchy(
-            target_path=args.path,
-            max_depth=args.depth,
-            show_components=show_components,
-        )
-        _emit_payload(response.to_dict(), args.format)
-        return 0
+        return _cmd_inspect_hierarchy(args, get_orchestrator, parser)
 
     if args.command == "inspect" and args.inspect_command == "materials":
-        response = get_orchestrator().inspect_materials(
-            target_path=args.path,
-        )
-        _emit_payload(response.to_dict(), args.format)
-        return 0
+        return _cmd_inspect_materials(args, get_orchestrator, parser)
 
     if args.command == "validate" and args.validate_command == "structure":
-        response = get_orchestrator().inspect_structure(
-            target_path=args.path,
-        )
-        _emit_payload(response.to_dict(), args.format)
-        return 0
+        return _cmd_validate_structure(args, get_orchestrator, parser)
 
     if args.command == "validate" and args.validate_command == "refs":
-        ignore_guid_file = _resolve_ignore_guid_file(
-            args.ignore_guid_file,
-            args.scope,
-        )
-        try:
-            ignore_guids = _load_ignore_guids(args.ignore_guid, ignore_guid_file)
-        except OSError as exc:
-            parser.error(f"Failed to read --ignore-guid-file: {exc}")
-        response = get_orchestrator().validate_refs(
-            scope=args.scope,
-            details=args.details,
-            max_diagnostics=args.max_diagnostics,
-            exclude_patterns=tuple(args.exclude),
-            ignore_asset_guids=ignore_guids,
-        )
-        _emit_payload(response.to_dict(), args.format)
-        return 0
+        return _cmd_validate_refs(args, get_orchestrator, parser)
 
     if args.command == "validate" and args.validate_command == "runtime":
-        response = get_orchestrator().validate_runtime(
-            scene_path=args.scene,
-            profile=args.profile,
-            log_file=args.log_file,
-            since_timestamp=args.since_timestamp,
-            allow_warnings=args.allow_warnings,
-            max_diagnostics=args.max_diagnostics,
-        )
-        _emit_payload(response.to_dict(), args.format)
-        return 0
+        return _cmd_validate_runtime(args, get_orchestrator, parser)
 
     if args.command == "validate" and args.validate_command == "bridge-check":
-        from prefab_sentinel.bridge_check import format_text, run_all_checks
-
-        envelope = run_all_checks()
-        if args.format == "text":
-            print(format_text(envelope))
-        else:
-            print(json.dumps(envelope, ensure_ascii=False, indent=2))
-        return 0 if envelope["success"] else 1
+        return _cmd_validate_bridge_check(args, get_orchestrator, parser)
 
     if args.command == "validate" and args.validate_command == "bridge-smoke":
-        from prefab_sentinel.bridge_smoke import (
-            build_bridge_env,
-            build_bridge_request,
-            load_patch_plan as load_bridge_smoke_plan,
-            resolve_expected_applied as resolve_bridge_expected_applied,
-            run_bridge as run_bridge_smoke,
-            validate_expectation as validate_bridge_smoke_expectation,
-        )
-
-        if args.expected_applied is not None and args.expected_applied < 0:
-            parser.error("--expected-applied must be greater than or equal to 0.")
-        plan_path = Path(args.plan)
-        bridge_script = Path(args.bridge_script)
-        try:
-            plan = load_bridge_smoke_plan(plan_path)
-            expected_applied, expected_applied_source = resolve_bridge_expected_applied(
-                plan=plan,
-                expected_applied=args.expected_applied,
-                expect_applied_from_plan=args.expect_applied_from_plan,
-                expect_failure=args.expect_failure,
-            )
-            request = build_bridge_request(plan)
-            env = build_bridge_env(
-                unity_command=args.unity_command,
-                unity_project_path=args.unity_project_path,
-                unity_execute_method=args.unity_execute_method,
-                unity_timeout_sec=args.unity_timeout_sec,
-                unity_log_file=args.unity_log_file,
-            )
-            payload = run_bridge_smoke(
-                bridge_script=bridge_script,
-                python_executable=args.python,
-                request=request,
-                env=env,
-            )
-        except (OSError, ValueError, RuntimeError) as exc:
-            payload = {
-                "success": False,
-                "severity": "error",
-                "code": "SMOKE_BRIDGE_ERROR",
-                "message": str(exc),
-                "data": {
-                    "plan": str(plan_path),
-                    "bridge_script": str(bridge_script),
-                },
-                "diagnostics": [],
-            }
-            _emit_payload(payload, args.format)
-            return 1
-
-        matched_expectation = validate_bridge_smoke_expectation(
-            payload,
-            args.expect_failure,
-            expected_applied,
-            expected_applied_source,
-            args.expected_code,
-        )
-        if args.out:
-            output_path = Path(args.out)
-            try:
-                output_path.parent.mkdir(parents=True, exist_ok=True)
-                output_path.write_text(
-                    json.dumps(payload, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
-            except OSError as exc:
-                parser.error(f"Failed to write --out: {exc}")
-        _emit_payload(payload, args.format)
-        return 0 if matched_expectation else 1
+        return _cmd_validate_bridge_smoke(args, get_orchestrator, parser)
 
     if args.command == "validate" and args.validate_command == "smoke-batch":
-        return run_smoke_batch_from_args(args, parser)
+        return _cmd_validate_smoke_batch(args, get_orchestrator, parser)
 
     if args.command == "validate" and args.validate_command == "integration-tests":
-        from prefab_sentinel.integration_tests import (
-            deploy_test_files,
-            extract_unity_log_errors,
-            run_integration_tests,
-        )
-        project_path = Path(args.unity_project_path).resolve()
-        out_dir = Path(args.out_dir).resolve()
-        if not project_path.is_dir():
-            parser.error(f"Unity project path does not exist: {project_path}")
-        if not args.skip_deploy:
-            try:
-                deploy_test_files(project_path)
-            except FileNotFoundError as exc:
-                parser.error(str(exc))
-        try:
-            results = run_integration_tests(
-                args.unity_command,
-                project_path,
-                out_dir,
-                timeout_sec=args.timeout_sec,
-            )
-        except RuntimeError as exc:
-            payload = {
-                "success": False,
-                "severity": "error",
-                "code": "INTEGRATION_TEST_LAUNCH_ERROR",
-                "message": str(exc),
-                "data": {},
-                "diagnostics": [],
-            }
-            log_path = out_dir / "unity_integration.log"
-            errors = extract_unity_log_errors(log_path, max_lines=20)
-            if errors:
-                payload["diagnostics"] = [
-                    {"detail": "unity_log_error", "evidence": line}
-                    for line in errors
-                ]
-            _emit_payload(payload, "json")
-            return 1
-        _emit_payload(results, "json")
-        return 0 if results.get("success") else 1
+        return _cmd_validate_integration_tests(args, get_orchestrator, parser)
 
     if args.command == "suggest" and args.suggest_command == "ignore-guids":
-        ignore_guid_file = _resolve_ignore_guid_file(
-            args.ignore_guid_file,
-            args.scope,
-        )
-        try:
-            ignore_guids = _load_ignore_guids(args.ignore_guid, ignore_guid_file)
-        except OSError as exc:
-            parser.error(f"Failed to read --ignore-guid-file: {exc}")
-        response = get_orchestrator().suggest_ignore_guids(
-            scope=args.scope,
-            min_occurrences=args.min_occurrences,
-            max_items=args.max_items,
-            exclude_patterns=tuple(args.exclude),
-            ignore_asset_guids=ignore_guids,
-        )
-        payload = response.to_dict()
-        out_ignore_file = args.out_ignore_guid_file
-        if out_ignore_file:
-            _enforce_ci_ignore_guid_policy(parser, out_ignore_file)
-            candidate_guids = [
-                str(item.get("guid", ""))
-                for item in payload.get("data", {}).get("candidates", [])
-                if item.get("guid")
-            ]
-            if candidate_guids:
-                try:
-                    file_update = _write_ignore_guid_file(
-                        path=Path(out_ignore_file),
-                        guids=candidate_guids,
-                        mode=args.out_ignore_guid_mode,
-                    )
-                except OSError as exc:
-                    parser.error(f"Failed to write --out-ignore-guid-file: {exc}")
-                payload.setdefault("data", {})["ignore_file_update"] = file_update
-            else:
-                payload.setdefault("data", {})["ignore_file_update"] = {
-                    "path": out_ignore_file,
-                    "mode": args.out_ignore_guid_mode,
-                    "added": 0,
-                    "total": 0,
-                    "written": False,
-                    "reason": "no_candidates",
-                }
-        _emit_payload(payload, args.format)
-        return 0
+        return _cmd_suggest_ignore_guids(args, get_orchestrator, parser)
 
     if args.command == "patch" and args.patch_command == "apply":
-        from prefab_sentinel.patch_plan import (
-            compute_patch_plan_hmac_sha256,
-            compute_patch_plan_sha256,
-            load_patch_plan,
-        )
-
-        plan_path = Path(args.plan)
-        if not args.dry_run and args.confirm:
-            if not args.out_report:
-                parser.error(
-                    "patch apply --confirm requires --out-report to record the audit log."
-                )
-            if not args.change_reason or not args.change_reason.strip():
-                parser.error("patch apply --confirm requires --change-reason.")
-        try:
-            plan = load_patch_plan(plan_path)
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
-            parser.error(f"Failed to load --plan: {exc}")
-        plan_sha256 = compute_patch_plan_sha256(plan_path)
-        plan_signature = None
-        attested_sha256 = None
-        attested_signature = None
-        if args.attestation_file:
-            attested_sha256, attested_signature = _load_attestation_expectations(
-                parser,
-                args.attestation_file,
-            )
-            if (
-                attested_sha256 is None
-                and attested_signature is None
-                and args.plan_sha256 is None
-                and args.plan_signature is None
-            ):
-                parser.error(
-                    "patch apply --attestation-file must include sha256/signature when "
-                    "--plan-sha256/--plan-signature are not specified."
-                )
-
-        sha256_input = args.plan_sha256 if args.plan_sha256 is not None else attested_sha256
-        signature_input = (
-            args.plan_signature if args.plan_signature is not None else attested_signature
-        )
-
-        if sha256_input is not None:
-            expected_digest = _normalize_expected_digest(
-                parser,
-                option_name="--plan-sha256",
-                digest=sha256_input,
-            )
-            if expected_digest != plan_sha256:
-                parser.error(
-                    "Plan digest mismatch: "
-                    f"--plan-sha256={expected_digest} does not match actual {plan_sha256}."
-                )
-        if signature_input is not None:
-            expected_signature = _normalize_expected_digest(
-                parser,
-                option_name="--plan-signature",
-                digest=signature_input,
-            )
-            key = _resolve_signing_key(
-                parser,
-                key_env=args.plan_signing_key_env,
-                key_file=args.plan_signing_key_file,
-            )
-            plan_signature = compute_patch_plan_hmac_sha256(plan_path, key)
-            if expected_signature != plan_signature:
-                parser.error(
-                    "Plan signature mismatch: "
-                    f"--plan-signature={expected_signature} does not match actual {plan_signature}."
-                )
-        response = get_orchestrator().patch_apply(
-            plan=plan,
-            dry_run=args.dry_run,
-            confirm=args.confirm,
-            plan_sha256=plan_sha256,
-            plan_signature=plan_signature,
-            change_reason=args.change_reason,
-            scope=args.scope,
-            runtime_scene=args.runtime_scene,
-            runtime_profile=args.runtime_profile,
-            runtime_log_file=args.runtime_log_file,
-            runtime_since_timestamp=args.runtime_since_timestamp,
-            runtime_allow_warnings=args.runtime_allow_warnings,
-            runtime_max_diagnostics=args.runtime_max_diagnostics,
-        )
-        payload = response.to_dict()
-        payload.setdefault("data", {})["plan_attestation_file"] = args.attestation_file
-        if args.out_report:
-            report_path = Path(args.out_report)
-            try:
-                report_path.parent.mkdir(parents=True, exist_ok=True)
-                report_path.write_text(
-                    json.dumps(payload, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
-            except OSError as exc:
-                parser.error(f"Failed to write --out-report: {exc}")
-        _emit_payload(payload, args.format)
-        return 0
+        return _cmd_patch_apply(args, get_orchestrator, parser)
 
     if args.command == "patch" and args.patch_command == "revert":
-        from prefab_sentinel.patch_revert import revert_overrides
-
-        if not args.dry_run and args.confirm and (not args.change_reason or not args.change_reason.strip()):
-            parser.error("patch revert --confirm requires --change-reason.")
-        if not args.dry_run and not args.confirm:
-            parser.error("patch revert requires either --dry-run or --confirm.")
-
-        response = revert_overrides(
-            variant_path=args.path,
-            target_file_id=args.target,
-            property_path=args.property,
-            dry_run=args.dry_run,
-            confirm=args.confirm,
-            change_reason=args.change_reason,
-        )
-        _emit_payload(response.to_dict(), args.format)
-        return 0
+        return _cmd_patch_revert(args, get_orchestrator, parser)
 
     if args.command == "patch" and args.patch_command == "hash":
-        from prefab_sentinel.patch_plan import compute_patch_plan_sha256, load_patch_plan
-
-        plan_path = Path(args.plan)
-        try:
-            load_patch_plan(plan_path)
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
-            parser.error(f"Failed to load --plan: {exc}")
-        digest = compute_patch_plan_sha256(plan_path)
-        if args.format == "json":
-            print(
-                json.dumps(
-                    {
-                        "success": True,
-                        "severity": "info",
-                        "code": "PATCH_PLAN_SHA256",
-                        "message": "Patch plan digest calculated.",
-                        "data": {"plan": str(plan_path), "sha256": digest},
-                        "diagnostics": [],
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                )
-            )
-        else:
-            print(digest)
-        return 0
+        return _cmd_patch_hash(args, get_orchestrator, parser)
 
     if args.command == "patch" and args.patch_command == "sign":
-        from prefab_sentinel.patch_plan import (
-            compute_patch_plan_hmac_sha256,
-            load_patch_plan,
-        )
-
-        plan_path = Path(args.plan)
-        try:
-            load_patch_plan(plan_path)
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
-            parser.error(f"Failed to load --plan: {exc}")
-        key = _resolve_signing_key(parser, key_env=args.key_env, key_file=args.key_file)
-        signature = compute_patch_plan_hmac_sha256(plan_path, key)
-        if args.format == "json":
-            print(
-                json.dumps(
-                    {
-                        "success": True,
-                        "severity": "info",
-                        "code": "PATCH_PLAN_SIGNATURE",
-                        "message": "Patch plan signature calculated.",
-                        "data": {"plan": str(plan_path), "signature": signature},
-                        "diagnostics": [],
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                )
-            )
-        else:
-            print(signature)
-        return 0
+        return _cmd_patch_sign(args, get_orchestrator, parser)
 
     if args.command == "patch" and args.patch_command == "attest":
-        from prefab_sentinel.patch_plan import (
-            compute_patch_plan_hmac_sha256,
-            compute_patch_plan_sha256,
-            load_patch_plan,
-        )
-
-        plan_path = Path(args.plan)
-        try:
-            load_patch_plan(plan_path)
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
-            parser.error(f"Failed to load --plan: {exc}")
-        sha256 = compute_patch_plan_sha256(plan_path)
-        signature = None
-        if not args.unsigned:
-            key = _resolve_signing_key(parser, key_env=args.key_env, key_file=args.key_file)
-            signature = compute_patch_plan_hmac_sha256(plan_path, key)
-
-        payload = {
-            "success": True,
-            "severity": "info",
-            "code": "PATCH_PLAN_ATTESTATION",
-            "message": "Patch plan attestation generated.",
-            "data": {
-                "plan": str(plan_path),
-                "sha256": sha256,
-                "signature": signature,
-            },
-            "diagnostics": [],
-        }
-        if args.out:
-            output_path = Path(args.out)
-            try:
-                output_path.parent.mkdir(parents=True, exist_ok=True)
-                output_path.write_text(
-                    json.dumps(payload, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
-            except OSError as exc:
-                parser.error(f"Failed to write --out: {exc}")
-            payload["data"]["attestation_path"] = str(output_path)
-
-        if args.format == "json":
-            print(json.dumps(payload, ensure_ascii=False, indent=2))
-        else:
-            print(f"sha256={sha256}")
-            if signature:
-                print(f"signature={signature}")
-        return 0
+        return _cmd_patch_attest(args, get_orchestrator, parser)
 
     if args.command == "patch" and args.patch_command == "verify":
-        from prefab_sentinel.patch_plan import (
-            compute_patch_plan_hmac_sha256,
-            compute_patch_plan_sha256,
-            load_patch_plan,
-        )
-
-        plan_path = Path(args.plan)
-        try:
-            load_patch_plan(plan_path)
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
-            parser.error(f"Failed to load --plan: {exc}")
-        attested_sha256 = None
-        attested_signature = None
-        if args.attestation_file:
-            attested_sha256, attested_signature = _load_attestation_expectations(
-                parser,
-                args.attestation_file,
-            )
-
-        sha256_input = args.sha256 if args.sha256 is not None else attested_sha256
-        signature_input = args.signature if args.signature is not None else attested_signature
-        if sha256_input is None and signature_input is None:
-            parser.error(
-                "patch verify requires at least one expected value: "
-                "--sha256 / --signature / --attestation-file."
-            )
-
-        actual_sha256 = compute_patch_plan_sha256(plan_path)
-        sha256_checked = sha256_input is not None
-        sha256_expected = (
-            _normalize_expected_digest(
-                parser,
-                option_name="--sha256",
-                digest=sha256_input,
-            )
-            if sha256_checked
-            else None
-        )
-        sha256_matched = (actual_sha256 == sha256_expected) if sha256_checked else None
-
-        signature_checked = signature_input is not None
-        signature_expected = (
-            _normalize_expected_digest(
-                parser,
-                option_name="--signature",
-                digest=signature_input,
-            )
-            if signature_checked
-            else None
-        )
-        signature_actual = None
-        signature_matched = None
-        if signature_checked:
-            key = _resolve_signing_key(
-                parser,
-                key_env=args.signing_key_env,
-                key_file=args.signing_key_file,
-            )
-            signature_actual = compute_patch_plan_hmac_sha256(plan_path, key)
-            signature_matched = signature_actual == signature_expected
-
-        checks = [value for value in (sha256_matched, signature_matched) if value is not None]
-        success = all(checks)
-        code = "PATCH_PLAN_VERIFY_OK" if success else "PATCH_PLAN_VERIFY_MISMATCH"
-        message = (
-            "Patch plan verification succeeded."
-            if success
-            else "Patch plan verification failed."
-        )
-        payload = {
-            "success": success,
-            "severity": "info" if success else "error",
-            "code": code,
-            "message": message,
-            "data": {
-                "plan": str(plan_path),
-                "attestation_file": args.attestation_file,
-                "sha256": {
-                    "checked": sha256_checked,
-                    "expected": sha256_expected,
-                    "actual": actual_sha256,
-                    "matched": sha256_matched,
-                },
-                "signature": {
-                    "checked": signature_checked,
-                    "expected": signature_expected,
-                    "actual": signature_actual,
-                    "matched": signature_matched,
-                },
-            },
-            "diagnostics": [],
-        }
-        if args.format == "json":
-            print(json.dumps(payload, ensure_ascii=False, indent=2))
-        else:
-            print("OK" if success else "MISMATCH")
-        return 0 if success else 1
+        return _cmd_patch_verify(args, get_orchestrator, parser)
 
     if args.command == "patch" and args.patch_command == "generate":
-        from prefab_sentinel.plan_generators import generate_circle_layout
-
-        if args.generate_command == "circle":
-            root_name = args.root_name
-            if root_name is None:
-                root_name = Path(args.output).stem
-            plan = generate_circle_layout(
-                output_path=args.output,
-                root_name=root_name,
-                count=args.count,
-                radius=args.radius,
-                child_base_name=args.child_name,
-                axis=args.axis,
-                scale=(args.scale, args.scale, args.scale),
-            )
-            plan_json = json.dumps(plan, ensure_ascii=False, indent=2) + "\n"
-            if args.out:
-                out_path = Path(args.out)
-                out_path.parent.mkdir(parents=True, exist_ok=True)
-                out_path.write_text(plan_json, encoding="utf-8")
-                print(
-                    json.dumps(
-                        {
-                            "success": True,
-                            "path": str(out_path),
-                            "op_count": len(plan.get("ops", [])),
-                        },
-                        ensure_ascii=False,
-                        indent=2,
-                    )
-                )
-            else:
-                sys.stdout.write(plan_json)
-            return 0
+        return _cmd_patch_generate(args, get_orchestrator, parser)
 
     if args.command == "report" and args.report_command == "export":
-        from prefab_sentinel.reporting import export_report
-
-        input_path = Path(args.input)
-        payload = json.loads(input_path.read_text(encoding="utf-8"))
-        md_max_usages = args.md_max_usages
-        md_max_steps = args.md_max_steps
-        if args.md_omit_usages:
-            md_max_usages = 0
-        if args.md_omit_steps:
-            md_max_steps = 0
-        output = export_report(
-            payload=payload,
-            output_path=args.out,
-            fmt=args.format,
-            md_max_usages=md_max_usages,
-            md_max_steps=md_max_steps,
-            csv_include_summary=args.csv_include_summary,
-        )
-        print(f"Exported report: {output}")
-        return 0
+        return _cmd_report_export(args, get_orchestrator, parser)
 
     if args.command == "report" and args.report_command == "smoke-history":
-        return run_smoke_history_from_args(args, parser)
+        return _cmd_report_smoke_history(args, get_orchestrator, parser)
 
     if args.command == "editor":
-        from prefab_sentinel.editor_bridge import send_action
-
-        cmd = args.editor_command
-        if cmd == "screenshot":
-            result = send_action(
-                action="capture_screenshot",
-                view=args.view,
-                width=args.width,
-                height=args.height,
-            )
-        elif cmd == "select":
-            kwargs: dict[str, Any] = {
-                "action": "select_object",
-                "hierarchy_path": args.path,
-            }
-            if args.prefab_stage:
-                kwargs["prefab_asset_path"] = args.prefab_stage
-            result = send_action(**kwargs)
-        elif cmd == "frame":
-            zoom_value = args.distance if args.distance > 0 else args.zoom
-            result = send_action(
-                action="frame_selected",
-                zoom=zoom_value,
-            )
-        elif cmd == "instantiate":
-            position: list[float] = []
-            if args.position:
-                try:
-                    position = [float(v) for v in args.position.split(",")]
-                    if len(position) != 3:
-                        parser.error(f"--position requires exactly 3 values (x,y,z), got {len(position)}")
-                except ValueError:
-                    parser.error(f"Invalid --position format: {args.position} (expected x,y,z)")
-            result = send_action(
-                action="instantiate_to_scene",
-                prefab_path=args.prefab,
-                parent_path=args.parent,
-                position=position or None,
-            )
-        elif cmd == "ping":
-            result = send_action(
-                action="ping_object",
-                asset_path=args.asset,
-            )
-        elif cmd == "console":
-            result = send_action(
-                action="capture_console_logs",
-                max_entries=args.max_entries,
-                log_type_filter=args.filter,
-                since_seconds=args.since,
-            )
-            if result.get("success") and args.classify:
-                entries = result.get("data", {}).get("entries", [])
-                log_lines = [e.get("message", "") for e in entries]
-                if log_lines:
-                    from prefab_sentinel.services.runtime_validation import RuntimeValidationService
-
-                    svc = RuntimeValidationService()
-                    classification = svc.classify_errors(log_lines)
-                    result["classification"] = classification.to_dict()
-        elif cmd == "refresh":
-            result = send_action(action="refresh_asset_database")
-        elif cmd == "recompile":
-            result = send_action(action="recompile_scripts")
-        elif cmd == "set-material":
-            result = send_action(
-                action="set_material",
-                renderer_path=args.renderer,
-                material_index=args.index,
-                material_guid=args.material_guid,
-            )
-        elif cmd == "delete":
-            result = send_action(
-                action="delete_object",
-                hierarchy_path=args.path,
-            )
-        elif cmd == "list-children":
-            result = send_action(
-                action="list_children",
-                hierarchy_path=args.path,
-                list_depth=args.depth,
-            )
-        elif cmd == "list-materials":
-            result = send_action(
-                action="list_materials",
-                hierarchy_path=args.path,
-            )
-        elif cmd == "list-roots":
-            result = send_action(action="list_roots")
-        elif cmd == "get-material-property":
-            result = send_action(
-                action="get_material_property",
-                renderer_path=args.renderer,
-                material_index=args.index,
-                property_name=args.property,
-            )
-        elif cmd == "camera":
-            result = send_action(
-                action="camera",
-                yaw=args.yaw,
-                pitch=args.pitch,
-                distance=args.distance,
-            )
-        elif cmd == "run-tests":
-            result = send_action(action="run_integration_tests", timeout_sec=300)
-        else:
-            parser.error(f"Unknown editor command: {cmd}")
-        _emit_payload(result, "json")
-        return 0 if result.get("success") else 1
+        return _cmd_editor(args, get_orchestrator, parser)
 
     parser.error("Unknown command.")
 
