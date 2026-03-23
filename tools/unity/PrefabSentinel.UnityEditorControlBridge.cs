@@ -18,6 +18,26 @@ namespace PrefabSentinel
     {
         private const int ProtocolVersion = 1;
 
+        /// <summary>All action strings handled by this bridge.</summary>
+        public static readonly HashSet<string> SupportedActions = new HashSet<string>
+        {
+            "capture_screenshot",
+            "select_object",
+            "frame_selected",
+            "instantiate_to_scene",
+            "ping_object",
+            "capture_console_logs",
+            "refresh_asset_database",
+            "recompile_scripts",
+            "set_material",
+            "delete_object",
+            "list_children",
+            "list_materials",
+            "camera",
+            "list_roots",
+            "get_material_property",
+        };
+
         // ── Request / Response DTOs ──
 
         [Serializable]

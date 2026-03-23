@@ -51,21 +51,4 @@ def max_severity(severities: Iterable[Severity]) -> Severity:
     return max(levels, key=lambda level: _SEVERITY_ORDER[level])
 
 
-def make_phase1_stub_response(
-    tool: str,
-    operation: str,
-    context: dict[str, Any] | None = None,
-) -> ToolResponse:
-    return ToolResponse(
-        success=False,
-        severity=Severity.WARNING,
-        code="PHASE1_STUB",
-        message=f"{tool}.{operation} is not implemented in the Phase 1 scaffold.",
-        data={
-            "tool": tool,
-            "operation": operation,
-            "context": context or {},
-        },
-        diagnostics=[],
-    )
 

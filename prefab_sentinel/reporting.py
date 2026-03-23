@@ -75,39 +75,22 @@ def _extract_runtime_validation_data(payload_data: dict[str, Any]) -> dict[str, 
     return runtime
 
 
-def _limit_usages_for_markdown(value: Any, max_usages: int) -> Any:
+def _limit_list_field_for_markdown(value: Any, field_name: str, max_items: int) -> Any:
+    """Recursively truncate lists under *field_name* to *max_items* entries."""
     if isinstance(value, dict):
         limited: dict[str, Any] = {}
         for key, item in value.items():
-            if key == "usages" and isinstance(item, list):
-                keep = item[:max_usages]
-                limited[key] = [_limit_usages_for_markdown(entry, max_usages) for entry in keep]
-                if len(item) > max_usages:
-                    limited["usages_total"] = len(item)
-                    limited["usages_truncated_for_markdown"] = len(item) - len(keep)
+            if key == field_name and isinstance(item, list):
+                keep = item[:max_items]
+                limited[key] = [_limit_list_field_for_markdown(entry, field_name, max_items) for entry in keep]
+                if len(item) > max_items:
+                    limited[f"{field_name}_total"] = len(item)
+                    limited[f"{field_name}_truncated_for_markdown"] = len(item) - len(keep)
                 continue
-            limited[key] = _limit_usages_for_markdown(item, max_usages)
+            limited[key] = _limit_list_field_for_markdown(item, field_name, max_items)
         return limited
     if isinstance(value, list):
-        return [_limit_usages_for_markdown(item, max_usages) for item in value]
-    return value
-
-
-def _limit_steps_for_markdown(value: Any, max_steps: int) -> Any:
-    if isinstance(value, dict):
-        limited: dict[str, Any] = {}
-        for key, item in value.items():
-            if key == "steps" and isinstance(item, list):
-                keep = item[:max_steps]
-                limited[key] = [_limit_steps_for_markdown(entry, max_steps) for entry in keep]
-                if len(item) > max_steps:
-                    limited["steps_total"] = len(item)
-                    limited["steps_truncated_for_markdown"] = len(item) - len(keep)
-                continue
-            limited[key] = _limit_steps_for_markdown(item, max_steps)
-        return limited
-    if isinstance(value, list):
-        return [_limit_steps_for_markdown(item, max_steps) for item in value]
+        return [_limit_list_field_for_markdown(item, field_name, max_items) for item in value]
     return value
 
 
@@ -121,9 +104,9 @@ def render_markdown_report(
     if not isinstance(payload_data, dict):
         payload_data = {}
     if md_max_usages is not None:
-        payload_data = _limit_usages_for_markdown(payload_data, max(0, md_max_usages))
+        payload_data = _limit_list_field_for_markdown(payload_data, "usages", max(0, md_max_usages))
     if md_max_steps is not None:
-        payload_data = _limit_steps_for_markdown(payload_data, max(0, md_max_steps))
+        payload_data = _limit_list_field_for_markdown(payload_data, "steps", max(0, md_max_steps))
 
     ref_scan = _extract_ref_scan_data(payload_data)
     categories_occ = ref_scan.get("categories_occurrences", {})

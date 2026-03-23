@@ -18,6 +18,7 @@ from prefab_sentinel.unity_assets import (
     iter_references,
     looks_like_guid,
     normalize_guid,
+    relative_to_root,
     resolve_guid_to_asset_name,
     resolve_scope_path,
 )
@@ -72,10 +73,7 @@ class ReferenceResolverMcp:
         return ids
 
     def _relative(self, path: Path) -> str:
-        try:
-            return path.resolve().relative_to(self.project_root).as_posix()
-        except ValueError:
-            return path.resolve().as_posix()
+        return relative_to_root(path, self.project_root)
 
     @staticmethod
     def _normalize_pattern(path_pattern: str) -> str:
@@ -87,10 +85,7 @@ class ReferenceResolverMcp:
         scope_path: Path,
         exclude_patterns: tuple[str, ...],
     ) -> bool:
-        try:
-            rel = path.resolve().relative_to(scope_path.resolve()).as_posix()
-        except ValueError:
-            rel = path.resolve().as_posix()
+        rel = relative_to_root(path, scope_path)
 
         parts = {part.lower() for part in Path(rel).parts}
         if parts & DEFAULT_EXCLUDED_DIR_NAMES:
@@ -176,7 +171,6 @@ class ReferenceResolverMcp:
                 code="REF_BUILTIN",
                 message="Reference points to Unity builtin resource.",
                 data={"guid": normalized_guid, "file_id": file_id, "read_only": True},
-                diagnostics=[],
             )
 
         if not looks_like_guid(normalized_guid):
@@ -186,7 +180,6 @@ class ReferenceResolverMcp:
                 code="REF001",
                 message="GUID must be a 32-character hexadecimal string.",
                 data={"guid": guid, "file_id": file_id, "read_only": True},
-                diagnostics=[],
             )
 
         asset_path = self._guid_map().get(normalized_guid)
@@ -254,7 +247,6 @@ class ReferenceResolverMcp:
                 "validation_note": validation_note,
                 "read_only": True,
             },
-            diagnostics=[],
         )
 
     def scan_broken_references(
@@ -274,7 +266,6 @@ class ReferenceResolverMcp:
                 code="REF404",
                 message="Scope path does not exist.",
                 data={"scope": scope, "read_only": True},
-                diagnostics=[],
             )
 
         ignore_guid_set, invalid_ignore_guids = self._normalize_ignore_guids(ignore_asset_guids)
@@ -289,7 +280,6 @@ class ReferenceResolverMcp:
                     "invalid_ignore_asset_guids": invalid_ignore_guids,
                     "read_only": True,
                 },
-                diagnostics=[],
             )
 
         max_diagnostics = max(0, max_diagnostics)
@@ -513,7 +503,6 @@ class ReferenceResolverMcp:
                     code="REF404",
                     message="Scope path does not exist.",
                     data={"scope": scope, "read_only": True},
-                    diagnostics=[],
                 )
             scan_project_root = self._resolve_scan_project_root(scan_scope_path)
 
@@ -527,7 +516,6 @@ class ReferenceResolverMcp:
                     code="REF001",
                     message="GUID was not found in project meta files.",
                     data={"asset_or_guid": asset_or_guid, "read_only": True},
-                    diagnostics=[],
                 )
         else:
             candidate = resolve_scope_path(asset_or_guid, self.project_root)
@@ -538,7 +526,6 @@ class ReferenceResolverMcp:
                     code="REF404",
                     message="Target asset path does not exist.",
                     data={"asset_or_guid": asset_or_guid, "read_only": True},
-                    diagnostics=[],
                 )
             meta_path = candidate.with_suffix(candidate.suffix + ".meta")
             if not meta_path.exists():
@@ -548,7 +535,6 @@ class ReferenceResolverMcp:
                     code="REF001",
                     message="Target asset has no .meta GUID file.",
                     data={"asset_or_guid": asset_or_guid, "read_only": True},
-                    diagnostics=[],
                 )
             try:
                 guid = extract_meta_guid(meta_path) or ""
@@ -561,7 +547,6 @@ class ReferenceResolverMcp:
                     code="REF001",
                     message="Target asset meta file does not contain a valid GUID.",
                     data={"asset_or_guid": asset_or_guid, "read_only": True},
-                    diagnostics=[],
                 )
             asset_path = candidate
 
@@ -616,5 +601,4 @@ class ReferenceResolverMcp:
                 "usages": usages,
                 "read_only": True,
             },
-            diagnostics=[],
         )

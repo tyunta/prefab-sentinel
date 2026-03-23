@@ -154,7 +154,6 @@ class Phase1Orchestrator:
                 code=f"{code_prefix}_FILE_NOT_FOUND",
                 message=f"Target file does not exist: {target_path}",
                 data={"target_path": target_path, "read_only": True},
-                diagnostics=[],
             )
         try:
             return decode_text_file(path)
@@ -165,7 +164,6 @@ class Phase1Orchestrator:
                 code=f"{code_prefix}_READ_ERROR",
                 message=f"Failed to read target file: {exc}",
                 data={"target_path": target_path, "read_only": True},
-                diagnostics=[],
             )
 
     def _resolve_variant_base(
@@ -224,7 +222,6 @@ class Phase1Orchestrator:
                     f"Use validate refs to check external reference integrity."
                 ),
                 data={"target_path": target_path, "file_type": suffix, "read_only": True},
-                diagnostics=[],
             )
 
         text, is_variant, base_prefab_path, _ = self._resolve_variant_base(
@@ -322,7 +319,6 @@ class Phase1Orchestrator:
                     f"Use validate refs to check external reference integrity."
                 ),
                 data={"target_path": target_path, "file_type": suffix, "read_only": True},
-                diagnostics=[],
             )
 
         text, is_variant, base_prefab_path, chain_diags = self._resolve_variant_base(
@@ -405,7 +401,6 @@ class Phase1Orchestrator:
                     f"(no Renderer components expected)."
                 ),
                 data={"target_path": target_path, "file_type": suffix, "read_only": True},
-                diagnostics=[],
             )
 
         try:
@@ -417,7 +412,6 @@ class Phase1Orchestrator:
                 code="INSPECT_MATERIALS_READ_ERROR",
                 message=f"Failed to inspect materials: {exc}",
                 data={"target_path": target_path, "read_only": True},
-                diagnostics=[],
             )
 
         tree_text = format_materials(result)
@@ -464,7 +458,6 @@ class Phase1Orchestrator:
             code="INSPECT_MATERIALS_RESULT",
             message="inspect.materials completed (read-only).",
             data=data,
-            diagnostics=[],
         )
 
     def inspect_structure(
@@ -685,7 +678,6 @@ class Phase1Orchestrator:
                     "Candidates are heuristic. Review each GUID before adding to an ignore policy."
                 ),
             },
-            diagnostics=[],
         )
 
     def validate_runtime(
@@ -724,7 +716,6 @@ class Phase1Orchestrator:
                         {"step": name, "result": step.to_dict()} for name, step in steps
                     ],
                 },
-                diagnostics=[],
             )
 
         collect_step = self.runtime_validation.collect_unity_console(
@@ -783,7 +774,6 @@ class Phase1Orchestrator:
                 code="POST_SCHEMA_ERROR",
                 message="Postcondition must be an object.",
                 data={"read_only": True, "executed": False},
-                diagnostics=[],
             )
 
         postcondition_type = str(postcondition.get("type", "")).strip()
@@ -794,7 +784,6 @@ class Phase1Orchestrator:
                 code="POST_SCHEMA_ERROR",
                 message="Postcondition type is required.",
                 data={"read_only": True, "executed": False},
-                diagnostics=[],
             )
 
         if postcondition_type == "asset_exists":
@@ -807,7 +796,6 @@ class Phase1Orchestrator:
                     code="POST_SCHEMA_ERROR",
                     message="asset_exists requires exactly one of 'resource' or 'path'.",
                     data={"type": postcondition_type, "read_only": True, "executed": False},
-                    diagnostics=[],
                 )
             if resource_id and resource_id not in resource_ids:
                 return ToolResponse(
@@ -821,7 +809,6 @@ class Phase1Orchestrator:
                         "read_only": True,
                         "executed": False,
                     },
-                    diagnostics=[],
                 )
             return ToolResponse(
                 success=True,
@@ -829,7 +816,6 @@ class Phase1Orchestrator:
                 code="POST_SCHEMA_OK",
                 message="Postcondition schema validated.",
                 data={"type": postcondition_type, "read_only": True, "executed": False},
-                diagnostics=[],
             )
 
         if postcondition_type == "broken_refs":
@@ -841,7 +827,6 @@ class Phase1Orchestrator:
                     code="POST_SCHEMA_ERROR",
                     message="broken_refs requires a non-empty 'scope'.",
                     data={"type": postcondition_type, "read_only": True, "executed": False},
-                    diagnostics=[],
                 )
             expected_count = postcondition.get("expected_count", 0)
             if not isinstance(expected_count, int) or expected_count < 0:
@@ -856,7 +841,6 @@ class Phase1Orchestrator:
                         "read_only": True,
                         "executed": False,
                     },
-                    diagnostics=[],
                 )
             for field_name in ("exclude_patterns", "ignore_asset_guids"):
                 values = postcondition.get(field_name, [])
@@ -874,7 +858,6 @@ class Phase1Orchestrator:
                             "read_only": True,
                             "executed": False,
                         },
-                        diagnostics=[],
                     )
             max_diagnostics = postcondition.get("max_diagnostics", 200)
             if not isinstance(max_diagnostics, int) or max_diagnostics < 0:
@@ -889,7 +872,6 @@ class Phase1Orchestrator:
                         "read_only": True,
                         "executed": False,
                     },
-                    diagnostics=[],
                 )
             return ToolResponse(
                 success=True,
@@ -897,7 +879,6 @@ class Phase1Orchestrator:
                 code="POST_SCHEMA_OK",
                 message="Postcondition schema validated.",
                 data={"type": postcondition_type, "scope": scope, "read_only": True, "executed": False},
-                diagnostics=[],
             )
 
         return ToolResponse(
@@ -910,7 +891,6 @@ class Phase1Orchestrator:
                 "read_only": True,
                 "executed": False,
             },
-            diagnostics=[],
         )
 
     def _evaluate_postcondition(
@@ -942,7 +922,6 @@ class Phase1Orchestrator:
                         "read_only": True,
                         "executed": True,
                     },
-                    diagnostics=[],
                 )
             return ToolResponse(
                 success=True,
@@ -957,7 +936,6 @@ class Phase1Orchestrator:
                     "read_only": True,
                     "executed": True,
                 },
-                diagnostics=[],
             )
 
         scope = str(postcondition.get("scope", "")).strip()
@@ -1159,7 +1137,6 @@ class Phase1Orchestrator:
                     "op_count": total_op_count,
                     "read_only": True,
                 },
-                diagnostics=[],
             )
             steps.append(("confirm_gate", confirm_step))
             return _finalize("patch.apply blocked by confirm gate.", fail_fast=False)

@@ -447,7 +447,6 @@ class SerializedObjectMcp:
                 "diff": preview,
                 "read_only": True,
             },
-            diagnostics=[],
         )
 
     def _unsupported_resource_plan_response(
@@ -474,7 +473,6 @@ class SerializedObjectMcp:
             code="SER_UNSUPPORTED_TARGET",
             message="Resource mode/kind combination is not supported by the current backend.",
             data=data,
-            diagnostics=[],
         )
 
     def _build_unity_bridge_request(
@@ -521,7 +519,6 @@ class SerializedObjectMcp:
                     "read_only": False,
                     "executed": False,
                 },
-                diagnostics=[],
             )
 
         protocol_raw = payload.get("protocol_version", _UNITY_BRIDGE_PROTOCOL_VERSION)
@@ -543,7 +540,6 @@ class SerializedObjectMcp:
                     "read_only": False,
                     "executed": False,
                 },
-                diagnostics=[],
             )
 
         severity_raw = str(payload.get("severity", Severity.ERROR.value))
@@ -607,7 +603,6 @@ class SerializedObjectMcp:
                     "executed": False,
                     "error": self.bridge_command_error,
                 },
-                diagnostics=[],
             )
         if not self.bridge_command:
             return ToolResponse(
@@ -625,7 +620,6 @@ class SerializedObjectMcp:
                     "read_only": False,
                     "executed": False,
                 },
-                diagnostics=[],
             )
         if not self._is_bridge_command_allowed(self.bridge_command):
             return ToolResponse(
@@ -641,7 +635,6 @@ class SerializedObjectMcp:
                     "read_only": False,
                     "executed": False,
                 },
-                diagnostics=[],
             )
 
         request_payload = {
@@ -677,7 +670,6 @@ class SerializedObjectMcp:
                     "read_only": False,
                     "executed": False,
                 },
-                diagnostics=[],
             )
         except OSError as exc:
             return ToolResponse(
@@ -693,7 +685,6 @@ class SerializedObjectMcp:
                     "read_only": False,
                     "executed": False,
                 },
-                diagnostics=[],
             )
 
         if completed.returncode != 0:
@@ -712,7 +703,6 @@ class SerializedObjectMcp:
                     "read_only": False,
                     "executed": False,
                 },
-                diagnostics=[],
             )
 
         try:
@@ -733,7 +723,6 @@ class SerializedObjectMcp:
                     "read_only": False,
                     "executed": False,
                 },
-                diagnostics=[],
             )
 
         return self._parse_bridge_response(payload, target_path=target_path, ops=ops)
@@ -2724,7 +2713,6 @@ class SerializedObjectMcp:
                     "diff": preview,
                     "read_only": True,
                 },
-                diagnostics=[],
             )
         if inferred_kind in {"asset", "material"}:
             diagnostics, preview = self._validate_asset_open_ops(
@@ -2753,7 +2741,6 @@ class SerializedObjectMcp:
                     "diff": preview,
                     "read_only": True,
                 },
-                diagnostics=[],
             )
 
         preview: list[dict[str, Any]] = []
@@ -2839,7 +2826,6 @@ class SerializedObjectMcp:
                 "diff": preview,
                 "read_only": True,
             },
-            diagnostics=[],
         )
 
     def dry_run_resource_plan(
@@ -2890,7 +2876,6 @@ class SerializedObjectMcp:
                     "read_only": False,
                     "executed": False,
                 },
-                diagnostics=[],
             )
         if not target_path.exists():
             return ToolResponse(
@@ -2905,7 +2890,6 @@ class SerializedObjectMcp:
                     "read_only": False,
                     "executed": False,
                 },
-                diagnostics=[],
             )
 
         try:
@@ -2924,7 +2908,6 @@ class SerializedObjectMcp:
                     "executed": False,
                     "error": str(exc),
                 },
-                diagnostics=[],
             )
         except json.JSONDecodeError as exc:
             return ToolResponse(
@@ -2940,7 +2923,6 @@ class SerializedObjectMcp:
                     "executed": False,
                     "error": str(exc),
                 },
-                diagnostics=[],
             )
 
         working = deepcopy(loaded)
@@ -2994,7 +2976,6 @@ class SerializedObjectMcp:
                     "executed": False,
                     "error": str(exc),
                 },
-                diagnostics=[],
             )
 
         return ToolResponse(
@@ -3010,7 +2991,6 @@ class SerializedObjectMcp:
                 "read_only": False,
                 "executed": True,
             },
-            diagnostics=[],
         )
 
     def apply_resource_plan(

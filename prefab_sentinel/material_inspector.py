@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from prefab_sentinel.unity_assets import (
-    REFERENCE_PATTERN,
     SOURCE_PREFAB_PATTERN,
     collect_project_guid_index,
     decode_text_file,
@@ -22,7 +21,6 @@ from prefab_sentinel.unity_assets import (
     resolve_scope_path,
 )
 from prefab_sentinel.unity_yaml_parser import (
-    CLASS_ID_GAMEOBJECT,
     YamlBlock,
     parse_game_objects,
     split_yaml_blocks,

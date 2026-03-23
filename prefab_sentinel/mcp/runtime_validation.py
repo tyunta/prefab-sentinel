@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse, max_severity
-from prefab_sentinel.unity_assets import decode_text_file, find_project_root, resolve_scope_path
+from prefab_sentinel.unity_assets import decode_text_file, find_project_root, relative_to_root, resolve_scope_path
 from prefab_sentinel.wsl_compat import needs_windows_paths, split_unity_command, to_windows_path, to_wsl_path
 
 UNITY_COMMAND_ENV = "UNITYTOOL_UNITY_COMMAND"
@@ -85,10 +85,7 @@ class RuntimeValidationMcp:
         self.project_root = find_project_root(project_root or Path.cwd())
 
     def _relative(self, path: Path) -> str:
-        try:
-            return path.resolve().relative_to(self.project_root).as_posix()
-        except ValueError:
-            return path.resolve().as_posix()
+        return relative_to_root(path, self.project_root)
 
     def _default_runtime_root(self) -> Path:
         configured_root = os.environ.get(UNITY_PROJECT_PATH_ENV, "").strip()
@@ -109,7 +106,6 @@ class RuntimeValidationMcp:
             code=code,
             message=message,
             data={**data, "read_only": True, "executed": False},
-            diagnostics=[],
         )
 
     def _load_runtime_config(self, *, default_project_root: Path) -> tuple[dict[str, Any] | None, ToolResponse | None]:
@@ -130,7 +126,6 @@ class RuntimeValidationMcp:
                     "read_only": True,
                     "executed": False,
                 },
-                diagnostics=[],
             )
 
         timeout_raw = os.environ.get(UNITY_TIMEOUT_SEC_ENV, str(DEFAULT_TIMEOUT_SEC)).strip()
@@ -149,7 +144,6 @@ class RuntimeValidationMcp:
                     "read_only": True,
                     "executed": False,
                 },
-                diagnostics=[],
             )
 
         project_path_raw = os.environ.get(UNITY_PROJECT_PATH_ENV, "").strip()
@@ -165,7 +159,6 @@ class RuntimeValidationMcp:
                     "read_only": True,
                     "executed": False,
                 },
-                diagnostics=[],
             )
 
         execute_method = (
@@ -216,7 +209,6 @@ class RuntimeValidationMcp:
             code="RUN_PROTOCOL_ERROR",
             message=message,
             data={**base_data, "read_only": True, "executed": False},
-            diagnostics=[],
         )
 
     def _parse_runtime_response(
@@ -375,7 +367,6 @@ class RuntimeValidationMcp:
                         "read_only": False,
                         "executed": False,
                     },
-                    diagnostics=[],
                 )
             except OSError as exc:
                 failure_code = self._failure_code(action)
@@ -400,7 +391,6 @@ class RuntimeValidationMcp:
                         "read_only": False,
                         "executed": False,
                     },
-                    diagnostics=[],
                 )
 
             response_error: str | None = None
@@ -440,7 +430,6 @@ class RuntimeValidationMcp:
                             "read_only": False,
                             "executed": True,
                         },
-                        diagnostics=[],
                     )
                 return response
 
@@ -470,7 +459,6 @@ class RuntimeValidationMcp:
                     "read_only": False,
                     "executed": completed.returncode == 0,
                 },
-                diagnostics=[],
             )
 
     def _invoke_via_editor_bridge(
@@ -495,7 +483,6 @@ class RuntimeValidationMcp:
                     "read_only": True,
                     "executed": False,
                 },
-                diagnostics=[],
             )
 
         watch_dir = Path(to_wsl_path(watch_dir_raw))
@@ -515,7 +502,6 @@ class RuntimeValidationMcp:
                     "read_only": True,
                     "executed": False,
                 },
-                diagnostics=[],
             )
 
         request_id = uuid.uuid4().hex
@@ -553,7 +539,6 @@ class RuntimeValidationMcp:
                     "read_only": True,
                     "executed": False,
                 },
-                diagnostics=[],
             )
 
         deadline = time.monotonic() + timeout_sec
@@ -576,7 +561,6 @@ class RuntimeValidationMcp:
                             "read_only": False,
                             "executed": False,
                         },
-                        diagnostics=[],
                     )
                 finally:
                     self._try_delete(request_file)
@@ -614,7 +598,6 @@ class RuntimeValidationMcp:
                 "read_only": False,
                 "executed": False,
             },
-            diagnostics=[],
         )
 
     @staticmethod
@@ -654,7 +637,6 @@ class RuntimeValidationMcp:
                     "read_only": True,
                     "executed": False,
                 },
-                diagnostics=[],
             )
         if scene.suffix.lower() != ".unity":
             return ToolResponse(
@@ -668,7 +650,6 @@ class RuntimeValidationMcp:
                     "read_only": True,
                     "executed": False,
                 },
-                diagnostics=[],
             )
 
         return self._invoke_unity_runtime(
@@ -702,7 +683,6 @@ class RuntimeValidationMcp:
                     "since_timestamp": since_timestamp,
                     "read_only": True,
                 },
-                diagnostics=[],
             )
 
         lines = decode_text_file(log_path).splitlines()
@@ -720,7 +700,6 @@ class RuntimeValidationMcp:
                 "since_timestamp": since_timestamp,
                 "read_only": True,
             },
-            diagnostics=[],
         )
 
     def classify_errors(
@@ -823,7 +802,6 @@ class RuntimeValidationMcp:
                     "allow_warnings": allow_warnings,
                     "read_only": True,
                 },
-                diagnostics=[],
             )
 
         if warning_count > 0 and not allow_warnings:
@@ -839,7 +817,6 @@ class RuntimeValidationMcp:
                     "allow_warnings": allow_warnings,
                     "read_only": True,
                 },
-                diagnostics=[],
             )
 
         return ToolResponse(
@@ -854,5 +831,4 @@ class RuntimeValidationMcp:
                 "allow_warnings": allow_warnings,
                 "read_only": True,
             },
-            diagnostics=[],
         )

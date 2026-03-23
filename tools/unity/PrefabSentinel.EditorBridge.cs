@@ -164,21 +164,7 @@ namespace PrefabSentinel
                 && (header.action == "compile_udonsharp" || header.action == "run_clientsim");
 
             bool isEditorControl = !string.IsNullOrEmpty(header.action)
-                && (header.action == "capture_screenshot"
-                    || header.action == "select_object"
-                    || header.action == "frame_selected"
-                    || header.action == "instantiate_to_scene"
-                    || header.action == "ping_object"
-                    || header.action == "capture_console_logs"
-                    || header.action == "refresh_asset_database"
-                    || header.action == "recompile_scripts"
-                    || header.action == "set_material"
-                    || header.action == "delete_object"
-                    || header.action == "list_children"
-                    || header.action == "list_materials"
-                    || header.action == "camera"
-                    || header.action == "list_roots"
-                    || header.action == "get_material_property");
+                && UnityEditorControlBridge.SupportedActions.Contains(header.action);
 
             if (isRuntime)
             {

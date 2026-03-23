@@ -12,6 +12,7 @@ from prefab_sentinel.unity_assets import (
     decode_text_file,
     find_project_root,
     normalize_guid,
+    relative_to_root,
     resolve_scope_path,
 )
 from prefab_sentinel.unity_yaml_parser import split_yaml_blocks
@@ -65,10 +66,7 @@ class PrefabVariantMcp:
         return self._guid_index
 
     def _relative(self, path: Path) -> str:
-        try:
-            return path.resolve().relative_to(self.project_root).as_posix()
-        except ValueError:
-            return path.resolve().as_posix()
+        return relative_to_root(path, self.project_root)
 
     def _load_variant(self, variant_path: str) -> tuple[Path | None, str | None, ToolResponse | None]:
         path = resolve_scope_path(variant_path, self.project_root)
@@ -82,7 +80,6 @@ class PrefabVariantMcp:
                     code="PVR404",
                     message="Variant path does not exist.",
                     data={"variant_path": variant_path, "read_only": True},
-                    diagnostics=[],
                 ),
             )
         try:
@@ -97,7 +94,6 @@ class PrefabVariantMcp:
                     code="PVR400",
                     message="Variant file could not be decoded as UTF-8/CP932.",
                     data={"variant_path": variant_path, "read_only": True},
-                    diagnostics=[],
                 ),
             )
         return path, text, None
@@ -294,7 +290,6 @@ class PrefabVariantMcp:
                 "overrides": payload,
                 "read_only": True,
             },
-            diagnostics=[],
         )
 
     def compute_effective_values(
@@ -344,7 +339,6 @@ class PrefabVariantMcp:
                 "effective_values": list(effective.values()),
                 "read_only": True,
             },
-            diagnostics=[],
         )
 
     def detect_stale_overrides(self, variant_path: str) -> ToolResponse:
@@ -443,7 +437,6 @@ class PrefabVariantMcp:
             code="PVR_STALE_NONE",
             message="No stale override patterns detected.",
             data={"variant_path": self._relative(path), "stale_count": 0, "read_only": True},
-            diagnostics=[],
         )
 
     # ------------------------------------------------------------------
@@ -614,7 +607,6 @@ class PrefabVariantMcp:
                 code="PVR404",
                 message="Variant path does not exist.",
                 data={"variant_path": variant_path, "read_only": True},
-                diagnostics=[],
             )
 
         try:
@@ -626,7 +618,6 @@ class PrefabVariantMcp:
                 code="PVR_READ_ERROR",
                 message=f"Failed to read variant file: {variant_path}",
                 data={"variant_path": variant_path, "read_only": True},
-                diagnostics=[],
             )
 
         if SOURCE_PREFAB_PATTERN.search(text) is None:
@@ -642,7 +633,6 @@ class PrefabVariantMcp:
                     "values": [],
                     "read_only": True,
                 },
-                diagnostics=[],
             )
 
         result: dict[str, ChainValue] = {}
@@ -732,7 +722,6 @@ class PrefabVariantMcp:
                 "values": values_list,
                 "read_only": True,
             },
-            diagnostics=[],
         )
 
     def _merge_base_values_with_origin(

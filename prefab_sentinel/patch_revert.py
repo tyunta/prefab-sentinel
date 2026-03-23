@@ -182,7 +182,6 @@ def revert_overrides(
                 "variant_path": variant_path,
                 "read_only": True,
             },
-            diagnostics=[],
         )
 
     try:
@@ -197,7 +196,6 @@ def revert_overrides(
                 "variant_path": variant_path,
                 "read_only": True,
             },
-            diagnostics=[],
         )
 
     matches = _find_matches(text, target_file_id, property_path, variant_mcp)
@@ -218,7 +216,6 @@ def revert_overrides(
                 "match_count": 0,
                 "read_only": True,
             },
-            diagnostics=[],
         )
 
     # Resolve chain values to show what the parent value is
@@ -260,7 +257,6 @@ def revert_overrides(
                 "parent_value": parent_value,
                 "read_only": True,
             },
-            diagnostics=[],
         )
 
     if not confirm:
@@ -278,7 +274,6 @@ def revert_overrides(
                 "parent_value": parent_value,
                 "read_only": True,
             },
-            diagnostics=[],
         )
 
     # Confirm mode: remove the matching lines and write back
@@ -302,7 +297,6 @@ def revert_overrides(
                 "read_only": False,
                 "executed": False,
             },
-            diagnostics=[],
         )
 
     return ToolResponse(

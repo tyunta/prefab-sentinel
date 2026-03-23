@@ -545,5 +545,26 @@ class CollectPackageGuidNamesTests(unittest.TestCase):
         self.assertEqual(result, {})
 
 
+class TestRelativeToRoot(unittest.TestCase):
+    """Tests for the relative_to_root() free function."""
+
+    def test_inside_root(self) -> None:
+        from prefab_sentinel.unity_assets import relative_to_root
+
+        root = Path("/project")
+        result = relative_to_root(root / "Assets" / "Foo.prefab", root)
+        self.assertEqual(result, "Assets/Foo.prefab")
+
+    def test_outside_root(self) -> None:
+        from prefab_sentinel.unity_assets import relative_to_root
+
+        root = Path("/project")
+        other = Path("/other/Bar.prefab")
+        result = relative_to_root(other, root)
+        # Falls back to resolved absolute path
+        self.assertTrue(result.endswith("Bar.prefab"))
+        self.assertNotIn("project", result)
+
+
 if __name__ == "__main__":
     unittest.main()

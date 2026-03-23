@@ -211,6 +211,17 @@ def resolve_scope_path(scope: str, project_root: Path) -> Path:
     return resolved
 
 
+def relative_to_root(path: Path, root: Path) -> str:
+    """Return *path* relative to *root* as a POSIX string.
+
+    Falls back to the resolved absolute path when *path* is outside *root*.
+    """
+    try:
+        return path.resolve().relative_to(root).as_posix()
+    except ValueError:
+        return path.resolve().as_posix()
+
+
 def _read_json_file(path: Path) -> dict[str, object] | None:
     """Read a JSON file, returning None on failure or non-object content."""
     try:
