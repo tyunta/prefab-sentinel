@@ -10,6 +10,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from prefab_sentinel.unity_assets import normalize_guid
+
 DOCUMENT_HEADER_PATTERN = re.compile(r"^--- !u!(\d+) &(-?\d+)( stripped)?", re.MULTILINE)
 
 # Well-known Unity class IDs
@@ -231,7 +233,7 @@ def parse_components(blocks: list[YamlBlock]) -> dict[str, ComponentInfo]:
                 continue
             script_match = re.match(r"\s+m_Script:\s*\{.*?guid:\s*([0-9a-fA-F]{32})", line)
             if script_match:
-                script_guid = script_match.group(1).lower()
+                script_guid = normalize_guid(script_match.group(1))
                 continue
         result[block.file_id] = ComponentInfo(
             file_id=block.file_id,

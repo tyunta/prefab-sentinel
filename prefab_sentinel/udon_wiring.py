@@ -10,7 +10,7 @@ import re
 from dataclasses import dataclass
 
 from prefab_sentinel.contracts import Diagnostic, Severity, max_severity
-from prefab_sentinel.unity_assets import REFERENCE_PATTERN
+from prefab_sentinel.unity_assets import REFERENCE_PATTERN, normalize_guid
 from prefab_sentinel.unity_yaml_parser import (
     CLASS_ID_MONOBEHAVIOUR,
     GameObjectInfo,
@@ -107,7 +107,7 @@ def _parse_monobehaviour_fields(block: YamlBlock) -> ComponentWiring | None:
                     value=value,
                     line=line_num,
                     file_id=ref_match.group(1),
-                    guid=(ref_match.group(2) or "").lower(),
+                    guid=normalize_guid(ref_match.group(2) or ""),
                 )
             )
 
@@ -133,7 +133,7 @@ def _parse_monobehaviour_fields(block: YamlBlock) -> ComponentWiring | None:
 
         script_match = re.match(r"\s+m_Script:\s*\{.*?guid:\s*([0-9a-fA-F]{32})", line)
         if script_match:
-            script_guid = script_match.group(1).lower()
+            script_guid = normalize_guid(script_match.group(1))
             if base_indent is None:
                 base_indent = current_indent
             continue
