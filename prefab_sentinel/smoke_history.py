@@ -234,6 +234,78 @@ def _to_bool(value: Any) -> bool | None:
     return None
 
 
+def _check_pct_threshold(
+    actual: float | None,
+    threshold: float | None,
+    metric_name: str,
+    no_data_msg: str,
+) -> str | None:
+    """Return a violation message if *actual* violates *threshold*, else None."""
+    if threshold is None:
+        return None
+    if actual is None:
+        return f"{metric_name} threshold configured but {no_data_msg}"
+    if actual < threshold:
+        return (
+            f"{metric_name} below threshold: {actual:.2f} < {threshold:.2f}"
+        )
+    return None
+
+
+def _check_by_target_breaches(
+    by_target: dict[str, dict[str, Any]],
+    threshold: int | None,
+    metric_key: str,
+    metric_name: str,
+    no_data_msg: str,
+) -> list[str]:
+    """Return violation messages for per-target breach count checks."""
+    if threshold is None:
+        return []
+    if not by_target:
+        return [
+            f"{metric_name} per-target breach threshold configured but {no_data_msg}"
+        ]
+    violations: list[str] = []
+    for target in sorted(by_target):
+        breaches = _to_int(by_target[target].get(metric_key)) or 0
+        if breaches > threshold:
+            violations.append(
+                f"{metric_name} breach threshold exceeded for target "
+                f"'{target}': {breaches} > {threshold}"
+            )
+    return violations
+
+
+def _check_by_target_pct(
+    by_target: dict[str, dict[str, Any]],
+    threshold: float | None,
+    metric_key: str,
+    metric_name: str,
+    no_targets_msg: str,
+    no_target_data_msg: str,
+) -> list[str]:
+    """Return violation messages for per-target coverage pct checks."""
+    if threshold is None:
+        return []
+    if not by_target:
+        return [no_targets_msg]
+    violations: list[str] = []
+    for target in sorted(by_target):
+        pct = _to_float(by_target[target].get(metric_key))
+        if pct is None:
+            violations.append(
+                f"{metric_name} threshold configured but target "
+                f"'{target}' has no {no_target_data_msg}"
+            )
+        elif pct < threshold:
+            violations.append(
+                f"{metric_name} below threshold for target "
+                f"'{target}': {pct:.2f} < {threshold:.2f}"
+            )
+    return violations
+
+
 def _is_smoke_batch_summary(payload: Any) -> bool:
     if not isinstance(payload, dict):
         return False
@@ -965,16 +1037,12 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
             "code mismatch threshold exceeded: "
             f"{code_mismatches} > {args.max_code_mismatches}"
         )
-    if args.min_code_pass_pct is not None:
-        if code_pass_pct is None:
-            violations.append(
-                "code pass percentage threshold configured but no code assertion rows exist"
-            )
-        elif code_pass_pct < args.min_code_pass_pct:
-            violations.append(
-                "code pass percentage below threshold: "
-                f"{code_pass_pct:.2f} < {args.min_code_pass_pct:.2f}"
-            )
+    v = _check_pct_threshold(
+        code_pass_pct, args.min_code_pass_pct,
+        "code pass percentage", "no code assertion rows exist",
+    )
+    if v:
+        violations.append(v)
     if (
         args.max_applied_mismatches is not None
         and applied_mismatches > args.max_applied_mismatches
@@ -983,16 +1051,12 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
             "applied mismatch threshold exceeded: "
             f"{applied_mismatches} > {args.max_applied_mismatches}"
         )
-    if args.min_applied_pass_pct is not None:
-        if applied_pass_pct is None:
-            violations.append(
-                "applied pass percentage threshold configured but no applied assertion rows exist"
-            )
-        elif applied_pass_pct < args.min_applied_pass_pct:
-            violations.append(
-                "applied pass percentage below threshold: "
-                f"{applied_pass_pct:.2f} < {args.min_applied_pass_pct:.2f}"
-            )
+    v = _check_pct_threshold(
+        applied_pass_pct, args.min_applied_pass_pct,
+        "applied pass percentage", "no applied assertion rows exist",
+    )
+    if v:
+        violations.append(v)
     if (
         args.max_observed_timeout_breaches is not None
         and observed_timeout_breaches > args.max_observed_timeout_breaches
@@ -1001,58 +1065,28 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
             "observed timeout breach threshold exceeded: "
             f"{observed_timeout_breaches} > {args.max_observed_timeout_breaches}"
         )
-    if args.min_observed_timeout_coverage_pct is not None:
-        if observed_timeout_coverage_pct is None:
-            violations.append(
-                "observed timeout coverage threshold configured but no duration/timeout rows exist"
-            )
-        elif observed_timeout_coverage_pct < args.min_observed_timeout_coverage_pct:
-            violations.append(
-                "observed timeout coverage below threshold: "
-                f"{observed_timeout_coverage_pct:.2f} < {args.min_observed_timeout_coverage_pct:.2f}"
-            )
-    if args.max_observed_timeout_breaches_per_target is not None:
-        if not observed_timeout_by_target:
-            violations.append(
-                "observed timeout per-target breach threshold configured but no duration/timeout target rows exist"
-            )
-        else:
-            for target in sorted(observed_timeout_by_target):
-                target_metrics = observed_timeout_by_target[target]
-                target_breaches = (
-                    _to_int(target_metrics.get("observed_timeout_breach_count")) or 0
-                )
-                if target_breaches > args.max_observed_timeout_breaches_per_target:
-                    violations.append(
-                        "observed timeout breach threshold exceeded for target "
-                        f"'{target}': {target_breaches} > "
-                        f"{args.max_observed_timeout_breaches_per_target}"
-                    )
-    if args.min_observed_timeout_coverage_pct_per_target is not None:
-        if not observed_timeout_by_target:
-            violations.append(
-                "observed timeout per-target coverage threshold configured but no duration/timeout target rows exist"
-            )
-        else:
-            for target in sorted(observed_timeout_by_target):
-                target_metrics = observed_timeout_by_target[target]
-                target_coverage_pct = _to_float(
-                    target_metrics.get("observed_timeout_coverage_pct")
-                )
-                if target_coverage_pct is None:
-                    violations.append(
-                        "observed timeout coverage threshold configured but target "
-                        f"'{target}' has no duration/timeout rows"
-                    )
-                elif (
-                    target_coverage_pct
-                    < args.min_observed_timeout_coverage_pct_per_target
-                ):
-                    violations.append(
-                        "observed timeout coverage below threshold for target "
-                        f"'{target}': {target_coverage_pct:.2f} < "
-                        f"{args.min_observed_timeout_coverage_pct_per_target:.2f}"
-                    )
+    v = _check_pct_threshold(
+        observed_timeout_coverage_pct, args.min_observed_timeout_coverage_pct,
+        "observed timeout coverage", "no duration/timeout rows exist",
+    )
+    if v:
+        violations.append(v)
+    violations.extend(_check_by_target_breaches(
+        observed_timeout_by_target,
+        args.max_observed_timeout_breaches_per_target,
+        "observed_timeout_breach_count",
+        "observed timeout",
+        "no duration/timeout target rows exist",
+    ))
+    violations.extend(_check_by_target_pct(
+        observed_timeout_by_target,
+        args.min_observed_timeout_coverage_pct_per_target,
+        "observed_timeout_coverage_pct",
+        "observed timeout coverage",
+        "observed timeout per-target coverage threshold configured"
+        " but no duration/timeout target rows exist",
+        "duration/timeout rows",
+    ))
     if (
         args.max_profile_timeout_breaches is not None
         and profile_timeout_breaches > args.max_profile_timeout_breaches
@@ -1061,52 +1095,28 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
             "profile timeout breach threshold exceeded: "
             f"{profile_timeout_breaches} > {args.max_profile_timeout_breaches}"
         )
-    if args.min_profile_timeout_coverage_pct is not None:
-        if profile_timeout_coverage_pct is None:
-            violations.append(
-                "profile timeout coverage threshold configured but no timeout profile duration rows exist"
-            )
-        elif profile_timeout_coverage_pct < args.min_profile_timeout_coverage_pct:
-            violations.append(
-                "profile timeout coverage below threshold: "
-                f"{profile_timeout_coverage_pct:.2f} < {args.min_profile_timeout_coverage_pct:.2f}"
-            )
-    if args.max_profile_timeout_breaches_per_target is not None:
-        if not profile_timeout_by_target:
-            violations.append(
-                "profile timeout per-target breach threshold configured but no timeout profile target rows exist"
-            )
-        for target in sorted(profile_timeout_by_target):
-            target_metrics = profile_timeout_by_target[target]
-            target_breaches = _to_int(target_metrics.get("timeout_breach_count")) or 0
-            if target_breaches > args.max_profile_timeout_breaches_per_target:
-                violations.append(
-                    "profile timeout breach threshold exceeded for target "
-                    f"'{target}': {target_breaches} > {args.max_profile_timeout_breaches_per_target}"
-                )
-    if args.min_profile_timeout_coverage_pct_per_target is not None:
-        if not profile_timeout_by_target:
-            violations.append(
-                "profile timeout per-target coverage threshold configured but no timeout profile target rows exist"
-            )
-        else:
-            for target in sorted(profile_timeout_by_target):
-                target_metrics = profile_timeout_by_target[target]
-                target_coverage_pct = _to_float(target_metrics.get("timeout_coverage_pct"))
-                if target_coverage_pct is None:
-                    violations.append(
-                        "profile timeout coverage threshold configured but target "
-                        f"'{target}' has no timeout profile duration rows"
-                    )
-                elif (
-                    target_coverage_pct
-                    < args.min_profile_timeout_coverage_pct_per_target
-                ):
-                    violations.append(
-                        "profile timeout coverage below threshold for target "
-                        f"'{target}': {target_coverage_pct:.2f} < "
-                        f"{args.min_profile_timeout_coverage_pct_per_target:.2f}"
-                    )
+    v = _check_pct_threshold(
+        profile_timeout_coverage_pct, args.min_profile_timeout_coverage_pct,
+        "profile timeout coverage", "no timeout profile duration rows exist",
+    )
+    if v:
+        violations.append(v)
+    violations.extend(_check_by_target_breaches(
+        profile_timeout_by_target,
+        args.max_profile_timeout_breaches_per_target,
+        "timeout_breach_count",
+        "profile timeout",
+        "no timeout profile target rows exist",
+    ))
+    violations.extend(_check_by_target_pct(
+        profile_timeout_by_target,
+        args.min_profile_timeout_coverage_pct_per_target,
+        "timeout_coverage_pct",
+        "profile timeout coverage",
+        "profile timeout per-target coverage threshold configured"
+        " but no timeout profile target rows exist",
+        "timeout profile duration rows",
+    ))
 
     for message in violations:
         print(f"SMOKE_HISTORY_THRESHOLD_FAILED: {message}", file=sys.stderr)
