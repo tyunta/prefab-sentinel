@@ -2842,6 +2842,17 @@ class SerializedObjectService:
         return adapter.dry_run(self, context)
 
     def apply_and_save(self, target: str, ops: list[dict[str, Any]]) -> ToolResponse:
+        """Apply ops to *target* and persist the result.
+
+        Contract:
+            Expects ops that have already been validated by ``dry_run_patch``.
+            All ops are applied to a working copy; on first failure the file is
+            left unchanged (first-failure-aborts semantics).
+
+        Response fields:
+            ``applied`` – number of ops successfully applied (0 on failure).
+            ``executed`` – ``True`` only when the file has been written to disk.
+        """
         dry_run = self.dry_run_patch(target=target, ops=ops)
         if not dry_run.success:
             return ToolResponse(
@@ -2934,7 +2945,7 @@ class SerializedObjectService:
                 diagnostics.append(
                     Diagnostic(
                         path=str(target_path),
-                        location=f"ops[{index}]",
+                        location=f"ops[{index}] ({op.get('op', '?')})",
                         detail="apply_error",
                         evidence=str(exc),
                     )
