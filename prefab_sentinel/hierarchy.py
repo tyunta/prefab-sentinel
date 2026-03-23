@@ -16,7 +16,8 @@ from prefab_sentinel.unity_yaml_parser import (
     split_yaml_blocks,
 )
 
-# Well-known Unity class names by class_id
+# Unity ClassID reference: https://docs.unity3d.com/Manual/ClassIDReference.html
+# Subset relevant to prefab/scene hierarchy and wiring analysis.
 _CLASS_NAMES: dict[str, str] = {
     "4": "Transform",
     "20": "Camera",

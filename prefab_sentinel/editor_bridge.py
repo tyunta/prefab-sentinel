@@ -26,6 +26,7 @@ from prefab_sentinel.bridge_constants import (
 )
 
 PROTOCOL_VERSION = 1
+# Empirical: sufficient for typical Inspector operations in loaded projects
 DEFAULT_TIMEOUT_SEC = 30
 DEFAULT_POLL_INTERVAL = 1.0
 

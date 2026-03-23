@@ -28,6 +28,7 @@ _CS_FILES = [
 ]
 
 _DEFAULT_EXECUTE_METHOD = "PrefabSentinel.UnityIntegrationTests.RunAll"
+# 10x editor bridge timeout: batchmode includes domain reload and import
 _DEFAULT_TIMEOUT_SEC = 300
 
 
