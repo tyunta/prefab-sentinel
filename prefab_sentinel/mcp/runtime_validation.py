@@ -12,21 +12,22 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from prefab_sentinel.bridge_constants import (
+    BRIDGE_MODE_ENV,
+    BRIDGE_WATCH_DIR_ENV,
+    UNITY_COMMAND_ENV,
+    UNITY_LOG_FILE_ENV,
+    UNITY_PROJECT_PATH_ENV,
+    UNITY_TIMEOUT_SEC_ENV,
+)
 from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse, max_severity
 from prefab_sentinel.unity_assets import decode_text_file, find_project_root, relative_to_root, resolve_scope_path
 from prefab_sentinel.wsl_compat import needs_windows_paths, split_unity_command, to_windows_path, to_wsl_path
 
-UNITY_COMMAND_ENV = "UNITYTOOL_UNITY_COMMAND"
-UNITY_PROJECT_PATH_ENV = "UNITYTOOL_UNITY_PROJECT_PATH"
 UNITY_RUNTIME_EXECUTE_METHOD_ENV = "UNITYTOOL_RUNTIME_EXECUTE_METHOD"
-UNITY_TIMEOUT_SEC_ENV = "UNITYTOOL_UNITY_TIMEOUT_SEC"
-UNITY_LOG_FILE_ENV = "UNITYTOOL_UNITY_LOG_FILE"
-
 DEFAULT_RUNTIME_EXECUTE_METHOD = "PrefabSentinel.UnityRuntimeValidationBridge.RunFromJson"
 DEFAULT_TIMEOUT_SEC = 300
 RUNTIME_PROTOCOL_VERSION = 1
-BRIDGE_MODE_ENV = "UNITYTOOL_BRIDGE_MODE"
-BRIDGE_WATCH_DIR_ENV = "UNITYTOOL_BRIDGE_WATCH_DIR"
 _DEFAULT_EDITOR_POLL_INTERVAL = 1.0
 
 _LOG_PATTERNS: tuple[tuple[str, Severity, re.Pattern[str]], ...] = (

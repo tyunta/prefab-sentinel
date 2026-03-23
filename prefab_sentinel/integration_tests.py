@@ -19,9 +19,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from prefab_sentinel.bridge_constants import VALID_SEVERITIES
 from prefab_sentinel.wsl_compat import needs_windows_paths, split_unity_command, to_windows_path
-
-VALID_SEVERITIES = frozenset({"info", "warning", "error", "critical"})
 
 _CS_FILES = [
     "PrefabSentinel.UnityPatchBridge.cs",
@@ -30,9 +29,6 @@ _CS_FILES = [
 
 _DEFAULT_EXECUTE_METHOD = "PrefabSentinel.UnityIntegrationTests.RunAll"
 _DEFAULT_TIMEOUT_SEC = 300
-
-# env var names (shared with bridge_smoke / smoke_batch)
-UNITY_COMMAND_ENV = "UNITYTOOL_UNITY_COMMAND"
 
 
 def _project_root() -> Path:

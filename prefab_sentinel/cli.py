@@ -7,8 +7,18 @@ import re
 import sys
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+if TYPE_CHECKING:
+    from prefab_sentinel.orchestrator import Phase1Orchestrator
+
+from prefab_sentinel.bridge_constants import (
+    UNITY_COMMAND_ENV,
+    UNITY_EXECUTE_METHOD_ENV,
+    UNITY_LOG_FILE_ENV,
+    UNITY_PROJECT_PATH_ENV,
+    UNITY_TIMEOUT_SEC_ENV,
+)
 from prefab_sentinel.smoke_batch import (
     add_arguments as add_smoke_batch_arguments,
     run_from_args as run_smoke_batch_from_args,
@@ -17,14 +27,6 @@ from prefab_sentinel.smoke_history import (
     add_arguments as add_smoke_history_arguments,
     run_from_args as run_smoke_history_from_args,
 )
-
-# ENV constant names used in parser help strings.
-# Inlined here to avoid eager import of bridge_smoke at module level.
-UNITY_COMMAND_ENV = "UNITYTOOL_UNITY_COMMAND"
-UNITY_PROJECT_PATH_ENV = "UNITYTOOL_UNITY_PROJECT_PATH"
-UNITY_EXECUTE_METHOD_ENV = "UNITYTOOL_UNITY_EXECUTE_METHOD"
-UNITY_TIMEOUT_SEC_ENV = "UNITYTOOL_UNITY_TIMEOUT_SEC"
-UNITY_LOG_FILE_ENV = "UNITYTOOL_UNITY_LOG_FILE"
 
 _DEFAULT_PLAN_SIGNING_KEY_ENV = "UNITYTOOL_PLAN_SIGNING_KEY"
 _DEFAULT_IGNORE_GUID_BRANCH_ALLOWLIST = ("main", "release/*")

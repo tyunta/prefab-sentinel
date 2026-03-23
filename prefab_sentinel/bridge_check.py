@@ -10,16 +10,15 @@ import os
 from pathlib import Path
 from typing import Any
 
-from prefab_sentinel.bridge_smoke import (
+from prefab_sentinel.bridge_constants import (
+    BRIDGE_MODE_ENV,
+    BRIDGE_WATCH_DIR_ENV,
     UNITY_COMMAND_ENV,
     UNITY_PROJECT_PATH_ENV,
 )
 from prefab_sentinel.wsl_compat import is_wsl, to_wsl_path
 
-# Environment variable names not defined in bridge_smoke.
 PATCH_BRIDGE_ENV = "UNITYTOOL_PATCH_BRIDGE"
-BRIDGE_MODE_ENV = "UNITYTOOL_BRIDGE_MODE"
-BRIDGE_WATCH_DIR_ENV = "UNITYTOOL_BRIDGE_WATCH_DIR"
 
 # Expected C# bridge files under Assets/Editor/.
 _CS_PATCH_BRIDGE = "PrefabSentinel.UnityPatchBridge.cs"

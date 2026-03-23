@@ -6,18 +6,19 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from prefab_sentinel.bridge_constants import (
+    UNITY_COMMAND_ENV,
+    UNITY_EXECUTE_METHOD_ENV,
+    UNITY_LOG_FILE_ENV,
+    UNITY_PROJECT_PATH_ENV,
+    UNITY_TIMEOUT_SEC_ENV,
+    VALID_SEVERITIES,
+)
 from prefab_sentinel.patch_plan import (
     build_bridge_request as _build_bridge_request_impl,
     count_plan_ops,
     load_patch_plan as _load_patch_plan_impl,
 )
-
-VALID_SEVERITIES = {"info", "warning", "error", "critical"}
-UNITY_COMMAND_ENV = "UNITYTOOL_UNITY_COMMAND"
-UNITY_PROJECT_PATH_ENV = "UNITYTOOL_UNITY_PROJECT_PATH"
-UNITY_EXECUTE_METHOD_ENV = "UNITYTOOL_UNITY_EXECUTE_METHOD"
-UNITY_TIMEOUT_SEC_ENV = "UNITYTOOL_UNITY_TIMEOUT_SEC"
-UNITY_LOG_FILE_ENV = "UNITYTOOL_UNITY_LOG_FILE"
 
 
 def load_patch_plan(path: Path) -> dict[str, Any]:
