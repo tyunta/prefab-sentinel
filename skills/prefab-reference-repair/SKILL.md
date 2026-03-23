@@ -1,6 +1,6 @@
 ---
 name: prefab-reference-repair
-description: Broken reference repair workflow using reference-resolver MCP and where-used inspection, with ignore-guid policy and decision_required gating. Use when validate refs reports missing GUIDs or fileID errors.
+description: Broken reference repair workflow using reference-resolver service and where-used inspection, with ignore-guid policy and decision_required gating. Use when validate refs reports missing GUIDs or fileID errors.
 ---
 
 # Prefab Reference Repair

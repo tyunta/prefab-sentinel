@@ -42,7 +42,7 @@ def _warning_response(code: str = "WARN", data: dict | None = None) -> ToolRespo
 
 
 def _make_runtime_mock() -> MagicMock:
-    """Create a RuntimeValidationMcp mock with assert_no_critical_errors pre-configured.
+    """Create a RuntimeValidationService mock with assert_no_critical_errors pre-configured.
 
     MagicMock treats any attribute starting with 'assert' as an assertion method,
     so we must explicitly assign it before first access.

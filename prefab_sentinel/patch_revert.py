@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse
-from prefab_sentinel.mcp.prefab_variant import OverrideEntry, PrefabVariantMcp
+from prefab_sentinel.services.prefab_variant import OverrideEntry, PrefabVariantService
 from prefab_sentinel.unity_assets import (
     decode_text_file,
     find_project_root,
@@ -104,10 +104,10 @@ def _find_matches(
     text: str,
     target_file_id: str,
     property_path: str,
-    variant_mcp: PrefabVariantMcp,
+    variant_svc: PrefabVariantService,
 ) -> list[RevertMatch]:
     """Find all OverrideEntry instances matching the given target + propertyPath."""
-    entries = variant_mcp._parse_overrides(text)
+    entries = variant_svc._parse_overrides(text)
     lines = text.splitlines()
     line_ranges = _find_modification_line_ranges(lines, entries)
 
@@ -169,7 +169,7 @@ def revert_overrides(
         Optional project root override.
     """
     root = find_project_root(project_root or Path.cwd())
-    variant_mcp = PrefabVariantMcp(project_root=root)
+    variant_svc = PrefabVariantService(project_root=root)
 
     resolved_path = resolve_scope_path(variant_path, root)
     if not resolved_path.exists():
@@ -198,7 +198,7 @@ def revert_overrides(
             },
         )
 
-    matches = _find_matches(text, target_file_id, property_path, variant_mcp)
+    matches = _find_matches(text, target_file_id, property_path, variant_svc)
 
     if not matches:
         return ToolResponse(
@@ -219,7 +219,7 @@ def revert_overrides(
         )
 
     # Resolve chain values to show what the parent value is
-    chain_values = variant_mcp.resolve_chain_values(variant_path)
+    chain_values = variant_svc.resolve_chain_values(variant_path)
     parent_key = f"{target_file_id}:{property_path}"
     parent_value = chain_values.get(parent_key)
 

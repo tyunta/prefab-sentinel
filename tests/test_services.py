@@ -10,16 +10,16 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from prefab_sentinel.mcp.prefab_variant import PrefabVariantMcp
-from prefab_sentinel.mcp.reference_resolver import ReferenceResolverMcp
-from prefab_sentinel.mcp.runtime_validation import RuntimeValidationMcp
-from prefab_sentinel.mcp.serialized_object import SerializedObjectMcp
 from prefab_sentinel.orchestrator import Phase1Orchestrator
 from prefab_sentinel.patch_plan import (
     compute_patch_plan_hmac_sha256,
     compute_patch_plan_sha256,
     load_patch_plan,
 )
+from prefab_sentinel.services.prefab_variant import PrefabVariantService
+from prefab_sentinel.services.reference_resolver import ReferenceResolverService
+from prefab_sentinel.services.runtime_validation import RuntimeValidationService
+from prefab_sentinel.services.serialized_object import SerializedObjectService
 from tests.bridge_test_helpers import write_fake_runtime_runner, write_file
 
 BASE_GUID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -83,14 +83,14 @@ guid: {VARIANT_GUID}
     )
 
 
-class ReferenceResolverMcpTests(unittest.TestCase):
+class ReferenceResolverServiceTests(unittest.TestCase):
     def test_scan_broken_references_detects_missing_asset_and_local_id(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             _create_sample_project(root)
-            mcp = ReferenceResolverMcp(project_root=root)
+            svc = ReferenceResolverService(project_root=root)
 
-            response = mcp.scan_broken_references("Assets")
+            response = svc.scan_broken_references("Assets")
 
             self.assertFalse(response.success)
             self.assertEqual("REF_SCAN_BROKEN", response.code)
@@ -111,9 +111,9 @@ class ReferenceResolverMcpTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             _create_sample_project(root)
-            mcp = ReferenceResolverMcp(project_root=root)
+            svc = ReferenceResolverService(project_root=root)
 
-            response = mcp.scan_broken_references(
+            response = svc.scan_broken_references(
                 "Assets",
                 include_diagnostics=True,
                 max_diagnostics=1,
@@ -132,9 +132,9 @@ class ReferenceResolverMcpTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             _create_sample_project(root)
-            mcp = ReferenceResolverMcp(project_root=root)
+            svc = ReferenceResolverService(project_root=root)
 
-            response = mcp.scan_broken_references(
+            response = svc.scan_broken_references(
                 "Assets",
                 ignore_asset_guids=(MISSING_GUID,),
             )
@@ -152,9 +152,9 @@ class ReferenceResolverMcpTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             _create_sample_project(root)
-            mcp = ReferenceResolverMcp(project_root=root)
+            svc = ReferenceResolverService(project_root=root)
 
-            response = mcp.scan_broken_references(
+            response = svc.scan_broken_references(
                 "Assets",
                 ignore_asset_guids=("not-a-guid",),
             )
@@ -167,13 +167,13 @@ class ReferenceResolverMcpTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             _create_sample_project(root)
-            mcp = ReferenceResolverMcp(project_root=root)
+            svc = ReferenceResolverService(project_root=root)
 
-            resolved = mcp.resolve_reference(BASE_GUID, "100100000")
+            resolved = svc.resolve_reference(BASE_GUID, "100100000")
             self.assertTrue(resolved.success)
             self.assertEqual("REF_RESOLVED", resolved.code)
 
-            usage = mcp.where_used(BASE_GUID, scope="Assets", max_usages=1)
+            usage = svc.where_used(BASE_GUID, scope="Assets", max_usages=1)
             self.assertTrue(usage.success)
             self.assertEqual("Assets", usage.data["scope"])
             self.assertEqual(1, usage.data["returned_usages"])
@@ -184,9 +184,9 @@ class ReferenceResolverMcpTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             _create_sample_project(root)
-            mcp = ReferenceResolverMcp(project_root=root)
+            svc = ReferenceResolverService(project_root=root)
 
-            usage = mcp.where_used(BASE_GUID, scope="Assets/NotFound")
+            usage = svc.where_used(BASE_GUID, scope="Assets/NotFound")
 
             self.assertFalse(usage.success)
             self.assertEqual("REF404", usage.code)
@@ -224,8 +224,8 @@ guid: {CROSS_PROJECT_GUID}
 """,
             )
 
-            mcp = ReferenceResolverMcp(project_root=repo_root)
-            response = mcp.scan_broken_references("sample/avatar/Assets")
+            svc = ReferenceResolverService(project_root=repo_root)
+            response = svc.scan_broken_references("sample/avatar/Assets")
 
             self.assertFalse(response.success)
             self.assertEqual(1, response.data["categories"]["missing_asset"])
@@ -243,31 +243,31 @@ PrefabInstance:
   m_SourcePrefab: {{fileID: 100100000, guid: {BASE_GUID}, type: 3}}
 """,
             )
-            mcp = ReferenceResolverMcp(project_root=root)
+            svc = ReferenceResolverService(project_root=root)
 
-            usage = mcp.where_used(BASE_GUID)
+            usage = svc.where_used(BASE_GUID)
             paths = [item["path"] for item in usage.data["usages"]]
 
             self.assertTrue(paths)
             self.assertFalse(any(path.startswith("Library/") for path in paths))
 
 
-class PrefabVariantMcpTests(unittest.TestCase):
+class PrefabVariantServiceTests(unittest.TestCase):
     def test_detect_stale_and_compute_effective_values(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             _create_sample_project(root)
-            mcp = PrefabVariantMcp(project_root=root)
+            svc = PrefabVariantService(project_root=root)
 
-            chain = mcp.resolve_prefab_chain("Assets/Variant.prefab")
+            chain = svc.resolve_prefab_chain("Assets/Variant.prefab")
             self.assertTrue(chain.success)
             self.assertEqual("PVR_CHAIN_OK", chain.code)
             self.assertGreaterEqual(len(chain.data["chain"]), 2)
 
-            overrides = mcp.list_overrides("Assets/Variant.prefab")
+            overrides = svc.list_overrides("Assets/Variant.prefab")
             self.assertEqual(5, overrides.data["override_count"])
 
-            effective = mcp.compute_effective_values("Assets/Variant.prefab")
+            effective = svc.compute_effective_values("Assets/Variant.prefab")
             dup_values = [
                 item
                 for item in effective.data["effective_values"]
@@ -276,7 +276,7 @@ class PrefabVariantMcpTests(unittest.TestCase):
             self.assertEqual(1, len(dup_values))
             self.assertEqual("second", dup_values[0]["value"])
 
-            stale = mcp.detect_stale_overrides("Assets/Variant.prefab")
+            stale = svc.detect_stale_overrides("Assets/Variant.prefab")
             self.assertFalse(stale.success)
             self.assertEqual("PVR001", stale.code)
             details = [diag.detail for diag in stale.diagnostics]
@@ -284,15 +284,15 @@ class PrefabVariantMcpTests(unittest.TestCase):
             self.assertIn("array_size_mismatch", details)
 
 
-class RuntimeValidationMcpTests(unittest.TestCase):
+class RuntimeValidationServiceTests(unittest.TestCase):
     def test_compile_udonsharp_returns_skip_without_runtime_env(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             _create_sample_project(root)
-            mcp = RuntimeValidationMcp(project_root=root)
+            svc = RuntimeValidationService(project_root=root)
 
             with patch.dict(os.environ, {}, clear=True):
-                response = mcp.compile_udonsharp()
+                response = svc.compile_udonsharp()
 
             self.assertTrue(response.success)
             self.assertEqual("RUN_COMPILE_SKIPPED", response.code)
@@ -303,7 +303,7 @@ class RuntimeValidationMcpTests(unittest.TestCase):
             _create_sample_project(root)
             runner = root / "unity_runner.py"
             write_fake_runtime_runner(runner)
-            mcp = RuntimeValidationMcp(project_root=root)
+            svc = RuntimeValidationService(project_root=root)
 
             with patch.dict(
                 os.environ,
@@ -313,7 +313,7 @@ class RuntimeValidationMcpTests(unittest.TestCase):
                 },
                 clear=False,
             ):
-                response = mcp.compile_udonsharp()
+                response = svc.compile_udonsharp()
 
             self.assertTrue(response.success)
             self.assertEqual("RUN_COMPILE_OK", response.code)
@@ -324,9 +324,9 @@ class RuntimeValidationMcpTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             _create_sample_project(root)
-            mcp = RuntimeValidationMcp(project_root=root)
+            svc = RuntimeValidationService(project_root=root)
 
-            response = mcp.run_clientsim("Assets/MissingScene.unity", "default")
+            response = svc.run_clientsim("Assets/MissingScene.unity", "default")
 
             self.assertFalse(response.success)
             self.assertEqual("RUN002", response.code)
@@ -345,7 +345,7 @@ GameObject:
             )
             runner = root / "unity_runner.py"
             write_fake_runtime_runner(runner)
-            mcp = RuntimeValidationMcp(project_root=root)
+            svc = RuntimeValidationService(project_root=root)
 
             with patch.dict(
                 os.environ,
@@ -355,7 +355,7 @@ GameObject:
                 },
                 clear=False,
             ):
-                response = mcp.run_clientsim("Assets/Scenes/Smoke.unity", "default")
+                response = svc.run_clientsim("Assets/Scenes/Smoke.unity", "default")
 
             self.assertTrue(response.success)
             self.assertEqual("RUN_CLIENTSIM_OK", response.code)
@@ -364,8 +364,8 @@ GameObject:
             self.assertEqual(".", response.data["project_root"])
 
     def test_classify_errors_detects_known_categories(self) -> None:
-        mcp = RuntimeValidationMcp(project_root=Path.cwd())
-        response = mcp.classify_errors(
+        svc = RuntimeValidationService(project_root=Path.cwd())
+        response = svc.classify_errors(
             [
                 "Broken PPtr in file",
                 "NullReferenceException in UdonBehaviour",
@@ -453,7 +453,7 @@ GameObject:
             self.assertIn("RUN_ASSERT_OK", step_codes)
 
 
-class SerializedObjectMcpTests(unittest.TestCase):
+class SerializedObjectServiceTests(unittest.TestCase):
     def test_load_patch_plan_normalizes_v2_resources(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "patch.json"
@@ -536,8 +536,8 @@ class SerializedObjectMcpTests(unittest.TestCase):
             self.assertEqual(expected, digest)
 
     def test_dry_run_patch_validates_plan_and_returns_preview(self) -> None:
-        mcp = SerializedObjectMcp()
-        response = mcp.dry_run_patch(
+        svc = SerializedObjectService()
+        response = svc.dry_run_patch(
             target="Assets/Variant.prefab",
             ops=[
                 {
@@ -561,8 +561,8 @@ class SerializedObjectMcpTests(unittest.TestCase):
         self.assertEqual(2, len(response.data["diff"]))
 
     def test_dry_run_patch_returns_schema_error(self) -> None:
-        mcp = SerializedObjectMcp()
-        response = mcp.dry_run_patch(
+        svc = SerializedObjectService()
+        response = svc.dry_run_patch(
             target="Assets/Variant.prefab",
             ops=[{"op": "set", "component": "", "path": "x"}],
         )
@@ -574,8 +574,8 @@ class SerializedObjectMcpTests(unittest.TestCase):
     def test_dry_run_patch_warns_on_unresolved_before(self) -> None:
         from prefab_sentinel.contracts import Severity
 
-        mcp = SerializedObjectMcp()
-        response = mcp.dry_run_patch(
+        svc = SerializedObjectService()
+        response = svc.dry_run_patch(
             target="Assets/Variant.prefab",
             ops=[
                 {
@@ -597,8 +597,8 @@ class SerializedObjectMcpTests(unittest.TestCase):
         """insert_array_element with path missing .Array.data should fail."""
         from prefab_sentinel.contracts import Severity
 
-        mcp = SerializedObjectMcp()
-        response = mcp.dry_run_patch(
+        svc = SerializedObjectService()
+        response = svc.dry_run_patch(
             target="Assets/Variant.prefab",
             ops=[
                 {
@@ -619,8 +619,8 @@ class SerializedObjectMcpTests(unittest.TestCase):
 
     def test_dry_run_array_op_with_suffix(self) -> None:
         """insert_array_element with correct .Array.data path should pass validation."""
-        mcp = SerializedObjectMcp()
-        response = mcp.dry_run_patch(
+        svc = SerializedObjectService()
+        response = svc.dry_run_patch(
             target="Assets/Variant.prefab",
             ops=[
                 {
@@ -640,8 +640,8 @@ class SerializedObjectMcpTests(unittest.TestCase):
         """remove_array_element with path missing .Array.data should fail."""
         from prefab_sentinel.contracts import Severity
 
-        mcp = SerializedObjectMcp()
-        response = mcp.dry_run_patch(
+        svc = SerializedObjectService()
+        response = svc.dry_run_patch(
             target="Assets/Variant.prefab",
             ops=[
                 {
@@ -663,8 +663,8 @@ class SerializedObjectMcpTests(unittest.TestCase):
         """add_component in open-mode patch should give a helpful create-mode message."""
         from prefab_sentinel.contracts import Severity
 
-        mcp = SerializedObjectMcp()
-        response = mcp.dry_run_patch(
+        svc = SerializedObjectService()
+        response = svc.dry_run_patch(
             target="Assets/Variant.prefab",
             ops=[
                 {
@@ -684,8 +684,8 @@ class SerializedObjectMcpTests(unittest.TestCase):
         """Truly unknown op should give generic error."""
         from prefab_sentinel.contracts import Severity
 
-        mcp = SerializedObjectMcp()
-        response = mcp.dry_run_patch(
+        svc = SerializedObjectService()
+        response = svc.dry_run_patch(
             target="Assets/Variant.prefab",
             ops=[
                 {
@@ -704,8 +704,8 @@ class SerializedObjectMcpTests(unittest.TestCase):
         """set op with handle-like value should produce WARNING."""
         from prefab_sentinel.contracts import Severity
 
-        mcp = SerializedObjectMcp()
-        response = mcp.dry_run_patch(
+        svc = SerializedObjectService()
+        response = svc.dry_run_patch(
             target="Assets/Variant.prefab",
             ops=[
                 {
@@ -727,8 +727,8 @@ class SerializedObjectMcpTests(unittest.TestCase):
         """set op with go_ prefixed value should produce WARNING."""
         from prefab_sentinel.contracts import Severity
 
-        mcp = SerializedObjectMcp()
-        response = mcp.dry_run_patch(
+        svc = SerializedObjectService()
+        response = svc.dry_run_patch(
             target="Assets/Variant.prefab",
             ops=[
                 {
@@ -746,8 +746,8 @@ class SerializedObjectMcpTests(unittest.TestCase):
         self.assertIn("handle_in_value", diag_details)
 
     def test_dry_run_patch_supports_material_asset_root_mutation_ops(self) -> None:
-        mcp = SerializedObjectMcp()
-        response = mcp.dry_run_patch(
+        svc = SerializedObjectService()
+        response = svc.dry_run_patch(
             target="Assets/Generated/Material.mat",
             ops=[
                 {
@@ -764,8 +764,8 @@ class SerializedObjectMcpTests(unittest.TestCase):
         self.assertEqual(1, len(response.data["diff"]))
 
     def test_dry_run_resource_plan_supports_prefab_create_mode(self) -> None:
-        mcp = SerializedObjectMcp()
-        response = mcp.dry_run_resource_plan(
+        svc = SerializedObjectService()
+        response = svc.dry_run_resource_plan(
             resource={
                 "id": "prefab",
                 "kind": "prefab",
@@ -784,8 +784,8 @@ class SerializedObjectMcpTests(unittest.TestCase):
         self.assertEqual(2, len(response.data["diff"]))
 
     def test_dry_run_resource_plan_supports_prefab_hierarchy_ops(self) -> None:
-        mcp = SerializedObjectMcp()
-        response = mcp.dry_run_resource_plan(
+        svc = SerializedObjectService()
+        response = svc.dry_run_resource_plan(
             resource={
                 "id": "prefab",
                 "kind": "prefab",
@@ -814,8 +814,8 @@ class SerializedObjectMcpTests(unittest.TestCase):
         self.assertEqual(4, len(response.data["diff"]))
 
     def test_dry_run_resource_plan_supports_prefab_component_ops(self) -> None:
-        mcp = SerializedObjectMcp()
-        response = mcp.dry_run_resource_plan(
+        svc = SerializedObjectService()
+        response = svc.dry_run_resource_plan(
             resource={
                 "id": "prefab",
                 "kind": "prefab",
@@ -852,8 +852,8 @@ class SerializedObjectMcpTests(unittest.TestCase):
         self.assertEqual(6, len(response.data["diff"]))
 
     def test_dry_run_resource_plan_supports_prefab_component_mutation_ops(self) -> None:
-        mcp = SerializedObjectMcp()
-        response = mcp.dry_run_resource_plan(
+        svc = SerializedObjectService()
+        response = svc.dry_run_resource_plan(
             resource={
                 "id": "prefab",
                 "kind": "prefab",
@@ -890,8 +890,8 @@ class SerializedObjectMcpTests(unittest.TestCase):
         self.assertEqual(5, len(response.data["diff"]))
 
     def test_dry_run_resource_plan_supports_material_create_mode(self) -> None:
-        mcp = SerializedObjectMcp()
-        response = mcp.dry_run_resource_plan(
+        svc = SerializedObjectService()
+        response = svc.dry_run_resource_plan(
             resource={
                 "id": "material",
                 "kind": "material",
@@ -919,8 +919,8 @@ class SerializedObjectMcpTests(unittest.TestCase):
         self.assertEqual(3, len(response.data["diff"]))
 
     def test_dry_run_resource_plan_supports_scriptable_object_create_mode(self) -> None:
-        mcp = SerializedObjectMcp()
-        response = mcp.dry_run_resource_plan(
+        svc = SerializedObjectService()
+        response = svc.dry_run_resource_plan(
             resource={
                 "id": "data",
                 "kind": "asset",
@@ -948,8 +948,8 @@ class SerializedObjectMcpTests(unittest.TestCase):
         self.assertEqual(3, len(response.data["diff"]))
 
     def test_dry_run_resource_plan_supports_scene_create_mode(self) -> None:
-        mcp = SerializedObjectMcp()
-        response = mcp.dry_run_resource_plan(
+        svc = SerializedObjectService()
+        response = svc.dry_run_resource_plan(
             resource={
                 "id": "scene",
                 "kind": "scene",
@@ -985,8 +985,8 @@ class SerializedObjectMcpTests(unittest.TestCase):
         self.assertEqual(5, len(response.data["diff"]))
 
     def test_dry_run_resource_plan_supports_scene_open_mode(self) -> None:
-        mcp = SerializedObjectMcp()
-        response = mcp.dry_run_resource_plan(
+        svc = SerializedObjectService()
+        response = svc.dry_run_resource_plan(
             resource={
                 "id": "scene",
                 "kind": "scene",
@@ -1010,8 +1010,8 @@ class SerializedObjectMcpTests(unittest.TestCase):
         self.assertEqual(3, len(response.data["diff"]))
 
     def test_dry_run_resource_plan_rejects_non_prefab_target_for_create_mode(self) -> None:
-        mcp = SerializedObjectMcp()
-        response = mcp.dry_run_resource_plan(
+        svc = SerializedObjectService()
+        response = svc.dry_run_resource_plan(
             resource={
                 "id": "prefab",
                 "kind": "prefab",
@@ -1029,8 +1029,8 @@ class SerializedObjectMcpTests(unittest.TestCase):
         self.assertTrue(response.diagnostics)
 
     def test_dry_run_resource_plan_rejects_material_create_without_shader(self) -> None:
-        mcp = SerializedObjectMcp()
-        response = mcp.dry_run_resource_plan(
+        svc = SerializedObjectService()
+        response = svc.dry_run_resource_plan(
             resource={
                 "id": "material",
                 "kind": "material",
@@ -1048,8 +1048,8 @@ class SerializedObjectMcpTests(unittest.TestCase):
         self.assertTrue(response.diagnostics)
 
     def test_dry_run_resource_plan_rejects_scene_instantiate_prefab_without_prefab(self) -> None:
-        mcp = SerializedObjectMcp()
-        response = mcp.dry_run_resource_plan(
+        svc = SerializedObjectService()
+        response = svc.dry_run_resource_plan(
             resource={
                 "id": "scene",
                 "kind": "scene",
@@ -1072,8 +1072,8 @@ class SerializedObjectMcpTests(unittest.TestCase):
         self.assertTrue(response.diagnostics)
 
     def test_dry_run_resource_plan_rejects_wrong_handle_kind_for_component_op(self) -> None:
-        mcp = SerializedObjectMcp()
-        response = mcp.dry_run_resource_plan(
+        svc = SerializedObjectService()
+        response = svc.dry_run_resource_plan(
             resource={
                 "id": "prefab",
                 "kind": "prefab",
@@ -1092,8 +1092,8 @@ class SerializedObjectMcpTests(unittest.TestCase):
         self.assertTrue(response.diagnostics)
 
     def test_dry_run_resource_plan_rejects_unknown_handle_in_prefab_hierarchy_ops(self) -> None:
-        mcp = SerializedObjectMcp()
-        response = mcp.dry_run_resource_plan(
+        svc = SerializedObjectService()
+        response = svc.dry_run_resource_plan(
             resource={
                 "id": "prefab",
                 "kind": "prefab",
@@ -1118,8 +1118,8 @@ class SerializedObjectMcpTests(unittest.TestCase):
 
     def test_create_plan_handle_value_in_set(self) -> None:
         """set op with {"handle": "c_comp"} in create mode should pass dry-run."""
-        mcp = SerializedObjectMcp()
-        response = mcp.dry_run_resource_plan(
+        svc = SerializedObjectService()
+        response = svc.dry_run_resource_plan(
             resource={
                 "id": "prefab",
                 "kind": "prefab",
@@ -1149,8 +1149,8 @@ class SerializedObjectMcpTests(unittest.TestCase):
 
     def test_create_plan_unknown_handle_in_set(self) -> None:
         """set op with {"handle": "missing"} should produce schema_error."""
-        mcp = SerializedObjectMcp()
-        response = mcp.dry_run_resource_plan(
+        svc = SerializedObjectService()
+        response = svc.dry_run_resource_plan(
             resource={
                 "id": "prefab",
                 "kind": "prefab",
@@ -1176,8 +1176,8 @@ class SerializedObjectMcpTests(unittest.TestCase):
 
     def test_create_plan_handle_value_in_insert_array(self) -> None:
         """insert_array_element with {"handle": "c_comp"} in create mode should pass."""
-        mcp = SerializedObjectMcp()
-        response = mcp.dry_run_resource_plan(
+        svc = SerializedObjectService()
+        response = svc.dry_run_resource_plan(
             resource={
                 "id": "prefab",
                 "kind": "prefab",
@@ -1207,8 +1207,8 @@ class SerializedObjectMcpTests(unittest.TestCase):
         self.assertEqual("SER_DRY_RUN_OK", response.code)
 
     def test_dry_run_resource_plan_rejects_save_before_final_op(self) -> None:
-        mcp = SerializedObjectMcp()
-        response = mcp.dry_run_resource_plan(
+        svc = SerializedObjectService()
+        response = svc.dry_run_resource_plan(
             resource={
                 "id": "prefab",
                 "kind": "prefab",
@@ -1240,8 +1240,8 @@ class SerializedObjectMcpTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            mcp = SerializedObjectMcp()
-            response = mcp.apply_and_save(
+            svc = SerializedObjectService()
+            response = svc.apply_and_save(
                 target=str(target),
                 ops=[
                     {
@@ -1280,8 +1280,8 @@ class SerializedObjectMcpTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            mcp = SerializedObjectMcp()
-            response = mcp.apply_resource_plan(
+            svc = SerializedObjectService()
+            response = svc.apply_resource_plan(
                 resource={
                     "path": str(target),
                     "mode": "open",
@@ -1309,8 +1309,8 @@ class SerializedObjectMcpTests(unittest.TestCase):
             target = root / "state.prefab"
             target.write_text("%YAML 1.1\n", encoding="utf-8")
 
-            mcp = SerializedObjectMcp()
-            response = mcp.apply_and_save(
+            svc = SerializedObjectService()
+            response = svc.apply_and_save(
                 target=str(target),
                 ops=[
                     {
@@ -1359,8 +1359,8 @@ print(
                 encoding="utf-8",
             )
 
-            mcp = SerializedObjectMcp(bridge_command=(sys.executable, str(bridge)))
-            response = mcp.apply_and_save(
+            svc = SerializedObjectService(bridge_command=(sys.executable, str(bridge)))
+            response = svc.apply_and_save(
                 target=str(target),
                 ops=[
                     {
@@ -1411,8 +1411,8 @@ print(
                 encoding="utf-8",
             )
 
-            mcp = SerializedObjectMcp(bridge_command=(sys.executable, str(bridge)))
-            response = mcp.apply_and_save(
+            svc = SerializedObjectService(bridge_command=(sys.executable, str(bridge)))
+            response = svc.apply_and_save(
                 target=str(target),
                 ops=[
                     {
@@ -1457,8 +1457,8 @@ print(
                 encoding="utf-8",
             )
 
-            mcp = SerializedObjectMcp(bridge_command=(sys.executable, str(bridge)))
-            response = mcp.apply_and_save(
+            svc = SerializedObjectService(bridge_command=(sys.executable, str(bridge)))
+            response = svc.apply_and_save(
                 target=str(target),
                 ops=[
                     {
@@ -1479,8 +1479,8 @@ print(
             target = root / "state.prefab"
             target.write_text("%YAML 1.1\n", encoding="utf-8")
 
-            mcp = SerializedObjectMcp(bridge_command=("forbidden-bridge", "run"))
-            response = mcp.apply_and_save(
+            svc = SerializedObjectService(bridge_command=("forbidden-bridge", "run"))
+            response = svc.apply_and_save(
                 target=str(target),
                 ops=[
                     {
@@ -1528,8 +1528,8 @@ print(
                 encoding="utf-8",
             )
 
-            mcp = SerializedObjectMcp(bridge_command=(sys.executable, str(bridge)))
-            response = mcp.apply_resource_plan(
+            svc = SerializedObjectService(bridge_command=(sys.executable, str(bridge)))
+            response = svc.apply_resource_plan(
                 resource={
                     "id": "prefab",
                     "kind": "prefab",
@@ -1581,8 +1581,8 @@ print(
                 encoding="utf-8",
             )
 
-            mcp = SerializedObjectMcp(bridge_command=(sys.executable, str(bridge)))
-            response = mcp.apply_resource_plan(
+            svc = SerializedObjectService(bridge_command=(sys.executable, str(bridge)))
+            response = svc.apply_resource_plan(
                 resource={
                     "id": "prefab",
                     "kind": "prefab",
@@ -1642,8 +1642,8 @@ print(
                 encoding="utf-8",
             )
 
-            mcp = SerializedObjectMcp(bridge_command=(sys.executable, str(bridge)))
-            response = mcp.apply_resource_plan(
+            svc = SerializedObjectService(bridge_command=(sys.executable, str(bridge)))
+            response = svc.apply_resource_plan(
                 resource={
                     "id": "prefab",
                     "kind": "prefab",
@@ -1711,8 +1711,8 @@ print(
                 encoding="utf-8",
             )
 
-            mcp = SerializedObjectMcp(bridge_command=(sys.executable, str(bridge)))
-            response = mcp.apply_resource_plan(
+            svc = SerializedObjectService(bridge_command=(sys.executable, str(bridge)))
+            response = svc.apply_resource_plan(
                 resource={
                     "id": "prefab",
                     "kind": "prefab",
@@ -1778,8 +1778,8 @@ print(
                 encoding="utf-8",
             )
 
-            mcp = SerializedObjectMcp(bridge_command=(sys.executable, str(bridge)))
-            response = mcp.apply_resource_plan(
+            svc = SerializedObjectService(bridge_command=(sys.executable, str(bridge)))
+            response = svc.apply_resource_plan(
                 resource={
                     "id": "material",
                     "kind": "material",
@@ -1844,8 +1844,8 @@ print(
                 encoding="utf-8",
             )
 
-            mcp = SerializedObjectMcp(bridge_command=(sys.executable, str(bridge)))
-            response = mcp.apply_resource_plan(
+            svc = SerializedObjectService(bridge_command=(sys.executable, str(bridge)))
+            response = svc.apply_resource_plan(
                 resource={
                     "id": "material",
                     "kind": "material",
@@ -1903,8 +1903,8 @@ print(
                 encoding="utf-8",
             )
 
-            mcp = SerializedObjectMcp(bridge_command=(sys.executable, str(bridge)))
-            response = mcp.apply_resource_plan(
+            svc = SerializedObjectService(bridge_command=(sys.executable, str(bridge)))
+            response = svc.apply_resource_plan(
                 resource={
                     "id": "scene",
                     "kind": "scene",
@@ -1968,8 +1968,8 @@ print(
                 encoding="utf-8",
             )
 
-            mcp = SerializedObjectMcp(bridge_command=(sys.executable, str(bridge)))
-            response = mcp.apply_resource_plan(
+            svc = SerializedObjectService(bridge_command=(sys.executable, str(bridge)))
+            response = svc.apply_resource_plan(
                 resource={
                     "id": "scene",
                     "kind": "scene",
@@ -2273,7 +2273,7 @@ class OrchestratorSuggestionTests(unittest.TestCase):
             self.assertEqual("where_used", response.data["steps"][0]["step"])
 
 
-class TestSerializedObjectMcpProjectRoot(unittest.TestCase):
+class TestSerializedObjectServiceProjectRoot(unittest.TestCase):
     """P2: _resolve_target_path uses project_root, not CWD."""
 
     def test_resolve_target_path_uses_project_root(self) -> None:
@@ -2283,8 +2283,8 @@ class TestSerializedObjectMcpProjectRoot(unittest.TestCase):
             assets_dir.mkdir(parents=True)
             (assets_dir / "Test.prefab").write_text("%YAML 1.1\n")
 
-            mcp = SerializedObjectMcp(project_root=project_root)
-            resolved = mcp._resolve_target_path("Assets/Tyunta/Test.prefab")
+            svc = SerializedObjectService(project_root=project_root)
+            resolved = svc._resolve_target_path("Assets/Tyunta/Test.prefab")
             self.assertEqual(resolved, (project_root / "Assets" / "Tyunta" / "Test.prefab").resolve())
 
     def test_resolve_target_path_no_doubling(self) -> None:
@@ -2295,9 +2295,9 @@ class TestSerializedObjectMcpProjectRoot(unittest.TestCase):
             assets_dir.mkdir(parents=True)
             (assets_dir / "Test.prefab").write_text("%YAML 1.1\n")
 
-            mcp = SerializedObjectMcp(project_root=project_root)
+            svc = SerializedObjectService(project_root=project_root)
             # Even if CWD were inside Assets/Tyunta, project_root anchors the path
-            resolved = mcp._resolve_target_path("Assets/Tyunta/Test.prefab")
+            resolved = svc._resolve_target_path("Assets/Tyunta/Test.prefab")
             path_str = str(resolved)
             self.assertNotIn("Assets/Tyunta/Assets/Tyunta", path_str.replace("\\", "/"))
 
@@ -2341,11 +2341,11 @@ class TestSerializedObjectMcpProjectRoot(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            mcp = SerializedObjectMcp(
+            svc = SerializedObjectService(
                 bridge_command=(sys.executable, str(bridge)),
                 project_root=project_root,
             )
-            response = mcp.apply_resource_plan(
+            response = svc.apply_resource_plan(
                 resource={
                     "id": "mat",
                     "kind": "material",
@@ -2388,8 +2388,8 @@ class TestNumericComponentWarning(unittest.TestCase):
             prefab = project_root / "Assets" / "Test.prefab"
             prefab.write_text("%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Root\n")
 
-            mcp = SerializedObjectMcp(project_root=project_root)
-            response = mcp.dry_run_patch(
+            svc = SerializedObjectService(project_root=project_root)
+            response = svc.dry_run_patch(
                 "Assets/Test.prefab",
                 [{"op": "set", "component": "9196683876007738779", "path": "m_IsActive", "value": 1}],
             )
@@ -2404,9 +2404,9 @@ class TestNumericComponentWarning(unittest.TestCase):
             prefab = project_root / "Assets" / "Test.prefab"
             prefab.write_text("%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Root\n")
 
-            mcp = SerializedObjectMcp(project_root=project_root)
+            svc = SerializedObjectService(project_root=project_root)
             diagnostics: list = []
-            result = mcp._validate_op(
+            result = svc._validate_op(
                 "Assets/Test.prefab", 0,
                 {"op": "set", "component": "-42", "path": "m_IsActive", "value": 1},
                 diagnostics,
@@ -2423,9 +2423,9 @@ class TestNumericComponentWarning(unittest.TestCase):
             prefab = project_root / "Assets" / "Test.prefab"
             prefab.write_text("%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Root\n")
 
-            mcp = SerializedObjectMcp(project_root=project_root)
+            svc = SerializedObjectService(project_root=project_root)
             diagnostics: list = []
-            result = mcp._validate_op(
+            result = svc._validate_op(
                 "Assets/Test.prefab", 0,
                 {"op": "set", "component": "SkinnedMeshRenderer", "path": "m_IsActive", "value": 1},
                 diagnostics,
@@ -2463,11 +2463,11 @@ class TestBeforeValueResolution(unittest.TestCase):
     def test_before_shows_existing_override_value(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project_root = self._make_variant(tmp)
-            pv = PrefabVariantMcp(project_root=project_root)
-            mcp = SerializedObjectMcp(project_root=project_root, prefab_variant=pv)
+            pv = PrefabVariantService(project_root=project_root)
+            svc = SerializedObjectService(project_root=project_root, prefab_variant=pv)
 
             diagnostics: list = []
-            result = mcp._validate_op(
+            result = svc._validate_op(
                 "Assets/Variant.prefab",
                 0,
                 {"op": "set", "component": "42", "path": "m_Materials.Array.data[0]", "value": "new_mat"},
@@ -2483,11 +2483,11 @@ class TestBeforeValueResolution(unittest.TestCase):
     def test_before_shows_base_default_for_unoverridden_property(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project_root = self._make_variant(tmp)
-            pv = PrefabVariantMcp(project_root=project_root)
-            mcp = SerializedObjectMcp(project_root=project_root, prefab_variant=pv)
+            pv = PrefabVariantService(project_root=project_root)
+            svc = SerializedObjectService(project_root=project_root, prefab_variant=pv)
 
             diagnostics: list = []
-            result = mcp._validate_op(
+            result = svc._validate_op(
                 "Assets/Variant.prefab",
                 0,
                 {"op": "set", "component": "42", "path": "m_IsActive", "value": 1},
@@ -2499,10 +2499,10 @@ class TestBeforeValueResolution(unittest.TestCase):
     def test_before_unresolved_without_prefab_variant(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project_root = self._make_variant(tmp)
-            mcp = SerializedObjectMcp(project_root=project_root)
+            svc = SerializedObjectService(project_root=project_root)
 
             diagnostics: list = []
-            result = mcp._validate_op(
+            result = svc._validate_op(
                 "Assets/Variant.prefab",
                 0,
                 {"op": "set", "component": "42", "path": "m_Materials.Array.data[0]", "value": "new_mat"},
@@ -2519,11 +2519,11 @@ class TestBeforeValueResolution(unittest.TestCase):
             prefab = assets / "Base.prefab"
             prefab.write_text("%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Root\n")
 
-            pv = PrefabVariantMcp(project_root=project_root)
-            mcp = SerializedObjectMcp(project_root=project_root, prefab_variant=pv)
+            pv = PrefabVariantService(project_root=project_root)
+            svc = SerializedObjectService(project_root=project_root, prefab_variant=pv)
 
             diagnostics: list = []
-            result = mcp._validate_op(
+            result = svc._validate_op(
                 "Assets/Base.prefab",
                 0,
                 {"op": "set", "component": "1", "path": "m_Name", "value": "NewRoot"},
@@ -2535,17 +2535,17 @@ class TestBeforeValueResolution(unittest.TestCase):
     def test_cache_cleared_at_dry_run_start(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project_root = self._make_variant(tmp)
-            pv = PrefabVariantMcp(project_root=project_root)
-            mcp = SerializedObjectMcp(project_root=project_root, prefab_variant=pv)
+            pv = PrefabVariantService(project_root=project_root)
+            svc = SerializedObjectService(project_root=project_root, prefab_variant=pv)
 
             # Manually seed cache to simulate a previous call
-            mcp._before_cache = {"stale_key": "stale_value"}
-            mcp.dry_run_patch(
+            svc._before_cache = {"stale_key": "stale_value"}
+            svc.dry_run_patch(
                 "Assets/Variant.prefab",
                 [{"op": "set", "component": "42", "path": "m_Materials.Array.data[0]", "value": "x"}],
             )
             # Stale key should be gone; cache was rebuilt from scratch
-            self.assertNotIn("stale_key", mcp._before_cache or {})
+            self.assertNotIn("stale_key", svc._before_cache or {})
 
 
 class TestChainBeforeValueResolution(unittest.TestCase):
@@ -2619,11 +2619,11 @@ class TestChainBeforeValueResolution(unittest.TestCase):
         """Property overridden in parent variant is found via chain walk."""
         with tempfile.TemporaryDirectory() as tmp:
             project_root = self._make_chain(tmp)
-            pv = PrefabVariantMcp(project_root=project_root)
-            mcp = SerializedObjectMcp(project_root=project_root, prefab_variant=pv)
+            pv = PrefabVariantService(project_root=project_root)
+            svc = SerializedObjectService(project_root=project_root, prefab_variant=pv)
 
             diagnostics: list = []
-            result = mcp._validate_op(
+            result = svc._validate_op(
                 "Assets/Leaf.prefab",
                 0,
                 {"op": "set", "component": "42", "path": "m_Materials.Array.data[0]", "value": "x"},
@@ -2637,11 +2637,11 @@ class TestChainBeforeValueResolution(unittest.TestCase):
         """Property overridden in the leaf variant itself takes precedence."""
         with tempfile.TemporaryDirectory() as tmp:
             project_root = self._make_chain(tmp)
-            pv = PrefabVariantMcp(project_root=project_root)
-            mcp = SerializedObjectMcp(project_root=project_root, prefab_variant=pv)
+            pv = PrefabVariantService(project_root=project_root)
+            svc = SerializedObjectService(project_root=project_root, prefab_variant=pv)
 
             diagnostics: list = []
-            result = mcp._validate_op(
+            result = svc._validate_op(
                 "Assets/Leaf.prefab",
                 0,
                 {"op": "set", "component": "42", "path": "m_Materials.Array.data[1]", "value": "x"},
@@ -2655,11 +2655,11 @@ class TestChainBeforeValueResolution(unittest.TestCase):
         """Property not overridden in any variant is read from the base prefab."""
         with tempfile.TemporaryDirectory() as tmp:
             project_root = self._make_chain(tmp)
-            pv = PrefabVariantMcp(project_root=project_root)
-            mcp = SerializedObjectMcp(project_root=project_root, prefab_variant=pv)
+            pv = PrefabVariantService(project_root=project_root)
+            svc = SerializedObjectService(project_root=project_root, prefab_variant=pv)
 
             diagnostics: list = []
-            result = mcp._validate_op(
+            result = svc._validate_op(
                 "Assets/Leaf.prefab",
                 0,
                 {"op": "set", "component": "42", "path": "m_IsActive", "value": 0},
@@ -2681,11 +2681,11 @@ class TestChainBeforeValueResolution(unittest.TestCase):
             leaf_meta = assets / "Orphan.prefab.meta"
             leaf_meta.write_text("guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaa9999\n")
 
-            pv = PrefabVariantMcp(project_root=project_root)
-            mcp = SerializedObjectMcp(project_root=project_root, prefab_variant=pv)
+            pv = PrefabVariantService(project_root=project_root)
+            svc = SerializedObjectService(project_root=project_root, prefab_variant=pv)
 
             diagnostics: list = []
-            result = mcp._validate_op(
+            result = svc._validate_op(
                 "Assets/Orphan.prefab",
                 0,
                 {"op": "set", "component": "42", "path": "m_IsActive", "value": 0},
@@ -2699,7 +2699,7 @@ class TestChainBeforeValueResolution(unittest.TestCase):
         """resolve_chain_values returns the merged effective map."""
         with tempfile.TemporaryDirectory() as tmp:
             project_root = self._make_chain(tmp)
-            pv = PrefabVariantMcp(project_root=project_root)
+            pv = PrefabVariantService(project_root=project_root)
             values = pv.resolve_chain_values("Assets/Leaf.prefab")
 
             # Leaf overrides data[1], Mid overrides data[0], Base has m_IsActive
@@ -2730,7 +2730,7 @@ class TestChainBeforeValueResolution(unittest.TestCase):
             top_meta = assets / "Top.prefab.meta"
             top_meta.write_text("guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaa3333\n")
 
-            pv = PrefabVariantMcp(project_root=project_root)
+            pv = PrefabVariantService(project_root=project_root)
             values = pv.resolve_chain_values("Assets/Top.prefab")
 
             # Top overrides data[0] -> should shadow Mid's override
@@ -2754,7 +2754,7 @@ class TestResolveChainValuesWithOrigin(unittest.TestCase):
         """Value overridden in leaf has origin_depth=0 and leaf path."""
         with tempfile.TemporaryDirectory() as tmp:
             project_root = self._make_chain(tmp)
-            pv = PrefabVariantMcp(project_root=project_root)
+            pv = PrefabVariantService(project_root=project_root)
             response = pv.resolve_chain_values_with_origin("Assets/Leaf.prefab")
 
             self.assertTrue(response.success)
@@ -2771,7 +2771,7 @@ class TestResolveChainValuesWithOrigin(unittest.TestCase):
         """Value overridden in mid-level variant has origin_depth=1."""
         with tempfile.TemporaryDirectory() as tmp:
             project_root = self._make_chain(tmp)
-            pv = PrefabVariantMcp(project_root=project_root)
+            pv = PrefabVariantService(project_root=project_root)
             response = pv.resolve_chain_values_with_origin("Assets/Leaf.prefab")
 
             values = response.data["values"]
@@ -2787,7 +2787,7 @@ class TestResolveChainValuesWithOrigin(unittest.TestCase):
         """Value from base prefab has the highest origin_depth."""
         with tempfile.TemporaryDirectory() as tmp:
             project_root = self._make_chain(tmp)
-            pv = PrefabVariantMcp(project_root=project_root)
+            pv = PrefabVariantService(project_root=project_root)
             response = pv.resolve_chain_values_with_origin("Assets/Leaf.prefab")
 
             values = response.data["values"]
@@ -2804,7 +2804,7 @@ class TestResolveChainValuesWithOrigin(unittest.TestCase):
         """Response includes chain list with depths."""
         with tempfile.TemporaryDirectory() as tmp:
             project_root = self._make_chain(tmp)
-            pv = PrefabVariantMcp(project_root=project_root)
+            pv = PrefabVariantService(project_root=project_root)
             response = pv.resolve_chain_values_with_origin("Assets/Leaf.prefab")
 
             chain = response.data["chain"]
@@ -2818,7 +2818,7 @@ class TestResolveChainValuesWithOrigin(unittest.TestCase):
         """Non-variant file returns success with empty values."""
         with tempfile.TemporaryDirectory() as tmp:
             project_root = self._make_chain(tmp)
-            pv = PrefabVariantMcp(project_root=project_root)
+            pv = PrefabVariantService(project_root=project_root)
             response = pv.resolve_chain_values_with_origin("Assets/Base.prefab")
 
             self.assertTrue(response.success)

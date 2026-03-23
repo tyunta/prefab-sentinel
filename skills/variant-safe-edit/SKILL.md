@@ -1,6 +1,6 @@
 ---
 name: variant-safe-edit
-description: Safe prefab variant editing workflow using Prefab Sentinel MCP/CLI with preflight scans, dry-run diffs, confirm-gated apply, and runtime validation. Use when editing Prefab/Scene/Assets or applying patch plans while avoiding broken references and enforcing audit logs.
+description: Safe prefab variant editing workflow using Prefab Sentinel CLI with preflight scans, dry-run diffs, confirm-gated apply, and runtime validation. Use when editing Prefab/Scene/Assets or applying patch plans while avoiding broken references and enforcing audit logs.
 ---
 
 # Variant Safe Edit

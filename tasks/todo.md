@@ -29,11 +29,11 @@
 
 ## Authoring Verification
 
-- `python3 -m compileall prefab_sentinel/mcp/serialized_object.py tools/unity_patch_bridge.py tests/test_mcp_readonly.py tests/test_unity_patch_bridge.py tests/test_cli.py` -> passed.
-- `python3 -m compileall prefab_sentinel/mcp/runtime_validation.py prefab_sentinel/orchestrator.py tests/test_mcp_readonly.py tests/test_cli.py` -> passed.
-- `uv run --extra test python -m unittest tests.test_mcp_readonly.RuntimeValidationMcpTests.test_run_clientsim_runs_unity_command_when_configured tests.test_cli.CliTests.test_validate_runtime_runs_unity_when_configured` -> passed.
-- `python3 -m compileall prefab_sentinel/patch_plan.py prefab_sentinel/mcp/serialized_object.py prefab_sentinel/orchestrator.py tests/test_mcp_readonly.py tests/test_cli.py` -> passed.
-- `uv run --extra test python -m unittest tests.test_mcp_readonly.SerializedObjectMcpTests.test_load_patch_plan_normalizes_v2_resources tests.test_mcp_readonly.SerializedObjectMcpTests.test_apply_resource_plan_updates_open_json_target tests.test_mcp_readonly.SerializedObjectMcpTests.test_orchestrator_patch_apply_enforces_asset_exists_postcondition tests.test_mcp_readonly.SerializedObjectMcpTests.test_orchestrator_patch_apply_fails_broken_refs_postcondition tests.test_cli.CliTests.test_patch_apply_confirm_enforces_asset_exists_postcondition` -> passed.
+- `python3 -m compileall prefab_sentinel/services/serialized_object.py tools/unity_patch_bridge.py tests/test_services.py tests/test_unity_patch_bridge.py tests/test_cli.py` -> passed.
+- `python3 -m compileall prefab_sentinel/services/runtime_validation.py prefab_sentinel/orchestrator.py tests/test_services.py tests/test_cli.py` -> passed.
+- `uv run --extra test python -m unittest tests.test_services.RuntimeValidationServiceTests.test_run_clientsim_runs_unity_command_when_configured tests.test_cli.CliTests.test_validate_runtime_runs_unity_when_configured` -> passed.
+- `python3 -m compileall prefab_sentinel/patch_plan.py prefab_sentinel/services/serialized_object.py prefab_sentinel/orchestrator.py tests/test_services.py tests/test_cli.py` -> passed.
+- `uv run --extra test python -m unittest tests.test_services.SerializedObjectServiceTests.test_load_patch_plan_normalizes_v2_resources tests.test_services.SerializedObjectServiceTests.test_apply_resource_plan_updates_open_json_target tests.test_services.SerializedObjectServiceTests.test_orchestrator_patch_apply_enforces_asset_exists_postcondition tests.test_services.SerializedObjectServiceTests.test_orchestrator_patch_apply_fails_broken_refs_postcondition tests.test_cli.CliTests.test_patch_apply_confirm_enforces_asset_exists_postcondition` -> passed.
 - `uv run --extra test python scripts/run_unit_tests.py` -> passed, 250 tests in parallel.
 - `python3 -m compileall prefab_sentinel/smoke_batch.py tests/test_bridge_smoke_samples.py` -> passed.
 - `uv run --extra test python -m unittest tests.test_bridge_smoke_samples` -> passed.
@@ -54,7 +54,7 @@
 
 ## Phase A: ブロンドヘアセッション改善 (2026-03-22)
 
-- [x] P2: パス解決の CWD 非依存化 — `SerializedObjectMcp._resolve_target_path()` を `resolve_scope_path()` に置換
+- [x] P2: パス解決の CWD 非依存化 — `SerializedObjectService._resolve_target_path()` を `resolve_scope_path()` に置換
 - [x] P5: `editor refresh` コマンド追加 — `AssetDatabase.Refresh()` をトリガー
 - [x] P6: `editor select` Prefab Stage 対応 — `--prefab-stage` オプションで Prefab 内部オブジェクトを選択
 - [x] P1: dry-run `before` 値の実効値解決 (Phase 1) — Variant オーバーライドの既存値を表示

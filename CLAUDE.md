@@ -9,11 +9,11 @@
 - 検証可能性: 設定値と結果の対応を説明できる実装のみ採用する。
 - 必須参照の欠落は補完せず `error` で停止する（fail-fast）。
 
-## 責務境界（MCP / Skills）
-- `serialized-object-mcp`: 何を書き換えるか（操作実行）。
-- `prefab-variant-mcp`: どこが上書きされているか（差分可視化）。
-- `reference-resolver-mcp`: 参照が有効か（実体照合）。
-- `runtime-validation-mcp`: 実行時に壊れていないか（結果検証）。
+## 責務境界（Services / Skills）
+- `serialized-object`: 何を書き換えるか（操作実行）。
+- `prefab-variant`: どこが上書きされているか（差分可視化）。
+- `reference-resolver`: 参照が有効か（実体照合）。
+- `runtime-validation`: 実行時に壊れていないか（結果検証）。
 - Skills: どの順で使うか（運用プロトコル）。
 
 ## 変更時の必須フロー

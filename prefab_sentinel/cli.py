@@ -1845,10 +1845,10 @@ def main(argv: list[str] | None = None) -> int:
                 entries = result.get("data", {}).get("entries", [])
                 log_lines = [e.get("message", "") for e in entries]
                 if log_lines:
-                    from prefab_sentinel.mcp.runtime_validation import RuntimeValidationMcp
+                    from prefab_sentinel.services.runtime_validation import RuntimeValidationService
 
-                    mcp = RuntimeValidationMcp()
-                    classification = mcp.classify_errors(log_lines)
+                    svc = RuntimeValidationService()
+                    classification = svc.classify_errors(log_lines)
                     result["classification"] = classification.to_dict()
         elif cmd == "refresh":
             result = send_action(action="refresh_asset_database")

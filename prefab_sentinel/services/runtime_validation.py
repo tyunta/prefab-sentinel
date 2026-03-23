@@ -77,10 +77,10 @@ def _coerce_severity(value: object) -> Severity | None:
     return None
 
 
-class RuntimeValidationMcp:
-    """Runtime validation MCP interface for log-based checks plus Unity batchmode hooks."""
+class RuntimeValidationService:
+    """Runtime validation service for log-based checks plus Unity batchmode hooks."""
 
-    TOOL_NAME = "runtime-validation-mcp"
+    TOOL_NAME = "runtime-validation"
 
     def __init__(self, project_root: Path | None = None) -> None:
         self.project_root = find_project_root(project_root or Path.cwd())

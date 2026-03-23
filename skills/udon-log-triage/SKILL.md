@@ -1,6 +1,6 @@
 ---
 name: udon-log-triage
-description: Udon/ClientSim log triage workflow using runtime-validation MCP to classify errors, map to assets, and propose fixes as safe_fix or decision_required. Use when runtime exceptions or log-based regressions occur.
+description: Udon/ClientSim log triage workflow using runtime-validation service to classify errors, map to assets, and propose fixes as safe_fix or decision_required. Use when runtime exceptions or log-based regressions occur.
 ---
 
 # Udon Log Triage

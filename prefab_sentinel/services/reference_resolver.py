@@ -24,10 +24,10 @@ from prefab_sentinel.unity_assets import (
 )
 
 
-class ReferenceResolverMcp:
-    """Read-only reference resolver MCP interface for Phase 1."""
+class ReferenceResolverService:
+    """Read-only reference validation service."""
 
-    TOOL_NAME = "reference-resolver-mcp"
+    TOOL_NAME = "reference-resolver"
 
     def __init__(self, project_root: Path | None = None) -> None:
         self.project_root = find_project_root(project_root or Path.cwd())

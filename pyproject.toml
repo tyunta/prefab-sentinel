@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "prefab-sentinel"
-version = "0.2.51"
-description = "Prefab Sentinel CLI and MCP contracts for safe Unity Prefab/Scene editing."
+version = "0.2.52"
+description = "Prefab Sentinel CLI for safe Unity Prefab/Scene inspection and editing."
 requires-python = ">=3.11"
 readme = "README.md"
 dependencies = []
@@ -38,9 +38,9 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = [
-    "prefab_sentinel.mcp.serialized_object",
-    "prefab_sentinel.mcp.reference_resolver",
-    "prefab_sentinel.mcp.prefab_variant",
+    "prefab_sentinel.services.serialized_object",
+    "prefab_sentinel.services.reference_resolver",
+    "prefab_sentinel.services.prefab_variant",
     "prefab_sentinel.cli",
 ]
 disable_error_code = ["arg-type", "index", "assignment", "var-annotated", "no-redef"]
@@ -49,7 +49,7 @@ disable_error_code = ["arg-type", "index", "assignment", "var-annotated", "no-re
 packages = ["prefab_sentinel"]
 
 [tool.bumpversion]
-current_version = "0.2.51"
+current_version = "0.2.52"
 commit = false
 tag = false
 allow_dirty = true

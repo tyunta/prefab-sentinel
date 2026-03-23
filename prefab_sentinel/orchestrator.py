@@ -13,11 +13,11 @@ from prefab_sentinel.material_inspector import (
     format_materials,
     inspect_materials,
 )
-from prefab_sentinel.mcp.prefab_variant import PrefabVariantMcp
-from prefab_sentinel.mcp.reference_resolver import ReferenceResolverMcp
-from prefab_sentinel.mcp.runtime_validation import RuntimeValidationMcp
-from prefab_sentinel.mcp.serialized_object import SerializedObjectMcp
 from prefab_sentinel.patch_plan import count_plan_ops, iter_resource_batches, normalize_patch_plan
+from prefab_sentinel.services.prefab_variant import PrefabVariantService
+from prefab_sentinel.services.reference_resolver import ReferenceResolverService
+from prefab_sentinel.services.runtime_validation import RuntimeValidationService
+from prefab_sentinel.services.serialized_object import SerializedObjectService
 from prefab_sentinel.structure_validator import validate_structure
 from prefab_sentinel.udon_wiring import analyze_wiring
 from prefab_sentinel.unity_assets import (
@@ -32,19 +32,19 @@ from prefab_sentinel.wsl_compat import to_wsl_path
 
 @dataclass(slots=True)
 class Phase1Orchestrator:
-    reference_resolver: ReferenceResolverMcp
-    prefab_variant: PrefabVariantMcp
-    runtime_validation: RuntimeValidationMcp
-    serialized_object: SerializedObjectMcp
+    reference_resolver: ReferenceResolverService
+    prefab_variant: PrefabVariantService
+    runtime_validation: RuntimeValidationService
+    serialized_object: SerializedObjectService
 
     @classmethod
     def default(cls, project_root: Path | None = None) -> Phase1Orchestrator:
-        pv = PrefabVariantMcp(project_root=project_root)
+        pv = PrefabVariantService(project_root=project_root)
         return cls(
-            reference_resolver=ReferenceResolverMcp(project_root=project_root),
+            reference_resolver=ReferenceResolverService(project_root=project_root),
             prefab_variant=pv,
-            runtime_validation=RuntimeValidationMcp(project_root=project_root),
-            serialized_object=SerializedObjectMcp(
+            runtime_validation=RuntimeValidationService(project_root=project_root),
+            serialized_object=SerializedObjectService(
                 project_root=project_root,
                 prefab_variant=pv,
             ),

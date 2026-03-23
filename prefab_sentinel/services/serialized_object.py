@@ -10,11 +10,11 @@ from pathlib import Path
 from typing import Any
 
 from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse
-from prefab_sentinel.mcp.prefab_variant import PrefabVariantMcp
 from prefab_sentinel.patch_plan import (
     PLAN_VERSION,
     build_bridge_request,
 )
+from prefab_sentinel.services.prefab_variant import PrefabVariantService
 from prefab_sentinel.unity_assets import (
     SOURCE_PREFAB_PATTERN,
     decode_text_file,
@@ -96,14 +96,14 @@ class _ResourceAdapter:
 
     def dry_run(
         self,
-        owner: SerializedObjectMcp,
+        owner: SerializedObjectService,
         context: _ResourcePlanContext,
     ) -> ToolResponse:
         raise NotImplementedError
 
     def apply(
         self,
-        owner: SerializedObjectMcp,
+        owner: SerializedObjectService,
         context: _ResourcePlanContext,
     ) -> ToolResponse:
         raise NotImplementedError
@@ -114,14 +114,14 @@ class _JsonResourceAdapter(_ResourceAdapter):
 
     def dry_run(
         self,
-        owner: SerializedObjectMcp,
+        owner: SerializedObjectService,
         context: _ResourcePlanContext,
     ) -> ToolResponse:
         return owner.dry_run_patch(target=context.target, ops=context.ops)
 
     def apply(
         self,
-        owner: SerializedObjectMcp,
+        owner: SerializedObjectService,
         context: _ResourcePlanContext,
     ) -> ToolResponse:
         return owner.apply_and_save(target=context.target, ops=context.ops)
@@ -133,7 +133,7 @@ class _PrefabResourceAdapter(_ResourceAdapter):
 
     def dry_run(
         self,
-        owner: SerializedObjectMcp,
+        owner: SerializedObjectService,
         context: _ResourcePlanContext,
     ) -> ToolResponse:
         if context.mode == "open":
@@ -152,7 +152,7 @@ class _PrefabResourceAdapter(_ResourceAdapter):
 
     def apply(
         self,
-        owner: SerializedObjectMcp,
+        owner: SerializedObjectService,
         context: _ResourcePlanContext,
     ) -> ToolResponse:
         dry_run = self.dry_run(owner, context)
@@ -174,7 +174,7 @@ class _BridgeBackedAssetResourceAdapter(_ResourceAdapter):
 
     def dry_run(
         self,
-        owner: SerializedObjectMcp,
+        owner: SerializedObjectService,
         context: _ResourcePlanContext,
     ) -> ToolResponse:
         if context.mode == "open":
@@ -194,7 +194,7 @@ class _BridgeBackedAssetResourceAdapter(_ResourceAdapter):
 
     def apply(
         self,
-        owner: SerializedObjectMcp,
+        owner: SerializedObjectService,
         context: _ResourcePlanContext,
     ) -> ToolResponse:
         dry_run = self.dry_run(owner, context)
@@ -225,7 +225,7 @@ class _SceneResourceAdapter(_ResourceAdapter):
 
     def dry_run(
         self,
-        owner: SerializedObjectMcp,
+        owner: SerializedObjectService,
         context: _ResourcePlanContext,
     ) -> ToolResponse:
         diagnostics, preview = owner._validate_scene_ops(
@@ -243,7 +243,7 @@ class _SceneResourceAdapter(_ResourceAdapter):
 
     def apply(
         self,
-        owner: SerializedObjectMcp,
+        owner: SerializedObjectService,
         context: _ResourcePlanContext,
     ) -> ToolResponse:
         dry_run = self.dry_run(owner, context)
@@ -280,17 +280,17 @@ def _check_handle_value(
     )
 
 
-class SerializedObjectMcp:
-    """Serialized-object MCP scaffold with plan validation and dry-run preview."""
+class SerializedObjectService:
+    """Serialized object service for plan validation, dry-run preview, and patch application."""
 
-    TOOL_NAME = "unity-serialized-object-mcp"
+    TOOL_NAME = "serialized-object"
 
     def __init__(
         self,
         bridge_command: tuple[str, ...] | None = None,
         bridge_timeout_sec: float = 120.0,
         project_root: Path | None = None,
-        prefab_variant: PrefabVariantMcp | None = None,
+        prefab_variant: PrefabVariantService | None = None,
     ) -> None:
         self.bridge_command_error: str | None = None
         self.bridge_command = (

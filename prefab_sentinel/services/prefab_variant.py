@@ -51,10 +51,10 @@ class ChainValue:
     origin_depth: int  # 0 = the variant itself, 1 = parent, ...
 
 
-class PrefabVariantMcp:
-    """Read-only prefab variant MCP interface for Phase 1."""
+class PrefabVariantService:
+    """Read-only prefab variant analysis service."""
 
-    TOOL_NAME = "prefab-variant-mcp"
+    TOOL_NAME = "prefab-variant"
 
     def __init__(self, project_root: Path | None = None) -> None:
         self.project_root = find_project_root(project_root or Path.cwd())
