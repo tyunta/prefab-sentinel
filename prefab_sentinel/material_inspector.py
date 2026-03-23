@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from prefab_sentinel.unity_assets import (
+    REFERENCE_PATTERN,
     SOURCE_PREFAB_PATTERN,
     collect_project_guid_index,
     decode_text_file,
@@ -38,14 +39,20 @@ RENDERER_CLASS_NAMES: dict[str, str] = {
     "137": "SkinnedMeshRenderer",
 }
 
-# Pattern to extract material reference entries from m_Materials array
-_MATERIAL_REF_PATTERN = re.compile(
-    r"\{fileID:\s*(-?\d+)(?:,\s*guid:\s*([0-9a-fA-F]{32}))?(?:,\s*type:\s*(-?\d+))?\}"
-)
+# Reuse the canonical reference pattern from unity_assets
+_MATERIAL_REF_PATTERN = REFERENCE_PATTERN
 
 # Pattern for m_Materials.Array.data[N] in override propertyPath
 _MATERIAL_OVERRIDE_PATH = re.compile(
     r"^m_Materials\.Array\.data\[(\d+)\]$"
+)
+
+# Patterns for PrefabInstance m_Modifications target and objectReference fields
+_OVERRIDE_TARGET_PATTERN = re.compile(
+    r"target:\s*\{fileID:\s*(-?\d+)(?:,\s*guid:\s*([0-9a-fA-F]{32}))?"
+)
+_OBJ_REF_PATTERN = re.compile(
+    r"objectReference:\s*\{fileID:\s*(-?\d+)(?:,\s*guid:\s*([0-9a-fA-F]{32}))?"
 )
 
 
@@ -382,13 +389,6 @@ def _parse_material_overrides(
         property_path = ""
         object_reference_guid = ""
 
-    target_pattern = re.compile(
-        r"target:\s*\{fileID:\s*(-?\d+)(?:,\s*guid:\s*([0-9a-fA-F]{32}))?"
-    )
-    obj_ref_pattern = re.compile(
-        r"objectReference:\s*\{fileID:\s*(-?\d+)(?:,\s*guid:\s*([0-9a-fA-F]{32}))?"
-    )
-
     for line in lines:
         stripped = line.strip()
         indent = len(line) - len(line.lstrip(" "))
@@ -410,7 +410,7 @@ def _parse_material_overrides(
         if stripped.startswith("- target:") or stripped.startswith("target:"):
             _flush()
             has_entry = True
-            tmatch = target_pattern.search(stripped)
+            tmatch = _OVERRIDE_TARGET_PATTERN.search(stripped)
             if tmatch:
                 target_file_id = tmatch.group(1)
             continue
@@ -421,7 +421,7 @@ def _parse_material_overrides(
         if stripped.startswith("propertyPath:"):
             property_path = stripped.split(":", 1)[1].strip()
         elif stripped.startswith("objectReference:"):
-            ref_match = obj_ref_pattern.search(stripped)
+            ref_match = _OBJ_REF_PATTERN.search(stripped)
             if ref_match:
                 object_reference_guid = normalize_guid(ref_match.group(2) or "")
 
