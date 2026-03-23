@@ -473,19 +473,31 @@ def _run_smoke_with_retries(
     command: list[str],
     max_retries: int,
     retry_delay_sec: float,
+    timeout_sec: float | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], int, float]:
     attempts = 0
     started_at = time.perf_counter()
     while True:
         attempts += 1
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
-        )
+        try:
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+                timeout=timeout_sec,
+            )
+        except subprocess.TimeoutExpired:
+            elapsed_sec = time.perf_counter() - started_at
+            completed = subprocess.CompletedProcess(
+                args=command,
+                returncode=-1,
+                stdout="",
+                stderr=f"Process timed out after {timeout_sec}s",
+            )
+            return completed, attempts, elapsed_sec
         if completed.returncode == 0:
             elapsed_sec = time.perf_counter() - started_at
             return completed, attempts, elapsed_sec
@@ -574,10 +586,16 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
             response_out=response_path,
             unity_log_file=unity_log_file,
         )
+        # Add 30s buffer over Unity-side timeout so Python outlives the
+        # Unity process and can capture its output on timeout.
+        subprocess_timeout = (
+            case_timeout_sec + 30 if case_timeout_sec is not None else None
+        )
         completed, attempts, duration_sec = _run_smoke_with_retries(
             command=command,
             max_retries=args.max_retries,
             retry_delay_sec=args.retry_delay_sec,
+            timeout_sec=subprocess_timeout,
         )
         case_payload = _parse_case_payload(
             case=case,
