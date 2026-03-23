@@ -10,6 +10,16 @@ from pathlib import Path
 from typing import Any
 
 
+def _pass_pct(total: int, failures: int) -> float | None:
+    """Compute pass percentage: ``(total - failures) / total * 100``, rounded to 2 decimals.
+
+    Returns ``None`` when *total* is zero (no data).
+    """
+    if total <= 0:
+        return None
+    return round(((total - failures) / float(total)) * 100.0, 2)
+
+
 def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--inputs",
@@ -328,21 +338,7 @@ def _build_target_stats(
         observed_timeout_breach_count = len(
             [pair for pair in observed_timeout_pairs if pair[0] > float(pair[1])]
         )
-        observed_timeout_coverage_pct = (
-            round(
-                (
-                    (
-                        observed_timeout_sample_count
-                        - observed_timeout_breach_count
-                    )
-                    / float(observed_timeout_sample_count)
-                )
-                * 100.0,
-                2,
-            )
-            if observed_timeout_sample_count > 0
-            else None
-        )
+        observed_timeout_coverage_pct = _pass_pct(observed_timeout_sample_count, observed_timeout_breach_count)
         code_matches_values = [
             value
             for value in (row.get("code_matches") for row in target_rows)
@@ -358,34 +354,12 @@ def _build_target_stats(
         code_assertion_mismatches = len(
             [value for value in code_matches_values if value is False]
         )
-        code_assertion_pass_pct = (
-            round(
-                (
-                    (code_assertion_runs - code_assertion_mismatches)
-                    / float(code_assertion_runs)
-                )
-                * 100.0,
-                2,
-            )
-            if code_assertion_runs > 0
-            else None
-        )
+        code_assertion_pass_pct = _pass_pct(code_assertion_runs, code_assertion_mismatches)
         applied_assertion_runs = len(applied_matches_values)
         applied_assertion_mismatches = len(
             [value for value in applied_matches_values if value is False]
         )
-        applied_assertion_pass_pct = (
-            round(
-                (
-                    (applied_assertion_runs - applied_assertion_mismatches)
-                    / float(applied_assertion_runs)
-                )
-                * 100.0,
-                2,
-            )
-            if applied_assertion_runs > 0
-            else None
-        )
+        applied_assertion_pass_pct = _pass_pct(applied_assertion_runs, applied_assertion_mismatches)
         duration_avg = sum(durations) / len(durations) if durations else None
         stats.append(
             {
@@ -461,18 +435,7 @@ def _build_timeout_profiles(
         timeout_breach_count = len(
             [value for value in duration_values if value > float(recommended_timeout_sec)]
         )
-        timeout_coverage_pct = (
-            round(
-                (
-                    (duration_sample_count - timeout_breach_count)
-                    / float(duration_sample_count)
-                )
-                * 100.0,
-                2,
-            )
-            if duration_sample_count > 0
-            else None
-        )
+        timeout_coverage_pct = _pass_pct(duration_sample_count, timeout_breach_count)
 
         profiles.append(
             {
@@ -515,11 +478,7 @@ def _compute_code_assertion_metrics(
     ]
     code_assertions = len(code_matches_values)
     code_mismatches = len([value for value in code_matches_values if value is False])
-    code_pass_pct = (
-        ((code_assertions - code_mismatches) / float(code_assertions)) * 100.0
-        if code_assertions > 0
-        else None
-    )
+    code_pass_pct = _pass_pct(code_assertions, code_mismatches)
     return code_assertions, code_mismatches, code_pass_pct
 
 
@@ -531,11 +490,7 @@ def _compute_applied_assertion_metrics(
     ]
     applied_assertions = len(applied_matches_values)
     applied_mismatches = len([value for value in applied_matches_values if value is False])
-    applied_pass_pct = (
-        ((applied_assertions - applied_mismatches) / float(applied_assertions)) * 100.0
-        if applied_assertions > 0
-        else None
-    )
+    applied_pass_pct = _pass_pct(applied_assertions, applied_mismatches)
     return applied_assertions, applied_mismatches, applied_pass_pct
 
 
@@ -558,12 +513,7 @@ def _compute_observed_timeout_metrics(
             for item in by_target.values()
         ]
     )
-    observed_timeout_coverage_pct = (
-        ((observed_timeout_samples - observed_timeout_breaches) / float(observed_timeout_samples))
-        * 100.0
-        if observed_timeout_samples > 0
-        else None
-    )
+    observed_timeout_coverage_pct = _pass_pct(observed_timeout_samples, observed_timeout_breaches)
     return (
         observed_timeout_samples,
         observed_timeout_breaches,
@@ -583,18 +533,7 @@ def _compute_observed_timeout_metrics_by_target(
         observed_timeout_breach_count = (
             _to_int(item.get("observed_timeout_breach_count")) or 0
         )
-        observed_timeout_coverage_pct = (
-            (
-                (
-                    observed_timeout_sample_count
-                    - observed_timeout_breach_count
-                )
-                / float(observed_timeout_sample_count)
-            )
-            * 100.0
-            if observed_timeout_sample_count > 0
-            else None
-        )
+        observed_timeout_coverage_pct = _pass_pct(observed_timeout_sample_count, observed_timeout_breach_count)
         by_target[target] = {
             "observed_timeout_sample_count": observed_timeout_sample_count,
             "observed_timeout_breach_count": observed_timeout_breach_count,
@@ -622,12 +561,7 @@ def _compute_profile_timeout_metrics_by_target(
             continue
         duration_sample_count = _to_int(evidence.get("duration_sample_count")) or 0
         timeout_breach_count = _to_int(evidence.get("timeout_breach_count")) or 0
-        timeout_coverage_pct = (
-            ((duration_sample_count - timeout_breach_count) / float(duration_sample_count))
-            * 100.0
-            if duration_sample_count > 0
-            else None
-        )
+        timeout_coverage_pct = _pass_pct(duration_sample_count, timeout_breach_count)
         by_target[target] = {
             "duration_sample_count": duration_sample_count,
             "timeout_breach_count": timeout_breach_count,
@@ -649,12 +583,7 @@ def _compute_profile_timeout_metrics(
     profile_timeout_breaches = sum(
         [_to_int(item.get("timeout_breach_count")) or 0 for item in by_target.values()]
     )
-    profile_timeout_coverage_pct = (
-        ((profile_timeout_samples - profile_timeout_breaches) / float(profile_timeout_samples))
-        * 100.0
-        if profile_timeout_samples > 0
-        else None
-    )
+    profile_timeout_coverage_pct = _pass_pct(profile_timeout_samples, profile_timeout_breaches)
     return (
         profile_timeout_samples,
         profile_timeout_breaches,
