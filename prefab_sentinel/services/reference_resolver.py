@@ -332,6 +332,17 @@ class ReferenceResolverService:
             text = self._read_text(file_path)
             if text is None:
                 unreadable_files += 1
+                diagnostics.append(
+                    Diagnostic(
+                        path=self._relative(file_path),
+                        location="",
+                        detail="unreadable_file",
+                        evidence=(
+                            "File could not be decoded (UTF-8/CP932). "
+                            "References inside this file were not validated."
+                        ),
+                    )
+                )
                 continue
 
             local_ids: set[str] | None = None
