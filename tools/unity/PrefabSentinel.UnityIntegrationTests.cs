@@ -212,6 +212,24 @@ namespace PrefabSentinel
                     ("Variant_MultipleOverrides", Test_Variant_MultipleOverrides),
                     ("Variant_OverridePersistsAfterSave", Test_Variant_OverridePersistsAfterSave),
                     ("Variant_InheritBaseChange", Test_Variant_InheritBaseChange),
+                    // Handle-based ObjectReference (Phase H)
+                    ("Handle_ObjectReference_InCreateMode", Test_Handle_ObjectReference_InCreateMode),
+                    ("Handle_ObjectReference_UnknownHandle", Test_Handle_ObjectReference_UnknownHandle),
+                    ("Handle_ObjectReference_InOpenModeRejected", Test_Handle_ObjectReference_InOpenModeRejected),
+                    // remove_component
+                    ("RemoveComponent_Success", Test_RemoveComponent_Success),
+                    ("RemoveComponent_TransformRejected", Test_RemoveComponent_TransformRejected),
+                    // Additional value_kind types
+                    ("Set_ColorProperty_String", Test_Set_ColorProperty_String),
+                    ("Set_EnumProperty_StringName", Test_Set_EnumProperty_StringName),
+                    ("Set_QuaternionProperty_Json", Test_Set_QuaternionProperty_Json),
+                    ("Set_RectProperty_Json", Test_Set_RectProperty_Json),
+                    // Additional error paths
+                    ("Set_MissingTarget_OpenMode", Test_Set_MissingTarget_OpenMode),
+                    ("Set_EmptyTarget", Test_Set_EmptyTarget),
+                    ("Set_EmptyOps", Test_Set_EmptyOps),
+                    // UdonSharp (conditional)
+                    ("UdonSharpBacking_CreateMode", Test_UdonSharpBacking_CreateMode),
                 };
 
                 var results = new List<TestCaseResult>();
@@ -1356,6 +1374,322 @@ namespace PrefabSentinel
             if (variantProp == null) return Fail(name, "Could not read m_IsTrigger on variant.");
             if (!variantProp.boolValue)
                 return Fail(name, "Variant should inherit m_IsTrigger=true from mutated base.");
+
+            return Pass(name);
+        }
+
+        // ----------------------------------------------------------------
+        // Handle-based ObjectReference (Phase H)
+        // ----------------------------------------------------------------
+
+        private static TestCaseResult Test_Handle_ObjectReference_InCreateMode(string prefabPath, string materialPath)
+        {
+            const string name = "Handle_ObjectReference_InCreateMode";
+            string target = TestAssetDir + "/HandleObjRef.prefab";
+            DeleteIfExists(target);
+
+            string ops = "["
+                + "{\"op\":\"create_prefab\",\"name\":\"HandleObjRefRoot\"},"
+                + "{\"op\":\"add_component\",\"target\":\"$root\",\"type\":\"UnityEngine.Rigidbody\",\"result\":\"$rb\"},"
+                + "{\"op\":\"add_component\",\"target\":\"$root\",\"type\":\"UnityEngine.ConfigurableJoint\",\"result\":\"$joint\"},"
+                + "{\"op\":\"set\",\"target\":\"$joint\",\"path\":\"m_ConnectedBody\","
+                + "\"value_kind\":\"handle\",\"value_string\":\"$rb\"},"
+                + "{\"op\":\"save\"}"
+                + "]";
+            var resp = RunBridge(BuildCreatePrefabRequest(target, ops));
+            var err = AssertCreateSuccess(name, resp);
+            if (err != null) return err;
+
+            var go = AssetDatabase.LoadAssetAtPath<GameObject>(target);
+            if (go == null) return Fail(name, "Prefab not found after save.");
+            var joint = go.GetComponent<ConfigurableJoint>();
+            if (joint == null) return Fail(name, "ConfigurableJoint not found.");
+            var rb = go.GetComponent<Rigidbody>();
+            if (rb == null) return Fail(name, "Rigidbody not found.");
+            if (joint.connectedBody != rb)
+                return Fail(name, $"connectedBody should reference the Rigidbody but was {joint.connectedBody}.");
+
+            return Pass(name);
+        }
+
+        private static TestCaseResult Test_Handle_ObjectReference_UnknownHandle(string prefabPath, string materialPath)
+        {
+            const string name = "Handle_ObjectReference_UnknownHandle";
+            string target = TestAssetDir + "/HandleUnknown.prefab";
+            DeleteIfExists(target);
+
+            string ops = "["
+                + "{\"op\":\"create_prefab\",\"name\":\"HandleUnknownRoot\"},"
+                + "{\"op\":\"add_component\",\"target\":\"$root\",\"type\":\"UnityEngine.ConfigurableJoint\",\"result\":\"$joint\"},"
+                + "{\"op\":\"set\",\"target\":\"$joint\",\"path\":\"m_ConnectedBody\","
+                + "\"value_kind\":\"handle\",\"value_string\":\"$nonexistent\"},"
+                + "{\"op\":\"save\"}"
+                + "]";
+            var resp = RunBridge(BuildCreatePrefabRequest(target, ops));
+            return AssertBridgeFailure(name, resp, null) ?? Pass(name);
+        }
+
+        private static TestCaseResult Test_Handle_ObjectReference_InOpenModeRejected(string prefabPath, string materialPath)
+        {
+            const string name = "Handle_ObjectReference_InOpenModeRejected";
+            string ops = "["
+                + "{\"op\":\"set\",\"component\":\"BoxCollider\",\"path\":\"m_Material\","
+                + "\"value_kind\":\"handle\",\"value_string\":\"$something\"}"
+                + "]";
+            var resp = RunBridge(BuildPrefabRequest(prefabPath, ops));
+            return AssertBridgeFailure(name, resp, null) ?? Pass(name);
+        }
+
+        // ----------------------------------------------------------------
+        // remove_component
+        // ----------------------------------------------------------------
+
+        private static TestCaseResult Test_RemoveComponent_Success(string prefabPath, string materialPath)
+        {
+            const string name = "RemoveComponent_Success";
+            string target = TestAssetDir + "/RemoveComp.prefab";
+            DeleteIfExists(target);
+
+            string ops = "["
+                + "{\"op\":\"create_prefab\",\"name\":\"RemoveCompRoot\"},"
+                + "{\"op\":\"add_component\",\"target\":\"$root\",\"type\":\"UnityEngine.BoxCollider\",\"result\":\"$collider\"},"
+                + "{\"op\":\"remove_component\",\"target\":\"$collider\"},"
+                + "{\"op\":\"save\"}"
+                + "]";
+            var resp = RunBridge(BuildCreatePrefabRequest(target, ops));
+            var err = AssertCreateSuccess(name, resp);
+            if (err != null) return err;
+
+            var go = AssetDatabase.LoadAssetAtPath<GameObject>(target);
+            if (go == null) return Fail(name, "Prefab not found after save.");
+            if (go.GetComponent<BoxCollider>() != null)
+                return Fail(name, "BoxCollider should have been removed but still exists.");
+
+            return Pass(name);
+        }
+
+        private static TestCaseResult Test_RemoveComponent_TransformRejected(string prefabPath, string materialPath)
+        {
+            const string name = "RemoveComponent_TransformRejected";
+            string target = TestAssetDir + "/RemoveTransform.prefab";
+            DeleteIfExists(target);
+
+            string ops = "["
+                + "{\"op\":\"create_prefab\",\"name\":\"RemoveTransformRoot\"},"
+                + "{\"op\":\"find_component\",\"target\":\"$root\",\"type\":\"UnityEngine.Transform\",\"result\":\"$transform\"},"
+                + "{\"op\":\"remove_component\",\"target\":\"$transform\"},"
+                + "{\"op\":\"save\"}"
+                + "]";
+            var resp = RunBridge(BuildCreatePrefabRequest(target, ops));
+            return AssertBridgeFailure(name, resp, null) ?? Pass(name);
+        }
+
+        // ----------------------------------------------------------------
+        // Additional value_kind types
+        // ----------------------------------------------------------------
+
+        private static TestCaseResult Test_Set_ColorProperty_String(string prefabPath, string materialPath)
+        {
+            const string name = "Set_ColorProperty_String";
+            string target = TestAssetDir + "/ColorString.prefab";
+            DeleteIfExists(target);
+
+            string ops = "["
+                + "{\"op\":\"create_prefab\",\"name\":\"ColorStringRoot\"},"
+                + "{\"op\":\"add_component\",\"target\":\"$root\",\"type\":\"UnityEngine.Light\",\"result\":\"$light\"},"
+                + "{\"op\":\"set\",\"target\":\"$light\",\"path\":\"m_Color\","
+                + "\"value_kind\":\"string\",\"value_string\":\"#FF8040\"},"
+                + "{\"op\":\"save\"}"
+                + "]";
+            var resp = RunBridge(BuildCreatePrefabRequest(target, ops));
+            var err = AssertCreateSuccess(name, resp);
+            if (err != null) return err;
+
+            var go = AssetDatabase.LoadAssetAtPath<GameObject>(target);
+            if (go == null) return Fail(name, "Prefab not found after save.");
+            var light = go.GetComponent<Light>();
+            if (light == null) return Fail(name, "Light not found.");
+            // #FF8040 = (1.0, 0.502, 0.251, 1.0) approximately
+            if (Mathf.Abs(light.color.r - 1.0f) > 0.02f || Mathf.Abs(light.color.g - 0.502f) > 0.02f || Mathf.Abs(light.color.b - 0.251f) > 0.02f)
+                return Fail(name, $"Color mismatch: expected ~(1, 0.5, 0.25) got ({light.color.r}, {light.color.g}, {light.color.b}).");
+
+            return Pass(name);
+        }
+
+        private static TestCaseResult Test_Set_EnumProperty_StringName(string prefabPath, string materialPath)
+        {
+            const string name = "Set_EnumProperty_StringName";
+            // AudioRolloffMode: Logarithmic=0, Linear=1, Custom=2
+            // Use Custom (2) to avoid coincidence with prior test that sets Linear (1) via int.
+            string ops = "[" + SetOp("AudioSource", "rolloffMode", "string", "string", "Custom") + "]";
+            var resp = RunBridge(BuildPrefabRequest(prefabPath, ops));
+            var err = AssertBridgeSuccess(name, resp, 1);
+            if (err != null) return err;
+
+            var prop = GetPrefabProperty(prefabPath, "AudioSource", "rolloffMode");
+            if (prop == null) return Fail(name, "Could not read rolloffMode.");
+            if (prop.enumValueIndex != 2)
+                return Fail(name, $"rolloffMode expected 2 (Custom) but got {prop.enumValueIndex}.");
+
+            return Pass(name);
+        }
+
+        private static TestCaseResult Test_Set_QuaternionProperty_Json(string prefabPath, string materialPath)
+        {
+            const string name = "Set_QuaternionProperty_Json";
+            string target = TestAssetDir + "/QuatJson.prefab";
+            DeleteIfExists(target);
+
+            string quatJson = "{\\\"x\\\":0.0,\\\"y\\\":0.7071,\\\"z\\\":0.0,\\\"w\\\":0.7071}";
+            string ops = "["
+                + "{\"op\":\"create_prefab\",\"name\":\"QuatRoot\"},"
+                + "{\"op\":\"find_component\",\"target\":\"$root\",\"type\":\"UnityEngine.Transform\",\"result\":\"$transform\"},"
+                + "{\"op\":\"set\",\"target\":\"$transform\",\"path\":\"m_LocalRotation\","
+                + "\"value_kind\":\"json\",\"value_json\":\"" + quatJson + "\"},"
+                + "{\"op\":\"save\"}"
+                + "]";
+            var resp = RunBridge(BuildCreatePrefabRequest(target, ops));
+            var err = AssertCreateSuccess(name, resp);
+            if (err != null) return err;
+
+            var go = AssetDatabase.LoadAssetAtPath<GameObject>(target);
+            if (go == null) return Fail(name, "Prefab not found after save.");
+            var q = go.transform.localRotation;
+            if (Mathf.Abs(q.y - 0.7071f) > 0.01f || Mathf.Abs(q.w - 0.7071f) > 0.01f)
+                return Fail(name, $"Quaternion mismatch: expected ~(0,0.707,0,0.707) got ({q.x},{q.y},{q.z},{q.w}).");
+
+            return Pass(name);
+        }
+
+        private static TestCaseResult Test_Set_RectProperty_Json(string prefabPath, string materialPath)
+        {
+            const string name = "Set_RectProperty_Json";
+            string target = TestAssetDir + "/RectJson.prefab";
+            DeleteIfExists(target);
+
+            string rectJson = "{\\\"x\\\":0.1,\\\"y\\\":0.2,\\\"width\\\":0.5,\\\"height\\\":0.6}";
+            string ops = "["
+                + "{\"op\":\"create_prefab\",\"name\":\"RectRoot\"},"
+                + "{\"op\":\"add_component\",\"target\":\"$root\",\"type\":\"UnityEngine.Camera\",\"result\":\"$cam\"},"
+                + "{\"op\":\"set\",\"target\":\"$cam\",\"path\":\"m_NormalizedViewPortRect\","
+                + "\"value_kind\":\"json\",\"value_json\":\"" + rectJson + "\"},"
+                + "{\"op\":\"save\"}"
+                + "]";
+            var resp = RunBridge(BuildCreatePrefabRequest(target, ops));
+            var err = AssertCreateSuccess(name, resp);
+            if (err != null) return err;
+
+            var go = AssetDatabase.LoadAssetAtPath<GameObject>(target);
+            if (go == null) return Fail(name, "Prefab not found after save.");
+            var cam = go.GetComponent<Camera>();
+            if (cam == null) return Fail(name, "Camera not found.");
+            var r = cam.rect;
+            if (Mathf.Abs(r.x - 0.1f) > 0.01f || Mathf.Abs(r.y - 0.2f) > 0.01f
+                || Mathf.Abs(r.width - 0.5f) > 0.01f || Mathf.Abs(r.height - 0.6f) > 0.01f)
+                return Fail(name, $"Rect mismatch: expected (0.1,0.2,0.5,0.6) got ({r.x},{r.y},{r.width},{r.height}).");
+
+            return Pass(name);
+        }
+
+        // ----------------------------------------------------------------
+        // Additional error paths
+        // ----------------------------------------------------------------
+
+        private static TestCaseResult Test_Set_MissingTarget_OpenMode(string prefabPath, string materialPath)
+        {
+            const string name = "Set_MissingTarget_OpenMode";
+            string ops = "[" + SetOp("BoxCollider", "m_IsTrigger", "bool", "bool", "true") + "]";
+            var resp = RunBridge(BuildPrefabRequest("Assets/__NonExistent_Test_12345__.prefab", ops));
+            return AssertBridgeFailure(name, resp, null) ?? Pass(name);
+        }
+
+        private static TestCaseResult Test_Set_EmptyTarget(string prefabPath, string materialPath)
+        {
+            const string name = "Set_EmptyTarget";
+            string json = "{\"protocol_version\":" + ProtocolVersion
+                + ",\"target\":\"\",\"kind\":\"prefab\",\"mode\":\"open\""
+                + ",\"ops\":[{\"op\":\"set\",\"component\":\"BoxCollider\",\"path\":\"m_IsTrigger\""
+                + ",\"value_kind\":\"bool\",\"value_bool\":true}]}";
+            var resp = RunBridge(json);
+            return AssertBridgeFailure(name, resp, "UNITY_BRIDGE_SCHEMA") ?? Pass(name);
+        }
+
+        private static TestCaseResult Test_Set_EmptyOps(string prefabPath, string materialPath)
+        {
+            const string name = "Set_EmptyOps";
+            string json = "{\"protocol_version\":" + ProtocolVersion
+                + ",\"target\":\"" + EscapeJsonString(prefabPath)
+                + "\",\"kind\":\"prefab\",\"mode\":\"open\""
+                + ",\"ops\":[]}";
+            var resp = RunBridge(json);
+            return AssertBridgeSuccess(name, resp, 0) ?? Pass(name);
+        }
+
+        // ----------------------------------------------------------------
+        // UdonSharp backing (conditional)
+        // ----------------------------------------------------------------
+
+        private static TestCaseResult Test_UdonSharpBacking_CreateMode(string prefabPath, string materialPath)
+        {
+            const string name = "UdonSharpBacking_CreateMode";
+
+            // Locate UdonSharpBehaviour type via reflection
+            Type usbType = null;
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                try { usbType = asm.GetType("UdonSharp.UdonSharpBehaviour"); } catch { }
+                if (usbType != null) break;
+            }
+            if (usbType == null) return Pass(name, "Skipped — UdonSharp not installed.");
+
+            // Find a concrete subclass
+            Type concreteType = null;
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                try
+                {
+                    foreach (var t in asm.GetTypes())
+                    {
+                        if (!t.IsAbstract && usbType.IsAssignableFrom(t) && t != usbType)
+                        {
+                            concreteType = t;
+                            break;
+                        }
+                    }
+                }
+                catch { }
+                if (concreteType != null) break;
+            }
+            if (concreteType == null) return Pass(name, "Skipped — no concrete UdonSharpBehaviour found.");
+
+            string target = TestAssetDir + "/UdonBacking.prefab";
+            DeleteIfExists(target);
+
+            string fullTypeName = concreteType.FullName + ", " + concreteType.Assembly.GetName().Name;
+            string ops = "["
+                + "{\"op\":\"create_prefab\",\"name\":\"UdonBackingRoot\"},"
+                + "{\"op\":\"add_component\",\"target\":\"$root\",\"type\":\"" + EscapeJsonString(fullTypeName) + "\",\"result\":\"$udon\"},"
+                + "{\"op\":\"save\"}"
+                + "]";
+            var resp = RunBridge(BuildCreatePrefabRequest(target, ops));
+            var err = AssertCreateSuccess(name, resp);
+            if (err != null) return err;
+
+            // Verify backing UdonBehaviour was created
+            var go = AssetDatabase.LoadAssetAtPath<GameObject>(target);
+            if (go == null) return Fail(name, "Prefab not found after save.");
+
+            Type udonBehaviourType = null;
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                try { udonBehaviourType = asm.GetType("VRC.Udon.UdonBehaviour"); } catch { }
+                if (udonBehaviourType != null) break;
+            }
+            if (udonBehaviourType == null) return Fail(name, "VRC.Udon.UdonBehaviour type not found despite UdonSharp being present.");
+
+            var backing = go.GetComponent(udonBehaviourType);
+            if (backing == null)
+                return Fail(name, "Backing UdonBehaviour was not auto-created by add_component.");
 
             return Pass(name);
         }
