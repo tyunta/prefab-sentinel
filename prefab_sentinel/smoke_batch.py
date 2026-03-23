@@ -555,124 +555,138 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
 
     cases = _build_cases(args)
     results: list[dict[str, Any]] = []
+    partial_error: Exception | None = None
     for case in cases:
-        if not _wsl_path_exists(case.plan):
-            raise FileNotFoundError(f"Plan not found for {case.name}: {case.plan}")
-        if not _wsl_path_exists(case.project_path):
-            raise FileNotFoundError(
-                f"Project path not found for {case.name}: {case.project_path}"
-            )
-
-        case_timeout_sec, timeout_source = _resolve_case_unity_timeout_sec(
-            case=case,
-            default_timeout_sec=args.unity_timeout_sec,
-            avatar_timeout_sec=args.avatar_unity_timeout_sec,
-            world_timeout_sec=args.world_unity_timeout_sec,
-            timeout_profile_overrides=timeout_profile_overrides,
-        )
-
-        case_dir = out_dir / case.name
-        case_dir.mkdir(parents=True, exist_ok=True)
-        response_path = case_dir / "response.json"
-        unity_log_file = case_dir / "unity.log"
-        command = _build_smoke_command(
-            smoke_script=smoke_script,
-            python_executable=args.python,
-            bridge_script=bridge_script,
-            unity_command=args.unity_command,
-            unity_execute_method=args.unity_execute_method,
-            unity_timeout_sec=case_timeout_sec,
-            case=case,
-            response_out=response_path,
-            unity_log_file=unity_log_file,
-        )
-        # Add 30s buffer over Unity-side timeout so Python outlives the
-        # Unity process and can capture its output on timeout.
-        subprocess_timeout = (
-            case_timeout_sec + 30 if case_timeout_sec is not None else None
-        )
-        completed, attempts, duration_sec = _run_smoke_with_retries(
-            command=command,
-            max_retries=args.max_retries,
-            retry_delay_sec=args.retry_delay_sec,
-            timeout_sec=subprocess_timeout,
-        )
-        case_payload = _parse_case_payload(
-            case=case,
-            exit_code=completed.returncode,
-            stdout_text=completed.stdout,
-            stderr_text=completed.stderr,
-        )
         try:
-            expected_applied, expected_applied_source = _resolve_expected_applied(
+            if not _wsl_path_exists(case.plan):
+                raise FileNotFoundError(f"Plan not found for {case.name}: {case.plan}")
+            if not _wsl_path_exists(case.project_path):
+                raise FileNotFoundError(
+                    f"Project path not found for {case.name}: {case.project_path}"
+                )
+
+            case_timeout_sec, timeout_source = _resolve_case_unity_timeout_sec(
                 case=case,
-                expect_applied_from_plan=args.expect_applied_from_plan,
+                default_timeout_sec=args.unity_timeout_sec,
+                avatar_timeout_sec=args.avatar_unity_timeout_sec,
+                world_timeout_sec=args.world_unity_timeout_sec,
+                timeout_profile_overrides=timeout_profile_overrides,
             )
-        except (OSError, json.JSONDecodeError, ValueError) as exc:
-            raise ValueError(
-                f"Failed to resolve expected applied count for {case.name}: {exc}"
-            ) from exc
-        actual_applied = _extract_applied_count(case_payload)
-        applied_matches: bool | None = None
-        if expected_applied is not None:
-            applied_matches = actual_applied == expected_applied
-        expected_code = case.expected_code
-        actual_code_raw = case_payload.get("code")
-        actual_code = actual_code_raw if isinstance(actual_code_raw, str) else ""
-        code_matches: bool | None = None
-        if expected_code is not None:
-            code_matches = actual_code == expected_code
-        matched_expectation = completed.returncode == 0
-        if code_matches is False:
-            matched_expectation = False
-        if applied_matches is False:
-            matched_expectation = False
-        if not response_path.exists():
-            response_path.write_text(
-                json.dumps(case_payload, ensure_ascii=False, indent=2),
-                encoding="utf-8",
+
+            case_dir = out_dir / case.name
+            case_dir.mkdir(parents=True, exist_ok=True)
+            response_path = case_dir / "response.json"
+            unity_log_file = case_dir / "unity.log"
+            command = _build_smoke_command(
+                smoke_script=smoke_script,
+                python_executable=args.python,
+                bridge_script=bridge_script,
+                unity_command=args.unity_command,
+                unity_execute_method=args.unity_execute_method,
+                unity_timeout_sec=case_timeout_sec,
+                case=case,
+                response_out=response_path,
+                unity_log_file=unity_log_file,
             )
-        results.append(
-            {
-                "name": case.name,
-                "plan": str(case.plan),
-                "project_path": str(case.project_path),
-                "expect_failure": case.expect_failure,
-                "expected_code": expected_code,
-                "actual_code": actual_code,
-                "code_matches": code_matches,
-                "expected_applied": expected_applied,
-                "expected_applied_source": expected_applied_source,
-                "actual_applied": actual_applied,
-                "applied_matches": applied_matches,
-                "matched_expectation": matched_expectation,
-                "attempts": attempts,
-                "duration_sec": round(duration_sec, 6),
-                "unity_timeout_sec": case_timeout_sec,
-                "timeout_source": timeout_source,
-                "exit_code": completed.returncode,
-                "response_code": str(case_payload.get("code", "")),
-                "response_severity": str(case_payload.get("severity", "")),
-                "response_path": str(response_path),
-                "unity_log_file": str(unity_log_file),
-            }
-        )
+            # Add 30s buffer over Unity-side timeout so Python outlives the
+            # Unity process and can capture its output on timeout.
+            subprocess_timeout = (
+                case_timeout_sec + 30 if case_timeout_sec is not None else None
+            )
+            completed, attempts, duration_sec = _run_smoke_with_retries(
+                command=command,
+                max_retries=args.max_retries,
+                retry_delay_sec=args.retry_delay_sec,
+                timeout_sec=subprocess_timeout,
+            )
+            case_payload = _parse_case_payload(
+                case=case,
+                exit_code=completed.returncode,
+                stdout_text=completed.stdout,
+                stderr_text=completed.stderr,
+            )
+            try:
+                expected_applied, expected_applied_source = _resolve_expected_applied(
+                    case=case,
+                    expect_applied_from_plan=args.expect_applied_from_plan,
+                )
+            except (OSError, json.JSONDecodeError, ValueError) as exc:
+                raise ValueError(
+                    f"Failed to resolve expected applied count for {case.name}: {exc}"
+                ) from exc
+            actual_applied = _extract_applied_count(case_payload)
+            applied_matches: bool | None = None
+            if expected_applied is not None:
+                applied_matches = actual_applied == expected_applied
+            expected_code = case.expected_code
+            actual_code_raw = case_payload.get("code")
+            actual_code = actual_code_raw if isinstance(actual_code_raw, str) else ""
+            code_matches: bool | None = None
+            if expected_code is not None:
+                code_matches = actual_code == expected_code
+            matched_expectation = completed.returncode == 0
+            if code_matches is False:
+                matched_expectation = False
+            if applied_matches is False:
+                matched_expectation = False
+            if not response_path.exists():
+                response_path.write_text(
+                    json.dumps(case_payload, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+            results.append(
+                {
+                    "name": case.name,
+                    "plan": str(case.plan),
+                    "project_path": str(case.project_path),
+                    "expect_failure": case.expect_failure,
+                    "expected_code": expected_code,
+                    "actual_code": actual_code,
+                    "code_matches": code_matches,
+                    "expected_applied": expected_applied,
+                    "expected_applied_source": expected_applied_source,
+                    "actual_applied": actual_applied,
+                    "applied_matches": applied_matches,
+                    "matched_expectation": matched_expectation,
+                    "attempts": attempts,
+                    "duration_sec": round(duration_sec, 6),
+                    "unity_timeout_sec": case_timeout_sec,
+                    "timeout_source": timeout_source,
+                    "exit_code": completed.returncode,
+                    "response_code": str(case_payload.get("code", "")),
+                    "response_severity": str(case_payload.get("severity", "")),
+                    "response_path": str(response_path),
+                    "unity_log_file": str(unity_log_file),
+                }
+            )
+        except (FileNotFoundError, ValueError, OSError) as exc:
+            partial_error = exc
+            break
 
     failed_cases = [item for item in results if not item["matched_expectation"]]
-    all_passed = len(failed_cases) == 0
+    all_passed = len(failed_cases) == 0 and partial_error is None
+    summary_code = (
+        "SMOKE_BATCH_OK" if all_passed else "SMOKE_BATCH_FAILED"
+    )
+    if partial_error is not None:
+        summary_message = (
+            f"Batch aborted after {len(results)}/{len(cases)} cases: {partial_error}"
+        )
+    elif all_passed:
+        summary_message = "All bridge smoke cases matched expectations."
+    else:
+        summary_message = "Some bridge smoke cases failed to match expectations."
     summary_payload: dict[str, Any] = {
         "success": all_passed,
         "severity": "info" if all_passed else "error",
-        "code": "SMOKE_BATCH_OK" if all_passed else "SMOKE_BATCH_FAILED",
-        "message": (
-            "All bridge smoke cases matched expectations."
-            if all_passed
-            else "Some bridge smoke cases failed to match expectations."
-        ),
+        "code": summary_code,
+        "message": summary_message,
         "data": {
-            "total_cases": len(results),
+            "total_cases": len(cases),
+            "completed_cases": len(results),
             "passed_cases": len(results) - len(failed_cases),
             "failed_cases": len(failed_cases),
+            "partial": partial_error is not None,
             "timeout_profile_path": (
                 str(timeout_profile_path) if timeout_profile_path is not None else None
             ),
@@ -696,6 +710,9 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
             _render_markdown_summary(summary_payload),
             encoding="utf-8",
         )
+
+    if partial_error is not None:
+        raise partial_error
 
     print(summary_json)
     return 0 if summary_payload["success"] else 1
