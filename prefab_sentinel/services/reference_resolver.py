@@ -5,7 +5,13 @@ import os
 from collections import Counter
 from pathlib import Path
 
-from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse
+from prefab_sentinel.contracts import (
+    Diagnostic,
+    Severity,
+    ToolResponse,
+    error_response,
+    success_response,
+)
 from prefab_sentinel.unity_assets import (
     DEFAULT_EXCLUDED_DIR_NAMES,
     collect_project_guid_index,
@@ -163,32 +169,36 @@ class ReferenceResolverService:
         return normalized, invalid
 
     def resolve_reference(self, guid: str, file_id: str) -> ToolResponse:
+        """Resolve a single GUID + fileID reference to its target asset.
+
+        Args:
+            guid: 32-character hexadecimal asset GUID.
+            file_id: Local fileID within the referenced asset (``"0"`` for asset-level).
+
+        Returns:
+            ``ToolResponse`` with ``data.asset_path`` on success, or a
+            diagnostic indicating missing GUID / missing local fileID.
+        """
         normalized_guid = normalize_guid(guid)
         if is_unity_builtin_guid(normalized_guid):
-            return ToolResponse(
-                success=True,
-                severity=Severity.INFO,
-                code="REF_BUILTIN",
-                message="Reference points to Unity builtin resource.",
+            return success_response(
+                "REF_BUILTIN",
+                "Reference points to Unity builtin resource.",
                 data={"guid": normalized_guid, "file_id": file_id, "read_only": True},
             )
 
         if not looks_like_guid(normalized_guid):
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="REF001",
-                message="GUID must be a 32-character hexadecimal string.",
+            return error_response(
+                "REF001",
+                "GUID must be a 32-character hexadecimal string.",
                 data={"guid": guid, "file_id": file_id, "read_only": True},
             )
 
         asset_path = self._guid_map().get(normalized_guid)
         if asset_path is None:
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="REF001",
-                message="GUID was not found in project meta files.",
+            return error_response(
+                "REF001",
+                "GUID was not found in project meta files.",
                 data={"guid": normalized_guid, "file_id": file_id, "read_only": True},
                 diagnostics=[
                     Diagnostic(
@@ -220,11 +230,9 @@ class ReferenceResolverService:
                 validation_note = "prefab_external_fileid_validation_skipped"
 
         if diagnostics:
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="REF002",
-                message="GUID resolved but fileID was not found in the referenced asset.",
+            return error_response(
+                "REF002",
+                "GUID resolved but fileID was not found in the referenced asset.",
                 data={
                     "guid": normalized_guid,
                     "file_id": file_id,
@@ -234,11 +242,9 @@ class ReferenceResolverService:
                 diagnostics=diagnostics,
             )
 
-        return ToolResponse(
-            success=True,
-            severity=Severity.INFO,
-            code="REF_RESOLVED",
-            message="Reference resolved successfully.",
+        return success_response(
+            "REF_RESOLVED",
+            "Reference resolved successfully.",
             data={
                 "guid": normalized_guid,
                 "file_id": file_id,
@@ -258,23 +264,33 @@ class ReferenceResolverService:
         top_guid_limit: int = 10,
         ignore_asset_guids: tuple[str, ...] = (),
     ) -> ToolResponse:
+        """Scan all Unity text assets in scope for broken GUID/fileID references.
+
+        Args:
+            scope: Directory or file path to scan.
+            include_diagnostics: When ``True``, attach per-reference diagnostics.
+            max_diagnostics: Maximum number of diagnostic entries to return.
+            exclude_patterns: Glob patterns for paths to skip.
+            top_guid_limit: Number of top missing GUIDs to report.
+            ignore_asset_guids: GUIDs to exclude from missing-asset counts.
+
+        Returns:
+            ``ToolResponse`` with ``data.broken_count``, ``data.categories``,
+            ``data.top_missing_asset_guids``, and optionally ``diagnostics``.
+        """
         scope_path = resolve_scope_path(scope, self.project_root)
         if not scope_path.exists():
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="REF404",
-                message="Scope path does not exist.",
+            return error_response(
+                "REF404",
+                "Scope path does not exist.",
                 data={"scope": scope, "read_only": True},
             )
 
         ignore_guid_set, invalid_ignore_guids = self._normalize_ignore_guids(ignore_asset_guids)
         if invalid_ignore_guids:
-            return ToolResponse(
-                success=False,
-                severity=Severity.ERROR,
-                code="REF001",
-                message="ignore_asset_guids must contain only 32-character hexadecimal GUIDs.",
+            return error_response(
+                "REF001",
+                "ignore_asset_guids must contain only 32-character hexadecimal GUIDs.",
                 data={
                     "scope": scope,
                     "invalid_ignore_asset_guids": invalid_ignore_guids,
@@ -339,7 +355,8 @@ class ReferenceResolverService:
                         detail="unreadable_file",
                         evidence=(
                             "File could not be decoded (UTF-8/CP932). "
-                            "References inside this file were not validated."
+                            "References inside this file were not validated. "
+                            "Check file encoding (UTF-8 or CP932 expected) and permissions."
                         ),
                     )
                 )
@@ -417,81 +434,94 @@ class ReferenceResolverService:
             max(0, total_broken - returned_diagnostics) if include_diagnostics else total_broken
         )
 
-        if total_broken > 0:
-            severity = Severity.ERROR
-            success = False
-            code = "REF_SCAN_BROKEN"
-            message = "Broken references were detected in scope."
-        elif unreadable_files > 0:
-            severity = Severity.WARNING
-            success = True
-            code = "REF_SCAN_PARTIAL"
-            message = "No broken references found, but some files could not be decoded."
-        else:
-            severity = Severity.INFO
-            success = True
-            code = "REF_SCAN_OK"
-            message = "No broken references were detected in scope."
+        truncated_hint: str | None = None
+        if truncated_diagnostics > 0:
+            if include_diagnostics:
+                truncated_hint = (
+                    f"Output limited to {max_diagnostics} diagnostics. "
+                    f"Use --max-diagnostics {max_diagnostics * 5} to see more."
+                )
+            else:
+                truncated_hint = (
+                    f"{total_broken} broken reference(s) found. "
+                    f"Use --details to include individual diagnostics."
+                )
 
-        return ToolResponse(
-            success=success,
-            severity=severity,
-            code=code,
-            message=message,
-            data={
-                "scope": self._relative(scope_path),
-                "project_root": self._relative(self.project_root),
-                "scan_project_root": self._relative(scan_project_root),
-                "read_only": True,
-                "ignore_asset_guids": sorted(ignore_guid_set),
-                "details_included": include_diagnostics,
-                "max_diagnostics": max_diagnostics,
-                "scanned_files": scanned_files,
-                "scanned_references": scanned_refs,
-                "broken_count": total_broken,
-                "broken_occurrences": broken_occurrences,
-                "ignored_missing_asset_unique_count": len(
-                    ignored_missing_asset_guid_occurrences
-                ),
-                "ignored_missing_asset_occurrences": sum(
-                    ignored_missing_asset_guid_occurrences.values()
-                ),
-                "returned_diagnostics": returned_diagnostics,
-                "truncated_diagnostics": truncated_diagnostics,
-                "unreadable_files": unreadable_files,
-                "skipped_external_prefab_fileid_checks": skipped_external_prefab_fileid_checks,
-                "exclude_patterns": list(exclude_patterns),
-                "categories": {
-                    "missing_asset": unique_counts["missing_asset"],
-                    "missing_local_id": unique_counts["missing_local_id"],
-                },
-                "categories_occurrences": {
-                    "missing_asset": raw_counts["missing_asset"],
-                    "missing_local_id": raw_counts["missing_local_id"],
-                },
-                "top_missing_asset_guids": [
-                    {
-                        "guid": guid,
-                        "occurrences": count,
-                        "asset_name": resolve_guid_to_asset_name(
-                            guid, guid_map, scan_project_root,
-                        ),
-                    }
-                    for guid, count in missing_asset_guid_occurrences.most_common(top_guid_limit)
-                ],
-                "top_ignored_missing_asset_guids": [
-                    {
-                        "guid": guid,
-                        "occurrences": count,
-                        "asset_name": resolve_guid_to_asset_name(
-                            guid, guid_map, scan_project_root,
-                        ),
-                    }
-                    for guid, count in ignored_missing_asset_guid_occurrences.most_common(
-                        top_guid_limit
-                    )
-                ],
+        scan_data = {
+            "scope": self._relative(scope_path),
+            "project_root": self._relative(self.project_root),
+            "scan_project_root": self._relative(scan_project_root),
+            "read_only": True,
+            "ignore_asset_guids": sorted(ignore_guid_set),
+            "details_included": include_diagnostics,
+            "max_diagnostics": max_diagnostics,
+            "scanned_files": scanned_files,
+            "scanned_references": scanned_refs,
+            "broken_count": total_broken,
+            "broken_occurrences": broken_occurrences,
+            "ignored_missing_asset_unique_count": len(
+                ignored_missing_asset_guid_occurrences
+            ),
+            "ignored_missing_asset_occurrences": sum(
+                ignored_missing_asset_guid_occurrences.values()
+            ),
+            "returned_diagnostics": returned_diagnostics,
+            "truncated_diagnostics": truncated_diagnostics,
+            "truncated_hint": truncated_hint,
+            "unreadable_files": unreadable_files,
+            "skipped_external_prefab_fileid_checks": skipped_external_prefab_fileid_checks,
+            "exclude_patterns": list(exclude_patterns),
+            "categories": {
+                "missing_asset": unique_counts["missing_asset"],
+                "missing_local_id": unique_counts["missing_local_id"],
             },
+            "categories_occurrences": {
+                "missing_asset": raw_counts["missing_asset"],
+                "missing_local_id": raw_counts["missing_local_id"],
+            },
+            "top_missing_asset_guids": [
+                {
+                    "guid": guid,
+                    "occurrences": count,
+                    "asset_name": resolve_guid_to_asset_name(
+                        guid, guid_map, scan_project_root,
+                    ),
+                }
+                for guid, count in missing_asset_guid_occurrences.most_common(top_guid_limit)
+            ],
+            "top_ignored_missing_asset_guids": [
+                {
+                    "guid": guid,
+                    "occurrences": count,
+                    "asset_name": resolve_guid_to_asset_name(
+                        guid, guid_map, scan_project_root,
+                    ),
+                }
+                for guid, count in ignored_missing_asset_guid_occurrences.most_common(
+                    top_guid_limit
+                )
+            ],
+        }
+
+        if total_broken > 0:
+            return error_response(
+                "REF_SCAN_BROKEN",
+                "Broken references were detected in scope.",
+                data=scan_data,
+                diagnostics=diagnostics,
+            )
+        if unreadable_files > 0:
+            return success_response(
+                "REF_SCAN_PARTIAL",
+                "No broken references found, but some files could not be decoded.",
+                severity=Severity.WARNING,
+                data=scan_data,
+                diagnostics=diagnostics,
+            )
+        return success_response(
+            "REF_SCAN_OK",
+            "No broken references were detected in scope.",
+            data=scan_data,
             diagnostics=diagnostics,
         )
 
@@ -502,17 +532,27 @@ class ReferenceResolverService:
         exclude_patterns: tuple[str, ...] = (),
         max_usages: int = 500,
     ) -> ToolResponse:
+        """Find all files referencing a given asset or GUID.
+
+        Args:
+            asset_or_guid: Asset file path or 32-char hexadecimal GUID.
+            scope: Directory or file path to restrict the search.
+            exclude_patterns: Glob patterns for paths to skip.
+            max_usages: Maximum number of usage entries to return.
+
+        Returns:
+            ``ToolResponse`` with ``data.usages`` listing each referencing
+            file path, line, column, and raw reference text.
+        """
         max_usages = max(1, max_usages)
         scan_scope_path: Path | None = None
         scan_project_root = self.project_root
         if scope:
             scan_scope_path = resolve_scope_path(scope, self.project_root)
             if not scan_scope_path.exists():
-                return ToolResponse(
-                    success=False,
-                    severity=Severity.ERROR,
-                    code="REF404",
-                    message="Scope path does not exist.",
+                return error_response(
+                    "REF404",
+                    "Scope path does not exist.",
                     data={"scope": scope, "read_only": True},
                 )
             scan_project_root = self._resolve_scan_project_root(scan_scope_path)
@@ -521,30 +561,24 @@ class ReferenceResolverService:
             guid = normalize_guid(asset_or_guid)
             asset_path = self._guid_map(scan_project_root).get(guid)
             if asset_path is None:
-                return ToolResponse(
-                    success=False,
-                    severity=Severity.ERROR,
-                    code="REF001",
-                    message="GUID was not found in project meta files.",
+                return error_response(
+                    "REF001",
+                    "GUID was not found in project meta files.",
                     data={"asset_or_guid": asset_or_guid, "read_only": True},
                 )
         else:
             candidate = resolve_scope_path(asset_or_guid, self.project_root)
             if not candidate.exists():
-                return ToolResponse(
-                    success=False,
-                    severity=Severity.ERROR,
-                    code="REF404",
-                    message="Target asset path does not exist.",
+                return error_response(
+                    "REF404",
+                    "Target asset path does not exist.",
                     data={"asset_or_guid": asset_or_guid, "read_only": True},
                 )
             meta_path = candidate.with_suffix(candidate.suffix + ".meta")
             if not meta_path.exists():
-                return ToolResponse(
-                    success=False,
-                    severity=Severity.ERROR,
-                    code="REF001",
-                    message="Target asset has no .meta GUID file.",
+                return error_response(
+                    "REF001",
+                    "Target asset has no .meta GUID file.",
                     data={"asset_or_guid": asset_or_guid, "read_only": True},
                 )
             try:
@@ -552,11 +586,9 @@ class ReferenceResolverService:
             except UnicodeDecodeError:
                 guid = ""
             if not looks_like_guid(guid):
-                return ToolResponse(
-                    success=False,
-                    severity=Severity.ERROR,
-                    code="REF001",
-                    message="Target asset meta file does not contain a valid GUID.",
+                return error_response(
+                    "REF001",
+                    "Target asset meta file does not contain a valid GUID.",
                     data={"asset_or_guid": asset_or_guid, "read_only": True},
                 )
             asset_path = candidate
@@ -593,11 +625,10 @@ class ReferenceResolverService:
         else:
             severity = Severity.WARNING
 
-        return ToolResponse(
-            success=True,
+        return success_response(
+            "REF_WHERE_USED",
+            "Reference usage scan completed.",
             severity=severity,
-            code="REF_WHERE_USED",
-            message="Reference usage scan completed.",
             data={
                 "guid": guid,
                 "asset_path": self._relative(asset_path),

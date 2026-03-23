@@ -101,7 +101,9 @@ class ReferenceResolverServiceTests(unittest.TestCase):
             self.assertEqual(2, response.data["broken_count"])
             self.assertEqual(2, response.data["broken_occurrences"])
             self.assertFalse(response.data["details_included"])
-            self.assertEqual([], response.diagnostics)
+            self.assertEqual(0, len(response.diagnostics))
+            # truncated hint is in data, not diagnostics
+            self.assertIn("--details", response.data["truncated_hint"])
             self.assertGreaterEqual(
                 response.data["skipped_external_prefab_fileid_checks"],
                 1,
@@ -122,6 +124,8 @@ class ReferenceResolverServiceTests(unittest.TestCase):
             self.assertFalse(response.success)
             self.assertEqual(1, len(response.diagnostics))
             self.assertEqual(1, response.data["returned_diagnostics"])
+            # truncated hint is in data, not diagnostics
+            self.assertIn("--max-diagnostics", response.data["truncated_hint"])
             self.assertEqual(1, response.data["truncated_diagnostics"])
             self.assertGreaterEqual(
                 response.data["broken_occurrences"],
