@@ -7,6 +7,7 @@ Prefab Variants.
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -198,7 +199,7 @@ def _inspect_base_materials(
 
         mat_refs = _parse_renderer_materials(block)
         slots: list[MaterialSlot] = []
-        for idx, (file_id, guid) in enumerate(mat_refs):
+        for idx, (_file_id, guid) in enumerate(mat_refs):
             name, mat_path = _resolve_material_name(guid, guid_index, project_root)
             slots.append(MaterialSlot(
                 index=idx,
@@ -276,7 +277,10 @@ def _inspect_variant_materials(
             parent_rel = parent_path.as_posix()
         try:
             parent_text = decode_text_file(parent_path)
-        except (OSError, UnicodeDecodeError):
+        except (OSError, UnicodeDecodeError) as exc:
+            logging.getLogger(__name__).debug(
+                "Failed to read variant ancestor %s: %s", parent_path, exc,
+            )
             break
         base_prefab_path_str = parent_rel
         base_text = parent_text
@@ -316,7 +320,7 @@ def _inspect_variant_materials(
 
         base_mat_refs = _parse_renderer_materials(block)
         slots: list[MaterialSlot] = []
-        for idx, (file_id, guid) in enumerate(base_mat_refs):
+        for idx, (_file_id, guid) in enumerate(base_mat_refs):
             override_key = (block.file_id, idx)
             is_overridden = override_key in material_overrides
             effective_guid = material_overrides[override_key] if is_overridden else guid

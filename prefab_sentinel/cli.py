@@ -1060,7 +1060,6 @@ def _resolve_signing_key(
         return key
 
     parser.error("Signing key source is not configured.")
-    return ""
 
 
 def _normalize_expected_digest(
@@ -1140,7 +1139,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    def get_orchestrator() -> Phase1Orchestrator:
+    def get_orchestrator() -> Phase1Orchestrator:  # noqa: F821
         from prefab_sentinel.orchestrator import Phase1Orchestrator
 
         return Phase1Orchestrator.default()
@@ -1504,9 +1503,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "patch" and args.patch_command == "revert":
         from prefab_sentinel.patch_revert import revert_overrides
 
-        if not args.dry_run and args.confirm:
-            if not args.change_reason or not args.change_reason.strip():
-                parser.error("patch revert --confirm requires --change-reason.")
+        if not args.dry_run and args.confirm and (not args.change_reason or not args.change_reason.strip()):
+            parser.error("patch revert --confirm requires --change-reason.")
         if not args.dry_run and not args.confirm:
             parser.error("patch revert requires either --dry-run or --confirm.")
 
@@ -1899,12 +1897,10 @@ def main(argv: list[str] | None = None) -> int:
             result = send_action(action="run_integration_tests", timeout_sec=300)
         else:
             parser.error(f"Unknown editor command: {cmd}")
-            return 2
         _emit_payload(result, "json")
         return 0 if result.get("success") else 1
 
     parser.error("Unknown command.")
-    return 2
 
 
 if __name__ == "__main__":

@@ -10,11 +10,11 @@ from pathlib import Path
 from typing import Any
 
 from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse
+from prefab_sentinel.mcp.prefab_variant import PrefabVariantMcp
 from prefab_sentinel.patch_plan import (
     PLAN_VERSION,
     build_bridge_request,
 )
-from prefab_sentinel.mcp.prefab_variant import PrefabVariantMcp
 from prefab_sentinel.unity_assets import (
     SOURCE_PREFAB_PATTERN,
     decode_text_file,
@@ -2401,22 +2401,21 @@ class SerializedObjectMcp:
                 )
             return entry
 
-        if op_name in ("insert_array_element", "remove_array_element"):
-            if not property_path.endswith(".Array.data"):
-                diagnostics.append(
-                    Diagnostic(
-                        path=target,
-                        location=f"ops[{index}].path",
-                        detail="schema_error",
-                        evidence=(
-                            f"Array operations require path ending with '.Array.data', "
-                            f"got '{property_path}'. "
-                            f"Example: 'globalSwitches.Array.data' instead of "
-                            f"'globalSwitches'."
-                        ),
-                    )
+        if op_name in ("insert_array_element", "remove_array_element") and not property_path.endswith(".Array.data"):
+            diagnostics.append(
+                Diagnostic(
+                    path=target,
+                    location=f"ops[{index}].path",
+                    detail="schema_error",
+                    evidence=(
+                        f"Array operations require path ending with '.Array.data', "
+                        f"got '{property_path}'. "
+                        f"Example: 'globalSwitches.Array.data' instead of "
+                        f"'globalSwitches'."
+                    ),
                 )
-                return None
+            )
+            return None
 
         if "index" not in op:
             diagnostics.append(

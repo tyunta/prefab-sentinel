@@ -141,8 +141,8 @@ def analyze_hierarchy(
     # Identify root GameObjects: those whose Transform has m_Father == "0" or ""
     root_go_fids: list[str] = []
     for go_fid in game_objects:
-        t = go_to_transform.get(go_fid)
-        if t and t.father_file_id in ("0", ""):
+        t_or_none = go_to_transform.get(go_fid)
+        if t_or_none and t_or_none.father_file_id in ("0", ""):
             root_go_fids.append(go_fid)
 
     roots = [_build_node(fid, 0) for fid in root_go_fids]

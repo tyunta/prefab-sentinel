@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -9,8 +10,6 @@ from typing import Any
 from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse, max_severity
 from prefab_sentinel.hierarchy import HierarchyNode, analyze_hierarchy, format_tree
 from prefab_sentinel.material_inspector import (
-    MaterialSlot,
-    RendererMaterials,
     format_materials,
     inspect_materials,
 )
@@ -248,8 +247,8 @@ class Phase1Orchestrator:
             for guid, asset_path in guid_index.items():
                 if asset_path.suffix == ".cs":
                     guid_to_name[guid] = asset_path.stem
-        except Exception:
-            pass  # best-effort: leave guid_to_name empty
+        except Exception as exc:  # best-effort: project root or GUID index may fail
+            logging.getLogger(__name__).debug("GUID index build failed (best-effort): %s", exc)
 
         component_summaries = [
             {
