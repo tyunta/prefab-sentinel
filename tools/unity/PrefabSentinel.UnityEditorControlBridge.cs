@@ -283,23 +283,34 @@ namespace PrefabSentinel
                     int h = request.height > 0 ? request.height : (int)sceneView.position.height;
 
                     Camera cam = sceneView.camera;
-                    RenderTexture rt = new RenderTexture(w, h, 24);
-                    RenderTexture prev = cam.targetTexture;
-                    cam.targetTexture = rt;
-                    cam.Render();
-                    cam.targetTexture = prev;
+                    if (cam == null)
+                        return BuildError("EDITOR_CTRL_NO_SCENE_CAMERA", "SceneView camera is null.");
 
-                    RenderTexture.active = rt;
-                    Texture2D tex = new Texture2D(w, h, TextureFormat.RGB24, false);
-                    tex.ReadPixels(new Rect(0, 0, w, h), 0, 0);
-                    tex.Apply();
-                    RenderTexture.active = null;
+                    RenderTexture rt = null;
+                    Texture2D tex = null;
+                    try
+                    {
+                        rt = new RenderTexture(w, h, 24);
+                        RenderTexture prev = cam.targetTexture;
+                        cam.targetTexture = rt;
+                        cam.Render();
+                        cam.targetTexture = prev;
 
-                    byte[] png = tex.EncodeToPNG();
-                    File.WriteAllBytes(outputPath, png);
+                        RenderTexture.active = rt;
+                        tex = new Texture2D(w, h, TextureFormat.RGB24, false);
+                        tex.ReadPixels(new Rect(0, 0, w, h), 0, 0);
+                        tex.Apply();
+                        RenderTexture.active = null;
 
-                    UnityEngine.Object.DestroyImmediate(tex);
-                    UnityEngine.Object.DestroyImmediate(rt);
+                        byte[] png = tex.EncodeToPNG();
+                        File.WriteAllBytes(outputPath, png);
+                    }
+                    finally
+                    {
+                        if (tex != null) UnityEngine.Object.DestroyImmediate(tex);
+                        if (rt != null) UnityEngine.Object.DestroyImmediate(rt);
+                        RenderTexture.active = null;
+                    }
 
                     return BuildSuccess("EDITOR_CTRL_SCREENSHOT_OK", $"Scene view captured to {outputPath}",
                         data: new EditorControlData
@@ -321,27 +332,35 @@ namespace PrefabSentinel
                     if (tex == null)
                         return BuildError("EDITOR_CTRL_NO_GAME_VIEW", "Failed to capture game view. Ensure Game view is visible.");
 
-                    if (request.width > 0 && request.height > 0)
+                    RenderTexture rt = null;
+                    try
                     {
-                        // Resize if custom dimensions requested
-                        RenderTexture rt = RenderTexture.GetTemporary(request.width, request.height);
-                        Graphics.Blit(tex, rt);
-                        UnityEngine.Object.DestroyImmediate(tex);
+                        if (request.width > 0 && request.height > 0)
+                        {
+                            // Resize if custom dimensions requested
+                            rt = RenderTexture.GetTemporary(request.width, request.height);
+                            Graphics.Blit(tex, rt);
+                            UnityEngine.Object.DestroyImmediate(tex);
 
-                        RenderTexture.active = rt;
-                        tex = new Texture2D(request.width, request.height, TextureFormat.RGB24, false);
-                        tex.ReadPixels(new Rect(0, 0, request.width, request.height), 0, 0);
-                        tex.Apply();
-                        RenderTexture.active = null;
-                        RenderTexture.ReleaseTemporary(rt);
+                            RenderTexture.active = rt;
+                            tex = new Texture2D(request.width, request.height, TextureFormat.RGB24, false);
+                            tex.ReadPixels(new Rect(0, 0, request.width, request.height), 0, 0);
+                            tex.Apply();
+                            RenderTexture.active = null;
 
-                        w = request.width;
-                        h = request.height;
+                            w = request.width;
+                            h = request.height;
+                        }
+
+                        byte[] png = tex.EncodeToPNG();
+                        File.WriteAllBytes(outputPath, png);
                     }
-
-                    byte[] png = tex.EncodeToPNG();
-                    File.WriteAllBytes(outputPath, png);
-                    UnityEngine.Object.DestroyImmediate(tex);
+                    finally
+                    {
+                        if (tex != null) UnityEngine.Object.DestroyImmediate(tex);
+                        if (rt != null) RenderTexture.ReleaseTemporary(rt);
+                        RenderTexture.active = null;
+                    }
 
                     return BuildSuccess("EDITOR_CTRL_SCREENSHOT_OK", $"Game view captured to {outputPath}",
                         data: new EditorControlData
@@ -464,9 +483,15 @@ namespace PrefabSentinel
             {
                 GameObject parent = GameObject.Find(request.parent_path);
                 if (parent != null)
+                {
                     instance.transform.SetParent(parent.transform, false);
+                }
                 else
-                    Debug.LogWarning($"[PrefabSentinel.EditorControl] Parent not found: {request.parent_path}");
+                {
+                    UnityEngine.Object.DestroyImmediate(instance);
+                    return BuildError("EDITOR_CTRL_PARENT_NOT_FOUND",
+                        $"Parent not found: {request.parent_path}");
+                }
             }
 
             // Set position if specified
@@ -809,6 +834,10 @@ namespace PrefabSentinel
                     $"Material at index {request.material_index} is null.");
 
             var shader = mat.shader;
+            if (shader == null)
+                return BuildError("EDITOR_CTRL_SHADER_NULL",
+                    $"Material at index {request.material_index} has no shader assigned.");
+
             var properties = new List<MaterialPropertyEntry>();
             int propCount = shader.GetPropertyCount();
 
@@ -1064,11 +1093,19 @@ namespace PrefabSentinel
 
         private static void WriteResponse(string responsePath, EditorControlResponse response)
         {
-            string json = JsonUtility.ToJson(response, true);
-            string tmpPath = responsePath + ".tmp";
-            File.WriteAllText(tmpPath, json);
-            if (File.Exists(responsePath)) File.Delete(responsePath);
-            File.Move(tmpPath, responsePath);
+            try
+            {
+                string json = JsonUtility.ToJson(response, true);
+                string tmpPath = responsePath + ".tmp";
+                File.WriteAllText(tmpPath, json);
+                if (File.Exists(responsePath)) File.Delete(responsePath);
+                File.Move(tmpPath, responsePath);
+            }
+            catch
+            {
+                try { File.WriteAllText(responsePath, JsonUtility.ToJson(response, true)); }
+                catch { /* best effort */ }
+            }
         }
     }
 }

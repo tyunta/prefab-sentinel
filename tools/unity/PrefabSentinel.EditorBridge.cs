@@ -183,16 +183,19 @@ namespace PrefabSentinel
             // If the response file doesn't exist at this point, something went wrong.
             if (!File.Exists(responsePath))
             {
+                // EditorControl and Runtime bridges use protocol version 1;
+                // PatchBridge uses protocol version 2.
+                int pv = (isEditorControl || isRuntime) ? 1 : 2;
                 WriteErrorResponse(responsePath, "EDITOR_BRIDGE_NO_RESPONSE",
-                    "Bridge method completed but did not write a response file.");
+                    "Bridge method completed but did not write a response file.", pv);
             }
         }
 
-        private static void WriteErrorResponse(string responsePath, string code, string detail)
+        private static void WriteErrorResponse(string responsePath, string code, string detail, int protocolVersion = 2)
         {
             string json = JsonUtility.ToJson(new ErrorResponse
             {
-                protocol_version = 2,
+                protocol_version = protocolVersion,
                 success = false,
                 severity = "error",
                 code = code,
@@ -203,10 +206,18 @@ namespace PrefabSentinel
 
         private static void WriteAtomic(string path, string content)
         {
-            string tmpPath = path + TmpSuffix;
-            File.WriteAllText(tmpPath, content);
-            if (File.Exists(path)) File.Delete(path);
-            File.Move(tmpPath, path);
+            try
+            {
+                string tmpPath = path + TmpSuffix;
+                File.WriteAllText(tmpPath, content);
+                if (File.Exists(path)) File.Delete(path);
+                File.Move(tmpPath, path);
+            }
+            catch
+            {
+                try { File.WriteAllText(path, content); }
+                catch { /* best effort */ }
+            }
         }
 
         private static void TryDelete(string path)
