@@ -508,7 +508,8 @@ def _run_smoke_with_retries(
             time.sleep(retry_delay_sec)
 
 
-def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+def _validate_batch_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    """Validate range constraints on all batch CLI arguments."""
     if args.max_retries < 0:
         parser.error("--max-retries must be greater than or equal to 0.")
     if args.retry_delay_sec < 0.0:
@@ -537,23 +538,21 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
         if arg_value is not None and not str(arg_value).strip():
             parser.error(f"{arg_name} must be non-empty when specified.")
 
-    timeout_profile_path: Path | None = None
-    timeout_profile_overrides: dict[str, int] = {}
-    if args.timeout_profile:
-        timeout_profile_path = Path(args.timeout_profile)
-        if not _wsl_path_exists(timeout_profile_path):
-            parser.error(f"--timeout-profile not found: {timeout_profile_path}")
-        try:
-            timeout_profile_overrides = _load_timeout_profile_map(timeout_profile_path)
-        except (OSError, json.JSONDecodeError, ValueError) as exc:
-            parser.error(f"Failed to parse --timeout-profile: {exc}")
 
-    smoke_script = Path(args.smoke_script)
-    bridge_script = Path(args.bridge_script)
-    out_dir = Path(args.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+def _execute_batch_cases(
+    args: argparse.Namespace,
+    cases: list[SmokeCase],
+    out_dir: Path,
+    *,
+    smoke_script: Path,
+    bridge_script: Path,
+    timeout_profile_overrides: dict[str, int],
+) -> tuple[list[dict[str, Any]], Exception | None]:
+    """Execute each smoke case with retries and response parsing.
 
-    cases = _build_cases(args)
+    Returns ``(results, partial_error)``.  *partial_error* is non-None when the
+    loop was interrupted by an exception mid-batch.
+    """
     results: list[dict[str, Any]] = []
     partial_error: Exception | None = None
     for case in cases:
@@ -662,7 +661,23 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
         except (FileNotFoundError, ValueError, OSError) as exc:
             partial_error = exc
             break
+    return results, partial_error
 
+
+def _build_batch_summary(
+    args: argparse.Namespace,
+    cases: list[SmokeCase],
+    results: list[dict[str, Any]],
+    out_dir: Path,
+    *,
+    partial_error: Exception | None,
+    timeout_profile_path: Path | None,
+    timeout_profile_overrides: dict[str, int],
+) -> tuple[dict[str, Any], Path]:
+    """Build summary payload and write JSON/MD outputs.
+
+    Returns ``(summary_payload, summary_json_path)``.
+    """
     failed_cases = [item for item in results if not item["matched_expectation"]]
     all_passed = len(failed_cases) == 0 and partial_error is None
     summary_code = (
@@ -710,6 +725,48 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
             _render_markdown_summary(summary_payload),
             encoding="utf-8",
         )
+
+    return summary_payload, summary_json
+
+
+def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    _validate_batch_args(args, parser)
+
+    timeout_profile_path: Path | None = None
+    timeout_profile_overrides: dict[str, int] = {}
+    if args.timeout_profile:
+        timeout_profile_path = Path(args.timeout_profile)
+        if not _wsl_path_exists(timeout_profile_path):
+            parser.error(f"--timeout-profile not found: {timeout_profile_path}")
+        try:
+            timeout_profile_overrides = _load_timeout_profile_map(timeout_profile_path)
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            parser.error(f"Failed to parse --timeout-profile: {exc}")
+
+    smoke_script = Path(args.smoke_script)
+    bridge_script = Path(args.bridge_script)
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    cases = _build_cases(args)
+    results, partial_error = _execute_batch_cases(
+        args,
+        cases,
+        out_dir,
+        smoke_script=smoke_script,
+        bridge_script=bridge_script,
+        timeout_profile_overrides=timeout_profile_overrides,
+    )
+
+    summary_payload, summary_json = _build_batch_summary(
+        args,
+        cases,
+        results,
+        out_dir,
+        partial_error=partial_error,
+        timeout_profile_path=timeout_profile_path,
+        timeout_profile_overrides=timeout_profile_overrides,
+    )
 
     if partial_error is not None:
         raise partial_error

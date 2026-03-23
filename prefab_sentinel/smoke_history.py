@@ -803,7 +803,8 @@ def _render_markdown_summary(
     return "\n".join(lines)
 
 
-def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+def _validate_history_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    """Validate range constraints on all history CLI arguments."""
     if args.duration_percentile < 0.0 or args.duration_percentile > 100.0:
         parser.error("--duration-percentile must be in range 0..100.")
     if args.timeout_multiplier < 1.0:
@@ -875,6 +876,11 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
             "--min-profile-timeout-coverage-pct-per-target must be in range 0..100."
         )
 
+
+def _load_history_rows(
+    args: argparse.Namespace, parser: argparse.ArgumentParser
+) -> list[dict[str, Any]]:
+    """Load input files, parse JSON, filter rows. Returns the row list."""
     input_paths = _expand_inputs(args.inputs)
     if not input_paths:
         parser.error("No input JSON files were found.")
@@ -900,7 +906,18 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
 
     if not rows:
         parser.error("No smoke case rows were available after filtering.")
+    return rows
 
+
+def _compute_and_write_outputs(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+    rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]] | None, dict[str, Any] | None]:
+    """Write CSV, compute stats, write MD/profile outputs.
+
+    Returns ``(stats, profile_payload)`` for use by threshold evaluation.
+    """
     header = [
         "source",
         "batch_success",
@@ -991,6 +1008,16 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
         _write_json(out_timeout_profile, profile_payload)
         print(out_timeout_profile)
 
+    return stats, profile_payload
+
+
+def _evaluate_thresholds(
+    args: argparse.Namespace,
+    rows: list[dict[str, Any]],
+    stats: list[dict[str, Any]] | None,
+    profile_payload: dict[str, Any] | None,
+) -> int:
+    """Check threshold violations and return exit code (0 = pass, 1 = fail)."""
     (
         _code_assertions,
         code_mismatches,
@@ -1037,12 +1064,12 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
             "code mismatch threshold exceeded: "
             f"{code_mismatches} > {args.max_code_mismatches}"
         )
-    v = _check_pct_threshold(
+    violation = _check_pct_threshold(
         code_pass_pct, args.min_code_pass_pct,
         "code pass percentage", "no code assertion rows exist",
     )
-    if v:
-        violations.append(v)
+    if violation:
+        violations.append(violation)
     if (
         args.max_applied_mismatches is not None
         and applied_mismatches > args.max_applied_mismatches
@@ -1051,12 +1078,12 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
             "applied mismatch threshold exceeded: "
             f"{applied_mismatches} > {args.max_applied_mismatches}"
         )
-    v = _check_pct_threshold(
+    violation = _check_pct_threshold(
         applied_pass_pct, args.min_applied_pass_pct,
         "applied pass percentage", "no applied assertion rows exist",
     )
-    if v:
-        violations.append(v)
+    if violation:
+        violations.append(violation)
     if (
         args.max_observed_timeout_breaches is not None
         and observed_timeout_breaches > args.max_observed_timeout_breaches
@@ -1065,12 +1092,12 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
             "observed timeout breach threshold exceeded: "
             f"{observed_timeout_breaches} > {args.max_observed_timeout_breaches}"
         )
-    v = _check_pct_threshold(
+    violation = _check_pct_threshold(
         observed_timeout_coverage_pct, args.min_observed_timeout_coverage_pct,
         "observed timeout coverage", "no duration/timeout rows exist",
     )
-    if v:
-        violations.append(v)
+    if violation:
+        violations.append(violation)
     violations.extend(_check_by_target_breaches(
         observed_timeout_by_target,
         args.max_observed_timeout_breaches_per_target,
@@ -1095,12 +1122,12 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
             "profile timeout breach threshold exceeded: "
             f"{profile_timeout_breaches} > {args.max_profile_timeout_breaches}"
         )
-    v = _check_pct_threshold(
+    violation = _check_pct_threshold(
         profile_timeout_coverage_pct, args.min_profile_timeout_coverage_pct,
         "profile timeout coverage", "no timeout profile duration rows exist",
     )
-    if v:
-        violations.append(v)
+    if violation:
+        violations.append(violation)
     violations.extend(_check_by_target_breaches(
         profile_timeout_by_target,
         args.max_profile_timeout_breaches_per_target,
@@ -1121,6 +1148,14 @@ def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
     for message in violations:
         print(f"SMOKE_HISTORY_THRESHOLD_FAILED: {message}", file=sys.stderr)
     return 0 if not violations else 1
+
+
+def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    _validate_history_args(args, parser)
+    rows = _load_history_rows(args, parser)
+    stats, profile_payload = _compute_and_write_outputs(args, parser, rows)
+    return _evaluate_thresholds(args, rows, stats, profile_payload)
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
