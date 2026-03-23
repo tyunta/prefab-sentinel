@@ -36,6 +36,7 @@ namespace PrefabSentinel
             "camera",
             "list_roots",
             "get_material_property",
+            "run_integration_tests",
         };
 
         // ── Request / Response DTOs ──
@@ -243,6 +244,9 @@ namespace PrefabSentinel
                     break;
                 case "get_material_property":
                     response = HandleGetMaterialProperty(request);
+                    break;
+                case "run_integration_tests":
+                    response = HandleRunIntegrationTests();
                     break;
                 default:
                     response = BuildError(
@@ -519,6 +523,23 @@ namespace PrefabSentinel
             return BuildSuccess("EDITOR_CTRL_RECOMPILE_OK",
                 "Script recompilation scheduled (domain reload will follow)",
                 data: new EditorControlData { executed = true });
+        }
+
+        private static EditorControlResponse HandleRunIntegrationTests()
+        {
+            try
+            {
+                var result = UnityIntegrationTests.RunTestSuite();
+                string json = JsonUtility.ToJson(result, true);
+                if (result.success)
+                    return BuildSuccess("EDITOR_CTRL_TESTS_PASSED", json,
+                        data: new EditorControlData { executed = true });
+                return BuildError("EDITOR_CTRL_TESTS_FAILED", json);
+            }
+            catch (Exception ex)
+            {
+                return BuildError("EDITOR_CTRL_TESTS_ERROR", ex.ToString());
+            }
         }
 
         private static EditorControlResponse HandleSetMaterial(EditorControlRequest request)

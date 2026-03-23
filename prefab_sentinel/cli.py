@@ -919,6 +919,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Scene view distance factor (0 = keep current). Maps to SceneView.size.",
     )
 
+    editor_sub.add_parser(
+        "run-tests",
+        help="Run UnityPatchBridge integration tests in the running Editor.",
+    )
+
     return parser
 
 
@@ -1888,6 +1893,8 @@ def main(argv: list[str] | None = None) -> int:
                 pitch=args.pitch,
                 distance=args.distance,
             )
+        elif cmd == "run-tests":
+            result = send_action(action="run_integration_tests", timeout_sec=300)
         else:
             parser.error(f"Unknown editor command: {cmd}")
             return 2

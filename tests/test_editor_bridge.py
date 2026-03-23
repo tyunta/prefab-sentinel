@@ -181,6 +181,7 @@ class TestSupportedActions(unittest.TestCase):
             "camera",
             "list_roots",
             "get_material_property",
+            "run_integration_tests",
         }
         self.assertEqual(expected, SUPPORTED_ACTIONS)
 
@@ -418,6 +419,13 @@ class TestCliEditorSubcommands(unittest.TestCase):
         self.assertAlmostEqual(0.0, args.yaw)
         self.assertAlmostEqual(15.0, args.pitch)
         self.assertAlmostEqual(0.0, args.distance)
+
+    def test_editor_run_tests_parser(self) -> None:
+        from prefab_sentinel.cli import build_parser
+
+        parser = build_parser()
+        args = parser.parse_args(["editor", "run-tests"])
+        self.assertEqual("run-tests", args.editor_command)
 
 
 if __name__ == "__main__":
