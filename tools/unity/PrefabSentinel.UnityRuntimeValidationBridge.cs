@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using UnityEditor;
@@ -16,10 +17,17 @@ namespace PrefabSentinel
     /// </summary>
     public static class UnityRuntimeValidationBridge
     {
-        private const int ProtocolVersion = 1;
+        public const int ProtocolVersion = 1;
         private const string RequestArg = "-sentinelRuntimeRequest";
         private const string ResponseArg = "-sentinelRuntimeResponse";
         private const string DefaultProjectRootName = "project";
+
+        /// <summary>All action strings handled by this bridge.</summary>
+        public static readonly HashSet<string> SupportedActions = new HashSet<string>
+        {
+            "compile_udonsharp",
+            "run_clientsim",
+        };
 
         [Serializable]
         public sealed class RuntimeRequest

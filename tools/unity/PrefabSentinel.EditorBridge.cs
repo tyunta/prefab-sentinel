@@ -161,7 +161,7 @@ namespace PrefabSentinel
             }
 
             bool isRuntime = !string.IsNullOrEmpty(header.action)
-                && (header.action == "compile_udonsharp" || header.action == "run_clientsim");
+                && UnityRuntimeValidationBridge.SupportedActions.Contains(header.action);
 
             bool isEditorControl = !string.IsNullOrEmpty(header.action)
                 && UnityEditorControlBridge.SupportedActions.Contains(header.action);
@@ -183,9 +183,9 @@ namespace PrefabSentinel
             // If the response file doesn't exist at this point, something went wrong.
             if (!File.Exists(responsePath))
             {
-                // EditorControl and Runtime bridges use protocol version 1;
-                // PatchBridge uses protocol version 2.
-                int pv = (isEditorControl || isRuntime) ? 1 : 2;
+                int pv = isEditorControl ? UnityEditorControlBridge.ProtocolVersion
+                       : isRuntime ? UnityRuntimeValidationBridge.ProtocolVersion
+                       : UnityPatchBridge.ProtocolVersion;
                 WriteErrorResponse(responsePath, "EDITOR_BRIDGE_NO_RESPONSE",
                     "Bridge method completed but did not write a response file.", pv);
             }
