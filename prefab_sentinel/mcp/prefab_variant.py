@@ -168,8 +168,9 @@ class PrefabVariantMcp:
         path, text, error = self._load_variant(variant_path)
         if error is not None:
             return error
-        assert path is not None
-        assert text is not None
+        if path is None or text is None:
+            return ToolResponse(success=False, severity=Severity.ERROR, code="PVR_INTERNAL",
+                                message="Internal error: load succeeded but path/text is None.", data={})
 
         chain = [{"path": self._relative(path), "guid": None}]
         diagnostics: list[Diagnostic] = []
@@ -254,8 +255,9 @@ class PrefabVariantMcp:
         path, text, error = self._load_variant(variant_path)
         if error is not None:
             return error
-        assert path is not None
-        assert text is not None
+        if path is None or text is None:
+            return ToolResponse(success=False, severity=Severity.ERROR, code="PVR_INTERNAL",
+                                message="Internal error: load succeeded but path/text is None.", data={})
 
         entries = self._parse_overrides(text)
         filtered = entries
@@ -300,8 +302,9 @@ class PrefabVariantMcp:
         path, text, error = self._load_variant(variant_path)
         if error is not None:
             return error
-        assert path is not None
-        assert text is not None
+        if path is None or text is None:
+            return ToolResponse(success=False, severity=Severity.ERROR, code="PVR_INTERNAL",
+                                message="Internal error: load succeeded but path/text is None.", data={})
 
         entries = self._parse_overrides(text)
         if component_filter:
@@ -345,8 +348,9 @@ class PrefabVariantMcp:
         path, text, error = self._load_variant(variant_path)
         if error is not None:
             return error
-        assert path is not None
-        assert text is not None
+        if path is None or text is None:
+            return ToolResponse(success=False, severity=Severity.ERROR, code="PVR_INTERNAL",
+                                message="Internal error: load succeeded but path/text is None.", data={})
 
         entries = self._parse_overrides(text)
         diagnostics: list[Diagnostic] = []
