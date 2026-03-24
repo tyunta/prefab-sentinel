@@ -19,7 +19,7 @@ Reduce runtime failures by classifying logs, mapping errors to assets, and contr
 5. ランタイム検証を再実行してレポートを保存する。
 
 ## MCP ツール
-- `validate_runtime` — UdonSharp コンパイル + ClientSim 実行検証（`scene_path` パラメータ）
+- `validate_runtime` — UdonSharp コンパイル + ClientSim 実行検証（`asset_path` パラメータ）
 - `find_referencing_assets` — エラー箇所のアセット参照検索
 - `inspect_wiring` — MonoBehaviour フィールド配線検査
 
@@ -33,4 +33,4 @@ export UNITYTOOL_BRIDGE_WATCH_DIR=/mnt/d/VRC/World/EditorBridge
 ## Guardrails
 - If Unity runtime is unavailable (no batchmode command and no Editor Bridge), mark the task as pending and stop after classification steps.
 - Do not apply changes without audit logs (confirm mode with change_reason).
-- WSL environments: project_root and scene_path are auto-converted to Windows format for Unity; watch_dir is auto-converted to WSL format for Python I/O.
+- WSL environments: project_root and asset_path are auto-converted to Windows format for Unity; watch_dir is auto-converted to WSL format for Python I/O.
