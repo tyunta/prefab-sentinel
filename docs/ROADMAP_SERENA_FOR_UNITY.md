@@ -328,9 +328,14 @@ unity_yaml_parser ← 変更なし
 
 ---
 
-### P2: インクリメンタル探索
+### P2: インクリメンタル探索 ✅ 実装済み
 
 **前提:** P1 の `SymbolTree` が `depth` パラメータと `include_properties` をサポートしている。P2 はその上に Variant 対応と使用パターン最適化を追加する。
+
+**実装結果:**
+- `diff_unity_symbols` MCP ツール: Variant と Base の差分のみ返す（`orchestrator.diff_variant()` に委譲）
+- `find_unity_symbol` の `show_origin` パラメータ: プロパティに Variant チェーンのオリジン情報を注釈
+- オリジン追跡は SymbolTree に入れず MCP ツール層でマージ（設計判断: SymbolTree は単一 YAML のみ知る）
 
 **depth セマンティクス（P1 で実装済みの予定）:**
 - `depth=0`: ルート GameObject 一覧

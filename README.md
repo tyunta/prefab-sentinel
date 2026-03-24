@@ -97,7 +97,8 @@ prefab-sentinel-mcp
 | ツール | 説明 |
 |--------|------|
 | `get_unity_symbols` | アセットのシンボルツリー取得（GameObject/Component 階層） |
-| `find_unity_symbol` | 人間可読パス（例: `CharacterBody/MeshRenderer`）でオブジェクト検索 |
+| `find_unity_symbol` | 人間可読パス（例: `CharacterBody/MeshRenderer`）でオブジェクト検索。`show_origin=true` で Variant チェーンのオリジン注釈付き |
+| `diff_unity_symbols` | Variant と Base の差分のみ返す（override プロパティ + オリジン注釈） |
 | `find_referencing_assets` | GUID/パスの参照元アセット検索 |
 | `validate_refs` | 壊れた GUID/fileID 参照のスキャン |
 | `inspect_wiring` | MonoBehaviour フィールド配線の分析 |
@@ -1005,8 +1006,8 @@ uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel rep
 ## 19. 将来拡張
 
 実装中の具体アイデアと実行順は `docs/IDEAS_AND_ROADMAP.md` で管理する。
-MCP サーバーとシンボルモデルは P1 として実装済み（セクション 0.1「MCP サーバー」参照）。
-P2 以降の長期ビジョン（インクリメンタル探索・セマンティック編集）は `docs/ROADMAP_SERENA_FOR_UNITY.md` を参照。
+MCP サーバーとシンボルモデルは P1、Variant 差分とオリジン追跡は P2 として実装済み（セクション 0.1「MCP サーバー」参照）。
+P3 以降の長期ビジョン（セマンティック編集・C# 接続）は `docs/ROADMAP_SERENA_FOR_UNITY.md` を参照。
 
 - Sceneテンプレート比較による自動配線提案
 - 複数ワールド横断の共通設定ガバナンス
