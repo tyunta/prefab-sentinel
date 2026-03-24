@@ -100,6 +100,16 @@
 - [x] Task 9: ドキュメント — CLAUDE.md API 規約、README、ROADMAP 到達度 100%
 - [x] Task 10: 回帰テスト 1225 件全パス + minor バージョンバンプ v0.3.0
 
+## MCP Consolidation Phase 3: CLI Deletion (2026-03-24)
+
+- [x] Task 1: Delete CLI core files (cli.py, __main__.py, bridge_check.py, tests)
+- [x] Task 2: Remove CLI-dependent test classes from 4 test files
+- [x] Task 3: Remove suggest_ignore_guids from orchestrator and tests
+- [x] Task 4: Update pyproject.toml (remove CLI entry point, update description, clean mypy)
+- [x] Task 5: Update CI workflows (replace CLI commands with Python module invocations)
+- [x] Task 6: Update README (remove CLI sections, MCP-only architecture)
+- [x] Task 7: Full verification (1120 tests pass, 36 MCP tools registered) + bump v0.4.0
+
 ## MCP Consolidation Phase 2: AI Completeness (2026-03-24)
 
 - [x] Task 1: Registration test (36 tools) + 3 test classes (inspect_hierarchy, validate_runtime, patch_apply)
