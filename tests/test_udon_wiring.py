@@ -576,5 +576,96 @@ class AnalyzeWiringTests(unittest.TestCase):
         self.assertEqual(result.max_severity, Severity.INFO)
 
 
+class TestExtractMonoBehaviourFieldNames(unittest.TestCase):
+    """Test extract_monobehaviour_field_names for all-field extraction."""
+
+    def test_extracts_scalar_fields(self) -> None:
+        """Captures plain scalar fields that _parse_monobehaviour_fields skips."""
+        block = YamlBlock(
+            file_id="100",
+            class_id="114",
+            text=(
+                "MonoBehaviour:\n"
+                "  m_ObjectHideFlags: 0\n"
+                "  m_GameObject: {fileID: 50}\n"
+                "  m_Script: {fileID: 11500000, guid: aabb, type: 3}\n"
+                "  speed: 5.0\n"
+                "  health: 100\n"
+                "  label: Hello\n"
+            ),
+            start_line=1,
+        )
+        names = extract_monobehaviour_field_names(block)
+        self.assertIn("speed", names)
+        self.assertIn("health", names)
+        self.assertIn("label", names)
+
+    def test_skips_builtin_fields(self) -> None:
+        """SKIP_FIELDS are excluded."""
+        block = YamlBlock(
+            file_id="100",
+            class_id="114",
+            text=(
+                "MonoBehaviour:\n"
+                "  m_ObjectHideFlags: 0\n"
+                "  m_GameObject: {fileID: 50}\n"
+                "  m_Enabled: 1\n"
+                "  m_Script: {fileID: 11500000, guid: aabb, type: 3}\n"
+                "  m_Name: Test\n"
+                "  customField: 42\n"
+            ),
+            start_line=1,
+        )
+        names = extract_monobehaviour_field_names(block)
+        self.assertEqual(["customField"], names)
+
+    def test_skips_nested_lines(self) -> None:
+        """Nested properties (array elements, sub-objects) are not extracted."""
+        block = YamlBlock(
+            file_id="100",
+            class_id="114",
+            text=(
+                "MonoBehaviour:\n"
+                "  m_GameObject: {fileID: 50}\n"
+                "  m_Script: {fileID: 11500000, guid: aabb, type: 3}\n"
+                "  items:\n"
+                "    - {fileID: 1}\n"
+                "    - {fileID: 2}\n"
+                "  speed: 5.0\n"
+            ),
+            start_line=1,
+        )
+        names = extract_monobehaviour_field_names(block)
+        self.assertEqual(["items", "speed"], names)
+
+    def test_returns_empty_for_non_monobehaviour(self) -> None:
+        block = YamlBlock(
+            file_id="100",
+            class_id="4",  # Transform
+            text="Transform:\n  m_LocalPosition: {x: 0}\n",
+            start_line=1,
+        )
+        names = extract_monobehaviour_field_names(block)
+        self.assertEqual([], names)
+
+    def test_includes_reference_fields(self) -> None:
+        """Reference fields (fileID/GUID patterns) are also included."""
+        block = YamlBlock(
+            file_id="100",
+            class_id="114",
+            text=(
+                "MonoBehaviour:\n"
+                "  m_GameObject: {fileID: 50}\n"
+                "  m_Script: {fileID: 11500000, guid: aabb, type: 3}\n"
+                "  target: {fileID: 200, guid: 00000000000000000000000000000000, type: 2}\n"
+                "  speed: 3.0\n"
+            ),
+            start_line=1,
+        )
+        names = extract_monobehaviour_field_names(block)
+        self.assertIn("target", names)
+        self.assertIn("speed", names)
+
+
 if __name__ == "__main__":
     unittest.main()
