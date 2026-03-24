@@ -47,13 +47,14 @@ class TestToolRegistration(unittest.TestCase):
             "inspect_wiring",
             "inspect_variant",
             "diff_unity_symbols",
+            "set_property",
         }
         self.assertEqual(expected, tool_names)
 
     def test_tool_count(self) -> None:
         server = create_server()
         tools = _run(server.list_tools())
-        self.assertEqual(7, len(tools))
+        self.assertEqual(8, len(tools))
 
 
 class TestSymbolTools(unittest.TestCase):
@@ -489,6 +490,369 @@ class TestFindUnitySymbolShowOrigin(unittest.TestCase):
         if props:
             first_val = next(iter(props.values()))
             self.assertIsInstance(first_val, str)
+
+
+class TestSetPropertyTool(unittest.TestCase):
+    """Test the set_property MCP tool."""
+
+    def _prefab_with_meshrenderer(self) -> str:
+        """Prefab: Cube → Transform + MeshRenderer."""
+        return YAML_HEADER + "\n".join([
+            make_gameobject("100", "Cube", ["200", "300"]),
+            make_transform("200", "100"),
+            make_meshrenderer("300", "100"),
+        ])
+
+    def _prefab_with_monobehaviour(self, guid: str = "aaaa1111bbbb2222cccc3333dddd4444") -> str:
+        """Prefab: Player → Transform + MonoBehaviour(script)."""
+        return YAML_HEADER + "\n".join([
+            make_gameobject("100", "Player", ["200", "300"]),
+            make_transform("200", "100"),
+            make_monobehaviour("300", "100", guid=guid),
+        ])
+
+    def _mock_patch_apply_response(self, dry_run: bool = True) -> MagicMock:
+        resp = MagicMock()
+        resp.to_dict.return_value = {
+            "success": True,
+            "severity": "info",
+            "code": "PATCH_APPLY_RESULT",
+            "message": "patch.apply dry-run completed." if dry_run else "patch.apply completed.",
+            "data": {"dry_run": dry_run, "confirm": not dry_run, "read_only": dry_run},
+            "diagnostics": [],
+        }
+        return resp
+
+    def test_set_property_dry_run(self) -> None:
+        """confirm=False returns dry-run preview."""
+        import tempfile
+
+        text = self._prefab_with_meshrenderer()
+        server = create_server()
+        mock_resp = self._mock_patch_apply_response(dry_run=True)
+
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "test.prefab"
+            p.write_text(text, encoding="utf-8")
+
+            with patch(
+                "prefab_sentinel.mcp_server.Phase1Orchestrator"
+            ) as mock_cls:
+                mock_orch = MagicMock()
+                mock_orch.patch_apply.return_value = mock_resp
+                mock_cls.default.return_value = mock_orch
+
+                _, result = _run(server.call_tool(
+                    "set_property",
+                    {
+                        "path": str(p),
+                        "symbol_path": "Cube/MeshRenderer",
+                        "property_path": "m_Enabled",
+                        "value": 0,
+                    },
+                ))
+
+        self.assertTrue(result["success"])
+        mock_orch.patch_apply.assert_called_once()
+        call_kwargs = mock_orch.patch_apply.call_args[1]
+        self.assertTrue(call_kwargs["dry_run"])
+        self.assertFalse(call_kwargs["confirm"])
+
+    def test_set_property_confirm(self) -> None:
+        """confirm=True applies the change."""
+        import tempfile
+
+        text = self._prefab_with_meshrenderer()
+        server = create_server()
+        mock_resp = self._mock_patch_apply_response(dry_run=False)
+
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "test.prefab"
+            p.write_text(text, encoding="utf-8")
+
+            with patch(
+                "prefab_sentinel.mcp_server.Phase1Orchestrator"
+            ) as mock_cls:
+                mock_orch = MagicMock()
+                mock_orch.patch_apply.return_value = mock_resp
+                mock_cls.default.return_value = mock_orch
+
+                _, result = _run(server.call_tool(
+                    "set_property",
+                    {
+                        "path": str(p),
+                        "symbol_path": "Cube/MeshRenderer",
+                        "property_path": "m_Enabled",
+                        "value": 1,
+                        "confirm": True,
+                    },
+                ))
+
+        self.assertTrue(result["success"])
+        call_kwargs = mock_orch.patch_apply.call_args[1]
+        self.assertFalse(call_kwargs["dry_run"])
+        self.assertTrue(call_kwargs["confirm"])
+
+    def test_set_property_symbol_not_found(self) -> None:
+        """Returns error when symbol path doesn't resolve."""
+        import tempfile
+
+        text = self._prefab_with_meshrenderer()
+        server = create_server()
+
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "test.prefab"
+            p.write_text(text, encoding="utf-8")
+
+            _, result = _run(server.call_tool(
+                "set_property",
+                {
+                    "path": str(p),
+                    "symbol_path": "NonExistent/MeshRenderer",
+                    "property_path": "m_Enabled",
+                    "value": 0,
+                },
+            ))
+
+        self.assertFalse(result["success"])
+        self.assertEqual("SYMBOL_NOT_FOUND", result["code"])
+
+    def test_set_property_not_a_component(self) -> None:
+        """Returns error when symbol path points to a GameObject."""
+        import tempfile
+
+        text = self._prefab_with_meshrenderer()
+        server = create_server()
+
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "test.prefab"
+            p.write_text(text, encoding="utf-8")
+
+            _, result = _run(server.call_tool(
+                "set_property",
+                {
+                    "path": str(p),
+                    "symbol_path": "Cube",
+                    "property_path": "m_Name",
+                    "value": "NewName",
+                },
+            ))
+
+        self.assertFalse(result["success"])
+        self.assertEqual("SYMBOL_NOT_COMPONENT", result["code"])
+        self.assertIn("game_object", result["data"]["resolved_kind"])
+
+    def test_set_property_builtin_component_name(self) -> None:
+        """Built-in component resolves to its type name in the plan."""
+        import tempfile
+
+        text = self._prefab_with_meshrenderer()
+        server = create_server()
+        mock_resp = self._mock_patch_apply_response()
+
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "test.prefab"
+            p.write_text(text, encoding="utf-8")
+
+            with patch(
+                "prefab_sentinel.mcp_server.Phase1Orchestrator"
+            ) as mock_cls:
+                mock_orch = MagicMock()
+                mock_orch.patch_apply.return_value = mock_resp
+                mock_cls.default.return_value = mock_orch
+
+                _, result = _run(server.call_tool(
+                    "set_property",
+                    {
+                        "path": str(p),
+                        "symbol_path": "Cube/MeshRenderer",
+                        "property_path": "m_Enabled",
+                        "value": 0,
+                    },
+                ))
+
+        # Verify the plan passed to patch_apply uses type name
+        plan = mock_orch.patch_apply.call_args[1]["plan"]
+        self.assertEqual("MeshRenderer", plan["ops"][0]["component"])
+        # Verify symbol_resolution metadata
+        self.assertEqual("MeshRenderer", result["symbol_resolution"]["resolved_component"])
+
+    def test_set_property_monobehaviour_script_name(self) -> None:
+        """MonoBehaviour resolves to its script name for the component field."""
+        import tempfile
+
+        text = self._prefab_with_monobehaviour()
+        mock_resp = self._mock_patch_apply_response()
+
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "test.prefab"
+            p.write_text(text, encoding="utf-8")
+
+            # Create a project root with script meta
+            scripts_dir = Path(td) / "Assets" / "Scripts"
+            scripts_dir.mkdir(parents=True)
+            (scripts_dir / "PlayerScript.cs").write_text("class PlayerScript {}", encoding="utf-8")
+            (scripts_dir / "PlayerScript.cs.meta").write_text(
+                "fileFormatVersion: 2\nguid: aaaa1111bbbb2222cccc3333dddd4444\n",
+                encoding="utf-8",
+            )
+
+            server_with_root = create_server(project_root=td)
+
+            with patch(
+                "prefab_sentinel.mcp_server.Phase1Orchestrator"
+            ) as mock_cls:
+                mock_orch = MagicMock()
+                mock_orch.patch_apply.return_value = mock_resp
+                mock_cls.default.return_value = mock_orch
+
+                _, result = _run(server_with_root.call_tool(
+                    "set_property",
+                    {
+                        "path": str(p),
+                        "symbol_path": "Player/MonoBehaviour(PlayerScript)",
+                        "property_path": "speed",
+                        "value": 10.0,
+                    },
+                ))
+
+        plan = mock_orch.patch_apply.call_args[1]["plan"]
+        self.assertEqual("PlayerScript", plan["ops"][0]["component"])
+        self.assertEqual("PlayerScript", result["symbol_resolution"]["resolved_component"])
+
+    def test_set_property_monobehaviour_no_script_name(self) -> None:
+        """Returns error when MonoBehaviour has no resolved script name."""
+        import tempfile
+
+        text = self._prefab_with_monobehaviour()
+        server = create_server()  # No project_root → no script map
+
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "test.prefab"
+            p.write_text(text, encoding="utf-8")
+
+            _, result = _run(server.call_tool(
+                "set_property",
+                {
+                    "path": str(p),
+                    "symbol_path": "Player/MonoBehaviour",
+                    "property_path": "speed",
+                    "value": 5.0,
+                },
+            ))
+
+        self.assertFalse(result["success"])
+        self.assertEqual("SYMBOL_UNRESOLVABLE", result["code"])
+
+    def test_set_property_passes_change_reason(self) -> None:
+        """change_reason is forwarded to the orchestrator."""
+        import tempfile
+
+        text = self._prefab_with_meshrenderer()
+        server = create_server()
+        mock_resp = self._mock_patch_apply_response()
+
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "test.prefab"
+            p.write_text(text, encoding="utf-8")
+
+            with patch(
+                "prefab_sentinel.mcp_server.Phase1Orchestrator"
+            ) as mock_cls:
+                mock_orch = MagicMock()
+                mock_orch.patch_apply.return_value = mock_resp
+                mock_cls.default.return_value = mock_orch
+
+                _run(server.call_tool(
+                    "set_property",
+                    {
+                        "path": str(p),
+                        "symbol_path": "Cube/MeshRenderer",
+                        "property_path": "m_Enabled",
+                        "value": 1,
+                        "change_reason": "Enable renderer for visibility",
+                    },
+                ))
+
+        call_kwargs = mock_orch.patch_apply.call_args[1]
+        self.assertEqual("Enable renderer for visibility", call_kwargs["change_reason"])
+
+    def test_set_property_plan_structure(self) -> None:
+        """Constructed plan follows V2 format."""
+        import tempfile
+
+        text = self._prefab_with_meshrenderer()
+        server = create_server()
+        mock_resp = self._mock_patch_apply_response()
+
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "test.prefab"
+            p.write_text(text, encoding="utf-8")
+
+            with patch(
+                "prefab_sentinel.mcp_server.Phase1Orchestrator"
+            ) as mock_cls:
+                mock_orch = MagicMock()
+                mock_orch.patch_apply.return_value = mock_resp
+                mock_cls.default.return_value = mock_orch
+
+                _run(server.call_tool(
+                    "set_property",
+                    {
+                        "path": str(p),
+                        "symbol_path": "Cube/MeshRenderer",
+                        "property_path": "m_CastShadows",
+                        "value": 0,
+                    },
+                ))
+
+        plan = mock_orch.patch_apply.call_args[1]["plan"]
+        self.assertEqual(2, plan["plan_version"])
+        self.assertEqual(1, len(plan["resources"]))
+        self.assertEqual("target", plan["resources"][0]["id"])
+        self.assertEqual(str(p), plan["resources"][0]["path"])
+        self.assertEqual("open", plan["resources"][0]["mode"])
+        self.assertEqual(1, len(plan["ops"]))
+        op = plan["ops"][0]
+        self.assertEqual("target", op["resource"])
+        self.assertEqual("set", op["op"])
+        self.assertEqual("m_CastShadows", op["path"])
+        self.assertEqual(0, op["value"])
+
+    def test_set_property_symbol_resolution_metadata(self) -> None:
+        """Response includes symbol_resolution metadata."""
+        import tempfile
+
+        text = self._prefab_with_meshrenderer()
+        server = create_server()
+        mock_resp = self._mock_patch_apply_response()
+
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "test.prefab"
+            p.write_text(text, encoding="utf-8")
+
+            with patch(
+                "prefab_sentinel.mcp_server.Phase1Orchestrator"
+            ) as mock_cls:
+                mock_orch = MagicMock()
+                mock_orch.patch_apply.return_value = mock_resp
+                mock_cls.default.return_value = mock_orch
+
+                _, result = _run(server.call_tool(
+                    "set_property",
+                    {
+                        "path": str(p),
+                        "symbol_path": "Cube/MeshRenderer",
+                        "property_path": "m_Enabled",
+                        "value": 1,
+                    },
+                ))
+
+        sr = result["symbol_resolution"]
+        self.assertEqual("Cube/MeshRenderer", sr["symbol_path"])
+        self.assertEqual("MeshRenderer", sr["resolved_component"])
+        self.assertEqual("300", sr["file_id"])
+        self.assertEqual("m_Enabled", sr["property_path"])
 
 
 class TestCLIServeCommand(unittest.TestCase):

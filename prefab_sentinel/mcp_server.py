@@ -22,8 +22,17 @@ except ImportError as exc:
     ) from exc
 
 from prefab_sentinel.orchestrator import Phase1Orchestrator
-from prefab_sentinel.symbol_tree import SymbolTree, build_script_name_map
+from prefab_sentinel.patch_plan import PLAN_VERSION
+from prefab_sentinel.symbol_tree import (
+    AmbiguousSymbolError,
+    SymbolKind,
+    SymbolNode,
+    SymbolNotFoundError,
+    SymbolTree,
+    build_script_name_map,
+)
 from prefab_sentinel.unity_assets import decode_text_file
+from prefab_sentinel.unity_yaml_parser import CLASS_ID_MONOBEHAVIOUR
 from prefab_sentinel.wsl_compat import to_wsl_path
 
 __all__ = ["create_server"]
@@ -71,6 +80,23 @@ def create_server(
         if _root:
             return build_script_name_map(_root)
         return {}
+
+    def _build_symbol_tree(path: str) -> SymbolTree:
+        """Read asset and build SymbolTree for name resolution."""
+        text = _read_asset(path)
+        return SymbolTree.build(text, path, _script_map(), include_properties=False)
+
+    def _resolve_component_name(node: SymbolNode) -> str:
+        """Map a component SymbolNode to the type name used by patch ops."""
+        if node.class_id == CLASS_ID_MONOBEHAVIOUR:
+            if not node.script_name:
+                msg = (
+                    f"MonoBehaviour at fileID={node.file_id} has no script name. "
+                    f"Provide --project-root for script name resolution."
+                )
+                raise ValueError(msg)
+            return node.script_name
+        return node.name
 
     # ------------------------------------------------------------------
     # Symbol model tools
@@ -288,6 +314,125 @@ def create_server(
             component_filter=component_filter,
         )
         return resp.to_dict()
+
+    # ------------------------------------------------------------------
+    # Semantic editing tools
+    # ------------------------------------------------------------------
+
+    @server.tool()
+    def set_property(
+        path: str,
+        symbol_path: str,
+        property_path: str,
+        value: Any,
+        confirm: bool = False,
+        change_reason: str = "",
+    ) -> dict[str, Any]:
+        """Set a serialized field value on a component identified by symbol path.
+
+        Two-phase workflow:
+        - confirm=False (default): dry-run preview of changes.
+        - confirm=True: applies changes to disk.
+
+        Args:
+            path: Asset file path (.prefab, .unity, .asset, .mat).
+            symbol_path: Human-readable path to a component
+                (e.g. "CharacterBody/MeshRenderer" or
+                "CharacterBody/MonoBehaviour(PlayerScript)").
+            property_path: Serialized property path (e.g. "m_Speed",
+                "m_Materials.Array.data[0]").
+            value: New value to set (string, number, or object reference dict).
+            confirm: Set True to apply changes (False = dry-run only).
+            change_reason: Human-readable reason for the change (audit trail).
+        """
+        # 1. Symbol resolution
+        tree = _build_symbol_tree(path)
+        try:
+            node = tree.resolve_unique(symbol_path)
+        except SymbolNotFoundError:
+            return {
+                "success": False,
+                "severity": "error",
+                "code": "SYMBOL_NOT_FOUND",
+                "message": f"No component found at symbol path: {symbol_path!r}",
+                "data": {"asset_path": path, "symbol_path": symbol_path},
+                "diagnostics": [],
+            }
+        except AmbiguousSymbolError as exc:
+            return {
+                "success": False,
+                "severity": "error",
+                "code": "SYMBOL_AMBIGUOUS",
+                "message": str(exc),
+                "data": {"asset_path": path, "symbol_path": symbol_path},
+                "diagnostics": [],
+            }
+
+        # 2. Must be a component
+        if node.kind != SymbolKind.COMPONENT:
+            return {
+                "success": False,
+                "severity": "error",
+                "code": "SYMBOL_NOT_COMPONENT",
+                "message": (
+                    f"Symbol path {symbol_path!r} resolves to a {node.kind.value}, "
+                    f"not a component. Provide a path to a component."
+                ),
+                "data": {
+                    "asset_path": path,
+                    "symbol_path": symbol_path,
+                    "resolved_kind": node.kind.value,
+                },
+                "diagnostics": [],
+            }
+
+        # 3. Resolve component type name
+        try:
+            component_name = _resolve_component_name(node)
+        except ValueError as exc:
+            return {
+                "success": False,
+                "severity": "error",
+                "code": "SYMBOL_UNRESOLVABLE",
+                "message": str(exc),
+                "data": {"asset_path": path, "symbol_path": symbol_path},
+                "diagnostics": [],
+            }
+
+        # 4. Build V2 patch plan
+        plan: dict[str, object] = {
+            "plan_version": PLAN_VERSION,
+            "resources": [{"id": "target", "path": path, "mode": "open"}],
+            "ops": [
+                {
+                    "resource": "target",
+                    "op": "set",
+                    "component": component_name,
+                    "path": property_path,
+                    "value": value,
+                },
+            ],
+        }
+
+        # 5. Execute via orchestrator
+        orch = _get_orchestrator()
+        resp = orch.patch_apply(
+            plan=plan,
+            dry_run=(not confirm),
+            confirm=confirm,
+            change_reason=change_reason or None,
+        )
+
+        # 6. Enrich response with symbol resolution metadata
+        result = resp.to_dict()
+        result["symbol_resolution"] = {
+            "symbol_path": symbol_path,
+            "resolved_component": component_name,
+            "file_id": node.file_id,
+            "class_id": node.class_id,
+            "property_path": property_path,
+        }
+        return result
 
     return server
 
