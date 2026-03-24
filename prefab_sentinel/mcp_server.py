@@ -10,6 +10,7 @@ Requires the ``mcp`` optional dependency::
 
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,8 @@ from prefab_sentinel.unity_yaml_parser import CLASS_ID_MONOBEHAVIOUR
 from prefab_sentinel.wsl_compat import to_wsl_path
 
 __all__ = ["create_server"]
+
+logger = logging.getLogger(__name__)
 
 
 def create_server(
@@ -164,7 +167,6 @@ def create_server(
             resolved, text, include_properties=include_props,
         )
         return {
-            "success": True,
             "asset_path": path,
             "depth": depth,
             "symbols": tree.to_overview(depth=depth),
@@ -200,16 +202,9 @@ def create_server(
             resolved, text, include_properties=props,
         )
         results = tree.query(symbol_path, depth=depth)
-        if not results:
-            return {
-                "success": False,
-                "message": f"No match for symbol path: {symbol_path!r}",
-                "matches": [],
-            }
-        if show_origin:
+        if results and show_origin:
             _annotate_origins(results, path)
         response: dict[str, Any] = {
-            "success": True,
             "asset_path": path,
             "symbol_path": symbol_path,
             "matches": results,
@@ -228,6 +223,9 @@ def create_server(
             orch = session.get_orchestrator()
             resp = orch.prefab_variant.resolve_chain_values_with_origin(asset_path)
         except Exception:
+            logger.debug(
+                "Origin annotation failed for %s", asset_path, exc_info=True,
+            )
             return
         if not resp.success:
             return

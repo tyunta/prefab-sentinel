@@ -84,13 +84,15 @@ class TestSymbolTools(unittest.TestCase):
                 "get_unity_symbols",
                 {"path": str(prefab), "depth": 0},
             ))
-            self.assertTrue(result["success"])
             self.assertEqual(str(prefab), result["asset_path"])
             symbols = result["symbols"]
             self.assertEqual(1, len(symbols))
             self.assertEqual("Cube", symbols[0]["name"])
             # depth=0: no children
             self.assertNotIn("children", symbols[0])
+            # Serena-style: no envelope fields
+            self.assertNotIn("success", result)
+            self.assertNotIn("severity", result)
 
     def test_get_unity_symbols_depth1(self) -> None:
         import tempfile
@@ -101,7 +103,6 @@ class TestSymbolTools(unittest.TestCase):
                 "get_unity_symbols",
                 {"path": str(prefab), "depth": 1},
             ))
-            self.assertTrue(result["success"])
             symbols = result["symbols"]
             children = symbols[0]["children"]
             child_names = {c["name"] for c in children}
@@ -117,9 +118,10 @@ class TestSymbolTools(unittest.TestCase):
                 "find_unity_symbol",
                 {"path": str(prefab), "symbol_path": "Cube"},
             ))
-            self.assertTrue(result["success"])
             self.assertEqual(1, len(result["matches"]))
             self.assertEqual("Cube", result["matches"][0]["name"])
+            # Serena-style: no envelope fields
+            self.assertNotIn("success", result)
 
     def test_find_unity_symbol_not_found(self) -> None:
         import tempfile
@@ -130,8 +132,9 @@ class TestSymbolTools(unittest.TestCase):
                 "find_unity_symbol",
                 {"path": str(prefab), "symbol_path": "NonExistent"},
             ))
-            self.assertFalse(result["success"])
             self.assertEqual([], result["matches"])
+            # Serena-style: empty matches = not found, no error envelope
+            self.assertNotIn("success", result)
 
     def test_find_unity_symbol_component_path(self) -> None:
         import tempfile
@@ -142,7 +145,6 @@ class TestSymbolTools(unittest.TestCase):
                 "find_unity_symbol",
                 {"path": str(prefab), "symbol_path": "Cube/MeshRenderer"},
             ))
-            self.assertTrue(result["success"])
             self.assertEqual(1, len(result["matches"]))
             self.assertEqual("MeshRenderer", result["matches"][0]["name"])
 
@@ -179,7 +181,6 @@ class TestSymbolToolsWithMonoBehaviour(unittest.TestCase):
                     "symbol_path": "Player/MonoBehaviour",
                 },
             ))
-            self.assertTrue(result["success"])
             self.assertEqual(1, len(result["matches"]))
 
 
@@ -380,7 +381,6 @@ class TestFindUnitySymbolShowOrigin(unittest.TestCase):
                 },
             ))
 
-        self.assertTrue(result["success"])
         self.assertNotIn("show_origin", result)
         props = result["matches"][0].get("properties", {})
         # Flat format: {name: value_str}
@@ -442,7 +442,6 @@ class TestFindUnitySymbolShowOrigin(unittest.TestCase):
                     },
                 ))
 
-        self.assertTrue(result["success"])
         self.assertTrue(result.get("show_origin"))
         props = result["matches"][0].get("properties", {})
         self.assertIn("targetRef", props)
@@ -488,13 +487,54 @@ class TestFindUnitySymbolShowOrigin(unittest.TestCase):
                     },
                 ))
 
-        # find_unity_symbol still succeeds; origin annotation skipped
-        self.assertTrue(result["success"])
+        # find_unity_symbol still returns matches; origin annotation skipped
+        self.assertEqual(1, len(result["matches"]))
         props = result["matches"][0].get("properties", {})
         # Properties remain in flat {name: value} format since annotation was skipped
         if props:
             first_val = next(iter(props.values()))
             self.assertIsInstance(first_val, str)
+
+
+    def test_annotate_origins_logs_on_exception(self) -> None:
+        """When orchestrator raises, _annotate_origins logs debug and returns."""
+        import tempfile
+
+        text = YAML_HEADER + "\n".join([
+            make_gameobject("100", "Cube", ["200", "300"]),
+            make_transform("200", "100"),
+            make_monobehaviour(
+                "300", "100",
+                fields={"ref": "{fileID: 100, guid: 00000000000000000000000000000000, type: 2}"},
+            ),
+        ])
+        server = create_server()
+
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "test.prefab"
+            p.write_text(text, encoding="utf-8")
+
+            with patch(
+                "prefab_sentinel.session.Phase1Orchestrator"
+            ) as mock_cls:
+                mock_orch = MagicMock()
+                mock_orch.prefab_variant.resolve_chain_values_with_origin.side_effect = RuntimeError("test")
+                mock_cls.default.return_value = mock_orch
+
+                with self.assertLogs("prefab_sentinel.mcp_server", level="DEBUG") as cm:
+                    _, result = _run(server.call_tool(
+                        "find_unity_symbol",
+                        {
+                            "path": str(p),
+                            "symbol_path": "Cube/MonoBehaviour",
+                            "show_origin": True,
+                        },
+                    ))
+
+        # Tool still returns matches (best-effort annotation)
+        self.assertEqual(1, len(result["matches"]))
+        # Verify debug log was emitted
+        self.assertTrue(any("Origin annotation failed" in msg for msg in cm.output))
 
 
 class TestSetPropertyTool(unittest.TestCase):
