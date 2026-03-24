@@ -75,6 +75,12 @@ class ProjectSession:
     def scope(self) -> Path | None:
         return self._scope
 
+    def resolve_scope(self, explicit_scope: str | None) -> str | None:
+        """Return *explicit_scope* if given, else session scope as str."""
+        if explicit_scope is not None:
+            return explicit_scope
+        return str(self._scope) if self._scope is not None else None
+
     # ------------------------------------------------------------------
     # Cache accessors
     # ------------------------------------------------------------------

@@ -533,5 +533,35 @@ class TestWatcherDoneCallback(unittest.TestCase):
         asyncio.run(_run())
 
 
+# ---------------------------------------------------------------------------
+# resolve_scope
+# ---------------------------------------------------------------------------
+
+
+class TestResolveScope(unittest.TestCase):
+    """resolve_scope returns explicit > session > None."""
+
+    def test_explicit_scope_wins(self) -> None:
+        session = ProjectSession()
+        session._scope = Path("/project/Assets/A")
+        self.assertEqual("Assets/B", session.resolve_scope("Assets/B"))
+
+    def test_session_scope_fallback(self) -> None:
+        session = ProjectSession()
+        session._scope = Path("/project/Assets/A")
+        result = session.resolve_scope(None)
+        self.assertEqual(str(Path("/project/Assets/A")), result)
+
+    def test_none_when_no_scope(self) -> None:
+        session = ProjectSession()
+        self.assertIsNone(session.resolve_scope(None))
+
+    def test_explicit_empty_string_is_not_none(self) -> None:
+        session = ProjectSession()
+        session._scope = Path("/project/Assets/A")
+        # Empty string is explicit (not None)
+        self.assertEqual("", session.resolve_scope(""))
+
+
 if __name__ == "__main__":
     unittest.main()
