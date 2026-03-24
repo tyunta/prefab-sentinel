@@ -414,38 +414,32 @@ set_property("Player.prefab", "CharacterBody/MonoBehaviour(PlayerScript)", "move
 
 ---
 
-### P4: C# ↔ propertyPath 接続
+### P4: C# ↔ propertyPath 接続 ✅ 実装済み
 
 **目標:** C# フィールド定義と Unity シリアライズの対応を理解する。
 
-**スコープ:** 完全な C# AST パーサーは不要。正規表現ベースで以下を抽出:
-- `public` フィールド（型名 + フィールド名）
-- `[SerializeField]` 属性付き private フィールド
-- `[NonSerialized]` 属性（除外用）
-- `[Header]`, `[Tooltip]` 属性（メタデータ用、optional）
+**実装内容:**
 
-**新規モジュール:** `prefab_sentinel/csharp_fields.py`
-
-```python
-@dataclass(slots=True)
-class CSharpField:
-    name: str           # フィールド名
-    type_name: str      # 型名 (float, GameObject, etc.)
-    is_serialized: bool # SerializeField or public
-    line: int
-
-def parse_serialized_fields(source: str) -> list[CSharpField]
-def build_field_map(project_root: Path) -> dict[str, list[CSharpField]]
-    # script_guid → fields
-```
+- `prefab_sentinel/csharp_fields.py` — 正規表現ベースの C# シリアライズフィールドパーサー
+  - `CSharpField` データクラス（name, type_name, is_serialized, is_public, line, attributes）
+  - `parse_serialized_fields(source)` — C# ソースからフィールド抽出
+  - `build_field_map(project_root)` — GUID → CSharpField リストのマップ構築
+  - `resolve_script_fields(script_path_or_guid)` — パスまたは GUID からフィールド解決
+- `prefab_sentinel/udon_wiring.py` — `extract_monobehaviour_field_names()` 追加（YAML 全フィールド名抽出）
+- `prefab_sentinel/orchestrator.py` — 3 メソッド追加（list_serialized_fields, validate_field_rename, check_field_coverage）
 
 **MCP ツール:**
 
 | ツール | 動作 |
 |--------|------|
-| `validate_field_rename` | 旧名→新名のリネームで影響を受ける Prefab/Scene を検出 |
 | `list_serialized_fields` | スクリプト GUID or パスのシリアライズフィールド一覧 |
-| `check_field_coverage` | C# フィールドと Prefab propertyPath の突合（未使用検出） |
+| `validate_field_rename` | 旧名→新名のリネームで影響を受ける Prefab/Scene を検出（read-only） |
+| `check_field_coverage` | C# フィールドと YAML propertyPath の突合（未使用/孤立検出） |
+
+**既知の制限事項:**
+- クラス継承チェーンを辿らない（基底クラスのフィールドは検出不可 → coverage で false positive の可能性）
+- 条件コンパイル（`#if`）内のフィールドは区別しない
+- `[FormerlySerializedAs]` は認識・報告するが自動リマップはしない
 
 **統合:** P1 の `SymbolTree` で MonoBehaviour のプロパティを表示する際、C# 側の型情報を注釈として付加できる。
 
