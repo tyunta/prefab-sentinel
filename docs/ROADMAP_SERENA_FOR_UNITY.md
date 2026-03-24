@@ -371,34 +371,46 @@ diff_unity_symbols("PlayerVariant.prefab")
 
 ---
 
-### P3: セマンティック編集の名前解決
+### P3: セマンティック編集の名前解決 ✅ 部分実装済み
 
 **目標:** シンボルパスで値を設定できる。P1 のシンボルモデルがあれば変換レイヤーは薄い。
 
 **実装方針:**
-1. `SymbolTree.resolve_unique()` でシンボルパス → fileID を解決
-2. fileID + propertyPath から `SerializedObjectService` の patch plan を自動生成
-3. 既存の dry-run → confirm ワークフローに統合
+1. `SymbolTree.resolve_unique()` でシンボルパス → SymbolNode を解決
+2. SymbolNode のコンポーネントタイプ名 + propertyPath から V2 patch plan を自動生成
+3. 既存の dry-run → confirm ワークフローに統合（`Phase1Orchestrator.patch_apply()`）
 
-**新規 MCP ツール:**
+**実装済み MCP ツール:**
 
 | ツール | パラメータ | 動作 |
 |--------|-----------|------|
-| `set_property` | `path`, `symbol_path`, `value` | シンボル → fileID 解決 → patch → dry-run → apply |
-| `add_component` | `path`, `gameobject_path`, `component_type` | GO を名前で指定してコンポーネント追加 |
-| `remove_component` | `path`, `symbol_path` | コンポーネントを名前で指定して削除 |
+| `set_property` | `path`, `symbol_path`, `property_path`, `value`, `confirm`, `change_reason` | シンボル → タイプ名解決 → patch plan → dry-run/apply |
+
+**未実装（P3.5 — bridge プロトコル拡張待ち）:**
+
+| ツール | ブロッカー |
+|--------|-----------|
+| `add_component` | `add_component` は create-mode 専用 op。既存アセットへの open-mode 操作には bridge に `find_game_object` が必要 |
+| `remove_component` | `remove_component` は create-mode 専用 op。同上 |
 
 **使用例:**
 ```
-set_property("Player.prefab", "CharacterBody/MonoBehaviour(PlayerScript)/moveSpeed", "5.0")
+set_property("Player.prefab", "CharacterBody/MonoBehaviour(PlayerScript)", "moveSpeed", 5.0)
   → 内部:
-    1. resolve_unique("CharacterBody/MonoBehaviour(PlayerScript)") → fileID: 333
-    2. patch plan: [{op: "set", component: "333", path: "moveSpeed", value: "5.0"}]
-    3. dry_run_patch() → before/after diff
-    4. apply_and_save() → 書き込み
+    1. resolve_unique("CharacterBody/MonoBehaviour(PlayerScript)") → SymbolNode
+    2. _resolve_component_name(node) → "PlayerScript"
+    3. patch plan: {op: "set", component: "PlayerScript", path: "moveSpeed", value: 5.0}
+    4. confirm=False → dry_run_patch() → before/after diff
+    5. confirm=True → apply_and_save() → 書き込み
 ```
 
-**制約:** `--confirm` ゲートは維持。MCP ツール経由でも dry-run 結果を返し、明示的な confirm を要求する。
+**実装ノート:**
+- シンボル解決エラー（見つからない / 曖昧 / コンポーネントでない / スクリプト名未解決）は `success: false` + エラーコードで返す
+- レスポンスに `symbol_resolution` メタデータ（解決されたコンポーネント名、fileID、class_id）を付与
+- MonoBehaviour は `script_name`（C# クラス名）で識別。`--project-root` がないと解決不可
+- 同一 GO 上の同型コンポーネント重複は bridge 側の `TypeName@/hierarchy/path` 解決に依存（dry-run で検出可能）
+
+**制約:** `confirm` ゲートは維持。MCP ツール経由でも dry-run 結果を返し、明示的な `confirm=True` を要求する。
 
 ---
 
