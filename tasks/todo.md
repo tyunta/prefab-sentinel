@@ -100,6 +100,12 @@
 - [x] Task 9: ドキュメント — CLAUDE.md API 規約、README、ROADMAP 到達度 100%
 - [x] Task 10: 回帰テスト 1225 件全パス + minor バージョンバンプ v0.3.0
 
+## MCP Auto Smoke Tests (2026-03-25)
+
+- [x] Task 1: Fixture 作成 (basic.prefab, broken_ref.prefab, hierarchy.prefab)
+- [x] Task 2-4: McpSmokeTests — コア 5 ツール 10 テスト
+- [x] Task 5: McpSmokeExternalTests (SMOKE_PROJECT_ROOT opt-in) + 検証 — 1136 tests pass
+
 ## inspect_wiring Null 分類ヒント (2026-03-25)
 
 - [x] Task 1: ComponentWiring に null_field_names 追加 + テスト 3 件
