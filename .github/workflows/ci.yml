@@ -74,7 +74,7 @@ jobs:
 
       - name: Run Bridge Smoke Batch (Expected Failure Contract)
         run: |
-          uv run prefab-sentinel validate smoke-batch \
+          uv run python -m prefab_sentinel.smoke_batch \
             --targets all \
             --avatar-plan config/patch_plan.example.json \
             --world-plan config/patch_plan.example.json \
@@ -89,7 +89,7 @@ jobs:
 
       - name: Build Bridge Smoke Decision Table Artifacts
         run: |
-          uv run prefab-sentinel report smoke-history \
+          uv run python -m prefab_sentinel.smoke_history \
             --inputs reports/bridge_smoke/summary.json \
             --duration-percentile 90 \
             --out reports/bridge_smoke/history.csv \
@@ -126,7 +126,7 @@ jobs:
       - name: Run Integration Test Contract (Expected Failure)
         run: |
           set +e
-          uv run prefab-sentinel validate integration-tests \
+          uv run python scripts/unity_integration_tests.py \
             --unity-command /nonexistent/Unity.exe \
             --unity-project-path /tmp/fake_project \
             --out-dir reports/integration \

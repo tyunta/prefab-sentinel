@@ -434,8 +434,6 @@ jobs:
         shell: pwsh
         run: |
           $args = @(
-            "validate",
-            "smoke-batch",
             "--targets", "${{ inputs.targets }}",
             "--avatar-plan", "${{ inputs.avatar_plan }}",
             "--world-plan", "${{ inputs.world_plan }}",
@@ -467,15 +465,13 @@ jobs:
           if ("${{ inputs.world_expected_code }}" -ne "") {
             $args += @("--world-expected-code", "${{ inputs.world_expected_code }}")
           }
-          prefab-sentinel @args
+          python -m prefab_sentinel.smoke_batch @args
 
       - name: Build Unity Smoke Decision Table Artifacts
         if: ${{ steps.run_window.outputs.within_window == 'true' }}
         shell: pwsh
         run: |
           $args = @(
-            "report",
-            "smoke-history",
             "--inputs", "reports/bridge_smoke/summary.json",
             "--duration-percentile", "${{ inputs.history_duration_percentile }}",
             "--out", "reports/bridge_smoke/history.csv",
@@ -522,7 +518,7 @@ jobs:
           if ("${{ inputs.min_profile_timeout_coverage_pct_per_target }}" -ne "") {
             $args += @("--min-profile-timeout-coverage-pct-per-target", "${{ inputs.min_profile_timeout_coverage_pct_per_target }}")
           }
-          prefab-sentinel @args
+          python -m prefab_sentinel.smoke_history @args
 
       - name: Skip Outside UTC Run Window
         if: ${{ steps.run_window.outputs.within_window != 'true' }}

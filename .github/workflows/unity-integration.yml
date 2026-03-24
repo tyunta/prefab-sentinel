@@ -48,7 +48,7 @@ jobs:
 
       - name: Run integration tests
         run: >
-          prefab-sentinel validate integration-tests
+          python scripts/unity_integration_tests.py
           --unity-command "${{ inputs.unity_command }}"
           --unity-project-path "${{ inputs.unity_project_path }}"
           --out-dir reports/integration
