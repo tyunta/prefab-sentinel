@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -57,6 +58,27 @@ class ChainValue:
     value: str
     origin_path: str  # relative path of the Prefab that set this value
     origin_depth: int  # 0 = the variant itself, 1 = parent, ...
+
+
+@dataclass(slots=True)
+class _ChainLevel:
+    """One level in the Variant chain walk."""
+
+    entries: list[OverrideEntry]
+    path: Path
+    depth: int
+    is_base: bool
+    text: str
+
+
+def _effective_value(entry: OverrideEntry) -> str:
+    """Return the effective value of an override entry.
+
+    Unity stores object references in objectReference; when it is empty or
+    ``{fileID: 0}`` the plain ``value`` field is the effective value instead.
+    """
+    ref = entry.object_reference
+    return ref if ref and ref != "{fileID: 0}" else entry.value
 
 
 class PrefabVariantService:
@@ -488,7 +510,117 @@ class PrefabVariantService:
         )
 
     # ------------------------------------------------------------------
-    # Chain-aware before-value resolution
+    # Chain-aware before-value resolution — shared traversal helpers
+    # ------------------------------------------------------------------
+
+    def _walk_chain_levels(
+        self,
+        initial_text: str,
+        initial_path: Path,
+    ) -> Iterator[_ChainLevel]:
+        """Yield :class:`_ChainLevel` for each level from variant to base.
+
+        The caller is responsible for initial path validation and decoding.
+        This generator handles the chain traversal loop, cycle detection,
+        and GUID resolution.  The final level (base prefab) has ``is_base=True``.
+        """
+        visited: set[str] = set()
+        current_text: str | None = initial_text
+        current_path: Path = initial_path
+        depth = 0
+        depth_limit = 12
+
+        for _ in range(depth_limit):
+            if current_text is None:
+                break
+
+            entries = self._parse_overrides(current_text)
+
+            source = SOURCE_PREFAB_PATTERN.search(current_text)
+            is_base = source is None
+
+            yield _ChainLevel(
+                entries=entries,
+                path=current_path,
+                depth=depth,
+                is_base=is_base,
+                text=current_text,
+            )
+
+            if is_base:
+                break
+
+            source_guid = normalize_guid(source.group(2))
+            if source_guid in visited:
+                break
+            visited.add(source_guid)
+
+            target_file = self._guid_map().get(source_guid)
+            if target_file is None:
+                break
+
+            try:
+                current_text = decode_text_file(target_file)
+            except (OSError, UnicodeDecodeError):
+                break
+
+            depth += 1
+            current_path = target_file
+
+    @staticmethod
+    def _iter_base_property_values(
+        base_text: str,
+    ) -> Iterator[tuple[str, str, str]]:
+        """Yield ``(file_id, property_path, value)`` from a base prefab.
+
+        Best-effort extraction of property values from YAML component blocks.
+        Array elements written as ``m_Foo`` list items are mapped to
+        ``m_Foo.Array.data[N]`` paths.
+        """
+        blocks = split_yaml_blocks(base_text)
+        for block in blocks:
+            file_id = block.file_id
+            lines = block.text.split("\n")
+            current_array_field: str | None = None
+            array_index = 0
+
+            for line in lines:
+                stripped = line.strip()
+
+                if stripped.startswith("---") or not stripped:
+                    current_array_field = None
+                    continue
+
+                if stripped.startswith("- ") and current_array_field is not None:
+                    item_value = stripped[2:].strip()
+                    prop_path = f"{current_array_field}.Array.data[{array_index}]"
+                    yield (file_id, prop_path, item_value)
+                    array_index += 1
+                    continue
+
+                if not stripped.startswith("- "):
+                    current_array_field = None
+
+                if ":" in stripped:
+                    field_part, _, value_part = stripped.partition(":")
+                    field_name = field_part.strip()
+                    value_raw = value_part.strip()
+
+                    if not value_raw and not field_name.startswith("m_"):
+                        continue
+
+                    if not value_raw and field_name.startswith("m_"):
+                        current_array_field = field_name
+                        array_index = 0
+                        continue
+
+                    if value_raw == "[]":
+                        continue
+
+                    yield (file_id, field_name, value_raw)
+
+    # ------------------------------------------------------------------
+    # Chain-aware before-value resolution — public API
     # ------------------------------------------------------------------
 
     def resolve_chain_values(
@@ -516,126 +648,24 @@ class PrefabVariantService:
             return {}
 
         if SOURCE_PREFAB_PATTERN.search(text) is None:
-            # Not a variant – nothing to resolve
             return {}
 
-        # Collect overrides bottom-up.  Child overrides take precedence.
         result: dict[str, str] = {}
-        visited: set[str] = set()
-        current_text: str | None = text
-        depth_limit = 12
-
-        for _ in range(depth_limit):
-            if current_text is None:
-                break
-
-            # Parse overrides at this level and merge (child wins)
-            entries = self._parse_overrides(current_text)
-            for entry in entries:
+        for level in self._walk_chain_levels(text, path):
+            for entry in level.entries:
                 if not entry.property_path:
                     continue
                 key = f"{entry.target_file_id}:{entry.property_path}"
                 if key not in result:
-                    obj_ref = entry.object_reference
-                    val = entry.value
-                    result[key] = (
-                        obj_ref if obj_ref and obj_ref != "{fileID: 0}" else val
-                    )
+                    result[key] = _effective_value(entry)
 
-            # Follow m_SourcePrefab to the parent
-            source = SOURCE_PREFAB_PATTERN.search(current_text)
-            if source is None:
-                break
-
-            source_guid = normalize_guid(source.group(2))
-            if source_guid in visited:
-                break
-            visited.add(source_guid)
-
-            target_file = self._guid_map().get(source_guid)
-            if target_file is None:
-                break
-
-            try:
-                current_text = decode_text_file(target_file)
-            except (OSError, UnicodeDecodeError):
-                break
-
-            # If the parent is itself a variant, continue the loop.
-            # If it is a base prefab (no m_SourcePrefab), extract property
-            # values directly from the YAML blocks and stop.
-            if SOURCE_PREFAB_PATTERN.search(current_text) is None:
-                self._merge_base_prefab_values(current_text, result)
-                break
+            if level.is_base:
+                for fid, pp, val in self._iter_base_property_values(level.text):
+                    key = f"{fid}:{pp}"
+                    if key not in result:
+                        result[key] = val
 
         return result
-
-    def _merge_base_prefab_values(
-        self,
-        base_text: str,
-        result: dict[str, str],
-    ) -> None:
-        """Best-effort extraction of property values from a base prefab.
-
-        For each YAML block (keyed by fileID), scan for simple ``key: value``
-        lines and Unity-style inline references
-        ``{fileID: N, guid: G, type: T}``.  Array elements written as
-        ``m_Foo.Array.data[N]`` are mapped from the YAML list syntax.
-        """
-        blocks = split_yaml_blocks(base_text)
-        for block in blocks:
-            file_id = block.file_id
-            lines = block.text.split("\n")
-            # Track array context for m_Foo list items
-            current_array_field: str | None = None
-            array_index = 0
-
-            for line in lines:
-                stripped = line.strip()
-
-                # Skip document header and blank lines
-                if stripped.startswith("---") or not stripped:
-                    current_array_field = None
-                    continue
-
-                # Detect list items under an array field
-                if stripped.startswith("- ") and current_array_field is not None:
-                    item_value = stripped[2:].strip()
-                    prop_path = f"{current_array_field}.Array.data[{array_index}]"
-                    key = f"{file_id}:{prop_path}"
-                    if key not in result:
-                        result[key] = item_value
-                    array_index += 1
-                    continue
-
-                # Reset array context on non-list line
-                if not stripped.startswith("- "):
-                    current_array_field = None
-
-                # Simple "field: value" lines
-                if ":" in stripped:
-                    field_part, _, value_part = stripped.partition(":")
-                    field_name = field_part.strip()
-                    value_raw = value_part.strip()
-
-                    # Skip the class name line (e.g. "MeshRenderer:")
-                    if not value_raw and not field_name.startswith("m_"):
-                        continue
-
-                    # Detect start of a YAML list (field with no inline value
-                    # or empty value, followed by "- " items)
-                    if not value_raw and field_name.startswith("m_"):
-                        current_array_field = field_name
-                        array_index = 0
-                        continue
-
-                    # Skip empty "[]" arrays
-                    if value_raw == "[]":
-                        continue
-
-                    key = f"{file_id}:{field_name}"
-                    if key not in result:
-                        result[key] = value_raw
 
     def resolve_chain_values_with_origin(
         self,
@@ -679,67 +709,35 @@ class PrefabVariantService:
 
         result: dict[str, ChainValue] = {}
         chain: list[dict[str, object]] = []
-        visited: set[str] = set()
-        current_text: str | None = text
-        current_path: Path = path
-        depth = 0
-        depth_limit = 12
 
-        for _ in range(depth_limit):
-            if current_text is None:
-                break
+        for level in self._walk_chain_levels(text, path):
+            rel = self._relative(level.path)
+            chain.append({"path": rel, "depth": level.depth})
 
-            rel = self._relative(current_path)
-            chain.append({"path": rel, "depth": depth})
-
-            entries = self._parse_overrides(current_text)
-            for entry in entries:
+            for entry in level.entries:
                 if not entry.property_path:
                     continue
                 key = f"{entry.target_file_id}:{entry.property_path}"
                 if key not in result:
-                    obj_ref = entry.object_reference
-                    val = entry.value
-                    effective = (
-                        obj_ref if obj_ref and obj_ref != "{fileID: 0}" else val
-                    )
                     result[key] = ChainValue(
                         target_file_id=entry.target_file_id,
                         property_path=entry.property_path,
-                        value=effective,
+                        value=_effective_value(entry),
                         origin_path=rel,
-                        origin_depth=depth,
+                        origin_depth=level.depth,
                     )
 
-            source = SOURCE_PREFAB_PATTERN.search(current_text)
-            if source is None:
-                break
-
-            source_guid = normalize_guid(source.group(2))
-            if source_guid in visited:
-                break
-            visited.add(source_guid)
-
-            target_file = self._guid_map().get(source_guid)
-            if target_file is None:
-                break
-
-            try:
-                current_text = decode_text_file(target_file)
-            except (OSError, UnicodeDecodeError):
-                break
-
-            depth += 1
-            current_path = target_file
-
-            if SOURCE_PREFAB_PATTERN.search(current_text) is None:
-                # Base prefab — extract values with origin tracking
-                base_rel = self._relative(current_path)
-                chain.append({"path": base_rel, "depth": depth})
-                self._merge_base_values_with_origin(
-                    current_text, result, base_rel, depth,
-                )
-                break
+            if level.is_base:
+                for fid, pp, val in self._iter_base_property_values(level.text):
+                    key = f"{fid}:{pp}"
+                    if key not in result:
+                        result[key] = ChainValue(
+                            target_file_id=fid,
+                            property_path=pp,
+                            value=val,
+                            origin_path=rel,
+                            origin_depth=level.depth,
+                        )
 
         values_list = [
             {
@@ -763,73 +761,3 @@ class PrefabVariantService:
                 "read_only": True,
             },
         )
-
-    def _merge_base_values_with_origin(
-        self,
-        base_text: str,
-        result: dict[str, ChainValue],
-        origin_path: str,
-        origin_depth: int,
-    ) -> None:
-        """Extract base prefab values with origin tracking.
-
-        Same logic as :meth:`_merge_base_prefab_values` but stores
-        :class:`ChainValue` instances instead of plain strings.
-        """
-        blocks = split_yaml_blocks(base_text)
-        for block in blocks:
-            file_id = block.file_id
-            lines = block.text.split("\n")
-            current_array_field: str | None = None
-            array_index = 0
-
-            for line in lines:
-                stripped = line.strip()
-
-                if stripped.startswith("---") or not stripped:
-                    current_array_field = None
-                    continue
-
-                if stripped.startswith("- ") and current_array_field is not None:
-                    item_value = stripped[2:].strip()
-                    prop_path = f"{current_array_field}.Array.data[{array_index}]"
-                    key = f"{file_id}:{prop_path}"
-                    if key not in result:
-                        result[key] = ChainValue(
-                            target_file_id=file_id,
-                            property_path=prop_path,
-                            value=item_value,
-                            origin_path=origin_path,
-                            origin_depth=origin_depth,
-                        )
-                    array_index += 1
-                    continue
-
-                if not stripped.startswith("- "):
-                    current_array_field = None
-
-                if ":" in stripped:
-                    field_part, _, value_part = stripped.partition(":")
-                    field_name = field_part.strip()
-                    value_raw = value_part.strip()
-
-                    if not value_raw and not field_name.startswith("m_"):
-                        continue
-
-                    if not value_raw and field_name.startswith("m_"):
-                        current_array_field = field_name
-                        array_index = 0
-                        continue
-
-                    if value_raw == "[]":
-                        continue
-
-                    key = f"{file_id}:{field_name}"
-                    if key not in result:
-                        result[key] = ChainValue(
-                            target_file_id=file_id,
-                            property_path=field_name,
-                            value=value_raw,
-                            origin_path=origin_path,
-                            origin_depth=origin_depth,
-                        )
