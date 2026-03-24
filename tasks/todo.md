@@ -66,7 +66,7 @@
 - [x] P7: `inspect materials` コマンド — メッシュごとのマテリアルスロット一覧表示（Variant チェーン考慮）
 - [x] P1 Phase 2: チェーン全体の before 値解決 — `resolve_chain_values()` でベース Prefab まで辿る
 - [x] パス二重化検出 — `has_path_doubling()` + `resolve_scope_path()` の警告
-- [ ] P8: Game View スクリーンショット — Play Mode 外での Camera.Render() によるレンダリング
+- [x] P8: Game View スクリーンショット — 実装済み (C# HandleCaptureScreenshot, ScreenCapture + Camera.Render)
 
 ## Phase C: 目マテリアル比較セッション改善 (2026-03-22)
 
@@ -77,15 +77,15 @@
 ## Phase D: セッションレポートから拾った未トラック課題
 
 ### 優先度高
-- [ ] `inspect materials` が Variant チェーンで空を返す (renderer_count: 0) — FBX/Model のレンダラーを辿れていない (report_usage_20260322)
-- [ ] WSL inspect パス解決不具合 — bridge-check は通るが inspect 系で Windows パスが解決できない (report_usage_20260322)
-- [ ] Scene ビューのカメラ制御コマンド (`editor camera --orbit yaw=N pitch=N`) — 反復調整ワークフローのボトルネック (report_ribbon_color_matching)
+- [x] `inspect materials` が Variant チェーンで空を返す — stripped レンダラーの m_Modifications フォールバック追加 (material_inspector.py)
+- [x] WSL inspect パス解決不具合 — `_read_target_file()` を `resolve_scope_path()` に移行 (orchestrator.py)
+- [x] Scene ビューのカメラ制御コマンド — 実装済み (`editor camera --yaw --pitch --distance`, cli.py:708-752)
 
 ### 優先度中
-- [ ] dry-run でのコンポーネントパス検証 — open モードで実適用時まで失敗が見えない (report_ribbon_color_matching)
-- [ ] guide スキルのパスがバージョン 0.2.19 固定 — プラグインバージョンと連動すべき (report_usage_20260322)
-- [ ] `editor select` が1回だとビューが遠い — 2回実行が必要 (report_usage_20260322)
-- [ ] Scene/Prefab Stage ルート一覧取得 `editor list-roots` (report_ribbon_color_matching)
+- [x] dry-run でのコンポーネントパス検証 — soft_warnings の evidence にコンポーネント名・`inspect wiring` 案内を追加 (serialized_object.py)
+- [x] guide スキルのパスがバージョン固定 — 解消済み (`${CLAUDE_PLUGIN_ROOT}` 使用、v0.2.95)
+- [x] `editor select` が1回だとビューが遠い — `EditorApplication.delayCall` で FrameSelected 遅延実行 (C# HandleSelectObject)
+- [x] Scene/Prefab Stage ルート一覧取得 — 実装済み (`editor list-roots`, cli.py:885, C# HandleListRoots:948-1001)
 
 ## P5: ステートフルセッション (2026-03-24)
 
