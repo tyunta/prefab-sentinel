@@ -48,13 +48,16 @@ class TestToolRegistration(unittest.TestCase):
             "inspect_variant",
             "diff_unity_symbols",
             "set_property",
+            "list_serialized_fields",
+            "validate_field_rename",
+            "check_field_coverage",
         }
         self.assertEqual(expected, tool_names)
 
     def test_tool_count(self) -> None:
         server = create_server()
         tools = _run(server.list_tools())
-        self.assertEqual(8, len(tools))
+        self.assertEqual(11, len(tools))
 
 
 class TestSymbolTools(unittest.TestCase):
@@ -878,6 +881,174 @@ class TestCLIServeCommand(unittest.TestCase):
         ])
         self.assertEqual("streamable-http", args.transport)
         self.assertEqual("/unity/project", args.project_root)
+
+
+class TestListSerializedFieldsTool(unittest.TestCase):
+    """Tests for the list_serialized_fields MCP tool."""
+
+    def test_delegates_to_orchestrator(self) -> None:
+        from prefab_sentinel.contracts import Severity, ToolResponse
+
+        server = create_server()
+        mock_resp = ToolResponse(
+            success=True,
+            severity=Severity.INFO,
+            code="CSF_LIST_OK",
+            message="Found 2 serialized fields.",
+            data={
+                "script_guid": "aabb",
+                "script_path": "/test/Foo.cs",
+                "class_name": "Foo",
+                "field_count": 2,
+                "fields": [
+                    {"name": "speed", "type_name": "float", "is_serialized": True, "is_public": True, "line": 1},
+                    {"name": "health", "type_name": "int", "is_serialized": True, "is_public": False, "line": 2},
+                ],
+                "read_only": True,
+            },
+            diagnostics=[],
+        )
+        with patch("prefab_sentinel.mcp_server.Phase1Orchestrator") as mock_orch_cls:
+            mock_orch_cls.default.return_value.list_serialized_fields.return_value = mock_resp
+            _, result = _run(server.call_tool(
+                "list_serialized_fields",
+                {"script_path_or_guid": "aabb"},
+            ))
+
+        self.assertTrue(result["success"])
+        self.assertEqual("CSF_LIST_OK", result["code"])
+        self.assertEqual(2, result["data"]["field_count"])
+
+    def test_error_propagated(self) -> None:
+        from prefab_sentinel.contracts import Severity, ToolResponse
+
+        server = create_server()
+        mock_resp = ToolResponse(
+            success=False,
+            severity=Severity.ERROR,
+            code="CSF_RESOLVE_FAILED",
+            message="Script not found.",
+            data={"script": "missing.cs"},
+            diagnostics=[],
+        )
+        with patch("prefab_sentinel.mcp_server.Phase1Orchestrator") as mock_orch_cls:
+            mock_orch_cls.default.return_value.list_serialized_fields.return_value = mock_resp
+            _, result = _run(server.call_tool(
+                "list_serialized_fields",
+                {"script_path_or_guid": "missing.cs"},
+            ))
+
+        self.assertFalse(result["success"])
+        self.assertEqual("CSF_RESOLVE_FAILED", result["code"])
+
+
+class TestValidateFieldRenameTool(unittest.TestCase):
+    """Tests for the validate_field_rename MCP tool."""
+
+    def test_delegates_to_orchestrator(self) -> None:
+        from prefab_sentinel.contracts import Severity, ToolResponse
+
+        server = create_server()
+        mock_resp = ToolResponse(
+            success=True,
+            severity=Severity.INFO,
+            code="CSF_RENAME_OK",
+            message="Rename 'speed' -> 'velocity': 3 affected components.",
+            data={
+                "script_guid": "aabb",
+                "script_path": "/test/Foo.cs",
+                "old_name": "speed",
+                "new_name": "velocity",
+                "conflict": False,
+                "has_formerly_serialized_as": False,
+                "affected_count": 3,
+                "affected_assets": [],
+                "read_only": True,
+            },
+            diagnostics=[],
+        )
+        with patch("prefab_sentinel.mcp_server.Phase1Orchestrator") as mock_orch_cls:
+            mock_orch_cls.default.return_value.validate_field_rename.return_value = mock_resp
+            _, result = _run(server.call_tool(
+                "validate_field_rename",
+                {
+                    "script_path_or_guid": "aabb",
+                    "old_name": "speed",
+                    "new_name": "velocity",
+                },
+            ))
+
+        self.assertTrue(result["success"])
+        self.assertEqual("CSF_RENAME_OK", result["code"])
+        self.assertEqual(3, result["data"]["affected_count"])
+
+    def test_with_scope_parameter(self) -> None:
+        from prefab_sentinel.contracts import Severity, ToolResponse
+
+        server = create_server()
+        mock_resp = ToolResponse(
+            success=True, severity=Severity.INFO, code="CSF_RENAME_OK",
+            message="ok", data={"affected_count": 0, "read_only": True},
+            diagnostics=[],
+        )
+        with patch("prefab_sentinel.mcp_server.Phase1Orchestrator") as mock_orch_cls:
+            mock_orch = mock_orch_cls.default.return_value
+            mock_orch.validate_field_rename.return_value = mock_resp
+            _run(server.call_tool(
+                "validate_field_rename",
+                {
+                    "script_path_or_guid": "aabb",
+                    "old_name": "speed",
+                    "new_name": "velocity",
+                    "scope": "Assets/Scripts",
+                },
+            ))
+            mock_orch.validate_field_rename.assert_called_once_with(
+                script_path_or_guid="aabb",
+                old_name="speed",
+                new_name="velocity",
+                scope="Assets/Scripts",
+            )
+
+
+class TestCheckFieldCoverageTool(unittest.TestCase):
+    """Tests for the check_field_coverage MCP tool."""
+
+    def test_delegates_to_orchestrator(self) -> None:
+        from prefab_sentinel.contracts import Severity, ToolResponse
+
+        server = create_server()
+        mock_resp = ToolResponse(
+            success=True,
+            severity=Severity.INFO,
+            code="CSF_COVERAGE_OK",
+            message="Checked 5 components (2 scripts): 1 unused, 2 orphaned.",
+            data={
+                "scope": "Assets/",
+                "scripts_checked": 2,
+                "components_checked": 5,
+                "unused_count": 1,
+                "unused_fields": [{"field_name": "oldField", "class_name": "Foo"}],
+                "orphaned_count": 2,
+                "orphaned_paths": [
+                    {"field_name": "legacy1", "class_name": "Foo"},
+                    {"field_name": "legacy2", "class_name": "Bar"},
+                ],
+                "read_only": True,
+            },
+            diagnostics=[],
+        )
+        with patch("prefab_sentinel.mcp_server.Phase1Orchestrator") as mock_orch_cls:
+            mock_orch_cls.default.return_value.check_field_coverage.return_value = mock_resp
+            _, result = _run(server.call_tool(
+                "check_field_coverage",
+                {"scope": "Assets/"},
+            ))
+
+        self.assertTrue(result["success"])
+        self.assertEqual("CSF_COVERAGE_OK", result["code"])
+        self.assertEqual(1, result["data"]["unused_count"])
+        self.assertEqual(2, result["data"]["orphaned_count"])
 
 
 if __name__ == "__main__":

@@ -434,6 +434,66 @@ def create_server(
         }
         return result
 
+    @server.tool()
+    def list_serialized_fields(
+        script_path_or_guid: str,
+    ) -> dict[str, Any]:
+        """List serialized C# fields for a Unity script.
+
+        Parses the C# source to extract fields that Unity will serialize,
+        enabling field coverage checks and rename impact analysis.
+
+        Args:
+            script_path_or_guid: .cs file path or 32-char GUID string.
+        """
+        orch = _get_orchestrator()
+        resp = orch.list_serialized_fields(script_path_or_guid=script_path_or_guid)
+        return resp.to_dict()
+
+    @server.tool()
+    def validate_field_rename(
+        script_path_or_guid: str,
+        old_name: str,
+        new_name: str,
+        scope: str | None = None,
+    ) -> dict[str, Any]:
+        """Analyze the impact of renaming a serialized C# field (read-only).
+
+        Scans YAML assets for MonoBehaviours using the script and reports
+        which assets reference the field. Does NOT apply any changes.
+
+        Args:
+            script_path_or_guid: .cs file path or 32-char GUID string.
+            old_name: Current field name to rename.
+            new_name: Proposed new field name.
+            scope: Directory to restrict impact search (default: project root).
+        """
+        orch = _get_orchestrator()
+        resp = orch.validate_field_rename(
+            script_path_or_guid=script_path_or_guid,
+            old_name=old_name,
+            new_name=new_name,
+            scope=scope,
+        )
+        return resp.to_dict()
+
+    @server.tool()
+    def check_field_coverage(
+        scope: str,
+    ) -> dict[str, Any]:
+        """Detect unused C# fields or orphaned YAML propertyPaths in scope.
+
+        Compares serialized C# field definitions against YAML MonoBehaviour
+        data to find mismatches: fields defined in code but absent in assets
+        (unused), or fields present in assets but absent in code (orphaned).
+
+        Args:
+            scope: Directory or file path to scan.
+        """
+        orch = _get_orchestrator()
+        resp = orch.check_field_coverage(scope=scope)
+        return resp.to_dict()
+
     return server
 
 
