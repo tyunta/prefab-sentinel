@@ -93,5 +93,6 @@ def dispatch_changes(
         session.invalidate_script_map()
 
     for ap in asset_paths:
-        logger.debug("Asset changed: %s — evicting SymbolTree", ap)
+        logger.debug("Asset changed: %s — invalidating asset caches", ap)
+        session.invalidate_asset_caches(ap)
         session.invalidate_symbol_tree(ap)

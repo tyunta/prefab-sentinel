@@ -87,6 +87,13 @@ class TestDispatchChanges(unittest.TestCase):
             Path("/project/Assets/Scenes/Main.unity")
         )
 
+    def test_prefab_change_calls_invalidate_asset_caches(self) -> None:
+        session = MagicMock()
+        dispatch_changes(session, {(2, "/project/Assets/Prefabs/Player.prefab")})
+        session.invalidate_asset_caches.assert_called_once_with(
+            Path("/project/Assets/Prefabs/Player.prefab")
+        )
+
     def test_unrelated_file_no_invalidation(self) -> None:
         session = MagicMock()
         dispatch_changes(session, {(2, "/project/Assets/readme.txt")})
