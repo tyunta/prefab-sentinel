@@ -121,7 +121,7 @@ class TestAnalyzeHierarchy:
         assert result.total_components == 3  # Transform + MeshFilter + MeshRenderer
 
     def test_unknown_class_id_label(self) -> None:
-        # class_id 999 is not in _CLASS_NAMES
+        # class_id 999 is not in CLASS_NAMES
         text = (
             YAML_HEADER
             + make_gameobject("100", "Obj", ["200", "300"])

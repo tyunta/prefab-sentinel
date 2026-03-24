@@ -18,7 +18,7 @@ from prefab_sentinel.unity_yaml_parser import (
 
 # Unity ClassID reference: https://docs.unity3d.com/Manual/ClassIDReference.html
 # Subset relevant to prefab/scene hierarchy and wiring analysis.
-_CLASS_NAMES: dict[str, str] = {
+CLASS_NAMES: dict[str, str] = {
     "4": "Transform",
     "20": "Camera",
     "23": "MeshRenderer",
@@ -78,7 +78,7 @@ def _component_label(
         return "RectTransform" if t.is_rect_transform else "Transform"
     block = blocks_by_fid.get(comp_fid)
     if block:
-        name = _CLASS_NAMES.get(block.class_id)
+        name = CLASS_NAMES.get(block.class_id)
         if name:
             return name
         return f"Component({block.class_id})"
