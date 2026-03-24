@@ -2697,6 +2697,10 @@ class SerializedObjectService:
         """Reset the per-target before-value cache."""
         self._before_cache = None
 
+    def invalidate_before_cache(self) -> None:
+        """Public cache invalidation — resets before-value cache."""
+        self._before_cache = None
+
     def _resolve_target_path(self, target: str) -> Path:
         return resolve_scope_path(target, self.project_root)
 

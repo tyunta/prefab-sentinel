@@ -8,7 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from prefab_sentinel.orchestrator import Phase1Orchestrator
 from prefab_sentinel.patch_plan import (
@@ -2348,6 +2348,26 @@ print(
             self.assertIn("RUN_CLIENTSIM_SKIPPED", step_codes)
             self.assertIn("RUN_ASSERT_OK", step_codes)
             self.assertFalse(response.data["read_only"])
+
+    def test_invalidate_before_cache_from_populated(self) -> None:
+        svc = SerializedObjectService(
+            project_root=Path("/fake/project"), prefab_variant=MagicMock(),
+        )
+        svc._before_cache = {"comp:field": "value"}
+
+        svc.invalidate_before_cache()
+
+        self.assertIsNone(svc._before_cache)
+
+    def test_invalidate_before_cache_from_none(self) -> None:
+        svc = SerializedObjectService(
+            project_root=Path("/fake/project"), prefab_variant=MagicMock(),
+        )
+        self.assertIsNone(svc._before_cache)
+
+        svc.invalidate_before_cache()  # should not raise
+
+        self.assertIsNone(svc._before_cache)
 
 
 class OrchestratorSuggestionTests(unittest.TestCase):
