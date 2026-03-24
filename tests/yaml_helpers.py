@@ -144,10 +144,15 @@ def make_monobehaviour(
     file_id: str,
     go_file_id: str,
     guid: str = "abcd1234abcd1234abcd1234abcd1234",
+    fields: dict[str, str] | None = None,
 ) -> str:
-    return (
+    lines = (
         f"--- !u!114 &{file_id}\n"
         f"MonoBehaviour:\n"
         f"  m_GameObject: {{fileID: {go_file_id}}}\n"
         f"  m_Script: {{fileID: 11500000, guid: {guid}, type: 3}}\n"
     )
+    if fields:
+        for fname, fval in fields.items():
+            lines += f"  {fname}: {fval}\n"
+    return lines
