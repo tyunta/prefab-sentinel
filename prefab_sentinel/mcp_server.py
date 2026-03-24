@@ -716,7 +716,7 @@ def create_server(
 
     @server.tool()
     def list_serialized_fields(
-        script_path_or_guid: str,
+        script_or_guid: str,
         include_inherited: bool = False,
     ) -> dict[str, Any]:
         """List serialized C# fields for a Unity script.
@@ -725,20 +725,20 @@ def create_server(
         enabling field coverage checks and rename impact analysis.
 
         Args:
-            script_path_or_guid: .cs file path or 32-char GUID string.
+            script_or_guid: .cs file path or 32-char GUID string.
             include_inherited: If true, include fields from base classes
                 (each annotated with source_class).
         """
         orch = session.get_orchestrator()
         resp = orch.list_serialized_fields(
-            script_path_or_guid=script_path_or_guid,
+            script_path_or_guid=script_or_guid,
             include_inherited=include_inherited,
         )
         return resp.to_dict()
 
     @server.tool()
     def validate_field_rename(
-        script_path_or_guid: str,
+        script_or_guid: str,
         old_name: str,
         new_name: str,
         scope: str | None = None,
@@ -749,7 +749,7 @@ def create_server(
         which assets reference the field. Does NOT apply any changes.
 
         Args:
-            script_path_or_guid: .cs file path or 32-char GUID string.
+            script_or_guid: .cs file path or 32-char GUID string.
             old_name: Current field name to rename.
             new_name: Proposed new field name.
             scope: Directory to restrict impact search (default: project root).
@@ -757,7 +757,7 @@ def create_server(
         orch = session.get_orchestrator()
         resolved_scope = session.resolve_scope(scope)
         resp = orch.validate_field_rename(
-            script_path_or_guid=script_path_or_guid,
+            script_path_or_guid=script_or_guid,
             old_name=old_name,
             new_name=new_name,
             scope=resolved_scope,
@@ -849,15 +849,15 @@ def create_server(
     @server.tool()
     def editor_list_children(
         hierarchy_path: str,
-        list_depth: int = 1,
+        depth: int = 1,
     ) -> dict[str, Any]:
         """List children of a GameObject in the running scene.
 
         Args:
             hierarchy_path: Hierarchy path to the parent GameObject.
-            list_depth: Maximum depth to traverse (default: 1).
+            depth: Maximum depth to traverse (default: 1).
         """
-        return send_action(action="list_children", hierarchy_path=hierarchy_path, list_depth=list_depth)
+        return send_action(action="list_children", hierarchy_path=hierarchy_path, list_depth=depth)
 
     @server.tool()
     def editor_list_materials(
@@ -877,20 +877,20 @@ def create_server(
 
     @server.tool()
     def editor_get_material_property(
-        renderer_path: str,
+        hierarchy_path: str,
         material_index: int,
         property_name: str = "",
     ) -> dict[str, Any]:
         """Read shader property values from a material at runtime.
 
         Args:
-            renderer_path: Hierarchy path to the GameObject with a Renderer.
+            hierarchy_path: Hierarchy path to the GameObject with a Renderer.
             material_index: Material slot index (0-based).
             property_name: Shader property to read (empty = list all properties).
         """
         return send_action(
             action="get_material_property",
-            renderer_path=renderer_path, material_index=material_index,
+            renderer_path=hierarchy_path, material_index=material_index,
             property_name=property_name,
         )
 
@@ -976,20 +976,20 @@ def create_server(
 
     @server.tool()
     def editor_set_material(
-        renderer_path: str,
+        hierarchy_path: str,
         material_index: int,
         material_guid: str,
     ) -> dict[str, Any]:
         """Replace a material slot on a Renderer at runtime (Undo-able).
 
         Args:
-            renderer_path: Hierarchy path to the GameObject with a Renderer.
+            hierarchy_path: Hierarchy path to the GameObject with a Renderer.
             material_index: Material slot index (0-based).
             material_guid: GUID of the replacement Material asset (32-char hex).
         """
         return send_action(
             action="set_material",
-            renderer_path=renderer_path, material_index=material_index,
+            renderer_path=hierarchy_path, material_index=material_index,
             material_guid=material_guid,
         )
 

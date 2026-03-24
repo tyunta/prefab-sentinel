@@ -935,7 +935,7 @@ class TestListSerializedFieldsTool(unittest.TestCase):
             mock_orch_cls.default.return_value.list_serialized_fields.return_value = mock_resp
             _, result = _run(server.call_tool(
                 "list_serialized_fields",
-                {"script_path_or_guid": "aabb"},
+                {"script_or_guid": "aabb"},
             ))
 
         self.assertTrue(result["success"])
@@ -958,7 +958,7 @@ class TestListSerializedFieldsTool(unittest.TestCase):
             mock_orch_cls.default.return_value.list_serialized_fields.return_value = mock_resp
             _, result = _run(server.call_tool(
                 "list_serialized_fields",
-                {"script_path_or_guid": "missing.cs"},
+                {"script_or_guid": "missing.cs"},
             ))
 
         self.assertFalse(result["success"])
@@ -995,7 +995,7 @@ class TestValidateFieldRenameTool(unittest.TestCase):
             _, result = _run(server.call_tool(
                 "validate_field_rename",
                 {
-                    "script_path_or_guid": "aabb",
+                    "script_or_guid": "aabb",
                     "old_name": "speed",
                     "new_name": "velocity",
                 },
@@ -1020,7 +1020,7 @@ class TestValidateFieldRenameTool(unittest.TestCase):
             _run(server.call_tool(
                 "validate_field_rename",
                 {
-                    "script_path_or_guid": "aabb",
+                    "script_or_guid": "aabb",
                     "old_name": "speed",
                     "new_name": "velocity",
                     "scope": "Assets/Scripts",
@@ -1577,7 +1577,7 @@ class TestScopeFallback(unittest.TestCase):
             mock_orch = mock_cls.default.return_value
             mock_orch.validate_field_rename.return_value = mock_resp
             _run(server.call_tool("validate_field_rename", {
-                "script_path_or_guid": "aabb",
+                "script_or_guid": "aabb",
                 "old_name": "speed",
                 "new_name": "velocity",
             }))
@@ -1763,7 +1763,7 @@ class TestEditorReadOnlyTools(unittest.TestCase):
         mock_response = {"success": True, "data": {"children": ["A", "B"]}}
         with patch("prefab_sentinel.mcp_server.send_action", return_value=mock_response):
             _, result = _run(server.call_tool("editor_list_children", {
-                "hierarchy_path": "/Root", "list_depth": 2,
+                "hierarchy_path": "/Root", "depth": 2,
             }))
         self.assertEqual(mock_response, result)
 
@@ -1789,7 +1789,7 @@ class TestEditorReadOnlyTools(unittest.TestCase):
         server = create_server()
         with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_get_material_property", {
-                "renderer_path": "/Body", "material_index": 0, "property_name": "_Color",
+                "hierarchy_path": "/Body", "material_index": 0, "property_name": "_Color",
             }))
         mock_send.assert_called_once_with(
             action="get_material_property",
@@ -1800,7 +1800,7 @@ class TestEditorReadOnlyTools(unittest.TestCase):
         server = create_server()
         with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_get_material_property", {
-                "renderer_path": "/Body", "material_index": 0,
+                "hierarchy_path": "/Body", "material_index": 0,
             }))
         mock_send.assert_called_once_with(
             action="get_material_property",
@@ -1911,7 +1911,7 @@ class TestEditorWriteTools(unittest.TestCase):
         server = create_server()
         with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_set_material", {
-                "renderer_path": "/Body",
+                "hierarchy_path": "/Body",
                 "material_index": 0,
                 "material_guid": "abc123def456",
             }))
