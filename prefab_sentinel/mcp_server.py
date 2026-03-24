@@ -162,30 +162,30 @@ def create_server(
 
     @server.tool()
     def get_unity_symbols(
-        path: str,
+        asset_path: str,
         depth: int = 1,
     ) -> dict[str, Any]:
         """Get the symbol tree (GameObject/Component hierarchy) of a Unity asset.
 
         Args:
-            path: Asset file path (.prefab, .unity, .asset).
+            asset_path: Asset file path (.prefab, .unity, .asset).
             depth: Expansion depth. 0=root GOs only, 1=GOs+components,
                    2=components+properties.
         """
-        text, resolved = _read_asset(path)
+        text, resolved = _read_asset(asset_path)
         include_props = depth >= 2
         tree = session.get_symbol_tree(
             resolved, text, include_properties=include_props,
         )
         return {
-            "asset_path": path,
+            "asset_path": asset_path,
             "depth": depth,
             "symbols": tree.to_overview(depth=depth),
         }
 
     @server.tool()
     def find_unity_symbol(
-        path: str,
+        asset_path: str,
         symbol_path: str,
         depth: int = 0,
         include_properties: bool = False,
@@ -200,7 +200,7 @@ def create_server(
         - "CharacterBody/MonoBehaviour(PlayerScript)/moveSpeed" — a field
 
         Args:
-            path: Asset file path.
+            asset_path: Asset file path.
             symbol_path: Human-readable path to the target object.
             depth: How deep to expand below the matched node.
             include_properties: Include serialized field values.
@@ -208,15 +208,15 @@ def create_server(
                 (which Prefab set each value). Implies include_properties.
         """
         props = include_properties or show_origin
-        text, resolved = _read_asset(path)
+        text, resolved = _read_asset(asset_path)
         tree = session.get_symbol_tree(
             resolved, text, include_properties=props,
         )
         results = tree.query(symbol_path, depth=depth)
         if results and show_origin:
-            _annotate_origins(results, path)
+            _annotate_origins(results, asset_path)
         response: dict[str, Any] = {
-            "asset_path": path,
+            "asset_path": asset_path,
             "symbol_path": symbol_path,
             "matches": results,
         }
@@ -330,35 +330,35 @@ def create_server(
 
     @server.tool()
     def inspect_wiring(
-        path: str,
+        asset_path: str,
         udon_only: bool = False,
     ) -> dict[str, Any]:
         """Analyze MonoBehaviour field wiring in a Prefab or Scene.
 
         Args:
-            path: Asset file path (.prefab, .unity).
+            asset_path: Asset file path (.prefab, .unity).
             udon_only: Only inspect UdonSharp components.
         """
         orch = session.get_orchestrator()
-        resp = orch.inspect_wiring(target_path=path, udon_only=udon_only)
+        resp = orch.inspect_wiring(target_path=asset_path, udon_only=udon_only)
         return resp.to_dict()
 
     @server.tool()
     def inspect_variant(
-        path: str,
+        asset_path: str,
         component_filter: str | None = None,
         show_origin: bool = False,
     ) -> dict[str, Any]:
         """Inspect a Prefab Variant's override chain and effective values.
 
         Args:
-            path: Variant prefab file path.
+            asset_path: Variant prefab file path.
             component_filter: Filter overrides by component substring.
             show_origin: Show which Prefab in the chain set each value.
         """
         orch = session.get_orchestrator()
         resp = orch.inspect_variant(
-            variant_path=path,
+            variant_path=asset_path,
             component_filter=component_filter,
             show_origin=show_origin,
         )
@@ -366,7 +366,7 @@ def create_server(
 
     @server.tool()
     def diff_unity_symbols(
-        path: str,
+        asset_path: str,
         component_filter: str | None = None,
     ) -> dict[str, Any]:
         """Show only the differences between a Variant and its Base.
@@ -375,12 +375,12 @@ def create_server(
         plus origin annotations showing which Prefab in the chain set each value.
 
         Args:
-            path: Variant prefab file path.
+            asset_path: Variant prefab file path.
             component_filter: Filter diffs by property path substring.
         """
         orch = session.get_orchestrator()
         resp = orch.diff_variant(
-            variant_path=path,
+            variant_path=asset_path,
             component_filter=component_filter,
         )
         return resp.to_dict()
@@ -391,7 +391,7 @@ def create_server(
 
     @server.tool()
     def set_property(
-        path: str,
+        asset_path: str,
         symbol_path: str,
         property_path: str,
         value: Any,
@@ -405,7 +405,7 @@ def create_server(
         - confirm=True: applies changes to disk.
 
         Args:
-            path: Asset file path (.prefab, .unity, .asset, .mat).
+            asset_path: Asset file path (.prefab, .unity, .asset, .mat).
             symbol_path: Human-readable path to a component
                 (e.g. "CharacterBody/MeshRenderer" or
                 "CharacterBody/MonoBehaviour(PlayerScript)").
@@ -416,7 +416,7 @@ def create_server(
             change_reason: Human-readable reason for the change (audit trail).
         """
         # 1. Symbol resolution
-        text, resolved = _read_asset(path)
+        text, resolved = _read_asset(asset_path)
         tree = session.get_symbol_tree(resolved, text, include_properties=False)
         try:
             node = tree.resolve_unique(symbol_path)
@@ -426,7 +426,7 @@ def create_server(
                 "severity": "error",
                 "code": "SYMBOL_NOT_FOUND",
                 "message": f"No component found at symbol path: {symbol_path!r}",
-                "data": {"asset_path": path, "symbol_path": symbol_path},
+                "data": {"asset_path": asset_path, "symbol_path": symbol_path},
                 "diagnostics": [],
             }
         except AmbiguousSymbolError as exc:
@@ -435,7 +435,7 @@ def create_server(
                 "severity": "error",
                 "code": "SYMBOL_AMBIGUOUS",
                 "message": str(exc),
-                "data": {"asset_path": path, "symbol_path": symbol_path},
+                "data": {"asset_path": asset_path, "symbol_path": symbol_path},
                 "diagnostics": [],
             }
 
@@ -450,7 +450,7 @@ def create_server(
                     f"not a component. Provide a path to a component."
                 ),
                 "data": {
-                    "asset_path": path,
+                    "asset_path": asset_path,
                     "symbol_path": symbol_path,
                     "resolved_kind": node.kind.value,
                 },
@@ -466,14 +466,14 @@ def create_server(
                 "severity": "error",
                 "code": "SYMBOL_UNRESOLVABLE",
                 "message": str(exc),
-                "data": {"asset_path": path, "symbol_path": symbol_path},
+                "data": {"asset_path": asset_path, "symbol_path": symbol_path},
                 "diagnostics": [],
             }
 
         # 4. Build V2 patch plan
         plan: dict[str, object] = {
             "plan_version": PLAN_VERSION,
-            "resources": [{"id": "target", "path": path, "mode": "open"}],
+            "resources": [{"id": "target", "path": asset_path, "mode": "open"}],
             "ops": [
                 {
                     "resource": "target",
@@ -511,7 +511,7 @@ def create_server(
 
     @server.tool()
     def add_component(
-        path: str,
+        asset_path: str,
         symbol_path: str,
         component_type: str,
         confirm: bool = False,
@@ -524,7 +524,7 @@ def create_server(
         - confirm=True: applies the change.
 
         Args:
-            path: Asset file path (.prefab, .unity, .asset).
+            asset_path: Asset file path (.prefab, .unity, .asset).
             symbol_path: Symbol path to the target GameObject
                 (e.g. "Player" for the root, "Player/Body" for a child).
             component_type: Unity component type to add
@@ -532,7 +532,7 @@ def create_server(
             confirm: Set True to apply (False = dry-run only).
             change_reason: Human-readable reason for the change (audit trail).
         """
-        text, resolved = _read_asset(path)
+        text, resolved = _read_asset(asset_path)
         tree = session.get_symbol_tree(resolved, text, include_properties=False)
         try:
             node = tree.resolve_unique(symbol_path)
@@ -542,7 +542,7 @@ def create_server(
                 "severity": "error",
                 "code": "SYMBOL_NOT_FOUND",
                 "message": f"No game object found at symbol path: {symbol_path!r}",
-                "data": {"asset_path": path, "symbol_path": symbol_path},
+                "data": {"asset_path": asset_path, "symbol_path": symbol_path},
                 "diagnostics": [],
             }
         except AmbiguousSymbolError as exc:
@@ -551,7 +551,7 @@ def create_server(
                 "severity": "error",
                 "code": "SYMBOL_AMBIGUOUS",
                 "message": str(exc),
-                "data": {"asset_path": path, "symbol_path": symbol_path},
+                "data": {"asset_path": asset_path, "symbol_path": symbol_path},
                 "diagnostics": [],
             }
 
@@ -565,7 +565,7 @@ def create_server(
                     f"not a game_object. Provide a path to a GameObject."
                 ),
                 "data": {
-                    "asset_path": path,
+                    "asset_path": asset_path,
                     "symbol_path": symbol_path,
                     "resolved_kind": node.kind.value,
                 },
@@ -578,7 +578,7 @@ def create_server(
 
         plan: dict[str, object] = {
             "plan_version": PLAN_VERSION,
-            "resources": [{"id": "target", "path": path, "mode": "open"}],
+            "resources": [{"id": "target", "path": asset_path, "mode": "open"}],
             "ops": [
                 {
                     "resource": "target",
@@ -611,7 +611,7 @@ def create_server(
 
     @server.tool()
     def remove_component(
-        path: str,
+        asset_path: str,
         symbol_path: str,
         confirm: bool = False,
         change_reason: str = "",
@@ -623,14 +623,14 @@ def create_server(
         - confirm=True: applies the removal.
 
         Args:
-            path: Asset file path (.prefab, .unity, .asset).
+            asset_path: Asset file path (.prefab, .unity, .asset).
             symbol_path: Symbol path to the component to remove
                 (e.g. "Player/AudioSource" or
                 "Player/Body/MonoBehaviour(PlayerScript)").
             confirm: Set True to apply (False = dry-run only).
             change_reason: Human-readable reason for the change (audit trail).
         """
-        text, resolved = _read_asset(path)
+        text, resolved = _read_asset(asset_path)
         tree = session.get_symbol_tree(resolved, text, include_properties=False)
         try:
             node = tree.resolve_unique(symbol_path)
@@ -640,7 +640,7 @@ def create_server(
                 "severity": "error",
                 "code": "SYMBOL_NOT_FOUND",
                 "message": f"No component found at symbol path: {symbol_path!r}",
-                "data": {"asset_path": path, "symbol_path": symbol_path},
+                "data": {"asset_path": asset_path, "symbol_path": symbol_path},
                 "diagnostics": [],
             }
         except AmbiguousSymbolError as exc:
@@ -649,7 +649,7 @@ def create_server(
                 "severity": "error",
                 "code": "SYMBOL_AMBIGUOUS",
                 "message": str(exc),
-                "data": {"asset_path": path, "symbol_path": symbol_path},
+                "data": {"asset_path": asset_path, "symbol_path": symbol_path},
                 "diagnostics": [],
             }
 
@@ -663,7 +663,7 @@ def create_server(
                     f"not a component. Provide a path to a component."
                 ),
                 "data": {
-                    "asset_path": path,
+                    "asset_path": asset_path,
                     "symbol_path": symbol_path,
                     "resolved_kind": node.kind.value,
                 },
@@ -678,13 +678,13 @@ def create_server(
                 "severity": "error",
                 "code": "SYMBOL_UNRESOLVABLE",
                 "message": str(exc),
-                "data": {"asset_path": path, "symbol_path": symbol_path},
+                "data": {"asset_path": asset_path, "symbol_path": symbol_path},
                 "diagnostics": [],
             }
 
         plan: dict[str, object] = {
             "plan_version": PLAN_VERSION,
-            "resources": [{"id": "target", "path": path, "mode": "open"}],
+            "resources": [{"id": "target", "path": asset_path, "mode": "open"}],
             "ops": [
                 {
                     "resource": "target",
@@ -1009,25 +1009,25 @@ def create_server(
     # ------------------------------------------------------------------
 
     @server.tool()
-    def inspect_materials(path: str) -> dict[str, Any]:
+    def inspect_materials(asset_path: str) -> dict[str, Any]:
         """Show per-renderer material slot assignments with override/inherited markers.
 
         Args:
-            path: Path to a .prefab or .unity file.
+            asset_path: Path to a .prefab or .unity file.
         """
         orch = session.get_orchestrator()
-        resp = orch.inspect_materials(target_path=path)
+        resp = orch.inspect_materials(target_path=asset_path)
         return resp.to_dict()
 
     @server.tool()
-    def validate_structure(path: str) -> dict[str, Any]:
+    def validate_structure(asset_path: str) -> dict[str, Any]:
         """Validate internal YAML structure (fileID duplicates, Transform consistency).
 
         Args:
-            path: Path to a .prefab, .unity, or .asset file.
+            asset_path: Path to a .prefab, .unity, or .asset file.
         """
         orch = session.get_orchestrator()
-        resp = orch.inspect_structure(target_path=path)
+        resp = orch.inspect_structure(target_path=asset_path)
         return resp.to_dict()
 
     @server.tool()

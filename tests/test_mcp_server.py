@@ -86,7 +86,7 @@ class TestSymbolTools(unittest.TestCase):
             prefab = self._write_prefab(Path(td))
             _, result = _run(self.server.call_tool(
                 "get_unity_symbols",
-                {"path": str(prefab), "depth": 0},
+                {"asset_path": str(prefab), "depth": 0},
             ))
             self.assertEqual(str(prefab), result["asset_path"])
             symbols = result["symbols"]
@@ -105,7 +105,7 @@ class TestSymbolTools(unittest.TestCase):
             prefab = self._write_prefab(Path(td))
             _, result = _run(self.server.call_tool(
                 "get_unity_symbols",
-                {"path": str(prefab), "depth": 1},
+                {"asset_path": str(prefab), "depth": 1},
             ))
             symbols = result["symbols"]
             children = symbols[0]["children"]
@@ -120,7 +120,7 @@ class TestSymbolTools(unittest.TestCase):
             prefab = self._write_prefab(Path(td))
             _, result = _run(self.server.call_tool(
                 "find_unity_symbol",
-                {"path": str(prefab), "symbol_path": "Cube"},
+                {"asset_path": str(prefab), "symbol_path": "Cube"},
             ))
             self.assertEqual(1, len(result["matches"]))
             self.assertEqual("Cube", result["matches"][0]["name"])
@@ -134,7 +134,7 @@ class TestSymbolTools(unittest.TestCase):
             prefab = self._write_prefab(Path(td))
             _, result = _run(self.server.call_tool(
                 "find_unity_symbol",
-                {"path": str(prefab), "symbol_path": "NonExistent"},
+                {"asset_path": str(prefab), "symbol_path": "NonExistent"},
             ))
             self.assertEqual([], result["matches"])
             # Serena-style: empty matches = not found, no error envelope
@@ -147,7 +147,7 @@ class TestSymbolTools(unittest.TestCase):
             prefab = self._write_prefab(Path(td))
             _, result = _run(self.server.call_tool(
                 "find_unity_symbol",
-                {"path": str(prefab), "symbol_path": "Cube/MeshRenderer"},
+                {"asset_path": str(prefab), "symbol_path": "Cube/MeshRenderer"},
             ))
             self.assertEqual(1, len(result["matches"]))
             self.assertEqual("MeshRenderer", result["matches"][0]["name"])
@@ -158,7 +158,7 @@ class TestSymbolTools(unittest.TestCase):
         with self.assertRaises(ToolError):
             _run(self.server.call_tool(
                 "get_unity_symbols",
-                {"path": "/nonexistent/test.prefab"},
+                {"asset_path": "/nonexistent/test.prefab"},
             ))
 
 
@@ -181,7 +181,7 @@ class TestSymbolToolsWithMonoBehaviour(unittest.TestCase):
             _, result = _run(server.call_tool(
                 "find_unity_symbol",
                 {
-                    "path": str(p),
+                    "asset_path": str(p),
                     "symbol_path": "Player/MonoBehaviour",
                 },
             ))
@@ -243,7 +243,7 @@ class TestOrchestratorTools(unittest.TestCase):
             mock_cls.default.return_value = mock_orch
             _, result = _run(server.call_tool(
                 "inspect_wiring",
-                {"path": "/some/test.prefab"},
+                {"asset_path": "/some/test.prefab"},
             ))
 
         self.assertTrue(result["success"])
@@ -298,7 +298,7 @@ class TestOrchestratorTools(unittest.TestCase):
             mock_cls.default.return_value = mock_orch
             _, result = _run(server.call_tool(
                 "inspect_variant",
-                {"path": "/some/variant.prefab", "show_origin": True},
+                {"asset_path": "/some/variant.prefab", "show_origin": True},
             ))
 
         self.assertTrue(result["success"])
@@ -329,7 +329,7 @@ class TestDiffUnitySymbolsTool(unittest.TestCase):
             mock_cls.default.return_value = mock_orch
             _, result = _run(server.call_tool(
                 "diff_unity_symbols",
-                {"path": "/some/variant.prefab"},
+                {"asset_path": "/some/variant.prefab"},
             ))
 
         self.assertTrue(result["success"])
@@ -352,7 +352,7 @@ class TestDiffUnitySymbolsTool(unittest.TestCase):
             mock_cls.default.return_value = mock_orch
             _run(server.call_tool(
                 "diff_unity_symbols",
-                {"path": "/v.prefab", "component_filter": "speed"},
+                {"asset_path": "/v.prefab", "component_filter": "speed"},
             ))
 
         mock_orch.diff_variant.assert_called_once_with(
@@ -381,7 +381,7 @@ class TestFindUnitySymbolShowOrigin(unittest.TestCase):
             _, result = _run(server.call_tool(
                 "find_unity_symbol",
                 {
-                    "path": str(p),
+                    "asset_path": str(p),
                     "symbol_path": "Player/MonoBehaviour",
                     "include_properties": True,
                 },
@@ -442,7 +442,7 @@ class TestFindUnitySymbolShowOrigin(unittest.TestCase):
                 _, result = _run(server.call_tool(
                     "find_unity_symbol",
                     {
-                        "path": str(p),
+                        "asset_path": str(p),
                         "symbol_path": "Player/MonoBehaviour",
                         "show_origin": True,
                     },
@@ -487,7 +487,7 @@ class TestFindUnitySymbolShowOrigin(unittest.TestCase):
                 _, result = _run(server.call_tool(
                     "find_unity_symbol",
                     {
-                        "path": str(p),
+                        "asset_path": str(p),
                         "symbol_path": "Cube/MonoBehaviour",
                         "show_origin": True,
                     },
@@ -531,7 +531,7 @@ class TestFindUnitySymbolShowOrigin(unittest.TestCase):
                     _, result = _run(server.call_tool(
                         "find_unity_symbol",
                         {
-                            "path": str(p),
+                            "asset_path": str(p),
                             "symbol_path": "Cube/MonoBehaviour",
                             "show_origin": True,
                         },
@@ -596,7 +596,7 @@ class TestSetPropertyTool(unittest.TestCase):
                 _, result = _run(server.call_tool(
                     "set_property",
                     {
-                        "path": str(p),
+                        "asset_path": str(p),
                         "symbol_path": "Cube/MeshRenderer",
                         "property_path": "m_Enabled",
                         "value": 0,
@@ -631,7 +631,7 @@ class TestSetPropertyTool(unittest.TestCase):
                 _, result = _run(server.call_tool(
                     "set_property",
                     {
-                        "path": str(p),
+                        "asset_path": str(p),
                         "symbol_path": "Cube/MeshRenderer",
                         "property_path": "m_Enabled",
                         "value": 1,
@@ -658,7 +658,7 @@ class TestSetPropertyTool(unittest.TestCase):
             _, result = _run(server.call_tool(
                 "set_property",
                 {
-                    "path": str(p),
+                    "asset_path": str(p),
                     "symbol_path": "NonExistent/MeshRenderer",
                     "property_path": "m_Enabled",
                     "value": 0,
@@ -682,7 +682,7 @@ class TestSetPropertyTool(unittest.TestCase):
             _, result = _run(server.call_tool(
                 "set_property",
                 {
-                    "path": str(p),
+                    "asset_path": str(p),
                     "symbol_path": "Cube",
                     "property_path": "m_Name",
                     "value": "NewName",
@@ -715,7 +715,7 @@ class TestSetPropertyTool(unittest.TestCase):
                 _, result = _run(server.call_tool(
                     "set_property",
                     {
-                        "path": str(p),
+                        "asset_path": str(p),
                         "symbol_path": "Cube/MeshRenderer",
                         "property_path": "m_Enabled",
                         "value": 0,
@@ -760,7 +760,7 @@ class TestSetPropertyTool(unittest.TestCase):
                 _, result = _run(server_with_root.call_tool(
                     "set_property",
                     {
-                        "path": str(p),
+                        "asset_path": str(p),
                         "symbol_path": "Player/MonoBehaviour(PlayerScript)",
                         "property_path": "speed",
                         "value": 10.0,
@@ -785,7 +785,7 @@ class TestSetPropertyTool(unittest.TestCase):
             _, result = _run(server.call_tool(
                 "set_property",
                 {
-                    "path": str(p),
+                    "asset_path": str(p),
                     "symbol_path": "Player/MonoBehaviour",
                     "property_path": "speed",
                     "value": 5.0,
@@ -817,7 +817,7 @@ class TestSetPropertyTool(unittest.TestCase):
                 _run(server.call_tool(
                     "set_property",
                     {
-                        "path": str(p),
+                        "asset_path": str(p),
                         "symbol_path": "Cube/MeshRenderer",
                         "property_path": "m_Enabled",
                         "value": 1,
@@ -850,7 +850,7 @@ class TestSetPropertyTool(unittest.TestCase):
                 _run(server.call_tool(
                     "set_property",
                     {
-                        "path": str(p),
+                        "asset_path": str(p),
                         "symbol_path": "Cube/MeshRenderer",
                         "property_path": "m_CastShadows",
                         "value": 0,
@@ -892,7 +892,7 @@ class TestSetPropertyTool(unittest.TestCase):
                 _, result = _run(server.call_tool(
                     "set_property",
                     {
-                        "path": str(p),
+                        "asset_path": str(p),
                         "symbol_path": "Cube/MeshRenderer",
                         "property_path": "m_Enabled",
                         "value": 1,
@@ -1197,7 +1197,7 @@ class TestAddComponentTool(unittest.TestCase):
                 _, result = _run(server.call_tool(
                     "add_component",
                     {
-                        "path": str(p),
+                        "asset_path": str(p),
                         "symbol_path": "Root",
                         "component_type": "AudioSource",
                     },
@@ -1233,7 +1233,7 @@ class TestAddComponentTool(unittest.TestCase):
                 _, result = _run(server.call_tool(
                     "add_component",
                     {
-                        "path": str(p),
+                        "asset_path": str(p),
                         "symbol_path": "Root/Child",
                         "component_type": "BoxCollider",
                     },
@@ -1258,7 +1258,7 @@ class TestAddComponentTool(unittest.TestCase):
             _, result = _run(server.call_tool(
                 "add_component",
                 {
-                    "path": str(p),
+                    "asset_path": str(p),
                     "symbol_path": "Nonexistent",
                     "component_type": "AudioSource",
                 },
@@ -1281,7 +1281,7 @@ class TestAddComponentTool(unittest.TestCase):
             _, result = _run(server.call_tool(
                 "add_component",
                 {
-                    "path": str(p),
+                    "asset_path": str(p),
                     "symbol_path": "Root/Child/MeshRenderer",
                     "component_type": "AudioSource",
                 },
@@ -1311,7 +1311,7 @@ class TestAddComponentTool(unittest.TestCase):
                 _, result = _run(server.call_tool(
                     "add_component",
                     {
-                        "path": str(p),
+                        "asset_path": str(p),
                         "symbol_path": "Root",
                         "component_type": "AudioSource",
                         "confirm": True,
@@ -1344,7 +1344,7 @@ class TestAddComponentTool(unittest.TestCase):
                 _, result = _run(server.call_tool(
                     "add_component",
                     {
-                        "path": str(p),
+                        "asset_path": str(p),
                         "symbol_path": "Root/Child",
                         "component_type": "AudioSource",
                     },
@@ -1401,7 +1401,7 @@ class TestRemoveComponentTool(unittest.TestCase):
                 _, result = _run(server.call_tool(
                     "remove_component",
                     {
-                        "path": str(p),
+                        "asset_path": str(p),
                         "symbol_path": "Cube/MeshRenderer",
                     },
                 ))
@@ -1435,7 +1435,7 @@ class TestRemoveComponentTool(unittest.TestCase):
                 _, result = _run(server.call_tool(
                     "remove_component",
                     {
-                        "path": str(p),
+                        "asset_path": str(p),
                         "symbol_path": "Cube/MeshRenderer",
                         "confirm": True,
                     },
@@ -1459,7 +1459,7 @@ class TestRemoveComponentTool(unittest.TestCase):
             _, result = _run(server.call_tool(
                 "remove_component",
                 {
-                    "path": str(p),
+                    "asset_path": str(p),
                     "symbol_path": "Cube/AudioSource",
                 },
             ))
@@ -1481,7 +1481,7 @@ class TestRemoveComponentTool(unittest.TestCase):
             _, result = _run(server.call_tool(
                 "remove_component",
                 {
-                    "path": str(p),
+                    "asset_path": str(p),
                     "symbol_path": "Cube",
                 },
             ))
@@ -1510,7 +1510,7 @@ class TestRemoveComponentTool(unittest.TestCase):
                 _, result = _run(server.call_tool(
                     "remove_component",
                     {
-                        "path": str(p),
+                        "asset_path": str(p),
                         "symbol_path": "Cube/MeshRenderer",
                     },
                 ))
@@ -1942,7 +1942,7 @@ class TestInspectionTools(unittest.TestCase):
         with patch("prefab_sentinel.session.Phase1Orchestrator") as mock_cls:
             mock_cls.default.return_value = mock_orch
             _, result = _run(server.call_tool("inspect_materials", {
-                "path": "Assets/Avatar.prefab",
+                "asset_path": "Assets/Avatar.prefab",
             }))
 
         self.assertTrue(result["success"])
@@ -1962,7 +1962,7 @@ class TestInspectionTools(unittest.TestCase):
         with patch("prefab_sentinel.session.Phase1Orchestrator") as mock_cls:
             mock_cls.default.return_value = mock_orch
             _, result = _run(server.call_tool("validate_structure", {
-                "path": "Assets/Scene.unity",
+                "asset_path": "Assets/Scene.unity",
             }))
 
         self.assertTrue(result["success"])
