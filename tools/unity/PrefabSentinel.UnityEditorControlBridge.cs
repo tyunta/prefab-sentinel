@@ -408,8 +408,11 @@ namespace PrefabSentinel
                         $"GameObject not found in Prefab Stage: {request.hierarchy_path}");
 
                 Selection.activeGameObject = target.gameObject;
-                var psv = SceneView.lastActiveSceneView;
-                if (psv != null) { psv.FrameSelected(); psv.Repaint(); }
+                EditorApplication.delayCall += () =>
+                {
+                    var psv = SceneView.lastActiveSceneView;
+                    if (psv != null) { psv.FrameSelected(); psv.Repaint(); }
+                };
                 return BuildSuccess("EDITOR_CTRL_SELECT_OK",
                     $"Selected in Prefab Stage: {request.hierarchy_path}",
                     data: new EditorControlData
@@ -426,8 +429,11 @@ namespace PrefabSentinel
                     $"GameObject not found: {request.hierarchy_path}");
 
             Selection.activeGameObject = go;
-            var sv = SceneView.lastActiveSceneView;
-            if (sv != null) { sv.FrameSelected(); sv.Repaint(); }
+            EditorApplication.delayCall += () =>
+            {
+                var sv = SceneView.lastActiveSceneView;
+                if (sv != null) { sv.FrameSelected(); sv.Repaint(); }
+            };
 
             return BuildSuccess("EDITOR_CTRL_SELECT_OK",
                 $"Selected: {request.hierarchy_path}",
@@ -447,12 +453,14 @@ namespace PrefabSentinel
             if (sceneView == null)
                 return BuildError("EDITOR_CTRL_NO_SCENE_VIEW", "No active SceneView found.");
 
-            sceneView.FrameSelected();
-
-            if (request.zoom > 0f)
-                sceneView.size = request.zoom;
-
-            sceneView.Repaint();
+            float zoom = request.zoom;
+            EditorApplication.delayCall += () =>
+            {
+                sceneView.FrameSelected();
+                if (zoom > 0f)
+                    sceneView.size = zoom;
+                sceneView.Repaint();
+            };
 
             return BuildSuccess("EDITOR_CTRL_FRAME_OK",
                 $"Framed: {Selection.activeGameObject.name}" + (request.zoom > 0f ? $" (zoom={request.zoom})" : ""),

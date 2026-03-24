@@ -2940,16 +2940,20 @@ class SerializedObjectService:
             loc = f"{entry.get('component', '')}:{entry.get('path', '')}"
             before_val = entry.get("before", "")
             if isinstance(before_val, str) and before_val.startswith("(unresolved"):
+                component = entry.get("component", "")
+                prop_path = entry.get("path", "")
                 soft_warnings.append(
                     Diagnostic(
                         path=target,
                         location=loc,
                         detail="unresolved_before_value",
                         evidence=(
-                            f"Before value unresolved: {before_val}. "
-                            f"The target file may not exist, or the component path "
-                            f"may be invalid. Verify with 'editor list-children' "
-                            f"if bridge is available."
+                            f"Before value unresolved for '{component}:{prop_path}': "
+                            f"{before_val}. "
+                            f"The component type or property path may not exist on "
+                            f"the target. This operation will likely fail on apply. "
+                            f"Verify with 'inspect wiring --path {target}' or "
+                            f"'editor list-children' if bridge is available."
                         ),
                     )
                 )
