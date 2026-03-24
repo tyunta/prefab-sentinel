@@ -185,6 +185,56 @@ def _parse_monobehaviour_fields(block: YamlBlock) -> ComponentWiring | None:
 
 
 # ---------------------------------------------------------------------------
+# Field name extraction (all fields, not just references)
+# ---------------------------------------------------------------------------
+
+
+def extract_monobehaviour_field_names(block: YamlBlock) -> list[str]:
+    """Extract all top-level field names from a MonoBehaviour YAML block.
+
+    Unlike :func:`_parse_monobehaviour_fields` which only captures reference
+    fields (fileID/GUID patterns), this returns ALL field names including
+    plain scalar values like ``speed: 5.0``.
+
+    Unity built-in fields in :data:`SKIP_FIELDS` are excluded.
+    Returns an empty list for non-MonoBehaviour blocks.
+    """
+    if block.class_id != CLASS_ID_MONOBEHAVIOUR:
+        return []
+
+    lines = block.text.split("\n")
+    field_names: list[str] = []
+    base_indent: int | None = None
+
+    for line in lines:
+        stripped = line.rstrip()
+        if not stripped:
+            continue
+        current_indent = len(line) - len(line.lstrip())
+
+        # Skip nested lines (array elements, sub-properties)
+        if base_indent is not None and current_indent > base_indent:
+            continue
+
+        field_match = re.match(r"^(\s+)(\w+):\s*(.*)", line)
+        if not field_match:
+            continue
+
+        if base_indent is None:
+            base_indent = current_indent
+        elif current_indent != base_indent:
+            continue
+
+        name = field_match.group(2)
+        if name in SKIP_FIELDS:
+            continue
+
+        field_names.append(name)
+
+    return field_names
+
+
+# ---------------------------------------------------------------------------
 # Analysis
 # ---------------------------------------------------------------------------
 

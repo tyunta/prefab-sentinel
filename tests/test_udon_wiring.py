@@ -10,6 +10,7 @@ from prefab_sentinel.udon_wiring import (
     UDON_BEHAVIOUR_GUID,
     _parse_monobehaviour_fields,
     analyze_wiring,
+    extract_monobehaviour_field_names,
 )
 from prefab_sentinel.unity_yaml_parser import (
     YamlBlock,
