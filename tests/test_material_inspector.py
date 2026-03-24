@@ -113,7 +113,7 @@ class TestParseMaterialOverrides(unittest.TestCase):
             f"  m_SourcePrefab: {{fileID: 100100000, guid: {BASE_PREFAB_GUID}, type: 3}}\n"
         )
         out: dict[tuple[str, int], str] = {}
-        _parse_material_overrides(text, BASE_PREFAB_GUID, out)
+        _parse_material_overrides(text, out)
         self.assertEqual(out, {})
 
     def test_single_material_override(self) -> None:
@@ -129,7 +129,7 @@ class TestParseMaterialOverrides(unittest.TestCase):
             f"  m_SourcePrefab: {{fileID: 100100000, guid: {BASE_PREFAB_GUID}, type: 3}}\n"
         )
         out: dict[tuple[str, int], str] = {}
-        _parse_material_overrides(text, BASE_PREFAB_GUID, out)
+        _parse_material_overrides(text, out)
         self.assertIn(("42", 0), out)
         self.assertEqual(out[("42", 0)], MAT_GUID_C.lower())
 
@@ -150,7 +150,7 @@ class TestParseMaterialOverrides(unittest.TestCase):
             f"  m_SourcePrefab: {{fileID: 100100000, guid: {BASE_PREFAB_GUID}, type: 3}}\n"
         )
         out: dict[tuple[str, int], str] = {}
-        _parse_material_overrides(text, BASE_PREFAB_GUID, out)
+        _parse_material_overrides(text, out)
         self.assertEqual(len(out), 2)
         self.assertEqual(out[("42", 0)], MAT_GUID_B.lower())
         self.assertEqual(out[("42", 1)], MAT_GUID_C.lower())
@@ -172,7 +172,7 @@ class TestParseMaterialOverrides(unittest.TestCase):
             f"  m_SourcePrefab: {{fileID: 100100000, guid: {BASE_PREFAB_GUID}, type: 3}}\n"
         )
         out: dict[tuple[str, int], str] = {}
-        _parse_material_overrides(text, BASE_PREFAB_GUID, out)
+        _parse_material_overrides(text, out)
         self.assertEqual(out, {})
 
 
@@ -514,6 +514,123 @@ class TestInspectMaterialsIntegration(unittest.TestCase):
 
             result = inspect_materials(str(prefab_path), project_root=tmp_path)
             self.assertEqual(result.renderers, [])
+
+
+    def _setup_fbx_variant_chain(
+        self,
+        tmp_path: Path,
+        base_modifications: list[dict[str, str]],
+        variant_modifications: list[dict[str, str]],
+        *,
+        extra_base_blocks: str = "",
+    ) -> Path:
+        """Create Base.prefab (Model Prefab) + Variant.prefab chain."""
+        fbx_guid = "dddddddddddddddddddddddddddddddd"
+        assets_dir = tmp_path / "Assets"
+        assets_dir.mkdir(exist_ok=True)
+
+        base_text = (
+            YAML_HEADER
+            + extra_base_blocks
+            + "--- !u!137 &300 stripped\n"
+            + "SkinnedMeshRenderer:\n"
+            + "  m_CorrespondingSourceObject: {fileID: 0}\n"
+            + "  m_GameObject: {fileID: 100}\n"
+            + make_prefab_variant(source_guid=fbx_guid, modifications=base_modifications)
+        )
+        (assets_dir / "Base.prefab").write_text(base_text, encoding="utf-8")
+        (assets_dir / "Base.prefab.meta").write_text(
+            f"fileFormatVersion: 2\nguid: {BASE_PREFAB_GUID}\n", encoding="utf-8",
+        )
+
+        variant_text = (
+            YAML_HEADER
+            + "--- !u!137 &300 stripped\n"
+            + "SkinnedMeshRenderer:\n"
+            + "  m_CorrespondingSourceObject: {fileID: 0}\n"
+            + "  m_GameObject: {fileID: 100}\n"
+            + make_prefab_variant(source_guid=BASE_PREFAB_GUID, modifications=variant_modifications)
+        )
+        variant_path = assets_dir / "Variant.prefab"
+        variant_path.write_text(variant_text, encoding="utf-8")
+        return variant_path
+
+    def test_variant_fbx_chain_stripped_only(self) -> None:
+        """Variant -> Base (Model Prefab, all stripped) with m_Modifications materials."""
+        fbx_guid = "dddddddddddddddddddddddddddddddd"
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            variant_path = self._setup_fbx_variant_chain(
+                tmp_path,
+                base_modifications=[
+                    {
+                        "target": f"{{fileID: 300, guid: {fbx_guid}, type: 3}}",
+                        "propertyPath": "m_Materials.Array.data[0]",
+                        "value": "",
+                        "objectReference": f"{{fileID: 2100000, guid: {MAT_GUID_A}, type: 2}}",
+                    },
+                    {
+                        "target": f"{{fileID: 300, guid: {fbx_guid}, type: 3}}",
+                        "propertyPath": "m_Materials.Array.data[1]",
+                        "value": "",
+                        "objectReference": f"{{fileID: 2100000, guid: {MAT_GUID_B}, type: 2}}",
+                    },
+                    {
+                        "target": f"{{fileID: 100, guid: {fbx_guid}, type: 3}}",
+                        "propertyPath": "m_Name",
+                        "value": "BodyMesh",
+                        "objectReference": "{fileID: 0}",
+                    },
+                ],
+                variant_modifications=[
+                    {
+                        "target": f"{{fileID: 300, guid: {BASE_PREFAB_GUID}, type: 3}}",
+                        "propertyPath": "m_Materials.Array.data[0]",
+                        "value": "",
+                        "objectReference": f"{{fileID: 2100000, guid: {MAT_GUID_C}, type: 2}}",
+                    },
+                ],
+                extra_base_blocks=(
+                    "--- !u!1 &100 stripped\n"
+                    "GameObject:\n"
+                    "  m_CorrespondingSourceObject: {fileID: 0}\n"
+                ),
+            )
+            result = inspect_materials(str(variant_path), project_root=tmp_path)
+            self.assertTrue(result.is_variant)
+            self.assertEqual(len(result.renderers), 1)
+            self.assertEqual(result.renderers[0].game_object_name, "BodyMesh")
+            self.assertEqual(result.renderers[0].renderer_type, "SkinnedMeshRenderer")
+            self.assertEqual(len(result.renderers[0].slots), 2)
+            # Slot 0 overridden by variant
+            self.assertTrue(result.renderers[0].slots[0].is_override)
+            self.assertEqual(result.renderers[0].slots[0].material_guid, MAT_GUID_C.lower())
+            # Slot 1 inherited from base's m_Modifications
+            self.assertFalse(result.renderers[0].slots[1].is_override)
+            self.assertEqual(result.renderers[0].slots[1].material_guid, MAT_GUID_B.lower())
+
+    def test_variant_fbx_chain_no_base_mods(self) -> None:
+        """Variant -> Base (Model Prefab) with no material m_Modifications in base."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            variant_path = self._setup_fbx_variant_chain(
+                tmp_path,
+                base_modifications=[],
+                variant_modifications=[
+                    {
+                        "target": f"{{fileID: 300, guid: {BASE_PREFAB_GUID}, type: 3}}",
+                        "propertyPath": "m_Materials.Array.data[0]",
+                        "value": "",
+                        "objectReference": f"{{fileID: 2100000, guid: {MAT_GUID_A}, type: 2}}",
+                    },
+                ],
+            )
+            result = inspect_materials(str(variant_path), project_root=tmp_path)
+            self.assertTrue(result.is_variant)
+            # One renderer with one slot from variant override only
+            self.assertEqual(len(result.renderers), 1)
+            self.assertEqual(len(result.renderers[0].slots), 1)
+            self.assertTrue(result.renderers[0].slots[0].is_override)
 
 
 if __name__ == "__main__":
