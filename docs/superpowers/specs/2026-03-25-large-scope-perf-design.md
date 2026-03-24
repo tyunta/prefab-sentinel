@@ -24,16 +24,18 @@ MCP 統合テスト (`report_mcp_integration_test_20260324.md`) で、`validate_
 
 #### `_read_text_uncached(path: Path) -> str | None`
 
-既存の `_read_text()` からキャッシュ操作を除いた純粋な I/O メソッド。ファイルを読み込み、テキストを返す。デコードエラー時は `None` を返す。
+既存の `_read_text()` からキャッシュ操作を除いた純粋な I/O メソッド。`decode_text_file(path)` を呼び、テキストを返す。`decode_text_file()` は内部で UTF-8 → CP932 のフォールバックを行い、両方失敗した場合に `UnicodeDecodeError` を送出する。
 
-既存の `_read_text()` は以下の処理を行う:
-1. `_text_cache` をチェック（ヒットなら返す）
-2. `_unreadable_paths` をチェック（既知の失敗なら `None`）
-3. ファイルを読み込み（UTF-8 → CP932 フォールバック）
-4. 結果を `_text_cache` に格納
-5. 失敗なら `_unreadable_paths` に追加
+`_read_text_uncached()` はこの `UnicodeDecodeError` を捕捉し `None` を返す。`FileNotFoundError` は捕捉しない（既存の `_read_text()` と同じ振る舞い — ファイル消失は呼び出し元に伝播する）。ただし並列実行中のファイル消失に備え、`_preload_texts()` 側で `OSError` を捕捉する（後述）。
 
-`_read_text_uncached()` はステップ 3 のみを行い、キャッシュ操作（ステップ 1, 2, 4, 5）を省略する。
+既存の `_read_text()` の実際の動作:
+1. `_text_cache.get(path)` をチェック — `None` 以外なら返す
+2. `path in _unreadable_paths` をチェック — `True` なら `None`（`_text_cache` にも `None` が入っている）
+3. `decode_text_file(path)` を呼ぶ（UTF-8 → CP932 フォールバック）
+4. 成功: `_text_cache[path] = text`
+5. 失敗（`UnicodeDecodeError`）: `_text_cache[path] = None` + `_unreadable_paths.add(path)`
+
+**注意**: `_text_cache` は `dict[Path, str | None]` 型。デコード失敗時も `None` を格納する。`_read_text_uncached()` はステップ 3 のみを行う。
 
 #### `_preload_texts(paths: list[Path], max_workers: int = 10) -> None`
 
@@ -45,22 +47,30 @@ def _preload_texts(self, paths: list[Path], max_workers: int = 10) -> None:
     if not uncached:
         return
     with ThreadPoolExecutor(max_workers=min(max_workers, len(uncached))) as pool:
-        results = list(pool.map(self._read_text_uncached, uncached))
-    for path, text in zip(uncached, results):
-        if text is not None:
-            self._text_cache[path] = text
-        else:
-            self._unreadable_paths.add(path)
+        futures = {pool.submit(self._read_text_uncached, p): p for p in uncached}
+        for future in as_completed(futures):
+            path = futures[future]
+            try:
+                text = future.result()
+            except OSError:
+                text = None
+            if text is not None:
+                self._text_cache[path] = text
+            else:
+                self._text_cache[path] = None
+                self._unreadable_paths.add(path)
 ```
 
-**スレッドセーフティ**: `_preload_texts()` は `pool.map()` 完了後に逐次で `_text_cache` / `_unreadable_paths` を更新する。並列フェーズでは `_read_text_uncached()` が独立したファイルを読むだけでインスタンス変数にアクセスしないため、競合は発生しない。
+**エラーハンドリング**: `_read_text_uncached()` が `UnicodeDecodeError` を捕捉して `None` を返すのに対し、`OSError`（`FileNotFoundError`, `PermissionError` 等）は並列実行中のファイルシステム変動に備えて `_preload_texts()` 側で捕捉する。失敗時は `_text_cache[path] = None` と `_unreadable_paths.add(path)` で `_read_text()` と同じ状態にする。
+
+**スレッドセーフティ**: `_read_text_uncached()` はインスタンス変数にアクセスしない（引数のファイルを読むだけ）。`_text_cache` / `_unreadable_paths` の更新は `as_completed()` ループ内でメインスレッドが逐次実行するため、競合は発生しない。
 
 #### `scan_broken_references()` / `where_used()` への統合
 
 各メソッドのファイル一覧収集後、検証ループの前に 1 行追加:
 
 ```python
-files = self._collect_scope_files(scope_path, extensions)
+files = self._collect_scope_files(scope_path, exclude_patterns)
 self._preload_texts(files)  # ← 追加
 # 既存の検証ループ（変更なし）
 for f in files:
@@ -72,13 +82,16 @@ for f in files:
 
 `_read_text()` 自体は変更しない。`_preload_texts()` 実行後はキャッシュヒットするので、既存の逐次ループのコードパスに影響はない。`_preload_texts()` を呼ばなくても従来通り動作する（フォールバック）。
 
+`_preload_texts()` は失敗時に `_text_cache[path] = None` を設定するので、`_read_text()` の既存チェック（`cached = self._text_cache.get(path)` → `if cached is not None or path in self._unreadable_paths: return cached`）と完全に整合する。
+
 ## エッジケース
 
 - **ファイル数 0**: `uncached` が空なので `return` して終了。`ThreadPoolExecutor` は生成されない。
 - **ファイル数 1**: `max_workers=1` で実行。並列化のオーバーヘッドは無視できる。
-- **デコードエラー**: `_read_text_uncached()` が `None` を返し、`_unreadable_paths` に追加される。既存の `_read_text()` と同じ振る舞い。
-- **ファイルが途中で消える**: `FileNotFoundError` は `_read_text_uncached()` 内で捕捉し `None` を返す。
+- **デコードエラー**: `_read_text_uncached()` が `None` を返し、`_text_cache[path] = None` + `_unreadable_paths` に追加。既存の `_read_text()` と同一の状態になる。
+- **ファイルが途中で消える / パーミッションエラー**: `_preload_texts()` が `OSError` を捕捉し、unreadable として記録する。WSL/ネットワークパスでの一時的アクセス不可にも対応。
 - **外部参照先ファイル**: `scan_broken_references()` の検証ループ中に外部ファイルの `_read_text()` が呼ばれるケースがある。これらは scope 外なのでプリロード対象外だが、`_text_cache` に個別キャッシュされるので 2 回目以降はヒットする。大量の外部参照先がある場合の追加最適化は将来拡張とする。
+- **`invalidate_text_cache(path)` 後の再アクセス**: invalidation は `_text_cache.pop(path, None)` + `_unreadable_paths.discard(path)` を実行するので、次の `_read_text()` で再読み込みが行われる。`_preload_texts()` の結果も正しく invalidation される。
 
 ## 期待効果
 
@@ -91,7 +104,18 @@ for f in files:
 | ファイル | 変更内容 |
 |---------|---------|
 | `prefab_sentinel/services/reference_resolver.py` | `_read_text_uncached()`, `_preload_texts()` 追加。`scan_broken_references()`, `where_used()` に 1 行追加 |
-| `tests/test_reference_resolver.py` | `_preload_texts` のテスト追加 |
+| `tests/test_services.py` | `_preload_texts` のテスト追加 |
+
+## テスト計画
+
+`tests/test_services.py` の `ReferenceResolverServiceTests` クラスに追加:
+
+- `test_preload_texts_populates_cache`: 複数ファイルを `_preload_texts()` 後に `_text_cache` に格納されていること
+- `test_preload_texts_handles_unreadable`: 読み込み不可ファイル混在時に `_unreadable_paths` に追加されること
+- `test_preload_texts_idempotent`: 2 回呼んでも再読み込みしないこと（キャッシュ済みファイルがスキップされること）
+- `test_preload_texts_empty_list`: 空リストで例外が発生しないこと
+
+既存の `scan_broken_references` / `where_used` テストは振る舞い変更なしで全 pass する。
 
 ## やらないこと
 
@@ -101,11 +125,12 @@ for f in files:
 - GUID index のディスクキャッシュ（将来拡張）。
 - `max_workers` のユーザー設定化（固定値 10 で十分）。
 - 外部参照先ファイルのプリロード（scope 外ファイルの列挙が事前に不可能）。
+- `_local_id_cache` のプリロード（テキストキャッシュ後の CPU バウンド処理であり、I/O 並列化の対象外）。
 
 ## 検証基準
 
 1. 全ユニットテスト pass
 2. `_preload_texts` 後に `_text_cache` にファイルが格納されていること
 3. `_preload_texts` 後の `_read_text()` がキャッシュヒットすること
-4. デコードエラー時に `_unreadable_paths` に追加されること
+4. デコードエラー / ファイル消失時に `_text_cache[path] = None` + `_unreadable_paths` に追加されること
 5. 既存の `scan_broken_references()` / `where_used()` の振る舞いが変わらないこと
