@@ -158,13 +158,13 @@ Scene
 
 | Serena の価値 | 現状 | 到達度 | 主要ギャップ |
 |---------------|------|--------|-------------|
-| シンボルモデル | SymbolTree + 名前パス解決 | 90% | — (P1 完了) |
-| セマンティックナビ | depth/props/origin 付きクエリ | 85% | — (P2 完了) |
-| セマンティック編集 | set/add/remove_component (名前→fileID 解決) | 90% | P3.5 完了: open-mode add/remove_component 実装済み |
-| MCP サーバー | 15 ツール + session 管理 + Serena 式レスポンス | 95% | 参照系は直接返却、操作/検証系はエンベロープ |
-| プロジェクトスコープ | activate_project(scope) | 85% | — (P5 完了) |
-| ステートフル | ProjectSession + watchfiles | 80% | キャッシュ共有最適化 (サービス←→session 間) |
-| C# 接続 | field parser + rename/coverage + 継承チェーン | 90% | P4+ 完了: resolve_inherited_fields, find_derived_guids |
+| シンボルモデル | SymbolTree + 名前パス解決 | 100% | — |
+| セマンティックナビ | depth/props/origin 付きクエリ | 100% | — |
+| セマンティック編集 | set/add/remove_component (名前→fileID 解決) | 100% | — |
+| MCP サーバー | 15 ツール + session 管理 + 直接ペイロード統一 | 100% | — |
+| プロジェクトスコープ | activate_project(scope) + scope フォールバック | 100% | — |
+| ステートフル | ProjectSession + watchfiles + 細粒度キャッシュ無効化 | 100% | — |
+| C# 接続 | field parser + rename/coverage + 継承チェーン | 100% | — |
 
 ---
 

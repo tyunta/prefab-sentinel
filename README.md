@@ -498,12 +498,22 @@ Udonログを根拠に修正候補を最短で絞る。
 
 ツールの種類によって 2 つのレスポンス形式を使い分ける。
 
-**参照系ツール**（`get_unity_symbols`, `find_unity_symbol`）— ペイロード直接返却:
+**参照系ツール**（`get_unity_symbols`, `find_unity_symbol`, `find_referencing_assets`）— ペイロード直接返却:
 
 ```json
 {
   "asset_path": "Assets/Player.prefab",
   "symbols": [ ... ]
+}
+```
+
+`find_referencing_assets` は直接ペイロード:
+
+```json
+{
+  "matches": [ ... ],
+  "target": "queried_asset_or_guid",
+  "metadata": { "total_count": 3, "truncated": false, "scope": "Assets/..." }
 }
 ```
 
