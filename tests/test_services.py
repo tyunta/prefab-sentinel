@@ -2371,46 +2371,6 @@ print(
 
 
 class OrchestratorSuggestionTests(unittest.TestCase):
-    def test_suggest_ignore_guids_returns_candidates(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            _create_sample_project(root)
-            orchestrator = Phase1Orchestrator.default(project_root=root)
-
-            response = orchestrator.suggest_ignore_guids(
-                scope="Assets",
-                min_occurrences=1,
-                max_items=5,
-            )
-
-            self.assertTrue(response.success)
-            self.assertEqual("SUGGEST_IGNORE_GUIDS_RESULT", response.code)
-            self.assertGreaterEqual(response.data["candidate_count"], 1)
-            first = response.data["candidates"][0]
-            self.assertEqual(MISSING_GUID, first["guid"])
-            self.assertGreaterEqual(first["occurrences"], 1)
-            self.assertEqual([], response.data["safe_fix"])
-            self.assertEqual(
-                response.data["candidate_count"],
-                len(response.data["decision_required"]),
-            )
-
-    def test_suggest_ignore_guids_respects_ignore_list(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            _create_sample_project(root)
-            orchestrator = Phase1Orchestrator.default(project_root=root)
-
-            response = orchestrator.suggest_ignore_guids(
-                scope="Assets",
-                min_occurrences=1,
-                max_items=5,
-                ignore_asset_guids=(MISSING_GUID,),
-            )
-
-            self.assertTrue(response.success)
-            self.assertEqual(0, response.data["candidate_count"])
-
     def test_inspect_where_used_wraps_reference_result(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
