@@ -27,7 +27,7 @@ MCP 統合テスト (`report_mcp_integration_test_20260324.md`) では 15 の re
 初回スコープでカバーするツール:
 
 1. **`inspect_wiring`** — envelope 形式。`asset_path` でファイル直接指定。
-2. **`validate_refs`** — envelope 形式。`asset_path` でファイル直接指定。内部 fileID のみ検査。
+2. **`validate_refs`** — envelope 形式。パラメータ名は `scope`（他ツールの `asset_path` とは異なる）。ファイルパスを直接指定可能。内部 fileID のみ検査。
 3. **`inspect_hierarchy`** — envelope 形式。`asset_path` でファイル直接指定。
 4. **`validate_structure`** — envelope 形式。`asset_path` でファイル直接指定。
 5. **`get_unity_symbols`** — direct-payload 形式（`symbols` キー）。`asset_path` でファイル直接指定。
@@ -59,7 +59,7 @@ MCP 統合テスト (`report_mcp_integration_test_20260324.md`) では 15 の re
 ```yaml
 # GameObject &100 "BrokenObj" + MonoBehaviour &200
 # MonoBehaviour fields: goodRef: {fileID: 100}, badRef: {fileID: 99999}
-# → validate_refs: internal_broken_ref_count >= 1 (fileID:99999 not found)
+# → validate_refs: broken_count >= 1 (fileID:99999 not found in local anchors)
 ```
 
 `hierarchy.prefab`:
@@ -95,7 +95,12 @@ class McpSmokeTests(unittest.TestCase):
         cls.fixtures_dir = Path(__file__).parent / "fixtures" / "smoke"
 ```
 
-`call_tool()` は `list[TextContent]` を返す。既存テストパターンに従い `json.loads(result[0].text)` でレスポンス dict を取得する。
+`call_tool()` は `(metadata, result_dict)` タプルを返す。既存テストパターンに従いタプルアンパックで dict を取得する:
+
+```python
+_, result = _run(server.call_tool("tool_name", {"asset_path": str(path)}))
+# result は既にパース済みの dict
+```
 
 #### クラス構成
 
@@ -105,9 +110,11 @@ class McpSmokeTests(unittest.TestCase):
     def test_inspect_wiring_null_ratio_correct(self) -> None: ...
     def test_inspect_wiring_null_field_names_correct(self) -> None: ...
 
-    # --- validate_refs ---
+    # --- validate_refs (parameter: scope, not asset_path) ---
     def test_validate_refs_detects_broken_ref(self) -> None: ...
-    def test_validate_refs_clean_file_passes(self) -> None: ...
+    def test_validate_refs_clean_file_no_broken_local_ids(self) -> None: ...
+    # ↑ basic.prefab: m_Script の外部 GUID は missing_asset になるが、
+    #   内部 fileID (missing_local_id) は 0 件であることを検証する
 
     # --- inspect_hierarchy ---
     def test_inspect_hierarchy_returns_three_levels(self) -> None: ...
