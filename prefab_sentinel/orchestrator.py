@@ -133,6 +133,76 @@ class Phase1Orchestrator:
             diagnostics=diagnostics,
         )
 
+    def diff_variant(
+        self,
+        variant_path: str,
+        component_filter: str | None = None,
+    ) -> ToolResponse:
+        """Compare a Variant against its Base, returning only overridden properties.
+
+        Each diff entry pairs the variant value with the base value and includes
+        origin annotations showing which Prefab in the chain set the base value.
+
+        Args:
+            variant_path: Path to a ``.prefab`` Variant asset.
+            component_filter: Optional substring to filter diffs by property path.
+
+        Returns:
+            ``ToolResponse`` with ``data.diffs`` listing overridden properties.
+        """
+        chain_resp = self.prefab_variant.resolve_chain_values_with_origin(variant_path)
+        if not chain_resp.success:
+            return chain_resp
+
+        values = chain_resp.data.get("values", [])
+        chain = chain_resp.data.get("chain", [])
+
+        # Index all values by (target_file_id, property_path)
+        by_key: dict[str, list[dict[str, Any]]] = {}
+        for v in values:
+            key = f"{v['target_file_id']}:{v['property_path']}"
+            by_key.setdefault(key, []).append(v)
+
+        # Extract diffs: values set by the variant itself (origin_depth == 0)
+        diffs: list[dict[str, Any]] = []
+        for _key, entries in by_key.items():
+            variant_entry = None
+            base_entry = None
+            for e in entries:
+                if e["origin_depth"] == 0:
+                    variant_entry = e
+                elif base_entry is None or e["origin_depth"] < base_entry["origin_depth"]:
+                    # Closest ancestor that set this value
+                    base_entry = e
+            if variant_entry is None:
+                continue
+            diff: dict[str, Any] = {
+                "target_file_id": variant_entry["target_file_id"],
+                "property_path": variant_entry["property_path"],
+                "variant_value": variant_entry["value"],
+                "base_value": base_entry["value"] if base_entry else None,
+                "base_origin_path": base_entry["origin_path"] if base_entry else None,
+                "base_origin_depth": base_entry["origin_depth"] if base_entry else None,
+            }
+            diffs.append(diff)
+
+        if component_filter:
+            needle = component_filter.lower()
+            diffs = [d for d in diffs if needle in d["property_path"].lower()]
+
+        return success_response(
+            "DIFF_VARIANT_OK",
+            f"Found {len(diffs)} differences.",
+            data={
+                "variant_path": variant_path,
+                "component_filter": component_filter,
+                "diff_count": len(diffs),
+                "diffs": diffs,
+                "chain": chain,
+                "read_only": True,
+            },
+        )
+
     def inspect_where_used(
         self,
         asset_or_guid: str,

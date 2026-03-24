@@ -106,6 +106,7 @@ def create_server(
         symbol_path: str,
         depth: int = 0,
         include_properties: bool = False,
+        show_origin: bool = False,
     ) -> dict[str, Any]:
         """Find a Unity object by its human-readable symbol path.
 
@@ -120,10 +121,13 @@ def create_server(
             symbol_path: Human-readable path to the target object.
             depth: How deep to expand below the matched node.
             include_properties: Include serialized field values.
+            show_origin: Annotate properties with Variant chain origin
+                (which Prefab set each value). Implies include_properties.
         """
+        props = include_properties or show_origin
         text = _read_asset(path)
         tree = SymbolTree.build(
-            text, path, _script_map(), include_properties=include_properties
+            text, path, _script_map(), include_properties=props
         )
         results = tree.query(symbol_path, depth=depth)
         if not results:
@@ -132,12 +136,55 @@ def create_server(
                 "message": f"No match for symbol path: {symbol_path!r}",
                 "matches": [],
             }
-        return {
+        if show_origin:
+            _annotate_origins(results, path)
+        response: dict[str, Any] = {
             "success": True,
             "asset_path": path,
             "symbol_path": symbol_path,
             "matches": results,
         }
+        if show_origin:
+            response["show_origin"] = True
+        return response
+
+    # ------------------------------------------------------------------
+    # Origin annotation helper
+    # ------------------------------------------------------------------
+
+    def _annotate_origins(matches: list[dict[str, Any]], asset_path: str) -> None:
+        """Inject Variant chain origin info into property dicts in-place."""
+        try:
+            orch = _get_orchestrator()
+            resp = orch.prefab_variant.resolve_chain_values_with_origin(asset_path)
+        except Exception:
+            return
+        if not resp.success:
+            return
+        # Build lookup: (file_id, property_path) -> origin info
+        origin_map: dict[tuple[str, str], dict[str, Any]] = {}
+        for v in resp.data.get("values", []):
+            key = (v["target_file_id"], v["property_path"])
+            if key not in origin_map:
+                origin_map[key] = {
+                    "origin_path": v["origin_path"],
+                    "origin_depth": v["origin_depth"],
+                }
+        # Annotate properties on matched nodes
+        for match in matches:
+            props = match.get("properties")
+            file_id = match.get("file_id", "")
+            if not props or not file_id:
+                continue
+            annotated: dict[str, Any] = {}
+            for prop_name, prop_value in props.items():
+                entry: dict[str, Any] = {"value": prop_value}
+                origin = origin_map.get((file_id, prop_name))
+                if origin:
+                    entry["origin_path"] = origin["origin_path"]
+                    entry["origin_depth"] = origin["origin_depth"]
+                annotated[prop_name] = entry
+            match["properties"] = annotated
 
     # ------------------------------------------------------------------
     # Orchestrator-backed tools
@@ -218,6 +265,27 @@ def create_server(
             variant_path=path,
             component_filter=component_filter,
             show_origin=show_origin,
+        )
+        return resp.to_dict()
+
+    @server.tool()
+    def diff_unity_symbols(
+        path: str,
+        component_filter: str | None = None,
+    ) -> dict[str, Any]:
+        """Show only the differences between a Variant and its Base.
+
+        Returns overridden properties with both variant and base values,
+        plus origin annotations showing which Prefab in the chain set each value.
+
+        Args:
+            path: Variant prefab file path.
+            component_filter: Filter diffs by property path substring.
+        """
+        orch = _get_orchestrator()
+        resp = orch.diff_variant(
+            variant_path=path,
+            component_filter=component_filter,
         )
         return resp.to_dict()
 
