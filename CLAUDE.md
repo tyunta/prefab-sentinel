@@ -38,10 +38,12 @@
 - 各変更に `before/after` 差分と validation report を必ず添付する。
 
 ## API / エラー規約
-- すべての応答は `success / severity / code / message / data / diagnostics` を含む。
+- **操作系・検証系ツール**（`set_property`, `validate_refs`, `validate_field_rename`, `check_field_coverage`, `activate_project` 等）: `success / severity / code / message / data / diagnostics` エンベロープを返す。`diagnostics` が意味のあるデータを運ぶため。
+- **参照系ツール**（`get_unity_symbols`, `find_unity_symbol`）: ペイロードを直接返す（エンベロープなし）。該当なしは空 `matches` 配列で表現し、エラーとしない。インフラエラー（ファイル不在等）は MCP `ToolError` で伝播。
+- **orchestrator 系ツール**（`inspect_wiring`, `inspect_variant`, `find_referencing_assets` 等）: `ToolResponse.to_dict()` 経由でエンベロープを返す。
 - 主要コード: `SER001`, `SER002`, `PVR001`, `PVR002`, `PVR003`, `REF001`, `REF002`, `RUN001`, `RUN002`。
 - `severity` は `info | warning | error | critical` を使用する。
-- MCP ツールはドメインエラーを `success: false` + diagnostics で表現する。MCP レベルの例外はインフラエラー（ファイル不在、import 失敗）のみ。
+- MCP レベルの例外（`ToolError`）はインフラエラー（ファイル不在、import 失敗）のみ。
 
 ## セキュリティと実行制御
 - 既定は read-only inspection とし、書き込みは明示モード時のみ許可する。

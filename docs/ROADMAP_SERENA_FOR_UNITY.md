@@ -161,7 +161,7 @@ Scene
 | シンボルモデル | SymbolTree + 名前パス解決 | 90% | — (P1 完了) |
 | セマンティックナビ | depth/props/origin 付きクエリ | 85% | — (P2 完了) |
 | セマンティック編集 | set_property (名前→fileID 解決) | 75% | add/remove_component (bridge 拡張待ち) |
-| MCP サーバー | 13 ツール + session 管理 | 90% | — (P1 完了) |
+| MCP サーバー | 13 ツール + session 管理 + Serena 式レスポンス | 95% | 参照系は直接返却、操作/検証系はエンベロープ |
 | プロジェクトスコープ | activate_project(scope) | 85% | — (P5 完了) |
 | ステートフル | ProjectSession + watchfiles | 80% | キャッシュ共有最適化 (サービス←→session 間) |
 | C# 接続 | field parser + rename/coverage | 80% | 継承チェーン未対応 (P4 完了) |

@@ -492,7 +492,23 @@ Udonログを根拠に修正候補を最短で絞る。
 
 ## 7. API共通仕様
 
-### 7.1 レスポンス共通フォーマット
+### 7.1 レスポンスフォーマット
+
+ツールの種類によって 2 つのレスポンス形式を使い分ける。
+
+**参照系ツール**（`get_unity_symbols`, `find_unity_symbol`）— ペイロード直接返却:
+
+```json
+{
+  "asset_path": "Assets/Player.prefab",
+  "symbols": [ ... ]
+}
+```
+
+該当なしは空配列（`"matches": []`）で表現する。インフラエラー（ファイル不在等）は MCP `ToolError` で伝播。
+
+**操作系・検証系・orchestrator 系ツール** — 標準エンベロープ:
+
 ```json
 {
   "success": true,
