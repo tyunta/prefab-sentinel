@@ -857,7 +857,7 @@ def create_server(
             hierarchy_path: Hierarchy path to the parent GameObject.
             depth: Maximum depth to traverse (default: 1).
         """
-        return send_action(action="list_children", hierarchy_path=hierarchy_path, list_depth=depth)
+        return send_action(action="list_children", hierarchy_path=hierarchy_path, depth=depth)
 
     @server.tool()
     def editor_list_materials(
@@ -890,7 +890,7 @@ def create_server(
         """
         return send_action(
             action="get_material_property",
-            renderer_path=hierarchy_path, material_index=material_index,
+            hierarchy_path=hierarchy_path, material_index=material_index,
             property_name=property_name,
         )
 
@@ -955,7 +955,7 @@ def create_server(
             hierarchy_path: Hierarchy path of the parent GameObject (empty = scene root).
             position: Local position as "x,y,z" string (e.g. "0,1.5,0"). Empty = default.
         """
-        kwargs: dict[str, Any] = {"prefab_path": asset_path, "parent_path": hierarchy_path}
+        kwargs: dict[str, Any] = {"asset_path": asset_path, "hierarchy_path": hierarchy_path}
         if position:
             try:
                 parts = [float(v) for v in position.split(",")]
@@ -989,7 +989,7 @@ def create_server(
         """
         return send_action(
             action="set_material",
-            renderer_path=hierarchy_path, material_index=material_index,
+            hierarchy_path=hierarchy_path, material_index=material_index,
             material_guid=material_guid,
         )
 

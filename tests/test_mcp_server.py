@@ -1771,7 +1771,7 @@ class TestEditorReadOnlyTools(unittest.TestCase):
         server = create_server()
         with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_list_children", {"hierarchy_path": "/Root"}))
-        mock_send.assert_called_once_with(action="list_children", hierarchy_path="/Root", list_depth=1)
+        mock_send.assert_called_once_with(action="list_children", hierarchy_path="/Root", depth=1)
 
     def test_editor_list_materials_delegates(self) -> None:
         server = create_server()
@@ -1793,7 +1793,7 @@ class TestEditorReadOnlyTools(unittest.TestCase):
             }))
         mock_send.assert_called_once_with(
             action="get_material_property",
-            renderer_path="/Body", material_index=0, property_name="_Color",
+            hierarchy_path="/Body", material_index=0, property_name="_Color",
         )
 
     def test_editor_get_material_property_default_property_name(self) -> None:
@@ -1804,7 +1804,7 @@ class TestEditorReadOnlyTools(unittest.TestCase):
             }))
         mock_send.assert_called_once_with(
             action="get_material_property",
-            renderer_path="/Body", material_index=0, property_name="",
+            hierarchy_path="/Body", material_index=0, property_name="",
         )
 
     def test_editor_console_delegates(self) -> None:
@@ -1870,8 +1870,8 @@ class TestEditorWriteTools(unittest.TestCase):
             }))
         mock_send.assert_called_once_with(
             action="instantiate_to_scene",
-            prefab_path="Assets/Prefabs/Mic.prefab",
-            parent_path="/Canvas",
+            asset_path="Assets/Prefabs/Mic.prefab",
+            hierarchy_path="/Canvas",
             position=[0.0, 1.5, 0.0],
         )
 
@@ -1883,8 +1883,8 @@ class TestEditorWriteTools(unittest.TestCase):
             }))
         mock_send.assert_called_once_with(
             action="instantiate_to_scene",
-            prefab_path="Assets/Prefabs/Mic.prefab",
-            parent_path="",
+            asset_path="Assets/Prefabs/Mic.prefab",
+            hierarchy_path="",
         )
 
     def test_editor_instantiate_invalid_position_count(self) -> None:
@@ -1917,7 +1917,7 @@ class TestEditorWriteTools(unittest.TestCase):
             }))
         mock_send.assert_called_once_with(
             action="set_material",
-            renderer_path="/Body", material_index=0, material_guid="abc123def456",
+            hierarchy_path="/Body", material_index=0, material_guid="abc123def456",
         )
 
     def test_editor_delete_delegates(self) -> None:

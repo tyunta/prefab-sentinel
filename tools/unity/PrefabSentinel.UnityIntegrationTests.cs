@@ -2086,7 +2086,7 @@ namespace PrefabSentinel
         private static TestCaseResult Test_EditorCtrl_InstantiateToScene(string prefabPath, string materialPath)
         {
             const string name = "EditorCtrl_InstantiateToScene";
-            string extra = "\"prefab_path\":\"" + EscapeJsonString(prefabPath) + "\"";
+            string extra = "\"asset_path\":\"" + EscapeJsonString(prefabPath) + "\"";
             var resp = RunEditorControlBridge(BuildEditorControlRequest("instantiate_to_scene", extra));
             var err = AssertEditorControlSuccess(name, resp);
             if (err != null) return err;
@@ -2105,8 +2105,8 @@ namespace PrefabSentinel
         private static TestCaseResult Test_EditorCtrl_InstantiateToScene_ParentNotFound(string prefabPath, string materialPath)
         {
             const string name = "EditorCtrl_InstantiateToScene_ParentNotFound";
-            string extra = "\"prefab_path\":\"" + EscapeJsonString(prefabPath) + "\","
-                         + "\"parent_path\":\"/NonExistentParent_12345\"";
+            string extra = "\"asset_path\":\"" + EscapeJsonString(prefabPath) + "\","
+                         + "\"hierarchy_path\":\"/NonExistentParent_12345\"";
             var resp = RunEditorControlBridge(BuildEditorControlRequest("instantiate_to_scene", extra));
             return AssertEditorControlFailure(name, resp, "EDITOR_CTRL_PARENT_NOT_FOUND") ?? Pass(name);
         }
@@ -2202,7 +2202,7 @@ namespace PrefabSentinel
             try
             {
                 string goPath = "/" + go.name;
-                string extra = "\"renderer_path\":\"" + EscapeJsonString(goPath) + "\","
+                string extra = "\"hierarchy_path\":\"" + EscapeJsonString(goPath) + "\","
                              + "\"material_index\":0";
                 var resp = RunEditorControlBridge(BuildEditorControlRequest("get_material_property", extra));
                 var err = AssertEditorControlSuccess(name, resp);
@@ -2239,7 +2239,7 @@ namespace PrefabSentinel
                 renderer.sharedMaterial = nullShaderMat;
 
                 string goPath = "/" + go.name;
-                string extra = "\"renderer_path\":\"" + EscapeJsonString(goPath) + "\","
+                string extra = "\"hierarchy_path\":\"" + EscapeJsonString(goPath) + "\","
                              + "\"material_index\":0";
                 var resp = RunEditorControlBridge(BuildEditorControlRequest("get_material_property", extra));
                 return AssertEditorControlFailure(name, resp, "EDITOR_CTRL_SHADER_NULL") ?? Pass(name);
@@ -2273,7 +2273,7 @@ namespace PrefabSentinel
                     return Fail(name, "Could not resolve test material GUID.");
 
                 string goPath = "/" + go.name;
-                string extra = "\"renderer_path\":\"" + EscapeJsonString(goPath) + "\","
+                string extra = "\"hierarchy_path\":\"" + EscapeJsonString(goPath) + "\","
                              + "\"material_index\":0,"
                              + "\"material_guid\":\"" + EscapeJsonString(matGuid) + "\"";
                 var resp = RunEditorControlBridge(BuildEditorControlRequest("set_material", extra));

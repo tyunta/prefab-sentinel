@@ -59,16 +59,11 @@ namespace PrefabSentinel
             // frame_selected
             public float zoom = 0f;         // 0 = keep current
 
-            // instantiate_to_scene
-            public string prefab_path = string.Empty;
-            public string parent_path = string.Empty;
+            // instantiate_to_scene (asset_path = prefab, hierarchy_path = parent)
             public float[] position = null; // [x, y, z]
 
-            // ping_object
+            // ping_object / instantiate_to_scene
             public string asset_path = string.Empty;
-
-            // set_material
-            public string renderer_path = string.Empty;
             public int material_index = -1;
             public string material_guid = string.Empty;
 
@@ -78,7 +73,7 @@ namespace PrefabSentinel
             public float since_seconds = 0f;       // 0 = no time filter
 
             // list_children
-            public int list_depth = 1;
+            public int depth = 1;
 
             // camera
             public float yaw = 0f;
@@ -473,23 +468,23 @@ namespace PrefabSentinel
 
         private static EditorControlResponse HandleInstantiateToScene(EditorControlRequest request)
         {
-            if (string.IsNullOrEmpty(request.prefab_path))
-                return BuildError("EDITOR_CTRL_MISSING_PATH", "prefab_path is required for instantiate_to_scene.");
+            if (string.IsNullOrEmpty(request.asset_path))
+                return BuildError("EDITOR_CTRL_MISSING_PATH", "asset_path is required for instantiate_to_scene.");
 
-            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(request.prefab_path);
+            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(request.asset_path);
             if (prefab == null)
                 return BuildError("EDITOR_CTRL_ASSET_NOT_FOUND",
-                    $"Prefab not found at: {request.prefab_path}");
+                    $"Prefab not found at: {request.asset_path}");
 
             GameObject instance = (GameObject)PrefabUtility.InstantiatePrefab(prefab);
             if (instance == null)
                 return BuildError("EDITOR_CTRL_INSTANTIATE_FAILED",
-                    $"Failed to instantiate: {request.prefab_path}");
+                    $"Failed to instantiate: {request.asset_path}");
 
             // Set parent if specified
-            if (!string.IsNullOrEmpty(request.parent_path))
+            if (!string.IsNullOrEmpty(request.hierarchy_path))
             {
-                GameObject parent = GameObject.Find(request.parent_path);
+                GameObject parent = GameObject.Find(request.hierarchy_path);
                 if (parent != null)
                 {
                     instance.transform.SetParent(parent.transform, false);
@@ -498,7 +493,7 @@ namespace PrefabSentinel
                 {
                     UnityEngine.Object.DestroyImmediate(instance);
                     return BuildError("EDITOR_CTRL_PARENT_NOT_FOUND",
-                        $"Parent not found: {request.parent_path}");
+                        $"Parent not found: {request.hierarchy_path}");
                 }
             }
 
@@ -577,22 +572,22 @@ namespace PrefabSentinel
 
         private static EditorControlResponse HandleSetMaterial(EditorControlRequest request)
         {
-            if (string.IsNullOrEmpty(request.renderer_path))
-                return BuildError("EDITOR_CTRL_SET_MATERIAL_NO_PATH", "renderer_path is required.");
+            if (string.IsNullOrEmpty(request.hierarchy_path))
+                return BuildError("EDITOR_CTRL_SET_MATERIAL_NO_PATH", "hierarchy_path is required.");
             if (request.material_index < 0)
                 return BuildError("EDITOR_CTRL_SET_MATERIAL_NO_INDEX", "material_index is required (>= 0).");
             if (string.IsNullOrEmpty(request.material_guid))
                 return BuildError("EDITOR_CTRL_SET_MATERIAL_NO_GUID", "material_guid is required.");
 
-            var go = GameObject.Find(request.renderer_path);
+            var go = GameObject.Find(request.hierarchy_path);
             if (go == null)
                 return BuildError("EDITOR_CTRL_SET_MATERIAL_NOT_FOUND",
-                    $"GameObject not found: {request.renderer_path}");
+                    $"GameObject not found: {request.hierarchy_path}");
 
             var renderer = go.GetComponent<Renderer>();
             if (renderer == null)
                 return BuildError("EDITOR_CTRL_SET_MATERIAL_NO_RENDERER",
-                    $"No Renderer on: {request.renderer_path}");
+                    $"No Renderer on: {request.hierarchy_path}");
 
             var mats = renderer.sharedMaterials;
             if (request.material_index >= mats.Length)
@@ -660,7 +655,7 @@ namespace PrefabSentinel
                 return BuildError("EDITOR_CTRL_OBJECT_NOT_FOUND",
                     $"GameObject not found: {request.hierarchy_path}");
 
-            int maxDepth = Math.Min(Math.Max(request.list_depth, 1), 50);
+            int maxDepth = Math.Min(Math.Max(request.depth, 1), 50);
             var children = new List<ChildEntry>();
             CollectChildren(go.transform, maxDepth, 0, children);
 
@@ -816,20 +811,20 @@ namespace PrefabSentinel
 
         private static EditorControlResponse HandleGetMaterialProperty(EditorControlRequest request)
         {
-            if (string.IsNullOrEmpty(request.renderer_path))
-                return BuildError("EDITOR_CTRL_MISSING_PATH", "renderer_path is required for get_material_property.");
+            if (string.IsNullOrEmpty(request.hierarchy_path))
+                return BuildError("EDITOR_CTRL_MISSING_PATH", "hierarchy_path is required for get_material_property.");
             if (request.material_index < 0)
                 return BuildError("EDITOR_CTRL_MISSING_INDEX", "material_index is required (>= 0).");
 
-            var go = GameObject.Find(request.renderer_path);
+            var go = GameObject.Find(request.hierarchy_path);
             if (go == null)
                 return BuildError("EDITOR_CTRL_OBJECT_NOT_FOUND",
-                    $"GameObject not found: {request.renderer_path}");
+                    $"GameObject not found: {request.hierarchy_path}");
 
             var renderer = go.GetComponent<Renderer>();
             if (renderer == null)
                 return BuildError("EDITOR_CTRL_NO_RENDERER",
-                    $"No Renderer on: {request.renderer_path}");
+                    $"No Renderer on: {request.hierarchy_path}");
 
             var mats = renderer.sharedMaterials;
             if (request.material_index >= mats.Length)
