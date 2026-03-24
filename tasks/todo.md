@@ -112,6 +112,11 @@
 - [x] Task 2: orchestrator の component summary dict に null_ratio / null_field_names 追加 + テスト
 - [x] Task 3: 検証 — 1124 tests pass、動作確認 OK
 
+## Large Scope Performance — parallel file I/O (2026-03-25)
+
+- [x] Task 1: `_read_text_uncached` + `_preload_texts` 追加 + テスト 4 件
+- [x] Task 2: `scan_broken_references` / `where_used` に統合 — 1140 tests pass
+
 ## MCP Parameter Naming Unification — v0.5.0 (2026-03-25)
 
 - [x] Task 1: path → asset_path (10 inspection tools)

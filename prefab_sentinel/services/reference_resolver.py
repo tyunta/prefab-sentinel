@@ -353,6 +353,7 @@ class ReferenceResolverService:
         max_diagnostics = max(0, max_diagnostics)
         top_guid_limit = max(1, top_guid_limit)
         files = self._collect_scope_files(scope_path, exclude_patterns)
+        self._preload_texts(files)
         scan_project_root = self._resolve_scan_project_root(scope_path)
         guid_map = self._guid_map(scan_project_root)
 
@@ -660,6 +661,7 @@ class ReferenceResolverService:
         if scan_scope_path is None:
             scan_scope_path = self.project_root
         files = self._collect_scope_files(scan_scope_path, exclude_patterns)
+        self._preload_texts(files)
         scanned_files = 0
         truncated_usages = 0
         for path in files:
