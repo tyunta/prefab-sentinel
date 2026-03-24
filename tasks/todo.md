@@ -87,6 +87,32 @@
 - [x] `editor select` が1回だとビューが遠い — `EditorApplication.delayCall` で FrameSelected 遅延実行 (C# HandleSelectObject)
 - [x] Scene/Prefab Stage ルート一覧取得 — 実装済み (`editor list-roots`, cli.py:885, C# HandleListRoots:948-1001)
 
+## 到達度マトリクス 100% 最適化 (2026-03-24)
+
+- [x] Task 1: ReferenceResolverService — `invalidate_text_cache()`, `invalidate_guid_index()` 追加
+- [x] Task 2: SerializedObjectService — `invalidate_before_cache()` 追加
+- [x] Task 3: Phase1Orchestrator — 3 委譲メソッド追加
+- [x] Task 4: Session — `invalidate_asset_caches()` 追加、`invalidate_script_map()` 拡張（SymbolTree 全クリア）
+- [x] Task 5: Watcher — asset 変更時 `invalidate_asset_caches()` 呼び出し追加
+- [x] Task 6: Session — `resolve_scope()` 追加（explicit > session > None）
+- [x] Task 7: MCP — 4 ツールに scope フォールバック適用 + `activate_project` diagnostics
+- [x] Task 8: MCP — `find_referencing_assets` 直接ペイロード化（BREAKING CHANGE）
+- [x] Task 9: ドキュメント — CLAUDE.md API 規約、README、ROADMAP 到達度 100%
+- [x] Task 10: 回帰テスト 1225 件全パス + minor バージョンバンプ v0.3.0
+
+## MCP Consolidation Phase 1 (2026-03-24)
+
+- [x] Task 0: Git tag `v0.3.0-cli-final`
+- [x] Task 1: Registration test (33 tools) + `send_action` / `revert_overrides_impl` imports
+- [x] Task 2: 9 read-only editor tools (screenshot, select, frame, camera, list-children, list-materials, list-roots, get-material-property, console)
+- [x] Task 3: 3 side-effect editor tools (refresh, recompile, run-tests)
+- [x] Task 4: 3 write editor tools (instantiate, set-material, delete)
+- [x] Task 5: 2 inspection tools (inspect_materials, validate_structure)
+- [x] Task 6: revert_overrides tool
+- [x] Task 7: Full registration test pass (33 tools)
+- [x] Task 8: README MCP ツール一覧に 18 ツール追加
+- [x] Task 9: 最終検証 — 1256 テスト全パス
+
 ## P5: ステートフルセッション (2026-03-24)
 
 - [x] Commit 1: `session.py` — ProjectSession + test_session.py

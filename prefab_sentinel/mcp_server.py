@@ -33,6 +33,8 @@ from prefab_sentinel.symbol_tree import (
 )
 from prefab_sentinel.unity_assets import decode_text_file
 from prefab_sentinel.unity_yaml_parser import CLASS_ID_MONOBEHAVIOUR
+from prefab_sentinel.editor_bridge import send_action
+from prefab_sentinel.patch_revert import revert_overrides as revert_overrides_impl
 from prefab_sentinel.wsl_compat import to_wsl_path
 
 __all__ = ["create_server"]
@@ -778,6 +780,289 @@ def create_server(
         orch = session.get_orchestrator()
         resolved_scope = session.resolve_scope(scope)
         resp = orch.check_field_coverage(scope=resolved_scope)
+        return resp.to_dict()
+
+    # ------------------------------------------------------------------
+    # Editor bridge tools (read-only)
+    # ------------------------------------------------------------------
+
+    @server.tool()
+    def editor_screenshot(
+        view: str = "scene",
+        width: int = 0,
+        height: int = 0,
+    ) -> dict[str, Any]:
+        """Capture a screenshot of the Unity Editor.
+
+        Args:
+            view: Which view to capture ("scene" or "game").
+            width: Capture width in pixels (0 = current window size).
+            height: Capture height in pixels (0 = current window size).
+        """
+        return send_action(action="capture_screenshot", view=view, width=width, height=height)
+
+    @server.tool()
+    def editor_select(
+        hierarchy_path: str,
+        prefab_asset_path: str = "",
+    ) -> dict[str, Any]:
+        """Select a GameObject in the Unity Hierarchy.
+
+        Args:
+            hierarchy_path: Hierarchy path of the GameObject (e.g. /Canvas/Panel/Button).
+            prefab_asset_path: Asset path of a Prefab to open in Prefab Stage before selecting.
+        """
+        kwargs: dict[str, Any] = {"hierarchy_path": hierarchy_path}
+        if prefab_asset_path:
+            kwargs["prefab_asset_path"] = prefab_asset_path
+        return send_action(action="select_object", **kwargs)
+
+    @server.tool()
+    def editor_frame(
+        zoom: float = 0.0,
+    ) -> dict[str, Any]:
+        """Frame the selected object in Scene view.
+
+        Args:
+            zoom: Scene view distance factor (SceneView.size). 0 = keep current.
+                Larger values zoom OUT, smaller values zoom IN. Typical: 0.1-5.0.
+        """
+        return send_action(action="frame_selected", zoom=zoom)
+
+    @server.tool()
+    def editor_camera(
+        yaw: float = 0.0,
+        pitch: float = 0.0,
+        distance: float = 0.0,
+    ) -> dict[str, Any]:
+        """Set Scene view camera orientation.
+
+        All parameters default to 0.0 (no change). Set only the values you want to modify.
+
+        Args:
+            yaw: Horizontal rotation in degrees.
+            pitch: Vertical rotation in degrees.
+            distance: Distance from pivot point.
+        """
+        return send_action(action="camera", yaw=yaw, pitch=pitch, distance=distance)
+
+    @server.tool()
+    def editor_list_children(
+        hierarchy_path: str,
+        list_depth: int = 1,
+    ) -> dict[str, Any]:
+        """List children of a GameObject in the running scene.
+
+        Args:
+            hierarchy_path: Hierarchy path to the parent GameObject.
+            list_depth: Maximum depth to traverse (default: 1).
+        """
+        return send_action(action="list_children", hierarchy_path=hierarchy_path, list_depth=list_depth)
+
+    @server.tool()
+    def editor_list_materials(
+        hierarchy_path: str,
+    ) -> dict[str, Any]:
+        """List material slots on renderers under a GameObject at runtime.
+
+        Args:
+            hierarchy_path: Hierarchy path to the root GameObject.
+        """
+        return send_action(action="list_materials", hierarchy_path=hierarchy_path)
+
+    @server.tool()
+    def editor_list_roots() -> dict[str, Any]:
+        """List root GameObjects in the current Scene or Prefab Stage."""
+        return send_action(action="list_roots")
+
+    @server.tool()
+    def editor_get_material_property(
+        renderer_path: str,
+        material_index: int,
+        property_name: str = "",
+    ) -> dict[str, Any]:
+        """Read shader property values from a material at runtime.
+
+        Args:
+            renderer_path: Hierarchy path to the GameObject with a Renderer.
+            material_index: Material slot index (0-based).
+            property_name: Shader property to read (empty = list all properties).
+        """
+        return send_action(
+            action="get_material_property",
+            renderer_path=renderer_path, material_index=material_index,
+            property_name=property_name,
+        )
+
+    @server.tool()
+    def editor_console(
+        max_entries: int = 200,
+        log_type_filter: str = "all",
+        since_seconds: float = 0.0,
+    ) -> dict[str, Any]:
+        """Capture Unity Console log entries as structured data.
+
+        Args:
+            max_entries: Maximum number of log entries to retrieve (default: 200).
+            log_type_filter: Filter by log type: "all", "error", "warning", "exception".
+            since_seconds: Only entries from the last N seconds (0 = no time filter).
+        """
+        return send_action(
+            action="capture_console_logs",
+            max_entries=max_entries, log_type_filter=log_type_filter,
+            since_seconds=since_seconds,
+        )
+
+    # ------------------------------------------------------------------
+    # Editor bridge tools (side-effect)
+    # ------------------------------------------------------------------
+
+    @server.tool()
+    def editor_refresh() -> dict[str, Any]:
+        """Trigger AssetDatabase.Refresh() in the running Unity Editor."""
+        return send_action(action="refresh_asset_database")
+
+    @server.tool()
+    def editor_recompile() -> dict[str, Any]:
+        """Trigger C# script recompilation in the running Unity Editor."""
+        return send_action(action="recompile_scripts")
+
+    @server.tool()
+    def editor_run_tests(
+        timeout_sec: int = 300,
+    ) -> dict[str, Any]:
+        """Run Unity integration tests via Editor Bridge.
+
+        Args:
+            timeout_sec: Maximum wait time in seconds (default: 300).
+        """
+        return send_action(action="run_integration_tests", timeout_sec=timeout_sec)
+
+    # ------------------------------------------------------------------
+    # Editor bridge tools (write / mutation)
+    # ------------------------------------------------------------------
+
+    @server.tool()
+    def editor_instantiate(
+        prefab_path: str,
+        parent_path: str = "",
+        position: str = "",
+    ) -> dict[str, Any]:
+        """Instantiate a Prefab into the current Scene.
+
+        Args:
+            prefab_path: Asset path of the prefab (e.g. Assets/Prefabs/Mic.prefab).
+            parent_path: Hierarchy path of the parent GameObject (empty = scene root).
+            position: Local position as "x,y,z" string (e.g. "0,1.5,0"). Empty = default.
+        """
+        kwargs: dict[str, Any] = {"prefab_path": prefab_path, "parent_path": parent_path}
+        if position:
+            try:
+                parts = [float(v) for v in position.split(",")]
+            except ValueError:
+                return {
+                    "success": False, "severity": "error", "code": "INVALID_POSITION",
+                    "message": f"Non-numeric position values: {position} (expected x,y,z)",
+                    "data": {}, "diagnostics": [],
+                }
+            if len(parts) != 3:
+                return {
+                    "success": False, "severity": "error", "code": "INVALID_POSITION",
+                    "message": f"position requires exactly 3 values (x,y,z), got {len(parts)}",
+                    "data": {}, "diagnostics": [],
+                }
+            kwargs["position"] = parts
+        return send_action(action="instantiate_to_scene", **kwargs)
+
+    @server.tool()
+    def editor_set_material(
+        renderer_path: str,
+        material_index: int,
+        material_guid: str,
+    ) -> dict[str, Any]:
+        """Replace a material slot on a Renderer at runtime (Undo-able).
+
+        Args:
+            renderer_path: Hierarchy path to the GameObject with a Renderer.
+            material_index: Material slot index (0-based).
+            material_guid: GUID of the replacement Material asset (32-char hex).
+        """
+        return send_action(
+            action="set_material",
+            renderer_path=renderer_path, material_index=material_index,
+            material_guid=material_guid,
+        )
+
+    @server.tool()
+    def editor_delete(
+        hierarchy_path: str,
+    ) -> dict[str, Any]:
+        """Delete a GameObject from the scene hierarchy (Undo-able).
+
+        Args:
+            hierarchy_path: Hierarchy path to the GameObject to delete.
+        """
+        return send_action(action="delete_object", hierarchy_path=hierarchy_path)
+
+    # ------------------------------------------------------------------
+    # Inspection tools (orchestrator-backed)
+    # ------------------------------------------------------------------
+
+    @server.tool()
+    def inspect_materials(path: str) -> dict[str, Any]:
+        """Show per-renderer material slot assignments with override/inherited markers.
+
+        Args:
+            path: Path to a .prefab or .unity file.
+        """
+        orch = session.get_orchestrator()
+        resp = orch.inspect_materials(target_path=path)
+        return resp.to_dict()
+
+    @server.tool()
+    def validate_structure(path: str) -> dict[str, Any]:
+        """Validate internal YAML structure (fileID duplicates, Transform consistency).
+
+        Args:
+            path: Path to a .prefab, .unity, or .asset file.
+        """
+        orch = session.get_orchestrator()
+        resp = orch.inspect_structure(target_path=path)
+        return resp.to_dict()
+
+    # ------------------------------------------------------------------
+    # Revert tool
+    # ------------------------------------------------------------------
+
+    @server.tool()
+    def revert_overrides(
+        variant_path: str,
+        target_file_id: str,
+        property_path: str,
+        confirm: bool = False,
+        change_reason: str = "",
+    ) -> dict[str, Any]:
+        """Remove a specific property override from a Prefab Variant.
+
+        Two-phase workflow:
+        - confirm=False (default): dry-run preview showing what would be removed.
+        - confirm=True: applies the removal and writes back.
+
+        Args:
+            variant_path: Path to the Prefab Variant file.
+            target_file_id: fileID of the target component in the parent prefab.
+            property_path: propertyPath of the override to remove.
+            confirm: Set True to apply (False = dry-run only).
+            change_reason: Required when confirm=True. Audit log reason.
+        """
+        resp = revert_overrides_impl(
+            variant_path=variant_path,
+            target_file_id=target_file_id,
+            property_path=property_path,
+            dry_run=not confirm,
+            confirm=confirm,
+            change_reason=change_reason or None,
+        )
         return resp.to_dict()
 
     return server

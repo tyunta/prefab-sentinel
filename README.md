@@ -111,6 +111,24 @@ prefab-sentinel-mcp
 | `list_serialized_fields` | C# スクリプトのシリアライズ対象フィールド一覧（パスまたは GUID 指定、`include_inherited` で基底クラス含む） |
 | `validate_field_rename` | フィールドリネームの影響分析（派生クラス経由の影響含む、影響アセット一覧、衝突検出） |
 | `check_field_coverage` | C# フィールドと YAML propertyPath の不一致検出（継承チェーン解決済み、未使用/孤立） |
+| `inspect_materials` | レンダラーごとのマテリアルスロット表示（override/inherited マーカー付き） |
+| `validate_structure` | YAML 内部構造の検証（fileID 重複、Transform 整合性） |
+| `revert_overrides` | Prefab Variant から特定プロパティの override を YAML レベルで削除（dry-run/confirm ゲート付き） |
+| `editor_screenshot` | Unity Editor の Scene/Game ビューのスクリーンショット取得 |
+| `editor_select` | Hierarchy 内の GameObject を選択（Prefab Stage 対応） |
+| `editor_frame` | 選択オブジェクトを Scene ビューでフレーミング |
+| `editor_camera` | Scene ビューのカメラ方向設定（yaw/pitch/distance） |
+| `editor_list_children` | GameObject の子オブジェクト一覧 |
+| `editor_list_materials` | ランタイムのレンダラーのマテリアルスロット一覧 |
+| `editor_list_roots` | 現在の Scene / Prefab Stage のルートオブジェクト一覧 |
+| `editor_get_material_property` | ランタイムのシェーダープロパティ値を読み取り |
+| `editor_console` | Unity Console のログエントリを構造化データとして取得 |
+| `editor_refresh` | AssetDatabase.Refresh() のトリガー |
+| `editor_recompile` | C# スクリプト再コンパイルのトリガー |
+| `editor_run_tests` | Editor Bridge 経由で Unity 統合テストを実行 |
+| `editor_instantiate` | Prefab を現在の Scene にインスタンス化 |
+| `editor_set_material` | ランタイムでレンダラーのマテリアルスロットを差し替え（Undo 対応） |
+| `editor_delete` | Hierarchy から GameObject を削除（Undo 対応） |
 
 **Claude Desktop 設定例:**
 
