@@ -5,36 +5,32 @@ description: Udon/ClientSim log triage workflow using runtime-validation service
 
 # Udon Log Triage
 
-## 呼び出し方
-```bash
-uvx --from "${CLAUDE_PLUGIN_ROOT}" prefab-sentinel <command>
-```
-以下のコマンド例では `prefab-sentinel` を上記で読み替える。
+## インターフェース
+MCP ツールを直接呼び出す（CLI は廃止済み）。
 
 ## Overview
 Reduce runtime failures by classifying logs, mapping errors to assets, and controlling fixes.
 
 ## Workflow
-1. Collect runtime logs with `validate runtime` or `run_clientsim`.
-2. Classify errors with `classify_errors` and assert with `assert_no_critical_errors`.
-3. Map error locations to assets/components using `inspect where-used`.
-4. Propose fixes: use `safe_fix` only for deterministic, unique candidates; otherwise `decision_required`.
-5. Re-run runtime validation and save the report.
+1. `validate_runtime` MCP ツールでランタイムログを収集・分類する。
+2. エラーの分類結果から `assert_no_critical_errors` のステップを確認する。
+3. `find_referencing_assets` でエラー箇所をアセット/コンポーネントにマッピングする。
+4. 修正を提案: 決定的で一意な候補のみ `safe_fix`、それ以外は `decision_required`。
+5. ランタイム検証を再実行してレポートを保存する。
 
-## Commands
+## MCP ツール
+- `validate_runtime` — UdonSharp コンパイル + ClientSim 実行検証（`scene_path` パラメータ）
+- `find_referencing_assets` — エラー箇所のアセット参照検索
+- `inspect_wiring` — MonoBehaviour フィールド配線検査
+
+## Editor Bridge モード
+Unity Editor 起動中は以下の環境変数で Editor Bridge 経由の検証が可能:
 ```bash
-# Batchmode (default)
-prefab-sentinel validate runtime --scene "Assets/Scenes/Smoke.unity"
-
-# Editor Bridge mode (Unity Editor running)
 export UNITYTOOL_BRIDGE_MODE=editor
 export UNITYTOOL_BRIDGE_WATCH_DIR=/mnt/d/VRC/World/EditorBridge
-prefab-sentinel validate runtime --scene "Assets/Scenes/Smoke.unity"
-
-prefab-sentinel inspect where-used --asset-or-guid "Assets/SomeAsset.prefab" --scope "Assets"
 ```
 
 ## Guardrails
 - If Unity runtime is unavailable (no batchmode command and no Editor Bridge), mark the task as pending and stop after classification steps.
-- Do not apply changes without audit logs (`--confirm --out-report --change-reason`).
+- Do not apply changes without audit logs (confirm mode with change_reason).
 - WSL environments: project_root and scene_path are auto-converted to Windows format for Unity; watch_dir is auto-converted to WSL format for Python I/O.

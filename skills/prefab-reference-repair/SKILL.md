@@ -5,29 +5,23 @@ description: Broken reference repair workflow using reference-resolver service a
 
 # Prefab Reference Repair
 
-## 呼び出し方
-```bash
-uvx --from "${CLAUDE_PLUGIN_ROOT}" prefab-sentinel <command>
-```
-以下のコマンド例では `prefab-sentinel` を上記で読み替える。
+## インターフェース
+MCP ツールを直接呼び出す（CLI は廃止済み）。
 
 ## Overview
 Detect and repair broken references while avoiding unsafe auto-fixes.
 
 ## Workflow
-1. Run `validate refs --scope ...` to identify missing assets or fileIDs.
-2. Use `inspect where-used` to locate and understand each broken reference.
-3. If a unique, deterministic replacement exists, propose a `safe_fix`.
-4. If multiple candidates exist, mark as `decision_required` and stop.
-5. For noisy missing GUIDs, use `suggest ignore-guids` and update `<scope>/config/ignore_guids.txt`.
-6. Re-run `validate refs` to confirm the scope is clean.
+1. `validate_refs` MCP ツールで missing assets / fileIDs を特定する。
+2. `find_referencing_assets` で壊れた参照の使用箇所を調査する。
+3. 一意で決定的な置換先が存在すれば `safe_fix` を提案する。
+4. 複数候補がある場合は `decision_required` として保留する。
+5. ノイズの多い missing GUID は `validate_refs` の `ignore_asset_guids` パラメータで除外し、`<scope>/config/ignore_guids.txt` を更新する。
+6. `validate_refs` を再実行してスコープがクリーンになったことを確認する。
 
-## Commands
-```bash
-prefab-sentinel validate refs --scope "Assets/YourScope"
-prefab-sentinel inspect where-used --asset-or-guid "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" --scope "Assets/YourScope"
-prefab-sentinel suggest ignore-guids --scope "Assets/YourScope"
-```
+## MCP ツール
+- `validate_refs` — 壊れた GUID/fileID 参照のスキャン（`scope`, `ignore_asset_guids` パラメータ）
+- `find_referencing_assets` — GUID/パスの参照元アセット検索（`asset_or_guid`, `scope` パラメータ）
 
 ## Guardrails
 - Do not edit YAML directly.
