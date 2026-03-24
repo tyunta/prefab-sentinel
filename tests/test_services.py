@@ -261,6 +261,43 @@ PrefabInstance:
             self.assertTrue(paths)
             self.assertFalse(any(path.startswith("Library/") for path in paths))
 
+    def test_invalidate_text_cache_single_file(self) -> None:
+        svc = ReferenceResolverService(project_root=Path("/fake/project"))
+        path = Path("/fake/Assets/Test.prefab")
+        svc._text_cache[path] = "content"
+        svc._local_id_cache[path] = {"123"}
+        svc._unreadable_paths.add(path)
+        other = Path("/fake/Assets/Other.prefab")
+        svc._text_cache[other] = "other"
+
+        svc.invalidate_text_cache(path)
+
+        self.assertNotIn(path, svc._text_cache)
+        self.assertNotIn(path, svc._local_id_cache)
+        self.assertNotIn(path, svc._unreadable_paths)
+        self.assertIn(other, svc._text_cache)
+
+    def test_invalidate_text_cache_all(self) -> None:
+        svc = ReferenceResolverService(project_root=Path("/fake/project"))
+        path = Path("/fake/Assets/Test.prefab")
+        svc._text_cache[path] = "content"
+        svc._local_id_cache[path] = {"123"}
+        svc._unreadable_paths.add(path)
+
+        svc.invalidate_text_cache(None)
+
+        self.assertEqual(len(svc._text_cache), 0)
+        self.assertEqual(len(svc._local_id_cache), 0)
+        self.assertEqual(len(svc._unreadable_paths), 0)
+
+    def test_invalidate_guid_index(self) -> None:
+        svc = ReferenceResolverService(project_root=Path("/fake/project"))
+        svc._guid_index_cache[Path("/fake")] = {"guid1": Path("/fake/a.prefab")}
+
+        svc.invalidate_guid_index()
+
+        self.assertEqual(len(svc._guid_index_cache), 0)
+
 
 class PrefabVariantServiceTests(unittest.TestCase):
     def test_detect_stale_and_compute_effective_values(self) -> None:

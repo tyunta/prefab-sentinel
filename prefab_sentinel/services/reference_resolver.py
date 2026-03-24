@@ -42,6 +42,21 @@ class ReferenceResolverService:
         self._local_id_cache: dict[Path, set[str]] = {}
         self._unreadable_paths: set[Path] = set()
 
+    def invalidate_text_cache(self, path: Path | None = None) -> None:
+        """Clear text/localID caches. *path*=None clears all."""
+        if path is None:
+            self._text_cache.clear()
+            self._local_id_cache.clear()
+            self._unreadable_paths.clear()
+        else:
+            self._text_cache.pop(path, None)
+            self._local_id_cache.pop(path, None)
+            self._unreadable_paths.discard(path)
+
+    def invalidate_guid_index(self) -> None:
+        """Clear the GUID index cache."""
+        self._guid_index_cache.clear()
+
     def _guid_map(self, index_root: Path | None = None) -> dict[str, Path]:
         root = (index_root or self.project_root).resolve()
         cached = self._guid_index_cache.get(root)
