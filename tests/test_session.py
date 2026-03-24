@@ -236,6 +236,17 @@ class TestInvalidationCascades(unittest.TestCase):
         self.assertIsNone(session._orchestrator)
         self.assertIsNone(session._script_name_map)
 
+    def test_invalidate_guid_index_clears_symbol_cache(self) -> None:
+        with _tmp_prefab() as path:
+            session = ProjectSession()
+            session.get_symbol_tree(path, _simple_prefab_text())
+            self.assertEqual(len(session._symbol_cache), 1)
+
+            session.invalidate_guid_index()
+
+            self.assertIsNone(session._script_name_map)
+            self.assertEqual(len(session._symbol_cache), 0)
+
     @patch("prefab_sentinel.session.Phase1Orchestrator")
     @patch("prefab_sentinel.session.build_script_name_map")
     def test_script_map_invalidation_does_not_cascade(
@@ -252,6 +263,36 @@ class TestInvalidationCascades(unittest.TestCase):
         # Orchestrator not affected
         self.assertIs(session._orchestrator, orch)
         self.assertIsNone(session._script_name_map)
+
+    def test_invalidate_asset_caches_clears_text_and_before(self) -> None:
+        session = ProjectSession()
+        mock_orch = MagicMock()
+        session._orchestrator = mock_orch
+        path = Path("/project/Assets/Test.prefab")
+
+        session.invalidate_asset_caches(path)
+
+        mock_orch.invalidate_text_cache.assert_called_once_with(path)
+        mock_orch.invalidate_before_cache.assert_called_once()
+        # orchestrator NOT re-created
+        self.assertIs(session._orchestrator, mock_orch)
+
+    def test_invalidate_asset_caches_noop_without_orchestrator(self) -> None:
+        session = ProjectSession()
+        self.assertIsNone(session._orchestrator)
+        # Should not raise
+        session.invalidate_asset_caches(Path("/fake.prefab"))
+
+    def test_invalidate_script_map_clears_symbol_cache(self) -> None:
+        with _tmp_prefab() as path:
+            session = ProjectSession()
+            session.get_symbol_tree(path, _simple_prefab_text())
+            self.assertEqual(len(session._symbol_cache), 1)
+
+            session.invalidate_script_map()
+
+            self.assertIsNone(session._script_name_map)
+            self.assertEqual(len(session._symbol_cache), 0)
 
     def test_invalidate_all_clears_everything(self) -> None:
         with _tmp_prefab() as path:

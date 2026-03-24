@@ -191,22 +191,38 @@ class ProjectSession:
     def invalidate_guid_index(self) -> None:
         """Clear GUID index cache (trigger: .meta change).
 
-        Cascades to script map and orchestrator since both depend on
-        the GUID index.
+        Cascades to script map, SymbolTree cache, and orchestrator since
+        all depend on the GUID index.
         """
         self._orchestrator = None
         self._script_name_map = None
-        logger.debug("Invalidated GUID index + script map + orchestrator")
+        self._symbol_cache.clear()
+        logger.debug("Invalidated GUID index + script map + SymbolTree + orchestrator")
 
     def invalidate_script_map(self) -> None:
-        """Clear only the script name map (trigger: .cs change)."""
+        """Clear only the script name map (trigger: .cs change).
+
+        Also clears all SymbolTree entries because MonoBehaviour nodes
+        reference script names from the map.
+        """
         self._script_name_map = None
-        logger.debug("Invalidated script name map")
+        self._symbol_cache.clear()
+        logger.debug("Invalidated script name map + all SymbolTree entries")
 
     def invalidate_symbol_tree(self, path: Path) -> None:
         """Evict a single SymbolTree entry (trigger: asset file change)."""
         if self._symbol_cache.pop(path, None) is not None:
             logger.debug("Evicted SymbolTree cache: %s", path)
+
+    def invalidate_asset_caches(self, path: Path) -> None:
+        """Clear service-level caches for a single asset (trigger: asset file change).
+
+        Unlike invalidate_guid_index, this does NOT re-create the orchestrator.
+        """
+        if self._orchestrator is not None:
+            self._orchestrator.invalidate_text_cache(path)
+            self._orchestrator.invalidate_before_cache()
+        logger.debug("Invalidated asset caches for %s", path)
 
     def invalidate_all(self) -> None:
         """Full cache reset."""
