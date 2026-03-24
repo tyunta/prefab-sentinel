@@ -158,13 +158,13 @@ Scene
 
 | Serena の価値 | 現状 | 到達度 | 主要ギャップ |
 |---------------|------|--------|-------------|
-| シンボルモデル | fileID/ClassID/propertyPath | 30% | 名前ベースアドレッシング |
-| セマンティックナビ | inspect/validate 系コマンド | 50% | インクリメンタル深掘り |
-| セマンティック編集 | patch plan + apply | 60% | 名前 → fileID 解決 |
-| MCP サーバー | CLI + Claude Code plugin | 20% | MCP プロトコル実装 |
-| プロジェクトスコープ | `--scope` パラメータ | 40% | activate/session 管理 |
-| ステートフル | 完全ステートレス | 10% | プロセス常駐 + キャッシュ |
-| C# 接続 | YAML のみ | 0% | field ↔ propertyPath マッピング |
+| シンボルモデル | SymbolTree + 名前パス解決 | 90% | — (P1 完了) |
+| セマンティックナビ | depth/props/origin 付きクエリ | 85% | — (P2 完了) |
+| セマンティック編集 | set_property (名前→fileID 解決) | 75% | add/remove_component (bridge 拡張待ち) |
+| MCP サーバー | 13 ツール + session 管理 | 90% | — (P1 完了) |
+| プロジェクトスコープ | activate_project(scope) | 85% | — (P5 完了) |
+| ステートフル | ProjectSession + watchfiles | 80% | キャッシュ共有最適化 (サービス←→session 間) |
+| C# 接続 | field parser + rename/coverage | 80% | 継承チェーン未対応 (P4 完了) |
 
 ---
 
@@ -445,29 +445,35 @@ set_property("Player.prefab", "CharacterBody/MonoBehaviour(PlayerScript)", "move
 
 ---
 
-### P5: ステートフルセッション
+### P5: ステートフルセッション ✅ 実装済み
 
-**P1 の MCP サーバー化で自然に解決する部分が大きい。**
-MCP サーバーはプロセス常駐なので、リクエスト間でメモリ上にキャッシュを保持できる。
+**実装内容:**
+
+- `prefab_sentinel/session.py` — `ProjectSession` クラス: orchestrator / script_name_map / SymbolTree のリクエスト間キャッシュ
+  - orchestrator は lazy singleton（GUID 無効化時に再生成）
+  - script_name_map は lazy 構築 + キャッシュ
+  - SymbolTree は mtime ベースのキャッシュ（`include_properties` 上位互換判定付き）
+  - `activate(scope)` でスコープ設定 + キャッシュ warm + watcher 起動
+  - `status()` でキャッシュ診断情報を返却
+- `prefab_sentinel/watcher.py` — `watchfiles` (optional) によるバックグラウンドファイル監視
+  - `.meta` 変更 → GUID インデックス + script_map + orchestrator 無効化
+  - `.cs` 変更 → script_map 無効化
+  - `.prefab`/`.unity`/`.asset`/`.mat` 変更 → 該当 SymbolTree エントリ破棄
+  - `watchfiles` 未インストール時は graceful no-op
+- MCP ツール 2 つ追加:
+  - `activate_project(scope)` — スコープ設定 + キャッシュ warm
+  - `get_project_status()` — キャッシュ状態表示
+- 既存 11 ツールを session 経由に移行（`_get_orchestrator()` → `session.get_orchestrator()`）
+- `set_property(confirm=True)` 成功後に SymbolTree キャッシュを自動無効化
+- `pyproject.toml` に `watch = ["watchfiles>=1.0"]` optional dependency 追加
 
 **キャッシュ対象と無効化戦略:**
 
 | キャッシュ | 構築コスト | 無効化トリガー |
 |-----------|-----------|---------------|
-| GUID インデックス | 大規模で数秒 | .meta ファイルの追加/削除 |
-| SymbolTree | アセットサイズ依存 | 対象 .prefab/.unity の変更 |
-| スクリプト名マップ | .cs.meta 全スキャン | .cs.meta の追加/削除 |
-
-**実装方針:**
-1. `watchfiles` (pure-Python file watcher) で Assets/ を監視
-2. 変更検知時に該当キャッシュのみ無効化（全再構築ではない）
-3. `activate_project(scope)` MCP ツールでスコープを固定し、監視対象を限定
-
-**新規 MCP ツール:**
-- `activate_project(scope)` — スコープ設定 + 初期キャッシュ構築
-- `get_project_status()` — キャッシュ状態、最終更新、監視中ファイル数
-
-**依存:** `watchfiles` を optional dependency に追加（P5 専用）
+| Orchestrator (+ サービス内 GUID キャッシュ) | 高 (1-3s) | `.meta` 追加/削除 |
+| SymbolTree per asset | 中 (YAML パース) | 対象ファイル変更 (mtime) |
+| スクリプト名マップ | 中 | `.cs`/`.meta` 変更 |
 
 ---
 

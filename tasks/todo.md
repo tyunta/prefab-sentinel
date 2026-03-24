@@ -74,6 +74,17 @@
 - [ ] Issue 2: `inspect wiring` の Variant 対応 — `inspect_hierarchy` パターンを適用
 - [ ] Issue 4: `editor set-material` コマンド — ランタイムでマテリアルスロット差し替え
 
+## P5: ステートフルセッション (2026-03-24)
+
+- [x] Commit 1: `session.py` — ProjectSession + test_session.py
+- [x] Commit 2: `watcher.py` — watchfiles integration + test_watcher.py + pyproject.toml
+- [x] Commit 3: MCP 統合 — mcp_server.py 移行 + activate/status ツール + test_mcp_server.py 更新
+- [x] Commit 4: ドキュメント — README.md + ROADMAP 更新
+- [x] 検証: 1139 テスト全パス
+- [x] レビュー修正: re-activation reset, dead field除去, diagnostics追加, watcher例外ログ, テスト追加
+- [x] リファクタ: unused import除去, tempfile helper抽出, redundant WSL path解決排除, unused `field` import除去
+- [x] 最終検証: 1145 テスト全パス
+
 ## Phase 3: Runtime Verification Bridge
 
 - [x] Fix CS1626 (yield-in-try-catch) in `UnityRuntimeValidationBridge.cs` `Run()` method — GuardCoroutine pattern.
