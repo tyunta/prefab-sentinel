@@ -81,6 +81,43 @@ class ReferenceResolverService:
         self._text_cache[path] = text
         return text
 
+    def _read_text_uncached(self, path: Path) -> str | None:
+        """Read file text without touching caches (for parallel preload)."""
+        try:
+            return decode_text_file(path)
+        except UnicodeDecodeError:
+            return None
+
+    def _preload_texts(
+        self, paths: list[Path], max_workers: int = 10,
+    ) -> None:
+        """Pre-populate ``_text_cache`` by reading files in parallel."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        uncached = [
+            p for p in paths
+            if p not in self._text_cache and p not in self._unreadable_paths
+        ]
+        if not uncached:
+            return
+        with ThreadPoolExecutor(
+            max_workers=min(max_workers, len(uncached)),
+        ) as pool:
+            futures = {
+                pool.submit(self._read_text_uncached, p): p for p in uncached
+            }
+            for future in as_completed(futures):
+                path = futures[future]
+                try:
+                    text = future.result()
+                except OSError:
+                    text = None
+                if text is not None:
+                    self._text_cache[path] = text
+                else:
+                    self._text_cache[path] = None
+                    self._unreadable_paths.add(path)
+
     def _local_ids(self, path: Path) -> set[str]:
         cached = self._local_id_cache.get(path)
         if cached is not None:

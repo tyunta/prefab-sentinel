@@ -298,6 +298,61 @@ PrefabInstance:
 
         self.assertEqual(len(svc._guid_index_cache), 0)
 
+    def test_preload_texts_populates_cache(self) -> None:
+        """_preload_texts should populate _text_cache for multiple files."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_sample_project(root)
+            svc = ReferenceResolverService(project_root=root)
+
+            files = [
+                root / "Assets" / "Base.prefab",
+                root / "Assets" / "Variant.prefab",
+            ]
+            svc._preload_texts(files)
+
+            for f in files:
+                self.assertIn(f, svc._text_cache)
+                self.assertIsNotNone(svc._text_cache[f])
+
+    def test_preload_texts_handles_unreadable(self) -> None:
+        """_preload_texts should mark unreadable files in _unreadable_paths."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_sample_project(root)
+            svc = ReferenceResolverService(project_root=root)
+
+            # Create a binary file that will fail decode
+            bad = root / "Assets" / "bad.prefab"
+            bad.write_bytes(b"\x80\x81\x82\x83" * 100)
+
+            svc._preload_texts([bad])
+
+            self.assertIn(bad, svc._unreadable_paths)
+            self.assertIsNone(svc._text_cache[bad])
+
+    def test_preload_texts_idempotent(self) -> None:
+        """Calling _preload_texts twice should not re-read cached files."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_sample_project(root)
+            svc = ReferenceResolverService(project_root=root)
+
+            files = [root / "Assets" / "Base.prefab"]
+            svc._preload_texts(files)
+            original_text = svc._text_cache[files[0]]
+
+            # Modify file on disk — preload should NOT re-read
+            files[0].write_text("modified", encoding="utf-8")
+            svc._preload_texts(files)
+
+            self.assertEqual(svc._text_cache[files[0]], original_text)
+
+    def test_preload_texts_empty_list(self) -> None:
+        """_preload_texts with empty list should not raise."""
+        svc = ReferenceResolverService(project_root=Path("/fake"))
+        svc._preload_texts([])  # Should not raise
+
 
 class PrefabVariantServiceTests(unittest.TestCase):
     def test_detect_stale_and_compute_effective_values(self) -> None:
