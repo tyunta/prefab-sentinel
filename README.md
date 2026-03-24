@@ -958,6 +958,7 @@ uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel rep
 ## 19. 将来拡張
 
 実装中の具体アイデアと実行順は `docs/IDEAS_AND_ROADMAP.md` で管理する。
+長期ビジョン（MCP サーバー化・シンボルモデル・セマンティック編集）は `docs/ROADMAP_SERENA_FOR_UNITY.md` を参照。
 
 - Sceneテンプレート比較による自動配線提案
 - 複数ワールド横断の共通設定ガバナンス
