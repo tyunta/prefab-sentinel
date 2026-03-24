@@ -575,6 +575,24 @@ class AnalyzeWiringTests(unittest.TestCase):
         # Cross-component duplicates should remain INFO
         self.assertEqual(result.max_severity, Severity.INFO)
 
+    def test_null_field_names_populated(self) -> None:
+        """ComponentWiring.null_field_names lists all null ref field names."""
+        result = analyze_wiring(BASIC_MONOBEHAVIOUR, "test.prefab")
+        self.assertEqual(len(result.components), 1)
+        self.assertEqual(result.components[0].null_field_names, ["myNullRef"])
+
+    def test_null_field_names_empty_when_no_nulls(self) -> None:
+        """ComponentWiring.null_field_names is empty when no null refs."""
+        result = analyze_wiring(CLEAN_FILE, "test.prefab")
+        for comp in result.components:
+            self.assertEqual(comp.null_field_names, [])
+
+    def test_null_field_names_excludes_nested_structs(self) -> None:
+        """Nested struct null refs are not included in null_field_names."""
+        result = analyze_wiring(NESTED_STRUCT, "test.prefab")
+        for comp in result.components:
+            self.assertEqual(comp.null_field_names, [])
+
 
 class TestExtractMonoBehaviourFieldNames(unittest.TestCase):
     """Test extract_monobehaviour_field_names for all-field extraction."""

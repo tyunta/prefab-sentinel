@@ -7,7 +7,7 @@ detects null references, internal fileID mismatches, and duplicate wiring.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from prefab_sentinel.contracts import Diagnostic, Severity, max_severity
 from prefab_sentinel.unity_assets import REFERENCE_PATTERN, normalize_guid
@@ -66,6 +66,7 @@ class ComponentWiring:
     is_udon_sharp: bool
     backing_udon_file_id: str
     override_count: int = 0
+    null_field_names: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -305,6 +306,7 @@ def analyze_wiring(
     for comp in components:
         for f in comp.fields:
             if f.file_id == "0" and not f.guid:
+                comp.null_field_names.append(f.name)
                 null_references.append(
                     Diagnostic(
                         path=file_path,

@@ -100,6 +100,12 @@
 - [x] Task 9: ドキュメント — CLAUDE.md API 規約、README、ROADMAP 到達度 100%
 - [x] Task 10: 回帰テスト 1225 件全パス + minor バージョンバンプ v0.3.0
 
+## inspect_wiring Null 分類ヒント (2026-03-25)
+
+- [x] Task 1: ComponentWiring に null_field_names 追加 + テスト 3 件
+- [x] Task 2: orchestrator の component summary dict に null_ratio / null_field_names 追加 + テスト
+- [x] Task 3: 検証 — 1124 tests pass、動作確認 OK
+
 ## MCP Parameter Naming Unification — v0.5.0 (2026-03-25)
 
 - [x] Task 1: path → asset_path (10 inspection tools)

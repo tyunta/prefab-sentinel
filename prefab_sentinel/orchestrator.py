@@ -754,6 +754,8 @@ class Phase1Orchestrator:
                 "script_name": guid_to_name.get(comp.script_guid, ""),
                 "is_udon_sharp": comp.is_udon_sharp,
                 "field_count": len(comp.fields),
+                "null_ratio": f"{len(comp.null_field_names)}/{len(comp.fields)}",
+                "null_field_names": comp.null_field_names,
                 "fields": field_dicts,
             }
             if comp.override_count > 0:

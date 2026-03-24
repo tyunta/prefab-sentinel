@@ -465,6 +465,35 @@ class InspectWiringTests(unittest.TestCase):
         self.assertEqual(len(comps), 1)
         self.assertEqual(comps[0]["script_name"], "")
 
+    def test_null_ratio_and_null_field_names_in_output(self) -> None:
+        """inspect_wiring output includes null_ratio and null_field_names per component."""
+        import tempfile
+        from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
+
+        text = (
+            YAML_HEADER
+            + make_gameobject("100", "MyObj", ["200"])
+            + make_monobehaviour("200", "100")
+            + "  validRef: {fileID: 100}\n"
+            + "  nullRef1: {fileID: 0}\n"
+            + "  nullRef2: {fileID: 0}\n"
+        )
+        with tempfile.NamedTemporaryFile(suffix=".prefab", mode="w", delete=False) as f:
+            f.write(text)
+            f.flush()
+            orch = _make_orchestrator()
+            with patch(
+                "prefab_sentinel.orchestrator.find_project_root",
+                side_effect=Exception("no project"),
+            ):
+                result = orch.inspect_wiring(f.name)
+
+        self.assertTrue(result.success)
+        comps = result.data["components"]
+        self.assertEqual(len(comps), 1)
+        self.assertEqual(comps[0]["null_ratio"], "2/3")
+        self.assertEqual(comps[0]["null_field_names"], ["nullRef1", "nullRef2"])
+
 
 class InspectWiringVariantTests(unittest.TestCase):
     """inspect_wiring should detect Variant prefabs and analyze wiring from the base."""
