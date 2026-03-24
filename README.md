@@ -35,12 +35,12 @@ Claude Code Plugin として導入すると、Claude Code から `/prefab-sentin
 
 | スキル | 呼び出し | 説明 |
 |--------|----------|------|
-| guide | `/prefab-sentinel:guide` | CLI リファレンス・コマンド一覧・パッチスキーマ・ブリッジセットアップ |
+| guide | `/prefab-sentinel:guide` | MCP ツールリファレンス・パッチスキーマ・ブリッジセットアップ |
 | prefab-reference-repair | `/prefab-sentinel:prefab-reference-repair` | 壊れた参照の検出・修復ワークフロー |
 | variant-safe-edit | `/prefab-sentinel:variant-safe-edit` | Prefab Variant の安全な編集ワークフロー |
 | udon-log-triage | `/prefab-sentinel:udon-log-triage` | ランタイムログのトリアージワークフロー |
 
-**CLI の呼び出し:**
+**ツールの呼び出し:**
 各スキル内のコマンドは `${CLAUDE_PLUGIN_ROOT}`（Plugin インストールディレクトリに展開されるテンプレート変数）を使ってローカルから実行される。ネットワークアクセス不要。
 
 **個人コマンドファイルからの移行:**
@@ -49,47 +49,22 @@ Claude Code Plugin として導入すると、Claude Code から `/prefab-sentin
 **Unity Bridge セットアップ:**
 パッチ実適用・ランタイム検証に必要な Unity Bridge のセットアップ手順は `/prefab-sentinel:guide` スキルに記載。
 
-### Codex CLI で使う
+### MCP サーバー（唯一のインターフェース）
 
-Codex CLI では `uvx` 経由で CLI を直接実行する。Claude Code Plugin のスキル（`skills/` ディレクトリの SKILL.md）は Codex の `AGENTS.md` に転記すれば同等のワークフローとして利用できる。
-
-```bash
-# インストール不要で実行
-uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel --help
-```
-
-Codex の `AGENTS.md` に以下のようなルールを追加すると、エージェントが自律的に CLI を呼び出せる。
-
-```markdown
-## prefab-sentinel
-
-Unity Prefab/Scene/Asset の検査・編集には prefab-sentinel CLI を使う。
-
-- 実行: `uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel <command>`
-- 参照検証: `prefab-sentinel validate refs --scope <path>`
-- 構造検証: `prefab-sentinel validate structure --path <path>`
-- パッチ適用: `prefab-sentinel patch apply --plan <plan.json> --dry-run` で確認後 `--confirm` で適用
-```
-
-### MCP サーバー（AI エージェント統合）
-
-[Model Context Protocol (MCP)](https://modelcontextprotocol.io/) サーバーとして起動し、AI エージェントから Unity アセットの検査ツールを直接呼び出せる。
+[Model Context Protocol (MCP)](https://modelcontextprotocol.io/) サーバーとして起動し、AI エージェントから Unity アセットの検査・編集ツールを直接呼び出せる。MCP が Prefab Sentinel の唯一の外部インターフェースとなる。
 
 ```bash
 # MCP 依存をインストール（ファイル監視オプション付き）
 pip install prefab-sentinel[mcp,watch]
 
 # stdio トランスポートで起動（デフォルト）
-prefab-sentinel serve
+prefab-sentinel-mcp
 
 # プロジェクトルートを明示指定
-prefab-sentinel serve --project-root /path/to/unity/project
+prefab-sentinel-mcp --project-root /path/to/unity/project
 
 # HTTP トランスポート
-prefab-sentinel serve --transport streamable-http
-
-# スタンドアロンエントリポイント（serve サブコマンドと同等）
-prefab-sentinel-mcp
+prefab-sentinel-mcp --transport streamable-http
 ```
 
 **提供ツール:**
@@ -146,15 +121,9 @@ prefab-sentinel-mcp
 }
 ```
 
-`mcp` 未インストール時は `prefab-sentinel serve` が明確なエラーメッセージを出力して終了する。CLI の通常機能には影響しない。
+`mcp` 未インストール時は `prefab-sentinel-mcp` が明確なエラーメッセージを出力して終了する。
 
 **ステートフルセッション:** MCP サーバーはリクエスト間でキャッシュを保持する。`activate_project` でスコープを設定すると、GUID インデックス・スクリプト名マップ・シンボルツリーがキャッシュされ、2 回目以降のクエリが高速化する。`watchfiles` extra (`pip install prefab-sentinel[watch]`) をインストールすると、`.meta`/`.cs`/アセットファイルの変更をバックグラウンドで検知し、該当キャッシュを自動無効化する。
-
-### リモート実行（インストール不要）
-
-```bash
-uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel --help
-```
 
 ### バージョン管理
 
@@ -178,9 +147,6 @@ cd prefab-sentinel
 
 # 依存関係の同期（uv が仮想環境を自動作成）
 uv sync
-
-# 動作確認
-uv run prefab-sentinel --help
 
 # テスト・lint 依存を含めてインストール
 uv sync --extra test --extra lint
@@ -206,7 +172,7 @@ uv run mypy prefab_sentinel/
 
 ### やる内容
 - サービス群を責務別に分割実装
-- CLIオーケストレーターを中心にサービスとSkillsを連携
+- MCP オーケストレーターを中心にサービスと Skills を連携
 - 監査ログ（誰が・何を・なぜ・どう変更したか）を保存
 - 失敗時のfail-fastと段階的ロールバック設計
 
@@ -280,7 +246,7 @@ uv run mypy prefab_sentinel/
 [User/Codex]
     |
     v
-[Prefab Sentinel CLI Orchestrator]
+[Prefab Sentinel MCP Orchestrator]
     |-------------------------------|
     v                               v
 [Service: serialized-object]     [Skills Layer]
@@ -296,7 +262,7 @@ uv run mypy prefab_sentinel/
 ```
 
 ### 3.1 コンポーネント責務
-- Prefab Sentinel CLI Orchestrator
+- Prefab Sentinel MCP Orchestrator
   - ユースケース単位で複数サービスを編成
   - 実行計画、依存順序、停止条件を管理
 - サービス群
@@ -746,92 +712,43 @@ uv run python -m pytest tests/ -v
 
 ---
 
-## 17. CLI想定コマンド
+## 17. 実行リファレンス
 
-```bash
-prefab-sentinel inspect variant --path "Assets/... Variant.prefab"
-prefab-sentinel inspect where-used --asset-or-guid "Assets/SomeAsset.prefab" --scope "Assets"
-prefab-sentinel validate refs --scope "Assets/haiirokoubou"
-prefab-sentinel suggest ignore-guids --scope "Assets/haiirokoubou"
-prefab-sentinel patch apply --plan patch.json --dry-run
-prefab-sentinel validate runtime --scene "Assets/Scenes/VRCDefaultWorldScene.unity"
-prefab-sentinel validate smoke-batch --targets all --out-dir "reports/bridge_smoke"
-prefab-sentinel report export --format md --out reports/latest.md
-```
+v0.4.0 で CLI (`prefab-sentinel` コマンド) は廃止され、MCP サーバーが唯一のインターフェースとなった。
+検査・編集は MCP ツール経由で実行する（セクション 0.1「MCP サーバー」のツール一覧参照）。
 
-### 17.1 CLI 実行方法
+### 17.1 実行方法
 
-- ローカル実行は `uv run`、可搬実行は `uvx --from git+https://github.com/tyunta/prefab-sentinel.git` を使用する
-- CLI名は `prefab-sentinel` を正規とする
+- MCP サーバー: `prefab-sentinel-mcp`（エントリポイント）
+- smoke-batch: `python -m prefab_sentinel.smoke_batch`
+- smoke-history: `python -m prefab_sentinel.smoke_history`
+- 統合テスト: `python scripts/unity_integration_tests.py`
 - 環境変数プレフィックス（`UNITYTOOL_*`）は互換性のため現状維持とする
 
 ```bash
-# プロジェクトルートで
-uv run prefab-sentinel inspect variant --path "Assets/... Variant.prefab"
-uv run prefab-sentinel inspect where-used --asset-or-guid "Assets/SomeAsset.prefab" --scope "Assets" --max-usages 200
-uv run prefab-sentinel validate refs --scope "Assets/haiirokoubou"
-uv run prefab-sentinel validate refs --scope "Assets/haiirokoubou" --details --max-diagnostics 200
-uv run prefab-sentinel validate refs --scope "Assets/haiirokoubou" --exclude "**/Generated/**"
-uv run prefab-sentinel validate refs --scope "Assets/haiirokoubou" --ignore-guid-file "Assets/haiirokoubou/config/ignore_guids.txt"
-uv run prefab-sentinel validate runtime --scene "sample/avatar/Assets/Marycia.unity" --log-file "sample/world/Logs/ClientSim.log"
-uv run prefab-sentinel validate bridge-smoke --plan "config/prefab_patch_plan.json" --unity-command "C:/Program Files/Unity/Hub/Editor/<version>/Editor/Unity.exe" --unity-project-path "D:/git/prefab-sentinel/sample/avatar" --unity-execute-method "PrefabSentinel.UnityPatchBridge.ApplyFromJson"
-uv run prefab-sentinel validate bridge-smoke --plan "config/prefab_patch_plan.json" --expected-applied 3 --unity-command "C:/Program Files/Unity/Hub/Editor/<version>/Editor/Unity.exe" --unity-project-path "D:/git/prefab-sentinel/sample/avatar" --unity-execute-method "PrefabSentinel.UnityPatchBridge.ApplyFromJson"
-uv run prefab-sentinel validate bridge-smoke --plan "config/prefab_patch_plan.json" --expect-applied-from-plan --unity-command "C:/Program Files/Unity/Hub/Editor/<version>/Editor/Unity.exe" --unity-project-path "D:/git/prefab-sentinel/sample/avatar" --unity-execute-method "PrefabSentinel.UnityPatchBridge.ApplyFromJson"
-uv run prefab-sentinel validate bridge-smoke --plan "config/prefab_patch_plan.json" --expected-code "BRIDGE_OK" --unity-command "C:/Program Files/Unity/Hub/Editor/<version>/Editor/Unity.exe" --unity-project-path "D:/git/prefab-sentinel/sample/avatar" --unity-execute-method "PrefabSentinel.UnityPatchBridge.ApplyFromJson"
-uv run prefab-sentinel validate smoke-batch --targets all --out-dir "reports/bridge_smoke" --summary-md "reports/bridge_smoke/summary.md"
-uv run prefab-sentinel validate smoke-batch --targets all --timeout-profile "reports/bridge_timeout_profile.json" --out-dir "reports/bridge_smoke"
-uv run prefab-sentinel validate smoke-batch --targets avatar --avatar-expected-code "OK" --out-dir "reports/bridge_smoke"
-uv run prefab-sentinel validate smoke-batch --targets avatar --avatar-expected-applied 3 --out-dir "reports/bridge_smoke"
-uv run prefab-sentinel validate smoke-batch --targets all --expect-applied-from-plan --out-dir "reports/bridge_smoke"
-uv run prefab-sentinel patch hash --plan "config/patch_plan.example.json"
-set UNITYTOOL_PLAN_SIGNING_KEY="replace-with-signing-key"
-uv run prefab-sentinel patch sign --plan "config/patch_plan.example.json"
-uv run prefab-sentinel patch attest --plan "config/patch_plan.example.json" --out "reports/patch_attestation.json"
-uv run prefab-sentinel patch verify --plan "config/patch_plan.example.json" --sha256 "<sha256>"
-uv run prefab-sentinel patch verify --plan "config/patch_plan.example.json" --attestation-file "reports/patch_attestation.json"
-uv run prefab-sentinel patch verify --plan "config/patch_plan.example.json" --signature "<signature>"
-uv run prefab-sentinel patch apply --plan "config/patch_plan.example.json" --dry-run
-uv run prefab-sentinel patch apply --plan "config/patch_plan.example.json" --dry-run --attestation-file "reports/patch_attestation.json"
-uv run prefab-sentinel patch apply --plan "config/patch_plan.example.json" --dry-run --plan-sha256 "<sha256>"
-uv run prefab-sentinel patch apply --plan "config/patch_plan.example.json" --dry-run --plan-signature "<signature>"
-uv run prefab-sentinel patch apply --plan "config/patch_plan.example.json" --dry-run --out-report "reports/patch_result.json"
-set UNITYTOOL_PATCH_BRIDGE="python tools/unity_patch_bridge.py"
-set UNITYTOOL_UNITY_COMMAND="C:/Program Files/Unity/Hub/Editor/<version>/Editor/Unity.exe"
-set UNITYTOOL_UNITY_PROJECT_PATH="D:/git/prefab-sentinel/sample/avatar"
-set UNITYTOOL_UNITY_EXECUTE_METHOD="PrefabSentinel.UnityPatchBridge.ApplyFromJson"
-set UNITYTOOL_RUNTIME_EXECUTE_METHOD="PrefabSentinel.UnityRuntimeValidationBridge.RunFromJson"
-python scripts/unity_bridge_smoke.py --plan "config/prefab_patch_plan.json" --unity-command "C:/Program Files/Unity/Hub/Editor/<version>/Editor/Unity.exe" --unity-project-path "D:/git/prefab-sentinel/sample/avatar" --unity-execute-method "PrefabSentinel.UnityPatchBridge.ApplyFromJson" --out "reports/unity_bridge_smoke.json"
-uv run prefab-sentinel patch apply --plan "config/prefab_patch_plan.json" --confirm --out-report "reports/patch_result.json" --change-reason "apply prefab patch"
-uv run prefab-sentinel patch apply --plan "config/prefab_patch_plan.json" --confirm --out-report "reports/patch_result.json" --change-reason "apply prefab patch" --scope "Assets" --runtime-scene "Assets/Smoke.unity"
-uv run prefab-sentinel suggest ignore-guids --scope "Assets/haiirokoubou" --min-occurrences 100 --max-items 20
-uv run prefab-sentinel suggest ignore-guids --scope "Assets/haiirokoubou" --ignore-guid "7e5debf235ac2d54397a268de3328672"
-uv run prefab-sentinel suggest ignore-guids --scope "Assets/haiirokoubou" --min-occurrences 100 --out-ignore-guid-file "Assets/haiirokoubou/config/ignore_guids.txt" --out-ignore-guid-mode append
-python scripts/benchmark_refs.py --scope "sample/avatar/Assets" --warmup-runs 1 --runs 3 --out "sample/avatar/config/benchmark_refs.json" --out-csv "sample/avatar/config/benchmark_refs.csv" --csv-append --include-generated-date
-python scripts/benchmark_history_to_csv.py --inputs "sample/avatar/config/bench_*.json" --scope-contains "avatar" --severity error --generated-date-prefix "2026-02" --min-p90 2.0 --latest-per-scope --top-slowest 20 --split-by-severity --sort-by avg_sec --sort-order desc --include-date-column --out "sample/avatar/config/benchmark_trend.csv" --out-md "sample/avatar/config/benchmark_trend.md"
-python scripts/benchmark_samples.py --targets all --runs 1 --warmup-runs 0 --history-generated-date-prefix "2026-02" --history-min-p90 2.0 --history-latest-per-scope --history-split-by-severity --history-write-md --run-regression --regression-baseline-auto-latest 3 --regression-baseline-pinning-file "sample/avatar/config/baseline_pinning.json" --regression-alerts-only --regression-fail-on-regression --regression-out-csv-append --regression-out-md
-python scripts/benchmark_regression_report.py --baseline-inputs "sample/avatar/config/bench_20260211*.json" --latest-inputs "sample/avatar/config/bench_20260212*.json" --baseline-pinning-file "sample/avatar/config/baseline_pinning.json" --avg-ratio-threshold 1.1 --p90-ratio-threshold 1.1 --alerts-only --fail-on-regression --out-json "sample/avatar/config/benchmark_regression.json" --out-csv "sample/avatar/config/benchmark_regression.csv" --out-csv-append --out-md "sample/avatar/config/benchmark_regression.md"
-python scripts/bridge_smoke_samples.py --targets all --unity-command "C:/Program Files/Unity/Hub/Editor/<version>/Editor/Unity.exe" --expect-applied-from-plan --out-dir "reports/bridge_smoke" --summary-md "reports/bridge_smoke/summary.md"
-python scripts/bridge_smoke_samples.py --targets all --unity-command "C:/Program Files/Unity/Hub/Editor/<version>/Editor/Unity.exe" --unity-timeout-sec 600 --avatar-unity-timeout-sec 900 --world-unity-timeout-sec 450 --max-retries 2 --retry-delay-sec 5 --expect-applied-from-plan --out-dir "reports/bridge_smoke" --summary-md "reports/bridge_smoke/summary.md"
-python scripts/smoke_summary_to_csv.py --inputs "reports/bridge_smoke/**/summary.json" --duration-percentile 90 --out "reports/bridge_smoke_history.csv" --out-md "reports/bridge_smoke_history.md" --out-timeout-profile "reports/bridge_timeout_profile.json" --timeout-multiplier 1.5 --timeout-slack-sec 60 --timeout-min-sec 300 --timeout-round-sec 30
-uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel report smoke-history --inputs "reports/bridge_smoke/**/summary.json" --duration-percentile 90 --out "reports/bridge_smoke_history.csv" --out-md "reports/bridge_smoke_history.md" --out-timeout-profile "reports/bridge_timeout_profile.json" --timeout-multiplier 1.5 --timeout-slack-sec 60 --timeout-min-sec 300 --timeout-round-sec 30
-uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel report smoke-history --inputs "reports/bridge_smoke/**/summary.json" --out "reports/bridge_smoke_history.csv" --max-code-mismatches 0 --min-code-pass-pct 100 --max-applied-mismatches 0 --min-applied-pass-pct 100 --max-observed-timeout-breaches 0 --min-observed-timeout-coverage-pct 100 --max-observed-timeout-breaches-per-target 0 --min-observed-timeout-coverage-pct-per-target 100 --max-profile-timeout-breaches 0 --min-profile-timeout-coverage-pct 100 --max-profile-timeout-breaches-per-target 0 --min-profile-timeout-coverage-pct-per-target 100
+# smoke-batch 実行
+python -m prefab_sentinel.smoke_batch \
+  --targets all \
+  --avatar-plan config/patch_plan.example.json \
+  --world-plan config/patch_plan.example.json \
+  --out-dir reports/bridge_smoke
 
-# uvx 経由でローカルパッケージから実行（インストール不要）
-uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel inspect variant --path "Assets/... Variant.prefab"
-uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel inspect where-used --asset-or-guid "Assets/SomeAsset.prefab" --scope "Assets"
-uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel validate refs --scope "Assets/haiirokoubou"
-uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel validate runtime --scene "sample/avatar/Assets/Marycia.unity"
-uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel validate bridge-smoke --plan "config/prefab_patch_plan.json"
-uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel validate bridge-smoke --plan "config/prefab_patch_plan.json" --expected-applied 3
-uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel validate bridge-smoke --plan "config/prefab_patch_plan.json" --expect-applied-from-plan
-uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel validate bridge-smoke --plan "config/prefab_patch_plan.json" --expected-code "BRIDGE_OK"
-uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel validate smoke-batch --targets all --out-dir "reports/bridge_smoke"
-uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel validate smoke-batch --targets all --timeout-profile "reports/bridge_timeout_profile.json" --out-dir "reports/bridge_smoke"
-uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel validate smoke-batch --targets avatar --avatar-expected-code "OK" --out-dir "reports/bridge_smoke"
-uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel validate smoke-batch --targets avatar --avatar-expected-applied 3 --out-dir "reports/bridge_smoke"
-uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel validate smoke-batch --targets all --expect-applied-from-plan --out-dir "reports/bridge_smoke"
-uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel patch apply --plan "config/patch_plan.example.json" --dry-run
-uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel suggest ignore-guids --scope "Assets/haiirokoubou"
+# smoke-history 実行
+python -m prefab_sentinel.smoke_history \
+  --inputs reports/bridge_smoke/summary.json \
+  --duration-percentile 90 \
+  --out reports/bridge_smoke/history.csv \
+  --out-md reports/bridge_smoke/history.md
+
+# 統合テスト実行
+python scripts/unity_integration_tests.py \
+  --unity-command "C:/Program Files/Unity/Hub/Editor/<version>/Editor/Unity.exe" \
+  --unity-project-path "D:/git/prefab-sentinel/sample/avatar" \
+  --out-dir reports/integration
+
+# ベンチマーク
+python scripts/benchmark_refs.py --scope "sample/avatar/Assets" --warmup-runs 1 --runs 3 --out "sample/avatar/config/benchmark_refs.json"
+python scripts/bridge_smoke_samples.py --targets all --unity-command "C:/Program Files/Unity/Hub/Editor/<version>/Editor/Unity.exe" --expect-applied-from-plan --out-dir "reports/bridge_smoke"
 ```
 
 ### 17.2 レポート / ignore-guid
@@ -840,8 +757,7 @@ uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel sug
 - `report export --format csv` は diagnostics テーブル（`path, location, detail, evidence`）を CSV 形式で出力する。
 - `report export --format csv --csv-include-summary` でエンベロープメタデータ行（success, severity, code, message, scanned_files 等）を diagnostics テーブルの前に追加できる。
 - `--ignore-guid-file` は UTF-8 テキスト（1行1GUID、`#` 以降コメント可）を受け付ける。未指定時は `<scope>/config/ignore_guids.txt` を参照し、存在しなければ無視する。
-- `suggest ignore-guids` は `--out-ignore-guid-file` で候補 GUID を 1 行 1 件で保存できる（`replace` / `append`）。
-- `suggest ignore-guids` の候補出力には、GUID に対応するアセットパス（`asset_name`）がベストエフォートで付記される。
+- `validate_refs` MCP ツールの `top_missing_asset_guids` を使って無視候補 GUID を特定できる。
 - `validate refs` の `top_missing_asset_guids` / `top_ignored_missing_asset_guids` には、GUID→アセットパスのベストエフォート解決結果（`asset_name`）が含まれる。
 - `report export --format md` では、`scan_broken_references` データが含まれる場合に Noise Reduction サマリーを先頭に出力する。Noise Reduction の Top GUID 表示には `asset_name` が付記される。
 - `report export --format md` は `--md-max-usages N` / `--md-omit-usages` で `usages` 配列を軽量化できる。
@@ -876,49 +792,32 @@ uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel sug
 - `scripts/benchmark_regression_report.py` は `--out-md` で比較サマリの Markdown（回帰一覧 + scope 表）を出力できる。
 ### 17.4 Smoke / history / CI
 
-- `prefab-sentinel validate smoke-batch` は `bridge_smoke_samples.py` と同じ複数ターゲット実行（retry / timeout / summary 出力）を CLI から実行できる。
-- `prefab-sentinel validate smoke-batch --timeout-profile <json>` は `smoke-history` の timeout profile を読み込み、明示指定がないターゲットの timeout 既定値として適用する（優先順: target 指定 > 全体指定 > profile）。
-- `prefab-sentinel validate smoke-batch --avatar-expected-code CODE --world-expected-code CODE` は `response.code` をターゲット別に検証し、期待値不一致時は `matched_expectation=false` として fail-fast で失敗扱いにする（`summary.json` と `summary.md` に `expected_code` / `actual_code` / `code_matches` を出力）。
-- `prefab-sentinel validate smoke-batch --avatar-expected-applied N --world-expected-applied N` は `response.data.applied` をターゲット別に検証し、期待値不一致時は `matched_expectation=false` として fail-fast で失敗扱いにする（`summary.json` と `summary.md` に `expected_applied` / `actual_applied` / `applied_matches` を出力）。
-- `prefab-sentinel validate smoke-batch --expect-applied-from-plan` は patch plan 全体の `ops` 件数を期待適用件数として自動採用する（`--*-expected-applied` 未指定時のみ。`--*-expect-failure` ケースは `skipped_expect_failure` として除外）。
+- `python -m prefab_sentinel.smoke_batch` は `bridge_smoke_samples.py` と同じ複数ターゲット実行（retry / timeout / summary 出力）を CLI から実行できる。
+- `smoke-batch --timeout-profile <json>` は `smoke-history` の timeout profile を読み込み、明示指定がないターゲットの timeout 既定値として適用する（優先順: target 指定 > 全体指定 > profile）。
+- `smoke-batch --avatar-expected-code CODE --world-expected-code CODE` は `response.code` をターゲット別に検証し、期待値不一致時は `matched_expectation=false` として fail-fast で失敗扱いにする（`summary.json` と `summary.md` に `expected_code` / `actual_code` / `code_matches` を出力）。
+- `smoke-batch --avatar-expected-applied N --world-expected-applied N` は `response.data.applied` をターゲット別に検証し、期待値不一致時は `matched_expectation=false` として fail-fast で失敗扱いにする（`summary.json` と `summary.md` に `expected_applied` / `actual_applied` / `applied_matches` を出力）。
+- `smoke-batch --expect-applied-from-plan` は patch plan 全体の `ops` 件数を期待適用件数として自動採用する（`--*-expected-applied` 未指定時のみ。`--*-expect-failure` ケースは `skipped_expect_failure` として除外）。
 - `scripts/bridge_smoke_samples.py` は `unity_bridge_smoke.py` を avatar / world 複数ケースで連続実行し、`reports/bridge_smoke/<target>/response.json` と `unity.log`、集計 `summary.json`（任意 `summary.md`）を決定的なパスで出力できる。既定では repo 内の `config/bridge_smoke/avatar_prefab_create.json` / `world_material_create.json` を plan に使い、Unity project path は sibling ディレクトリ `../UnityTool_sample/avatar` / `../UnityTool_sample/world` を前提とする。`--max-retries` / `--retry-delay-sec` でターゲットごとの一時失敗を再試行でき、`--avatar-unity-timeout-sec` / `--world-unity-timeout-sec` で target 別 timeout を調整できる。`summary` の各ケースには `attempts` と `duration_sec` を含み、timeout tuning の根拠にできる。
 - `scripts/smoke_summary_to_csv.py` は `bridge_smoke_samples.py` の `summary.json` 群を集約して、target 別の duration / attempts / failure 傾向を CSV と Markdown decision table として出力できる。`--out-timeout-profile` を指定すると、観測値ベースの timeout 推奨値（`recommended_cli_arg` 付き）を JSON で出力でき、推奨 timeout に対する履歴カバレッジ（`timeout_breach_count` / `timeout_coverage_pct`）も確認できる。
-- `prefab-sentinel report smoke-history` は `scripts/smoke_summary_to_csv.py` と同等の集計 / 推奨 timeout 出力を CLI から直接実行できる。
-- `prefab-sentinel report smoke-history` は code アサーション情報（`expected_code` / `actual_code` / `code_matches`）と apply アサーション情報（`expected_applied` / `expected_applied_source` / `actual_applied` / `applied_matches`）を CSV 出力に含め、Markdown には target 別の `code_mismatches` / `code_pass_pct` と `applied_mismatches` / `applied_pass_pct`、さらに `observed_timeout_breaches` / `observed_timeout_coverage_pct` を表示する。
-- `prefab-sentinel report smoke-history --max-code-mismatches N --min-code-pass-pct P --max-applied-mismatches N --min-applied-pass-pct P --max-observed-timeout-breaches N --min-observed-timeout-coverage-pct P --max-observed-timeout-breaches-per-target N --min-observed-timeout-coverage-pct-per-target P --max-profile-timeout-breaches N --min-profile-timeout-coverage-pct P --max-profile-timeout-breaches-per-target N --min-profile-timeout-coverage-pct-per-target P` は code / apply アサーション品質ゲート、観測 timeout 品質ゲート（全体 + target 別の `duration_sec > unity_timeout_sec`）、および timeout profile 品質ゲート（全体 + target 別の `timeout_breach_count` / `timeout_coverage_pct`）を有効化し、閾値違反時は CSV / Markdown を出力したうえで exit code 1 を返す。
+- `python -m prefab_sentinel.smoke_history` は `scripts/smoke_summary_to_csv.py` と同等の集計 / 推奨 timeout 出力を直接実行できる。
+- `python -m prefab_sentinel.smoke_history` は code アサーション情報（`expected_code` / `actual_code` / `code_matches`）と apply アサーション情報（`expected_applied` / `expected_applied_source` / `actual_applied` / `applied_matches`）を CSV 出力に含め、Markdown には target 別の `code_mismatches` / `code_pass_pct` と `applied_mismatches` / `applied_pass_pct`、さらに `observed_timeout_breaches` / `observed_timeout_coverage_pct` を表示する。
+- `smoke-history --max-code-mismatches N --min-code-pass-pct P --max-applied-mismatches N --min-applied-pass-pct P --max-observed-timeout-breaches N --min-observed-timeout-coverage-pct P --max-observed-timeout-breaches-per-target N --min-observed-timeout-coverage-pct-per-target P --max-profile-timeout-breaches N --min-profile-timeout-coverage-pct P --max-profile-timeout-breaches-per-target N --min-profile-timeout-coverage-pct-per-target P` は code / apply アサーション品質ゲート、観測 timeout 品質ゲート（全体 + target 別の `duration_sec > unity_timeout_sec`）、および timeout profile 品質ゲート（全体 + target 別の `timeout_breach_count` / `timeout_coverage_pct`）を有効化し、閾値違反時は CSV / Markdown を出力したうえで exit code 1 を返す。
 - `scripts/run_unit_tests.py` は `unittest-parallel` を使って unit test を並列実行する共通入口で、既定では `-s tests -t . -v -j 0` を使う。`python -m pip install -e ".[test]"` または `uv run --extra test python scripts/run_unit_tests.py` で実行できる。追加引数はそのまま `python -m unittest_parallel` に渡すので、`python scripts/run_unit_tests.py -j 4 -k patch_apply` のように絞り込みや job 数調整もできる。
-- `.github/workflows/ci.yml` は `lint`（`ruff check` + `mypy`）、`python scripts/run_unit_tests.py`、`bridge-smoke-contract`（`prefab-sentinel validate smoke-batch` の expected-failure + expected-code 実行 + `prefab-sentinel report smoke-history` の code / timeout / profile 品質ゲート（`max_code_mismatches=0` / `min_code_pass_pct=100` / `max_observed_timeout_breaches=0` / `min_observed_timeout_coverage_pct=100` / `max_observed_timeout_breaches_per_target=0` / `min_observed_timeout_coverage_pct_per_target=100` / `max_profile_timeout_breaches=0` / `min_profile_timeout_coverage_pct=100` / `max_profile_timeout_breaches_per_target=0` / `min_profile_timeout_coverage_pct_per_target=100`）付き decision table / timeout profile 生成 + artifact 保存）を自動実行する。
-- `.github/workflows/unity-smoke.yml` は `workflow_dispatch` 専用で self-hosted Windows Unity ランナー上の実 Unity smoke（`prefab-sentinel validate smoke-batch` 非期待失敗モード）を実行し、`unity-smoke-summary` / `unity-smoke-avatar` / `unity-smoke-world` の分割 artifact で保存する。`unity-smoke-summary` には `summary.json` / `summary.md` に加えて `history.csv` / `history.md` / `timeout_profile.json`（`prefab-sentinel report smoke-history` 生成）を含む。`targets`（`all|avatar|world`）と入力パスの preflight 検証を備え、`timeout_profile_path` + `unity_timeout_sec` + `avatar/world` 個別 timeout 入力で batchmode timeout を調整できる。`history_duration_percentile` / `history_timeout_multiplier` / `history_timeout_slack_sec` / `history_timeout_min_sec` / `history_timeout_round_sec` で timeout profile policy ノブを workflow_dispatch から調整でき、これらの数値範囲は preflight で fail-fast 検証される。`avatar_expected_code` / `world_expected_code` 入力で target 別 code assertion を有効化でき、`max_code_mismatches` / `min_code_pass_pct` で smoke-history の code 品質ゲートを任意で有効化できる。`expect_applied_from_plan=true`（既定）では plan `ops` 件数を適用件数として自動検証でき、`max_applied_mismatches=0` / `min_applied_pass_pct=100` / `max_observed_timeout_breaches=0` / `min_observed_timeout_coverage_pct=100` / `max_observed_timeout_breaches_per_target=0` / `min_observed_timeout_coverage_pct_per_target=100` / `max_profile_timeout_breaches=0` / `min_profile_timeout_coverage_pct=100` / `max_profile_timeout_breaches_per_target=0` / `min_profile_timeout_coverage_pct_per_target=100`（既定）で smoke-history の品質ゲートも有効化される。さらに `run_window_start_utc_hour` / `run_window_end_utc_hour` を指定すると、UTC 実行ウィンドウ外では smoke 実行をスキップできる。
+- `.github/workflows/ci.yml` は `lint`（`ruff check` + `mypy`）、`python scripts/run_unit_tests.py`、`bridge-smoke-contract`（`python -m prefab_sentinel.smoke_batch` の expected-failure + expected-code 実行 + `python -m prefab_sentinel.smoke_history` の code / timeout / profile 品質ゲート付き decision table / timeout profile 生成 + artifact 保存）を自動実行する。
+- `.github/workflows/unity-smoke.yml` は `workflow_dispatch` 専用で self-hosted Windows Unity ランナー上の実 Unity smoke（`python -m prefab_sentinel.smoke_batch` 非期待失敗モード）を実行し、`unity-smoke-summary` / `unity-smoke-avatar` / `unity-smoke-world` の分割 artifact で保存する。`unity-smoke-summary` には `summary.json` / `summary.md` に加えて `history.csv` / `history.md` / `timeout_profile.json`（`python -m prefab_sentinel.smoke_history` 生成）を含む。`targets`（`all|avatar|world`）と入力パスの preflight 検証を備え、`timeout_profile_path` + `unity_timeout_sec` + `avatar/world` 個別 timeout 入力で batchmode timeout を調整できる。さらに `run_window_start_utc_hour` / `run_window_end_utc_hour` を指定すると、UTC 実行ウィンドウ外では smoke 実行をスキップできる。
 - 実 Unity 用のサンプルプロジェクトは sibling ディレクトリ `../UnityTool_sample` にあり、avatar 用と world 用の両方を含む前提で運用する。
 ### 17.5 Patch / attestation
-
-- `patch hash` は plan JSON を検証したうえで SHA-256 digest を出力する（`--format json` 対応）。
-- `patch sign` は plan JSON を検証したうえで HMAC-SHA256 署名を出力する（`--key-env` / `--key-file` / `--format json` 対応）。
-- `patch attest` は plan の sha256 と任意の署名を attestation JSON として出力できる（`--unsigned` / `--out`）。
-- `patch verify` は SHA-256 / HMAC-SHA256 の一致検証を行い、検証失敗時は非 0 終了コードを返す（`--format json` / `text`）。
-- `patch verify` は `--attestation-file` から期待値を読み取って照合できる。
 - `patch apply` は plan JSON のスキーマ検証と `dry_run_patch` プレビューを実装済み（open mode: prefab `set` / `insert_array_element` / `remove_array_element`、material / ScriptableObject root asset mutation、scene `open_scene` / hierarchy / component / `save_scene`、prefab create mode: `create_prefab` / `create_root` / `create_game_object` / `rename_object` / `reparent` / `add_component` / `find_component` / `remove_component` / `save`、material / ScriptableObject create mode: `create_asset` / `save` + mutation op、scene create mode: `create_scene` / `create_game_object` / `instantiate_prefab` / `rename_object` / `reparent` / `add_component` / `find_component` / `remove_component` / `save_scene`）。
 - prefab create mode の mutation op（`set` / `insert_array_element` / `remove_array_element`）は `component` selector ではなく、create mode 中に確保した component `$handle` を `target` に指定して適用する。
 - material / ScriptableObject の open mode mutation は root asset `$asset` を `target` に指定し、create mode では `create_asset` が返す asset `$handle` を `target` に指定して適用する。
 - scene mode は予約済み `$scene` handle を root parent として使い、hierarchy op の `parent` に指定する。scene 内 mutation op は `add_component` / `find_component` が返す component `$handle` を `target` に指定して適用する。
 - `patch apply` は `--out-report` 指定時に結果 envelope を JSON ファイルに保存する（`--confirm` 時は必須）。
 - `patch apply` は非 dry-run 時に `--confirm` と `--change-reason` を要求し、JSON ターゲット（`.json`）は内蔵バックエンドで実編集する。
-- `patch apply` は `--attestation-file` から期待値（sha256 / signature）を読み取って適用前照合できる（CLI 引数の `--plan-sha256` / `--plan-signature` が優先）。
-- `patch apply` は `--plan-sha256` 指定時に plan ファイル内容の SHA-256 を照合し、不一致なら適用前に停止する。
-- `patch apply` は `--plan-signature` 指定時に HMAC-SHA256 署名を照合し、不一致なら適用前に停止する（既定キー環境変数: `UNITYTOOL_PLAN_SIGNING_KEY`）。
-- `patch apply` は `--scope` 指定時に `scan_broken_references` を事前実行し、`error` / `critical` で fail-fast 停止する。
-- `patch apply` は `.prefab` ターゲットで `list_overrides` を事前実行し、`error` / `critical` で fail-fast 停止する。
-- `patch apply` は `--runtime-scene` 指定時に `compile_udonsharp` / `run_clientsim` / ログ分類 / `assert_no_critical_errors` を後段実行する。
-- `patch apply` は Unity ターゲット（`.prefab` / `.unity` / `.asset` など）に対して `UNITYTOOL_PATCH_BRIDGE` 経由の外部 bridge を使って適用できる。
-- `patch apply` は Unity bridge 未設定時に Unity ターゲットを `SER_UNSUPPORTED_TARGET` で停止する（Unity YAML の直接編集は行わない）。
+- `patch_apply` MCP ツールは attestation ファイルから期待値（sha256 / signature）を読み取って適用前照合できる。
+- `patch_apply` MCP ツールは scope 指定時に `scan_broken_references` を事前実行し、`error` / `critical` で fail-fast 停止する。
+- `patch_apply` MCP ツールは `.prefab` ターゲットで `list_overrides` を事前実行し、`error` / `critical` で fail-fast 停止する。
+- `patch_apply` MCP ツールは Unity ターゲット（`.prefab` / `.unity` / `.asset` など）に対して `UNITYTOOL_PATCH_BRIDGE` 経由の外部 bridge を使って適用できる。
 - `UNITYTOOL_PATCH_BRIDGE` は JSON 入力（stdin） / JSON 出力（stdout）の bridge コマンドを指定する（外部 bridge request `protocol_version: 2`）。
-- `patch generate circle` はパッチ計画を自動生成する。円形配置の子オブジェクトを持つ Prefab を作成する計画を出力する（`--output` / `--count` / `--radius` 必須、`--root-name` / `--child-name` / `--scale` / `--axis` / `--out` 任意）。生成結果は `normalize_patch_plan()` で検証済み。
-
-```bash
-# パッチ計画の自動生成（circle レイアウト）
-uv run prefab-sentinel patch generate circle --output Assets/Circle.prefab --root-name Circle --count 12 --radius 3.0 --out circle_plan.json
-uv run prefab-sentinel patch generate circle --output Assets/Ring.prefab --count 8 --radius 2.0 --child-name Node --scale 0.5 --axis xy
-```
 
 ### 17.6 `patch apply --confirm --out-report` の出力例
 
@@ -1003,38 +902,22 @@ before / after diff + validation steps の抜粋:
 - 配列操作パスの診断は `.Array.data` 形式を厳密検証し、`.Array.size` / index 付き誤指定時はヒント付きで停止する。
 - fixed buffer 配列に対する `insert_array_element` / `remove_array_element` は未対応として明示的に fail-fast 停止し、要素更新は `set` で個別要素パスを指定する方針とする。
 - patch plan v2 は任意の `postconditions` 配列を受け付け、`patch apply` 完了前に検証する。現状の対応型は `asset_exists`（`resource` または `path`）と `broken_refs`（`scope`, `expected_count`, `exclude_patterns`, `ignore_asset_guids`）で、不一致時は fail-fast で停止する。
-- `validate runtime` は `compile_udonsharp` / `run_clientsim` / `collect_unity_console` / `classify_errors` / `assert_no_critical_errors` を順に実行する。Unity batchmode 実行が設定されていれば UdonSharp compile と ClientSim を実行し、未設定環境では skip 応答を返したうえで log 分類へ進む。
-- `validate bridge-smoke` は patch plan を bridge request へ変換して `tools/unity_patch_bridge.py` を実行し、`--expect-failure` 判定・`--expected-code` の `response.code` 検証・`--expected-applied` / `--expect-applied-from-plan` の `response.data.applied` 検証・`--out` 保存までを CLI 本体から実行できる（code 検証有効時は出力 `data` に `expected_code` / `actual_code` / `code_matches`、apply 検証有効時は `expected_applied` / `expected_applied_source` / `actual_applied` / `applied_matches` を付与。`--expect-applied-from-plan` は plan 全体の `ops` 件数を使い、`--expect-failure` 指定時に自動スキップ）。
-- `report export --format md` は `VALIDATE_RUNTIME_RESULT` payload を入力した場合、Runtime Validation 要約（分類件数・severity 内訳・カテゴリ表）を追加出力する。
+- `validate_runtime` MCP ツールは `compile_udonsharp` / `run_clientsim` / `collect_unity_console` / `classify_errors` / `assert_no_critical_errors` を順に実行する。Unity batchmode 実行が設定されていれば UdonSharp compile と ClientSim を実行し、未設定環境では skip 応答を返したうえで log 分類へ進む。
 
-```bash
-uv run prefab-sentinel report export --input reports/input.json --format md --out reports/latest.md
-uv run prefab-sentinel report export --input reports/input.json --format md --out reports/latest.md --md-max-usages 100
-uv run prefab-sentinel report export --input reports/input.json --format md --out reports/latest.md --md-omit-usages
-uv run prefab-sentinel report export --input reports/input.json --format md --out reports/latest.md --md-max-steps 20
-uv run prefab-sentinel report export --input reports/input.json --format md --out reports/latest.md --md-omit-steps
-uv run prefab-sentinel report export --input reports/input.json --format csv --out reports/latest.csv
-uv run prefab-sentinel report export --input reports/input.json --format csv --out reports/latest.csv --csv-include-summary
-uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel report export --input reports/input.json --format json --out reports/latest.json
-```
+### 17.8 read-only 検査ツール詳細
 
-### 17.8 read-only 検査コマンド詳細
-
-- `inspect variant` は Prefab chain / overrides / stale 候補（重複 override・`Array.size` 不整合）を返す。
-- `inspect where-used` は GUID / asset の参照元を scope 指定で検索し、`max_usages` 超過分を `truncated_usages` に集計する。
-- `validate refs` は `missing_asset` / `missing_local_id` を検出する。
-- `validate refs` は既定でサマリーのみ返し、診断一覧は `--details` 指定時のみ返す（重い出力を抑制）。
+- `inspect_variant` は Prefab chain / overrides / stale 候補（重複 override・`Array.size` 不整合）を返す。
+- `find_referencing_assets` は GUID / asset の参照元を scope 指定で検索し、`max_usages` 超過分を `truncated_usages` に集計する。
+- `validate_refs` は `missing_asset` / `missing_local_id` を検出する。
 - Unity 組み込み GUID（例: `0000000000000000e000000000000000` / `f000...`）は欠落判定から除外する。
 - GUID インデックスは scope が属する Unity プロジェクトルート（最寄り `Assets` 親）で構築し、`Library` / `Logs` / `Temp` / `obj` など既定除外ディレクトリは走査しない。
-- `validate refs` の結果には `scan_project_root`（GUID インデックスに使った Unity プロジェクトルート）を含む。
+- `validate_refs` の結果には `scan_project_root`（GUID インデックスに使った Unity プロジェクトルート）を含む。
 - 外部 `*.prefab` 参照の fileID 検証は誤検知回避のため既定でスキップし、件数を `skipped_external_prefab_fileid_checks` に集計する。
-- `validate refs` の `categories` はユニーク問題件数（例: missing GUID 単位）を返し、発生回数は `categories_occurrences` / `broken_occurrences` で確認する。
+- `validate_refs` の `categories` はユニーク問題件数（例: missing GUID 単位）を返し、発生回数は `categories_occurrences` / `broken_occurrences` で確認する。
 - ノイズ判定に使えるよう、`top_missing_asset_guids` に missing GUID 上位を返す。
-- `suggest ignore-guids` は `top_missing_asset_guids` から閾値ベースで無視候補 GUID を提案する（適用は手動判断前提）。候補は `decision_required` として返却する。
-- `--ignore-guid` / `--ignore-guid-file` で missing GUID を一時的に無視でき、集計は `ignored_missing_asset_occurrences` / `top_ignored_missing_asset_guids` で確認できる。
-- 候補採用を継続運用する場合は `--out-ignore-guid-file` で ignore リストへ追記して再利用できる。
-- `where_used` も同じ既定除外を適用し、`Library` など非本番スコープを走査しない。
-- 書き込み操作は `patch apply --confirm`、Unity bridge 経由の `.prefab` / `.unity` 適用、`validate runtime` で利用可能。
+- `ignore_asset_guids` パラメータで missing GUID を一時的に無視でき、集計は `ignored_missing_asset_occurrences` / `top_ignored_missing_asset_guids` で確認できる。
+- `find_referencing_assets` も同じ既定除外を適用し、`Library` など非本番スコープを走査しない。
+- 書き込み操作は `patch_apply`（confirm モード）、`set_property`、`add_component`、`remove_component`、`revert_overrides` の各 MCP ツールで利用可能。
 
 ---
 
