@@ -475,6 +475,10 @@ class InspectWiringVariantTests(unittest.TestCase):
                 ]
             },
         )
+        orch.prefab_variant.list_overrides.return_value = _ok_response(
+            "PVR_OVERRIDES_OK",
+            {"overrides": [], "override_count": 0},
+        )
         with patch(
             "prefab_sentinel.orchestrator.find_project_root",
             side_effect=Exception("no project"),
@@ -533,6 +537,118 @@ class InspectWiringVariantTests(unittest.TestCase):
         self.assertNotIn("is_variant", result.data)
         # Component count should be 0 (Variant text has no MonoBehaviours)
         self.assertEqual(0, result.data["component_count"])
+
+
+class InspectWiringVariantOverrideAnnotationTests(unittest.TestCase):
+    """inspect_wiring should annotate components/fields with Variant override info."""
+
+    BASE_GUID = "aabbccddaabbccddaabbccddaabbccdd"
+
+    def _make_variant_text(self) -> str:
+        return (
+            "%YAML 1.1\n"
+            "--- !u!1001 &100100000\n"
+            "PrefabInstance:\n"
+            f"  m_SourcePrefab: {{fileID: 100100000, guid: {self.BASE_GUID}, type: 3}}\n"
+            "  m_Modification:\n"
+            "    m_Modifications: []\n"
+        )
+
+    def _make_base_text(self) -> str:
+        from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
+
+        return (
+            YAML_HEADER
+            + make_gameobject("100", "BaseObj", ["200"])
+            + make_monobehaviour("200", "100")
+            + "  myRef: {fileID: 100}\n"
+            + "  otherRef: {fileID: 100}\n"
+        )
+
+    def test_variant_override_count_in_response(self) -> None:
+        """Component with overrides should have override_count in response."""
+        import tempfile
+
+        base_text = self._make_base_text()
+        variant_text = self._make_variant_text()
+
+        with tempfile.NamedTemporaryFile(
+            suffix=".prefab", mode="w", delete=False, prefix="base_"
+        ) as base_f:
+            base_f.write(base_text)
+            base_f.flush()
+            base_path = base_f.name
+
+        with tempfile.NamedTemporaryFile(
+            suffix=".prefab", mode="w", delete=False, prefix="variant_"
+        ) as var_f:
+            var_f.write(variant_text)
+            var_f.flush()
+            variant_path = var_f.name
+
+        orch = _make_orchestrator()
+        orch.prefab_variant.resolve_prefab_chain.return_value = _ok_response(
+            "CHAIN_OK",
+            {
+                "chain": [
+                    {"path": variant_path, "guid": "variant_guid"},
+                    {"path": base_path, "guid": self.BASE_GUID},
+                ]
+            },
+        )
+        # list_overrides returns overrides targeting the MonoBehaviour (fileID 200)
+        orch.prefab_variant.list_overrides.return_value = _ok_response(
+            "PVR_OVERRIDES_OK",
+            {
+                "overrides": [
+                    {"target_file_id": "200", "property_path": "myRef.fileID"},
+                    {"target_file_id": "200", "property_path": "myRef.guid"},
+                ],
+                "override_count": 2,
+            },
+        )
+        with patch(
+            "prefab_sentinel.orchestrator.find_project_root",
+            side_effect=Exception("no project"),
+        ):
+            result = orch.inspect_wiring(variant_path)
+
+        self.assertTrue(result.success)
+        comps = result.data["components"]
+        self.assertEqual(len(comps), 1)
+        self.assertEqual(comps[0]["override_count"], 2)
+
+        # myRef should be marked overridden, otherRef should not
+        fields_by_name = {f["name"]: f for f in comps[0]["fields"]}
+        self.assertTrue(fields_by_name["myRef"].get("is_overridden"))
+        self.assertNotIn("is_overridden", fields_by_name["otherRef"])
+
+    def test_non_variant_no_override_fields(self) -> None:
+        """Non-variant should not have override_count or is_overridden in response."""
+        import tempfile
+        from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
+
+        text = (
+            YAML_HEADER
+            + make_gameobject("100", "Obj", ["200"])
+            + make_monobehaviour("200", "100")
+            + "  ref: {fileID: 100}\n"
+        )
+        with tempfile.NamedTemporaryFile(suffix=".prefab", mode="w", delete=False) as f:
+            f.write(text)
+            f.flush()
+            orch = _make_orchestrator()
+            with patch(
+                "prefab_sentinel.orchestrator.find_project_root",
+                side_effect=Exception("no project"),
+            ):
+                result = orch.inspect_wiring(f.name)
+
+        comps = result.data["components"]
+        self.assertEqual(len(comps), 1)
+        self.assertNotIn("override_count", comps[0])
+        for fd in comps[0]["fields"]:
+            self.assertNotIn("is_overridden", fd)
 
 
 class InspectWhereUsedTests(unittest.TestCase):

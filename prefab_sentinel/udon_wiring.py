@@ -53,6 +53,7 @@ class WiringField:
     line: int
     file_id: str
     guid: str
+    is_overridden: bool = False
 
 
 @dataclass(slots=True)
@@ -64,6 +65,7 @@ class ComponentWiring:
     block_start_line: int
     is_udon_sharp: bool
     backing_udon_file_id: str
+    override_count: int = 0
 
 
 @dataclass(slots=True)
@@ -244,8 +246,17 @@ def analyze_wiring(
     file_path: str,
     *,
     udon_only: bool = False,
+    override_map: dict[str, set[str]] | None = None,
 ) -> WiringResult:
-    """Analyze MonoBehaviour field wiring in a Unity YAML file."""
+    """Analyze MonoBehaviour field wiring in a Unity YAML file.
+
+    Args:
+        text: Raw Unity YAML content.
+        file_path: Path to the source file (used in diagnostics).
+        udon_only: When ``True``, only report UdonSharp components.
+        override_map: Optional mapping of component fileID → set of
+            overridden property paths (used for Variant annotation).
+    """
     blocks = split_yaml_blocks(text)
     local_file_ids = {block.file_id for block in blocks}
     game_objects = parse_game_objects(blocks)
@@ -257,6 +268,15 @@ def analyze_wiring(
             continue
         if udon_only and not parsed.is_udon_sharp:
             continue
+        # Annotate override information from Variant
+        if override_map is not None:
+            ov_paths = override_map.get(parsed.file_id, set())
+            parsed.override_count = len(ov_paths)
+            for field in parsed.fields:
+                field.is_overridden = any(
+                    pp == field.name or pp.startswith(field.name + ".")
+                    for pp in ov_paths
+                )
         components.append(parsed)
 
     if not components:

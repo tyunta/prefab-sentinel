@@ -617,12 +617,28 @@ class Phase1Orchestrator:
                 data={"target_path": target_path, "file_type": suffix, "read_only": True},
             )
 
-        text, is_variant, base_prefab_path, _ = self._resolve_variant_base(
+        text, is_variant, base_prefab_path, chain_diags = self._resolve_variant_base(
             text, target_path, "INSPECT_WIRING",
         )
+        override_map: dict[str, set[str]] | None = None
+        diagnostics: list[Diagnostic] = list(chain_diags)
 
-        result = analyze_wiring(text, target_path, udon_only=udon_only)
-        diagnostics: list[Diagnostic] = (
+        if is_variant:
+            ov_resp = self.prefab_variant.list_overrides(target_path)
+            if ov_resp.success:
+                omap: dict[str, set[str]] = {}
+                for ov in ov_resp.data.get("overrides", []):
+                    fid = ov.get("target_file_id", "")
+                    pp = ov.get("property_path", "")
+                    if fid and pp:
+                        omap.setdefault(fid, set()).add(pp)
+                override_map = omap
+            diagnostics.extend(ov_resp.diagnostics)
+
+        result = analyze_wiring(
+            text, target_path, udon_only=udon_only, override_map=override_map,
+        )
+        diagnostics.extend(
             result.null_references
             + result.internal_broken_refs
             + result.duplicate_references
@@ -644,8 +660,20 @@ class Phase1Orchestrator:
         except Exception as exc:  # best-effort: project root or GUID index may fail
             logging.getLogger(__name__).debug("GUID index build failed (best-effort): %s", exc)
 
-        component_summaries = [
-            {
+        component_summaries = []
+        for comp in result.components:
+            field_dicts = []
+            for f in comp.fields:
+                fd: dict[str, object] = {
+                    "name": f.name,
+                    "file_id": f.file_id,
+                    "guid": f.guid,
+                    "line": f.line,
+                }
+                if f.is_overridden:
+                    fd["is_overridden"] = True
+                field_dicts.append(fd)
+            cd: dict[str, object] = {
                 "file_id": comp.file_id,
                 "game_object_file_id": comp.game_object_file_id,
                 "game_object_name": _go_name(comp.game_object_file_id),
@@ -653,18 +681,11 @@ class Phase1Orchestrator:
                 "script_name": guid_to_name.get(comp.script_guid, ""),
                 "is_udon_sharp": comp.is_udon_sharp,
                 "field_count": len(comp.fields),
-                "fields": [
-                    {
-                        "name": f.name,
-                        "file_id": f.file_id,
-                        "guid": f.guid,
-                        "line": f.line,
-                    }
-                    for f in comp.fields
-                ],
+                "fields": field_dicts,
             }
-            for comp in result.components
-        ]
+            if comp.override_count > 0:
+                cd["override_count"] = comp.override_count
+            component_summaries.append(cd)
         data: dict[str, object] = {
             "target_path": target_path,
             "udon_only": udon_only,

@@ -667,5 +667,65 @@ class TestExtractMonoBehaviourFieldNames(unittest.TestCase):
         self.assertIn("speed", names)
 
 
+class AnalyzeWiringOverrideMapTests(unittest.TestCase):
+    """Tests for Variant override annotation via override_map parameter."""
+
+    def test_no_override_map_defaults(self) -> None:
+        """Without override_map, override_count=0 and is_overridden=False."""
+        result = analyze_wiring(BASIC_MONOBEHAVIOUR, "test.prefab")
+        for comp in result.components:
+            self.assertEqual(comp.override_count, 0)
+            for f in comp.fields:
+                self.assertFalse(f.is_overridden)
+
+    def test_empty_override_map_no_effect(self) -> None:
+        """Empty override_map should not annotate anything."""
+        result = analyze_wiring(BASIC_MONOBEHAVIOUR, "test.prefab", override_map={})
+        for comp in result.components:
+            self.assertEqual(comp.override_count, 0)
+            for f in comp.fields:
+                self.assertFalse(f.is_overridden)
+
+    def test_override_count_propagates(self) -> None:
+        """override_map with component fileID sets override_count."""
+        override_map = {"100001": {"myRef", "myNullRef"}}
+        result = analyze_wiring(
+            BASIC_MONOBEHAVIOUR, "test.prefab", override_map=override_map,
+        )
+        self.assertEqual(len(result.components), 1)
+        self.assertEqual(result.components[0].override_count, 2)
+
+    def test_field_is_overridden_exact_match(self) -> None:
+        """Field is_overridden=True when property_path exactly matches field name."""
+        override_map = {"100001": {"myRef"}}
+        result = analyze_wiring(
+            BASIC_MONOBEHAVIOUR, "test.prefab", override_map=override_map,
+        )
+        comp = result.components[0]
+        overridden = {f.name: f.is_overridden for f in comp.fields}
+        self.assertTrue(overridden["myRef"])
+        self.assertFalse(overridden["myNullRef"])
+
+    def test_field_is_overridden_prefix_match(self) -> None:
+        """Field is_overridden=True when property_path starts with field.name + '.'."""
+        override_map = {"100001": {"myRef.fileID"}}
+        result = analyze_wiring(
+            BASIC_MONOBEHAVIOUR, "test.prefab", override_map=override_map,
+        )
+        comp = result.components[0]
+        overridden = {f.name: f.is_overridden for f in comp.fields}
+        self.assertTrue(overridden["myRef"])
+        self.assertFalse(overridden["myNullRef"])
+
+    def test_unmatched_component_fileid_ignored(self) -> None:
+        """override_map with non-matching fileID should not annotate any component."""
+        override_map = {"999999": {"someField"}}
+        result = analyze_wiring(
+            BASIC_MONOBEHAVIOUR, "test.prefab", override_map=override_map,
+        )
+        for comp in result.components:
+            self.assertEqual(comp.override_count, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

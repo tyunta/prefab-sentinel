@@ -70,9 +70,22 @@
 
 ## Phase C: 目マテリアル比較セッション改善 (2026-03-22)
 
-- [ ] Issue 1+5: SKILL.md の component セレクタ誤記修正 + Scene パッチ計画ドキュメント追加 + 数値セレクタバリデーション
-- [ ] Issue 2: `inspect wiring` の Variant 対応 — `inspect_hierarchy` パターンを適用
-- [ ] Issue 4: `editor set-material` コマンド — ランタイムでマテリアルスロット差し替え
+- [x] Issue 1+5: SKILL.md の component セレクタ誤記修正 + Scene パッチ計画ドキュメント追加 + 数値セレクタバリデーション — 既に実装済み (guide/SKILL.md:159-174, :220-239, serialized_object.py:2515-2530)
+- [x] Issue 2: `inspect wiring` の Variant 対応 — `inspect_hierarchy` パターンを適用。コンポーネント override_count + フィールド is_overridden 注釈
+- [x] Issue 4: `editor set-material` コマンド — 既に実装済み (cli.py:844-863, C# HandleSetMaterial:570-615)
+
+## Phase D: セッションレポートから拾った未トラック課題
+
+### 優先度高
+- [ ] `inspect materials` が Variant チェーンで空を返す (renderer_count: 0) — FBX/Model のレンダラーを辿れていない (report_usage_20260322)
+- [ ] WSL inspect パス解決不具合 — bridge-check は通るが inspect 系で Windows パスが解決できない (report_usage_20260322)
+- [ ] Scene ビューのカメラ制御コマンド (`editor camera --orbit yaw=N pitch=N`) — 反復調整ワークフローのボトルネック (report_ribbon_color_matching)
+
+### 優先度中
+- [ ] dry-run でのコンポーネントパス検証 — open モードで実適用時まで失敗が見えない (report_ribbon_color_matching)
+- [ ] guide スキルのパスがバージョン 0.2.19 固定 — プラグインバージョンと連動すべき (report_usage_20260322)
+- [ ] `editor select` が1回だとビューが遠い — 2回実行が必要 (report_usage_20260322)
+- [ ] Scene/Prefab Stage ルート一覧取得 `editor list-roots` (report_ribbon_color_matching)
 
 ## P5: ステートフルセッション (2026-03-24)
 
