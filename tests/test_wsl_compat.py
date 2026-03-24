@@ -345,7 +345,7 @@ class TestFindProjectRootWsl(unittest.TestCase):
 
 
 class TestReadTargetFileWsl(unittest.TestCase):
-    """Verify that _read_target_file converts Windows paths on WSL."""
+    """Verify that _read_target_file resolves paths via resolve_scope_path."""
 
     def setUp(self) -> None:
         is_wsl.cache_clear()
@@ -353,14 +353,21 @@ class TestReadTargetFileWsl(unittest.TestCase):
     def tearDown(self) -> None:
         is_wsl.cache_clear()
 
-    @patch("prefab_sentinel.orchestrator.to_wsl_path")
-    def test_windows_target_path_converted(self, mock_to_wsl: MagicMock) -> None:
-        """Windows path in _read_target_file gets converted via to_wsl_path."""
-        mock_to_wsl.return_value = "/nonexistent/file.prefab"
+    @patch("prefab_sentinel.orchestrator.resolve_scope_path")
+    def test_windows_target_path_converted(self, mock_resolve: MagicMock) -> None:
+        """Windows path in _read_target_file gets resolved via resolve_scope_path."""
+        mock_resolve.return_value = Path("/nonexistent/file.prefab")
         from prefab_sentinel.orchestrator import Phase1Orchestrator
 
-        result = Phase1Orchestrator._read_target_file("D:/Project/file.prefab", "TEST")
-        mock_to_wsl.assert_called_once_with("D:/Project/file.prefab")
+        orch = Phase1Orchestrator(
+            reference_resolver=MagicMock(),
+            prefab_variant=MagicMock(),
+            runtime_validation=MagicMock(),
+            serialized_object=MagicMock(),
+        )
+        orch.prefab_variant.project_root = Path("/fake")
+        result = orch._read_target_file("D:/Project/file.prefab", "TEST")
+        mock_resolve.assert_called_once_with("D:/Project/file.prefab", Path("/fake"))
         # Should return error ToolResponse since file doesn't exist
         self.assertFalse(result.success)
         self.assertEqual("TEST_FILE_NOT_FOUND", result.code)

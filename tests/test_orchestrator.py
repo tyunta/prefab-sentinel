@@ -272,6 +272,52 @@ class DiffVariantTests(unittest.TestCase):
         self.assertEqual(1, diff["base_origin_depth"])
 
 
+class ReadTargetFilePathResolutionTests(unittest.TestCase):
+    """_read_target_file resolves relative paths via project_root."""
+
+    def test_relative_path_resolved_via_project_root(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            assets = Path(tmpdir) / "Assets"
+            assets.mkdir()
+            target = assets / "Test.prefab"
+            target.write_text("%YAML 1.1\n--- !u!1 &100\nGameObject:\n  m_Name: X\n")
+
+            orch = _make_orchestrator()
+            orch.prefab_variant.project_root = Path(tmpdir)
+
+            result = orch._read_target_file("Assets/Test.prefab", "TEST")
+            self.assertIsInstance(result, str)
+            self.assertIn("m_Name: X", result)
+
+    def test_absolute_path_still_works(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target = Path(tmpdir) / "Test.prefab"
+            target.write_text("%YAML 1.1\n--- !u!1 &100\nGameObject:\n  m_Name: Y\n")
+
+            orch = _make_orchestrator()
+            orch.prefab_variant.project_root = Path(tmpdir)
+
+            result = orch._read_target_file(str(target), "TEST")
+            self.assertIsInstance(result, str)
+            self.assertIn("m_Name: Y", result)
+
+    def test_nonexistent_relative_path_returns_error(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orch = _make_orchestrator()
+            orch.prefab_variant.project_root = Path(tmpdir)
+
+            result = orch._read_target_file("Assets/NoSuch.prefab", "TEST")
+            self.assertIsInstance(result, ToolResponse)
+            self.assertFalse(result.success)
+            self.assertEqual("TEST_FILE_NOT_FOUND", result.code)
+
+
 class FileTypeGuardTests(unittest.TestCase):
     def test_inspect_wiring_warns_on_controller_file(self) -> None:
         import tempfile
