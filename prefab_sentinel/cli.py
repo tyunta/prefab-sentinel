@@ -953,6 +953,24 @@ def _build_editor_parser(subparsers: argparse._SubParsersAction) -> None:
     )
 
 
+def _build_serve_parser(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[type-arg]
+    serve_parser = subparsers.add_parser(
+        "serve",
+        help="Start the MCP server for AI agent integration.",
+    )
+    serve_parser.add_argument(
+        "--transport",
+        choices=["stdio", "streamable-http"],
+        default="stdio",
+        help="MCP transport protocol (default: stdio).",
+    )
+    serve_parser.add_argument(
+        "--project-root",
+        default=None,
+        help="Unity project root directory (auto-detected if omitted).",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="prefab-sentinel",
@@ -965,6 +983,7 @@ def build_parser() -> argparse.ArgumentParser:
     _build_patch_parser(subparsers)
     _build_report_parser(subparsers)
     _build_editor_parser(subparsers)
+    _build_serve_parser(subparsers)
     return parser
 
 
@@ -1959,6 +1978,24 @@ def _cmd_editor(args, get_orchestrator, parser) -> int:
     return 0 if result.get("success") else 1
 
 
+# ── serve ────────────────────────────────────────────────────────────
+
+
+def _cmd_serve(args: argparse.Namespace) -> int:
+    """Start the MCP server."""
+    try:
+        from prefab_sentinel.mcp_server import create_server
+    except ImportError:
+        print(
+            "MCP server requires the 'mcp' extra: pip install prefab-sentinel[mcp]",
+            file=sys.stderr,
+        )
+        return 1
+    server = create_server(project_root=args.project_root)
+    server.run(transport=args.transport)
+    return 0
+
+
 # ── main() dispatch ──────────────────────────────────────────────────
 
 
@@ -1970,6 +2007,9 @@ def main(argv: list[str] | None = None) -> int:
         from prefab_sentinel.orchestrator import Phase1Orchestrator
 
         return Phase1Orchestrator.default()
+
+    if args.command == "serve":
+        return _cmd_serve(args)
 
     if args.command == "inspect" and args.inspect_command == "variant":
         return _cmd_inspect_variant(args, get_orchestrator, parser)

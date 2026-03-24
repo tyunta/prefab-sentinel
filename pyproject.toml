@@ -4,18 +4,20 @@ build-backend = "hatchling.build"
 
 [project]
 name = "prefab-sentinel"
-version = "0.2.74"
+version = "0.2.75"
 description = "Prefab Sentinel CLI for safe Unity Prefab/Scene inspection and editing."
 requires-python = ">=3.11"
 readme = "README.md"
 dependencies = []
 
 [project.optional-dependencies]
+mcp = ["mcp>=1.12"]
 test = ["unittest-parallel>=1.6,<2"]
 lint = ["ruff>=0.8", "mypy>=1.13", "bump-my-version>=0.31"]
 
 [project.scripts]
 prefab-sentinel = "prefab_sentinel.cli:main"
+prefab-sentinel-mcp = "prefab_sentinel.mcp_server:main"
 
 [tool.ruff]
 target-version = "py311"
@@ -49,7 +51,7 @@ disable_error_code = ["arg-type", "index", "assignment", "var-annotated", "no-re
 packages = ["prefab_sentinel"]
 
 [tool.bumpversion]
-current_version = "0.2.74"
+current_version = "0.2.75"
 commit = false
 tag = false
 allow_dirty = true
