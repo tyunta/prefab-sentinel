@@ -9,6 +9,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 from prefab_sentinel.mcp_server import create_server
+from prefab_sentinel.session import ProjectSession
 from tests.yaml_helpers import (
     YAML_HEADER,
     make_gameobject,
@@ -1540,6 +1541,81 @@ class TestRemoveComponentTool(unittest.TestCase):
         self.assertEqual("Cube/MeshRenderer", meta["symbol_path"])
         self.assertEqual("MeshRenderer", meta["resolved_component"])
         self.assertEqual("300", meta["file_id"])
+
+
+class TestScopeFallback(unittest.TestCase):
+    """MCP tools use session scope when explicit scope is omitted."""
+
+    def test_validate_refs_passes_resolved_scope(self) -> None:
+        server = create_server()
+        mock_resp = MagicMock()
+        mock_resp.to_dict.return_value = {"success": True, "data": {}}
+        with (
+            patch("prefab_sentinel.session.Phase1Orchestrator") as mock_cls,
+            patch.object(ProjectSession, "resolve_scope", return_value="Assets/Resolved"),
+        ):
+            mock_orch = mock_cls.default.return_value
+            mock_orch.validate_refs.return_value = mock_resp
+            _run(server.call_tool("validate_refs", {"scope": "Assets/Explicit"}))
+            self.assertEqual(
+                "Assets/Resolved",
+                mock_orch.validate_refs.call_args.kwargs["scope"],
+            )
+
+    def test_find_referencing_assets_passes_resolved_scope(self) -> None:
+        server = create_server()
+        mock_resp = MagicMock()
+        mock_resp.to_dict.return_value = {"success": True, "data": {}}
+        with (
+            patch("prefab_sentinel.session.Phase1Orchestrator") as mock_cls,
+            patch.object(ProjectSession, "resolve_scope", return_value="Assets/Fallback"),
+        ):
+            mock_orch = mock_cls.default.return_value
+            mock_orch.inspect_where_used.return_value = mock_resp
+            _run(server.call_tool(
+                "find_referencing_assets",
+                {"asset_or_guid": "abcd1234abcd1234abcd1234abcd1234"},
+            ))
+            self.assertEqual(
+                "Assets/Fallback",
+                mock_orch.inspect_where_used.call_args.kwargs["scope"],
+            )
+
+    def test_validate_field_rename_passes_resolved_scope(self) -> None:
+        server = create_server()
+        mock_resp = MagicMock()
+        mock_resp.to_dict.return_value = {"success": True, "data": {}}
+        with (
+            patch("prefab_sentinel.session.Phase1Orchestrator") as mock_cls,
+            patch.object(ProjectSession, "resolve_scope", return_value="Assets/Resolved"),
+        ):
+            mock_orch = mock_cls.default.return_value
+            mock_orch.validate_field_rename.return_value = mock_resp
+            _run(server.call_tool("validate_field_rename", {
+                "script_path_or_guid": "aabb",
+                "old_name": "speed",
+                "new_name": "velocity",
+            }))
+            self.assertEqual(
+                "Assets/Resolved",
+                mock_orch.validate_field_rename.call_args.kwargs["scope"],
+            )
+
+    def test_check_field_coverage_passes_resolved_scope(self) -> None:
+        server = create_server()
+        mock_resp = MagicMock()
+        mock_resp.to_dict.return_value = {"success": True, "data": {}}
+        with (
+            patch("prefab_sentinel.session.Phase1Orchestrator") as mock_cls,
+            patch.object(ProjectSession, "resolve_scope", return_value="Assets/Resolved"),
+        ):
+            mock_orch = mock_cls.default.return_value
+            mock_orch.check_field_coverage.return_value = mock_resp
+            _run(server.call_tool("check_field_coverage", {"scope": "Assets/Explicit"}))
+            self.assertEqual(
+                "Assets/Resolved",
+                mock_orch.check_field_coverage.call_args.kwargs["scope"],
+            )
 
 
 if __name__ == "__main__":

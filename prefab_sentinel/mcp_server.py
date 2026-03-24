@@ -126,7 +126,16 @@ def create_server(
             "code": "SESSION_ACTIVATED",
             "message": f"Project activated with scope: {scope}",
             "data": result,
-            "diagnostics": [],
+            "diagnostics": [
+                {
+                    "message": (
+                        f"Scope '{scope}' will be used as default for: "
+                        "validate_refs, find_referencing_assets, "
+                        "validate_field_rename, check_field_coverage."
+                    ),
+                    "severity": "info",
+                },
+            ],
         }
 
     @server.tool()
@@ -272,9 +281,10 @@ def create_server(
             max_results: Maximum number of results to return.
         """
         orch = session.get_orchestrator()
+        resolved_scope = session.resolve_scope(scope)
         resp = orch.inspect_where_used(
             asset_or_guid=asset_or_guid,
-            scope=scope,
+            scope=resolved_scope,
             max_usages=max_results,
         )
         return resp.to_dict()
@@ -293,8 +303,9 @@ def create_server(
             max_diagnostics: Cap on the number of diagnostics returned.
         """
         orch = session.get_orchestrator()
+        resolved_scope = session.resolve_scope(scope)
         resp = orch.validate_refs(
-            scope=scope,
+            scope=resolved_scope,
             details=details,
             max_diagnostics=max_diagnostics,
         )
@@ -727,11 +738,12 @@ def create_server(
             scope: Directory to restrict impact search (default: project root).
         """
         orch = session.get_orchestrator()
+        resolved_scope = session.resolve_scope(scope)
         resp = orch.validate_field_rename(
             script_path_or_guid=script_path_or_guid,
             old_name=old_name,
             new_name=new_name,
-            scope=scope,
+            scope=resolved_scope,
         )
         return resp.to_dict()
 
@@ -749,7 +761,8 @@ def create_server(
             scope: Directory or file path to scan.
         """
         orch = session.get_orchestrator()
-        resp = orch.check_field_coverage(scope=scope)
+        resolved_scope = session.resolve_scope(scope)
+        resp = orch.check_field_coverage(scope=resolved_scope)
         return resp.to_dict()
 
     return server
