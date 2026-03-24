@@ -137,6 +137,141 @@ class InspectVariantTests(unittest.TestCase):
         self.assertEqual(4, len(result.data["steps"]))
 
 
+class DiffVariantTests(unittest.TestCase):
+    """Tests for diff_variant() orchestrator method."""
+
+    def _chain_response(
+        self, values: list[dict], chain: list[dict] | None = None,
+    ) -> ToolResponse:
+        return _ok_response(
+            code="PVR_CHAIN_VALUES_WITH_ORIGIN",
+            data={
+                "variant_path": "Assets/Leaf.prefab",
+                "chain": chain or [
+                    {"path": "Assets/Leaf.prefab", "depth": 0},
+                    {"path": "Assets/Base.prefab", "depth": 1},
+                ],
+                "value_count": len(values),
+                "values": values,
+                "read_only": True,
+            },
+        )
+
+    def test_returns_only_leaf_overrides(self) -> None:
+        orch = _make_orchestrator()
+        orch.prefab_variant.resolve_chain_values_with_origin.return_value = (
+            self._chain_response([
+                {"target_file_id": "42", "property_path": "speed",
+                 "value": "5.0", "origin_path": "Assets/Leaf.prefab", "origin_depth": 0},
+                {"target_file_id": "42", "property_path": "speed",
+                 "value": "3.0", "origin_path": "Assets/Base.prefab", "origin_depth": 1},
+                {"target_file_id": "42", "property_path": "health",
+                 "value": "100", "origin_path": "Assets/Base.prefab", "origin_depth": 1},
+            ])
+        )
+        result = orch.diff_variant("Assets/Leaf.prefab")
+        self.assertTrue(result.success)
+        self.assertEqual(1, result.data["diff_count"])
+        diff = result.data["diffs"][0]
+        self.assertEqual("speed", diff["property_path"])
+        self.assertEqual("5.0", diff["variant_value"])
+
+    def test_includes_base_value(self) -> None:
+        orch = _make_orchestrator()
+        orch.prefab_variant.resolve_chain_values_with_origin.return_value = (
+            self._chain_response([
+                {"target_file_id": "42", "property_path": "speed",
+                 "value": "5.0", "origin_path": "Assets/Leaf.prefab", "origin_depth": 0},
+                {"target_file_id": "42", "property_path": "speed",
+                 "value": "3.0", "origin_path": "Assets/Base.prefab", "origin_depth": 1},
+            ])
+        )
+        result = orch.diff_variant("Assets/Leaf.prefab")
+        diff = result.data["diffs"][0]
+        self.assertEqual("3.0", diff["base_value"])
+        self.assertEqual("Assets/Base.prefab", diff["base_origin_path"])
+        self.assertEqual(1, diff["base_origin_depth"])
+
+    def test_new_property_has_no_base(self) -> None:
+        """A property added only in the variant has no base value."""
+        orch = _make_orchestrator()
+        orch.prefab_variant.resolve_chain_values_with_origin.return_value = (
+            self._chain_response([
+                {"target_file_id": "42", "property_path": "newField",
+                 "value": "hello", "origin_path": "Assets/Leaf.prefab", "origin_depth": 0},
+            ])
+        )
+        result = orch.diff_variant("Assets/Leaf.prefab")
+        self.assertEqual(1, result.data["diff_count"])
+        diff = result.data["diffs"][0]
+        self.assertIsNone(diff["base_value"])
+        self.assertIsNone(diff["base_origin_path"])
+
+    def test_non_variant_passes_through_error(self) -> None:
+        orch = _make_orchestrator()
+        orch.prefab_variant.resolve_chain_values_with_origin.return_value = (
+            _error_response("PVR404")
+        )
+        result = orch.diff_variant("Assets/NotExist.prefab")
+        self.assertFalse(result.success)
+        self.assertEqual("PVR404", result.code)
+
+    def test_component_filter(self) -> None:
+        orch = _make_orchestrator()
+        orch.prefab_variant.resolve_chain_values_with_origin.return_value = (
+            self._chain_response([
+                {"target_file_id": "42", "property_path": "moveSpeed",
+                 "value": "5.0", "origin_path": "Assets/Leaf.prefab", "origin_depth": 0},
+                {"target_file_id": "42", "property_path": "moveSpeed",
+                 "value": "3.0", "origin_path": "Assets/Base.prefab", "origin_depth": 1},
+                {"target_file_id": "42", "property_path": "jumpForce",
+                 "value": "10.0", "origin_path": "Assets/Leaf.prefab", "origin_depth": 0},
+                {"target_file_id": "42", "property_path": "jumpForce",
+                 "value": "8.0", "origin_path": "Assets/Base.prefab", "origin_depth": 1},
+            ])
+        )
+        result = orch.diff_variant("Assets/Leaf.prefab", component_filter="move")
+        self.assertEqual(1, result.data["diff_count"])
+        self.assertEqual("moveSpeed", result.data["diffs"][0]["property_path"])
+
+    def test_chain_preserved_in_response(self) -> None:
+        orch = _make_orchestrator()
+        chain = [
+            {"path": "Assets/Leaf.prefab", "depth": 0},
+            {"path": "Assets/Mid.prefab", "depth": 1},
+            {"path": "Assets/Base.prefab", "depth": 2},
+        ]
+        orch.prefab_variant.resolve_chain_values_with_origin.return_value = (
+            self._chain_response([], chain=chain)
+        )
+        result = orch.diff_variant("Assets/Leaf.prefab")
+        self.assertEqual(chain, result.data["chain"])
+        self.assertEqual(0, result.data["diff_count"])
+
+    def test_closest_ancestor_used_as_base(self) -> None:
+        """In a 3-level chain, the mid-level value is used as base, not the root."""
+        orch = _make_orchestrator()
+        orch.prefab_variant.resolve_chain_values_with_origin.return_value = (
+            self._chain_response([
+                {"target_file_id": "42", "property_path": "speed",
+                 "value": "9.0", "origin_path": "Assets/Leaf.prefab", "origin_depth": 0},
+                {"target_file_id": "42", "property_path": "speed",
+                 "value": "7.0", "origin_path": "Assets/Mid.prefab", "origin_depth": 1},
+                {"target_file_id": "42", "property_path": "speed",
+                 "value": "3.0", "origin_path": "Assets/Base.prefab", "origin_depth": 2},
+            ], chain=[
+                {"path": "Assets/Leaf.prefab", "depth": 0},
+                {"path": "Assets/Mid.prefab", "depth": 1},
+                {"path": "Assets/Base.prefab", "depth": 2},
+            ])
+        )
+        result = orch.diff_variant("Assets/Leaf.prefab")
+        diff = result.data["diffs"][0]
+        self.assertEqual("7.0", diff["base_value"])
+        self.assertEqual("Assets/Mid.prefab", diff["base_origin_path"])
+        self.assertEqual(1, diff["base_origin_depth"])
+
+
 class FileTypeGuardTests(unittest.TestCase):
     def test_inspect_wiring_warns_on_controller_file(self) -> None:
         import tempfile

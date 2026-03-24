@@ -46,13 +46,14 @@ class TestToolRegistration(unittest.TestCase):
             "validate_refs",
             "inspect_wiring",
             "inspect_variant",
+            "diff_unity_symbols",
         }
         self.assertEqual(expected, tool_names)
 
     def test_tool_count(self) -> None:
         server = create_server()
         tools = _run(server.list_tools())
-        self.assertEqual(6, len(tools))
+        self.assertEqual(7, len(tools))
 
 
 class TestSymbolTools(unittest.TestCase):
@@ -293,6 +294,201 @@ class TestOrchestratorTools(unittest.TestCase):
             component_filter=None,
             show_origin=True,
         )
+
+
+class TestDiffUnitySymbolsTool(unittest.TestCase):
+    """Test the diff_unity_symbols MCP tool."""
+
+    def test_delegates_to_orchestrator(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.to_dict.return_value = {
+            "success": True,
+            "data": {"diff_count": 1, "diffs": [{"property_path": "speed"}]},
+        }
+        mock_orch = MagicMock()
+        mock_orch.diff_variant.return_value = mock_resp
+
+        server = create_server()
+
+        with patch(
+            "prefab_sentinel.mcp_server.Phase1Orchestrator"
+        ) as mock_cls:
+            mock_cls.default.return_value = mock_orch
+            _, result = _run(server.call_tool(
+                "diff_unity_symbols",
+                {"path": "/some/variant.prefab"},
+            ))
+
+        self.assertTrue(result["success"])
+        mock_orch.diff_variant.assert_called_once_with(
+            variant_path="/some/variant.prefab",
+            component_filter=None,
+        )
+
+    def test_passes_component_filter(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.to_dict.return_value = {"success": True, "data": {"diffs": []}}
+        mock_orch = MagicMock()
+        mock_orch.diff_variant.return_value = mock_resp
+
+        server = create_server()
+
+        with patch(
+            "prefab_sentinel.mcp_server.Phase1Orchestrator"
+        ) as mock_cls:
+            mock_cls.default.return_value = mock_orch
+            _run(server.call_tool(
+                "diff_unity_symbols",
+                {"path": "/v.prefab", "component_filter": "speed"},
+            ))
+
+        mock_orch.diff_variant.assert_called_once_with(
+            variant_path="/v.prefab",
+            component_filter="speed",
+        )
+
+
+class TestFindUnitySymbolShowOrigin(unittest.TestCase):
+    """Test find_unity_symbol with show_origin parameter."""
+
+    def test_show_origin_false_returns_flat_properties(self) -> None:
+        """Default show_origin=False keeps properties as {name: value}."""
+        import tempfile
+
+        text = YAML_HEADER + "\n".join([
+            make_gameobject("100", "Player", ["200", "300"]),
+            make_transform("200", "100"),
+            make_monobehaviour("300", "100", fields={"speed": "5.0"}),
+        ])
+        server = create_server()
+
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "test.prefab"
+            p.write_text(text, encoding="utf-8")
+            _, result = _run(server.call_tool(
+                "find_unity_symbol",
+                {
+                    "path": str(p),
+                    "symbol_path": "Player/MonoBehaviour",
+                    "include_properties": True,
+                },
+            ))
+
+        self.assertTrue(result["success"])
+        self.assertNotIn("show_origin", result)
+        props = result["matches"][0].get("properties", {})
+        # Flat format: {name: value_str}
+        if props:
+            first_val = next(iter(props.values()))
+            self.assertIsInstance(first_val, str)
+
+    def test_show_origin_true_annotates_properties(self) -> None:
+        """show_origin=True changes properties to {name: {value, origin_path, origin_depth}}.
+
+        Uses a MonoBehaviour with a reference field so analyze_wiring()
+        populates properties (it only captures fileID/GUID references).
+        """
+        import tempfile
+
+        # Use a reference field that analyze_wiring will capture
+        text = YAML_HEADER + "\n".join([
+            make_gameobject("100", "Player", ["200", "300"]),
+            make_transform("200", "100"),
+            make_monobehaviour(
+                "300", "100",
+                fields={"targetRef": "{fileID: 100, guid: 00000000000000000000000000000000, type: 2}"},
+            ),
+        ])
+        server = create_server()
+
+        # Mock the orchestrator's prefab_variant to return origin data
+        mock_resp = MagicMock()
+        mock_resp.success = True
+        mock_resp.data = {
+            "values": [
+                {
+                    "target_file_id": "300",
+                    "property_path": "targetRef",
+                    "value": "{fileID: 100, guid: 00000000000000000000000000000000, type: 2}",
+                    "origin_path": "Assets/Leaf.prefab",
+                    "origin_depth": 0,
+                },
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "test.prefab"
+            p.write_text(text, encoding="utf-8")
+
+            with patch(
+                "prefab_sentinel.mcp_server.Phase1Orchestrator"
+            ) as mock_cls:
+                mock_orch = MagicMock()
+                mock_orch.prefab_variant.resolve_chain_values_with_origin.return_value = mock_resp
+                mock_cls.default.return_value = mock_orch
+
+                _, result = _run(server.call_tool(
+                    "find_unity_symbol",
+                    {
+                        "path": str(p),
+                        "symbol_path": "Player/MonoBehaviour",
+                        "show_origin": True,
+                    },
+                ))
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result.get("show_origin"))
+        props = result["matches"][0].get("properties", {})
+        self.assertIn("targetRef", props)
+        self.assertIsInstance(props["targetRef"], dict)
+        self.assertEqual("Assets/Leaf.prefab", props["targetRef"]["origin_path"])
+        self.assertEqual(0, props["targetRef"]["origin_depth"])
+
+    def test_show_origin_on_non_variant_degrades_gracefully(self) -> None:
+        """show_origin=True on a non-variant still returns results (no origin)."""
+        import tempfile
+
+        text = YAML_HEADER + "\n".join([
+            make_gameobject("100", "Cube", ["200", "300"]),
+            make_transform("200", "100"),
+            make_monobehaviour(
+                "300", "100",
+                fields={"ref": "{fileID: 100, guid: 00000000000000000000000000000000, type: 2}"},
+            ),
+        ])
+        server = create_server()
+
+        # Mock returns not-variant response (success=False)
+        mock_resp = MagicMock()
+        mock_resp.success = False
+
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "base.prefab"
+            p.write_text(text, encoding="utf-8")
+
+            with patch(
+                "prefab_sentinel.mcp_server.Phase1Orchestrator"
+            ) as mock_cls:
+                mock_orch = MagicMock()
+                mock_orch.prefab_variant.resolve_chain_values_with_origin.return_value = mock_resp
+                mock_cls.default.return_value = mock_orch
+
+                _, result = _run(server.call_tool(
+                    "find_unity_symbol",
+                    {
+                        "path": str(p),
+                        "symbol_path": "Cube/MonoBehaviour",
+                        "show_origin": True,
+                    },
+                ))
+
+        # find_unity_symbol still succeeds; origin annotation skipped
+        self.assertTrue(result["success"])
+        props = result["matches"][0].get("properties", {})
+        # Properties remain in flat {name: value} format since annotation was skipped
+        if props:
+            first_val = next(iter(props.values()))
+            self.assertIsInstance(first_val, str)
 
 
 class TestCLIServeCommand(unittest.TestCase):
