@@ -1,6 +1,6 @@
 {
   "name": "prefab-sentinel",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Unity Prefab/Scene/Asset の検査・編集・参照修復ツール",
   "author": {
     "name": "tyunta",

@@ -100,6 +100,15 @@
 - [x] Task 9: ドキュメント — CLAUDE.md API 規約、README、ROADMAP 到達度 100%
 - [x] Task 10: 回帰テスト 1225 件全パス + minor バージョンバンプ v0.3.0
 
+## MCP Parameter Naming Unification — v0.5.0 (2026-03-25)
+
+- [x] Task 1: path → asset_path (10 inspection tools)
+- [x] Task 2: scene_path/variant_path/prefab_path/max_depth → asset_path/depth/hierarchy_path
+- [x] Task 3: script_path_or_guid/renderer_path/list_depth → script_or_guid/hierarchy_path/depth
+- [x] Task 4: C# EditorControlRequest field alignment + wire protocol kwargs
+- [x] Task 5: Documentation update (skills/udon-log-triage)
+- [x] Task 6: Verification (旧名 grep 0件, 1120 tests pass, 36 tools registered) + bump v0.5.0
+
 ## MCP Consolidation Phase 3: CLI Deletion (2026-03-24)
 
 - [x] Task 1: Delete CLI core files (cli.py, __main__.py, bridge_check.py, tests)
