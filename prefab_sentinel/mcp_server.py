@@ -275,6 +275,8 @@ def create_server(
     ) -> dict[str, Any]:
         """Find all assets that reference a given asset path or GUID.
 
+        Returns a direct payload with matches array (not an envelope).
+
         Args:
             asset_or_guid: Asset path or 32-char GUID to search for.
             scope: Directory to restrict search scope.
@@ -282,12 +284,25 @@ def create_server(
         """
         orch = session.get_orchestrator()
         resolved_scope = session.resolve_scope(scope)
-        resp = orch.inspect_where_used(
+        step = orch.reference_resolver.where_used(
             asset_or_guid=asset_or_guid,
             scope=resolved_scope,
             max_usages=max_results,
         )
-        return resp.to_dict()
+        if not step.success:
+            from mcp.server.fastmcp.exceptions import ToolError
+            raise ToolError(step.message)
+
+        usages = step.data.get("usages", [])
+        return {
+            "matches": usages,
+            "target": asset_or_guid,
+            "metadata": {
+                "total_count": step.data.get("usage_count", len(usages)),
+                "truncated": step.data.get("truncated_usages", 0) > 0,
+                "scope": str(resolved_scope) if resolved_scope else None,
+            },
+        }
 
     @server.tool()
     def validate_refs(

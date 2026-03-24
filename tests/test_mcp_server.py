@@ -252,13 +252,17 @@ class TestOrchestratorTools(unittest.TestCase):
         )
 
     def test_find_referencing_assets_delegates(self) -> None:
-        mock_resp = MagicMock()
-        mock_resp.to_dict.return_value = {
-            "success": True,
-            "data": {"usages": []},
-        }
+        from prefab_sentinel.contracts import Severity, ToolResponse
+        mock_step = ToolResponse(
+            success=True,
+            severity=Severity.INFO,
+            code="REF_WHERE_USED",
+            message="ok",
+            data={"usages": [], "usage_count": 0, "returned_usages": 0, "truncated_usages": 0},
+            diagnostics=[],
+        )
         mock_orch = MagicMock()
-        mock_orch.inspect_where_used.return_value = mock_resp
+        mock_orch.reference_resolver.where_used.return_value = mock_step
 
         server = self._make_server()
 
@@ -271,12 +275,10 @@ class TestOrchestratorTools(unittest.TestCase):
                 {"asset_or_guid": "abcd1234abcd1234abcd1234abcd1234"},
             ))
 
-        self.assertTrue(result["success"])
-        mock_orch.inspect_where_used.assert_called_once_with(
-            asset_or_guid="abcd1234abcd1234abcd1234abcd1234",
-            scope=None,
-            max_usages=100,
-        )
+        # Direct payload format
+        self.assertIn("matches", result)
+        self.assertEqual([], result["matches"])
+        mock_orch.reference_resolver.where_used.assert_called_once()
 
     def test_inspect_variant_delegates(self) -> None:
         mock_resp = MagicMock()
@@ -1563,22 +1565,29 @@ class TestScopeFallback(unittest.TestCase):
             )
 
     def test_find_referencing_assets_passes_resolved_scope(self) -> None:
+        from prefab_sentinel.contracts import Severity, ToolResponse
         server = create_server()
-        mock_resp = MagicMock()
-        mock_resp.to_dict.return_value = {"success": True, "data": {}}
+        mock_step = ToolResponse(
+            success=True,
+            severity=Severity.INFO,
+            code="REF_WHERE_USED",
+            message="ok",
+            data={"usages": [], "usage_count": 0, "returned_usages": 0, "truncated_usages": 0},
+            diagnostics=[],
+        )
         with (
             patch("prefab_sentinel.session.Phase1Orchestrator") as mock_cls,
             patch.object(ProjectSession, "resolve_scope", return_value="Assets/Fallback"),
         ):
             mock_orch = mock_cls.default.return_value
-            mock_orch.inspect_where_used.return_value = mock_resp
+            mock_orch.reference_resolver.where_used.return_value = mock_step
             _run(server.call_tool(
                 "find_referencing_assets",
                 {"asset_or_guid": "abcd1234abcd1234abcd1234abcd1234"},
             ))
             self.assertEqual(
                 "Assets/Fallback",
-                mock_orch.inspect_where_used.call_args.kwargs["scope"],
+                mock_orch.reference_resolver.where_used.call_args.kwargs["scope"],
             )
 
     def test_validate_field_rename_passes_resolved_scope(self) -> None:
@@ -1616,6 +1625,101 @@ class TestScopeFallback(unittest.TestCase):
                 "Assets/Resolved",
                 mock_orch.check_field_coverage.call_args.kwargs["scope"],
             )
+
+
+class TestFindReferencingAssetsDirectPayload(unittest.TestCase):
+    """find_referencing_assets returns direct payload, not envelope."""
+
+    def test_returns_matches_array(self) -> None:
+        from prefab_sentinel.contracts import Severity, ToolResponse
+
+        server = create_server()
+        mock_step = ToolResponse(
+            success=True,
+            severity=Severity.INFO,
+            code="REF_WHERE_USED",
+            message="Found 2 usages",
+            data={
+                "usages": [
+                    {"file": "A.prefab", "line": 10},
+                    {"file": "B.prefab", "line": 20},
+                ],
+                "usage_count": 2,
+                "returned_usages": 2,
+                "truncated_usages": 0,
+                "scanned_files": 5,
+            },
+            diagnostics=[],
+        )
+        with patch("prefab_sentinel.session.Phase1Orchestrator") as mock_cls:
+            mock_orch = mock_cls.default.return_value
+            mock_orch.reference_resolver.where_used.return_value = mock_step
+            _, result = _run(server.call_tool(
+                "find_referencing_assets",
+                {"asset_or_guid": "abcd1234abcd1234abcd1234abcd1234"},
+            ))
+
+        # Direct payload — no envelope
+        self.assertIn("matches", result)
+        self.assertEqual(2, len(result["matches"]))
+        self.assertEqual("abcd1234abcd1234abcd1234abcd1234", result["target"])
+        self.assertFalse(result["metadata"]["truncated"])
+        self.assertEqual(2, result["metadata"]["total_count"])
+        # No envelope keys
+        self.assertNotIn("success", result)
+        self.assertNotIn("severity", result)
+
+    def test_truncated_metadata(self) -> None:
+        from prefab_sentinel.contracts import Severity, ToolResponse
+
+        server = create_server()
+        mock_step = ToolResponse(
+            success=True,
+            severity=Severity.WARNING,
+            code="REF_WHERE_USED",
+            message="Truncated",
+            data={
+                "usages": [{"file": "A.prefab"}],
+                "usage_count": 50,
+                "returned_usages": 1,
+                "truncated_usages": 49,
+                "scanned_files": 100,
+            },
+            diagnostics=[],
+        )
+        with patch("prefab_sentinel.session.Phase1Orchestrator") as mock_cls:
+            mock_orch = mock_cls.default.return_value
+            mock_orch.reference_resolver.where_used.return_value = mock_step
+            _, result = _run(server.call_tool(
+                "find_referencing_assets",
+                {"asset_or_guid": "x" * 32, "max_results": 1},
+            ))
+
+        self.assertTrue(result["metadata"]["truncated"])
+        self.assertEqual(50, result["metadata"]["total_count"])
+
+    def test_error_raises_tool_error(self) -> None:
+        from mcp.server.fastmcp.exceptions import ToolError
+        from prefab_sentinel.contracts import Severity, ToolResponse
+
+        server = create_server()
+        mock_step = ToolResponse(
+            success=False,
+            severity=Severity.ERROR,
+            code="REF_ERR",
+            message="Scope not found",
+            data={},
+            diagnostics=[],
+        )
+        with patch("prefab_sentinel.session.Phase1Orchestrator") as mock_cls:
+            mock_orch = mock_cls.default.return_value
+            mock_orch.reference_resolver.where_used.return_value = mock_step
+            with self.assertRaises(ToolError) as ctx:
+                _run(server.call_tool(
+                    "find_referencing_assets",
+                    {"asset_or_guid": "x" * 32},
+                ))
+            self.assertIn("Scope not found", str(ctx.exception))
 
 
 if __name__ == "__main__":
