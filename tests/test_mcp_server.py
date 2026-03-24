@@ -55,13 +55,15 @@ class TestToolRegistration(unittest.TestCase):
             "editor_list_children", "editor_list_materials", "editor_list_roots",
             "editor_get_material_property", "editor_console", "editor_run_tests",
             "inspect_materials", "validate_structure", "revert_overrides",
+            # Phase 2: AI workflow tools
+            "inspect_hierarchy", "validate_runtime", "patch_apply",
         }
         self.assertEqual(expected, tool_names)
 
     def test_tool_count(self) -> None:
         server = create_server()
         tools = _run(server.list_tools())
-        self.assertEqual(33, len(tools))
+        self.assertEqual(36, len(tools))
 
 
 class TestSymbolTools(unittest.TestCase):
@@ -2069,6 +2071,181 @@ class TestRevertOverridesTool(unittest.TestCase):
 
         _, kwargs = mock_revert.call_args
         self.assertIsNone(kwargs["change_reason"])
+
+
+class TestInspectHierarchyTool(unittest.TestCase):
+    """Tests for the inspect_hierarchy MCP tool."""
+
+    def test_delegates_to_orchestrator(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.to_dict.return_value = {"success": True, "data": {"tree": "..."}}
+        mock_orch = MagicMock()
+        mock_orch.inspect_hierarchy.return_value = mock_resp
+
+        server = create_server()
+        with patch.object(
+            ProjectSession, "get_orchestrator", return_value=mock_orch,
+        ):
+            _, result = _run(server.call_tool("inspect_hierarchy", {"path": "Assets/A.prefab"}))
+
+        self.assertTrue(result["success"])
+        mock_orch.inspect_hierarchy.assert_called_once_with(
+            target_path="Assets/A.prefab",
+            max_depth=None,
+            show_components=True,
+        )
+
+    def test_passes_optional_params(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.to_dict.return_value = {"success": True}
+        mock_orch = MagicMock()
+        mock_orch.inspect_hierarchy.return_value = mock_resp
+
+        server = create_server()
+        with patch.object(
+            ProjectSession, "get_orchestrator", return_value=mock_orch,
+        ):
+            _run(server.call_tool("inspect_hierarchy", {
+                "path": "Assets/A.prefab", "max_depth": 2, "show_components": False,
+            }))
+
+        mock_orch.inspect_hierarchy.assert_called_once_with(
+            target_path="Assets/A.prefab", max_depth=2, show_components=False,
+        )
+
+
+class TestValidateRuntimeTool(unittest.TestCase):
+    """Tests for the validate_runtime MCP tool."""
+
+    def test_delegates_to_orchestrator(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.to_dict.return_value = {"success": True, "data": {"steps": []}}
+        mock_orch = MagicMock()
+        mock_orch.validate_runtime.return_value = mock_resp
+
+        server = create_server()
+        with patch.object(
+            ProjectSession, "get_orchestrator", return_value=mock_orch,
+        ):
+            _, result = _run(server.call_tool("validate_runtime", {
+                "scene_path": "Assets/Scenes/Main.unity",
+            }))
+
+        self.assertTrue(result["success"])
+        mock_orch.validate_runtime.assert_called_once_with(
+            scene_path="Assets/Scenes/Main.unity",
+            profile="default",
+            log_file=None,
+            since_timestamp=None,
+            allow_warnings=False,
+            max_diagnostics=200,
+        )
+
+    def test_passes_all_params(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.to_dict.return_value = {"success": True}
+        mock_orch = MagicMock()
+        mock_orch.validate_runtime.return_value = mock_resp
+
+        server = create_server()
+        with patch.object(
+            ProjectSession, "get_orchestrator", return_value=mock_orch,
+        ):
+            _run(server.call_tool("validate_runtime", {
+                "scene_path": "Assets/S.unity",
+                "profile": "smoke",
+                "log_file": "/tmp/Editor.log",
+                "allow_warnings": True,
+                "max_diagnostics": 50,
+            }))
+
+        mock_orch.validate_runtime.assert_called_once_with(
+            scene_path="Assets/S.unity",
+            profile="smoke",
+            log_file="/tmp/Editor.log",
+            since_timestamp=None,
+            allow_warnings=True,
+            max_diagnostics=50,
+        )
+
+
+class TestPatchApplyTool(unittest.TestCase):
+    """Tests for the patch_apply MCP tool."""
+
+    def test_dry_run_default(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.to_dict.return_value = {"success": True, "code": "PATCH_DRY_RUN"}
+        mock_orch = MagicMock()
+        mock_orch.patch_apply.return_value = mock_resp
+
+        plan_json = '{"plan_version": "2", "resources": [], "ops": []}'
+        server = create_server()
+        with patch.object(
+            ProjectSession, "get_orchestrator", return_value=mock_orch,
+        ):
+            _, result = _run(server.call_tool("patch_apply", {"plan": plan_json}))
+
+        self.assertTrue(result["success"])
+        mock_orch.patch_apply.assert_called_once_with(
+            plan={"plan_version": "2", "resources": [], "ops": []},
+            dry_run=True,
+            confirm=False,
+            plan_sha256=None,
+            plan_signature=None,
+            change_reason=None,
+            scope=None,
+            runtime_scene=None,
+            runtime_profile="default",
+            runtime_log_file=None,
+            runtime_since_timestamp=None,
+            runtime_allow_warnings=False,
+            runtime_max_diagnostics=200,
+        )
+
+    def test_confirm_mode(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.to_dict.return_value = {"success": True, "code": "PATCH_APPLIED"}
+        mock_orch = MagicMock()
+        mock_orch.patch_apply.return_value = mock_resp
+
+        plan_json = '{"plan_version": "2", "resources": [], "ops": []}'
+        server = create_server()
+        with patch.object(
+            ProjectSession, "get_orchestrator", return_value=mock_orch,
+        ):
+            _run(server.call_tool("patch_apply", {
+                "plan": plan_json, "confirm": True, "change_reason": "Fix color",
+            }))
+
+        call_kwargs = mock_orch.patch_apply.call_args[1]
+        self.assertFalse(call_kwargs["dry_run"])
+        self.assertTrue(call_kwargs["confirm"])
+        self.assertEqual("Fix color", call_kwargs["change_reason"])
+
+    def test_invalid_json_returns_error(self) -> None:
+        server = create_server()
+        _, result = _run(server.call_tool("patch_apply", {"plan": "not json"}))
+        self.assertFalse(result["success"])
+        self.assertEqual("INVALID_PLAN_JSON", result["code"])
+        self.assertEqual("error", result["severity"])
+        self.assertIn("parse", result["message"].lower())
+
+    def test_empty_change_reason_becomes_none(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.to_dict.return_value = {"success": True}
+        mock_orch = MagicMock()
+        mock_orch.patch_apply.return_value = mock_resp
+
+        server = create_server()
+        with patch.object(
+            ProjectSession, "get_orchestrator", return_value=mock_orch,
+        ):
+            _run(server.call_tool("patch_apply", {
+                "plan": '{"plan_version": "2"}', "change_reason": "",
+            }))
+
+        call_kwargs = mock_orch.patch_apply.call_args[1]
+        self.assertIsNone(call_kwargs["change_reason"])
 
 
 if __name__ == "__main__":

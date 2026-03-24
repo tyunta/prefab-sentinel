@@ -1030,6 +1030,120 @@ def create_server(
         resp = orch.inspect_structure(target_path=path)
         return resp.to_dict()
 
+    @server.tool()
+    def inspect_hierarchy(
+        path: str,
+        max_depth: int | None = None,
+        show_components: bool = True,
+    ) -> dict[str, Any]:
+        """Display the GameObject hierarchy tree of a Unity asset.
+
+        Args:
+            path: Path to a .prefab or .unity file.
+            max_depth: Maximum tree depth to display (None = unlimited).
+            show_components: Show component annotations (default: True).
+        """
+        orch = session.get_orchestrator()
+        resp = orch.inspect_hierarchy(
+            target_path=path,
+            max_depth=max_depth,
+            show_components=show_components,
+        )
+        return resp.to_dict()
+
+    # ------------------------------------------------------------------
+    # AI workflow tools
+    # ------------------------------------------------------------------
+
+    @server.tool()
+    def validate_runtime(
+        scene_path: str,
+        profile: str = "default",
+        log_file: str | None = None,
+        since_timestamp: str | None = None,
+        allow_warnings: bool = False,
+        max_diagnostics: int = 200,
+    ) -> dict[str, Any]:
+        """Run runtime validation: UdonSharp compile + ClientSim execution.
+
+        Args:
+            scene_path: Target Unity scene path.
+            profile: Runtime profile label for ClientSim execution context.
+            log_file: Unity log file path (default: <project>/Logs/Editor.log).
+            since_timestamp: Log cursor label for filtering.
+            allow_warnings: Treat warning-only findings as pass.
+            max_diagnostics: Maximum diagnostics to include (default: 200).
+        """
+        orch = session.get_orchestrator()
+        resp = orch.validate_runtime(
+            scene_path=scene_path,
+            profile=profile,
+            log_file=log_file,
+            since_timestamp=since_timestamp,
+            allow_warnings=allow_warnings,
+            max_diagnostics=max_diagnostics,
+        )
+        return resp.to_dict()
+
+    @server.tool()
+    def patch_apply(
+        plan: str,
+        confirm: bool = False,
+        change_reason: str = "",
+        scope: str | None = None,
+        runtime_scene: str | None = None,
+        runtime_profile: str = "default",
+        runtime_log_file: str | None = None,
+        runtime_since_timestamp: str | None = None,
+        runtime_allow_warnings: bool = False,
+        runtime_max_diagnostics: int = 200,
+    ) -> dict[str, Any]:
+        """Validate and apply a patch plan to Unity assets.
+
+        Two-phase workflow:
+        - confirm=False (default): dry-run validation only.
+        - confirm=True: applies changes and runs post-apply checks.
+
+        Args:
+            plan: Patch plan as JSON string. Must conform to plan_version "2".
+            confirm: Set True to apply (False = dry-run only).
+            change_reason: Required when confirm=True. Audit log reason.
+            scope: Directory for post-apply reference validation.
+            runtime_scene: Scene path for post-apply runtime validation.
+            runtime_profile: ClientSim profile for runtime validation.
+            runtime_log_file: Unity log file path for runtime validation.
+            runtime_since_timestamp: Log cursor for runtime validation.
+            runtime_allow_warnings: Allow warnings in runtime validation.
+            runtime_max_diagnostics: Max diagnostics for runtime validation.
+        """
+        import json as _json
+        try:
+            plan_dict = _json.loads(plan)
+        except (ValueError, TypeError) as exc:
+            return {
+                "success": False, "severity": "error", "code": "INVALID_PLAN_JSON",
+                "message": f"Failed to parse plan JSON: {exc}",
+                "data": {}, "diagnostics": [],
+            }
+
+        orch = session.get_orchestrator()
+        resp = orch.patch_apply(
+            plan=plan_dict,
+            dry_run=not confirm,
+            confirm=confirm,
+            plan_sha256=None,
+            plan_signature=None,
+            change_reason=change_reason or None,
+            scope=scope,
+            runtime_scene=runtime_scene,
+            runtime_profile=runtime_profile,
+            runtime_log_file=runtime_log_file,
+            runtime_since_timestamp=runtime_since_timestamp,
+            runtime_allow_warnings=runtime_allow_warnings,
+            runtime_max_diagnostics=runtime_max_diagnostics,
+        )
+        return resp.to_dict()
+
     # ------------------------------------------------------------------
     # Revert tool
     # ------------------------------------------------------------------

@@ -100,6 +100,13 @@
 - [x] Task 9: ドキュメント — CLAUDE.md API 規約、README、ROADMAP 到達度 100%
 - [x] Task 10: 回帰テスト 1225 件全パス + minor バージョンバンプ v0.3.0
 
+## MCP Consolidation Phase 2: AI Completeness (2026-03-24)
+
+- [x] Task 1: Registration test (36 tools) + 3 test classes (inspect_hierarchy, validate_runtime, patch_apply)
+- [x] Task 2: 3 MCP ツール追加 (inspect_hierarchy, validate_runtime, patch_apply)
+- [x] Task 3: README MCP ツール一覧に 3 ツール追加
+- [x] Task 4: 最終検証 — 1264 テスト全パス
+
 ## MCP Consolidation Phase 1 (2026-03-24)
 
 - [x] Task 0: Git tag `v0.3.0-cli-final`

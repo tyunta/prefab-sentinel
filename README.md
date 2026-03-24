@@ -113,6 +113,9 @@ prefab-sentinel-mcp
 | `check_field_coverage` | C# フィールドと YAML propertyPath の不一致検出（継承チェーン解決済み、未使用/孤立） |
 | `inspect_materials` | レンダラーごとのマテリアルスロット表示（override/inherited マーカー付き） |
 | `validate_structure` | YAML 内部構造の検証（fileID 重複、Transform 整合性） |
+| `inspect_hierarchy` | GameObject 階層ツリー表示（深度制限、コンポーネント注釈対応） |
+| `validate_runtime` | UdonSharp コンパイル + ClientSim 実行検証 |
+| `patch_apply` | パッチ計画の検証・適用（JSON 文字列入力、dry-run/confirm ゲート付き） |
 | `revert_overrides` | Prefab Variant から特定プロパティの override を YAML レベルで削除（dry-run/confirm ゲート付き） |
 | `editor_screenshot` | Unity Editor の Scene/Game ビューのスクリーンショット取得 |
 | `editor_select` | Hierarchy 内の GameObject を選択（Prefab Stage 対応） |
