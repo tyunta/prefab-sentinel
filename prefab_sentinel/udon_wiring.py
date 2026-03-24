@@ -23,6 +23,7 @@ from prefab_sentinel.unity_yaml_parser import (
 # Constants
 # ---------------------------------------------------------------------------
 
+# VRChat SDK UdonBehaviour script GUID (com.vrchat.worlds, stable across SDK versions)
 UDON_BEHAVIOUR_GUID = "45115577ef41a5b4ca741ed302693907"
 
 SKIP_FIELDS = frozenset(

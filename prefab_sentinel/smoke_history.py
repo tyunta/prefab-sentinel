@@ -141,6 +141,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--duration-percentile",
         type=float,
+        # p90: covers typical variance while excluding long-tail outliers
         default=90.0,
         help="Percentile used in markdown decision table (0-100, default: 90).",
     )
@@ -157,24 +158,28 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--timeout-multiplier",
         type=float,
+        # 1.5x: provides 50% headroom above percentile for load variance
         default=1.5,
         help="Multiplier applied to duration percentile for timeout recommendation.",
     )
     parser.add_argument(
         "--timeout-slack-sec",
         type=int,
+        # 60s: buffer for Unity editor startup jitter and GC pauses
         default=60,
         help="Additional seconds added to duration_max and failure cases.",
     )
     parser.add_argument(
         "--timeout-min-sec",
         type=int,
+        # 300s (5min): ensures adequate time for initial scene load
         default=300,
         help="Minimum timeout recommendation in seconds.",
     )
     parser.add_argument(
         "--timeout-round-sec",
         type=int,
+        # 30s: balances readability with precision in timeout values
         default=30,
         help="Round timeout recommendation up by this step in seconds.",
     )

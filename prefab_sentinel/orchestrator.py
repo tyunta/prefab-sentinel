@@ -625,7 +625,7 @@ class Phase1Orchestrator:
     def suggest_ignore_guids(
         self,
         scope: str,
-        min_occurrences: int = 50,
+        min_occurrences: int = 50,  # filter noise: below this are likely one-off refs
         max_items: int = 20,
         exclude_patterns: tuple[str, ...] = (),
         ignore_asset_guids: tuple[str, ...] = (),
