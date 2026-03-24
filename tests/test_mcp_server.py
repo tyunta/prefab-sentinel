@@ -1864,8 +1864,8 @@ class TestEditorWriteTools(unittest.TestCase):
         server = create_server()
         with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_instantiate", {
-                "prefab_path": "Assets/Prefabs/Mic.prefab",
-                "parent_path": "/Canvas",
+                "asset_path": "Assets/Prefabs/Mic.prefab",
+                "hierarchy_path": "/Canvas",
                 "position": "0,1.5,0",
             }))
         mock_send.assert_called_once_with(
@@ -1879,7 +1879,7 @@ class TestEditorWriteTools(unittest.TestCase):
         server = create_server()
         with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_instantiate", {
-                "prefab_path": "Assets/Prefabs/Mic.prefab",
+                "asset_path": "Assets/Prefabs/Mic.prefab",
             }))
         mock_send.assert_called_once_with(
             action="instantiate_to_scene",
@@ -1891,7 +1891,7 @@ class TestEditorWriteTools(unittest.TestCase):
         server = create_server()
         with patch("prefab_sentinel.mcp_server.send_action"):
             _, result = _run(server.call_tool("editor_instantiate", {
-                "prefab_path": "Assets/X.prefab",
+                "asset_path": "Assets/X.prefab",
                 "position": "1,2",
             }))
         self.assertFalse(result["success"])
@@ -1901,7 +1901,7 @@ class TestEditorWriteTools(unittest.TestCase):
         server = create_server()
         with patch("prefab_sentinel.mcp_server.send_action"):
             _, result = _run(server.call_tool("editor_instantiate", {
-                "prefab_path": "Assets/X.prefab",
+                "asset_path": "Assets/X.prefab",
                 "position": "a,b,c",
             }))
         self.assertFalse(result["success"])
@@ -1986,7 +1986,7 @@ class TestRevertOverridesTool(unittest.TestCase):
             return_value=mock_resp,
         ) as mock_revert:
             _, result = _run(server.call_tool("revert_overrides", {
-                "variant_path": "Assets/V.prefab",
+                "asset_path": "Assets/V.prefab",
                 "target_file_id": "12345",
                 "property_path": "m_Color.r",
             }))
@@ -2013,7 +2013,7 @@ class TestRevertOverridesTool(unittest.TestCase):
             return_value=mock_resp,
         ) as mock_revert:
             _, result = _run(server.call_tool("revert_overrides", {
-                "variant_path": "Assets/V.prefab",
+                "asset_path": "Assets/V.prefab",
                 "target_file_id": "12345",
                 "property_path": "m_Color.r",
                 "confirm": True,
@@ -2039,7 +2039,7 @@ class TestRevertOverridesTool(unittest.TestCase):
             return_value=mock_resp,
         ) as mock_revert:
             _run(server.call_tool("revert_overrides", {
-                "variant_path": "Assets/V.prefab",
+                "asset_path": "Assets/V.prefab",
                 "target_file_id": "12345",
                 "property_path": "m_Color.r",
                 "change_reason": "",
@@ -2062,7 +2062,7 @@ class TestInspectHierarchyTool(unittest.TestCase):
         with patch.object(
             ProjectSession, "get_orchestrator", return_value=mock_orch,
         ):
-            _, result = _run(server.call_tool("inspect_hierarchy", {"path": "Assets/A.prefab"}))
+            _, result = _run(server.call_tool("inspect_hierarchy", {"asset_path": "Assets/A.prefab"}))
 
         self.assertTrue(result["success"])
         mock_orch.inspect_hierarchy.assert_called_once_with(
@@ -2082,7 +2082,7 @@ class TestInspectHierarchyTool(unittest.TestCase):
             ProjectSession, "get_orchestrator", return_value=mock_orch,
         ):
             _run(server.call_tool("inspect_hierarchy", {
-                "path": "Assets/A.prefab", "max_depth": 2, "show_components": False,
+                "asset_path": "Assets/A.prefab", "depth": 2, "show_components": False,
             }))
 
         mock_orch.inspect_hierarchy.assert_called_once_with(
@@ -2104,7 +2104,7 @@ class TestValidateRuntimeTool(unittest.TestCase):
             ProjectSession, "get_orchestrator", return_value=mock_orch,
         ):
             _, result = _run(server.call_tool("validate_runtime", {
-                "scene_path": "Assets/Scenes/Main.unity",
+                "asset_path": "Assets/Scenes/Main.unity",
             }))
 
         self.assertTrue(result["success"])
@@ -2128,7 +2128,7 @@ class TestValidateRuntimeTool(unittest.TestCase):
             ProjectSession, "get_orchestrator", return_value=mock_orch,
         ):
             _run(server.call_tool("validate_runtime", {
-                "scene_path": "Assets/S.unity",
+                "asset_path": "Assets/S.unity",
                 "profile": "smoke",
                 "log_file": "/tmp/Editor.log",
                 "allow_warnings": True,

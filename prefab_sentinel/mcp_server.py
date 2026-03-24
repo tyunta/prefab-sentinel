@@ -944,18 +944,18 @@ def create_server(
 
     @server.tool()
     def editor_instantiate(
-        prefab_path: str,
-        parent_path: str = "",
+        asset_path: str,
+        hierarchy_path: str = "",
         position: str = "",
     ) -> dict[str, Any]:
         """Instantiate a Prefab into the current Scene.
 
         Args:
-            prefab_path: Asset path of the prefab (e.g. Assets/Prefabs/Mic.prefab).
-            parent_path: Hierarchy path of the parent GameObject (empty = scene root).
+            asset_path: Asset path of the prefab (e.g. Assets/Prefabs/Mic.prefab).
+            hierarchy_path: Hierarchy path of the parent GameObject (empty = scene root).
             position: Local position as "x,y,z" string (e.g. "0,1.5,0"). Empty = default.
         """
-        kwargs: dict[str, Any] = {"prefab_path": prefab_path, "parent_path": parent_path}
+        kwargs: dict[str, Any] = {"prefab_path": asset_path, "parent_path": hierarchy_path}
         if position:
             try:
                 parts = [float(v) for v in position.split(",")]
@@ -1032,21 +1032,21 @@ def create_server(
 
     @server.tool()
     def inspect_hierarchy(
-        path: str,
-        max_depth: int | None = None,
+        asset_path: str,
+        depth: int | None = None,
         show_components: bool = True,
     ) -> dict[str, Any]:
         """Display the GameObject hierarchy tree of a Unity asset.
 
         Args:
-            path: Path to a .prefab or .unity file.
-            max_depth: Maximum tree depth to display (None = unlimited).
+            asset_path: Path to a .prefab or .unity file.
+            depth: Maximum tree depth to display (None = unlimited).
             show_components: Show component annotations (default: True).
         """
         orch = session.get_orchestrator()
         resp = orch.inspect_hierarchy(
-            target_path=path,
-            max_depth=max_depth,
+            target_path=asset_path,
+            max_depth=depth,
             show_components=show_components,
         )
         return resp.to_dict()
@@ -1057,7 +1057,7 @@ def create_server(
 
     @server.tool()
     def validate_runtime(
-        scene_path: str,
+        asset_path: str,
         profile: str = "default",
         log_file: str | None = None,
         since_timestamp: str | None = None,
@@ -1067,7 +1067,7 @@ def create_server(
         """Run runtime validation: UdonSharp compile + ClientSim execution.
 
         Args:
-            scene_path: Target Unity scene path.
+            asset_path: Target Unity scene path.
             profile: Runtime profile label for ClientSim execution context.
             log_file: Unity log file path (default: <project>/Logs/Editor.log).
             since_timestamp: Log cursor label for filtering.
@@ -1076,7 +1076,7 @@ def create_server(
         """
         orch = session.get_orchestrator()
         resp = orch.validate_runtime(
-            scene_path=scene_path,
+            scene_path=asset_path,
             profile=profile,
             log_file=log_file,
             since_timestamp=since_timestamp,
@@ -1150,7 +1150,7 @@ def create_server(
 
     @server.tool()
     def revert_overrides(
-        variant_path: str,
+        asset_path: str,
         target_file_id: str,
         property_path: str,
         confirm: bool = False,
@@ -1163,14 +1163,14 @@ def create_server(
         - confirm=True: applies the removal and writes back.
 
         Args:
-            variant_path: Path to the Prefab Variant file.
+            asset_path: Path to the Prefab Variant file.
             target_file_id: fileID of the target component in the parent prefab.
             property_path: propertyPath of the override to remove.
             confirm: Set True to apply (False = dry-run only).
             change_reason: Required when confirm=True. Audit log reason.
         """
         resp = revert_overrides_impl(
-            variant_path=variant_path,
+            variant_path=asset_path,
             target_file_id=target_file_id,
             property_path=property_path,
             dry_run=not confirm,
