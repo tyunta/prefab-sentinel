@@ -1097,5 +1097,382 @@ class EvaluatePostconditionTests(unittest.TestCase):
         self.assertEqual("POST_BROKEN_REFS_ERROR", result.code)
 
 
+class TestListSerializedFields(unittest.TestCase):
+    """Tests for Phase1Orchestrator.list_serialized_fields."""
+
+    def _make_orch_with_root(self, root: Path) -> Phase1Orchestrator:
+        orch = _make_orchestrator()
+        orch.reference_resolver.project_root = root
+        return orch
+
+    def test_list_fields_by_path(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            cs = root / "Test.cs"
+            cs.write_text(
+                "public float speed;\n"
+                "[SerializeField] private int health;\n"
+                "private float _internal;\n",
+                encoding="utf-8",
+            )
+            meta = Path(str(cs) + ".meta")
+            meta.write_text(
+                "fileFormatVersion: 2\nguid: aaaa1111bbbb2222cccc3333dddd4444\n",
+                encoding="utf-8",
+            )
+            orch = self._make_orch_with_root(root)
+            result = orch.list_serialized_fields(str(cs))
+
+        self.assertTrue(result.success)
+        self.assertEqual("CSF_LIST_OK", result.code)
+        self.assertEqual(2, result.data["field_count"])
+        names = {f["name"] for f in result.data["fields"]}
+        self.assertEqual({"speed", "health"}, names)
+        self.assertEqual("aaaa1111bbbb2222cccc3333dddd4444", result.data["script_guid"])
+
+    def test_list_fields_by_guid(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            assets = root / "Assets"
+            assets.mkdir()
+            cs = assets / "Foo.cs"
+            cs.write_text("public int value;\n", encoding="utf-8")
+            meta = Path(str(cs) + ".meta")
+            meta.write_text(
+                "fileFormatVersion: 2\nguid: cccc3333dddd4444eeee5555ffff6666\n",
+                encoding="utf-8",
+            )
+            orch = self._make_orch_with_root(root)
+            result = orch.list_serialized_fields("cccc3333dddd4444eeee5555ffff6666")
+
+        self.assertTrue(result.success)
+        self.assertEqual(1, result.data["field_count"])
+        self.assertEqual("value", result.data["fields"][0]["name"])
+
+    def test_nonexistent_path_returns_error(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            orch = self._make_orch_with_root(Path(td))
+            result = orch.list_serialized_fields("/nonexistent/Test.cs")
+
+        self.assertFalse(result.success)
+        self.assertEqual("CSF_RESOLVE_FAILED", result.code)
+
+    def test_response_has_read_only_flag(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            cs = root / "Test.cs"
+            cs.write_text("public float speed;\n", encoding="utf-8")
+            orch = self._make_orch_with_root(root)
+            result = orch.list_serialized_fields(str(cs))
+
+        self.assertTrue(result.data["read_only"])
+
+
+class TestValidateFieldRename(unittest.TestCase):
+    """Tests for Phase1Orchestrator.validate_field_rename."""
+
+    def _setup_project(self, td: str) -> tuple[Phase1Orchestrator, Path, str]:
+        """Create a project with a C# script and YAML referencing it."""
+        root = Path(td)
+        assets = root / "Assets"
+        assets.mkdir()
+
+        # C# script
+        cs = assets / "Player.cs"
+        cs.write_text(
+            "public float moveSpeed;\n"
+            "public int health;\n"
+            "private float _internal;\n",
+            encoding="utf-8",
+        )
+        meta = Path(str(cs) + ".meta")
+        guid = "aaaa1111bbbb2222cccc3333dddd4444"
+        meta.write_text(
+            f"fileFormatVersion: 2\nguid: {guid}\n",
+            encoding="utf-8",
+        )
+
+        # YAML prefab referencing the script
+        prefab = assets / "Player.prefab"
+        prefab.write_text(
+            "%YAML 1.1\n"
+            "%TAG !u! tag:unity3d.com,2011:\n"
+            "--- !u!114 &1001\n"
+            "MonoBehaviour:\n"
+            "  m_ObjectHideFlags: 0\n"
+            f"  m_Script: {{fileID: 11500000, guid: {guid}, type: 3}}\n"
+            "  moveSpeed: 5.0\n"
+            "  health: 100\n",
+            encoding="utf-8",
+        )
+
+        orch = _make_orchestrator()
+        orch.reference_resolver.project_root = root
+        return orch, root, guid
+
+    def test_rename_finds_affected_assets(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            orch, root, guid = self._setup_project(td)
+            result = orch.validate_field_rename(
+                str(root / "Assets" / "Player.cs"), "moveSpeed", "runSpeed"
+            )
+
+        self.assertTrue(result.success)
+        self.assertEqual("CSF_RENAME_OK", result.code)
+        self.assertEqual(1, result.data["affected_count"])
+        self.assertFalse(result.data["conflict"])
+
+    def test_rename_detects_conflict(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            orch, root, guid = self._setup_project(td)
+            result = orch.validate_field_rename(
+                str(root / "Assets" / "Player.cs"), "moveSpeed", "health"
+            )
+
+        self.assertTrue(result.success)
+        self.assertTrue(result.data["conflict"])
+
+    def test_rename_nonexistent_field(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            orch, root, guid = self._setup_project(td)
+            result = orch.validate_field_rename(
+                str(root / "Assets" / "Player.cs"), "nonExistent", "newName"
+            )
+
+        self.assertFalse(result.success)
+        self.assertEqual("CSF_FIELD_NOT_FOUND", result.code)
+        self.assertIn("moveSpeed", result.data["available_fields"])
+
+    def test_rename_script_not_found(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            orch = _make_orchestrator()
+            orch.reference_resolver.project_root = Path(td)
+            result = orch.validate_field_rename(
+                "/nonexistent/Test.cs", "speed", "velocity"
+            )
+
+        self.assertFalse(result.success)
+        self.assertEqual("CSF_RESOLVE_FAILED", result.code)
+
+    def test_rename_with_scope(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            orch, root, guid = self._setup_project(td)
+            # Scope to Assets/ — should still find the prefab
+            result = orch.validate_field_rename(
+                str(root / "Assets" / "Player.cs"),
+                "moveSpeed",
+                "runSpeed",
+                scope=str(root / "Assets"),
+            )
+
+        self.assertTrue(result.success)
+        self.assertEqual(1, result.data["affected_count"])
+
+    def test_rename_with_scope_excluding_file(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            orch, root, guid = self._setup_project(td)
+            # Create an empty subdirectory — no YAML files
+            empty_dir = root / "Assets" / "Empty"
+            empty_dir.mkdir()
+            result = orch.validate_field_rename(
+                str(root / "Assets" / "Player.cs"),
+                "moveSpeed",
+                "runSpeed",
+                scope=str(empty_dir),
+            )
+
+        self.assertTrue(result.success)
+        self.assertEqual(0, result.data["affected_count"])
+
+    def test_rename_response_has_read_only_flag(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            orch, root, guid = self._setup_project(td)
+            result = orch.validate_field_rename(
+                str(root / "Assets" / "Player.cs"), "moveSpeed", "runSpeed"
+            )
+
+        self.assertTrue(result.data["read_only"])
+
+
+class TestCheckFieldCoverage(unittest.TestCase):
+    """Tests for Phase1Orchestrator.check_field_coverage."""
+
+    def _setup_coverage_project(self, td: str) -> tuple[Phase1Orchestrator, Path]:
+        """Create a project with C# and YAML to test coverage."""
+        root = Path(td)
+        assets = root / "Assets"
+        assets.mkdir()
+
+        guid = "aaaa1111bbbb2222cccc3333dddd4444"
+
+        # C# script with 3 serialized fields
+        cs = assets / "Player.cs"
+        cs.write_text(
+            "public float moveSpeed;\n"
+            "public int health;\n"
+            "public string playerName;\n",
+            encoding="utf-8",
+        )
+        meta = Path(str(cs) + ".meta")
+        meta.write_text(
+            f"fileFormatVersion: 2\nguid: {guid}\n",
+            encoding="utf-8",
+        )
+
+        # YAML with only 2 of the 3 fields + 1 orphaned field
+        prefab = assets / "Player.prefab"
+        prefab.write_text(
+            "%YAML 1.1\n"
+            "%TAG !u! tag:unity3d.com,2011:\n"
+            "--- !u!114 &1001\n"
+            "MonoBehaviour:\n"
+            "  m_ObjectHideFlags: 0\n"
+            f"  m_Script: {{fileID: 11500000, guid: {guid}, type: 3}}\n"
+            "  moveSpeed: 5.0\n"
+            "  health: 100\n"
+            "  legacyField: old_value\n",
+            encoding="utf-8",
+        )
+
+        orch = _make_orchestrator()
+        orch.reference_resolver.project_root = root
+        return orch, root
+
+    def test_detects_unused_and_orphaned(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            orch, root = self._setup_coverage_project(td)
+            result = orch.check_field_coverage(str(root / "Assets"))
+
+        self.assertTrue(result.success)
+        self.assertEqual("CSF_COVERAGE_OK", result.code)
+
+        # playerName is in C# but not in YAML → unused
+        unused_names = {e["field_name"] for e in result.data["unused_fields"]}
+        self.assertIn("playerName", unused_names)
+
+        # legacyField is in YAML but not in C# → orphaned
+        orphaned_names = {e["field_name"] for e in result.data["orphaned_paths"]}
+        self.assertIn("legacyField", orphaned_names)
+
+    def test_all_fields_matched(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            assets = root / "Assets"
+            assets.mkdir()
+            guid = "bbbb2222cccc3333dddd4444eeee5555"
+
+            cs = assets / "Simple.cs"
+            cs.write_text("public float value;\n", encoding="utf-8")
+            meta = Path(str(cs) + ".meta")
+            meta.write_text(
+                f"fileFormatVersion: 2\nguid: {guid}\n",
+                encoding="utf-8",
+            )
+
+            prefab = assets / "Simple.prefab"
+            prefab.write_text(
+                "%YAML 1.1\n"
+                "%TAG !u! tag:unity3d.com,2011:\n"
+                "--- !u!114 &2001\n"
+                "MonoBehaviour:\n"
+                "  m_ObjectHideFlags: 0\n"
+                f"  m_Script: {{fileID: 11500000, guid: {guid}, type: 3}}\n"
+                "  value: 1.0\n",
+                encoding="utf-8",
+            )
+
+            orch = _make_orchestrator()
+            orch.reference_resolver.project_root = root
+            result = orch.check_field_coverage(str(assets))
+
+        self.assertTrue(result.success)
+        self.assertEqual(0, result.data["unused_count"])
+        self.assertEqual(0, result.data["orphaned_count"])
+        self.assertEqual(1, result.data["components_checked"])
+
+    def test_no_yaml_files_in_scope(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            empty = root / "Empty"
+            empty.mkdir()
+            orch = _make_orchestrator()
+            orch.reference_resolver.project_root = root
+            result = orch.check_field_coverage(str(empty))
+
+        self.assertTrue(result.success)
+        self.assertEqual(0, result.data["components_checked"])
+        self.assertEqual(0, result.data["unused_count"])
+        self.assertEqual(0, result.data["orphaned_count"])
+
+    def test_external_script_skipped(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            assets = root / "Assets"
+            assets.mkdir()
+
+            # YAML with a GUID that doesn't map to any local .cs
+            prefab = assets / "External.prefab"
+            prefab.write_text(
+                "%YAML 1.1\n"
+                "%TAG !u! tag:unity3d.com,2011:\n"
+                "--- !u!114 &3001\n"
+                "MonoBehaviour:\n"
+                "  m_ObjectHideFlags: 0\n"
+                "  m_Script: {fileID: 11500000, guid: deadbeef12345678deadbeef12345678, type: 3}\n"
+                "  someField: 42\n",
+                encoding="utf-8",
+            )
+
+            orch = _make_orchestrator()
+            orch.reference_resolver.project_root = root
+            result = orch.check_field_coverage(str(assets))
+
+        self.assertTrue(result.success)
+        self.assertEqual(0, result.data["components_checked"])
+
+    def test_response_has_read_only_flag(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            empty = root / "Empty"
+            empty.mkdir()
+            orch = _make_orchestrator()
+            orch.reference_resolver.project_root = root
+            result = orch.check_field_coverage(str(empty))
+
+        self.assertTrue(result.data["read_only"])
+
+
 if __name__ == "__main__":
     unittest.main()

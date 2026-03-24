@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -33,10 +34,33 @@ from prefab_sentinel.unity_assets import (
     collect_project_guid_index,
     decode_text_file,
     find_project_root,
+    resolve_scope_path,
 )
 from prefab_sentinel.wsl_compat import to_wsl_path
 
 __all__ = ["Phase1Orchestrator"]
+
+
+def _iter_yaml_files(scope_path: Path) -> list[Path]:
+    """Collect Unity YAML files from a directory or single file."""
+    if scope_path.is_file():
+        if scope_path.suffix.lower() in GAMEOBJECT_BEARING_SUFFIXES:
+            return [scope_path]
+        return []
+    return sorted(
+        p
+        for suffix in GAMEOBJECT_BEARING_SUFFIXES
+        for p in scope_path.rglob(f"*{suffix}")
+        if p.is_file()
+    )
+
+
+def _relative_path(path: Path, root: Path) -> str:
+    """Return path relative to root as a string, or absolute if outside root."""
+    try:
+        return str(path.relative_to(root))
+    except ValueError:
+        return str(path)
 
 
 @dataclass(slots=True)
@@ -199,6 +223,261 @@ class Phase1Orchestrator:
                 "diff_count": len(diffs),
                 "diffs": diffs,
                 "chain": chain,
+                "read_only": True,
+            },
+        )
+
+    # ------------------------------------------------------------------
+    # C# field inspection (P4)
+    # ------------------------------------------------------------------
+
+    def list_serialized_fields(
+        self,
+        script_path_or_guid: str,
+    ) -> ToolResponse:
+        """List all serialized C# fields for a script.
+
+        Args:
+            script_path_or_guid: ``.cs`` file path or 32-char GUID.
+
+        Returns:
+            ``ToolResponse`` with ``data.fields`` containing field dicts.
+        """
+        from prefab_sentinel.csharp_fields import resolve_script_fields
+
+        try:
+            guid, cs_path, fields = resolve_script_fields(
+                script_path_or_guid,
+                project_root=self.reference_resolver.project_root,
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            return error_response(
+                "CSF_RESOLVE_FAILED",
+                str(exc),
+                data={"script": script_path_or_guid},
+            )
+
+        serialized = [f for f in fields if f.is_serialized]
+        return success_response(
+            "CSF_LIST_OK",
+            f"Found {len(serialized)} serialized fields.",
+            data={
+                "script_guid": guid,
+                "script_path": str(cs_path),
+                "class_name": cs_path.stem,
+                "field_count": len(serialized),
+                "fields": [f.to_dict() for f in serialized],
+                "read_only": True,
+            },
+        )
+
+    def validate_field_rename(
+        self,
+        script_path_or_guid: str,
+        old_name: str,
+        new_name: str,
+        scope: str | None = None,
+    ) -> ToolResponse:
+        """Analyze the impact of renaming a serialized C# field.
+
+        Args:
+            script_path_or_guid: ``.cs`` file path or 32-char GUID.
+            old_name: Current field name.
+            new_name: Proposed new field name.
+            scope: Directory to restrict impact search.
+
+        Returns:
+            ``ToolResponse`` with ``data.affected_assets`` and ``data.conflict``.
+        """
+        from prefab_sentinel.csharp_fields import resolve_script_fields
+        from prefab_sentinel.udon_wiring import extract_monobehaviour_field_names
+        from prefab_sentinel.unity_yaml_parser import CLASS_ID_MONOBEHAVIOUR, split_yaml_blocks
+
+        try:
+            guid, cs_path, fields = resolve_script_fields(
+                script_path_or_guid,
+                project_root=self.reference_resolver.project_root,
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            return error_response(
+                "CSF_RESOLVE_FAILED",
+                str(exc),
+                data={"script": script_path_or_guid},
+            )
+
+        serialized = [f for f in fields if f.is_serialized]
+        field_names = {f.name for f in serialized}
+
+        if old_name not in field_names:
+            return error_response(
+                "CSF_FIELD_NOT_FOUND",
+                f"Field '{old_name}' not found in serialized fields of {cs_path.stem}.",
+                data={
+                    "script": str(cs_path),
+                    "available_fields": sorted(field_names),
+                },
+            )
+
+        conflict = new_name in field_names
+        has_formerly = any(
+            any("FormerlySerializedAs" in a for a in f.attributes)
+            for f in serialized
+            if f.name == old_name
+        )
+
+        # Scan YAML files for affected references
+        project_root = self.reference_resolver.project_root
+        scope_path = (
+            resolve_scope_path(scope, project_root) if scope else project_root
+        )
+
+        affected: list[dict[str, Any]] = []
+
+        if guid:
+            for yaml_path in _iter_yaml_files(scope_path):
+                try:
+                    text = decode_text_file(yaml_path)
+                except (OSError, UnicodeDecodeError):
+                    continue
+                if text is None or guid not in text:
+                    continue
+                blocks = split_yaml_blocks(text)
+                for block in blocks:
+                    if block.class_id != CLASS_ID_MONOBEHAVIOUR:
+                        continue
+                    if guid not in block.text:
+                        continue
+                    yaml_fields = extract_monobehaviour_field_names(block)
+                    if old_name in yaml_fields:
+                        rel = _relative_path(yaml_path, project_root)
+                        affected.append({
+                            "path": rel,
+                            "file_id": block.file_id,
+                        })
+
+        return success_response(
+            "CSF_RENAME_OK",
+            f"Rename '{old_name}' -> '{new_name}': {len(affected)} affected components.",
+            data={
+                "script_guid": guid,
+                "script_path": str(cs_path),
+                "old_name": old_name,
+                "new_name": new_name,
+                "conflict": conflict,
+                "has_formerly_serialized_as": has_formerly,
+                "affected_count": len(affected),
+                "affected_assets": affected,
+                "read_only": True,
+            },
+        )
+
+    def check_field_coverage(
+        self,
+        scope: str,
+    ) -> ToolResponse:
+        """Detect unused C# fields or orphaned YAML propertyPaths in scope.
+
+        Args:
+            scope: Directory or file to scan.
+
+        Returns:
+            ``ToolResponse`` with ``data.unused_fields`` and ``data.orphaned_paths``.
+        """
+        from prefab_sentinel.csharp_fields import parse_serialized_fields
+        from prefab_sentinel.udon_wiring import extract_monobehaviour_field_names
+        from prefab_sentinel.unity_yaml_parser import CLASS_ID_MONOBEHAVIOUR, split_yaml_blocks
+
+        project_root = self.reference_resolver.project_root
+        scope_path = resolve_scope_path(scope, project_root)
+
+        guid_index = collect_project_guid_index(project_root, include_package_cache=False)
+        cs_by_guid: dict[str, Path] = {
+            g: p for g, p in guid_index.items() if p.suffix == ".cs"
+        }
+
+        # Cache parsed C# fields by GUID
+        field_cache: dict[str, set[str]] = {}
+        unused_fields: list[dict[str, Any]] = []
+        orphaned_paths: list[dict[str, Any]] = []
+        scripts_checked: set[str] = set()
+        components_checked = 0
+
+        for yaml_path in _iter_yaml_files(scope_path):
+            try:
+                text = decode_text_file(yaml_path)
+            except (OSError, UnicodeDecodeError):
+                continue
+            if text is None:
+                continue
+            blocks = split_yaml_blocks(text)
+            for block in blocks:
+                if block.class_id != CLASS_ID_MONOBEHAVIOUR:
+                    continue
+                # Extract script GUID from block
+                guid_match = re.search(
+                    r"m_Script:\s*\{.*?guid:\s*([0-9a-fA-F]{32})", block.text
+                )
+                if not guid_match:
+                    continue
+                script_guid = guid_match.group(1).lower()
+
+                cs_path = cs_by_guid.get(script_guid)
+                if cs_path is None:
+                    continue  # External script, skip
+
+                components_checked += 1
+
+                # Parse C# fields (cached)
+                if script_guid not in field_cache:
+                    try:
+                        source = cs_path.read_text(encoding="utf-8-sig")
+                    except (OSError, UnicodeDecodeError):
+                        continue
+                    parsed = parse_serialized_fields(source)
+                    field_cache[script_guid] = {
+                        f.name for f in parsed if f.is_serialized
+                    }
+                    scripts_checked.add(script_guid)
+
+                cs_fields = field_cache[script_guid]
+                yaml_fields = set(extract_monobehaviour_field_names(block))
+                rel = _relative_path(yaml_path, project_root)
+
+                # Orphaned: in YAML but not in C#
+                for name in sorted(yaml_fields - cs_fields):
+                    orphaned_paths.append({
+                        "path": rel,
+                        "file_id": block.file_id,
+                        "field_name": name,
+                        "script_guid": script_guid,
+                        "class_name": cs_path.stem,
+                    })
+
+                # Unused: in C# but not in YAML (per-component)
+                for name in sorted(cs_fields - yaml_fields):
+                    unused_fields.append({
+                        "path": rel,
+                        "file_id": block.file_id,
+                        "field_name": name,
+                        "script_guid": script_guid,
+                        "class_name": cs_path.stem,
+                    })
+
+        return success_response(
+            "CSF_COVERAGE_OK",
+            (
+                f"Checked {components_checked} components "
+                f"({len(scripts_checked)} scripts): "
+                f"{len(unused_fields)} unused, {len(orphaned_paths)} orphaned."
+            ),
+            data={
+                "scope": scope,
+                "scripts_checked": len(scripts_checked),
+                "components_checked": components_checked,
+                "unused_count": len(unused_fields),
+                "unused_fields": unused_fields,
+                "orphaned_count": len(orphaned_paths),
+                "orphaned_paths": orphaned_paths,
                 "read_only": True,
             },
         )
