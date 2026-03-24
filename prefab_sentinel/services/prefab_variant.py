@@ -23,6 +23,14 @@ OVERRIDE_TARGET_PATTERN = re.compile(
 ARRAY_SIZE_PATH_PATTERN = re.compile(r"^(?P<prefix>.+)\.Array\.size$")
 ARRAY_DATA_PATH_PATTERN = re.compile(r"^(?P<prefix>.+)\.Array\.data\[(?P<index>\d+)\]$")
 
+# Specific code when only one category is present;
+# PVR001 is also the fallback for mixed diagnostics.
+_STALE_CATEGORY_CODES: dict[frozenset[str], str] = {
+    frozenset({"empty_property_path"}): "PVR001",
+    frozenset({"duplicate_override"}): "PVR002",
+    frozenset({"array_size_mismatch"}): "PVR003",
+}
+
 
 @dataclass(slots=True)
 class OverrideEntry:
@@ -431,7 +439,7 @@ class PrefabVariantService:
                 diagnostics.append(
                     Diagnostic(
                         path=self._relative(path),
-                        location=f"{lines[-1]}:1",
+                        location=f"{lines[0]}:1..{lines[-1]}:1",
                         detail="duplicate_override",
                         evidence=(
                             f"{target_key} / {property_path} appears {len(lines)} times; "
@@ -458,13 +466,16 @@ class PrefabVariantService:
                 )
 
         if diagnostics:
+            categories = {d.detail for d in diagnostics}
+            code = _STALE_CATEGORY_CODES.get(frozenset(categories), "PVR001")
             return error_response(
-                "PVR001",
+                code,
                 "Potential stale overrides detected.",
                 severity=Severity.WARNING,
                 data={
                     "variant_path": self._relative(path),
                     "stale_count": len(diagnostics),
+                    "categories": sorted(categories),
                     "read_only": True,
                 },
                 diagnostics=diagnostics,

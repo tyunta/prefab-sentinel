@@ -37,7 +37,7 @@
 
 ## API / エラー規約
 - すべての応答は `success / severity / code / message / data / diagnostics` を含む。
-- 主要コード: `SER001`, `SER002`, `PVR001`, `REF001`, `REF002`, `RUN001`, `RUN002`。
+- 主要コード: `SER001`, `SER002`, `PVR001`, `PVR002`, `PVR003`, `REF001`, `REF002`, `RUN001`, `RUN002`。
 - `severity` は `info | warning | error | critical` を使用する。
 
 ## セキュリティと実行制御

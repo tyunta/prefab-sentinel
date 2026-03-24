@@ -282,10 +282,98 @@ class PrefabVariantServiceTests(unittest.TestCase):
 
             stale = svc.detect_stale_overrides("Assets/Variant.prefab")
             self.assertFalse(stale.success)
+            # Mixed categories → umbrella code PVR001
             self.assertEqual("PVR001", stale.code)
             details = [diag.detail for diag in stale.diagnostics]
             self.assertIn("duplicate_override", details)
             self.assertIn("array_size_mismatch", details)
+            self.assertCountEqual(
+                ["array_size_mismatch", "duplicate_override"],
+                stale.data["categories"],
+            )
+
+    def test_detect_stale_duplicate_only_returns_pvr002(self) -> None:
+        """Single-category duplicate_override → PVR002."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            write_file(
+                root / "Assets" / "Base.prefab",
+                "%YAML 1.1\n--- !u!1 &100100000\nGameObject:\n  m_Name: Base\n",
+            )
+            write_file(
+                root / "Assets" / "Base.prefab.meta",
+                f"fileFormatVersion: 2\nguid: {BASE_GUID}\n",
+            )
+            write_file(
+                root / "Assets" / "Dup.prefab",
+                f"""%YAML 1.1
+--- !u!1001 &100100000
+PrefabInstance:
+  m_SourcePrefab: {{fileID: 100100000, guid: {BASE_GUID}, type: 3}}
+  m_Modification:
+    m_Modifications:
+    - target: {{fileID: 100100000, guid: {BASE_GUID}, type: 3}}
+      propertyPath: some.path
+      value: a
+      objectReference: {{fileID: 0}}
+    - target: {{fileID: 100100000, guid: {BASE_GUID}, type: 3}}
+      propertyPath: some.path
+      value: b
+      objectReference: {{fileID: 0}}
+""",
+            )
+            write_file(
+                root / "Assets" / "Dup.prefab.meta",
+                f"fileFormatVersion: 2\nguid: {VARIANT_GUID}\n",
+            )
+            svc = PrefabVariantService(project_root=root)
+            stale = svc.detect_stale_overrides("Assets/Dup.prefab")
+            self.assertFalse(stale.success)
+            self.assertEqual("PVR002", stale.code)
+            self.assertEqual(["duplicate_override"], stale.data["categories"])
+            # Location includes both first and last occurrence
+            loc = stale.diagnostics[0].location
+            self.assertIn("..", loc)
+
+    def test_detect_stale_array_mismatch_only_returns_pvr003(self) -> None:
+        """Single-category array_size_mismatch → PVR003."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            write_file(
+                root / "Assets" / "Base.prefab",
+                "%YAML 1.1\n--- !u!1 &100100000\nGameObject:\n  m_Name: Base\n",
+            )
+            write_file(
+                root / "Assets" / "Base.prefab.meta",
+                f"fileFormatVersion: 2\nguid: {BASE_GUID}\n",
+            )
+            write_file(
+                root / "Assets" / "Arr.prefab",
+                f"""%YAML 1.1
+--- !u!1001 &100100000
+PrefabInstance:
+  m_SourcePrefab: {{fileID: 100100000, guid: {BASE_GUID}, type: 3}}
+  m_Modification:
+    m_Modifications:
+    - target: {{fileID: 100100000, guid: {BASE_GUID}, type: 3}}
+      propertyPath: items.Array.size
+      value: 1
+      objectReference: {{fileID: 0}}
+    - target: {{fileID: 100100000, guid: {BASE_GUID}, type: 3}}
+      propertyPath: items.Array.data[2]
+      value: 0
+      objectReference: {{fileID: 0}}
+""",
+            )
+            write_file(
+                root / "Assets" / "Arr.prefab.meta",
+                f"fileFormatVersion: 2\nguid: {VARIANT_GUID}\n",
+            )
+            svc = PrefabVariantService(project_root=root)
+            stale = svc.detect_stale_overrides("Assets/Arr.prefab")
+            self.assertFalse(stale.success)
+            self.assertEqual("PVR003", stale.code)
+            self.assertEqual(["array_size_mismatch"], stale.data["categories"])
 
 
 class RuntimeValidationServiceTests(unittest.TestCase):

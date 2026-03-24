@@ -458,7 +458,9 @@ Udonログを根拠に修正候補を最短で絞る。
 ### 7.2 エラーコード規約
 - `SER001`: Serialized path not found
 - `SER002`: Type mismatch
-- `PVR001`: Stale override detected
+- `PVR001`: Stale override — empty propertyPath (single category) or mixed categories
+- `PVR002`: Stale override — duplicate propertyPath (later entries shadow earlier)
+- `PVR003`: Stale override — array size/index mismatch
 - `REF001`: Missing asset guid
 - `REF002`: Missing local fileID
 - `RUN001`: Udon runtime exception
