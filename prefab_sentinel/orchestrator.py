@@ -234,21 +234,29 @@ class Phase1Orchestrator:
     def list_serialized_fields(
         self,
         script_path_or_guid: str,
+        include_inherited: bool = False,
     ) -> ToolResponse:
         """List all serialized C# fields for a script.
 
         Args:
             script_path_or_guid: ``.cs`` file path or 32-char GUID.
+            include_inherited: If True, include fields inherited from
+                base classes (each annotated with ``source_class``).
 
         Returns:
             ``ToolResponse`` with ``data.fields`` containing field dicts.
         """
-        from prefab_sentinel.csharp_fields import resolve_script_fields
+        from prefab_sentinel.csharp_fields import (
+            resolve_inherited_fields,
+            resolve_script_fields,
+        )
+
+        project_root = self.reference_resolver.project_root
 
         try:
             guid, cs_path, fields = resolve_script_fields(
                 script_path_or_guid,
-                project_root=self.reference_resolver.project_root,
+                project_root=project_root,
             )
         except (FileNotFoundError, ValueError) as exc:
             return error_response(
@@ -257,7 +265,11 @@ class Phase1Orchestrator:
                 data={"script": script_path_or_guid},
             )
 
-        serialized = [f for f in fields if f.is_serialized]
+        if include_inherited and guid:
+            serialized = resolve_inherited_fields(guid, project_root)
+        else:
+            serialized = [f for f in fields if f.is_serialized]
+
         return success_response(
             "CSF_LIST_OK",
             f"Found {len(serialized)} serialized fields.",
@@ -267,6 +279,7 @@ class Phase1Orchestrator:
                 "class_name": cs_path.stem,
                 "field_count": len(serialized),
                 "fields": [f.to_dict() for f in serialized],
+                "include_inherited": include_inherited,
                 "read_only": True,
             },
         )
@@ -280,6 +293,9 @@ class Phase1Orchestrator:
     ) -> ToolResponse:
         """Analyze the impact of renaming a serialized C# field.
 
+        Also detects affected Prefabs/Scenes that reference derived classes
+        inheriting the renamed field.
+
         Args:
             script_path_or_guid: ``.cs`` file path or 32-char GUID.
             old_name: Current field name.
@@ -289,14 +305,20 @@ class Phase1Orchestrator:
         Returns:
             ``ToolResponse`` with ``data.affected_assets`` and ``data.conflict``.
         """
-        from prefab_sentinel.csharp_fields import resolve_script_fields
+        from prefab_sentinel.csharp_fields import (
+            find_derived_guids,
+            parse_class_info,
+            resolve_script_fields,
+        )
         from prefab_sentinel.udon_wiring import extract_monobehaviour_field_names
         from prefab_sentinel.unity_yaml_parser import CLASS_ID_MONOBEHAVIOUR, split_yaml_blocks
+
+        project_root = self.reference_resolver.project_root
 
         try:
             guid, cs_path, fields = resolve_script_fields(
                 script_path_or_guid,
-                project_root=self.reference_resolver.project_root,
+                project_root=project_root,
             )
         except (FileNotFoundError, ValueError) as exc:
             return error_response(
@@ -325,35 +347,60 @@ class Phase1Orchestrator:
             if f.name == old_name
         )
 
+        # Collect GUIDs to scan: direct + derived classes
+        scan_guids: set[str] = set()
+        if guid:
+            scan_guids.add(guid)
+            # Find derived classes that inherit this field
+            try:
+                source = cs_path.read_text(encoding="utf-8-sig")
+                info = parse_class_info(source, hint_name=cs_path.stem)
+                if info:
+                    derived = find_derived_guids(info.name, project_root)
+                    scan_guids.update(derived)
+            except (OSError, UnicodeDecodeError):
+                pass
+
         # Scan YAML files for affected references
-        project_root = self.reference_resolver.project_root
         scope_path = (
             resolve_scope_path(scope, project_root) if scope else project_root
         )
 
         affected: list[dict[str, Any]] = []
 
-        if guid:
+        if scan_guids:
             for yaml_path in _iter_yaml_files(scope_path):
                 try:
                     text = decode_text_file(yaml_path)
                 except (OSError, UnicodeDecodeError):
                     continue
-                if text is None or guid not in text:
+                if text is None:
+                    continue
+                # Quick check: does any scan GUID appear in the file?
+                if not any(g in text for g in scan_guids):
                     continue
                 blocks = split_yaml_blocks(text)
                 for block in blocks:
                     if block.class_id != CLASS_ID_MONOBEHAVIOUR:
                         continue
-                    if guid not in block.text:
+                    if not any(g in block.text for g in scan_guids):
                         continue
                     yaml_fields = extract_monobehaviour_field_names(block)
                     if old_name in yaml_fields:
                         rel = _relative_path(yaml_path, project_root)
-                        affected.append({
+                        # Identify which GUID this block uses
+                        block_guid = ""
+                        for g in scan_guids:
+                            if g in block.text:
+                                block_guid = g
+                                break
+                        entry: dict[str, Any] = {
                             "path": rel,
                             "file_id": block.file_id,
-                        })
+                        }
+                        if block_guid and block_guid != guid:
+                            entry["via_derived_guid"] = block_guid
+                        affected.append(entry)
 
         return success_response(
             "CSF_RENAME_OK",
@@ -367,6 +414,7 @@ class Phase1Orchestrator:
                 "has_formerly_serialized_as": has_formerly,
                 "affected_count": len(affected),
                 "affected_assets": affected,
+                "derived_guids_scanned": len(scan_guids) - (1 if guid else 0),
                 "read_only": True,
             },
         )
@@ -377,13 +425,20 @@ class Phase1Orchestrator:
     ) -> ToolResponse:
         """Detect unused C# fields or orphaned YAML propertyPaths in scope.
 
+        Resolves inheritance chains so that fields inherited from base
+        classes are not falsely reported as orphaned.
+
         Args:
             scope: Directory or file to scan.
 
         Returns:
             ``ToolResponse`` with ``data.unused_fields`` and ``data.orphaned_paths``.
         """
-        from prefab_sentinel.csharp_fields import parse_serialized_fields
+        from prefab_sentinel.csharp_fields import (
+            build_class_name_index,
+            build_field_map,
+            resolve_inherited_fields,
+        )
         from prefab_sentinel.udon_wiring import extract_monobehaviour_field_names
         from prefab_sentinel.unity_yaml_parser import CLASS_ID_MONOBEHAVIOUR, split_yaml_blocks
 
@@ -395,7 +450,11 @@ class Phase1Orchestrator:
             g: p for g, p in guid_index.items() if p.suffix == ".cs"
         }
 
-        # Cache parsed C# fields by GUID
+        # Pre-build shared caches for inheritance resolution
+        _field_map = build_field_map(project_root)
+        _class_index = build_class_name_index(project_root)
+
+        # Cache resolved C# fields by GUID (including inherited)
         field_cache: dict[str, set[str]] = {}
         unused_fields: list[dict[str, Any]] = []
         orphaned_paths: list[dict[str, Any]] = []
@@ -427,16 +486,15 @@ class Phase1Orchestrator:
 
                 components_checked += 1
 
-                # Parse C# fields (cached)
+                # Resolve C# fields including inherited (cached)
                 if script_guid not in field_cache:
-                    try:
-                        source = cs_path.read_text(encoding="utf-8-sig")
-                    except (OSError, UnicodeDecodeError):
-                        continue
-                    parsed = parse_serialized_fields(source)
-                    field_cache[script_guid] = {
-                        f.name for f in parsed if f.is_serialized
-                    }
+                    resolved = resolve_inherited_fields(
+                        script_guid,
+                        project_root,
+                        _field_map=_field_map,
+                        _class_index=_class_index,
+                    )
+                    field_cache[script_guid] = {f.name for f in resolved}
                     scripts_checked.add(script_guid)
 
                 cs_fields = field_cache[script_guid]

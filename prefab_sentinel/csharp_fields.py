@@ -19,9 +19,14 @@ from pathlib import Path
 from typing import Any
 
 __all__ = [
+    "CSharpClassInfo",
     "CSharpField",
+    "build_class_name_index",
     "build_field_map",
+    "find_derived_guids",
+    "parse_class_info",
     "parse_serialized_fields",
+    "resolve_inherited_fields",
     "resolve_script_fields",
 ]
 
@@ -52,6 +57,9 @@ class CSharpField:
     attributes: list[str] = field(default_factory=list)
     """Collected attributes (e.g., ``["Header(\\"Movement\\")", "Range(0, 100)"]``)."""
 
+    source_class: str = ""
+    """Class that declared this field (set by ``resolve_inherited_fields()``)."""
+
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
             "name": self.name,
@@ -62,7 +70,23 @@ class CSharpField:
         }
         if self.attributes:
             result["attributes"] = list(self.attributes)
+        if self.source_class:
+            result["source_class"] = self.source_class
         return result
+
+
+@dataclass(slots=True)
+class CSharpClassInfo:
+    """Class declaration metadata extracted from C# source."""
+
+    name: str
+    """Class name (e.g., ``DerivedPlayer``)."""
+
+    base_class: str
+    """Base class name (e.g., ``BasePlayer``). Empty string if none."""
+
+    fields: list[CSharpField]
+    """Serialized fields declared directly in this class."""
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +124,34 @@ _NON_TYPE_KEYWORDS = frozenset({
 # Detect C# property (has { get or { set) or method (has parentheses before ;)
 _PROPERTY_RE = re.compile(r"\{\s*get\b|\{\s*set\b")
 _METHOD_PAREN_RE = re.compile(r"\w+\s*\(")
+
+# Matches a class declaration line:
+#   [access] [modifiers] class Name [<T>] [: BaseClass [, IInterface ...]]
+_CLASS_DECL_RE = re.compile(
+    r"^\s*"
+    r"(?:(?:public|private|protected|internal)\s+)?"
+    r"(?:(?:abstract|sealed|static|partial|new)\s+)*"
+    r"class\s+"
+    r"(\w+)"  # group(1): class name
+    r"(?:\s*<[^>]+>)?"  # optional generic params
+    r"(?:\s*:\s*"
+    r"([\w.]+(?:\s*<[^>]+>)?)"  # group(2): first base type
+    r")?",
+    re.MULTILINE,
+)
+
+# Base classes where inheritance chain resolution should stop.
+# These are Unity/external types whose fields are not user-defined.
+_INHERITANCE_STOP_CLASSES = frozenset({
+    "MonoBehaviour",
+    "UdonSharpBehaviour",
+    "NetworkBehaviour",
+    "ScriptableObject",
+    "StateMachineBehaviour",
+    "Component",
+    "Behaviour",
+    "Object",
+})
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +245,50 @@ def parse_serialized_fields(source: str) -> list[CSharpField]:
         pending_attrs.clear()
 
     return results
+
+
+def parse_class_info(
+    source: str,
+    hint_name: str = "",
+) -> CSharpClassInfo | None:
+    """Extract the main class declaration from C# source.
+
+    Unity convention: one MonoBehaviour per file, named to match the file.
+    When *hint_name* is given (typically the file stem), the class whose
+    name matches is preferred.  Otherwise the first ``class`` found is
+    returned.
+
+    Args:
+        source: C# source code text.
+        hint_name: Preferred class name (e.g. file stem).
+
+    Returns:
+        ``CSharpClassInfo`` or ``None`` if no class declaration is found.
+    """
+    matches: list[tuple[str, str]] = []
+    for m in _CLASS_DECL_RE.finditer(source):
+        name = m.group(1)
+        base = m.group(2) or ""
+        # Strip generic suffix from base: "BaseClass<T>" → "BaseClass"
+        angle = base.find("<")
+        if angle >= 0:
+            base = base[:angle].strip()
+        matches.append((name, base))
+
+    if not matches:
+        return None
+
+    # Prefer class matching hint_name
+    chosen_name, chosen_base = matches[0]
+    if hint_name:
+        for name, base in matches:
+            if name == hint_name:
+                chosen_name, chosen_base = name, base
+                break
+
+    fields = parse_serialized_fields(source)
+    serialized = [f for f in fields if f.is_serialized]
+    return CSharpClassInfo(name=chosen_name, base_class=chosen_base, fields=serialized)
 
 
 # ---------------------------------------------------------------------------
@@ -291,3 +387,189 @@ def resolve_script_fields(
     source = cs_path.read_text(encoding="utf-8-sig")
     fields = parse_serialized_fields(source)
     return guid, cs_path, fields
+
+
+# ---------------------------------------------------------------------------
+# Inheritance chain resolution
+# ---------------------------------------------------------------------------
+
+
+def _strip_namespace(name: str) -> str:
+    """Strip namespace prefix: ``UnityEngine.MonoBehaviour`` → ``MonoBehaviour``."""
+    dot = name.rfind(".")
+    return name[dot + 1 :] if dot >= 0 else name
+
+
+def build_class_name_index(
+    project_root: Path,
+) -> dict[str, tuple[str, Path]]:
+    """Build a mapping from class name to ``(guid, cs_path)``.
+
+    Scans ``.cs`` files in the project and extracts the main class name
+    from each (using ``parse_class_info`` with file-stem hinting).
+
+    Args:
+        project_root: Unity project root directory.
+
+    Returns:
+        Dict mapping class name to ``(guid, cs_path)`` tuple.
+    """
+    from prefab_sentinel.unity_assets import collect_project_guid_index
+
+    guid_index = collect_project_guid_index(project_root, include_package_cache=False)
+    result: dict[str, tuple[str, Path]] = {}
+    for guid, asset_path in guid_index.items():
+        if asset_path.suffix != ".cs":
+            continue
+        try:
+            source = asset_path.read_text(encoding="utf-8-sig")
+        except (OSError, UnicodeDecodeError):
+            continue
+        info = parse_class_info(source, hint_name=asset_path.stem)
+        if info is not None:
+            result[info.name] = (guid, asset_path)
+    return result
+
+
+def resolve_inherited_fields(
+    script_guid: str,
+    project_root: Path,
+    *,
+    _field_map: dict[str, list[CSharpField]] | None = None,
+    _class_index: dict[str, tuple[str, Path]] | None = None,
+) -> list[CSharpField]:
+    """Resolve all serialized fields including inherited ones.
+
+    Walks the inheritance chain from the given script up to base classes,
+    collecting serialized fields from each level.  Each returned field has
+    ``source_class`` set to the class that declared it.
+
+    Stops at Unity/external base classes (``MonoBehaviour``,
+    ``UdonSharpBehaviour``, etc.) or when the base class is not found in
+    the project.
+
+    Args:
+        script_guid: Lowercase GUID of the script.
+        project_root: Unity project root directory.
+        _field_map: Pre-built field map (for caching).
+        _class_index: Pre-built class name index (for caching).
+
+    Returns:
+        List of serialized fields (base class fields first, then derived).
+    """
+    if _field_map is None:
+        _field_map = build_field_map(project_root)
+    if _class_index is None:
+        _class_index = build_class_name_index(project_root)
+
+    # Build guid → (class_name, path) reverse lookup for O(1) access
+    guid_to_class: dict[str, tuple[str, Path]] = {
+        guid: (name, path) for name, (guid, path) in _class_index.items()
+    }
+
+    # Walk the chain: derived → base → ... → stop
+    # Each entry: (class_name, guid, fields)
+    chain: list[tuple[str, str, list[CSharpField]]] = []
+    visited: set[str] = set()
+    current_guid = script_guid.lower()
+
+    while current_guid and current_guid not in visited:
+        visited.add(current_guid)
+
+        # Find the .cs file and parse class info
+        class_entry = guid_to_class.get(current_guid)
+        if class_entry is None:
+            # GUID not in class index — try field map only
+            direct_fields = _field_map.get(current_guid, [])
+            if direct_fields:
+                chain.append(("", current_guid, direct_fields))
+            break
+
+        class_name, cs_path = class_entry
+        try:
+            source = cs_path.read_text(encoding="utf-8-sig")
+        except (OSError, UnicodeDecodeError):
+            break
+        info = parse_class_info(source, hint_name=cs_path.stem)
+        if info is None:
+            break
+
+        direct_fields = _field_map.get(current_guid, [])
+        chain.append((info.name, current_guid, direct_fields))
+
+        # Check stop condition
+        base = info.base_class
+        if not base or _strip_namespace(base) in _INHERITANCE_STOP_CLASSES:
+            break
+
+        # Resolve base class
+        base_stripped = _strip_namespace(base)
+        base_entry = _class_index.get(base_stripped)
+        if base_entry is None:
+            break
+        current_guid = base_entry[0]
+
+    # Merge: base first, then derived. Set source_class on each field.
+    result: list[CSharpField] = []
+    for class_name, _guid, fields in reversed(chain):
+        for f in fields:
+            result.append(
+                CSharpField(
+                    name=f.name,
+                    type_name=f.type_name,
+                    is_serialized=f.is_serialized,
+                    is_public=f.is_public,
+                    line=f.line,
+                    attributes=list(f.attributes),
+                    source_class=class_name,
+                )
+            )
+    return result
+
+
+def find_derived_guids(
+    class_name: str,
+    project_root: Path,
+    *,
+    _class_index: dict[str, tuple[str, Path]] | None = None,
+) -> set[str]:
+    """Find GUIDs of all classes that inherit from *class_name* (transitively).
+
+    Args:
+        class_name: Name of the base class.
+        project_root: Unity project root directory.
+        _class_index: Pre-built class name index (for caching).
+
+    Returns:
+        Set of lowercase GUIDs for all derived classes.
+    """
+    if _class_index is None:
+        _class_index = build_class_name_index(project_root)
+
+    # Build reverse map: base_name → [child_class_name]
+    reverse: dict[str, list[str]] = {}
+    for name, (_guid, cs_path) in _class_index.items():
+        try:
+            source = cs_path.read_text(encoding="utf-8-sig")
+        except (OSError, UnicodeDecodeError):
+            continue
+        info = parse_class_info(source, hint_name=cs_path.stem)
+        if info and info.base_class:
+            base = _strip_namespace(info.base_class)
+            reverse.setdefault(base, []).append(name)
+
+    # BFS from class_name
+    result: set[str] = set()
+    queue = list(reverse.get(class_name, []))
+    visited: set[str] = set()
+    while queue:
+        current = queue.pop(0)
+        if current in visited:
+            continue
+        visited.add(current)
+        entry = _class_index.get(current)
+        if entry:
+            result.add(entry[0])  # guid
+        queue.extend(reverse.get(current, []))
+
+    return result
