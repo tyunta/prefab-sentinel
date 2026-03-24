@@ -108,6 +108,12 @@ class ReferenceResolverServiceTests(unittest.TestCase):
                 response.data["skipped_external_prefab_fileid_checks"],
                 1,
             )
+            # Details include per-reference info (capped at top_guid_limit)
+            details = response.data["skipped_external_prefab_fileid_details"]
+            self.assertGreaterEqual(len(details), 1)
+            self.assertIn("source", details[0])
+            self.assertIn("target_guid", details[0])
+            self.assertIn("file_id", details[0])
 
     def test_scan_broken_references_honors_details_limit(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

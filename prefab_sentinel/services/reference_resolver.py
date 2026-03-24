@@ -227,7 +227,7 @@ class ReferenceResolverService:
                     )
             else:
                 file_id_validated = False
-                validation_note = "prefab_external_fileid_validation_skipped"
+                validation_note = "prefab_external_fileid_not_applicable"
 
         if diagnostics:
             return error_response(
@@ -315,6 +315,8 @@ class ReferenceResolverService:
         unreadable_files = 0
         total_broken = 0
         skipped_external_prefab_fileid_checks = 0
+        skipped_external_prefab_fileid_details: list[dict[str, str]] = []
+        skipped_unreadable_target_checks = 0
 
         def record_issue(
             issue_key: tuple[str, ...],
@@ -395,11 +397,18 @@ class ReferenceResolverService:
                     if ref.file_id != "0" and is_unity_text_asset(target):
                         if not self._should_validate_external_file_id(target):
                             skipped_external_prefab_fileid_checks += 1
+                            if len(skipped_external_prefab_fileid_details) < top_guid_limit:
+                                skipped_external_prefab_fileid_details.append({
+                                    "source": src_path,
+                                    "target_guid": ref.guid,
+                                    "file_id": ref.file_id,
+                                })
                             continue
 
                         target_ids = self._local_ids(target)
-                        # If target cannot be decoded, skip local fileID validation.
+                        # Target exists but cannot be decoded — validation not possible.
                         if target in self._unreadable_paths:
+                            skipped_unreadable_target_checks += 1
                             continue
                         if target_ids and ref.file_id not in target_ids:
                             record_issue(
@@ -470,6 +479,8 @@ class ReferenceResolverService:
             "truncated_hint": truncated_hint,
             "unreadable_files": unreadable_files,
             "skipped_external_prefab_fileid_checks": skipped_external_prefab_fileid_checks,
+            "skipped_external_prefab_fileid_details": skipped_external_prefab_fileid_details,
+            "skipped_unreadable_target_checks": skipped_unreadable_target_checks,
             "exclude_patterns": list(exclude_patterns),
             "categories": {
                 "missing_asset": unique_counts["missing_asset"],
