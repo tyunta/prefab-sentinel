@@ -187,19 +187,5 @@ class RunIntegrationTestsErrorTests(unittest.TestCase):
             self.assertIn("not found", str(ctx.exception))
 
 
-class CliIntegrationTestsTests(unittest.TestCase):
-    """Tests for the CLI validate integration-tests subcommand."""
-
-    def test_cli_rejects_missing_project_path(self):
-        from prefab_sentinel import cli
-        with self.assertRaises(SystemExit) as ctx:
-            cli.main([
-                "validate", "integration-tests",
-                "--unity-command", "Unity.exe",
-                "--unity-project-path", "/nonexistent/project",
-            ])
-        self.assertNotEqual(ctx.exception.code, 0)
-
-
 if __name__ == "__main__":
     unittest.main()

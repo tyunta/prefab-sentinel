@@ -1,13 +1,9 @@
 from __future__ import annotations
 
-import io
-import json
 import tempfile
 import unittest
-from contextlib import redirect_stdout
 from pathlib import Path
 
-from prefab_sentinel import cli
 from prefab_sentinel.patch_revert import revert_overrides
 from tests.bridge_test_helpers import write_file
 
@@ -296,112 +292,6 @@ guid: {VARIANT_GUID}
             # m_Name should not appear in the modifications section
             after_mods = new_text.split("m_Modifications:")[1]
             self.assertNotIn("propertyPath: m_Name", after_mods)
-
-
-class PatchRevertCliTests(unittest.TestCase):
-    """Test the CLI integration for patch revert."""
-
-    def run_cli(self, argv: list[str]) -> tuple[int, str]:
-        buf = io.StringIO()
-        with redirect_stdout(buf):
-            exit_code = cli.main(argv)
-        return exit_code, buf.getvalue()
-
-    def test_cli_dry_run(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            _create_variant_project(root)
-
-            exit_code, output = self.run_cli([
-                "patch", "revert",
-                "--path", str(root / "Assets" / "Variant.prefab"),
-                "--target", "3430728864525902586",
-                "--property", "m_Materials.Array.data[0]",
-                "--dry-run",
-            ])
-
-        self.assertEqual(0, exit_code)
-        payload = json.loads(output)
-        self.assertTrue(payload["success"])
-        self.assertEqual("REVERT_DRY_RUN", payload["code"])
-        self.assertEqual(1, payload["data"]["match_count"])
-
-    def test_cli_confirm_requires_change_reason(self) -> None:
-        """--confirm without --change-reason should fail."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            _create_variant_project(root)
-
-            # argparse.error calls sys.exit(2), so we catch SystemExit
-            with self.assertRaises(SystemExit) as ctx:
-                self.run_cli([
-                    "patch", "revert",
-                    "--path", str(root / "Assets" / "Variant.prefab"),
-                    "--target", "3430728864525902586",
-                    "--property", "m_Materials.Array.data[0]",
-                    "--confirm",
-                ])
-            self.assertEqual(2, ctx.exception.code)
-
-    def test_cli_neither_dry_run_nor_confirm(self) -> None:
-        """Neither --dry-run nor --confirm should fail."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            _create_variant_project(root)
-
-            with self.assertRaises(SystemExit) as ctx:
-                self.run_cli([
-                    "patch", "revert",
-                    "--path", str(root / "Assets" / "Variant.prefab"),
-                    "--target", "3430728864525902586",
-                    "--property", "m_Materials.Array.data[0]",
-                ])
-            self.assertEqual(2, ctx.exception.code)
-
-    def test_cli_confirm_applies(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            _create_variant_project(root)
-
-            variant_path = root / "Assets" / "Variant.prefab"
-
-            exit_code, output = self.run_cli([
-                "patch", "revert",
-                "--path", str(variant_path),
-                "--target", "3430728864525902586",
-                "--property", "m_Materials.Array.data[0]",
-                "--confirm",
-                "--change-reason", "Revert accidental blonde material on Body_01",
-            ])
-
-            self.assertEqual(0, exit_code)
-            payload = json.loads(output)
-            self.assertTrue(payload["success"])
-            self.assertEqual("REVERT_APPLIED", payload["code"])
-
-            new_text = variant_path.read_text(encoding="utf-8")
-            self.assertNotIn("m_Materials.Array.data[0]", new_text)
-            self.assertIn("m_Materials.Array.data[1]", new_text)
-
-    def test_cli_md_format(self) -> None:
-        """--format md should produce markdown output."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            _create_variant_project(root)
-
-            exit_code, output = self.run_cli([
-                "patch", "revert",
-                "--path", str(root / "Assets" / "Variant.prefab"),
-                "--target", "3430728864525902586",
-                "--property", "m_Materials.Array.data[0]",
-                "--dry-run",
-                "--format", "md",
-            ])
-
-        self.assertEqual(0, exit_code)
-        # md format should not be valid JSON
-        with self.assertRaises(json.JSONDecodeError):
-            json.loads(output)
 
 
 class PatchRevertDuplicateOverrideTests(unittest.TestCase):

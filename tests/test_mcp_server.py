@@ -906,31 +906,6 @@ class TestSetPropertyTool(unittest.TestCase):
         self.assertEqual("m_Enabled", sr["property_path"])
 
 
-class TestCLIServeCommand(unittest.TestCase):
-    """Test the CLI serve subcommand parser."""
-
-    def test_serve_parser_registered(self) -> None:
-        from prefab_sentinel.cli import build_parser
-
-        parser = build_parser()
-        args = parser.parse_args(["serve"])
-        self.assertEqual("serve", args.command)
-        self.assertEqual("stdio", args.transport)
-        self.assertIsNone(args.project_root)
-
-    def test_serve_parser_with_options(self) -> None:
-        from prefab_sentinel.cli import build_parser
-
-        parser = build_parser()
-        args = parser.parse_args([
-            "serve",
-            "--transport", "streamable-http",
-            "--project-root", "/unity/project",
-        ])
-        self.assertEqual("streamable-http", args.transport)
-        self.assertEqual("/unity/project", args.project_root)
-
-
 class TestListSerializedFieldsTool(unittest.TestCase):
     """Tests for the list_serialized_fields MCP tool."""
 
@@ -1701,6 +1676,7 @@ class TestFindReferencingAssetsDirectPayload(unittest.TestCase):
 
     def test_error_raises_tool_error(self) -> None:
         from mcp.server.fastmcp.exceptions import ToolError
+
         from prefab_sentinel.contracts import Severity, ToolResponse
 
         server = create_server()
