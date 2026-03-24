@@ -50,6 +50,8 @@ class TestToolRegistration(unittest.TestCase):
             "inspect_variant",
             "diff_unity_symbols",
             "set_property",
+            "add_component",
+            "remove_component",
             "list_serialized_fields",
             "validate_field_rename",
             "check_field_coverage",
@@ -59,7 +61,7 @@ class TestToolRegistration(unittest.TestCase):
     def test_tool_count(self) -> None:
         server = create_server()
         tools = _run(server.list_tools())
-        self.assertEqual(13, len(tools))
+        self.assertEqual(15, len(tools))
 
 
 class TestSymbolTools(unittest.TestCase):
@@ -1165,6 +1167,379 @@ class TestSessionTools(unittest.TestCase):
         _, after = _run(server.call_tool("get_project_status", {}))
         self.assertTrue(after["data"]["orchestrator_cached"])
         self.assertTrue(after["data"]["script_map_cached"])
+
+
+class TestAddComponentTool(unittest.TestCase):
+    """Test the add_component MCP tool."""
+
+    def _prefab_with_child(self) -> str:
+        """Prefab: Root → Transform(children=[ChildTransform])
+                   Child → Transform(father=RootTransform) + MeshRenderer
+        """
+        return YAML_HEADER + "\n".join([
+            make_gameobject("100", "Root", ["200"]),
+            make_transform("200", "100", children_file_ids=["400"]),
+            make_gameobject("300", "Child", ["400", "500"]),
+            make_transform("400", "300", father_file_id="200"),
+            make_meshrenderer("500", "300"),
+        ])
+
+    def _mock_patch_apply_response(self, dry_run: bool = True) -> MagicMock:
+        resp = MagicMock()
+        resp.success = True
+        resp.to_dict.return_value = {
+            "success": True,
+            "severity": "info",
+            "code": "PATCH_APPLY_RESULT",
+            "message": "patch.apply dry-run completed." if dry_run else "patch.apply completed.",
+            "data": {"dry_run": dry_run, "confirm": not dry_run, "read_only": dry_run},
+            "diagnostics": [],
+        }
+        return resp
+
+    def test_add_component_dry_run_on_root(self) -> None:
+        import tempfile
+
+        text = self._prefab_with_child()
+        server = create_server()
+        mock_resp = self._mock_patch_apply_response(dry_run=True)
+
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "test.prefab"
+            p.write_text(text, encoding="utf-8")
+
+            with patch(
+                "prefab_sentinel.session.Phase1Orchestrator"
+            ) as mock_cls:
+                mock_orch = MagicMock()
+                mock_orch.patch_apply.return_value = mock_resp
+                mock_cls.default.return_value = mock_orch
+
+                _, result = _run(server.call_tool(
+                    "add_component",
+                    {
+                        "path": str(p),
+                        "symbol_path": "Root",
+                        "component_type": "AudioSource",
+                    },
+                ))
+
+        self.assertTrue(result["success"])
+        call_kwargs = mock_orch.patch_apply.call_args[1]
+        plan = call_kwargs["plan"]
+        op = plan["ops"][0]
+        self.assertEqual("add_component", op["op"])
+        self.assertEqual("/", op["target"])
+        self.assertEqual("AudioSource", op["type"])
+        self.assertTrue(call_kwargs["dry_run"])
+
+    def test_add_component_on_child(self) -> None:
+        import tempfile
+
+        text = self._prefab_with_child()
+        server = create_server()
+        mock_resp = self._mock_patch_apply_response(dry_run=True)
+
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "test.prefab"
+            p.write_text(text, encoding="utf-8")
+
+            with patch(
+                "prefab_sentinel.session.Phase1Orchestrator"
+            ) as mock_cls:
+                mock_orch = MagicMock()
+                mock_orch.patch_apply.return_value = mock_resp
+                mock_cls.default.return_value = mock_orch
+
+                _, result = _run(server.call_tool(
+                    "add_component",
+                    {
+                        "path": str(p),
+                        "symbol_path": "Root/Child",
+                        "component_type": "BoxCollider",
+                    },
+                ))
+
+        self.assertTrue(result["success"])
+        plan = mock_orch.patch_apply.call_args[1]["plan"]
+        op = plan["ops"][0]
+        self.assertEqual("/Child", op["target"])
+        self.assertEqual("BoxCollider", op["type"])
+
+    def test_add_component_symbol_not_found(self) -> None:
+        import tempfile
+
+        text = self._prefab_with_child()
+        server = create_server()
+
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "test.prefab"
+            p.write_text(text, encoding="utf-8")
+
+            _, result = _run(server.call_tool(
+                "add_component",
+                {
+                    "path": str(p),
+                    "symbol_path": "Nonexistent",
+                    "component_type": "AudioSource",
+                },
+            ))
+
+        self.assertFalse(result["success"])
+        self.assertEqual("SYMBOL_NOT_FOUND", result["code"])
+
+    def test_add_component_rejects_component_path(self) -> None:
+        """add_component requires a game_object, not a component."""
+        import tempfile
+
+        text = self._prefab_with_child()
+        server = create_server()
+
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "test.prefab"
+            p.write_text(text, encoding="utf-8")
+
+            _, result = _run(server.call_tool(
+                "add_component",
+                {
+                    "path": str(p),
+                    "symbol_path": "Root/Child/MeshRenderer",
+                    "component_type": "AudioSource",
+                },
+            ))
+
+        self.assertFalse(result["success"])
+        self.assertEqual("SYMBOL_NOT_GAME_OBJECT", result["code"])
+
+    def test_add_component_confirm_invalidates_cache(self) -> None:
+        import tempfile
+
+        text = self._prefab_with_child()
+        server = create_server()
+        mock_resp = self._mock_patch_apply_response(dry_run=False)
+
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "test.prefab"
+            p.write_text(text, encoding="utf-8")
+
+            with patch(
+                "prefab_sentinel.session.Phase1Orchestrator"
+            ) as mock_cls:
+                mock_orch = MagicMock()
+                mock_orch.patch_apply.return_value = mock_resp
+                mock_cls.default.return_value = mock_orch
+
+                _, result = _run(server.call_tool(
+                    "add_component",
+                    {
+                        "path": str(p),
+                        "symbol_path": "Root",
+                        "component_type": "AudioSource",
+                        "confirm": True,
+                    },
+                ))
+
+        self.assertTrue(result["success"])
+        call_kwargs = mock_orch.patch_apply.call_args[1]
+        self.assertFalse(call_kwargs["dry_run"])
+        self.assertTrue(call_kwargs["confirm"])
+
+    def test_add_component_symbol_resolution_metadata(self) -> None:
+        import tempfile
+
+        text = self._prefab_with_child()
+        server = create_server()
+        mock_resp = self._mock_patch_apply_response(dry_run=True)
+
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "test.prefab"
+            p.write_text(text, encoding="utf-8")
+
+            with patch(
+                "prefab_sentinel.session.Phase1Orchestrator"
+            ) as mock_cls:
+                mock_orch = MagicMock()
+                mock_orch.patch_apply.return_value = mock_resp
+                mock_cls.default.return_value = mock_orch
+
+                _, result = _run(server.call_tool(
+                    "add_component",
+                    {
+                        "path": str(p),
+                        "symbol_path": "Root/Child",
+                        "component_type": "AudioSource",
+                    },
+                ))
+
+        meta = result["symbol_resolution"]
+        self.assertEqual("Root/Child", meta["symbol_path"])
+        self.assertEqual("/Child", meta["hierarchy_target"])
+        self.assertEqual("AudioSource", meta["component_type"])
+        self.assertEqual("300", meta["file_id"])
+
+
+class TestRemoveComponentTool(unittest.TestCase):
+    """Test the remove_component MCP tool."""
+
+    def _prefab_with_meshrenderer(self) -> str:
+        return YAML_HEADER + "\n".join([
+            make_gameobject("100", "Cube", ["200", "300"]),
+            make_transform("200", "100"),
+            make_meshrenderer("300", "100"),
+        ])
+
+    def _mock_patch_apply_response(self, dry_run: bool = True) -> MagicMock:
+        resp = MagicMock()
+        resp.success = True
+        resp.to_dict.return_value = {
+            "success": True,
+            "severity": "info",
+            "code": "PATCH_APPLY_RESULT",
+            "message": "patch.apply dry-run completed." if dry_run else "patch.apply completed.",
+            "data": {"dry_run": dry_run, "confirm": not dry_run, "read_only": dry_run},
+            "diagnostics": [],
+        }
+        return resp
+
+    def test_remove_component_dry_run(self) -> None:
+        import tempfile
+
+        text = self._prefab_with_meshrenderer()
+        server = create_server()
+        mock_resp = self._mock_patch_apply_response(dry_run=True)
+
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "test.prefab"
+            p.write_text(text, encoding="utf-8")
+
+            with patch(
+                "prefab_sentinel.session.Phase1Orchestrator"
+            ) as mock_cls:
+                mock_orch = MagicMock()
+                mock_orch.patch_apply.return_value = mock_resp
+                mock_cls.default.return_value = mock_orch
+
+                _, result = _run(server.call_tool(
+                    "remove_component",
+                    {
+                        "path": str(p),
+                        "symbol_path": "Cube/MeshRenderer",
+                    },
+                ))
+
+        self.assertTrue(result["success"])
+        call_kwargs = mock_orch.patch_apply.call_args[1]
+        plan = call_kwargs["plan"]
+        op = plan["ops"][0]
+        self.assertEqual("remove_component", op["op"])
+        self.assertEqual("MeshRenderer", op["component"])
+        self.assertTrue(call_kwargs["dry_run"])
+
+    def test_remove_component_confirm(self) -> None:
+        import tempfile
+
+        text = self._prefab_with_meshrenderer()
+        server = create_server()
+        mock_resp = self._mock_patch_apply_response(dry_run=False)
+
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "test.prefab"
+            p.write_text(text, encoding="utf-8")
+
+            with patch(
+                "prefab_sentinel.session.Phase1Orchestrator"
+            ) as mock_cls:
+                mock_orch = MagicMock()
+                mock_orch.patch_apply.return_value = mock_resp
+                mock_cls.default.return_value = mock_orch
+
+                _, result = _run(server.call_tool(
+                    "remove_component",
+                    {
+                        "path": str(p),
+                        "symbol_path": "Cube/MeshRenderer",
+                        "confirm": True,
+                    },
+                ))
+
+        self.assertTrue(result["success"])
+        call_kwargs = mock_orch.patch_apply.call_args[1]
+        self.assertFalse(call_kwargs["dry_run"])
+        self.assertTrue(call_kwargs["confirm"])
+
+    def test_remove_component_symbol_not_found(self) -> None:
+        import tempfile
+
+        text = self._prefab_with_meshrenderer()
+        server = create_server()
+
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "test.prefab"
+            p.write_text(text, encoding="utf-8")
+
+            _, result = _run(server.call_tool(
+                "remove_component",
+                {
+                    "path": str(p),
+                    "symbol_path": "Cube/AudioSource",
+                },
+            ))
+
+        self.assertFalse(result["success"])
+        self.assertEqual("SYMBOL_NOT_FOUND", result["code"])
+
+    def test_remove_component_rejects_gameobject_path(self) -> None:
+        """remove_component requires a component, not a game_object."""
+        import tempfile
+
+        text = self._prefab_with_meshrenderer()
+        server = create_server()
+
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "test.prefab"
+            p.write_text(text, encoding="utf-8")
+
+            _, result = _run(server.call_tool(
+                "remove_component",
+                {
+                    "path": str(p),
+                    "symbol_path": "Cube",
+                },
+            ))
+
+        self.assertFalse(result["success"])
+        self.assertEqual("SYMBOL_NOT_COMPONENT", result["code"])
+
+    def test_remove_component_symbol_resolution_metadata(self) -> None:
+        import tempfile
+
+        text = self._prefab_with_meshrenderer()
+        server = create_server()
+        mock_resp = self._mock_patch_apply_response(dry_run=True)
+
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "test.prefab"
+            p.write_text(text, encoding="utf-8")
+
+            with patch(
+                "prefab_sentinel.session.Phase1Orchestrator"
+            ) as mock_cls:
+                mock_orch = MagicMock()
+                mock_orch.patch_apply.return_value = mock_resp
+                mock_cls.default.return_value = mock_orch
+
+                _, result = _run(server.call_tool(
+                    "remove_component",
+                    {
+                        "path": str(p),
+                        "symbol_path": "Cube/MeshRenderer",
+                    },
+                ))
+
+        meta = result["symbol_resolution"]
+        self.assertEqual("Cube/MeshRenderer", meta["symbol_path"])
+        self.assertEqual("MeshRenderer", meta["resolved_component"])
+        self.assertEqual("300", meta["file_id"])
 
 
 if __name__ == "__main__":

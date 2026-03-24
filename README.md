@@ -106,9 +106,11 @@ prefab-sentinel-mcp
 | `inspect_wiring` | MonoBehaviour フィールド配線の分析 |
 | `inspect_variant` | Prefab Variant の override チェーン分析 |
 | `set_property` | シンボルパスでコンポーネントのフィールド値を設定（dry-run/confirm ゲート付き） |
-| `list_serialized_fields` | C# スクリプトのシリアライズ対象フィールド一覧（パスまたは GUID 指定） |
-| `validate_field_rename` | フィールドリネームの影響分析（影響アセット一覧、衝突検出、read-only） |
-| `check_field_coverage` | C# フィールドと YAML propertyPath の不一致検出（未使用/孤立） |
+| `add_component` | シンボルパスで指定した GameObject にコンポーネントを追加（dry-run/confirm ゲート付き） |
+| `remove_component` | シンボルパスで指定したコンポーネントを削除（dry-run/confirm ゲート付き） |
+| `list_serialized_fields` | C# スクリプトのシリアライズ対象フィールド一覧（パスまたは GUID 指定、`include_inherited` で基底クラス含む） |
+| `validate_field_rename` | フィールドリネームの影響分析（派生クラス経由の影響含む、影響アセット一覧、衝突検出） |
+| `check_field_coverage` | C# フィールドと YAML propertyPath の不一致検出（継承チェーン解決済み、未使用/孤立） |
 
 **Claude Desktop 設定例:**
 
@@ -1030,8 +1032,8 @@ uvx --from git+https://github.com/tyunta/prefab-sentinel.git prefab-sentinel rep
 ## 19. 将来拡張
 
 実装中の具体アイデアと実行順は `docs/IDEAS_AND_ROADMAP.md` で管理する。
-MCP サーバーとシンボルモデルは P1、Variant 差分とオリジン追跡は P2、セマンティック編集（`set_property`）は P3、C# ↔ propertyPath 接続（フィールド一覧・リネーム影響分析・カバレッジ検出）は P4 として実装済み（セクション 0.1「MCP サーバー」参照）。
-P3.5（`add_component`/`remove_component`）以降の長期ビジョンは `docs/ROADMAP_SERENA_FOR_UNITY.md` を参照。
+MCP サーバーとシンボルモデルは P1、Variant 差分とオリジン追跡は P2、セマンティック編集（`set_property`）は P3、P3.5（open-mode `add_component`/`remove_component`）、C# ↔ propertyPath 接続（フィールド一覧・リネーム影響分析・カバレッジ検出 + 継承チェーン解決）は P4/P4+ として実装済み（セクション 0.1「MCP サーバー」参照）。
+長期ビジョンは `docs/ROADMAP_SERENA_FOR_UNITY.md` を参照。
 
 - Sceneテンプレート比較による自動配線提案
 - 複数ワールド横断の共通設定ガバナンス

@@ -3336,10 +3336,150 @@ namespace PrefabSentinel
                 );
                 return false;
             }
+            string opName = op.op ?? string.Empty;
+
+            // ── add_component: resolve GO by hierarchy path → AddComponent ──
+            if (string.Equals(opName, "add_component", StringComparison.Ordinal))
+            {
+                if (string.IsNullOrWhiteSpace(op.type))
+                {
+                    diagnostics.Add(
+                        new BridgeDiagnostic
+                        {
+                            path = target,
+                            location = $"ops[{opIndex}].type",
+                            detail = "schema_error",
+                            evidence = "type is required for add_component"
+                        }
+                    );
+                    return false;
+                }
+                GameObject targetGO;
+                string goError;
+                if (!TryFindGameObjectByPath(prefabRoot, op.target, out targetGO, out goError))
+                {
+                    diagnostics.Add(
+                        new BridgeDiagnostic
+                        {
+                            path = target,
+                            location = $"ops[{opIndex}].target",
+                            detail = "apply_error",
+                            evidence = goError
+                        }
+                    );
+                    return false;
+                }
+                Type componentType;
+                string typeError;
+                if (!TryResolveComponentType(op.type, out componentType, out typeError))
+                {
+                    diagnostics.Add(
+                        new BridgeDiagnostic
+                        {
+                            path = target,
+                            location = $"ops[{opIndex}].type",
+                            detail = "apply_error",
+                            evidence = typeError
+                        }
+                    );
+                    return false;
+                }
+                if (componentType.IsAbstract || componentType.ContainsGenericParameters)
+                {
+                    diagnostics.Add(
+                        new BridgeDiagnostic
+                        {
+                            path = target,
+                            location = $"ops[{opIndex}].type",
+                            detail = "apply_error",
+                            evidence = $"component type '{componentType.FullName ?? componentType.Name}' cannot be instantiated"
+                        }
+                    );
+                    return false;
+                }
+                if (componentType == typeof(Transform))
+                {
+                    diagnostics.Add(
+                        new BridgeDiagnostic
+                        {
+                            path = target,
+                            location = $"ops[{opIndex}].type",
+                            detail = "apply_error",
+                            evidence = "Transform is implicit and cannot be added"
+                        }
+                    );
+                    return false;
+                }
+                Component addedComponent = targetGO.AddComponent(componentType);
+                if (addedComponent == null)
+                {
+                    diagnostics.Add(
+                        new BridgeDiagnostic
+                        {
+                            path = target,
+                            location = $"ops[{opIndex}]",
+                            detail = "apply_error",
+                            evidence = $"AddComponent returned null for '{componentType.FullName ?? componentType.Name}'"
+                        }
+                    );
+                    return false;
+                }
+                return true;
+            }
+
+            // ── remove_component: resolve via TryFindUniqueComponent → DestroyImmediate ──
+            if (string.Equals(opName, "remove_component", StringComparison.Ordinal))
+            {
+                if (string.IsNullOrWhiteSpace(op.component))
+                {
+                    diagnostics.Add(
+                        new BridgeDiagnostic
+                        {
+                            path = target,
+                            location = $"ops[{opIndex}].component",
+                            detail = "schema_error",
+                            evidence = "component is required for remove_component"
+                        }
+                    );
+                    return false;
+                }
+                Component removeTarget;
+                string removeError;
+                if (!TryFindUniqueComponent(prefabRoot, op.component, out removeTarget, out removeError))
+                {
+                    diagnostics.Add(
+                        new BridgeDiagnostic
+                        {
+                            path = target,
+                            location = $"ops[{opIndex}].component",
+                            detail = "apply_error",
+                            evidence = removeError
+                        }
+                    );
+                    return false;
+                }
+                if (removeTarget is Transform)
+                {
+                    diagnostics.Add(
+                        new BridgeDiagnostic
+                        {
+                            path = target,
+                            location = $"ops[{opIndex}].component",
+                            detail = "apply_error",
+                            evidence = "Transform cannot be removed"
+                        }
+                    );
+                    return false;
+                }
+                UnityEngine.Object.DestroyImmediate(removeTarget, true);
+                return true;
+            }
+
+            // ── mutation ops: set / insert_array_element / remove_array_element ──
             if (
-                !string.Equals(op.op, "set", StringComparison.Ordinal)
-                && !string.Equals(op.op, "insert_array_element", StringComparison.Ordinal)
-                && !string.Equals(op.op, "remove_array_element", StringComparison.Ordinal)
+                !string.Equals(opName, "set", StringComparison.Ordinal)
+                && !string.Equals(opName, "insert_array_element", StringComparison.Ordinal)
+                && !string.Equals(opName, "remove_array_element", StringComparison.Ordinal)
             )
             {
                 diagnostics.Add(
@@ -3752,6 +3892,64 @@ namespace PrefabSentinel
                 ? $"component selector is ambiguous: '{selector}' matched {matches.Count} components"
                 : $"component selector is ambiguous: '{selector}' matched {matches.Count} components ({matchedCandidates})";
             return false;
+        }
+
+        private static bool TryFindGameObjectByPath(
+            GameObject root,
+            string hierarchyPath,
+            out GameObject result,
+            out string error
+        )
+        {
+            result = null;
+            error = string.Empty;
+
+            if (string.IsNullOrWhiteSpace(hierarchyPath))
+            {
+                result = root;
+                return true;
+            }
+
+            string normalized = hierarchyPath.Trim().TrimStart('/');
+            if (string.IsNullOrEmpty(normalized))
+            {
+                result = root;
+                return true;
+            }
+
+            Transform found = root.transform.Find(normalized);
+            if (found != null)
+            {
+                result = found.gameObject;
+                return true;
+            }
+
+            // Build list of available children for diagnostics.
+            List<string> available = new List<string>();
+            CollectChildPaths(root.transform, "", available, 32);
+            string hint = available.Count > 0
+                ? $"available paths: {string.Join(", ", available.ToArray())}"
+                : "no child objects found";
+            error = $"game object not found at path '/{normalized}'. {hint}";
+            return false;
+        }
+
+        private static void CollectChildPaths(
+            Transform parent,
+            string prefix,
+            List<string> paths,
+            int limit
+        )
+        {
+            for (int i = 0; i < parent.childCount && paths.Count < limit; i++)
+            {
+                Transform child = parent.GetChild(i);
+                string childPath = string.IsNullOrEmpty(prefix)
+                    ? child.name
+                    : prefix + "/" + child.name;
+                paths.Add("/" + childPath);
+                CollectChildPaths(child, childPath, paths, limit);
+            }
         }
 
         private static bool TryParseComponentSelector(

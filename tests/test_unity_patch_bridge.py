@@ -1710,6 +1710,101 @@ class EditorBridgeModeTests(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertEqual("BRIDGE_EDITOR_TIMEOUT", result["code"])
 
+    def test_remove_component_validation_accepts_component_field(self) -> None:
+        """Open-mode remove_component uses 'component' (TypeName@/path selector)."""
+        result = self._run_bridge(
+            {
+                "protocol_version": 2,
+                "plan_version": 2,
+                "resources": [
+                    {
+                        "id": "prefab",
+                        "path": "Assets/Test.prefab",
+                        "mode": "open",
+                    }
+                ],
+                "ops": [
+                    {
+                        "resource": "prefab",
+                        "op": "remove_component",
+                        "component": "AudioSource@/Root",
+                    },
+                ],
+            },
+        )
+        # Validation should pass (no BRIDGE_REQUEST_SCHEMA error).
+        # It will fail later (no Unity command) but that proves schema was accepted.
+        self.assertNotEqual("BRIDGE_REQUEST_SCHEMA", result.get("code", ""))
+
+    def test_remove_component_validation_rejects_missing_target_and_component(self) -> None:
+        result = self._run_bridge(
+            {
+                "protocol_version": 2,
+                "plan_version": 2,
+                "resources": [
+                    {
+                        "id": "prefab",
+                        "path": "Assets/Test.prefab",
+                        "mode": "open",
+                    }
+                ],
+                "ops": [
+                    {"resource": "prefab", "op": "remove_component"},
+                ],
+            },
+        )
+        self.assertFalse(result["success"])
+        self.assertEqual("BRIDGE_REQUEST_SCHEMA", result["code"])
+
+    def test_add_component_validation_passes_with_target_and_type(self) -> None:
+        """Open-mode add_component uses 'target' (hierarchy path) + 'type'."""
+        result = self._run_bridge(
+            {
+                "protocol_version": 2,
+                "plan_version": 2,
+                "resources": [
+                    {
+                        "id": "prefab",
+                        "path": "Assets/Test.prefab",
+                        "mode": "open",
+                    }
+                ],
+                "ops": [
+                    {
+                        "resource": "prefab",
+                        "op": "add_component",
+                        "target": "/CharacterBody",
+                        "type": "AudioSource",
+                    },
+                ],
+            },
+        )
+        self.assertNotEqual("BRIDGE_REQUEST_SCHEMA", result.get("code", ""))
+
+    def test_add_component_validation_rejects_missing_type(self) -> None:
+        result = self._run_bridge(
+            {
+                "protocol_version": 2,
+                "plan_version": 2,
+                "resources": [
+                    {
+                        "id": "prefab",
+                        "path": "Assets/Test.prefab",
+                        "mode": "open",
+                    }
+                ],
+                "ops": [
+                    {
+                        "resource": "prefab",
+                        "op": "add_component",
+                        "target": "/CharacterBody",
+                    },
+                ],
+            },
+        )
+        self.assertFalse(result["success"])
+        self.assertEqual("BRIDGE_REQUEST_SCHEMA", result["code"])
+
     def test_explicit_batchmode_requires_unity_command(self) -> None:
         result = self._run_bridge(
             {

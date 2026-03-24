@@ -482,8 +482,214 @@ def create_server(
         return result
 
     @server.tool()
+    def add_component(
+        path: str,
+        symbol_path: str,
+        component_type: str,
+        confirm: bool = False,
+        change_reason: str = "",
+    ) -> dict[str, Any]:
+        """Add a component to an existing GameObject in an open-mode asset.
+
+        Two-phase workflow:
+        - confirm=False (default): dry-run preview.
+        - confirm=True: applies the change.
+
+        Args:
+            path: Asset file path (.prefab, .unity, .asset).
+            symbol_path: Symbol path to the target GameObject
+                (e.g. "Player" for the root, "Player/Body" for a child).
+            component_type: Unity component type to add
+                (e.g. "AudioSource", "BoxCollider", "VRC.Udon.UdonBehaviour").
+            confirm: Set True to apply (False = dry-run only).
+            change_reason: Human-readable reason for the change (audit trail).
+        """
+        text, resolved = _read_asset(path)
+        tree = session.get_symbol_tree(resolved, text, include_properties=False)
+        try:
+            node = tree.resolve_unique(symbol_path)
+        except SymbolNotFoundError:
+            return {
+                "success": False,
+                "severity": "error",
+                "code": "SYMBOL_NOT_FOUND",
+                "message": f"No game object found at symbol path: {symbol_path!r}",
+                "data": {"asset_path": path, "symbol_path": symbol_path},
+                "diagnostics": [],
+            }
+        except AmbiguousSymbolError as exc:
+            return {
+                "success": False,
+                "severity": "error",
+                "code": "SYMBOL_AMBIGUOUS",
+                "message": str(exc),
+                "data": {"asset_path": path, "symbol_path": symbol_path},
+                "diagnostics": [],
+            }
+
+        if node.kind != SymbolKind.GAME_OBJECT:
+            return {
+                "success": False,
+                "severity": "error",
+                "code": "SYMBOL_NOT_GAME_OBJECT",
+                "message": (
+                    f"Symbol path {symbol_path!r} resolves to a {node.kind.value}, "
+                    f"not a game_object. Provide a path to a GameObject."
+                ),
+                "data": {
+                    "asset_path": path,
+                    "symbol_path": symbol_path,
+                    "resolved_kind": node.kind.value,
+                },
+                "diagnostics": [],
+            }
+
+        # Build hierarchy path: strip root GO name, keep children.
+        parts = [p for p in symbol_path.split("/") if p]
+        hierarchy_target = "/" + "/".join(parts[1:]) if len(parts) > 1 else "/"
+
+        plan: dict[str, object] = {
+            "plan_version": PLAN_VERSION,
+            "resources": [{"id": "target", "path": path, "mode": "open"}],
+            "ops": [
+                {
+                    "resource": "target",
+                    "op": "add_component",
+                    "target": hierarchy_target,
+                    "type": component_type,
+                },
+            ],
+        }
+
+        orch = session.get_orchestrator()
+        resp = orch.patch_apply(
+            plan=plan,
+            dry_run=(not confirm),
+            confirm=confirm,
+            change_reason=change_reason or None,
+        )
+
+        if confirm and resp.success:
+            session.invalidate_symbol_tree(resolved)
+
+        result = resp.to_dict()
+        result["symbol_resolution"] = {
+            "symbol_path": symbol_path,
+            "hierarchy_target": hierarchy_target,
+            "component_type": component_type,
+            "file_id": node.file_id,
+        }
+        return result
+
+    @server.tool()
+    def remove_component(
+        path: str,
+        symbol_path: str,
+        confirm: bool = False,
+        change_reason: str = "",
+    ) -> dict[str, Any]:
+        """Remove a component from an existing GameObject in an open-mode asset.
+
+        Two-phase workflow:
+        - confirm=False (default): dry-run preview.
+        - confirm=True: applies the removal.
+
+        Args:
+            path: Asset file path (.prefab, .unity, .asset).
+            symbol_path: Symbol path to the component to remove
+                (e.g. "Player/AudioSource" or
+                "Player/Body/MonoBehaviour(PlayerScript)").
+            confirm: Set True to apply (False = dry-run only).
+            change_reason: Human-readable reason for the change (audit trail).
+        """
+        text, resolved = _read_asset(path)
+        tree = session.get_symbol_tree(resolved, text, include_properties=False)
+        try:
+            node = tree.resolve_unique(symbol_path)
+        except SymbolNotFoundError:
+            return {
+                "success": False,
+                "severity": "error",
+                "code": "SYMBOL_NOT_FOUND",
+                "message": f"No component found at symbol path: {symbol_path!r}",
+                "data": {"asset_path": path, "symbol_path": symbol_path},
+                "diagnostics": [],
+            }
+        except AmbiguousSymbolError as exc:
+            return {
+                "success": False,
+                "severity": "error",
+                "code": "SYMBOL_AMBIGUOUS",
+                "message": str(exc),
+                "data": {"asset_path": path, "symbol_path": symbol_path},
+                "diagnostics": [],
+            }
+
+        if node.kind != SymbolKind.COMPONENT:
+            return {
+                "success": False,
+                "severity": "error",
+                "code": "SYMBOL_NOT_COMPONENT",
+                "message": (
+                    f"Symbol path {symbol_path!r} resolves to a {node.kind.value}, "
+                    f"not a component. Provide a path to a component."
+                ),
+                "data": {
+                    "asset_path": path,
+                    "symbol_path": symbol_path,
+                    "resolved_kind": node.kind.value,
+                },
+                "diagnostics": [],
+            }
+
+        try:
+            component_name = _resolve_component_name(node)
+        except ValueError as exc:
+            return {
+                "success": False,
+                "severity": "error",
+                "code": "SYMBOL_UNRESOLVABLE",
+                "message": str(exc),
+                "data": {"asset_path": path, "symbol_path": symbol_path},
+                "diagnostics": [],
+            }
+
+        plan: dict[str, object] = {
+            "plan_version": PLAN_VERSION,
+            "resources": [{"id": "target", "path": path, "mode": "open"}],
+            "ops": [
+                {
+                    "resource": "target",
+                    "op": "remove_component",
+                    "component": component_name,
+                },
+            ],
+        }
+
+        orch = session.get_orchestrator()
+        resp = orch.patch_apply(
+            plan=plan,
+            dry_run=(not confirm),
+            confirm=confirm,
+            change_reason=change_reason or None,
+        )
+
+        if confirm and resp.success:
+            session.invalidate_symbol_tree(resolved)
+
+        result = resp.to_dict()
+        result["symbol_resolution"] = {
+            "symbol_path": symbol_path,
+            "resolved_component": component_name,
+            "file_id": node.file_id,
+            "class_id": node.class_id,
+        }
+        return result
+
+    @server.tool()
     def list_serialized_fields(
         script_path_or_guid: str,
+        include_inherited: bool = False,
     ) -> dict[str, Any]:
         """List serialized C# fields for a Unity script.
 
@@ -492,9 +698,14 @@ def create_server(
 
         Args:
             script_path_or_guid: .cs file path or 32-char GUID string.
+            include_inherited: If true, include fields from base classes
+                (each annotated with source_class).
         """
         orch = session.get_orchestrator()
-        resp = orch.list_serialized_fields(script_path_or_guid=script_path_or_guid)
+        resp = orch.list_serialized_fields(
+            script_path_or_guid=script_path_or_guid,
+            include_inherited=include_inherited,
+        )
         return resp.to_dict()
 
     @server.tool()

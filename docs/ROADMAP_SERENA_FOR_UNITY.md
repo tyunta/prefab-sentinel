@@ -160,11 +160,11 @@ Scene
 |---------------|------|--------|-------------|
 | シンボルモデル | SymbolTree + 名前パス解決 | 90% | — (P1 完了) |
 | セマンティックナビ | depth/props/origin 付きクエリ | 85% | — (P2 完了) |
-| セマンティック編集 | set_property (名前→fileID 解決) | 75% | add/remove_component (bridge 拡張待ち) |
-| MCP サーバー | 13 ツール + session 管理 + Serena 式レスポンス | 95% | 参照系は直接返却、操作/検証系はエンベロープ |
+| セマンティック編集 | set/add/remove_component (名前→fileID 解決) | 90% | P3.5 完了: open-mode add/remove_component 実装済み |
+| MCP サーバー | 15 ツール + session 管理 + Serena 式レスポンス | 95% | 参照系は直接返却、操作/検証系はエンベロープ |
 | プロジェクトスコープ | activate_project(scope) | 85% | — (P5 完了) |
 | ステートフル | ProjectSession + watchfiles | 80% | キャッシュ共有最適化 (サービス←→session 間) |
-| C# 接続 | field parser + rename/coverage | 80% | 継承チェーン未対応 (P4 完了) |
+| C# 接続 | field parser + rename/coverage + 継承チェーン | 90% | P4+ 完了: resolve_inherited_fields, find_derived_guids |
 
 ---
 
@@ -371,7 +371,7 @@ diff_unity_symbols("PlayerVariant.prefab")
 
 ---
 
-### P3: セマンティック編集の名前解決 ✅ 部分実装済み
+### P3: セマンティック編集の名前解決 ✅ 実装済み
 
 **目標:** シンボルパスで値を設定できる。P1 のシンボルモデルがあれば変換レイヤーは薄い。
 
@@ -385,13 +385,8 @@ diff_unity_symbols("PlayerVariant.prefab")
 | ツール | パラメータ | 動作 |
 |--------|-----------|------|
 | `set_property` | `path`, `symbol_path`, `property_path`, `value`, `confirm`, `change_reason` | シンボル → タイプ名解決 → patch plan → dry-run/apply |
-
-**未実装（P3.5 — bridge プロトコル拡張待ち）:**
-
-| ツール | ブロッカー |
-|--------|-----------|
-| `add_component` | `add_component` は create-mode 専用 op。既存アセットへの open-mode 操作には bridge に `find_game_object` が必要 |
-| `remove_component` | `remove_component` は create-mode 専用 op。同上 |
+| `add_component` | `path`, `symbol_path`, `component_type`, `confirm`, `change_reason` | シンボル → 階層パス解決 → open-mode add_component op |
+| `remove_component` | `path`, `symbol_path`, `confirm`, `change_reason` | シンボル → コンポーネント名解決 → open-mode remove_component op |
 
 **使用例:**
 ```
@@ -402,10 +397,24 @@ set_property("Player.prefab", "CharacterBody/MonoBehaviour(PlayerScript)", "move
     3. patch plan: {op: "set", component: "PlayerScript", path: "moveSpeed", value: 5.0}
     4. confirm=False → dry_run_patch() → before/after diff
     5. confirm=True → apply_and_save() → 書き込み
+
+add_component("Player.prefab", "CharacterBody", "AudioSource")
+  → 内部:
+    1. resolve_unique("CharacterBody") → SymbolNode (kind=GAME_OBJECT)
+    2. symbol_path → hierarchy_target: "/CharacterBody" → C# Transform.Find("CharacterBody")
+    3. patch plan: {op: "add_component", target: "/CharacterBody", type: "AudioSource"}
+
+remove_component("Player.prefab", "CharacterBody/AudioSource")
+  → 内部:
+    1. resolve_unique("CharacterBody/AudioSource") → SymbolNode (kind=COMPONENT)
+    2. _resolve_component_name(node) → "AudioSource"
+    3. patch plan: {op: "remove_component", component: "AudioSource"}
 ```
 
 **実装ノート:**
 - シンボル解決エラー（見つからない / 曖昧 / コンポーネントでない / スクリプト名未解決）は `success: false` + エラーコードで返す
+- `add_component` は SymbolKind.GAME_OBJECT のみ許可、`remove_component` は SymbolKind.COMPONENT のみ許可
+- C# bridge の `TryFindGameObjectByPath()` は `Transform.Find()` で階層パスを解決。見つからない場合は利用可能なパス一覧を診断に含める
 - レスポンスに `symbol_resolution` メタデータ（解決されたコンポーネント名、fileID、class_id）を付与
 - MonoBehaviour は `script_name`（C# クラス名）で識別。`--project-root` がないと解決不可
 - 同一 GO 上の同型コンポーネント重複は bridge 側の `TypeName@/hierarchy/path` 解決に依存（dry-run で検出可能）

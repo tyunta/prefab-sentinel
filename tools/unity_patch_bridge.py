@@ -398,10 +398,13 @@ def _validate_bridge_ops(
 
         if op_name == "remove_component":
             target = op.get("target")
-            if not isinstance(target, str) or not target.strip():
+            comp = op.get("component")
+            has_target = isinstance(target, str) and bool(target.strip())
+            has_comp = isinstance(comp, str) and bool(comp.strip())
+            if not has_target and not has_comp:
                 return {
-                    "location": f"{location}.target",
-                    "error": "remove_component requires a non-empty 'target'",
+                    "location": location,
+                    "error": "remove_component requires a non-empty 'target' or 'component'",
                 }
             continue
 

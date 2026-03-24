@@ -98,6 +98,23 @@
 - [x] リファクタ: unused import除去, tempfile helper抽出, redundant WSL path解決排除, unused `field` import除去
 - [x] 最終検証: 1145 テスト全パス
 
+## P4+: C# 継承チェーン対応 (2026-03-24)
+
+- [x] `csharp_fields.py`: `CSharpClassInfo`, `parse_class_info()`, `build_class_name_index()`, `resolve_inherited_fields()`, `find_derived_guids()` 追加
+- [x] `orchestrator.py`: `list_serialized_fields` / `validate_field_rename` / `check_field_coverage` を継承対応に更新
+- [x] `mcp_server.py`: `list_serialized_fields` に `include_inherited` パラメータ追加
+- [x] `tests/test_csharp_fields.py`: 継承チェーンテスト 25 件追加
+- [x] レビュー・リファクタ: O(n)→O(1) GUID 逆引き、テスト fixture リーク修正
+- [x] 検証: 1200 テスト全パス
+
+## P3.5: Open-Mode 構造操作 (2026-03-24)
+
+- [x] C# bridge: `TryFindGameObjectByPath()` + `TryApplyOp()` に `add_component`/`remove_component` 分岐追加
+- [x] Python bridge: `remove_component` バリデーションで `component` フィールド許可
+- [x] MCP: `add_component` / `remove_component` ツール追加 (symbol_path → 階層パス変換)
+- [x] テスト: bridge バリデーション 4 件 + MCP ツール 11 件追加
+- [x] 検証: 1200 テスト全パス
+
 ## Phase 3: Runtime Verification Bridge
 
 - [x] Fix CS1626 (yield-in-try-catch) in `UnityRuntimeValidationBridge.cs` `Run()` method — GuardCoroutine pattern.
