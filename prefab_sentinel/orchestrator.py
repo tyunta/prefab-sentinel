@@ -91,6 +91,22 @@ class Phase1Orchestrator:
             ),
         )
 
+    # ------------------------------------------------------------------
+    # Cache invalidation (delegated to services)
+    # ------------------------------------------------------------------
+
+    def invalidate_text_cache(self, path: Path | None = None) -> None:
+        """Delegate text cache invalidation to reference resolver."""
+        self.reference_resolver.invalidate_text_cache(path)
+
+    def invalidate_guid_index(self) -> None:
+        """Delegate GUID index invalidation to reference resolver."""
+        self.reference_resolver.invalidate_guid_index()
+
+    def invalidate_before_cache(self) -> None:
+        """Delegate before-cache invalidation to serialized object service."""
+        self.serialized_object.invalidate_before_cache()
+
     def inspect_variant(
         self,
         variant_path: str,

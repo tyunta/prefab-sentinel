@@ -1636,5 +1636,38 @@ class TestCheckFieldCoverage(unittest.TestCase):
         self.assertTrue(result.data["read_only"])
 
 
+class TestInvalidationDelegation(unittest.TestCase):
+    """Orchestrator invalidation delegates to services."""
+
+    def _make_orchestrator(self) -> Phase1Orchestrator:
+        return Phase1Orchestrator(
+            reference_resolver=MagicMock(),
+            prefab_variant=MagicMock(),
+            runtime_validation=MagicMock(),
+            serialized_object=MagicMock(),
+        )
+
+    def test_invalidate_text_cache_delegates(self) -> None:
+        orch = self._make_orchestrator()
+        path = Path("/test.prefab")
+        orch.invalidate_text_cache(path)
+        orch.reference_resolver.invalidate_text_cache.assert_called_once_with(path)
+
+    def test_invalidate_text_cache_none_delegates(self) -> None:
+        orch = self._make_orchestrator()
+        orch.invalidate_text_cache(None)
+        orch.reference_resolver.invalidate_text_cache.assert_called_once_with(None)
+
+    def test_invalidate_guid_index_delegates(self) -> None:
+        orch = self._make_orchestrator()
+        orch.invalidate_guid_index()
+        orch.reference_resolver.invalidate_guid_index.assert_called_once()
+
+    def test_invalidate_before_cache_delegates(self) -> None:
+        orch = self._make_orchestrator()
+        orch.invalidate_before_cache()
+        orch.serialized_object.invalidate_before_cache.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()
