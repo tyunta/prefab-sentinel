@@ -40,6 +40,8 @@ class TestToolRegistration(unittest.TestCase):
         tools = _run(server.list_tools())
         tool_names = {t.name for t in tools}
         expected = {
+            "activate_project",
+            "get_project_status",
             "get_unity_symbols",
             "find_unity_symbol",
             "find_referencing_assets",
@@ -57,7 +59,7 @@ class TestToolRegistration(unittest.TestCase):
     def test_tool_count(self) -> None:
         server = create_server()
         tools = _run(server.list_tools())
-        self.assertEqual(11, len(tools))
+        self.assertEqual(13, len(tools))
 
 
 class TestSymbolTools(unittest.TestCase):
@@ -203,7 +205,7 @@ class TestOrchestratorTools(unittest.TestCase):
         server = self._make_server()
 
         with patch(
-            "prefab_sentinel.mcp_server.Phase1Orchestrator"
+            "prefab_sentinel.session.Phase1Orchestrator"
         ) as mock_cls:
             mock_cls.default.return_value = mock_orch
             _, result = _run(server.call_tool(
@@ -231,7 +233,7 @@ class TestOrchestratorTools(unittest.TestCase):
         server = self._make_server()
 
         with patch(
-            "prefab_sentinel.mcp_server.Phase1Orchestrator"
+            "prefab_sentinel.session.Phase1Orchestrator"
         ) as mock_cls:
             mock_cls.default.return_value = mock_orch
             _, result = _run(server.call_tool(
@@ -257,7 +259,7 @@ class TestOrchestratorTools(unittest.TestCase):
         server = self._make_server()
 
         with patch(
-            "prefab_sentinel.mcp_server.Phase1Orchestrator"
+            "prefab_sentinel.session.Phase1Orchestrator"
         ) as mock_cls:
             mock_cls.default.return_value = mock_orch
             _, result = _run(server.call_tool(
@@ -284,7 +286,7 @@ class TestOrchestratorTools(unittest.TestCase):
         server = self._make_server()
 
         with patch(
-            "prefab_sentinel.mcp_server.Phase1Orchestrator"
+            "prefab_sentinel.session.Phase1Orchestrator"
         ) as mock_cls:
             mock_cls.default.return_value = mock_orch
             _, result = _run(server.call_tool(
@@ -315,7 +317,7 @@ class TestDiffUnitySymbolsTool(unittest.TestCase):
         server = create_server()
 
         with patch(
-            "prefab_sentinel.mcp_server.Phase1Orchestrator"
+            "prefab_sentinel.session.Phase1Orchestrator"
         ) as mock_cls:
             mock_cls.default.return_value = mock_orch
             _, result = _run(server.call_tool(
@@ -338,7 +340,7 @@ class TestDiffUnitySymbolsTool(unittest.TestCase):
         server = create_server()
 
         with patch(
-            "prefab_sentinel.mcp_server.Phase1Orchestrator"
+            "prefab_sentinel.session.Phase1Orchestrator"
         ) as mock_cls:
             mock_cls.default.return_value = mock_orch
             _run(server.call_tool(
@@ -425,7 +427,7 @@ class TestFindUnitySymbolShowOrigin(unittest.TestCase):
             p.write_text(text, encoding="utf-8")
 
             with patch(
-                "prefab_sentinel.mcp_server.Phase1Orchestrator"
+                "prefab_sentinel.session.Phase1Orchestrator"
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.prefab_variant.resolve_chain_values_with_origin.return_value = mock_resp
@@ -471,7 +473,7 @@ class TestFindUnitySymbolShowOrigin(unittest.TestCase):
             p.write_text(text, encoding="utf-8")
 
             with patch(
-                "prefab_sentinel.mcp_server.Phase1Orchestrator"
+                "prefab_sentinel.session.Phase1Orchestrator"
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.prefab_variant.resolve_chain_values_with_origin.return_value = mock_resp
@@ -539,7 +541,7 @@ class TestSetPropertyTool(unittest.TestCase):
             p.write_text(text, encoding="utf-8")
 
             with patch(
-                "prefab_sentinel.mcp_server.Phase1Orchestrator"
+                "prefab_sentinel.session.Phase1Orchestrator"
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.patch_apply.return_value = mock_resp
@@ -574,7 +576,7 @@ class TestSetPropertyTool(unittest.TestCase):
             p.write_text(text, encoding="utf-8")
 
             with patch(
-                "prefab_sentinel.mcp_server.Phase1Orchestrator"
+                "prefab_sentinel.session.Phase1Orchestrator"
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.patch_apply.return_value = mock_resp
@@ -658,7 +660,7 @@ class TestSetPropertyTool(unittest.TestCase):
             p.write_text(text, encoding="utf-8")
 
             with patch(
-                "prefab_sentinel.mcp_server.Phase1Orchestrator"
+                "prefab_sentinel.session.Phase1Orchestrator"
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.patch_apply.return_value = mock_resp
@@ -703,7 +705,7 @@ class TestSetPropertyTool(unittest.TestCase):
             server_with_root = create_server(project_root=td)
 
             with patch(
-                "prefab_sentinel.mcp_server.Phase1Orchestrator"
+                "prefab_sentinel.session.Phase1Orchestrator"
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.patch_apply.return_value = mock_resp
@@ -760,7 +762,7 @@ class TestSetPropertyTool(unittest.TestCase):
             p.write_text(text, encoding="utf-8")
 
             with patch(
-                "prefab_sentinel.mcp_server.Phase1Orchestrator"
+                "prefab_sentinel.session.Phase1Orchestrator"
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.patch_apply.return_value = mock_resp
@@ -793,7 +795,7 @@ class TestSetPropertyTool(unittest.TestCase):
             p.write_text(text, encoding="utf-8")
 
             with patch(
-                "prefab_sentinel.mcp_server.Phase1Orchestrator"
+                "prefab_sentinel.session.Phase1Orchestrator"
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.patch_apply.return_value = mock_resp
@@ -835,7 +837,7 @@ class TestSetPropertyTool(unittest.TestCase):
             p.write_text(text, encoding="utf-8")
 
             with patch(
-                "prefab_sentinel.mcp_server.Phase1Orchestrator"
+                "prefab_sentinel.session.Phase1Orchestrator"
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.patch_apply.return_value = mock_resp
@@ -908,7 +910,7 @@ class TestListSerializedFieldsTool(unittest.TestCase):
             },
             diagnostics=[],
         )
-        with patch("prefab_sentinel.mcp_server.Phase1Orchestrator") as mock_orch_cls:
+        with patch("prefab_sentinel.session.Phase1Orchestrator") as mock_orch_cls:
             mock_orch_cls.default.return_value.list_serialized_fields.return_value = mock_resp
             _, result = _run(server.call_tool(
                 "list_serialized_fields",
@@ -931,7 +933,7 @@ class TestListSerializedFieldsTool(unittest.TestCase):
             data={"script": "missing.cs"},
             diagnostics=[],
         )
-        with patch("prefab_sentinel.mcp_server.Phase1Orchestrator") as mock_orch_cls:
+        with patch("prefab_sentinel.session.Phase1Orchestrator") as mock_orch_cls:
             mock_orch_cls.default.return_value.list_serialized_fields.return_value = mock_resp
             _, result = _run(server.call_tool(
                 "list_serialized_fields",
@@ -967,7 +969,7 @@ class TestValidateFieldRenameTool(unittest.TestCase):
             },
             diagnostics=[],
         )
-        with patch("prefab_sentinel.mcp_server.Phase1Orchestrator") as mock_orch_cls:
+        with patch("prefab_sentinel.session.Phase1Orchestrator") as mock_orch_cls:
             mock_orch_cls.default.return_value.validate_field_rename.return_value = mock_resp
             _, result = _run(server.call_tool(
                 "validate_field_rename",
@@ -991,7 +993,7 @@ class TestValidateFieldRenameTool(unittest.TestCase):
             message="ok", data={"affected_count": 0, "read_only": True},
             diagnostics=[],
         )
-        with patch("prefab_sentinel.mcp_server.Phase1Orchestrator") as mock_orch_cls:
+        with patch("prefab_sentinel.session.Phase1Orchestrator") as mock_orch_cls:
             mock_orch = mock_orch_cls.default.return_value
             mock_orch.validate_field_rename.return_value = mock_resp
             _run(server.call_tool(
@@ -1038,7 +1040,7 @@ class TestCheckFieldCoverageTool(unittest.TestCase):
             },
             diagnostics=[],
         )
-        with patch("prefab_sentinel.mcp_server.Phase1Orchestrator") as mock_orch_cls:
+        with patch("prefab_sentinel.session.Phase1Orchestrator") as mock_orch_cls:
             mock_orch_cls.default.return_value.check_field_coverage.return_value = mock_resp
             _, result = _run(server.call_tool(
                 "check_field_coverage",
@@ -1049,6 +1051,80 @@ class TestCheckFieldCoverageTool(unittest.TestCase):
         self.assertEqual("CSF_COVERAGE_OK", result["code"])
         self.assertEqual(1, result["data"]["unused_count"])
         self.assertEqual(2, result["data"]["orphaned_count"])
+
+
+class TestSessionTools(unittest.TestCase):
+    """Tests for activate_project and get_project_status tools."""
+
+    def test_get_project_status_before_activation(self) -> None:
+        server = create_server()
+        _, result = _run(server.call_tool("get_project_status", {}))
+
+        self.assertTrue(result["success"])
+        self.assertEqual("SESSION_STATUS", result["code"])
+        data = result["data"]
+        self.assertIsNone(data["project_root"])
+        self.assertIsNone(data["scope"])
+        self.assertFalse(data["orchestrator_cached"])
+        self.assertFalse(data["script_map_cached"])
+
+    @patch("prefab_sentinel.session.build_script_name_map")
+    @patch("prefab_sentinel.session.Phase1Orchestrator")
+    @patch("prefab_sentinel.session.resolve_scope_path")
+    @patch("prefab_sentinel.session.find_project_root")
+    def test_activate_project_returns_status(
+        self,
+        mock_find: MagicMock,
+        mock_resolve: MagicMock,
+        mock_orch: MagicMock,
+        mock_build: MagicMock,
+    ) -> None:
+        mock_find.return_value = Path("/unity")
+        mock_resolve.return_value = Path("/unity/Assets/MyScope")
+        mock_build.return_value = {"g1": "ScriptA"}
+
+        server = create_server()
+        _, result = _run(server.call_tool(
+            "activate_project",
+            {"scope": "Assets/MyScope"},
+        ))
+
+        self.assertTrue(result["success"])
+        self.assertEqual("SESSION_ACTIVATED", result["code"])
+        data = result["data"]
+        self.assertEqual(str(Path("/unity")), data["project_root"])
+        self.assertTrue(data["orchestrator_cached"])
+        self.assertTrue(data["script_map_cached"])
+        self.assertEqual(1, data["script_map_size"])
+
+    @patch("prefab_sentinel.session.build_script_name_map")
+    @patch("prefab_sentinel.session.Phase1Orchestrator")
+    @patch("prefab_sentinel.session.resolve_scope_path")
+    @patch("prefab_sentinel.session.find_project_root")
+    def test_status_updates_after_activation(
+        self,
+        mock_find: MagicMock,
+        mock_resolve: MagicMock,
+        mock_orch: MagicMock,
+        mock_build: MagicMock,
+    ) -> None:
+        mock_find.return_value = Path("/unity")
+        mock_resolve.return_value = Path("/unity/Assets/Scope")
+        mock_build.return_value = {}
+
+        server = create_server()
+
+        # Before: not activated
+        _, before = _run(server.call_tool("get_project_status", {}))
+        self.assertFalse(before["data"]["orchestrator_cached"])
+
+        # Activate
+        _run(server.call_tool("activate_project", {"scope": "Assets/Scope"}))
+
+        # After: caches warm
+        _, after = _run(server.call_tool("get_project_status", {}))
+        self.assertTrue(after["data"]["orchestrator_cached"])
+        self.assertTrue(after["data"]["script_map_cached"])
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ Requires the ``mcp`` optional dependency::
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -21,15 +22,13 @@ except ImportError as exc:
         "pip install prefab-sentinel[mcp]"
     ) from exc
 
-from prefab_sentinel.orchestrator import Phase1Orchestrator
 from prefab_sentinel.patch_plan import PLAN_VERSION
+from prefab_sentinel.session import ProjectSession
 from prefab_sentinel.symbol_tree import (
     AmbiguousSymbolError,
     SymbolKind,
     SymbolNode,
     SymbolNotFoundError,
-    SymbolTree,
-    build_script_name_map,
 )
 from prefab_sentinel.unity_assets import decode_text_file
 from prefab_sentinel.unity_yaml_parser import CLASS_ID_MONOBEHAVIOUR
@@ -49,23 +48,34 @@ def create_server(
     Returns:
         A configured ``FastMCP`` server instance ready to run.
     """
+    _root = Path(project_root) if project_root else None
+    session = ProjectSession(project_root=_root)
+
+    @asynccontextmanager
+    async def _lifespan(_app: FastMCP):  # type: ignore[type-arg]
+        try:
+            yield
+        finally:
+            await session.shutdown()
+
     server = FastMCP(
         name="prefab-sentinel",
         instructions=(
             "Unity asset inspection and editing tools. "
-            "Use get_unity_symbols to explore asset structure, "
+            "Use activate_project to set scope, "
+            "get_unity_symbols to explore asset structure, "
             "find_unity_symbol to locate specific objects by name, "
             "and validate_refs to check for broken references."
         ),
+        lifespan=_lifespan,
     )
 
-    _root = Path(project_root) if project_root else None
+    # ------------------------------------------------------------------
+    # Helpers (closure-scoped, not exposed as tools)
+    # ------------------------------------------------------------------
 
-    def _get_orchestrator() -> Phase1Orchestrator:
-        return Phase1Orchestrator.default(project_root=_root)
-
-    def _read_asset(path: str) -> str:
-        """Read a Unity asset file, returning its text content."""
+    def _read_asset(path: str) -> tuple[str, Path]:
+        """Read a Unity asset file, returning (text, resolved_path)."""
         resolved = Path(to_wsl_path(path))
         if not resolved.is_file():
             msg = f"File not found: {path}"
@@ -74,17 +84,7 @@ def create_server(
         if text is None:
             msg = f"Unable to decode file: {path}"
             raise ValueError(msg)
-        return text
-
-    def _script_map() -> dict[str, str]:
-        if _root:
-            return build_script_name_map(_root)
-        return {}
-
-    def _build_symbol_tree(path: str) -> SymbolTree:
-        """Read asset and build SymbolTree for name resolution."""
-        text = _read_asset(path)
-        return SymbolTree.build(text, path, _script_map(), include_properties=False)
+        return text, resolved
 
     def _resolve_component_name(node: SymbolNode) -> str:
         """Map a component SymbolNode to the type name used by patch ops."""
@@ -97,6 +97,50 @@ def create_server(
                 raise ValueError(msg)
             return node.script_name
         return node.name
+
+    # ------------------------------------------------------------------
+    # Session management tools
+    # ------------------------------------------------------------------
+
+    @server.tool()
+    async def activate_project(
+        scope: str,
+    ) -> dict[str, Any]:
+        """Set the project scope and warm caches for subsequent requests.
+
+        Call this once at the start of a session to set the working scope.
+        Subsequent tool calls will be faster due to cached GUID index and
+        script name map.
+
+        Args:
+            scope: Path to the Assets subdirectory to work with
+                (e.g. "Assets/Tyunta/SoulLinkerSystem").
+        """
+        result = await session.activate(scope)
+        return {
+            "success": True,
+            "severity": "info",
+            "code": "SESSION_ACTIVATED",
+            "message": f"Project activated with scope: {scope}",
+            "data": result,
+            "diagnostics": [],
+        }
+
+    @server.tool()
+    def get_project_status() -> dict[str, Any]:
+        """Show current session state: cached items, scope, project root.
+
+        Use this to check whether caches are warm or if activate_project
+        needs to be called.
+        """
+        return {
+            "success": True,
+            "severity": "info",
+            "code": "SESSION_STATUS",
+            "message": "Current session status",
+            "data": session.status(),
+            "diagnostics": [],
+        }
 
     # ------------------------------------------------------------------
     # Symbol model tools
@@ -114,10 +158,10 @@ def create_server(
             depth: Expansion depth. 0=root GOs only, 1=GOs+components,
                    2=components+properties.
         """
-        text = _read_asset(path)
+        text, resolved = _read_asset(path)
         include_props = depth >= 2
-        tree = SymbolTree.build(
-            text, path, _script_map(), include_properties=include_props
+        tree = session.get_symbol_tree(
+            resolved, text, include_properties=include_props,
         )
         return {
             "success": True,
@@ -151,9 +195,9 @@ def create_server(
                 (which Prefab set each value). Implies include_properties.
         """
         props = include_properties or show_origin
-        text = _read_asset(path)
-        tree = SymbolTree.build(
-            text, path, _script_map(), include_properties=props
+        text, resolved = _read_asset(path)
+        tree = session.get_symbol_tree(
+            resolved, text, include_properties=props,
         )
         results = tree.query(symbol_path, depth=depth)
         if not results:
@@ -181,7 +225,7 @@ def create_server(
     def _annotate_origins(matches: list[dict[str, Any]], asset_path: str) -> None:
         """Inject Variant chain origin info into property dicts in-place."""
         try:
-            orch = _get_orchestrator()
+            orch = session.get_orchestrator()
             resp = orch.prefab_variant.resolve_chain_values_with_origin(asset_path)
         except Exception:
             return
@@ -229,7 +273,7 @@ def create_server(
             scope: Directory to restrict search scope.
             max_results: Maximum number of results to return.
         """
-        orch = _get_orchestrator()
+        orch = session.get_orchestrator()
         resp = orch.inspect_where_used(
             asset_or_guid=asset_or_guid,
             scope=scope,
@@ -250,7 +294,7 @@ def create_server(
             details: Include per-reference diagnostics.
             max_diagnostics: Cap on the number of diagnostics returned.
         """
-        orch = _get_orchestrator()
+        orch = session.get_orchestrator()
         resp = orch.validate_refs(
             scope=scope,
             details=details,
@@ -269,7 +313,7 @@ def create_server(
             path: Asset file path (.prefab, .unity).
             udon_only: Only inspect UdonSharp components.
         """
-        orch = _get_orchestrator()
+        orch = session.get_orchestrator()
         resp = orch.inspect_wiring(target_path=path, udon_only=udon_only)
         return resp.to_dict()
 
@@ -286,7 +330,7 @@ def create_server(
             component_filter: Filter overrides by component substring.
             show_origin: Show which Prefab in the chain set each value.
         """
-        orch = _get_orchestrator()
+        orch = session.get_orchestrator()
         resp = orch.inspect_variant(
             variant_path=path,
             component_filter=component_filter,
@@ -308,7 +352,7 @@ def create_server(
             path: Variant prefab file path.
             component_filter: Filter diffs by property path substring.
         """
-        orch = _get_orchestrator()
+        orch = session.get_orchestrator()
         resp = orch.diff_variant(
             variant_path=path,
             component_filter=component_filter,
@@ -346,7 +390,8 @@ def create_server(
             change_reason: Human-readable reason for the change (audit trail).
         """
         # 1. Symbol resolution
-        tree = _build_symbol_tree(path)
+        text, resolved = _read_asset(path)
+        tree = session.get_symbol_tree(resolved, text, include_properties=False)
         try:
             node = tree.resolve_unique(symbol_path)
         except SymbolNotFoundError:
@@ -415,7 +460,7 @@ def create_server(
         }
 
         # 5. Execute via orchestrator
-        orch = _get_orchestrator()
+        orch = session.get_orchestrator()
         resp = orch.patch_apply(
             plan=plan,
             dry_run=(not confirm),
@@ -423,7 +468,11 @@ def create_server(
             change_reason=change_reason or None,
         )
 
-        # 6. Enrich response with symbol resolution metadata
+        # 6. Invalidate SymbolTree cache after confirmed write
+        if confirm and resp.success:
+            session.invalidate_symbol_tree(resolved)
+
+        # 7. Enrich response with symbol resolution metadata
         result = resp.to_dict()
         result["symbol_resolution"] = {
             "symbol_path": symbol_path,
@@ -446,7 +495,7 @@ def create_server(
         Args:
             script_path_or_guid: .cs file path or 32-char GUID string.
         """
-        orch = _get_orchestrator()
+        orch = session.get_orchestrator()
         resp = orch.list_serialized_fields(script_path_or_guid=script_path_or_guid)
         return resp.to_dict()
 
@@ -468,7 +517,7 @@ def create_server(
             new_name: Proposed new field name.
             scope: Directory to restrict impact search (default: project root).
         """
-        orch = _get_orchestrator()
+        orch = session.get_orchestrator()
         resp = orch.validate_field_rename(
             script_path_or_guid=script_path_or_guid,
             old_name=old_name,
@@ -490,7 +539,7 @@ def create_server(
         Args:
             scope: Directory or file path to scan.
         """
-        orch = _get_orchestrator()
+        orch = session.get_orchestrator()
         resp = orch.check_field_coverage(scope=scope)
         return resp.to_dict()
 
