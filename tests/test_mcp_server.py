@@ -54,7 +54,8 @@ class TestToolRegistration(unittest.TestCase):
             "editor_set_material", "editor_delete",
             "editor_list_children", "editor_list_materials", "editor_list_roots",
             "editor_get_material_property", "editor_console", "editor_run_tests",
-            "inspect_materials", "validate_structure", "revert_overrides",
+            "inspect_materials", "inspect_material_asset",
+            "validate_structure", "revert_overrides",
             # Phase 2: AI workflow tools
             "inspect_hierarchy", "validate_runtime", "patch_apply",
         }
@@ -63,7 +64,7 @@ class TestToolRegistration(unittest.TestCase):
     def test_tool_count(self) -> None:
         server = create_server()
         tools = _run(server.list_tools())
-        self.assertEqual(36, len(tools))
+        self.assertEqual(37, len(tools))
 
 
 class TestSymbolTools(unittest.TestCase):
