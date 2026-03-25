@@ -832,21 +832,74 @@ def create_server(
         return send_action(action="frame_selected", zoom=zoom)
 
     @server.tool()
-    def editor_camera(
-        yaw: float = 0.0,
-        pitch: float = 0.0,
-        distance: float = 0.0,
-    ) -> dict[str, Any]:
-        """Set Scene view camera orientation.
+    def editor_get_camera() -> dict[str, Any]:
+        """Get current Scene view camera state.
 
-        All parameters default to 0.0 (no change). Set only the values you want to modify.
+        Returns position, rotation (quaternion + euler), pivot, size, and
+        orthographic mode. Euler uses yaw=0 as front (+Z direction).
+        """
+        return send_action(action="get_camera")
+
+    @server.tool()
+    def editor_set_camera(
+        position: str = "",
+        rotation: str = "",
+        size: float = -1.0,
+        pivot: str = "",
+        yaw: float = float("nan"),
+        pitch: float = float("nan"),
+        distance: float = -1.0,
+        orthographic: int = -1,
+    ) -> dict[str, Any]:
+        """Set Scene view camera. Two modes (cannot mix):
+
+        Mode A (absolute): position, rotation, size
+        Mode B (pivot orbit): pivot, yaw, pitch, distance
+
+        Euler convention: yaw=0 = front (+Z direction).
+        Omitted params keep their current value.
 
         Args:
-            yaw: Horizontal rotation in degrees.
-            pitch: Vertical rotation in degrees.
-            distance: Distance from pivot point.
+            position: JSON '{"x":0,"y":1,"z":-5}' — world position.
+            rotation: JSON '{"yaw":0,"pitch":15,"roll":0}' — euler degrees.
+            size: SceneView zoom level (>=0 to set, -1 = keep).
+            pivot: JSON '{"x":0,"y":0,"z":0}' — orbit center.
+            yaw: Horizontal rotation in degrees (Mode B).
+            pitch: Vertical rotation in degrees (Mode B).
+            distance: Distance from pivot (Mode B, >=0 to set, -1 = keep).
+            orthographic: -1=keep, 0=perspective, 1=orthographic.
         """
-        return send_action(action="camera", yaw=yaw, pitch=pitch, distance=distance)
+        import json as _json
+        import math
+
+        kwargs: dict[str, Any] = {}
+
+        # Mode A params
+        if position:
+            p = _json.loads(position)
+            kwargs["camera_position"] = [p["x"], p["y"], p["z"]]
+        if rotation:
+            r = _json.loads(rotation)
+            kwargs["camera_rotation"] = [r.get("yaw", 0), r.get("pitch", 0), r.get("roll", 0)]
+        if size >= 0:
+            kwargs["camera_size"] = size
+
+        # Mode B params
+        if pivot:
+            pv = _json.loads(pivot)
+            kwargs["camera_pivot"] = [pv["x"], pv["y"], pv["z"]]
+        if not math.isnan(yaw):
+            kwargs["yaw"] = yaw
+        if not math.isnan(pitch):
+            kwargs["pitch"] = pitch
+        if distance >= 0:
+            kwargs["distance"] = distance
+
+        # Shared
+        if orthographic >= 0:
+            kwargs["camera_orthographic"] = orthographic
+
+        return send_action(action="set_camera", **kwargs)
 
     @server.tool()
     def editor_list_children(

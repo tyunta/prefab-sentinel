@@ -49,7 +49,8 @@ class TestToolRegistration(unittest.TestCase):
             "add_component", "remove_component",
             "list_serialized_fields", "validate_field_rename", "check_field_coverage",
             # New 18 tools
-            "editor_screenshot", "editor_select", "editor_frame", "editor_camera",
+            "editor_screenshot", "editor_select", "editor_frame",
+            "editor_get_camera", "editor_set_camera",
             "editor_refresh", "editor_recompile", "editor_instantiate",
             "editor_set_material", "editor_delete",
             "editor_list_children", "editor_list_materials", "editor_list_roots",
@@ -64,7 +65,7 @@ class TestToolRegistration(unittest.TestCase):
     def test_tool_count(self) -> None:
         server = create_server()
         tools = _run(server.list_tools())
-        self.assertEqual(37, len(tools))
+        self.assertEqual(38, len(tools))
 
 
 class TestSymbolTools(unittest.TestCase):

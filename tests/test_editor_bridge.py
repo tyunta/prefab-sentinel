@@ -178,12 +178,40 @@ class TestSupportedActions(unittest.TestCase):
             "delete_object",
             "list_children",
             "list_materials",
-            "camera",
+            "get_camera",
+            "set_camera",
             "list_roots",
             "get_material_property",
             "run_integration_tests",
         }
         self.assertEqual(expected, SUPPORTED_ACTIONS)
+
+
+class TestCameraActions(unittest.TestCase):
+    """Tests for get_camera / set_camera action validation."""
+
+    def test_get_camera_in_supported_actions(self) -> None:
+        self.assertIn("get_camera", SUPPORTED_ACTIONS)
+
+    def test_set_camera_in_supported_actions(self) -> None:
+        self.assertIn("set_camera", SUPPORTED_ACTIONS)
+
+    def test_old_camera_removed(self) -> None:
+        self.assertNotIn("camera", SUPPORTED_ACTIONS)
+
+    def test_get_camera_env_missing(self) -> None:
+        """get_camera returns bridge error when env not configured."""
+        with patch.dict(os.environ, {BRIDGE_MODE_ENV: ""}, clear=False):
+            result = send_action(action="get_camera")
+            self.assertFalse(result["success"])
+            self.assertEqual("EDITOR_BRIDGE_MODE", result["code"])
+
+    def test_set_camera_env_missing(self) -> None:
+        """set_camera returns bridge error when env not configured."""
+        with patch.dict(os.environ, {BRIDGE_MODE_ENV: ""}, clear=False):
+            result = send_action(action="set_camera", yaw=0.0)
+            self.assertFalse(result["success"])
+            self.assertEqual("EDITOR_BRIDGE_MODE", result["code"])
 
 
 if __name__ == "__main__":

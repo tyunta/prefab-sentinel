@@ -33,7 +33,8 @@ namespace PrefabSentinel
             "delete_object",
             "list_children",
             "list_materials",
-            "camera",
+            "get_camera",
+            "set_camera",
             "list_roots",
             "get_material_property",
             "run_integration_tests",
@@ -75,10 +76,18 @@ namespace PrefabSentinel
             // list_children
             public int depth = 1;
 
-            // camera
-            public float yaw = 0f;
-            public float pitch = 0f;
-            public float distance = 0f;  // 0 = keep current
+            // camera (get_camera / set_camera)
+            // Mode A (absolute): position + rotation + size
+            public float[] camera_position = null;   // [x, y, z] world coords
+            public float[] camera_rotation = null;   // [yaw, pitch, roll] euler degrees
+            public float camera_size = -1f;          // SceneView.size; -1 = keep current
+            // Mode B (pivot orbit): pivot + yaw/pitch/distance
+            public float[] camera_pivot = null;      // [x, y, z] pivot point
+            public float yaw = float.NaN;           // NaN = keep current
+            public float pitch = float.NaN;
+            public float distance = -1f;             // -1 = keep current
+            // Shared
+            public int camera_orthographic = -1;     // -1 = keep, 0 = perspective, 1 = ortho
 
             // get_material_property
             public string property_name = string.Empty; // empty = list all properties
@@ -147,9 +156,13 @@ namespace PrefabSentinel
             public MaterialSlotEntry[] material_slots = Array.Empty<MaterialSlotEntry>();
             public MaterialPropertyEntry[] material_properties = Array.Empty<MaterialPropertyEntry>();
             public string[] root_objects = Array.Empty<string>();
-            public float camera_yaw = 0f;
-            public float camera_pitch = 0f;
-            public float camera_distance = 0f;
+            // Camera state (full 6DoF)
+            public float[] camera_position = null;     // [x, y, z]
+            public float[] camera_rotation_quat = null; // [x, y, z, w] quaternion
+            public float[] camera_euler = null;        // [yaw, pitch, roll]
+            public float[] camera_pivot = null;        // [x, y, z]
+            public float camera_size = 0f;
+            public bool camera_orthographic = false;
             public bool read_only = true;
             public bool executed = false;
         }
@@ -231,8 +244,11 @@ namespace PrefabSentinel
                 case "list_materials":
                     response = HandleListMaterials(request);
                     break;
-                case "camera":
-                    response = HandleCamera(request);
+                case "get_camera":
+                    response = HandleGetCamera();
+                    break;
+                case "set_camera":
+                    response = HandleSetCamera(request);
                     break;
                 case "list_roots":
                     response = HandleListRoots(request);
@@ -725,27 +741,121 @@ namespace PrefabSentinel
                 });
         }
 
-        private static EditorControlResponse HandleCamera(EditorControlRequest request)
+        private static EditorControlResponse HandleGetCamera()
         {
             SceneView sceneView = SceneView.lastActiveSceneView;
             if (sceneView == null)
                 return BuildError("EDITOR_CTRL_NO_SCENE_VIEW", "No active SceneView found.");
 
-            sceneView.rotation = Quaternion.Euler(request.pitch, request.yaw, 0f);
+            Vector3 pos = sceneView.camera.transform.position;
+            Quaternion rot = sceneView.rotation;
+            Vector3 euler = rot.eulerAngles;
+            Vector3 pivot = sceneView.pivot;
 
-            if (request.distance > 0f)
-                sceneView.size = request.distance;
+            // Convert Unity euler (y=yaw applied raw) to our convention: yaw=0 means front (+Z)
+            float yaw = (euler.y + 180f) % 360f;
+            float pitchVal = euler.x > 180f ? euler.x - 360f : euler.x;
+
+            return BuildSuccess("EDITOR_CTRL_CAMERA_GET_OK",
+                $"Camera position=({pos.x:F2}, {pos.y:F2}, {pos.z:F2})",
+                data: new EditorControlData
+                {
+                    camera_position = new[] { pos.x, pos.y, pos.z },
+                    camera_rotation_quat = new[] { rot.x, rot.y, rot.z, rot.w },
+                    camera_euler = new[] { yaw, pitchVal, 0f },
+                    camera_pivot = new[] { pivot.x, pivot.y, pivot.z },
+                    camera_size = sceneView.size,
+                    camera_orthographic = sceneView.orthographic,
+                    executed = true
+                });
+        }
+
+        private static EditorControlResponse HandleSetCamera(EditorControlRequest request)
+        {
+            SceneView sceneView = SceneView.lastActiveSceneView;
+            if (sceneView == null)
+                return BuildError("EDITOR_CTRL_NO_SCENE_VIEW", "No active SceneView found.");
+
+            bool hasModeA = request.camera_position != null || request.camera_rotation != null;
+            bool hasModeB = request.camera_pivot != null || !float.IsNaN(request.yaw) || !float.IsNaN(request.pitch);
+
+            if (hasModeA && hasModeB)
+                return BuildError("EDITOR_CTRL_CAMERA_CONFLICT",
+                    "Cannot mix Mode A (position/rotation) and Mode B (pivot/yaw/pitch). Use one mode.");
+
+            if (hasModeA)
+            {
+                // Mode A: absolute position/rotation
+                if (request.camera_position != null && request.camera_position.Length == 3)
+                {
+                    sceneView.pivot = new Vector3(
+                        request.camera_position[0],
+                        request.camera_position[1],
+                        request.camera_position[2]);
+                    // Position sets pivot directly; SceneView computes camera pos from pivot+rotation+size
+                }
+                if (request.camera_rotation != null && request.camera_rotation.Length == 3)
+                {
+                    // Our convention: yaw=0 = front (+Z). Unity: yaw=0 = back. Offset by 180.
+                    float internalYaw = (request.camera_rotation[0] + 180f) % 360f;
+                    float internalPitch = request.camera_rotation[1];
+                    sceneView.rotation = Quaternion.Euler(internalPitch, internalYaw, 0f);
+                }
+                if (request.camera_size >= 0f)
+                    sceneView.size = request.camera_size;
+            }
+            else if (hasModeB)
+            {
+                // Mode B: pivot orbit
+                if (request.camera_pivot != null && request.camera_pivot.Length == 3)
+                {
+                    sceneView.pivot = new Vector3(
+                        request.camera_pivot[0],
+                        request.camera_pivot[1],
+                        request.camera_pivot[2]);
+                }
+                if (!float.IsNaN(request.yaw) || !float.IsNaN(request.pitch))
+                {
+                    Vector3 currentEuler = sceneView.rotation.eulerAngles;
+                    // Recover current yaw in our convention
+                    float curYaw = (currentEuler.y + 180f) % 360f;
+                    float curPitch = currentEuler.x > 180f ? currentEuler.x - 360f : currentEuler.x;
+
+                    float newYaw = float.IsNaN(request.yaw) ? curYaw : request.yaw;
+                    float newPitch = float.IsNaN(request.pitch) ? curPitch : request.pitch;
+
+                    // Convert back to Unity convention
+                    float internalYaw = (newYaw + 180f) % 360f;
+                    sceneView.rotation = Quaternion.Euler(newPitch, internalYaw, 0f);
+                }
+                if (request.distance >= 0f)
+                    sceneView.size = request.distance;
+            }
+            // else: no camera params → no-op, just return current state
+
+            if (request.camera_orthographic >= 0)
+                sceneView.orthographic = request.camera_orthographic == 1;
 
             sceneView.Repaint();
 
-            return BuildSuccess("EDITOR_CTRL_CAMERA_OK",
-                $"Camera set: yaw={request.yaw}, pitch={request.pitch}" +
-                (request.distance > 0f ? $", distance={request.distance}" : ""),
+            // Return updated state (same as HandleGetCamera)
+            Vector3 pos = sceneView.camera.transform.position;
+            Quaternion rot = sceneView.rotation;
+            Vector3 euler = rot.eulerAngles;
+            Vector3 piv = sceneView.pivot;
+            float retYaw = (euler.y + 180f) % 360f;
+            float retPitch = euler.x > 180f ? euler.x - 360f : euler.x;
+
+            return BuildSuccess("EDITOR_CTRL_CAMERA_SET_OK",
+                $"Camera updated",
                 data: new EditorControlData
                 {
-                    camera_yaw = request.yaw,
-                    camera_pitch = request.pitch,
-                    camera_distance = sceneView.size,
+                    camera_position = new[] { pos.x, pos.y, pos.z },
+                    camera_rotation_quat = new[] { rot.x, rot.y, rot.z, rot.w },
+                    camera_euler = new[] { retYaw, retPitch, 0f },
+                    camera_pivot = new[] { piv.x, piv.y, piv.z },
+                    camera_size = sceneView.size,
+                    camera_orthographic = sceneView.orthographic,
                     executed = true
                 });
         }
