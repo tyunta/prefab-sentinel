@@ -413,6 +413,29 @@ class CollectProjectGuidIndexTests(unittest.TestCase):
             index = collect_project_guid_index(root)
         self.assertEqual(len(index), 0)
 
+    def test_unreadable_meta_skipped(self) -> None:
+        """Binary .meta files that fail decode should be silently skipped."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            good = root / "good.cs.meta"
+            good.write_text("guid: abcdef01234567890abcdef012345678\n", encoding="utf-8")
+            bad = root / "bad.asset.meta"
+            bad.write_bytes(b"\x80\x81\x82\x83" * 100)
+            index = collect_project_guid_index(root)
+        self.assertIn("abcdef01234567890abcdef012345678", index)
+        self.assertEqual(len(index), 1)
+
+    def test_multiple_meta_files_collected(self) -> None:
+        """Multiple .meta files should all have their GUIDs extracted."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            for i in range(20):
+                guid = f"{i:032x}"
+                meta = root / f"file_{i}.cs.meta"
+                meta.write_text(f"guid: {guid}\n", encoding="utf-8")
+            index = collect_project_guid_index(root)
+        self.assertEqual(len(index), 20)
+
 
 class FindProjectRootTests(unittest.TestCase):
     def test_directory_with_assets(self) -> None:

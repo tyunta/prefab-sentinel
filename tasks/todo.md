@@ -116,6 +116,7 @@
 
 - [x] Task 1: `_read_text_uncached` + `_preload_texts` 追加 + テスト 4 件
 - [x] Task 2: `scan_broken_references` / `where_used` に統合 — 1140 tests pass
+- [x] Task 3: `_scan_meta_files` GUID index 並列化 — 47s→14s (3.4x), 1142 tests pass
 
 ## MCP Parameter Naming Unification — v0.5.0 (2026-03-25)
 

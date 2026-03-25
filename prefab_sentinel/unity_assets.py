@@ -136,21 +136,40 @@ def iter_references(text: str, include_location: bool = True) -> list[ReferenceM
 PACKAGE_CACHE_REL = Path("Library") / "PackageCache"
 
 
+def _extract_guid_safe(meta_path: Path) -> str | None:
+    """Extract GUID from .meta file, returning None on any read failure."""
+    try:
+        return extract_meta_guid(meta_path)
+    except (UnicodeDecodeError, OSError):
+        return None
+
+
 def _scan_meta_files(scan_root: Path, excluded: set[str], index: dict[str, Path]) -> None:
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    # Phase 1: collect .meta paths (sequential)
+    meta_paths: list[Path] = []
     for root, dirnames, filenames in os.walk(scan_root):
         dirnames[:] = [dirname for dirname in dirnames if dirname.lower() not in excluded]
         for filename in filenames:
-            if not filename.lower().endswith(".meta"):
-                continue
-            meta = Path(root) / filename
-            try:
-                guid = extract_meta_guid(meta)
-            except UnicodeDecodeError:
-                continue
-            if not guid:
-                continue
-            asset_path = meta.with_suffix("")
-            index[guid] = asset_path
+            if filename.lower().endswith(".meta"):
+                meta_paths.append(Path(root) / filename)
+
+    if not meta_paths:
+        return
+
+    # Phase 2: parallel GUID extraction
+    with ThreadPoolExecutor(
+        max_workers=min(10, len(meta_paths)),
+    ) as pool:
+        futures = {
+            pool.submit(_extract_guid_safe, p): p for p in meta_paths
+        }
+        for future in as_completed(futures):
+            path = futures[future]
+            guid = future.result()
+            if guid:
+                index[guid] = path.with_suffix("")
 
 
 def collect_project_guid_index(
