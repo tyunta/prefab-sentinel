@@ -83,7 +83,7 @@ prefab-sentinel-mcp --transport streamable-http
 | `set_property` | シンボルパスでコンポーネントのフィールド値を設定（dry-run/confirm ゲート付き） |
 | `add_component` | シンボルパスで指定した GameObject にコンポーネントを追加（dry-run/confirm ゲート付き） |
 | `remove_component` | シンボルパスで指定したコンポーネントを削除（dry-run/confirm ゲート付き） |
-| `list_serialized_fields` | C# スクリプトのシリアライズ対象フィールド一覧（パスまたは GUID 指定、`include_inherited` で基底クラス含む） |
+| `list_serialized_fields` | C# スクリプトのシリアライズ対象フィールド一覧（パス・クラス名・GUID 指定、`include_inherited` で基底クラス含む） |
 | `validate_field_rename` | フィールドリネームの影響分析（派生クラス経由の影響含む、影響アセット一覧、衝突検出） |
 | `check_field_coverage` | C# フィールドと YAML propertyPath の不一致検出（継承チェーン解決済み、未使用/孤立） |
 | `inspect_materials` | レンダラーごとのマテリアルスロット表示（override/inherited マーカー付き） |

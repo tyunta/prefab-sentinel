@@ -725,7 +725,8 @@ def create_server(
         enabling field coverage checks and rename impact analysis.
 
         Args:
-            script_or_guid: .cs file path or 32-char GUID string.
+            script_or_guid: .cs file path, class name (e.g. "NadeSharePuppetSpec"),
+                or 32-char GUID string. Class name resolution requires an active project.
             include_inherited: If true, include fields from base classes
                 (each annotated with source_class).
         """
@@ -749,7 +750,8 @@ def create_server(
         which assets reference the field. Does NOT apply any changes.
 
         Args:
-            script_or_guid: .cs file path or 32-char GUID string.
+            script_or_guid: .cs file path, class name, or 32-char GUID string.
+                Class name resolution requires an active project.
             old_name: Current field name to rename.
             new_name: Proposed new field name.
             scope: Directory to restrict impact search (default: project root).
@@ -1127,21 +1129,29 @@ def create_server(
             }
 
         orch = session.get_orchestrator()
-        resp = orch.patch_apply(
-            plan=plan_dict,
-            dry_run=not confirm,
-            confirm=confirm,
-            plan_sha256=None,
-            plan_signature=None,
-            change_reason=change_reason or None,
-            scope=scope,
-            runtime_scene=runtime_scene,
-            runtime_profile=runtime_profile,
-            runtime_log_file=runtime_log_file,
-            runtime_since_timestamp=runtime_since_timestamp,
-            runtime_allow_warnings=runtime_allow_warnings,
-            runtime_max_diagnostics=runtime_max_diagnostics,
-        )
+        try:
+            resp = orch.patch_apply(
+                plan=plan_dict,
+                dry_run=not confirm,
+                confirm=confirm,
+                plan_sha256=None,
+                plan_signature=None,
+                change_reason=change_reason or None,
+                scope=scope,
+                runtime_scene=runtime_scene,
+                runtime_profile=runtime_profile,
+                runtime_log_file=runtime_log_file,
+                runtime_since_timestamp=runtime_since_timestamp,
+                runtime_allow_warnings=runtime_allow_warnings,
+                runtime_max_diagnostics=runtime_max_diagnostics,
+            )
+        except ValueError as exc:
+            return {
+                "success": False, "severity": "error",
+                "code": "INVALID_PLAN_SCHEMA",
+                "message": f"Plan validation failed: {exc}",
+                "data": {}, "diagnostics": [],
+            }
         return resp.to_dict()
 
     # ------------------------------------------------------------------

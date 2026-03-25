@@ -309,7 +309,7 @@ PrefabInstance:
                 root / "Assets" / "Base.prefab",
                 root / "Assets" / "Variant.prefab",
             ]
-            svc._preload_texts(files)
+            svc.preload_texts(files)
 
             for f in files:
                 self.assertIn(f, svc._text_cache)
@@ -326,7 +326,7 @@ PrefabInstance:
             bad = root / "Assets" / "bad.prefab"
             bad.write_bytes(b"\x80\x81\x82\x83" * 100)
 
-            svc._preload_texts([bad])
+            svc.preload_texts([bad])
 
             self.assertIn(bad, svc._unreadable_paths)
             self.assertIsNone(svc._text_cache[bad])
@@ -339,19 +339,69 @@ PrefabInstance:
             svc = ReferenceResolverService(project_root=root)
 
             files = [root / "Assets" / "Base.prefab"]
-            svc._preload_texts(files)
+            svc.preload_texts(files)
             original_text = svc._text_cache[files[0]]
 
             # Modify file on disk — preload should NOT re-read
             files[0].write_text("modified", encoding="utf-8")
-            svc._preload_texts(files)
+            svc.preload_texts(files)
 
             self.assertEqual(svc._text_cache[files[0]], original_text)
 
     def test_preload_texts_empty_list(self) -> None:
         """_preload_texts with empty list should not raise."""
         svc = ReferenceResolverService(project_root=Path("/fake"))
-        svc._preload_texts([])  # Should not raise
+        svc.preload_texts([])  # Should not raise
+
+    def test_collect_scope_files_cached(self) -> None:
+        """Second call returns same list without re-walking."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            assets = root / "Assets"
+            assets.mkdir()
+            prefab = assets / "Test.prefab"
+            prefab.write_text("%YAML 1.1\n", encoding="utf-8")
+
+            service = ReferenceResolverService(project_root=root)
+            result1 = service.collect_scope_files(assets)
+            # Mutate filesystem — cached result should NOT reflect the change
+            (assets / "New.prefab").write_text("%YAML 1.1\n", encoding="utf-8")
+            result2 = service.collect_scope_files(assets)
+            self.assertEqual(result1, result2)  # Same cached list
+
+    def test_preload_and_read_populates_cache(self) -> None:
+        """preload_texts + read_text uses _text_cache."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            assets = root / "Assets"
+            assets.mkdir()
+            prefab = assets / "Test.prefab"
+            prefab.write_text(
+                "%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: A\n",
+                encoding="utf-8",
+            )
+
+            service = ReferenceResolverService(project_root=root)
+            service.preload_texts([prefab])
+            self.assertIn(prefab, service._text_cache)
+            text = service.read_text(prefab)
+            self.assertIn("m_Name: A", text)
+
+    def test_collect_scope_files_invalidated(self) -> None:
+        """After invalidation, re-walk picks up new files."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            assets = root / "Assets"
+            assets.mkdir()
+            prefab = assets / "Test.prefab"
+            prefab.write_text("%YAML 1.1\n", encoding="utf-8")
+
+            service = ReferenceResolverService(project_root=root)
+            result1 = service.collect_scope_files(assets)
+            (assets / "New.prefab").write_text("%YAML 1.1\n", encoding="utf-8")
+            service.invalidate_scope_files_cache()
+            result2 = service.collect_scope_files(assets)
+            self.assertEqual(len(result1) + 1, len(result2))
 
 
 class PrefabVariantServiceTests(unittest.TestCase):

@@ -41,19 +41,6 @@ from prefab_sentinel.unity_assets import (
 __all__ = ["Phase1Orchestrator"]
 
 
-def _iter_yaml_files(scope_path: Path) -> list[Path]:
-    """Collect Unity YAML files from a directory or single file."""
-    if scope_path.is_file():
-        if scope_path.suffix.lower() in GAMEOBJECT_BEARING_SUFFIXES:
-            return [scope_path]
-        return []
-    return sorted(
-        p
-        for suffix in GAMEOBJECT_BEARING_SUFFIXES
-        for p in scope_path.rglob(f"*{suffix}")
-        if p.is_file()
-    )
-
 
 def _relative_path(path: Path, root: Path) -> str:
     """Return path relative to root as a string, or absolute if outside root."""
@@ -106,6 +93,10 @@ class Phase1Orchestrator:
     def invalidate_before_cache(self) -> None:
         """Delegate before-cache invalidation to serialized object service."""
         self.serialized_object.invalidate_before_cache()
+
+    def invalidate_scope_files_cache(self) -> None:
+        """Delegate scope files cache invalidation to reference resolver."""
+        self.reference_resolver.invalidate_scope_files_cache()
 
     def inspect_variant(
         self,
@@ -385,11 +376,14 @@ class Phase1Orchestrator:
         affected: list[dict[str, Any]] = []
 
         if scan_guids:
-            for yaml_path in _iter_yaml_files(scope_path):
-                try:
-                    text = decode_text_file(yaml_path)
-                except (OSError, UnicodeDecodeError):
-                    continue
+            all_files = self.reference_resolver.collect_scope_files(scope_path)
+            yaml_files = [
+                f for f in all_files
+                if f.suffix.lower() in GAMEOBJECT_BEARING_SUFFIXES
+            ]
+            self.reference_resolver.preload_texts(yaml_files)
+            for yaml_path in yaml_files:
+                text = self.reference_resolver.read_text(yaml_path)
                 if text is None:
                     continue
                 # Quick check: does any scan GUID appear in the file?
@@ -466,9 +460,9 @@ class Phase1Orchestrator:
             g: p for g, p in guid_index.items() if p.suffix == ".cs"
         }
 
-        # Pre-build shared caches for inheritance resolution
-        _field_map = build_field_map(project_root)
-        _class_index = build_class_name_index(project_root)
+        # Pre-build shared caches for inheritance resolution (shared GUID index)
+        _field_map = build_field_map(project_root, _guid_index=guid_index)
+        _class_index = build_class_name_index(project_root, _guid_index=guid_index)
 
         # Cache resolved C# fields by GUID (including inherited)
         field_cache: dict[str, set[str]] = {}
@@ -477,11 +471,14 @@ class Phase1Orchestrator:
         scripts_checked: set[str] = set()
         components_checked = 0
 
-        for yaml_path in _iter_yaml_files(scope_path):
-            try:
-                text = decode_text_file(yaml_path)
-            except (OSError, UnicodeDecodeError):
-                continue
+        all_files = self.reference_resolver.collect_scope_files(scope_path)
+        yaml_files = [
+            f for f in all_files
+            if f.suffix.lower() in GAMEOBJECT_BEARING_SUFFIXES
+        ]
+        self.reference_resolver.preload_texts(yaml_files)
+        for yaml_path in yaml_files:
+            text = self.reference_resolver.read_text(yaml_path)
             if text is None:
                 continue
             blocks = split_yaml_blocks(text)

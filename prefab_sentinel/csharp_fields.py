@@ -296,7 +296,10 @@ def parse_class_info(
 # ---------------------------------------------------------------------------
 
 
-def build_field_map(project_root: Path) -> dict[str, list[CSharpField]]:
+def build_field_map(
+    project_root: Path,
+    _guid_index: dict[str, Path] | None = None,
+) -> dict[str, list[CSharpField]]:
     """Build a mapping from script GUID to serialized fields.
 
     Scans the project for ``.cs`` files, parses each for serialized fields,
@@ -304,13 +307,16 @@ def build_field_map(project_root: Path) -> dict[str, list[CSharpField]]:
 
     Args:
         project_root: Unity project root directory.
+        _guid_index: Pre-built GUID index to avoid redundant rebuilds.
 
     Returns:
         Dict mapping lowercase GUID strings to lists of ``CSharpField``.
     """
-    from prefab_sentinel.unity_assets import collect_project_guid_index
+    if _guid_index is None:
+        from prefab_sentinel.unity_assets import collect_project_guid_index
 
-    guid_index = collect_project_guid_index(project_root, include_package_cache=False)
+        _guid_index = collect_project_guid_index(project_root, include_package_cache=False)
+    guid_index = _guid_index
     result: dict[str, list[CSharpField]] = {}
     for guid, asset_path in guid_index.items():
         if asset_path.suffix != ".cs":
@@ -372,6 +378,24 @@ def resolve_script_fields(
     # Treat as file path
     cs_path = Path(to_wsl_path(identifier))
     if not cs_path.is_file():
+        # Try class name resolution via GUID index stem matching
+        if project_root is not None:
+            guid_index = collect_project_guid_index(
+                project_root, include_package_cache=False
+            )
+            stem_matches: list[tuple[str, Path]] = [
+                (g, p) for g, p in guid_index.items()
+                if p.suffix == ".cs" and p.stem == identifier
+            ]
+            if len(stem_matches) == 1:
+                matched_guid, matched_path = stem_matches[0]
+                source = matched_path.read_text(encoding="utf-8-sig")
+                fields = parse_serialized_fields(source)
+                return matched_guid, matched_path, fields
+            if len(stem_matches) > 1:
+                paths = ", ".join(str(p) for _, p in stem_matches)
+                msg = f"Multiple scripts match class name '{identifier}': {paths}"
+                raise FileNotFoundError(msg)
         msg = f"Script file not found: {identifier}"
         raise FileNotFoundError(msg)
 
@@ -402,6 +426,7 @@ def _strip_namespace(name: str) -> str:
 
 def build_class_name_index(
     project_root: Path,
+    _guid_index: dict[str, Path] | None = None,
 ) -> dict[str, tuple[str, Path]]:
     """Build a mapping from class name to ``(guid, cs_path)``.
 
@@ -410,13 +435,16 @@ def build_class_name_index(
 
     Args:
         project_root: Unity project root directory.
+        _guid_index: Pre-built GUID index to avoid redundant rebuilds.
 
     Returns:
         Dict mapping class name to ``(guid, cs_path)`` tuple.
     """
-    from prefab_sentinel.unity_assets import collect_project_guid_index
+    if _guid_index is None:
+        from prefab_sentinel.unity_assets import collect_project_guid_index
 
-    guid_index = collect_project_guid_index(project_root, include_package_cache=False)
+        _guid_index = collect_project_guid_index(project_root, include_package_cache=False)
+    guid_index = _guid_index
     result: dict[str, tuple[str, Path]] = {}
     for guid, asset_path in guid_index.items():
         if asset_path.suffix != ".cs":

@@ -118,6 +118,13 @@
 - [x] Task 2: `scan_broken_references` / `where_used` に統合 — 1140 tests pass
 - [x] Task 3: `_scan_meta_files` GUID index 並列化 — 47s→14s (3.4x), 1142 tests pass
 
+## MCP UX & Performance Improvements (2026-03-25)
+
+- [x] Task 1: patch_apply lenient parsing + ValueError handler — 1147 tests pass
+- [x] Task 2: class name resolution in resolve_script_fields — 1150 tests pass
+- [x] Task 3: _collect_scope_files caching — 1152 tests pass
+- [x] Task 4: orchestrator C# field ops through cached reads + GUID index sharing — 1153 tests pass
+
 ## MCP Parameter Naming Unification — v0.5.0 (2026-03-25)
 
 - [x] Task 1: path → asset_path (10 inspection tools)

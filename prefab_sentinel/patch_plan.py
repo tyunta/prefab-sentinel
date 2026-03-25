@@ -89,12 +89,16 @@ def normalize_patch_plan(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("Patch plan root must be an object.")
 
-    if "plan_version" not in payload:
+    raw_version = payload.get("plan_version", payload.get("version"))
+    if raw_version is None:
         normalized = _normalize_v1_plan(payload)
     else:
-        plan_version = payload.get("plan_version")
+        try:
+            plan_version = int(raw_version)
+        except (TypeError, ValueError):
+            raise _error("plan_version", f"must be an integer, got {raw_version!r}.")
         if plan_version != PLAN_VERSION:
-            raise _error("plan_version", f"must equal {PLAN_VERSION}.")
+            raise _error("plan_version", f"must equal {PLAN_VERSION}, got {plan_version}.")
 
         resources = payload.get("resources")
         if not isinstance(resources, list) or not resources:

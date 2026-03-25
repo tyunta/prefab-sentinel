@@ -228,6 +228,7 @@ class ProjectSession:
         if self._orchestrator is not None:
             self._orchestrator.invalidate_text_cache(path)
             self._orchestrator.invalidate_before_cache()
+            self._orchestrator.invalidate_scope_files_cache()
         logger.debug("Invalidated asset caches for %s", path)
 
     def invalidate_all(self) -> None:

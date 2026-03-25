@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from prefab_sentinel.contracts import Severity, ToolResponse
 from prefab_sentinel.orchestrator import Phase1Orchestrator
+from prefab_sentinel.services.reference_resolver import ReferenceResolverService
 
 
 def _ok_response(code: str = "OK", data: dict | None = None) -> ToolResponse:
@@ -1307,8 +1308,12 @@ class TestValidateFieldRename(unittest.TestCase):
             encoding="utf-8",
         )
 
-        orch = _make_orchestrator()
-        orch.reference_resolver.project_root = root
+        orch = Phase1Orchestrator(
+            reference_resolver=ReferenceResolverService(project_root=root),
+            prefab_variant=MagicMock(),
+            runtime_validation=MagicMock(),
+            serialized_object=MagicMock(),
+        )
         return orch, root, guid
 
     def test_rename_finds_affected_assets(self) -> None:
@@ -1449,8 +1454,12 @@ class TestCheckFieldCoverage(unittest.TestCase):
             encoding="utf-8",
         )
 
-        orch = _make_orchestrator()
-        orch.reference_resolver.project_root = root
+        orch = Phase1Orchestrator(
+            reference_resolver=ReferenceResolverService(project_root=root),
+            prefab_variant=MagicMock(),
+            runtime_validation=MagicMock(),
+            serialized_object=MagicMock(),
+        )
         return orch, root
 
     def test_detects_unused_and_orphaned(self) -> None:
@@ -1500,8 +1509,12 @@ class TestCheckFieldCoverage(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            orch = _make_orchestrator()
-            orch.reference_resolver.project_root = root
+            orch = Phase1Orchestrator(
+                reference_resolver=ReferenceResolverService(project_root=root),
+                prefab_variant=MagicMock(),
+                runtime_validation=MagicMock(),
+                serialized_object=MagicMock(),
+            )
             result = orch.check_field_coverage(str(assets))
 
         self.assertTrue(result.success)
@@ -1516,8 +1529,12 @@ class TestCheckFieldCoverage(unittest.TestCase):
             root = Path(td)
             empty = root / "Empty"
             empty.mkdir()
-            orch = _make_orchestrator()
-            orch.reference_resolver.project_root = root
+            orch = Phase1Orchestrator(
+                reference_resolver=ReferenceResolverService(project_root=root),
+                prefab_variant=MagicMock(),
+                runtime_validation=MagicMock(),
+                serialized_object=MagicMock(),
+            )
             result = orch.check_field_coverage(str(empty))
 
         self.assertTrue(result.success)
@@ -1546,8 +1563,12 @@ class TestCheckFieldCoverage(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            orch = _make_orchestrator()
-            orch.reference_resolver.project_root = root
+            orch = Phase1Orchestrator(
+                reference_resolver=ReferenceResolverService(project_root=root),
+                prefab_variant=MagicMock(),
+                runtime_validation=MagicMock(),
+                serialized_object=MagicMock(),
+            )
             result = orch.check_field_coverage(str(assets))
 
         self.assertTrue(result.success)
@@ -1560,8 +1581,12 @@ class TestCheckFieldCoverage(unittest.TestCase):
             root = Path(td)
             empty = root / "Empty"
             empty.mkdir()
-            orch = _make_orchestrator()
-            orch.reference_resolver.project_root = root
+            orch = Phase1Orchestrator(
+                reference_resolver=ReferenceResolverService(project_root=root),
+                prefab_variant=MagicMock(),
+                runtime_validation=MagicMock(),
+                serialized_object=MagicMock(),
+            )
             result = orch.check_field_coverage(str(empty))
 
         self.assertTrue(result.data["read_only"])

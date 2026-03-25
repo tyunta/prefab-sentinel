@@ -343,6 +343,57 @@ class TestResolveScriptFields(unittest.TestCase):
                 )
 
 
+    def test_resolve_by_class_name(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            assets = root / "Assets"
+            scripts = assets / "Scripts"
+            scripts.mkdir(parents=True)
+
+            cs = scripts / "MyComponent.cs"
+            cs.write_text("public float speed;", encoding="utf-8")
+            meta = Path(str(cs) + ".meta")
+            meta.write_text(
+                "fileFormatVersion: 2\nguid: aabb1122ccdd3344eeff5566aabb7788\n",
+                encoding="utf-8",
+            )
+
+            guid, path, fields = resolve_script_fields(
+                "MyComponent", project_root=root
+            )
+
+        self.assertEqual("aabb1122ccdd3344eeff5566aabb7788", guid)
+        self.assertEqual(cs, path)
+        self.assertEqual(1, len(fields))
+
+    def test_resolve_by_class_name_ambiguous_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            assets = root / "Assets"
+            dir_a = assets / "A"
+            dir_b = assets / "B"
+            dir_a.mkdir(parents=True)
+            dir_b.mkdir(parents=True)
+
+            for d, guid_hex in [(dir_a, "aa"), (dir_b, "bb")]:
+                cs = d / "Dup.cs"
+                cs.write_text("public int x;", encoding="utf-8")
+                meta = Path(str(cs) + ".meta")
+                meta.write_text(
+                    f"fileFormatVersion: 2\nguid: {guid_hex * 16}\n",
+                    encoding="utf-8",
+                )
+
+            with self.assertRaises(FileNotFoundError) as ctx:
+                resolve_script_fields("Dup", project_root=root)
+            self.assertIn("multiple", str(ctx.exception).lower())
+
+    def test_resolve_by_class_name_no_project_root_raises(self) -> None:
+        # Class name resolution requires project_root; without it, falls through to file-not-found
+        with self.assertRaises(FileNotFoundError):
+            resolve_script_fields("SomeClass")
+
+
 class TestToDictSourceClass(unittest.TestCase):
     """Test CSharpField.to_dict with source_class."""
 

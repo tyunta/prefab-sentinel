@@ -41,6 +41,7 @@ class ReferenceResolverService:
         self._text_cache: dict[Path, str | None] = {}
         self._local_id_cache: dict[Path, set[str]] = {}
         self._unreadable_paths: set[Path] = set()
+        self._scope_files_cache: dict[tuple[str, tuple[str, ...]], list[Path]] = {}
 
     def invalidate_text_cache(self, path: Path | None = None) -> None:
         """Clear text/localID caches. *path*=None clears all."""
@@ -48,6 +49,7 @@ class ReferenceResolverService:
             self._text_cache.clear()
             self._local_id_cache.clear()
             self._unreadable_paths.clear()
+            self._scope_files_cache.clear()
         else:
             self._text_cache.pop(path, None)
             self._local_id_cache.pop(path, None)
@@ -56,6 +58,24 @@ class ReferenceResolverService:
     def invalidate_guid_index(self) -> None:
         """Clear the GUID index cache."""
         self._guid_index_cache.clear()
+
+    def invalidate_scope_files_cache(self) -> None:
+        """Clear the scope files cache."""
+        self._scope_files_cache.clear()
+
+    def collect_scope_files(
+        self,
+        scope_path: Path,
+        exclude_patterns: tuple[str, ...] = (),
+    ) -> list[Path]:
+        """Return cached scope files, populating on first call."""
+        key = (str(scope_path), exclude_patterns)
+        cached = self._scope_files_cache.get(key)
+        if cached is not None:
+            return cached
+        files = self._collect_scope_files(scope_path, exclude_patterns)
+        self._scope_files_cache[key] = files
+        return files
 
     def _guid_map(self, index_root: Path | None = None) -> dict[str, Path]:
         root = (index_root or self.project_root).resolve()
@@ -68,7 +88,7 @@ class ReferenceResolverService:
             self._guid_index_cache[root] = cached
         return cached
 
-    def _read_text(self, path: Path) -> str | None:
+    def read_text(self, path: Path) -> str | None:
         cached = self._text_cache.get(path)
         if cached is not None or path in self._unreadable_paths:
             return cached
@@ -88,7 +108,7 @@ class ReferenceResolverService:
         except UnicodeDecodeError:
             return None
 
-    def _preload_texts(
+    def preload_texts(
         self, paths: list[Path], max_workers: int = 10,
     ) -> None:
         """Pre-populate ``_text_cache`` by reading files in parallel."""
@@ -125,7 +145,7 @@ class ReferenceResolverService:
         if not is_unity_text_asset(path):
             ids: set[str] = set()
         else:
-            text = self._read_text(path)
+            text = self.read_text(path)
             ids = extract_local_file_ids(text) if text is not None else set()
         self._local_id_cache[path] = ids
         return ids
@@ -352,8 +372,8 @@ class ReferenceResolverService:
 
         max_diagnostics = max(0, max_diagnostics)
         top_guid_limit = max(1, top_guid_limit)
-        files = self._collect_scope_files(scope_path, exclude_patterns)
-        self._preload_texts(files)
+        files = self.collect_scope_files(scope_path, exclude_patterns)
+        self.preload_texts(files)
         scan_project_root = self._resolve_scan_project_root(scope_path)
         guid_map = self._guid_map(scan_project_root)
 
@@ -400,7 +420,7 @@ class ReferenceResolverService:
 
         for file_path in files:
             scanned_files += 1
-            text = self._read_text(file_path)
+            text = self.read_text(file_path)
             if text is None:
                 unreadable_files += 1
                 diagnostics.append(
@@ -660,13 +680,13 @@ class ReferenceResolverService:
         usages: list[dict[str, str | int]] = []
         if scan_scope_path is None:
             scan_scope_path = self.project_root
-        files = self._collect_scope_files(scan_scope_path, exclude_patterns)
-        self._preload_texts(files)
+        files = self.collect_scope_files(scan_scope_path, exclude_patterns)
+        self.preload_texts(files)
         scanned_files = 0
         truncated_usages = 0
         for path in files:
             scanned_files += 1
-            text = self._read_text(path)
+            text = self.read_text(path)
             if text is None:
                 continue
             references = iter_references(text, include_location=True)

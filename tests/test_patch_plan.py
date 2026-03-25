@@ -287,6 +287,36 @@ class NormalizePatchPlanTests(unittest.TestCase):
         result = normalize_patch_plan(plan)
         self.assertEqual(result["postconditions"], [])
 
+    def test_string_plan_version_accepted(self) -> None:
+        plan = _v2_plan()
+        plan["plan_version"] = "2"
+        result = normalize_patch_plan(plan)
+        self.assertEqual(result["plan_version"], PLAN_VERSION)
+
+    def test_version_alias_accepted(self) -> None:
+        plan = _v2_plan()
+        del plan["plan_version"]
+        plan["version"] = 2
+        result = normalize_patch_plan(plan)
+        self.assertEqual(result["plan_version"], PLAN_VERSION)
+
+    def test_version_alias_string_accepted(self) -> None:
+        plan = _v2_plan()
+        del plan["plan_version"]
+        plan["version"] = "2"
+        result = normalize_patch_plan(plan)
+        self.assertEqual(result["plan_version"], PLAN_VERSION)
+
+    def test_wrong_version_error_message_includes_received_value(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            normalize_patch_plan({"plan_version": 99})
+        self.assertIn("99", str(ctx.exception))
+
+    def test_non_numeric_plan_version_raises(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            normalize_patch_plan({"plan_version": "abc"})
+        self.assertIn("abc", str(ctx.exception))
+
 
 class LoadPatchPlanTests(unittest.TestCase):
     def test_load_from_file(self) -> None:
