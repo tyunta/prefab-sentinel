@@ -13,6 +13,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from prefab_sentinel.fuzzy_match import suggest_similar
 from prefab_sentinel.unity_assets import (
     collect_project_guid_index,
     decode_text_file,
@@ -566,10 +567,11 @@ def write_material_property(
     category, before, section_name = _find_property(text, property_name)
     if category is None:
         all_names = _list_all_property_names(text)
+        suggestions = suggest_similar(property_name, all_names)
         return _error_dict(
             "MAT_PROP_NOT_FOUND",
             f"Property '{property_name}' not found in {path.name}",
-            data={"available_properties": all_names},
+            data={"available_properties": all_names, "suggestions": suggestions},
             diagnostics=[{"detail": f"Available: {', '.join(all_names)}"}],
         )
 

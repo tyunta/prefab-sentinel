@@ -125,6 +125,19 @@ class TestWriteMaterialPropertyErrors(unittest.TestCase):
             self.assertEqual("MAT_PROP_NOT_FOUND", result["code"])
             # Should list available properties
             self.assertTrue(len(result["diagnostics"]) > 0)
+            # Should have suggestions field
+            self.assertIn("suggestions", result["data"])
+            self.assertIsInstance(result["data"]["suggestions"], list)
+
+    def test_property_not_found_with_suggestions(self) -> None:
+        """Typo in property name returns fuzzy match suggestions."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mat = Path(tmpdir) / "test.mat"
+            shutil.copy(_FIXTURES / "standard_textured.mat", mat)
+            result = write_material_property(str(mat), "_Colr", "1", dry_run=True)
+            self.assertFalse(result["success"])
+            self.assertEqual("MAT_PROP_NOT_FOUND", result["code"])
+            self.assertIn("_Color", result["data"]["suggestions"])
 
     def test_color_parse_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
