@@ -70,26 +70,32 @@ def _try_delete(path: Path) -> None:
         path.unlink(missing_ok=True)
 
 
+_BRIDGE_SETUP_HINT = (
+    " Set UNITYTOOL_BRIDGE_MODE=editor and UNITYTOOL_BRIDGE_WATCH_DIR=<path>."
+    " See README 'Unity Bridge セットアップ' section."
+)
+
+
 def check_editor_bridge_env() -> dict[str, Any] | None:
     """Return an error response if editor bridge env is not configured, else None."""
     mode = os.environ.get(BRIDGE_MODE_ENV, "")
     if mode != "editor":
         return _error_response(
             code="EDITOR_BRIDGE_MODE",
-            message=f"{BRIDGE_MODE_ENV} must be 'editor', got '{mode}'.",
+            message=f"Editor Bridge not connected: {BRIDGE_MODE_ENV} must be 'editor', got '{mode}'.{_BRIDGE_SETUP_HINT}",
             data={"env_var": BRIDGE_MODE_ENV, "value": mode},
         )
     watch_dir = os.environ.get(BRIDGE_WATCH_DIR_ENV, "")
     if not watch_dir:
         return _error_response(
             code="EDITOR_BRIDGE_WATCH_DIR_MISSING",
-            message=f"{BRIDGE_WATCH_DIR_ENV} is not set.",
+            message=f"Editor Bridge not connected: {BRIDGE_WATCH_DIR_ENV} is not set.{_BRIDGE_SETUP_HINT}",
             data={"env_var": BRIDGE_WATCH_DIR_ENV},
         )
     if not Path(watch_dir).is_dir():
         return _error_response(
             code="EDITOR_BRIDGE_WATCH_DIR_NOT_FOUND",
-            message=f"Watch directory does not exist: {watch_dir}",
+            message=f"Editor Bridge not connected: watch directory does not exist: {watch_dir}.{_BRIDGE_SETUP_HINT}",
             data={"env_var": BRIDGE_WATCH_DIR_ENV, "value": watch_dir},
         )
     return None
