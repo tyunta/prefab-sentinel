@@ -104,6 +104,7 @@ namespace PrefabSentinel
             public string tags = string.Empty;            // JSON array string, empty = no change
             public string release_status = string.Empty;  // "public" | "private", empty = no change
             public bool confirm = false;                  // dry-run gate
+            public string platforms = string.Empty;  // JSON array: "[\"windows\",\"android\"]"
         }
 
         [Serializable]
@@ -185,6 +186,10 @@ namespace PrefabSentinel
             public string blueprint_id = string.Empty;
             public string phase = string.Empty;           // "validated" or "complete"
             public float elapsed_sec = 0f;
+
+            // multi-platform upload results
+            public string platform_results_json = string.Empty;
+            public bool original_target_restored = false;
 
             // error hint suggestions
             public string[] suggestions = Array.Empty<string>();
