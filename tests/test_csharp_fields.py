@@ -7,7 +7,6 @@ import unittest
 from pathlib import Path
 
 from prefab_sentinel.csharp_fields import (
-    CSharpClassInfo,
     CSharpField,
     build_class_name_index,
     build_field_map,

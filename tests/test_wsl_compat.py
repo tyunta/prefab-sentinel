@@ -313,7 +313,7 @@ class TestResolveScopePathWsl(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             from prefab_sentinel.unity_assets import resolve_scope_path
 
-            result = resolve_scope_path(tmpdir, Path(tmpdir))
+            resolve_scope_path(tmpdir, Path(tmpdir))
             mock_to_wsl.assert_called_once_with(tmpdir)
 
 

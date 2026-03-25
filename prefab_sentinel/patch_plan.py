@@ -95,8 +95,8 @@ def normalize_patch_plan(payload: dict[str, Any]) -> dict[str, Any]:
     else:
         try:
             plan_version = int(raw_version)
-        except (TypeError, ValueError):
-            raise _error("plan_version", f"must be an integer, got {raw_version!r}.")
+        except (TypeError, ValueError) as exc:
+            raise _error("plan_version", f"must be an integer, got {raw_version!r}.") from exc
         if plan_version != PLAN_VERSION:
             raise _error("plan_version", f"must equal {PLAN_VERSION}, got {plan_version}.")
 

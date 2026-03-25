@@ -7,10 +7,6 @@ from pathlib import Path
 
 from prefab_sentinel.material_asset_inspector import (
     MaterialAssetResult,
-    MaterialColor,
-    MaterialFloat,
-    MaterialInt,
-    MaterialTexture,
     ShaderInfo,
     format_material_asset,
     inspect_material_asset,

@@ -527,10 +527,9 @@ class PrefabVariantService:
         visited: set[str] = set()
         current_text: str | None = initial_text
         current_path: Path = initial_path
-        depth = 0
         depth_limit = 12
 
-        for _ in range(depth_limit):
+        for depth in range(depth_limit):
             if current_text is None:
                 break
 
@@ -564,7 +563,6 @@ class PrefabVariantService:
             except (OSError, UnicodeDecodeError):
                 break
 
-            depth += 1
             current_path = target_file
 
     @staticmethod

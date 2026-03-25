@@ -388,7 +388,6 @@ class TestSymbolTreeToOverview(unittest.TestCase):
     """SymbolTree.to_overview at various depths."""
 
     def _build_tree(self) -> SymbolTree:
-        guid = "aaaa1111bbbb2222cccc3333dddd4444"
         text = (
             YAML_HEADER
             + make_gameobject("100", "Root", ["200", "300"])

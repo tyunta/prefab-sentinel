@@ -6,7 +6,6 @@ from prefab_sentinel.builtin_assets import (
     BUILTIN_CUBE_MESH,
     BUILTIN_DEFAULT_MATERIAL,
     BUILTIN_SPHERE_MESH,
-    BuiltinAssetInfo,
     builtin_reference,
     resolve_builtin_reference,
 )

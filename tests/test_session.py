@@ -6,8 +6,8 @@ import asyncio
 import contextlib
 import tempfile
 import unittest
+from collections.abc import Generator
 from pathlib import Path
-from typing import Generator
 from unittest.mock import MagicMock, patch
 
 from prefab_sentinel.session import ProjectSession
@@ -502,10 +502,8 @@ class TestWatcherDoneCallback(unittest.TestCase):
             task = loop.create_task(_crash())
             task.add_done_callback(session._on_watcher_done)
             # Let the task finish
-            try:
+            with contextlib.suppress(RuntimeError):
                 await task
-            except RuntimeError:
-                pass
 
         with self.assertLogs("prefab_sentinel.session", level="ERROR") as cm:
             asyncio.run(_run())
@@ -524,10 +522,8 @@ class TestWatcherDoneCallback(unittest.TestCase):
             task = loop.create_task(_wait())
             task.add_done_callback(session._on_watcher_done)
             task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await task
-            except asyncio.CancelledError:
-                pass
 
         # No ERROR log expected — would raise if assertLogs doesn't capture
         asyncio.run(_run())

@@ -7,12 +7,7 @@ import unittest
 from prefab_sentinel.unity_yaml_parser import (
     CLASS_ID_GAMEOBJECT,
     CLASS_ID_MONOBEHAVIOUR,
-    CLASS_ID_RECTTRANSFORM,
     CLASS_ID_TRANSFORM,
-    ComponentInfo,
-    GameObjectInfo,
-    TransformInfo,
-    YamlBlock,
     get_stripped_file_ids,
     parse_components,
     parse_game_objects,

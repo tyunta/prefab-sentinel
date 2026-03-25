@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -17,7 +16,7 @@ from prefab_sentinel.material_inspector import (
     format_materials,
     inspect_materials,
 )
-from prefab_sentinel.unity_yaml_parser import YamlBlock, split_yaml_blocks
+from prefab_sentinel.unity_yaml_parser import YamlBlock
 from tests.yaml_helpers import (
     YAML_HEADER,
     make_gameobject,

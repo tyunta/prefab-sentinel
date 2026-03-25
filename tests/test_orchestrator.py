@@ -377,6 +377,7 @@ class FileTypeGuardTests(unittest.TestCase):
 
     def test_inspect_structure_all_checks_on_prefab(self) -> None:
         import tempfile
+
         from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_transform
 
         text = YAML_HEADER + make_gameobject("100", "Root", ["200"]) + make_transform("200", "100")
@@ -393,6 +394,7 @@ class FileTypeGuardTests(unittest.TestCase):
     def test_inspect_wiring_normal_on_prefab(self) -> None:
         """Prefab files should proceed normally, not trigger the guard."""
         import tempfile
+
         from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
 
         text = YAML_HEADER + make_gameobject("100", "Obj", ["200"]) + make_monobehaviour("200", "100")
@@ -412,6 +414,7 @@ class InspectWiringTests(unittest.TestCase):
     def test_script_name_and_game_object_name(self) -> None:
         """inspect_wiring should include script_name and game_object_name in component summaries."""
         import tempfile
+
         from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
 
         text = (
@@ -443,6 +446,7 @@ class InspectWiringTests(unittest.TestCase):
     def test_script_name_empty_on_project_root_failure(self) -> None:
         """script_name should be empty when project root cannot be determined."""
         import tempfile
+
         from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
 
         text = (
@@ -469,6 +473,7 @@ class InspectWiringTests(unittest.TestCase):
     def test_null_ratio_and_null_field_names_in_output(self) -> None:
         """inspect_wiring output includes null_ratio and null_field_names per component."""
         import tempfile
+
         from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
 
         text = (
@@ -569,6 +574,7 @@ class InspectWiringVariantTests(unittest.TestCase):
 
     def test_non_variant_has_no_variant_fields(self) -> None:
         import tempfile
+
         from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
 
         text = YAML_HEADER + make_gameobject("100", "Obj", ["200"]) + make_monobehaviour("200", "100")
@@ -702,6 +708,7 @@ class InspectWiringVariantOverrideAnnotationTests(unittest.TestCase):
     def test_non_variant_no_override_fields(self) -> None:
         """Non-variant should not have override_count or is_overridden in response."""
         import tempfile
+
         from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
 
         text = (

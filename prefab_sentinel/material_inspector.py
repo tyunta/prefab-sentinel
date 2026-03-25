@@ -494,10 +494,7 @@ def _build_stripped_renderer_materials(
     for block in stripped_renderers:
         # Find GO name: check if a parent GO's name was set via m_Modifications
         go_fid = _parse_renderer_game_object_fid(block)
-        if go_fid:
-            go_name = name_overrides.get(go_fid, f"fileID:{go_fid}")
-        else:
-            go_name = f"(renderer fileID:{block.file_id})"
+        go_name = name_overrides.get(go_fid, f"fileID:{go_fid}") if go_fid else f"(renderer fileID:{block.file_id})"
 
         # Collect base material slots for this renderer from m_Modifications
         base_slots: dict[int, str] = {}
