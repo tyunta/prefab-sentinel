@@ -1,8 +1,8 @@
 ---
 tool: modular-avatar
-version_tested: "1.16.2"
+version_tested: "1.12.5"
 last_updated: 2026-03-26
-confidence: low
+confidence: medium
 ---
 
 # Modular Avatar
@@ -135,7 +135,217 @@ confidence: low
 
 ## SerializedProperty リファレンス (L3)
 
-(未調査 — Phase 2 のソースコード分析で埋める)
+ソースバージョン: 1.12.5（PF-TEST プロジェクトインストール済み）
+
+### Script GUID テーブル
+
+| コンポーネント | GUID | 備考 |
+|---|---|---|
+| ModularAvatarMergeArmature | `2df373bf91cf30b4bbd495e11cb1a2ec` | |
+| ModularAvatarBoneProxy | `42581d8044b64899834d3d515ab3a144` | |
+| ModularAvatarMergeAnimator | `1bb122659f724ebf85fe095ac02dc339` | |
+| ModularAvatarMergeBlendTree | `229dd561ca024a6588e388160921a70f` | |
+| ModularAvatarParameters | `71a96d4ea0c344f39e277d82035bf9bd` | |
+| ModularAvatarMenuItem | `3b29d45007c5493d926d2cd45a489529` | |
+| ModularAvatarBlendshapeSync | `6fd7cab7d93b403280f2f9da978d8a4f` | |
+| ModularAvatarMeshSettings | `560fdafd46c74b2db6422fdf0e7f2363` | |
+| ModularAvatarVisibleHeadAccessory | `33dac8cfeaeb4c399ddd90597f849f70` | マーカーコンポーネント (フィールドなし) |
+| ModularAvatarWorldFixedObject | `0e2d9f1d69e34b92a96e6cc162770fad` | マーカーコンポーネント (フィールドなし) |
+| ModularAvatarWorldScaleObject | `e113c01563a14226b5e863befe6fe769` | マーカーコンポーネント (フィールドなし) |
+| ModularAvatarConvertConstraints | `e362b3df8a3d478c82bf5ffe18f622e6` | マーカーコンポーネント (フィールドなし) |
+| ModularAvatarPBBlocker | `a5bf908a199a4648845ebe2fd3b5a4bd` | マーカーコンポーネント (フィールドなし) |
+| ModularAvatarReplaceObject | `7e949680c0864ee7b441d9b2c93b890b` | |
+| ModularAvatarVRChatSettings | `89c938d7d8a741df99f2eda501b3a6fe` | |
+| ModularAvatarMenuInstallTarget | `1fad1419b52a42ae89b0df52eb861e47` | internal class |
+| ModularAvatarSyncParameterSequence | `934543afe4744213b5621aa13a67e3b4` | |
+| ModularAvatarMMDLayerControl | `d1d979d3cedd4ddd969f414e2ea04fb8` | StateMachineBehaviour (非 GameObject) |
+| MAMoveIndependently | `a8d5b07828ba4eefb9acc305478369d0` | MonoBehaviour 直接継承 |
+| ModularAvatarRemoveVertexColor | `dc5f8bfae24244aeaedcd6c2bb7264f9` | |
+| ModularAvatarScaleAdjuster | `09a660aa9d4e47d992adcac5a05dd808` | |
+| ModularAvatarMenuGroup | `97e46a47dd8a425eb4ce9411defe313d` | |
+| ModularAvatarMenuInstaller | `7ef83cb0c23d4d7c9d41021e544a1978` | |
+| ModularAvatarShapeChanger | `2db441f589c3407bb6fb5f02ff8ab541` | |
+| ModularAvatarObjectToggle | `a162bb8ec7e24a5abcf457887f1df3fa` | |
+| ModularAvatarMaterialSetter | `0adf335711644e34b6c635e94ae61fa7` | |
+
+### 共通型
+
+**AvatarObjectReference** (Serializable class — 多くのコンポーネントで使用):
+- `referencePath`: string — アバタールートからの相対パス
+- `targetObject`: GameObject — 直接参照 (internal)
+
+**ReactiveComponent** : AvatarTagComponent (ShapeChanger, ObjectToggle, MaterialSetter の基底):
+- `m_inverted`: bool — 条件を反転
+
+### コンポーネント別フィールド
+
+#### MA Merge Armature
+| propertyPath | 型 | 説明 |
+|---|---|---|
+| `mergeTarget.referencePath` | string | アバター側のターゲットボーンパス |
+| `mergeTarget.targetObject` | GameObject | ターゲットボーン直接参照 |
+| `prefix` | string | ボーン名マッチング時に除去するプレフィックス |
+| `suffix` | string | ボーン名マッチング時に除去するサフィックス |
+| `legacyLocked` | bool | 旧 "locked" フィールド [FormerlySerializedAs] |
+| `LockMode` | ArmatureLockMode | ロックモード (Legacy=0, NotLocked=1, BaseToMerge=2, BidirectionalExact=3) |
+| `mangleNames` | bool | ボーン名の衝突回避リネーム |
+
+#### MA Bone Proxy
+| propertyPath | 型 | 説明 |
+|---|---|---|
+| `boneReference` | HumanBodyBones | ヒューマノイドボーン参照 (enum int) |
+| `subPath` | string | ボーンからの相対パス |
+| `attachmentMode` | BoneProxyAttachmentMode | Unset=0, AsChildAtRoot=1, AsChildKeepWorldPose=2, AsChildKeepRotation=3, AsChildKeepPosition=4 |
+
+#### MA Merge Animator
+| propertyPath | 型 | 説明 |
+|---|---|---|
+| `animator` | RuntimeAnimatorController | 統合するアニメーターコントローラ |
+| `layerType` | VRCAvatarDescriptor.AnimLayerType | レイヤー種別 (デフォルト: FX) |
+| `deleteAttachedAnimator` | bool | 元の Animator コンポーネントを削除 |
+| `pathMode` | MergeAnimatorPathMode | Relative=0, Absolute=1 |
+| `matchAvatarWriteDefaults` | bool | Write Defaults をアバターに合わせる |
+| `relativePathRoot.referencePath` | string | 相対パスの基準 |
+| `layerPriority` | int | レイヤー優先度 |
+| `mergeAnimatorMode` | MergeAnimatorMode | Append=0, Replace=1 |
+
+#### MA Merge Blend Tree
+| propertyPath | 型 | 説明 |
+|---|---|---|
+| `BlendTree` | Object | ブレンドツリー [Obsolete] |
+| `PathMode` | MergeAnimatorPathMode | Relative=0, Absolute=1 |
+| `RelativePathRoot.referencePath` | string | 相対パスの基準 |
+
+#### MA Parameters
+| propertyPath | 型 | 説明 |
+|---|---|---|
+| `parameters` | List\<ParameterConfig\> | パラメーター設定リスト |
+| `parameters.Array.data[n].nameOrPrefix` | string | パラメーター名またはプレフィックス |
+| `parameters.Array.data[n].remapTo` | string | リマップ先の名前 |
+| `parameters.Array.data[n].internalParameter` | bool | 内部パラメーター (SHA256 リネーム対象) |
+| `parameters.Array.data[n].isPrefix` | bool | プレフィックスモード |
+| `parameters.Array.data[n].syncType` | ParameterSyncType | NotSynced=0, Int=1, Float=2, Bool=3 |
+| `parameters.Array.data[n].localOnly` | bool | ローカル専用 |
+| `parameters.Array.data[n].defaultValue` | float | デフォルト値 |
+| `parameters.Array.data[n].saved` | bool | 保存対象 |
+| `parameters.Array.data[n].hasExplicitDefaultValue` | bool | 明示的デフォルト値あり |
+| `parameters.Array.data[n].m_overrideAnimatorDefaults` | bool | アニメーターデフォルト上書き |
+
+#### MA Menu Item
+| propertyPath | 型 | 説明 |
+|---|---|---|
+| `Control` | VRCExpressionsMenu.Control | VRChat メニューコントロール定義 |
+| `MenuSource` | SubmenuSource | MenuAsset=0, Children=1 |
+| `menuSource_otherObjectChildren` | GameObject | 子メニューソースオブジェクト |
+| `isSynced` | bool | ネットワーク同期 (デフォルト: true) |
+| `isSaved` | bool | 保存対象 (デフォルト: true) |
+| `isDefault` | bool | デフォルト値 |
+| `automaticValue` | bool | 自動値割り当て |
+| `label` | string | 表示ラベル [Multiline] |
+
+#### MA Blendshape Sync
+| propertyPath | 型 | 説明 |
+|---|---|---|
+| `Bindings` | List\<BlendshapeBinding\> | 同期バインディングリスト |
+| `Bindings.Array.data[n].ReferenceMesh.referencePath` | string | 参照メッシュのパス |
+| `Bindings.Array.data[n].Blendshape` | string | ソースブレンドシェイプ名 |
+| `Bindings.Array.data[n].LocalBlendshape` | string | ローカルブレンドシェイプ名 |
+
+#### MA Mesh Settings
+| propertyPath | 型 | 説明 |
+|---|---|---|
+| `InheritProbeAnchor` | InheritMode | Inherit=0, Set=1, DontSet=2, SetOrInherit=3 |
+| `ProbeAnchor.referencePath` | string | プローブアンカーのパス |
+| `InheritBounds` | InheritMode | バウンズ継承モード |
+| `RootBone.referencePath` | string | ルートボーンのパス |
+| `Bounds` | Bounds | バウンズ設定 (center/size) |
+
+#### MA Shape Changer
+| propertyPath | 型 | 説明 |
+|---|---|---|
+| `m_inverted` | bool | 条件反転 (ReactiveComponent 継承) |
+| `m_shapes` | List\<ChangedShape\> | [FormerlySerializedAs("Shapes")] |
+| `m_shapes.Array.data[n].Object.referencePath` | string | ターゲットメッシュのパス |
+| `m_shapes.Array.data[n].ShapeName` | string | ブレンドシェイプ名 |
+| `m_shapes.Array.data[n].ChangeType` | ShapeChangeType | Delete=0, Set=1 |
+| `m_shapes.Array.data[n].Value` | float | 設定値 |
+
+#### MA Object Toggle
+| propertyPath | 型 | 説明 |
+|---|---|---|
+| `m_inverted` | bool | 条件反転 |
+| `m_objects` | List\<ToggledObject\> | トグル対象リスト |
+| `m_objects.Array.data[n].Object.referencePath` | string | ターゲットオブジェクトのパス |
+| `m_objects.Array.data[n].Active` | bool | 条件成立時の active 状態 |
+
+#### MA Material Setter
+| propertyPath | 型 | 説明 |
+|---|---|---|
+| `m_inverted` | bool | 条件反転 |
+| `m_objects` | List\<MaterialSwitchObject\> | マテリアル切替リスト |
+| `m_objects.Array.data[n].Object.referencePath` | string | ターゲットレンダラーのパス |
+| `m_objects.Array.data[n].Material` | Material | 設定するマテリアル |
+| `m_objects.Array.data[n].MaterialIndex` | int | マテリアルスロット番号 |
+
+#### MA Scale Adjuster
+| propertyPath | 型 | 説明 |
+|---|---|---|
+| `m_Scale` | Vector3 | スケール値 (デフォルト: 1,1,1) |
+| `legacyScaleProxy` | Transform | [FormerlySerializedAs("scaleProxy")] |
+
+#### MA Replace Object
+| propertyPath | 型 | 説明 |
+|---|---|---|
+| `targetObject.referencePath` | string | 差替対象のパス |
+
+#### MA Menu Installer
+| propertyPath | 型 | 説明 |
+|---|---|---|
+| `menuToAppend` | VRCExpressionsMenu | 追加するメニューアセット |
+| `installTargetMenu` | VRCExpressionsMenu | インストール先メニュー |
+
+#### MA Menu Install Target
+| propertyPath | 型 | 説明 |
+|---|---|---|
+| `installer` | ModularAvatarMenuInstaller | 関連する MenuInstaller 参照 |
+
+#### MA Menu Group
+| propertyPath | 型 | 説明 |
+|---|---|---|
+| `targetObject` | GameObject | グループの子メニューソース |
+
+#### MA Sync Parameter Sequence
+| propertyPath | 型 | 説明 |
+|---|---|---|
+| `PrimaryPlatform` | Platform | PC=0, Android=1, iOS=2 |
+| `Parameters` | VRCExpressionParameters | パラメーターアセット参照 |
+
+#### MA VRChat Settings
+| propertyPath | 型 | 説明 |
+|---|---|---|
+| `m_mmdWorldSupport` | bool | MMD ワールドサポート (デフォルト: true) |
+
+#### MA MMD Layer Control (StateMachineBehaviour)
+| propertyPath | 型 | 説明 |
+|---|---|---|
+| `m_DisableInMMDMode` | bool | MMD モード時に無効化 |
+
+#### MA Move Independently
+| propertyPath | 型 | 説明 |
+|---|---|---|
+| `m_groupedBones` | GameObject[] | グループ化されたボーン |
+
+#### MA Remove Vertex Color
+| propertyPath | 型 | 説明 |
+|---|---|---|
+| `Mode` | RemoveMode | Remove=0, DontRemove=1 |
+
+### 設計上の注意点
+
+- **AvatarObjectReference** は `referencePath` (文字列パス) と `targetObject` (直接参照) の二重参照構造。プレファブ内では `referencePath` が主、ビルド時に `targetObject` へ解決される。
+- **FormerlySerializedAs** が 3 箇所: `legacyLocked`←"locked", `legacyScaleProxy`←"scaleProxy", `m_shapes`←"Shapes"。旧バージョンからのマイグレーション時に注意。
+- マーカーコンポーネント (フィールドなし) が 5 種: VisibleHeadAccessory, WorldFixedObject, WorldScaleObject, ConvertConstraints, PBBlocker。存在のみで機能する。
+- **MMDLayerControl** は StateMachineBehaviour 継承で、GameObject ではなく Animator State Machine に付与される唯一のコンポーネント。
 
 ## 実運用で学んだこと
 
