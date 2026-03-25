@@ -247,11 +247,11 @@ namespace PrefabSentinel
                 if (r.skipped)
                     sb.Append($"{{\"platform\":\"{r.platform}\",\"skipped\":true}}");
                 else if (r.success)
-                    sb.Append($"{{\"platform\":\"{r.platform}\",\"success\":true,\"elapsed_sec\":{r.elapsed:F1}}}");
+                    sb.Append($"{{\"platform\":\"{r.platform}\",\"success\":true,\"elapsed_sec\":{r.elapsed.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)}}}");
                 else
                 {
-                    var escapedError = r.error.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n");
-                    sb.Append($"{{\"platform\":\"{r.platform}\",\"success\":false,\"elapsed_sec\":{r.elapsed:F1},\"error\":\"{escapedError}\"}}");
+                    var escapedError = r.error.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n").Replace("\r", "\\r").Replace("\t", "\\t");
+                    sb.Append($"{{\"platform\":\"{r.platform}\",\"success\":false,\"elapsed_sec\":{r.elapsed.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)},\"error\":\"{escapedError}\"}}");
                 }
             }
             sb.Append("]");
