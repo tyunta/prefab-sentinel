@@ -1,10 +1,12 @@
 {
-  "prefab-sentinel": {
+  "mcpServers": {
+    "prefab-sentinel": {
     "command": "uvx",
     "args": [
-      "--from", "git+https://github.com/tyunta/prefab-sentinel",
+      "--from", "${CLAUDE_PLUGIN_ROOT}",
       "--with", "mcp>=1.12",
       "prefab-sentinel-mcp"
     ]
+    }
   }
 }
