@@ -46,7 +46,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install test dependencies
-        run: uv sync --extra test
+        run: uv sync --extra test --extra mcp
 
       - name: Run Unit Tests
         run: uv run python scripts/run_unit_tests.py

@@ -61,7 +61,7 @@
 - 仕様との齟齬が出た場合は README を優先して同期する。
 
 ## バージョン管理
-- パッチバンプは git pre-commit hook で自動実行される（`.git/hooks/pre-commit`）。
+- pre-commit hook は `ruff check` → パッチバンプ → `uv lock` の順で実行される（`.git/hooks/pre-commit`）。lint 失敗時はコミット中断。
 - minor/major バンプは手動: `uv run bump-my-version bump minor|major`。
 - スキップ: `SKIP_BUMP=1` 環境変数を設定してコミットする。
 - バージョン記述箇所は `pyproject.toml` と `.claude-plugin/plugin.json` の 2 箇所（`[tool.bumpversion]` で一括管理）。
