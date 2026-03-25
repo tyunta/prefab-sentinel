@@ -21,6 +21,7 @@ from prefab_sentinel.hierarchy import HierarchyNode, analyze_hierarchy, format_t
 from prefab_sentinel.material_asset_inspector import (
     format_material_asset,
     inspect_material_asset as _inspect_material_asset,
+    write_material_property as _write_material_property,
 )
 from prefab_sentinel.material_inspector import (
     format_materials,
@@ -1059,6 +1060,58 @@ class Phase1Orchestrator:
             "INSPECT_MATERIAL_ASSET_RESULT",
             "inspect.material_asset completed (read-only).",
             data=data,
+        )
+
+    def set_material_property(
+        self,
+        target_path: str,
+        property_name: str,
+        value: str,
+        *,
+        dry_run: bool = True,
+        change_reason: str | None = None,
+    ) -> ToolResponse:
+        """Set a single property in a .mat file.
+
+        Args:
+            target_path: Path to a .mat file.
+            property_name: Property name (e.g. ``_Glossiness``).
+            value: New value as string.
+            dry_run: If True, preview only.
+            change_reason: Required when dry_run=False.
+
+        Returns:
+            ``ToolResponse`` with before/after data.
+        """
+        if not dry_run and not change_reason:
+            return error_response(
+                "MAT_PROP_REASON_REQUIRED",
+                "change_reason is required when confirm=True",
+            )
+
+        result = _write_material_property(
+            target_path, property_name, value, dry_run=dry_run,
+        )
+
+        if not dry_run and result.get("success"):
+            result["data"]["auto_refresh"] = self.maybe_auto_refresh()
+
+        severity = Severity.INFO if result["success"] else Severity.ERROR
+        return ToolResponse(
+            success=result["success"],
+            severity=severity,
+            code=result["code"],
+            message=result["message"],
+            data=result.get("data", {}),
+            diagnostics=[
+                Diagnostic(
+                    path=target_path,
+                    location="",
+                    detail=d.get("detail", ""),
+                    evidence=d.get("evidence", ""),
+                )
+                for d in result.get("diagnostics", [])
+            ],
         )
 
     def inspect_structure(

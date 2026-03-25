@@ -1132,6 +1132,43 @@ def create_server(
         return resp.to_dict()
 
     @server.tool()
+    def set_material_property(
+        asset_path: str,
+        property_name: str,
+        value: str,
+        confirm: bool = False,
+        change_reason: str = "",
+    ) -> dict[str, Any]:
+        """Set a single property in a .mat file (offline YAML editing).
+
+        Two-phase workflow:
+        - confirm=False (default): dry-run preview showing before/after.
+        - confirm=True: applies the change and writes back.
+
+        Value format depends on property category:
+        - Float: "0.5"
+        - Int: "2"
+        - Color: "[1, 0.8, 0.6, 1]" (RGBA)
+        - Texture: "guid:abc123..." or "" (null)
+
+        Args:
+            asset_path: Path to the .mat file.
+            property_name: Property name (e.g. "_Glossiness", "_Color").
+            value: New value as string.
+            confirm: Set True to apply (False = dry-run only).
+            change_reason: Required when confirm=True. Audit log reason.
+        """
+        orch = session.get_orchestrator()
+        resp = orch.set_material_property(
+            target_path=asset_path,
+            property_name=property_name,
+            value=value,
+            dry_run=not confirm,
+            change_reason=change_reason or None,
+        )
+        return resp.to_dict()
+
+    @server.tool()
     def validate_structure(asset_path: str) -> dict[str, Any]:
         """Validate internal YAML structure (fileID duplicates, Transform consistency).
 
