@@ -1,0 +1,10 @@
+{
+  "prefab-sentinel": {
+    "command": "uvx",
+    "args": [
+      "--from", "git+https://github.com/tyunta/prefab-sentinel",
+      "--with", "mcp>=1.12",
+      "prefab-sentinel-mcp"
+    ]
+  }
+}
