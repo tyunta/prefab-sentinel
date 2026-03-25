@@ -57,7 +57,7 @@ class TestToolRegistration(unittest.TestCase):
             "editor_get_material_property", "editor_set_material_property",
             "editor_console", "editor_run_tests",
             "inspect_materials", "inspect_material_asset", "set_material_property",
-            "validate_structure", "revert_overrides",
+            "validate_structure", "revert_overrides", "vrcsdk_upload",
             # Phase 2: AI workflow tools
             "inspect_hierarchy", "validate_runtime", "patch_apply",
         }
@@ -66,7 +66,7 @@ class TestToolRegistration(unittest.TestCase):
     def test_tool_count(self) -> None:
         server = create_server()
         tools = _run(server.list_tools())
-        self.assertEqual(40, len(tools))
+        self.assertEqual(41, len(tools))
 
 
 class TestSymbolTools(unittest.TestCase):
@@ -1951,6 +1951,42 @@ class TestEditorWriteTools(unittest.TestCase):
         with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_delete", {"hierarchy_path": "/OldObject"}))
         mock_send.assert_called_once_with(action="delete_object", hierarchy_path="/OldObject")
+
+    def test_vrcsdk_upload_delegates(self) -> None:
+        server = create_server()
+        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+            _run(server.call_tool("vrcsdk_upload", {
+                "target_type": "avatar",
+                "asset_path": "Assets/Avatars/Test.prefab",
+                "blueprint_id": "avtr_test123",
+                "confirm": False,
+            }))
+        mock_send.assert_called_once_with(
+            action="vrcsdk_upload",
+            timeout_sec=600,
+            target_type="avatar",
+            asset_path="Assets/Avatars/Test.prefab",
+            blueprint_id="avtr_test123",
+            description="",
+            tags="",
+            release_status="",
+            confirm=False,
+        )
+
+    def test_vrcsdk_upload_requires_change_reason(self) -> None:
+        """confirm=True without change_reason returns error without calling bridge."""
+        server = create_server()
+        with patch("prefab_sentinel.mcp_server.send_action") as mock_send:
+            _, result = _run(server.call_tool("vrcsdk_upload", {
+                "target_type": "avatar",
+                "asset_path": "Assets/Avatars/Test.prefab",
+                "blueprint_id": "avtr_test123",
+                "confirm": True,
+                "change_reason": "",
+            }))
+            mock_send.assert_not_called()
+        self.assertFalse(result["success"])
+        self.assertEqual("VRCSDK_REASON_REQUIRED", result["code"])
 
 
 class TestInspectionTools(unittest.TestCase):

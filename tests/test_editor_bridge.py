@@ -184,6 +184,7 @@ class TestSupportedActions(unittest.TestCase):
             "get_material_property",
             "set_material_property",
             "run_integration_tests",
+            "vrcsdk_upload",
         }
         self.assertEqual(expected, SUPPORTED_ACTIONS)
 

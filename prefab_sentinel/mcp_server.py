@@ -1035,6 +1035,58 @@ def create_server(
         """
         return send_action(action="run_integration_tests", timeout_sec=timeout_sec)
 
+    @server.tool()
+    def vrcsdk_upload(
+        target_type: str,
+        asset_path: str,
+        blueprint_id: str,
+        description: str = "",
+        tags: str = "",
+        release_status: str = "",
+        confirm: bool = False,
+        change_reason: str = "",
+        timeout_sec: int = 600,
+    ) -> dict[str, Any]:
+        """Build and upload an avatar or world to VRChat via VRC SDK.
+
+        Existing asset update only (blueprint_id required).
+
+        Two-phase workflow:
+        - confirm=False (default): validates SDK login, asset, descriptor.
+        - confirm=True: builds and uploads to VRChat.
+
+        Args:
+            target_type: "avatar" or "world".
+            asset_path: Prefab path (avatar) or Scene path (world).
+            blueprint_id: Existing VRC asset ID (e.g. "avtr_xxx..."). Required.
+            description: Description text (empty = no change).
+            tags: JSON array of tag strings (empty = no change).
+            release_status: "public" or "private" (empty = no change).
+            confirm: Set True to build + upload (False = validation only).
+            change_reason: Required when confirm=True. Audit log reason.
+            timeout_sec: Bridge timeout in seconds (default: 600).
+        """
+        if confirm and not change_reason:
+            return {
+                "success": False,
+                "severity": "error",
+                "code": "VRCSDK_REASON_REQUIRED",
+                "message": "change_reason is required when confirm=True",
+                "data": {},
+                "diagnostics": [],
+            }
+        return send_action(
+            action="vrcsdk_upload",
+            timeout_sec=timeout_sec,
+            target_type=target_type,
+            asset_path=asset_path,
+            blueprint_id=blueprint_id,
+            description=description,
+            tags=tags,
+            release_status=release_status,
+            confirm=confirm,
+        )
+
     # ------------------------------------------------------------------
     # Editor bridge tools (write / mutation)
     # ------------------------------------------------------------------
