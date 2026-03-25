@@ -182,6 +182,7 @@ class TestSupportedActions(unittest.TestCase):
             "set_camera",
             "list_roots",
             "get_material_property",
+            "set_material_property",
             "run_integration_tests",
         }
         self.assertEqual(expected, SUPPORTED_ACTIONS)

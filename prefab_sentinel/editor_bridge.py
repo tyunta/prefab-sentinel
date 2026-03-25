@@ -48,6 +48,7 @@ SUPPORTED_ACTIONS = frozenset(
         "set_camera",
         "list_roots",
         "get_material_property",
+        "set_material_property",
         "run_integration_tests",
     }
 )

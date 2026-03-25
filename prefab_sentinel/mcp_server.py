@@ -962,6 +962,36 @@ def create_server(
         )
 
     @server.tool()
+    def editor_set_material_property(
+        hierarchy_path: str,
+        material_index: int,
+        property_name: str,
+        value: str,
+    ) -> dict[str, Any]:
+        """Set a shader property value on a material at runtime.
+
+        Type is determined from shader definition (not from the value format).
+
+        Args:
+            hierarchy_path: Hierarchy path to the GameObject with a Renderer.
+            material_index: Material slot index (0-based).
+            property_name: Shader property name (e.g. "_Color", "_MainTex").
+            value: Value as string. Format depends on shader type:
+                Float/Range: "0.5"
+                Int: "2"
+                Color: "[1, 0.8, 0.6, 1]" (RGBA)
+                Vector: "[0, 1, 0, 0]" (XYZW)
+                Texture: "guid:abc123..." or "" (null)
+        """
+        return send_action(
+            action="set_material_property",
+            hierarchy_path=hierarchy_path,
+            material_index=material_index,
+            property_name=property_name,
+            property_value=value,
+        )
+
+    @server.tool()
     def editor_console(
         max_entries: int = 200,
         log_type_filter: str = "all",

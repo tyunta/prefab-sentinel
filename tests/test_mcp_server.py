@@ -54,7 +54,8 @@ class TestToolRegistration(unittest.TestCase):
             "editor_refresh", "editor_recompile", "editor_instantiate",
             "editor_set_material", "editor_delete",
             "editor_list_children", "editor_list_materials", "editor_list_roots",
-            "editor_get_material_property", "editor_console", "editor_run_tests",
+            "editor_get_material_property", "editor_set_material_property",
+            "editor_console", "editor_run_tests",
             "inspect_materials", "inspect_material_asset",
             "validate_structure", "revert_overrides",
             # Phase 2: AI workflow tools
@@ -65,7 +66,7 @@ class TestToolRegistration(unittest.TestCase):
     def test_tool_count(self) -> None:
         server = create_server()
         tools = _run(server.list_tools())
-        self.assertEqual(38, len(tools))
+        self.assertEqual(39, len(tools))
 
 
 class TestSymbolTools(unittest.TestCase):
@@ -1926,6 +1927,23 @@ class TestEditorWriteTools(unittest.TestCase):
         mock_send.assert_called_once_with(
             action="set_material",
             hierarchy_path="/Body", material_index=0, material_guid="abc123def456",
+        )
+
+    def test_editor_set_material_property_delegates(self) -> None:
+        server = create_server()
+        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+            _run(server.call_tool("editor_set_material_property", {
+                "hierarchy_path": "/Foo",
+                "material_index": 0,
+                "property_name": "_Color",
+                "value": "[1, 0, 0, 1]",
+            }))
+        mock_send.assert_called_once_with(
+            action="set_material_property",
+            hierarchy_path="/Foo",
+            material_index=0,
+            property_name="_Color",
+            property_value="[1, 0, 0, 1]",
         )
 
     def test_editor_delete_delegates(self) -> None:
