@@ -335,3 +335,276 @@ def format_material_asset(result: MaterialAssetResult) -> str:
     for i in result.ints:
         lines.append(f"  {i.name}: {i.value}")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Writer helpers
+# ---------------------------------------------------------------------------
+
+
+def _error_dict(
+    code: str,
+    message: str,
+    data: dict | None = None,
+    diagnostics: list | None = None,
+) -> dict:
+    return {
+        "success": False,
+        "severity": "error",
+        "code": code,
+        "message": message,
+        "data": data or {},
+        "diagnostics": diagnostics or [],
+    }
+
+
+def _success_dict(
+    code: str,
+    message: str,
+    data: dict | None = None,
+) -> dict:
+    return {
+        "success": True,
+        "severity": "info",
+        "code": code,
+        "message": message,
+        "data": data or {},
+        "diagnostics": [],
+    }
+
+
+def _find_property(
+    text: str,
+    property_name: str,
+) -> tuple[str | None, str | None, str | None]:
+    """Find a property across all 4 section categories.
+
+    Returns ``(category, current_value_str, section_name)`` or
+    ``(None, None, None)`` when the property is not found.
+    """
+    float_section = _extract_section(text, "m_Floats")
+    for m in _FLOAT_ENTRY.finditer(float_section):
+        if m.group(1) == property_name:
+            return "float", m.group(2), "m_Floats"
+
+    int_section = _extract_section(text, "m_Ints")
+    for m in _INT_ENTRY.finditer(int_section):
+        if m.group(1) == property_name:
+            return "int", m.group(2), "m_Ints"
+
+    color_section = _extract_section(text, "m_Colors")
+    for m in _COLOR_ENTRY.finditer(color_section):
+        if m.group(1) == property_name:
+            r, g, b, a = m.group(2), m.group(3), m.group(4), m.group(5)
+            return "color", f"[{r}, {g}, {b}, {a}]", "m_Colors"
+
+    tex_section = _extract_section(text, "m_TexEnvs")
+    for m in _TEX_ENTRY.finditer(tex_section):
+        if m.group(1) == property_name:
+            guid = m.group(3) or ""
+            return "texture", f"guid:{guid}" if guid else "", "m_TexEnvs"
+
+    return None, None, None
+
+
+def _list_all_property_names(text: str) -> list[str]:
+    """Collect all property names from every section category."""
+    names: list[str] = []
+    for section, pattern in [
+        ("m_Floats", _FLOAT_ENTRY),
+        ("m_Ints", _INT_ENTRY),
+        ("m_Colors", _COLOR_ENTRY),
+        ("m_TexEnvs", _TEX_ENTRY),
+    ]:
+        section_text = _extract_section(text, section)
+        for m in pattern.finditer(section_text):
+            names.append(m.group(1))
+    return sorted(set(names))
+
+
+def _section_span(text: str, section_name: str) -> tuple[int, int] | None:
+    """Return ``(start, end)`` byte offsets of a section in *text*."""
+    pattern = re.compile(
+        rf"^(\s{{4}}{re.escape(section_name)}:\s*\n)(.*?)(?=^\s{{4}}m_\w+:|\Z)",
+        re.MULTILINE | re.DOTALL,
+    )
+    m = pattern.search(text)
+    if m is None:
+        return None
+    # Return span covering the header plus body.
+    return m.start(), m.end()
+
+
+def _replace_in_section(
+    text: str,
+    section_name: str,
+    pattern: re.Pattern[str],
+    replacement: str,
+) -> str:
+    """Apply a regex substitution restricted to *section_name* only.
+
+    This avoids accidental matches in other sections (e.g. an int entry
+    that also matches the float pattern).
+    """
+    span = _section_span(text, section_name)
+    if span is None:
+        raise ValueError(f"Section {section_name} not found")
+    start, end = span
+    section_text = text[start:end]
+    new_section = pattern.sub(replacement, section_text, count=1)
+    return text[:start] + new_section + text[end:]
+
+
+def _replace_property(
+    text: str,
+    property_name: str,
+    value: str,
+    category: str,
+) -> str:
+    """Replace a property value in the full .mat text."""
+    import json as _json
+
+    if category == "float":
+        try:
+            float(value)
+        except ValueError:
+            raise ValueError(f"Invalid float value: {value}") from None
+        pattern = re.compile(
+            rf"(- {re.escape(property_name)}:\s*)[\d.e+-]+",
+        )
+        return _replace_in_section(text, "m_Floats", pattern, rf"\g<1>{value}")
+
+    if category == "int":
+        try:
+            int(value)
+        except ValueError:
+            raise ValueError(f"Invalid int value: {value}") from None
+        pattern = re.compile(
+            rf"(- {re.escape(property_name)}:\s*)-?\d+",
+        )
+        return _replace_in_section(text, "m_Ints", pattern, rf"\g<1>{value}")
+
+    if category == "color":
+        try:
+            parts = _json.loads(value)
+            if not isinstance(parts, list) or len(parts) != 4:
+                raise ValueError("Color must be [r, g, b, a]")
+            r, g, b, a = (float(x) for x in parts)
+        except (ValueError, TypeError, _json.JSONDecodeError) as exc:
+            raise ValueError(f"Invalid color value '{value}': {exc}") from None
+        new_val = f"{{r: {r}, g: {g}, b: {b}, a: {a}}}"
+        pattern = re.compile(
+            rf"(- {re.escape(property_name)}:\s*)"
+            r"\{r:\s*[\d.e+-]+,\s*g:\s*[\d.e+-]+,\s*b:\s*[\d.e+-]+,\s*a:\s*[\d.e+-]+\}",
+        )
+        return _replace_in_section(text, "m_Colors", pattern, rf"\g<1>{new_val}")
+
+    if category == "texture":
+        if value == "":
+            new_texture = "m_Texture: {fileID: 0}"
+        elif value.startswith("guid:"):
+            guid = value[5:]
+            new_texture = f"m_Texture: {{fileID: 2800000, guid: {guid}, type: 3}}"
+        else:
+            raise ValueError(
+                f"Texture value must be 'guid:<hex>' or empty, got: {value}",
+            )
+        # Within the named tex entry, replace the m_Texture line.
+        pattern = re.compile(
+            rf"(- {re.escape(property_name)}:\s*\n\s+)m_Texture:\s*\{{[^}}]+\}}",
+        )
+        return _replace_in_section(text, "m_TexEnvs", pattern, rf"\g<1>{new_texture}")
+
+    raise ValueError(f"Unknown category: {category}")
+
+
+# ---------------------------------------------------------------------------
+# Writer
+# ---------------------------------------------------------------------------
+
+
+def write_material_property(
+    target_path: str,
+    property_name: str,
+    value: str,
+    *,
+    dry_run: bool = True,
+) -> dict:
+    """Write a single property value in a ``.mat`` file.
+
+    Args:
+        target_path: Path to the .mat file.
+        property_name: Property name (e.g. ``_Glossiness``).
+        value: New value as string.  Format depends on the property type:
+
+            * Float / Int: ``"0.5"`` or ``"128"``
+            * Color: ``"[r, g, b, a]"``  (JSON array)
+            * Texture: ``"guid:abc..."`` to set, or ``""`` to null-out.
+
+        dry_run: If *True*, return a preview without writing.
+
+    Returns:
+        Envelope dict with ``success``, ``severity``, ``code``, ``message``,
+        ``data``, ``diagnostics``.
+    """
+    path = Path(target_path)
+
+    if path.suffix.lower() != ".mat":
+        return _error_dict(
+            "MAT_PROP_WRONG_EXT",
+            f"Expected .mat file, got {path.suffix}",
+        )
+
+    if not path.exists():
+        return _error_dict(
+            "MAT_PROP_FILE_NOT_FOUND",
+            f"File not found: {target_path}",
+        )
+
+    text = path.read_text(encoding="utf-8")
+
+    category, before, section_name = _find_property(text, property_name)
+    if category is None:
+        all_names = _list_all_property_names(text)
+        return _error_dict(
+            "MAT_PROP_NOT_FOUND",
+            f"Property '{property_name}' not found in {path.name}",
+            data={"available_properties": all_names},
+            diagnostics=[{"detail": f"Available: {', '.join(all_names)}"}],
+        )
+
+    data = {
+        "asset_path": target_path,
+        "property_name": property_name,
+        "category": section_name,
+        "before": str(before),
+        "after": value,
+    }
+
+    if dry_run:
+        return _success_dict(
+            "MAT_PROP_DRY_RUN",
+            f"Would change {property_name} from {before} to {value}",
+            data=data,
+        )
+
+    try:
+        new_text = _replace_property(text, property_name, value, category)
+    except ValueError as exc:
+        return _error_dict("MAT_PROP_PARSE_ERROR", str(exc))
+
+    path.write_text(new_text, encoding="utf-8")
+
+    # Verify the write by re-parsing.
+    verify_cat, _verify_val, _ = _find_property(new_text, property_name)
+    if verify_cat is None:
+        return _error_dict(
+            "MAT_PROP_VERIFY_FAILED",
+            "Property disappeared after write",
+        )
+
+    return _success_dict(
+        "MAT_PROP_APPLIED",
+        f"Changed {property_name} from {before} to {value}",
+        data=data,
+    )
