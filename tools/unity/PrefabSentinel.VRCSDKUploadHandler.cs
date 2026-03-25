@@ -63,6 +63,9 @@ namespace PrefabSentinel
                 }
             }
 
+            // --- Parse platforms ---
+            var platforms = ParsePlatforms(request.platforms);
+
             // --- dry-run return ---
             if (!request.confirm)
             {
@@ -79,36 +82,94 @@ namespace PrefabSentinel
                     });
             }
 
-            // --- Build + Upload ---
-            var sw = Stopwatch.StartNew();
+            // --- Multi-platform Build + Upload ---
+            var originalTarget = EditorUserBuildSettings.activeBuildTarget;
+            var totalSw = Stopwatch.StartNew();
+            var results = new System.Collections.Generic.List<(string platform, bool success, float elapsed, string error, bool skipped)>();
+            bool failed = false;
+            bool restored = false;
+            string failCode = "VRCSDK_BUILD_FAILED";
+            string failMessage = "";
+
             try
             {
-                if (request.target_type == "avatar")
-                    BuildAndUploadAvatar(request);
-                else
-                    BuildAndUploadWorld(request);
-            }
-            catch (Exception ex)
-            {
-                sw.Stop();
-                string code = ex.Message.Contains("upload", StringComparison.OrdinalIgnoreCase)
-                    ? "VRCSDK_UPLOAD_FAILED"
-                    : "VRCSDK_BUILD_FAILED";
-                return BuildError(code, $"{request.target_type} failed after {sw.Elapsed.TotalSeconds:F1}s: {ex.Message}");
-            }
-            sw.Stop();
-
-            return BuildSuccess("VRCSDK_UPLOAD_OK",
-                $"Uploaded {request.target_type} ({request.blueprint_id}) in {sw.Elapsed.TotalSeconds:F1}s",
-                data: new EditorControlData
+                for (int i = 0; i < platforms.Length; i++)
                 {
-                    target_type = request.target_type,
-                    asset_path = request.asset_path,
-                    blueprint_id = request.blueprint_id,
-                    phase = "complete",
-                    elapsed_sec = (float)sw.Elapsed.TotalSeconds,
-                    executed = true
-                });
+                    var platform = platforms[i];
+                    var platSw = Stopwatch.StartNew();
+
+                    try
+                    {
+                        // Switch build target
+                        bool switched = EditorUserBuildSettings.SwitchActiveBuildTarget(
+                            ToBuildTargetGroup(platform), ToBuildTarget(platform));
+                        if (!switched)
+                        {
+                            platSw.Stop();
+                            results.Add((platform, false, (float)platSw.Elapsed.TotalSeconds,
+                                "Platform switch failed", false));
+                            failCode = "VRCSDK_PLATFORM_SWITCH_FAILED";
+                            failMessage = $"Failed to switch to platform '{platform}'";
+                            failed = true;
+                            break;
+                        }
+
+                        // Build + Upload
+                        if (request.target_type == "avatar")
+                            BuildAndUploadAvatar(request);
+                        else
+                            BuildAndUploadWorld(request);
+
+                        platSw.Stop();
+                        results.Add((platform, true, (float)platSw.Elapsed.TotalSeconds, "", false));
+                    }
+                    catch (Exception ex)
+                    {
+                        platSw.Stop();
+                        results.Add((platform, false, (float)platSw.Elapsed.TotalSeconds, ex.Message, false));
+                        failCode = ex.Message.Contains("upload", StringComparison.OrdinalIgnoreCase)
+                            ? "VRCSDK_UPLOAD_FAILED"
+                            : "VRCSDK_BUILD_FAILED";
+                        failMessage = $"{request.target_type} failed on platform '{platform}' after {platSw.Elapsed.TotalSeconds:F1}s: {ex.Message}";
+                        failed = true;
+                        break;
+                    }
+                }
+            }
+            finally
+            {
+                // Mark remaining platforms as skipped
+                for (int i = results.Count; i < platforms.Length; i++)
+                    results.Add((platforms[i], false, 0f, "", true));
+
+                // Restore original build target (always, even on failure)
+                restored = EditorUserBuildSettings.SwitchActiveBuildTarget(
+                    EditorUserBuildSettings.GetBuildTargetGroup(originalTarget), originalTarget);
+            }
+
+            totalSw.Stop();
+
+            var data = new EditorControlData
+            {
+                target_type = request.target_type,
+                asset_path = request.asset_path,
+                blueprint_id = request.blueprint_id,
+                phase = failed ? "failed" : "complete",
+                elapsed_sec = (float)totalSw.Elapsed.TotalSeconds,
+                executed = true,
+                platform_results_json = BuildPlatformResultsJson(results),
+                original_target_restored = restored,
+            };
+
+            if (failed)
+            {
+                return BuildError(failCode, failMessage, data);
+            }
+
+            int platCount = platforms.Length;
+            return BuildSuccess("VRCSDK_UPLOAD_OK",
+                $"Uploaded {request.target_type} to {platCount} platform(s) in {totalSw.Elapsed.TotalSeconds:F1}s",
+                data: data);
         }
 
         private static void BuildAndUploadAvatar(EditorControlRequest request)
@@ -139,6 +200,62 @@ namespace PrefabSentinel
                 pipelineManager.blueprintId = request.blueprint_id;
 
             builder.BuildAndUpload(descriptor.gameObject, null).GetAwaiter().GetResult();
+        }
+
+        private static BuildTarget ToBuildTarget(string platform) => platform switch
+        {
+            "windows" => BuildTarget.StandaloneWindows64,
+            "android" => BuildTarget.Android,
+            "ios" => BuildTarget.iOS,
+            _ => throw new ArgumentException($"Unknown platform: {platform}")
+        };
+
+        private static BuildTargetGroup ToBuildTargetGroup(string platform) => platform switch
+        {
+            "windows" => BuildTargetGroup.Standalone,
+            "android" => BuildTargetGroup.Android,
+            "ios" => BuildTargetGroup.iOS,
+            _ => throw new ArgumentException($"Unknown platform: {platform}")
+        };
+
+        private static string[] ParsePlatforms(string json)
+        {
+            if (string.IsNullOrEmpty(json))
+                return new[] { "windows" };
+            // Minimal JSON array parser for string arrays: ["windows","android"]
+            json = json.Trim();
+            if (!json.StartsWith("[") || !json.EndsWith("]"))
+                return new[] { "windows" };
+            json = json.Substring(1, json.Length - 2); // strip [ ]
+            if (string.IsNullOrWhiteSpace(json))
+                return new[] { "windows" };
+            var parts = json.Split(',');
+            var result = new string[parts.Length];
+            for (int i = 0; i < parts.Length; i++)
+                result[i] = parts[i].Trim().Trim('"');
+            return result;
+        }
+
+        private static string BuildPlatformResultsJson(
+            System.Collections.Generic.List<(string platform, bool success, float elapsed, string error, bool skipped)> results)
+        {
+            var sb = new System.Text.StringBuilder("[");
+            for (int i = 0; i < results.Count; i++)
+            {
+                if (i > 0) sb.Append(",");
+                var r = results[i];
+                if (r.skipped)
+                    sb.Append($"{{\"platform\":\"{r.platform}\",\"skipped\":true}}");
+                else if (r.success)
+                    sb.Append($"{{\"platform\":\"{r.platform}\",\"success\":true,\"elapsed_sec\":{r.elapsed:F1}}}");
+                else
+                {
+                    var escapedError = r.error.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n");
+                    sb.Append($"{{\"platform\":\"{r.platform}\",\"success\":false,\"elapsed_sec\":{r.elapsed:F1},\"error\":\"{escapedError}\"}}");
+                }
+            }
+            sb.Append("]");
+            return sb.ToString();
         }
     }
 }
