@@ -72,6 +72,28 @@
 - Inspector の表示名と SerializedProperty の `propertyPath` は異なるため、目視だけで patch plan を書かない。
 - Editor 操作は Editor Bridge 常駐が前提。`UNITYTOOL_BRIDGE_MODE=editor` が未設定の場合はエラーで停止する。
 
+## VRChat エコシステムナレッジの自動適用
+- 作業中に VRChat エコシステムツール（ModularAvatar、liltoon、VRCFury、AvatarOptimizer 等）に関する判断が必要になったら、対応する `knowledge/*.md` を Read してから判断する。
+- ファイル特定: コンポーネント型名・シェーダー名・パッケージ名からファイルを特定する。不明な場合は `knowledge/` を Glob して候補を探す。
+- 読み込み判断: 判断に迷ったときのみ読む。同セッション内で既読なら再読み込み不要。
+- confidence が `low` のナレッジを判断材料にする場合、その旨をユーザーに伝える。
+- ナレッジファイルが存在しないツールに遭遇したら、その旨を報告し集中調査の要否を確認する。
+
+### 自動書き戻し
+- 以下に該当したら `knowledge/*.md` に追記する: ソースコードから未知の情報を発見した / 作業が成功して再現可能なパターンが確立した / 作業が失敗して原因と回避策が判明した / ユーザーから教わった知識。
+- 追記前に同じ事実が L1〜L3 セクションに存在するか確認し、存在すれば追記せず必要なら既存記述を更新する。矛盾する発見は既存記述を修正する。
+- 新規の発見は「実運用で学んだこと」セクションに追記する。
+- 書き戻し時に `version_tested` と `last_updated` を更新する。
+- inspect 実測値を書き戻した場合、該当項目の confidence を `high` に昇格する。
+
+### memory との棲み分け
+| 種類 | 保存先 | 例 |
+|------|--------|---|
+| ユーザーの好み・フィードバック | `memory/` | 「コミットは /commit を使う」 |
+| プロジェクト固有の状況 | `memory/` | 「Phase 2.3 未実装」 |
+| ツールのドメイン知識 | `knowledge/` | 「MA Merge Armature の mergeTarget は Transform 参照」 |
+| 作業で得た技術的知見 | `knowledge/` | 「liltoon の _MainColorPower は 0.5 以下だと暗すぎる」 |
+
 ## ignore-guid 運用
 - `<scope>/config/ignore_guids.txt` を既定とし、存在しなければ無視する。
 - CI での反映は `--out-ignore-guid-file` 明示指定時かつ許可ブランチのみ。既定は `main` / `release/*`（`UNITYTOOL_IGNORE_GUID_ALLOW_BRANCHES` で上書き可）。
