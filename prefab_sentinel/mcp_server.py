@@ -10,6 +10,7 @@ Requires the ``mcp`` optional dependency::
 
 from __future__ import annotations
 
+import json
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -1076,6 +1077,7 @@ def create_server(
         target_type: str,
         asset_path: str,
         blueprint_id: str,
+        platforms: list[str] | None = None,
         description: str = "",
         tags: str = "",
         release_status: str = "",
@@ -1095,13 +1097,49 @@ def create_server(
             target_type: "avatar" or "world".
             asset_path: Prefab path (avatar) or Scene path (world).
             blueprint_id: Existing VRC asset ID (e.g. "avtr_xxx..."). Required.
+            platforms: List of target platforms (default: ["windows"]).
+                Valid values: "windows", "android", "ios".
             description: Description text (empty = no change).
             tags: JSON array of tag strings (empty = no change).
             release_status: "public" or "private" (empty = no change).
             confirm: Set True to build + upload (False = validation only).
             change_reason: Required when confirm=True. Audit log reason.
             timeout_sec: Bridge timeout in seconds (default: 600).
+                For multi-platform, recommend 600 * len(platforms).
         """
+        if platforms is None:
+            platforms = ["windows"]
+
+        _valid_platforms = {"windows", "android", "ios"}
+        if not platforms:
+            return {
+                "success": False,
+                "severity": "error",
+                "code": "VRCSDK_INVALID_PLATFORMS",
+                "message": "platforms must not be empty",
+                "data": {},
+                "diagnostics": [],
+            }
+        invalid = [p for p in platforms if p not in _valid_platforms]
+        if invalid:
+            return {
+                "success": False,
+                "severity": "error",
+                "code": "VRCSDK_INVALID_PLATFORMS",
+                "message": f"Invalid platform(s): {invalid}. Valid: {sorted(_valid_platforms)}",
+                "data": {},
+                "diagnostics": [],
+            }
+        if len(platforms) != len(set(platforms)):
+            return {
+                "success": False,
+                "severity": "error",
+                "code": "VRCSDK_INVALID_PLATFORMS",
+                "message": f"Duplicate platform(s) in: {platforms}",
+                "data": {},
+                "diagnostics": [],
+            }
+
         if confirm and not change_reason:
             return {
                 "success": False,
@@ -1111,17 +1149,30 @@ def create_server(
                 "data": {},
                 "diagnostics": [],
             }
-        return send_action(
+
+        result = send_action(
             action="vrcsdk_upload",
             timeout_sec=timeout_sec,
             target_type=target_type,
             asset_path=asset_path,
             blueprint_id=blueprint_id,
+            platforms=json.dumps(platforms),
             description=description,
             tags=tags,
             release_status=release_status,
             confirm=confirm,
         )
+
+        # Post-process: convert C# platform_results_json to structured data
+        data = result.setdefault("data", {})
+        if isinstance(data, dict):
+            prj = data.pop("platform_results_json", "")
+            if prj:
+                data["platform_results"] = json.loads(prj)
+            if not confirm:
+                data["platforms"] = platforms
+
+        return result
 
     # ------------------------------------------------------------------
     # Editor bridge tools (write / mutation)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import unittest
 from pathlib import Path
 from typing import Any
@@ -20,8 +21,24 @@ from tests.yaml_helpers import (
 
 
 def _run(coro: Any) -> Any:
-    """Run an async coroutine synchronously."""
-    return asyncio.run(coro)
+    """Run an async coroutine synchronously.
+
+    When the result is a call_tool response (list[TextContent]), normalises
+    across MCP versions to always return a 2-tuple (content_list, parsed_dict)
+    so tests can use ``_, result = _run(server.call_tool(...))``.
+
+    For other coroutines (e.g. list_tools), returns the raw result unchanged.
+    """
+    raw = asyncio.run(coro)
+    if isinstance(raw, tuple) and len(raw) == 2 and isinstance(raw[1], dict):
+        # MCP 1.6+ Python 3.11 venv: (content_list, dict)
+        return raw
+    if isinstance(raw, list) and raw and hasattr(raw[0], "text"):
+        # MCP 1.6+ Python 3.12: list[TextContent] from call_tool
+        parsed = json.loads(raw[0].text)
+        return raw, parsed
+    # list_tools() or other coroutines: return as-is
+    return raw
 
 
 def _simple_prefab() -> str:
@@ -1959,8 +1976,9 @@ class TestEditorWriteTools(unittest.TestCase):
         mock_send.assert_called_once_with(action="delete_object", hierarchy_path="/OldObject")
 
     def test_vrcsdk_upload_delegates(self) -> None:
+        """Default platforms=["windows"] is serialized and passed to send_action."""
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True, "data": {}}) as mock_send:
             _run(server.call_tool("vrcsdk_upload", {
                 "target_type": "avatar",
                 "asset_path": "Assets/Avatars/Test.prefab",
@@ -1973,6 +1991,7 @@ class TestEditorWriteTools(unittest.TestCase):
             target_type="avatar",
             asset_path="Assets/Avatars/Test.prefab",
             blueprint_id="avtr_test123",
+            platforms='["windows"]',
             description="",
             tags="",
             release_status="",
@@ -1993,6 +2012,111 @@ class TestEditorWriteTools(unittest.TestCase):
             mock_send.assert_not_called()
         self.assertFalse(result["success"])
         self.assertEqual("VRCSDK_REASON_REQUIRED", result["code"])
+
+    def test_vrcsdk_upload_invalid_platforms_empty(self) -> None:
+        """Empty platforms list returns validation error."""
+        server = create_server()
+        with patch("prefab_sentinel.mcp_server.send_action") as mock_send:
+            _, result = _run(server.call_tool("vrcsdk_upload", {
+                "target_type": "avatar",
+                "asset_path": "Assets/Avatars/Test.prefab",
+                "blueprint_id": "avtr_test123",
+                "platforms": [],
+            }))
+            mock_send.assert_not_called()
+        self.assertFalse(result["success"])
+        self.assertEqual("VRCSDK_INVALID_PLATFORMS", result["code"])
+
+    def test_vrcsdk_upload_invalid_platforms_bad_value(self) -> None:
+        """Invalid platform name returns validation error."""
+        server = create_server()
+        with patch("prefab_sentinel.mcp_server.send_action") as mock_send:
+            _, result = _run(server.call_tool("vrcsdk_upload", {
+                "target_type": "avatar",
+                "asset_path": "Assets/Avatars/Test.prefab",
+                "blueprint_id": "avtr_test123",
+                "platforms": ["windows", "ps5"],
+            }))
+            mock_send.assert_not_called()
+        self.assertFalse(result["success"])
+        self.assertEqual("VRCSDK_INVALID_PLATFORMS", result["code"])
+
+    def test_vrcsdk_upload_invalid_platforms_duplicate(self) -> None:
+        """Duplicate platform returns validation error."""
+        server = create_server()
+        with patch("prefab_sentinel.mcp_server.send_action") as mock_send:
+            _, result = _run(server.call_tool("vrcsdk_upload", {
+                "target_type": "avatar",
+                "asset_path": "Assets/Avatars/Test.prefab",
+                "blueprint_id": "avtr_test123",
+                "platforms": ["windows", "windows"],
+            }))
+            mock_send.assert_not_called()
+        self.assertFalse(result["success"])
+        self.assertEqual("VRCSDK_INVALID_PLATFORMS", result["code"])
+
+    def test_vrcsdk_upload_converts_platform_results(self) -> None:
+        """platform_results_json from C# is converted to platform_results list."""
+        server = create_server()
+        bridge_response = {
+            "success": True,
+            "data": {
+                "phase": "complete",
+                "platform_results_json": '[{"platform":"windows","success":true,"elapsed_sec":45.1}]',
+                "original_target_restored": True,
+            },
+        }
+        with patch("prefab_sentinel.mcp_server.send_action", return_value=bridge_response):
+            _, result = _run(server.call_tool("vrcsdk_upload", {
+                "target_type": "avatar",
+                "asset_path": "Assets/Avatars/Test.prefab",
+                "blueprint_id": "avtr_test123",
+                "confirm": True,
+                "change_reason": "test upload",
+            }))
+        self.assertIn("platform_results", result["data"])
+        self.assertEqual(result["data"]["platform_results"][0]["platform"], "windows")
+        self.assertNotIn("platform_results_json", result["data"])
+
+    def test_vrcsdk_upload_converts_mixed_platform_results(self) -> None:
+        """platform_results_json with success + failure + skipped is correctly parsed."""
+        server = create_server()
+        bridge_response = {
+            "success": False,
+            "data": {
+                "phase": "failed",
+                "platform_results_json": '[{"platform":"windows","success":true,"elapsed_sec":45.1},{"platform":"android","success":false,"elapsed_sec":9.9,"error":"Shader error"},{"platform":"ios","skipped":true}]',
+                "original_target_restored": True,
+            },
+        }
+        with patch("prefab_sentinel.mcp_server.send_action", return_value=bridge_response):
+            _, result = _run(server.call_tool("vrcsdk_upload", {
+                "target_type": "avatar",
+                "asset_path": "Assets/Avatars/Test.prefab",
+                "blueprint_id": "avtr_test123",
+                "platforms": ["windows", "android", "ios"],
+                "confirm": True,
+                "change_reason": "test upload",
+            }))
+        pr = result["data"]["platform_results"]
+        self.assertEqual(len(pr), 3)
+        self.assertTrue(pr[0]["success"])
+        self.assertFalse(pr[1]["success"])
+        self.assertTrue(pr[2]["skipped"])
+        self.assertNotIn("platform_results_json", result["data"])
+
+    def test_vrcsdk_upload_dryrun_includes_platforms(self) -> None:
+        """dry-run response includes platforms echo-back from Python."""
+        server = create_server()
+        bridge_response = {"success": True, "data": {"phase": "validated"}}
+        with patch("prefab_sentinel.mcp_server.send_action", return_value=bridge_response):
+            _, result = _run(server.call_tool("vrcsdk_upload", {
+                "target_type": "avatar",
+                "asset_path": "Assets/Avatars/Test.prefab",
+                "blueprint_id": "avtr_test123",
+                "platforms": ["windows", "android"],
+            }))
+        self.assertEqual(result["data"]["platforms"], ["windows", "android"])
 
 
 class TestInspectionTools(unittest.TestCase):
