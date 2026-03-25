@@ -1748,17 +1748,23 @@ class TestEditorReadOnlyTools(unittest.TestCase):
             _run(server.call_tool("editor_frame", {}))
         mock_send.assert_called_once_with(action="frame_selected", zoom=0.0)
 
-    def test_editor_camera_delegates(self) -> None:
+    def test_editor_get_camera_delegates(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
-            _run(server.call_tool("editor_camera", {"yaw": 45.0, "pitch": 15.0, "distance": 3.0}))
-        mock_send.assert_called_once_with(action="camera", yaw=45.0, pitch=15.0, distance=3.0)
+            _run(server.call_tool("editor_get_camera", {}))
+        mock_send.assert_called_once_with(action="get_camera")
 
-    def test_editor_camera_defaults(self) -> None:
+    def test_editor_set_camera_mode_b(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
-            _run(server.call_tool("editor_camera", {}))
-        mock_send.assert_called_once_with(action="camera", yaw=0.0, pitch=0.0, distance=0.0)
+            _run(server.call_tool("editor_set_camera", {"yaw": 45.0, "pitch": 15.0, "distance": 3.0}))
+        mock_send.assert_called_once_with(action="set_camera", yaw=45.0, pitch=15.0, distance=3.0)
+
+    def test_editor_set_camera_defaults(self) -> None:
+        server = create_server()
+        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+            _run(server.call_tool("editor_set_camera", {}))
+        mock_send.assert_called_once_with(action="set_camera")
 
     def test_editor_list_children_delegates(self) -> None:
         server = create_server()

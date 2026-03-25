@@ -8,7 +8,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from prefab_sentinel.editor_bridge import bridge_status, send_action
 from prefab_sentinel.contracts import (
     Diagnostic,
     Severity,
@@ -17,6 +16,7 @@ from prefab_sentinel.contracts import (
     max_severity,
     success_response,
 )
+from prefab_sentinel.editor_bridge import bridge_status, send_action
 from prefab_sentinel.hierarchy import HierarchyNode, analyze_hierarchy, format_tree
 from prefab_sentinel.material_asset_inspector import (
     format_material_asset,
@@ -41,7 +41,6 @@ from prefab_sentinel.unity_assets import (
     find_project_root,
     resolve_scope_path,
 )
-
 
 __all__ = ["Phase1Orchestrator"]
 

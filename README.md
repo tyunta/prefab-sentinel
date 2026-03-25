@@ -96,7 +96,8 @@ prefab-sentinel-mcp --transport streamable-http
 | `editor_screenshot` | Unity Editor の Scene/Game ビューのスクリーンショット取得 |
 | `editor_select` | Hierarchy 内の GameObject を選択（Prefab Stage 対応） |
 | `editor_frame` | 選択オブジェクトを Scene ビューでフレーミング |
-| `editor_camera` | Scene ビューのカメラ方向設定（yaw/pitch/distance） |
+| `editor_get_camera` | Scene ビューのカメラ状態取得（position, rotation, pivot, size, orthographic） |
+| `editor_set_camera` | Scene ビューのカメラ設定（Mode A: 絶対座標 / Mode B: pivot 周回。yaw=0 が正面） |
 | `editor_list_children` | GameObject の子オブジェクト一覧 |
 | `editor_list_materials` | ランタイムのレンダラーのマテリアルスロット一覧 |
 | `editor_list_roots` | 現在の Scene / Prefab Stage のルートオブジェクト一覧 |

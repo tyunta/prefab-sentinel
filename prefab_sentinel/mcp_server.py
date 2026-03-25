@@ -23,7 +23,9 @@ except ImportError as exc:
         "pip install prefab-sentinel[mcp]"
     ) from exc
 
+from prefab_sentinel.editor_bridge import send_action
 from prefab_sentinel.patch_plan import PLAN_VERSION
+from prefab_sentinel.patch_revert import revert_overrides as revert_overrides_impl
 from prefab_sentinel.session import ProjectSession
 from prefab_sentinel.symbol_tree import (
     AmbiguousSymbolError,
@@ -33,8 +35,6 @@ from prefab_sentinel.symbol_tree import (
 )
 from prefab_sentinel.unity_assets import decode_text_file
 from prefab_sentinel.unity_yaml_parser import CLASS_ID_MONOBEHAVIOUR
-from prefab_sentinel.editor_bridge import send_action
-from prefab_sentinel.patch_revert import revert_overrides as revert_overrides_impl
 from prefab_sentinel.wsl_compat import to_wsl_path
 
 __all__ = ["create_server"]
