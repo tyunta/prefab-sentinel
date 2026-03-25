@@ -39,6 +39,7 @@ namespace PrefabSentinel
             "get_material_property",
             "set_material_property",
             "run_integration_tests",
+            "vrcsdk_upload",
         };
 
         // ── Request / Response DTOs ──
@@ -95,6 +96,14 @@ namespace PrefabSentinel
 
             // set_material_property
             public string property_value = string.Empty;  // raw JSON string, manually parsed by handler
+
+            // vrcsdk_upload
+            public string target_type = string.Empty;    // "avatar" or "world"
+            public string blueprint_id = string.Empty;    // existing VRC asset ID
+            public string description = string.Empty;     // empty = no change
+            public string tags = string.Empty;            // JSON array string, empty = no change
+            public string release_status = string.Empty;  // "public" | "private", empty = no change
+            public bool confirm = false;                  // dry-run gate
         }
 
         [Serializable]
@@ -169,6 +178,13 @@ namespace PrefabSentinel
             public bool camera_orthographic = false;
             public bool read_only = true;
             public bool executed = false;
+
+            // vrcsdk_upload response
+            public string target_type = string.Empty;
+            public string asset_path = string.Empty;
+            public string blueprint_id = string.Empty;
+            public string phase = string.Empty;           // "validated" or "complete"
+            public float elapsed_sec = 0f;
         }
 
         [Serializable]
@@ -265,6 +281,14 @@ namespace PrefabSentinel
                     break;
                 case "run_integration_tests":
                     response = HandleRunIntegrationTests();
+                    break;
+                case "vrcsdk_upload":
+#if VRC_SDK_VRCSDK3
+                    response = VRCSDKUploadHandler.Handle(request);
+#else
+                    response = BuildError("VRCSDK_NOT_AVAILABLE",
+                        "VRC SDK not found in project. Install VRChat SDK 3.x");
+#endif
                     break;
                 default:
                     response = BuildError(
