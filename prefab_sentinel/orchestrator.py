@@ -17,6 +17,10 @@ from prefab_sentinel.contracts import (
     success_response,
 )
 from prefab_sentinel.hierarchy import HierarchyNode, analyze_hierarchy, format_tree
+from prefab_sentinel.material_asset_inspector import (
+    format_material_asset,
+    inspect_material_asset as _inspect_material_asset,
+)
 from prefab_sentinel.material_inspector import (
     format_materials,
     inspect_materials,
@@ -950,6 +954,94 @@ class Phase1Orchestrator:
         return success_response(
             "INSPECT_MATERIALS_RESULT",
             "inspect.materials completed (read-only).",
+            data=data,
+        )
+
+    def inspect_material_asset(
+        self,
+        target_path: str,
+    ) -> ToolResponse:
+        """Inspect shader and properties of a .mat asset file (read-only).
+
+        Unlike ``inspect_materials`` (which inspects material *slots on
+        renderers* in .prefab/.unity files), this inspects the .mat asset
+        file *itself*.
+
+        Args:
+            target_path: Path to a ``.mat`` file.
+
+        Returns:
+            ``ToolResponse`` with shader info, property data, and summary
+            counts.
+        """
+        text_or_error = self._read_target_file(target_path, "INSPECT_MATERIAL_ASSET")
+        if isinstance(text_or_error, ToolResponse):
+            return text_or_error
+
+        suffix = Path(target_path).suffix.lower()
+        if suffix != ".mat":
+            return error_response(
+                "INSPECT_MATERIAL_ASSET_NOT_MAT",
+                f"Expected a .mat file, got {suffix}",
+                data={"target_path": target_path, "read_only": True},
+            )
+
+        try:
+            result = _inspect_material_asset(target_path)
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
+            return error_response(
+                "INSPECT_MATERIAL_ASSET_READ_ERROR",
+                f"Failed to inspect material asset: {exc}",
+                data={"target_path": target_path, "read_only": True},
+            )
+
+        tree_text = format_material_asset(result)
+
+        tex_data = [
+            {
+                "name": t.name,
+                "guid": t.guid,
+                "path": t.path,
+                "scale": t.scale,
+                "offset": t.offset,
+            }
+            for t in result.textures
+        ]
+        float_data = [{"name": f.name, "value": f.value} for f in result.floats]
+        color_data = [{"name": c.name, "value": c.value} for c in result.colors]
+        int_data = [{"name": i.name, "value": i.value} for i in result.ints]
+
+        data: dict[str, object] = {
+            "target_path": target_path,
+            "read_only": True,
+            "material_name": result.material_name,
+            "shader": {
+                "guid": result.shader.guid,
+                "file_id": result.shader.file_id,
+                "name": result.shader.name,
+                "path": result.shader.path,
+            },
+            "keywords": result.keywords,
+            "render_queue": result.render_queue,
+            "lightmap_flags": result.lightmap_flags,
+            "gpu_instancing": result.gpu_instancing,
+            "double_sided_gi": result.double_sided_gi,
+            "properties": {
+                "textures": tex_data,
+                "floats": float_data,
+                "colors": color_data,
+                "ints": int_data,
+            },
+            "texture_count": len(result.textures),
+            "float_count": len(result.floats),
+            "color_count": len(result.colors),
+            "int_count": len(result.ints),
+            "tree": tree_text,
+        }
+
+        return success_response(
+            "INSPECT_MATERIAL_ASSET_RESULT",
+            "inspect.material_asset completed (read-only).",
             data=data,
         )
 

@@ -148,3 +148,42 @@ class TestFormatMaterialAsset(unittest.TestCase):
         tree = format_material_asset(result)
         self.assertIn("NoTextures (Standard)", tree)
         self.assertNotIn("_MainTex:", tree)
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator integration
+# ---------------------------------------------------------------------------
+
+
+class TestOrchestratorInspectMaterialAsset(unittest.TestCase):
+    def test_success(self) -> None:
+        from prefab_sentinel.orchestrator import Phase1Orchestrator
+
+        orch = Phase1Orchestrator.default(project_root=FIXTURES.parent.parent)
+        resp = orch.inspect_material_asset(
+            target_path=str(FIXTURES / "standard_textured.mat"),
+        )
+        self.assertTrue(resp.success)
+        self.assertEqual(resp.code, "INSPECT_MATERIAL_ASSET_RESULT")
+        self.assertEqual(resp.data["material_name"], "TestMaterial")
+        self.assertEqual(resp.data["shader"]["name"], "Standard")
+        self.assertEqual(resp.data["texture_count"], 2)
+        self.assertIn("tree", resp.data)
+
+    def test_not_mat_file(self) -> None:
+        from prefab_sentinel.orchestrator import Phase1Orchestrator
+
+        orch = Phase1Orchestrator.default(project_root=FIXTURES.parent.parent)
+        resp = orch.inspect_material_asset(
+            target_path=str(FIXTURES.parent / "smoke" / "basic.prefab"),
+        )
+        self.assertFalse(resp.success)
+        self.assertEqual(resp.code, "INSPECT_MATERIAL_ASSET_NOT_MAT")
+
+    def test_file_not_found(self) -> None:
+        from prefab_sentinel.orchestrator import Phase1Orchestrator
+
+        orch = Phase1Orchestrator.default(project_root=FIXTURES.parent.parent)
+        resp = orch.inspect_material_asset(target_path="nonexistent.mat")
+        self.assertFalse(resp.success)
+        self.assertIn("FILE_NOT_FOUND", resp.code)
