@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from prefab_sentinel.editor_bridge import bridge_status
 from prefab_sentinel.orchestrator import Phase1Orchestrator
 from prefab_sentinel.symbol_tree import SymbolTree, build_script_name_map
 from prefab_sentinel.unity_assets import find_project_root, resolve_scope_path
@@ -188,6 +189,7 @@ class ProjectSession:
             "symbol_tree_paths": sorted(str(p) for p in self._symbol_cache),
             "watcher_running": self._watcher_task is not None
             and not self._watcher_task.done(),
+            "bridge": bridge_status(),
         }
 
     # ------------------------------------------------------------------

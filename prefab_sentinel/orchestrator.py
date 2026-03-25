@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from prefab_sentinel.editor_bridge import bridge_status, send_action
 from prefab_sentinel.contracts import (
     Diagnostic,
     Severity,
@@ -81,6 +82,22 @@ class Phase1Orchestrator:
                 prefab_variant=pv,
             ),
         )
+
+    def maybe_auto_refresh(self) -> str:
+        """Trigger AssetDatabase.Refresh if Editor Bridge is connected.
+
+        Returns:
+            "true" if refresh succeeded, "false" if refresh failed,
+            "skipped" if bridge is not connected.
+        """
+        status = bridge_status()
+        if not status["connected"]:
+            return "skipped"
+        try:
+            send_action(action="refresh_asset_database")
+            return "true"
+        except Exception:
+            return "false"
 
     # ------------------------------------------------------------------
     # Cache invalidation (delegated to services)

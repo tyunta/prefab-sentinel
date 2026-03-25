@@ -495,11 +495,15 @@ def create_server(
         )
 
         # 6. Invalidate SymbolTree cache after confirmed write
+        auto_refresh = "skipped"
         if confirm and resp.success:
             session.invalidate_symbol_tree(resolved)
+            auto_refresh = orch.maybe_auto_refresh()
 
         # 7. Enrich response with symbol resolution metadata
         result = resp.to_dict()
+        if confirm and resp.success:
+            result["auto_refresh"] = auto_refresh
         result["symbol_resolution"] = {
             "symbol_path": symbol_path,
             "resolved_component": component_name,
@@ -597,10 +601,14 @@ def create_server(
             change_reason=change_reason or None,
         )
 
+        auto_refresh = "skipped"
         if confirm and resp.success:
             session.invalidate_symbol_tree(resolved)
+            auto_refresh = orch.maybe_auto_refresh()
 
         result = resp.to_dict()
+        if confirm and resp.success:
+            result["auto_refresh"] = auto_refresh
         result["symbol_resolution"] = {
             "symbol_path": symbol_path,
             "hierarchy_target": hierarchy_target,
@@ -702,10 +710,14 @@ def create_server(
             change_reason=change_reason or None,
         )
 
+        auto_refresh = "skipped"
         if confirm and resp.success:
             session.invalidate_symbol_tree(resolved)
+            auto_refresh = orch.maybe_auto_refresh()
 
         result = resp.to_dict()
+        if confirm and resp.success:
+            result["auto_refresh"] = auto_refresh
         result["symbol_resolution"] = {
             "symbol_path": symbol_path,
             "resolved_component": component_name,
@@ -1220,7 +1232,11 @@ def create_server(
                 "message": f"Plan validation failed: {exc}",
                 "data": {}, "diagnostics": [],
             }
-        return resp.to_dict()
+        result = resp.to_dict()
+        if confirm and resp.success:
+            orch_ref = session.get_orchestrator()
+            result["auto_refresh"] = orch_ref.maybe_auto_refresh()
+        return result
 
     # ------------------------------------------------------------------
     # Revert tool
@@ -1255,7 +1271,11 @@ def create_server(
             confirm=confirm,
             change_reason=change_reason or None,
         )
-        return resp.to_dict()
+        result = resp.to_dict()
+        if confirm and resp.success:
+            orch = session.get_orchestrator()
+            result["auto_refresh"] = orch.maybe_auto_refresh()
+        return result
 
     return server
 

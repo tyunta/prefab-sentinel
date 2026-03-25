@@ -192,3 +192,19 @@ def send_action(
             "request_file": str(request_file),
         },
     )
+
+
+def bridge_status() -> dict[str, Any]:
+    """Return current bridge connection status without making a request.
+
+    Checks environment variables and watch directory existence only.
+    Does not attempt an actual bridge request (no I/O cost).
+    """
+    mode = os.environ.get(BRIDGE_MODE_ENV, "")
+    watch_dir = os.environ.get(BRIDGE_WATCH_DIR_ENV, "")
+    connected = mode == "editor" and bool(watch_dir) and Path(watch_dir).is_dir()
+    return {
+        "connected": connected,
+        "mode": mode or None,
+        "watch_dir": watch_dir or None,
+    }
