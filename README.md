@@ -824,6 +824,207 @@ python scripts/bridge_smoke_samples.py --targets all --unity-command "C:/Program
 - `patch_apply` MCP ツールは Unity ターゲット（`.prefab` / `.unity` / `.asset` など）に対して `UNITYTOOL_PATCH_BRIDGE` 経由の外部 bridge を使って適用できる。
 - `UNITYTOOL_PATCH_BRIDGE` は JSON 入力（stdin） / JSON 出力（stdout）の bridge コマンドを指定する（外部 bridge request `protocol_version: 2`）。
 
+### 17.5.1 `patch_apply` 入力スキーマ（annotated examples）
+
+`patch_apply` の `plan` パラメータに渡す JSON のスキーマ。`plan_version: 2` が現行。
+
+#### スキーマ概要
+
+```json
+{
+  "plan_version": 2,
+  "resources": [
+    {"id": "<resource-id>", "kind": "<kind>", "path": "<asset-path>", "mode": "<mode>"}
+  ],
+  "ops": [
+    {"resource": "<resource-id>", "op": "<op-type>", ...}
+  ],
+  "postconditions": [
+    {"type": "<check-type>", ...}
+  ]
+}
+```
+
+| フィールド | 必須 | 説明 |
+|---|---|---|
+| `plan_version` | ✅ | `2` 固定 |
+| `resources` | ✅ | 操作対象アセットの一覧。最低 1 件 |
+| `resources[].id` | ✅ | ops から参照する識別子（任意の文字列） |
+| `resources[].path` | ✅ | Unity アセットパス（`Assets/...`） |
+| `resources[].kind` | — | `prefab` / `scene` / `material` / `asset` / `json`（省略時はパス拡張子から推定） |
+| `resources[].mode` | — | `open`（既存編集）/ `create`（新規作成）。既定 `open` |
+| `ops` | ✅ | 操作配列（順序実行） |
+| `ops[].resource` | ✅ | `resources[].id` への参照 |
+| `ops[].op` | ✅ | 操作種別（下記参照） |
+| `postconditions` | — | 適用後の検証条件（省略可） |
+
+#### op 種別一覧
+
+**open mode（既存アセット編集）:**
+
+| op | 必須フィールド | 説明 |
+|---|---|---|
+| `set` | `component`, `path`, `value` | コンポーネントのプロパティ値を設定 |
+| `insert_array_element` | `component`, `path`, `index`, `value` | 配列に要素を挿入 |
+| `remove_array_element` | `component`, `path`, `index` | 配列から要素を削除 |
+
+- Prefab の `component` はクラス名（例: `"PlayerScript"`, `"UnityEngine.MeshRenderer"`）
+- Material / ScriptableObject の open mode では `component` の代わりに `"target": "$asset"` でルートを指定
+
+**create mode（新規アセット作成）:**
+
+| op | 必須フィールド | 説明 |
+|---|---|---|
+| `create_prefab` / `create_asset` / `create_scene` | — | アセットを新規作成 |
+| `create_root` | `name` | Prefab ルート GameObject 作成 |
+| `create_game_object` | `name`, `parent` | 子 GameObject 作成 |
+| `instantiate_prefab` | `prefab`, `parent` | Prefab をシーンにインスタンス化 |
+| `rename_object` | `target`, `name` | GameObject リネーム |
+| `reparent` | `target`, `parent` | 親変更 |
+| `add_component` | `target`, `type` | コンポーネント追加（`result` で `$handle` を返す） |
+| `find_component` | `target`, `type` | 既存コンポーネント取得（`result` で `$handle` を返す） |
+| `remove_component` | `target` | コンポーネント削除（`target` はコンポーネント `$handle`） |
+| `set` | `target`, `path`, `value` | `$handle` 経由でプロパティ設定 |
+| `save` / `save_scene` | — | ディスクに保存 |
+
+#### 例 1: Prefab のプロパティ編集（open mode）
+
+```json
+{
+  "plan_version": 2,
+  "resources": [
+    {"id": "avatar", "path": "Assets/Avatars/MyAvatar.prefab"}
+  ],
+  "ops": [
+    {
+      "resource": "avatar",
+      "op": "set",
+      "component": "VRC.SDK3.Avatars.Components.VRCAvatarDescriptor",
+      "path": "lipSync",
+      "value": 5
+    }
+  ]
+}
+```
+
+#### 例 2: Prefab の配列操作（open mode）
+
+```json
+{
+  "plan_version": 2,
+  "resources": [
+    {"id": "stage", "path": "Assets/Prefabs/Stage.prefab"}
+  ],
+  "ops": [
+    {
+      "resource": "stage",
+      "op": "set",
+      "component": "StageLighting",
+      "path": "lights.Array.size",
+      "value": 3
+    },
+    {
+      "resource": "stage",
+      "op": "insert_array_element",
+      "component": "StageLighting",
+      "path": "lights.Array.data",
+      "index": 2,
+      "value": {"guid": "aabb00112233445566778899aabbccdd", "file_id": "100100000"}
+    }
+  ],
+  "postconditions": [
+    {"type": "asset_exists", "resource": "stage"},
+    {"type": "broken_refs", "scope": "Assets/Prefabs", "expected_count": 0}
+  ]
+}
+```
+
+#### 例 3: Material / ScriptableObject の編集（open mode）
+
+Material と ScriptableObject は root asset mutation を使い、`"target": "$asset"` で対象を指定する:
+
+```json
+{
+  "plan_version": 2,
+  "resources": [
+    {"id": "mat", "kind": "material", "path": "Assets/Materials/Hair.mat"}
+  ],
+  "ops": [
+    {
+      "resource": "mat",
+      "op": "set",
+      "target": "$asset",
+      "path": "m_Shader",
+      "value": {"guid": "aabb00112233445566778899aabbccdd", "file_id": "4800000"}
+    }
+  ]
+}
+```
+
+> **Note:** Material の個別プロパティ編集（`_Color`, `_MainTex` 等）には `set_material_property`（YAML 直接編集）または `editor_set_material_property`（Editor Bridge 経由）を使う方が簡単。`patch_apply` は Material の `m_Shader` やシリアライズ済みフィールドへの直接書き込みに使う。
+
+#### 例 4: Scene のオブジェクト操作（create mode）
+
+```json
+{
+  "plan_version": 2,
+  "resources": [
+    {"id": "scene", "kind": "scene", "path": "Assets/Scenes/Main.unity", "mode": "create"}
+  ],
+  "ops": [
+    {"resource": "scene", "op": "create_scene"},
+    {
+      "resource": "scene",
+      "op": "create_game_object",
+      "name": "SpawnPoint",
+      "parent": "$scene"
+    },
+    {
+      "resource": "scene",
+      "op": "instantiate_prefab",
+      "prefab": "Assets/Prefabs/Stage.prefab",
+      "parent": "$scene"
+    },
+    {"resource": "scene", "op": "save_scene"}
+  ]
+}
+```
+
+#### 例 5: 複数リソースの一括操作
+
+```json
+{
+  "plan_version": 2,
+  "resources": [
+    {"id": "base", "path": "Assets/Prefabs/Base.prefab"},
+    {"id": "variant", "path": "Assets/Prefabs/Variant.prefab"}
+  ],
+  "ops": [
+    {
+      "resource": "base",
+      "op": "set",
+      "component": "AudioSource",
+      "path": "m_Volume",
+      "value": 0.8
+    },
+    {
+      "resource": "variant",
+      "op": "set",
+      "component": "AudioSource",
+      "path": "m_Pitch",
+      "value": 1.2
+    }
+  ]
+}
+```
+
+#### postconditions 種別
+
+| type | フィールド | 説明 |
+|---|---|---|
+| `asset_exists` | `resource` | 指定リソースのアセットファイルが存在するか検証 |
+| `broken_refs` | `scope`, `expected_count` | スコープ内の壊れた参照数が期待値と一致するか検証 |
+
 ### 17.6 `patch apply --confirm --out-report` の出力例
 
 before / after diff + validation steps の抜粋:
@@ -923,6 +1124,14 @@ before / after diff + validation steps の抜粋:
 - `ignore_asset_guids` パラメータで missing GUID を一時的に無視でき、集計は `ignored_missing_asset_occurrences` / `top_ignored_missing_asset_guids` で確認できる。
 - `find_referencing_assets` も同じ既定除外を適用し、`Library` など非本番スコープを走査しない。
 - 書き込み操作は `patch_apply`（confirm モード）、`set_property`、`add_component`、`remove_component`、`revert_overrides` の各 MCP ツールで利用可能。
+
+### 17.8.1 エラーヒント ("Did you mean...?")
+
+- `SYMBOL_NOT_FOUND` エラー（`set_property`, `add_component`, `remove_component`）は `data.suggestions` に類似 symbol_path のリスト（最大 3 件）を含む。
+- `MAT_PROP_NOT_FOUND` エラー（`inspect_material_asset` の書き込みモード）は `data.suggestions` に類似プロパティ名のリスト（最大 3 件）を含む。既存の `data.available_properties`（全プロパティ名リスト）も維持される。
+- `EDITOR_CTRL_PROPERTY_NOT_FOUND` エラー（`editor_get_material_property`, `editor_set_material_property`）は `data.suggestions` に類似シェーダープロパティ名のリスト（最大 3 件）を含む。
+- 候補なしの場合は `suggestions` は空配列 `[]`。
+- Python 側は `difflib.SequenceMatcher`、C# 側は Levenshtein 距離を使用（アルゴリズム差異あり、結果の完全一致は保証しない）。
 
 ---
 
