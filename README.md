@@ -1135,6 +1135,19 @@ before / after diff + validation steps の抜粋:
 
 ---
 
+### 17.9 VRC SDK アップロード
+
+### 17.9.1 マルチプラットフォームアップロード
+
+- `vrcsdk_upload` の `platforms` パラメータで複数プラットフォームへの順次ビルド+アップロードが可能。
+- 有効値: `"windows"`, `"android"`, `"ios"`。デフォルト: `["windows"]`。
+- 順次実行し、途中失敗で残りをスキップする。完了後は元のビルドターゲットに復元する。
+- レスポンスの `data.platform_results` に per-platform の結果（成功/失敗/スキップ）を含む。
+- `data.original_target_restored` で元のビルドターゲットの復元成否を確認できる。
+- 複数プラットフォーム時は `timeout_sec` を `600 * len(platforms)` 程度に設定することを推奨。
+
+---
+
 ## 18. 代表レポート出力フォーマット
 
 ```md
