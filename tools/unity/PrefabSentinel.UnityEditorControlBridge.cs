@@ -185,6 +185,9 @@ namespace PrefabSentinel
             public string blueprint_id = string.Empty;
             public string phase = string.Empty;           // "validated" or "complete"
             public float elapsed_sec = 0f;
+
+            // error hint suggestions
+            public string[] suggestions = Array.Empty<string>();
         }
 
         [Serializable]
@@ -1028,7 +1031,11 @@ namespace PrefabSentinel
 
             if (!string.IsNullOrEmpty(request.property_name) && properties.Count == 0)
                 return BuildError("EDITOR_CTRL_PROPERTY_NOT_FOUND",
-                    $"Property '{request.property_name}' not found on shader '{shader.name}'.");
+                    $"Property '{request.property_name}' not found on shader '{shader.name}'.",
+                    new EditorControlData
+                    {
+                        suggestions = SuggestSimilar(request.property_name, CollectShaderPropertyNames(shader)),
+                    });
 
             return BuildSuccess("EDITOR_CTRL_GET_MATERIAL_PROPERTY_OK",
                 $"Found {properties.Count} properties on material '{mat.name}' (shader: {shader.name})",
@@ -1081,7 +1088,11 @@ namespace PrefabSentinel
             int propIdx = shader.FindPropertyIndex(request.property_name);
             if (propIdx < 0)
                 return BuildError("EDITOR_CTRL_PROPERTY_NOT_FOUND",
-                    $"Property '{request.property_name}' not found on shader '{shader.name}'.");
+                    $"Property '{request.property_name}' not found on shader '{shader.name}'.",
+                    new EditorControlData
+                    {
+                        suggestions = SuggestSimilar(request.property_name, CollectShaderPropertyNames(shader)),
+                    });
 
             var propType = shader.GetPropertyType(propIdx);
             string val = request.property_value;
@@ -1403,6 +1414,71 @@ namespace PrefabSentinel
                 message = message,
                 data = new EditorControlData()
             };
+        }
+
+        private static EditorControlResponse BuildError(string code, string message, EditorControlData data)
+        {
+            return new EditorControlResponse
+            {
+                protocol_version = ProtocolVersion,
+                success = false,
+                severity = "error",
+                code = code,
+                message = message,
+                data = data
+            };
+        }
+
+        private static int LevenshteinDistance(string a, string b)
+        {
+            if (string.IsNullOrEmpty(a)) return b?.Length ?? 0;
+            if (string.IsNullOrEmpty(b)) return a.Length;
+
+            var dp = new int[a.Length + 1, b.Length + 1];
+            for (int i = 0; i <= a.Length; i++) dp[i, 0] = i;
+            for (int j = 0; j <= b.Length; j++) dp[0, j] = j;
+
+            for (int i = 1; i <= a.Length; i++)
+            {
+                for (int j = 1; j <= b.Length; j++)
+                {
+                    int cost = a[i - 1] == b[j - 1] ? 0 : 1;
+                    dp[i, j] = Math.Min(
+                        Math.Min(dp[i - 1, j] + 1, dp[i, j - 1] + 1),
+                        dp[i - 1, j - 1] + cost
+                    );
+                }
+            }
+            return dp[a.Length, b.Length];
+        }
+
+        private static string[] SuggestSimilar(string word, List<string> candidates, int maxResults = 3)
+        {
+            if (string.IsNullOrEmpty(word) || candidates == null || candidates.Count == 0)
+                return Array.Empty<string>();
+
+            var scored = new List<(string name, int dist)>();
+            foreach (var candidate in candidates)
+            {
+                int dist = LevenshteinDistance(word, candidate);
+                int maxLen = Math.Max(word.Length, candidate.Length);
+                if (maxLen > 0 && dist <= maxLen * 0.4f)
+                    scored.Add((candidate, dist));
+            }
+            scored.Sort((a, b) => a.dist.CompareTo(b.dist));
+            var result = new string[Math.Min(maxResults, scored.Count)];
+            for (int i = 0; i < result.Length; i++)
+                result[i] = scored[i].name;
+            return result;
+        }
+
+        private static List<string> CollectShaderPropertyNames(Shader shader)
+        {
+            var names = new List<string>();
+            int count = shader.GetPropertyCount();
+            for (int i = 0; i < count; i++)
+                names.Add(shader.GetPropertyName(i));
+            return names;
         }
 
         private static void WriteResponse(string responsePath, EditorControlResponse response)
