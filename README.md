@@ -180,6 +180,7 @@ uv run mypy prefab_sentinel/
 - MCP オーケストレーターを中心にサービスと Skills を連携
 - 監査ログ（誰が・何を・なぜ・どう変更したか）を保存
 - 失敗時のfail-fastと段階的ロールバック設計
+- **VRChat エコシステムナレッジ**: `knowledge/` ディレクトリに ModularAvatar、liltoon、VRCFury、AvatarOptimizer 等のドメイン知識を蓄積する。知識は 3 レベル（L1: 概念、L2: 操作パターン、L3: SerializedProperty）で段階的に充実し、通常作業中に自動で読み書きされる。
 
 ### やらないこと
 - YAML文字列の直接置換を標準手段にしない
