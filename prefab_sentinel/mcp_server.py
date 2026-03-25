@@ -24,6 +24,7 @@ except ImportError as exc:
     ) from exc
 
 from prefab_sentinel.editor_bridge import send_action
+from prefab_sentinel.fuzzy_match import suggest_similar
 from prefab_sentinel.patch_plan import PLAN_VERSION
 from prefab_sentinel.patch_revert import revert_overrides as revert_overrides_impl
 from prefab_sentinel.session import ProjectSession
@@ -32,6 +33,7 @@ from prefab_sentinel.symbol_tree import (
     SymbolKind,
     SymbolNode,
     SymbolNotFoundError,
+    SymbolTree,
 )
 from prefab_sentinel.unity_assets import decode_text_file
 from prefab_sentinel.unity_yaml_parser import CLASS_ID_MONOBEHAVIOUR
@@ -102,6 +104,19 @@ def create_server(
                 raise ValueError(msg)
             return node.script_name
         return node.name
+
+    def _collect_symbol_paths(tree: SymbolTree) -> list[str]:
+        """Collect all symbol paths from a tree for suggestion purposes."""
+        paths: list[str] = []
+
+        def _walk(nodes: list[SymbolNode], prefix: str) -> None:
+            for node in nodes:
+                path = f"{prefix}/{node.name}" if prefix else node.name
+                paths.append(path)
+                _walk(node.children, path)
+
+        _walk(tree.roots, "")
+        return paths
 
     # ------------------------------------------------------------------
     # Session management tools
@@ -421,12 +436,19 @@ def create_server(
         try:
             node = tree.resolve_unique(symbol_path)
         except SymbolNotFoundError:
+            suggestions = suggest_similar(
+                symbol_path, _collect_symbol_paths(tree),
+            )
             return {
                 "success": False,
                 "severity": "error",
                 "code": "SYMBOL_NOT_FOUND",
                 "message": f"No component found at symbol path: {symbol_path!r}",
-                "data": {"asset_path": asset_path, "symbol_path": symbol_path},
+                "data": {
+                    "asset_path": asset_path,
+                    "symbol_path": symbol_path,
+                    "suggestions": suggestions,
+                },
                 "diagnostics": [],
             }
         except AmbiguousSymbolError as exc:
@@ -541,12 +563,19 @@ def create_server(
         try:
             node = tree.resolve_unique(symbol_path)
         except SymbolNotFoundError:
+            suggestions = suggest_similar(
+                symbol_path, _collect_symbol_paths(tree),
+            )
             return {
                 "success": False,
                 "severity": "error",
                 "code": "SYMBOL_NOT_FOUND",
                 "message": f"No game object found at symbol path: {symbol_path!r}",
-                "data": {"asset_path": asset_path, "symbol_path": symbol_path},
+                "data": {
+                    "asset_path": asset_path,
+                    "symbol_path": symbol_path,
+                    "suggestions": suggestions,
+                },
                 "diagnostics": [],
             }
         except AmbiguousSymbolError as exc:
@@ -643,12 +672,19 @@ def create_server(
         try:
             node = tree.resolve_unique(symbol_path)
         except SymbolNotFoundError:
+            suggestions = suggest_similar(
+                symbol_path, _collect_symbol_paths(tree),
+            )
             return {
                 "success": False,
                 "severity": "error",
                 "code": "SYMBOL_NOT_FOUND",
                 "message": f"No component found at symbol path: {symbol_path!r}",
-                "data": {"asset_path": asset_path, "symbol_path": symbol_path},
+                "data": {
+                    "asset_path": asset_path,
+                    "symbol_path": symbol_path,
+                    "suggestions": suggestions,
+                },
                 "diagnostics": [],
             }
         except AmbiguousSymbolError as exc:

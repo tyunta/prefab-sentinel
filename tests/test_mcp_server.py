@@ -670,6 +670,8 @@ class TestSetPropertyTool(unittest.TestCase):
 
         self.assertFalse(result["success"])
         self.assertEqual("SYMBOL_NOT_FOUND", result["code"])
+        self.assertIn("suggestions", result["data"])
+        self.assertIsInstance(result["data"]["suggestions"], list)
 
     def test_set_property_not_a_component(self) -> None:
         """Returns error when symbol path points to a GameObject."""
@@ -1269,6 +1271,8 @@ class TestAddComponentTool(unittest.TestCase):
 
         self.assertFalse(result["success"])
         self.assertEqual("SYMBOL_NOT_FOUND", result["code"])
+        self.assertIn("suggestions", result["data"])
+        self.assertIsInstance(result["data"]["suggestions"], list)
 
     def test_add_component_rejects_component_path(self) -> None:
         """add_component requires a game_object, not a component."""
@@ -1469,6 +1473,8 @@ class TestRemoveComponentTool(unittest.TestCase):
 
         self.assertFalse(result["success"])
         self.assertEqual("SYMBOL_NOT_FOUND", result["code"])
+        self.assertIn("suggestions", result["data"])
+        self.assertIsInstance(result["data"]["suggestions"], list)
 
     def test_remove_component_rejects_gameobject_path(self) -> None:
         """remove_component requires a component, not a game_object."""
