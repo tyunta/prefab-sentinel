@@ -108,6 +108,7 @@ prefab-sentinel-mcp --transport streamable-http
 | `editor_refresh` | AssetDatabase.Refresh() のトリガー |
 | `editor_recompile` | C# スクリプト再コンパイルのトリガー |
 | `editor_run_tests` | Editor Bridge 経由で Unity 統合テストを実行 |
+| `vrcsdk_upload` | VRC SDK 経由でアバター/ワールドをビルド＋アップロード（dry-run/confirm ゲート付き、既存アセット更新のみ） |
 | `editor_instantiate` | Prefab を現在の Scene にインスタンス化 |
 | `editor_set_material` | ランタイムでレンダラーのマテリアルスロットを差し替え（Undo 対応） |
 | `editor_delete` | Hierarchy から GameObject を削除（Undo 対応） |
