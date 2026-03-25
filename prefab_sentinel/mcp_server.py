@@ -1022,6 +1022,21 @@ def create_server(
         return resp.to_dict()
 
     @server.tool()
+    def inspect_material_asset(asset_path: str) -> dict[str, Any]:
+        """Inspect shader, properties, and texture references in a .mat file (read-only).
+
+        Returns structured data about the material's shader, texture slots,
+        float/color/int properties, and summary counts. Unset texture slots
+        are omitted.
+
+        Args:
+            asset_path: Path to a .mat file.
+        """
+        orch = session.get_orchestrator()
+        resp = orch.inspect_material_asset(target_path=asset_path)
+        return resp.to_dict()
+
+    @server.tool()
     def validate_structure(asset_path: str) -> dict[str, Any]:
         """Validate internal YAML structure (fileID duplicates, Transform consistency).
 
