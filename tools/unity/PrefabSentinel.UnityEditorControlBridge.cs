@@ -37,6 +37,7 @@ namespace PrefabSentinel
             "set_camera",
             "list_roots",
             "get_material_property",
+            "set_material_property",
             "run_integration_tests",
         };
 
@@ -91,6 +92,9 @@ namespace PrefabSentinel
 
             // get_material_property
             public string property_name = string.Empty; // empty = list all properties
+
+            // set_material_property
+            public string property_value = string.Empty;  // raw JSON string, manually parsed by handler
         }
 
         [Serializable]
@@ -255,6 +259,9 @@ namespace PrefabSentinel
                     break;
                 case "get_material_property":
                     response = HandleGetMaterialProperty(request);
+                    break;
+                case "set_material_property":
+                    response = HandleSetMaterialProperty(request);
                     break;
                 case "run_integration_tests":
                     response = HandleRunIntegrationTests();
@@ -1006,6 +1013,176 @@ namespace PrefabSentinel
                     material_properties = properties.ToArray(),
                     total_entries = properties.Count,
                     read_only = true,
+                    executed = true
+                });
+        }
+
+        private static EditorControlResponse HandleSetMaterialProperty(EditorControlRequest request)
+        {
+            if (string.IsNullOrEmpty(request.hierarchy_path))
+                return BuildError("EDITOR_CTRL_MISSING_PATH", "hierarchy_path is required for set_material_property.");
+            if (request.material_index < 0)
+                return BuildError("EDITOR_CTRL_MISSING_INDEX", "material_index is required (>= 0).");
+            if (string.IsNullOrEmpty(request.property_name))
+                return BuildError("EDITOR_CTRL_MISSING_PROPERTY", "property_name is required.");
+            if (string.IsNullOrEmpty(request.property_value))
+                return BuildError("EDITOR_CTRL_MISSING_VALUE", "property_value is required.");
+
+            var go = GameObject.Find(request.hierarchy_path);
+            if (go == null)
+                return BuildError("EDITOR_CTRL_OBJECT_NOT_FOUND",
+                    $"GameObject not found: {request.hierarchy_path}");
+
+            var renderer = go.GetComponent<Renderer>();
+            if (renderer == null)
+                return BuildError("EDITOR_CTRL_NO_RENDERER",
+                    $"No Renderer on: {request.hierarchy_path}");
+
+            var mats = renderer.sharedMaterials;
+            if (request.material_index >= mats.Length)
+                return BuildError("EDITOR_CTRL_INDEX_OOB",
+                    $"material_index {request.material_index} out of range (length={mats.Length}).");
+
+            var mat = mats[request.material_index];
+            if (mat == null)
+                return BuildError("EDITOR_CTRL_MATERIAL_NULL",
+                    $"Material at index {request.material_index} is null.");
+
+            var shader = mat.shader;
+            if (shader == null)
+                return BuildError("EDITOR_CTRL_SHADER_NULL",
+                    $"Material at index {request.material_index} has no shader assigned.");
+
+            // Find property in shader
+            int propIdx = shader.FindPropertyIndex(request.property_name);
+            if (propIdx < 0)
+                return BuildError("EDITOR_CTRL_PROPERTY_NOT_FOUND",
+                    $"Property '{request.property_name}' not found on shader '{shader.name}'.");
+
+            var propType = shader.GetPropertyType(propIdx);
+            string val = request.property_value;
+
+            Undo.RecordObject(mat, $"Set {request.property_name}");
+
+            try
+            {
+                switch (propType)
+                {
+                    case UnityEngine.Rendering.ShaderPropertyType.Float:
+                    case UnityEngine.Rendering.ShaderPropertyType.Range:
+                        mat.SetFloat(request.property_name, float.Parse(val, System.Globalization.CultureInfo.InvariantCulture));
+                        break;
+
+                    case UnityEngine.Rendering.ShaderPropertyType.Int:
+                        mat.SetInteger(request.property_name, int.Parse(val, System.Globalization.CultureInfo.InvariantCulture));
+                        break;
+
+                    case UnityEngine.Rendering.ShaderPropertyType.Color:
+                    {
+                        // Parse "[r, g, b, a]"
+                        var trimmed = val.Trim('[', ']');
+                        var parts = trimmed.Split(',');
+                        if (parts.Length != 4)
+                            return BuildError("EDITOR_CTRL_PROPERTY_TYPE_MISMATCH",
+                                $"Color requires [r,g,b,a], got {parts.Length} components.");
+                        mat.SetColor(request.property_name, new Color(
+                            float.Parse(parts[0].Trim(), System.Globalization.CultureInfo.InvariantCulture),
+                            float.Parse(parts[1].Trim(), System.Globalization.CultureInfo.InvariantCulture),
+                            float.Parse(parts[2].Trim(), System.Globalization.CultureInfo.InvariantCulture),
+                            float.Parse(parts[3].Trim(), System.Globalization.CultureInfo.InvariantCulture)));
+                        break;
+                    }
+
+                    case UnityEngine.Rendering.ShaderPropertyType.Vector:
+                    {
+                        var trimmed = val.Trim('[', ']');
+                        var parts = trimmed.Split(',');
+                        if (parts.Length != 4)
+                            return BuildError("EDITOR_CTRL_PROPERTY_TYPE_MISMATCH",
+                                $"Vector requires [x,y,z,w], got {parts.Length} components.");
+                        mat.SetVector(request.property_name, new Vector4(
+                            float.Parse(parts[0].Trim(), System.Globalization.CultureInfo.InvariantCulture),
+                            float.Parse(parts[1].Trim(), System.Globalization.CultureInfo.InvariantCulture),
+                            float.Parse(parts[2].Trim(), System.Globalization.CultureInfo.InvariantCulture),
+                            float.Parse(parts[3].Trim(), System.Globalization.CultureInfo.InvariantCulture)));
+                        break;
+                    }
+
+                    case UnityEngine.Rendering.ShaderPropertyType.Texture:
+                    {
+                        if (string.IsNullOrEmpty(val))
+                        {
+                            mat.SetTexture(request.property_name, null);
+                        }
+                        else if (val.StartsWith("guid:"))
+                        {
+                            string guid = val.Substring(5);
+                            string texPath = AssetDatabase.GUIDToAssetPath(guid);
+                            if (string.IsNullOrEmpty(texPath))
+                                return BuildError("EDITOR_CTRL_PROPERTY_TYPE_MISMATCH",
+                                    $"Texture GUID not found: {guid}");
+                            var tex = AssetDatabase.LoadAssetAtPath<Texture>(texPath);
+                            if (tex == null)
+                                return BuildError("EDITOR_CTRL_PROPERTY_TYPE_MISMATCH",
+                                    $"Failed to load texture at: {texPath}");
+                            mat.SetTexture(request.property_name, tex);
+                        }
+                        else
+                        {
+                            return BuildError("EDITOR_CTRL_PROPERTY_TYPE_MISMATCH",
+                                "Texture value must be 'guid:<hex>' or empty string for null.");
+                        }
+                        break;
+                    }
+
+                    default:
+                        return BuildError("EDITOR_CTRL_PROPERTY_TYPE_MISMATCH",
+                            $"Unsupported property type: {propType}");
+                }
+            }
+            catch (FormatException ex)
+            {
+                return BuildError("EDITOR_CTRL_PROPERTY_TYPE_MISMATCH",
+                    $"Failed to parse value '{val}' for {propType}: {ex.Message}");
+            }
+
+            // Read back the value to confirm
+            string readBack;
+            switch (propType)
+            {
+                case UnityEngine.Rendering.ShaderPropertyType.Color:
+                    readBack = mat.GetColor(request.property_name).ToString();
+                    break;
+                case UnityEngine.Rendering.ShaderPropertyType.Float:
+                case UnityEngine.Rendering.ShaderPropertyType.Range:
+                    readBack = mat.GetFloat(request.property_name).ToString("G9");
+                    break;
+                case UnityEngine.Rendering.ShaderPropertyType.Vector:
+                    readBack = mat.GetVector(request.property_name).ToString();
+                    break;
+                case UnityEngine.Rendering.ShaderPropertyType.Texture:
+                    var readTex = mat.GetTexture(request.property_name);
+                    readBack = readTex != null ? AssetDatabase.GetAssetPath(readTex) : "(none)";
+                    break;
+                case UnityEngine.Rendering.ShaderPropertyType.Int:
+                    readBack = mat.GetInteger(request.property_name).ToString();
+                    break;
+                default:
+                    readBack = "(unknown)";
+                    break;
+            }
+
+            return BuildSuccess("EDITOR_CTRL_SET_MATERIAL_PROPERTY_OK",
+                $"Set {request.property_name} on material '{mat.name}'",
+                data: new EditorControlData
+                {
+                    material_properties = new[] { new MaterialPropertyEntry
+                    {
+                        property_name = request.property_name,
+                        property_type = propType.ToString(),
+                        value = readBack
+                    }},
+                    total_entries = 1,
                     executed = true
                 });
         }
