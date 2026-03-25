@@ -87,7 +87,7 @@ Color と Vector は同じ 4 要素配列だが、`shader.GetPropertyType()` で
 - `property_name` — 既存
 
 新規追加:
-- `string property_value = string.Empty;` — 設定する値 (JSON 文字列)
+- `string property_value = string.Empty;` — 設定する値の raw 文字列。JsonUtility ではデシリアライズされないため、ハンドラ内で手動パースする（JSON 配列 `[r,g,b,a]` 等を含むため）
 
 ### Bridge アクション
 
@@ -104,10 +104,12 @@ Color と Vector は同じ 4 要素配列だが、`shader.GetPropertyType()` で
 |---|---|
 | `EDITOR_CTRL_PROPERTY_NOT_FOUND` | `property_name` がシェーダーに存在しない |
 | `EDITOR_CTRL_PROPERTY_TYPE_MISMATCH` | 値の形式がシェーダー型と不一致 |
-| `EDITOR_CTRL_MISSING_PATH` | `hierarchy_path` 未指定 |
-| `EDITOR_CTRL_OBJECT_NOT_FOUND` | GameObject 不在 |
-| `EDITOR_CTRL_NO_RENDERER` | Renderer コンポーネント不在 |
-| `EDITOR_CTRL_MATERIAL_INDEX` | `material_index` が範囲外 |
+| `EDITOR_CTRL_MISSING_PATH` | `hierarchy_path` 未指定（既存コード再利用） |
+| `EDITOR_CTRL_OBJECT_NOT_FOUND` | GameObject 不在（既存コード再利用） |
+| `EDITOR_CTRL_NO_RENDERER` | Renderer コンポーネント不在（既存コード再利用） |
+| `EDITOR_CTRL_INDEX_OOB` | `material_index` が範囲外（既存 `HandleGetMaterialProperty` と同じコード） |
+| `EDITOR_CTRL_MATERIAL_NULL` | Material が null（既存コード再利用） |
+| `EDITOR_CTRL_SHADER_NULL` | Shader が null（既存コード再利用） |
 
 ### テスト
 
@@ -160,14 +162,33 @@ set_material_property(
 
 #### confirm=True
 
-1. YAML テキストを読み込み
-2. 対象セクション (`m_Floats` 等) を `_extract_section()` で特定
-3. エントリ単位で regex 置換:
-   - `m_Floats` / `m_Ints`: `- first:\n  {name}\n  second: {old_value}` → `second: {new_value}`
-   - `m_Colors`: `second: {r: ..., g: ..., b: ..., a: ...}` → 新しい RGBA 値
-   - `m_TexEnvs`: `m_Texture: {fileID: ..., guid: ...}` → 新しい GUID（`m_Scale` / `m_Offset` は保持）
+1. YAML テキスト全文を読み込み
+2. `_extract_section()` で対象セクション (`m_Floats` 等) の **開始・終了オフセット** を特定
+3. セクション内で対象エントリを regex 検索し、**全文テキスト上のオフセット** で in-place 置換:
+   - `m_Floats` / `m_Ints`: `- _PropertyName: {old_value}` → `- _PropertyName: {new_value}`
+   - `m_Colors`: `- _PropertyName: {r: ..., g: ..., b: ..., a: ...}` → 新しい RGBA 値
+   - `m_TexEnvs`: `m_Texture: {fileID: ..., guid: ..., type: ...}` 行のみ置換（`m_Scale` / `m_Offset` 行は保持）
 4. ファイル書き戻し
-5. `auto_refresh` 呼び出し
+5. 書き戻し後に `inspect_material_asset()` で再パースし、値が期待通りか検証（不一致なら `error`）
+6. `maybe_auto_refresh()` 呼び出し（Bridge 未接続時は `"skipped"` を返す）
+
+**YAML 形式の実例**（Unity 2022 テキストシリアライズ）:
+```yaml
+m_Floats:
+- _Glossiness: 0.8
+- _Metallic: 0.5
+m_Ints:
+- _StencilRef: 128
+m_Colors:
+- _Color: {r: 1, g: 0.5, b: 0.25, a: 1}
+m_TexEnvs:
+- _MainTex:
+    m_Texture: {fileID: 2800000, guid: aaa..., type: 3}
+    m_Scale: {x: 1, y: 1}
+    m_Offset: {x: 0, y: 0}
+```
+
+注: `first/second` 形式は Unity のバイナリシリアライズや古いバージョンで出現するが、テキストアセットモードでは上記の inline 形式。本実装は inline 形式のみをサポートする。
 
 レスポンス:
 ```json
@@ -191,12 +212,14 @@ set_material_property(
 
 | カテゴリ | value 例 | YAML 表現 |
 |---|---|---|
-| `m_Floats` | `"0.8"` | `second: 0.8` |
-| `m_Ints` | `"2"` | `second: 2` |
-| `m_Colors` | `"[1, 0.8, 0.6, 1]"` | `second: {r: 1, g: 0.8, b: 0.6, a: 1}` |
-| `m_TexEnvs` | `"guid:abc123..."` | `m_Texture: {fileID: 2800000, guid: abc123..., type: 2}` |
+| `m_Floats` | `"0.8"` | `- _PropName: 0.8` |
+| `m_Ints` | `"2"` | `- _PropName: 2` |
+| `m_Colors` | `"[1, 0.8, 0.6, 1]"` | `- _PropName: {r: 1, g: 0.8, b: 0.6, a: 1}` |
+| `m_TexEnvs` | `"guid:abc123..."` | `m_Texture: {fileID: 2800000, guid: abc123..., type: 3}` |
 
-テクスチャの null 化: `""` → `{fileID: 0, guid: , type: 0}`
+テクスチャの null 化: `""` → `m_Texture: {fileID: 0}`
+
+テクスチャ制約: Texture2D (`fileID: 2800000, type: 3`) のみサポート。RenderTexture / Cubemap 等は対象外。
 
 ### 実装箇所
 
@@ -206,15 +229,16 @@ set_material_property(
 | `prefab_sentinel/orchestrator.py` | `set_material_property()` メソッド追加 — dry-run/confirm 分岐、auto_refresh |
 | `prefab_sentinel/mcp_server.py` | `set_material_property` MCP ツール登録 |
 
-### エラーケース
+### エラーコード
 
-| 条件 | severity | 対応 |
+| コード | 条件 | severity |
 |---|---|---|
-| `.mat` 以外のファイル | `error` | `"Expected .mat file"` |
-| ファイル不在 | `error` | `"File not found"` |
-| プロパティ名が見つからない | `error` | 全プロパティ名リストを `diagnostics` に含めて提示 |
-| 値のパース失敗 | `error` | 期待される形式を `message` に含めて提示 |
-| `confirm=True` で `change_reason` 未指定 | `error` | `"change_reason is required"` |
+| `MAT_PROP_WRONG_EXT` | `.mat` 以外のファイル | `error` |
+| `MAT_PROP_FILE_NOT_FOUND` | ファイル不在 | `error` |
+| `MAT_PROP_NOT_FOUND` | プロパティ名が見つからない（全プロパティ名リストを `diagnostics` に含める） | `error` |
+| `MAT_PROP_PARSE_ERROR` | 値のパース失敗（期待される形式を `message` に含める） | `error` |
+| `MAT_PROP_REASON_REQUIRED` | `confirm=True` で `change_reason` 未指定 | `error` |
+| `MAT_PROP_VERIFY_FAILED` | 書き戻し後の再パースで値が不一致 | `error` |
 
 ### テスト
 
