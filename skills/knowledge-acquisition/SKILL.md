@@ -1,12 +1,11 @@
 ---
 name: knowledge-acquisition
-description: >
+description: >-
   VRChat エコシステムツールのナレッジを体系的に調査・検証して knowledge/ に蓄積する。
   新ツールの初回調査や、既存ナレッジの大幅補充時に使う。
-triggers:
-  - 新しい VRChat コミュニティツールに初めて遭遇した
-  - 既存ナレッジの confidence が low で、作業に支障がある
-  - ユーザーから「このツールについて調べて」と依頼された
+  トリガー: 新しい VRChat コミュニティツールに初めて遭遇した、
+  既存ナレッジの confidence が low で作業に支障がある、
+  ユーザーから「このツールについて調べて」と依頼された場合。
 ---
 
 # Knowledge Acquisition Protocol
