@@ -1,6 +1,6 @@
 {
   "name": "prefab-sentinel",
-  "version": "0.5.19",
+  "version": "0.5.20",
   "description": "Unity Prefab/Scene/Asset の検査・編集・参照修復ツール",
   "author": {
     "name": "tyunta",
@@ -8,5 +8,15 @@
   },
   "repository": "https://github.com/tyunta/prefab-sentinel",
   "license": "MIT",
-  "keywords": ["unity", "prefab", "validation", "inspection", "reference", "patch"]
+  "keywords": ["unity", "prefab", "validation", "inspection", "reference", "patch"],
+  "mcpServers": {
+    "prefab-sentinel": {
+      "command": "uvx",
+      "args": [
+        "--from", "${CLAUDE_PLUGIN_ROOT}",
+        "--with", "mcp>=1.12",
+        "prefab-sentinel-mcp"
+      ]
+    }
+  }
 }
