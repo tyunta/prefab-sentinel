@@ -95,9 +95,11 @@ def editor_screenshot(
     return send_action(action="capture_screenshot", view=view, width=width, height=height)
 ```
 
-- [ ] **Step 4: Update existing screenshot delegation test**
+- [ ] **Step 4: Update existing screenshot tests**
 
-The existing `test_editor_screenshot_defaults` test expects 1 call but now the default is refresh=True so it will be 2 calls. Update it:
+Two existing tests are affected by the default `refresh=True`:
+
+**`test_editor_screenshot_defaults`** expects 1 call → now 2. Update:
 
 ```python
 def test_editor_screenshot_defaults(self) -> None:
@@ -107,6 +109,19 @@ def test_editor_screenshot_defaults(self) -> None:
     # Default refresh=True means 2 calls: refresh + capture
     self.assertEqual(mock_send.call_count, 2)
     mock_send.assert_any_call(action="capture_screenshot", view="scene", width=0, height=0)
+```
+
+**`test_editor_screenshot_delegates`** passes `{"view": "game", "width": 1920}`. With default `refresh=True` it will make 2 calls. The test asserts `mock_response == result` on the return value, which still works (the return comes from the last `send_action` call). However, update it to also verify call count:
+
+```python
+def test_editor_screenshot_delegates(self) -> None:
+    server = create_server()
+    mock_response = {"success": True, "data": {"output_path": "/tmp/shot.png"}}
+    with patch("prefab_sentinel.mcp_server.send_action", return_value=mock_response) as mock_send:
+        _, result = _run(server.call_tool("editor_screenshot", {"view": "game", "width": 1920}))
+    self.assertEqual(mock_response, result)
+    # Default refresh=True: refresh + capture = 2 calls
+    self.assertEqual(mock_send.call_count, 2)
 ```
 
 - [ ] **Step 5: Run all tests**
@@ -146,6 +161,7 @@ def make_prefab_instance(
     file_id: str,
     source_guid: str,
     *,
+    transform_parent: str = "0",
     stripped_children: list[tuple[str, str]] | None = None,
 ) -> str:
     """Build a PrefabInstance block (class ID 1001) with m_SourcePrefab.
@@ -153,13 +169,14 @@ def make_prefab_instance(
     Args:
         file_id: FileID of the PrefabInstance.
         source_guid: GUID of the source prefab.
+        transform_parent: FileID of the parent Transform (0 = root).
         stripped_children: Optional list of (file_id, class_id) for stripped blocks.
     """
     block = (
         f"--- !u!1001 &{file_id}\n"
         f"PrefabInstance:\n"
         f"  m_Modification:\n"
-        f"    m_TransformParent: {{fileID: 0}}\n"
+        f"    m_TransformParent: {{fileID: {transform_parent}}}\n"
         f"    m_Modifications: []\n"
         f"  m_SourcePrefab: {{fileID: 100100000, guid: {source_guid}, type: 3}}\n"
     )
@@ -325,7 +342,7 @@ class TestSymbolTreeNestedExpansion(unittest.TestCase):
             YAML_HEADER
             + make_gameobject("100", "Avatar", ["200"])
             + make_transform("200", "100")
-            + make_prefab_instance("300", self.CHILD_GUID)
+            + make_prefab_instance("300", self.CHILD_GUID, transform_parent="200")
         )
 
     def test_expand_nested_false_skips_prefab_instances(self) -> None:
@@ -399,6 +416,21 @@ class TestSymbolTreeNestedExpansion(unittest.TestCase):
             self.assertIsNone(tree.resolve_file_id("500"))
             self.assertIsNone(tree.resolve_file_id("600"))
 
+    def test_file_read_failure_creates_unresolved_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create a child path that exists but is unreadable
+            child_path = Path(tmpdir) / "Assets" / "Bad.prefab"
+            child_path.parent.mkdir(parents=True, exist_ok=True)
+            child_path.write_bytes(b"\x80\x81\x82")  # invalid UTF-8
+            guid_map = {self.CHILD_GUID: child_path}
+            text = self._parent_text_with_instance()
+            tree = SymbolTree.build(text, "test.prefab", expand_nested=True, guid_to_asset_path=guid_map)
+            avatar = tree.roots[0]
+            pi_nodes = [c for c in avatar.children if c.kind == SymbolKind.PREFAB_INSTANCE]
+            self.assertEqual(len(pi_nodes), 1)
+            self.assertIn("Unresolved", pi_nodes[0].name)
+            self.assertEqual(pi_nodes[0].children, [])
+
     def test_depth_limit_stops_expansion(self) -> None:
         text = self._parent_text_with_instance()
         guid_map: dict[str, Path] = {}
@@ -431,15 +463,24 @@ Expected: FAIL (expand_nested parameter not accepted)
 
 - [ ] **Step 3: Implement expand_nested in SymbolTree.build()**
 
-In `prefab_sentinel/symbol_tree.py`, add the import at the top:
+In `prefab_sentinel/symbol_tree.py`, update the existing `unity_yaml_parser` import (line 22) to include `CLASS_ID_PREFAB_INSTANCE`:
 
 ```python
 from prefab_sentinel.unity_yaml_parser import (
     CLASS_ID_MONOBEHAVIOUR,
     CLASS_ID_PREFAB_INSTANCE,
     TRANSFORM_CLASS_IDS,
-    ...
+    ComponentInfo,
+    parse_components,
+    parse_game_objects,
+    parse_transforms,
+    split_yaml_blocks,
 )
+```
+
+Add a new import after the existing imports (after line 30):
+
+```python
 from prefab_sentinel.unity_assets import SOURCE_PREFAB_PATTERN, decode_text_file, normalize_guid
 ```
 
@@ -532,6 +573,9 @@ def build(
     roots = [_build_go_node(fid, 0) for fid in root_go_fids]
 
     # --- Nested Prefab expansion ---
+    _TRANSFORM_PARENT_RE = re.compile(
+        r"m_TransformParent:\s*\{fileID:\s*(\d+)"
+    )
     if expand_nested and guid_to_asset_path and _depth < _MAX_NESTED_DEPTH:
         for block in blocks:
             if block.class_id != CLASS_ID_PREFAB_INSTANCE:
@@ -542,17 +586,17 @@ def build(
             guid = normalize_guid(source_match.group(2))
             child_path = guid_to_asset_path.get(guid)
 
+            resolved = False
+            child_text = ""
             if child_path is not None and child_path.exists():
                 try:
                     child_text = decode_text_file(child_path)
+                    resolved = True
                 except (OSError, UnicodeDecodeError):
-                    child_path = None  # fall through to unresolved
+                    resolved = False
 
-            if child_path is not None and child_path.exists():
-                try:
-                    rel_path = child_path.as_posix()
-                except Exception:
-                    rel_path = guid
+            if resolved:
+                rel_path = child_path.as_posix()  # type: ignore[union-attr]
                 child_tree = cls.build(
                     child_text,
                     rel_path,
@@ -581,10 +625,15 @@ def build(
                 )
             file_id_index[block.file_id] = marker
 
-            # Attach to parent GO via m_TransformParent, or as root peer
-            # For simplicity: append to roots (PrefabInstances in Unity are
-            # typically root-level or attached via modification targets)
-            roots.append(marker)
+            # Attach to parent GO via m_TransformParent
+            tp_match = _TRANSFORM_PARENT_RE.search(block.text)
+            parent_t_fid = tp_match.group(1) if tp_match else "0"
+            parent_go_fid = transform_to_go.get(parent_t_fid, "")
+            parent_node = file_id_index.get(parent_go_fid)
+            if parent_node is not None:
+                parent_node.children.append(marker)
+            else:
+                roots.append(marker)
 
     return cls(
         asset_path=asset_path,
@@ -655,7 +704,9 @@ Expected: FAIL (PrefabInstance not transparent in resolve)
 
 - [ ] **Step 3: Add PrefabInstance flattening to _resolve_segments**
 
-In `prefab_sentinel/symbol_tree.py`, modify `_resolve_segments` to flatten PrefabInstance nodes. At the start of the method, before the segment matching:
+In `prefab_sentinel/symbol_tree.py`, modify `_resolve_segments` (line 310) to flatten PrefabInstance nodes. The only change is adding a flatten step at the top and replacing all `candidates` references with `flat_candidates`. Note: MonoBehaviour-specific matching lives in `_segment_matches()` (a separate method) and is NOT affected by this change.
+
+Current method (lines 310-356):
 
 ```python
 def _resolve_segments(
@@ -830,7 +881,13 @@ git commit -m "feat: bypass session cache for expand_nested=True"
 
 - [ ] **Step 1: Write delegation test**
 
-In `tests/test_mcp_server.py`, add:
+In `tests/test_mcp_server.py`, first add the `session` import at the top of the file (it is the module-level `session` instance used in `mcp_server.py`):
+
+```python
+from prefab_sentinel.mcp_server import session
+```
+
+Then add the test:
 
 ```python
 def test_get_unity_symbols_expand_nested(self) -> None:
