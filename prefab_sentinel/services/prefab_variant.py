@@ -549,6 +549,7 @@ class PrefabVariantService:
             if is_base:
                 break
 
+            assert source is not None  # guaranteed: is_base is False
             source_guid = normalize_guid(source.group(2))
             if source_guid in visited:
                 break

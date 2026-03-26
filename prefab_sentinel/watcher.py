@@ -63,12 +63,12 @@ async def start_watcher(
     logger.info("Starting file watcher on %s", watch_path)
 
     async for changes in awatch(watch_path, stop_event=stop_event, recursive=True):
-        dispatch_changes(session, changes)
+        dispatch_changes(session, changes)  # type: ignore[arg-type]  # watchfiles.Change is object-compatible
 
 
 def dispatch_changes(
     session: ProjectSession,
-    changes: set[tuple[object, str]],
+    changes: set[tuple[object, str]],  # watchfiles.Change is a subtype of object
 ) -> None:
     """Classify *changes* and call the appropriate invalidation methods."""
     meta_changed = False

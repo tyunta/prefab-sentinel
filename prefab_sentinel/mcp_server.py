@@ -336,7 +336,7 @@ def create_server(
             max_diagnostics: Cap on the number of diagnostics returned.
         """
         orch = session.get_orchestrator()
-        resolved_scope = session.resolve_scope(scope)
+        resolved_scope = session.resolve_scope(scope) or scope
         resp = orch.validate_refs(
             scope=resolved_scope,
             details=details,
@@ -829,7 +829,7 @@ def create_server(
             scope: Directory or file path to scan.
         """
         orch = session.get_orchestrator()
-        resolved_scope = session.resolve_scope(scope)
+        resolved_scope = session.resolve_scope(scope) or scope
         resp = orch.check_field_coverage(scope=resolved_scope)
         return resp.to_dict()
 
