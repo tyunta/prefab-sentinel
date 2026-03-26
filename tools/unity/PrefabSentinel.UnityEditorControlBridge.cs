@@ -44,6 +44,8 @@ namespace PrefabSentinel
             // Phase 2: BlendShape + Menu
             "get_blend_shapes", "set_blend_shape",
             "list_menu_items", "execute_menu_item",
+            // Phase 3: Material reverse lookup
+            "find_renderers_by_material",
         };
 
         // ── Request / Response DTOs ──
@@ -73,6 +75,7 @@ namespace PrefabSentinel
             public string asset_path = string.Empty;
             public int material_index = -1;
             public string material_guid = string.Empty;
+            public string material_path = string.Empty;  // asset path alternative to GUID
 
             // capture_console_logs
             public int max_entries = 200;
@@ -350,6 +353,9 @@ namespace PrefabSentinel
                     break;
                 case "execute_menu_item":
                     response = HandleExecuteMenuItem(request);
+                    break;
+                case "find_renderers_by_material":
+                    response = HandleFindRenderersByMaterial(request);
                     break;
                 case "vrcsdk_upload":
 #if VRC_SDK_VRCSDK3
@@ -716,8 +722,22 @@ namespace PrefabSentinel
                 return BuildError("EDITOR_CTRL_SET_MATERIAL_NO_PATH", "hierarchy_path is required.");
             if (request.material_index < 0)
                 return BuildError("EDITOR_CTRL_SET_MATERIAL_NO_INDEX", "material_index is required (>= 0).");
-            if (string.IsNullOrEmpty(request.material_guid))
-                return BuildError("EDITOR_CTRL_SET_MATERIAL_NO_GUID", "material_guid is required.");
+
+            // Resolve material GUID from guid or path
+            string guid = request.material_guid;
+            if (!string.IsNullOrEmpty(request.material_path))
+            {
+                if (!string.IsNullOrEmpty(guid))
+                    return BuildError("EDITOR_CTRL_SET_MATERIAL_CONFLICT",
+                        "Cannot specify both material_guid and material_path. Use one.");
+                guid = AssetDatabase.AssetPathToGUID(request.material_path);
+                if (string.IsNullOrEmpty(guid))
+                    return BuildError("EDITOR_CTRL_SET_MATERIAL_NOT_FOUND",
+                        $"Material not found at path: {request.material_path}");
+            }
+            if (string.IsNullOrEmpty(guid))
+                return BuildError("EDITOR_CTRL_SET_MATERIAL_NO_GUID",
+                    "material_guid or material_path is required.");
 
             var go = GameObject.Find(request.hierarchy_path);
             if (go == null)
@@ -734,10 +754,10 @@ namespace PrefabSentinel
                 return BuildError("EDITOR_CTRL_SET_MATERIAL_INDEX_OOB",
                     $"material_index {request.material_index} out of range (length={mats.Length}).");
 
-            string assetPath = AssetDatabase.GUIDToAssetPath(request.material_guid);
+            string assetPath = AssetDatabase.GUIDToAssetPath(guid);
             if (string.IsNullOrEmpty(assetPath))
                 return BuildError("EDITOR_CTRL_SET_MATERIAL_GUID_NOT_FOUND",
-                    $"No asset found for GUID: {request.material_guid}");
+                    $"No asset found for GUID: {guid}");
 
             var mat = AssetDatabase.LoadAssetAtPath<Material>(assetPath);
             if (mat == null)
@@ -1346,10 +1366,19 @@ namespace PrefabSentinel
                             }
                             mat.SetTexture(request.property_name, tex);
                         }
+                        else if (val.StartsWith("path:"))
+                        {
+                            string texPath = val.Substring(5);
+                            var tex = AssetDatabase.LoadAssetAtPath<Texture>(texPath);
+                            if (tex == null)
+                                return BuildError("EDITOR_CTRL_PROPERTY_TYPE_MISMATCH",
+                                    $"Texture not found at path: {texPath}");
+                            mat.SetTexture(request.property_name, tex);
+                        }
                         else
                         {
                             return BuildError("EDITOR_CTRL_PROPERTY_TYPE_MISMATCH",
-                                "Texture value must be 'guid:<hex>' or empty string for null.");
+                                "Texture value must be 'guid:<hex>', 'path:<asset_path>', or empty string for null.");
                         }
                         break;
                     }
@@ -1707,6 +1736,65 @@ namespace PrefabSentinel
                 evidence = "Undo.RecordObject"
             }};
             return resp;
+        }
+
+        // ── Material reverse lookup ──
+
+        private static EditorControlResponse HandleFindRenderersByMaterial(EditorControlRequest request)
+        {
+            // Resolve material GUID from guid or path
+            string guid = request.material_guid;
+            if (!string.IsNullOrEmpty(request.material_path))
+            {
+                if (!string.IsNullOrEmpty(guid))
+                    return BuildError("EDITOR_CTRL_FIND_RENDERERS_CONFLICT",
+                        "Cannot specify both material_guid and material_path. Use one.");
+                guid = AssetDatabase.AssetPathToGUID(request.material_path);
+                if (string.IsNullOrEmpty(guid))
+                    return BuildError("EDITOR_CTRL_MATERIAL_NOT_FOUND",
+                        $"Material not found at path: {request.material_path}");
+            }
+            if (string.IsNullOrEmpty(guid))
+                return BuildError("EDITOR_CTRL_MATERIAL_NOT_FOUND",
+                    "material_guid or material_path is required.");
+
+            string targetPath = AssetDatabase.GUIDToAssetPath(guid);
+            if (string.IsNullOrEmpty(targetPath))
+                return BuildError("EDITOR_CTRL_MATERIAL_NOT_FOUND",
+                    $"No asset found for GUID: {guid}");
+
+            var renderers = UnityEngine.Object.FindObjectsOfType<Renderer>();
+            var matches = new System.Collections.Generic.List<MaterialSlotEntry>();
+            foreach (var renderer in renderers)
+            {
+                var mats = renderer.sharedMaterials;
+                for (int i = 0; i < mats.Length; i++)
+                {
+                    if (mats[i] == null) continue;
+                    string matPath = AssetDatabase.GetAssetPath(mats[i]);
+                    if (matPath == targetPath)
+                    {
+                        matches.Add(new MaterialSlotEntry
+                        {
+                            renderer_path = GetHierarchyPath(renderer.transform),
+                            renderer_type = renderer.GetType().Name,
+                            slot_index = i,
+                            material_name = mats[i].name,
+                            material_asset_path = matPath,
+                            material_guid = guid,
+                        });
+                    }
+                }
+            }
+
+            return BuildSuccess("EDITOR_CTRL_FIND_RENDERERS_OK",
+                $"Found {matches.Count} slot(s) using material across {renderers.Length} renderers",
+                data: new EditorControlData
+                {
+                    material_slots = matches.ToArray(),
+                    total_entries = renderers.Length,
+                    executed = true,
+                });
         }
 
         private static EditorControlResponse HandleListMenuItems(EditorControlRequest request)

@@ -1036,7 +1036,7 @@ def create_server(
                 Int: "2"
                 Color: "[1, 0.8, 0.6, 1]" (RGBA)
                 Vector: "[0, 1, 0, 0]" (XYZW)
-                Texture: "guid:abc123..." or "" (null)
+                Texture: "guid:abc123..." or "path:Assets/Tex/foo.png" or "" (null)
         """
         import json as _json
         str_value = value if isinstance(value, str) else _json.dumps(value)
@@ -1234,20 +1234,49 @@ def create_server(
     def editor_set_material(
         hierarchy_path: str,
         material_index: int,
-        material_guid: str,
+        material_guid: str = "",
+        material_path: str = "",
     ) -> dict[str, Any]:
         """Replace a material slot on a Renderer at runtime (Undo-able).
+
+        Specify either material_guid or material_path (not both).
 
         Args:
             hierarchy_path: Hierarchy path to the GameObject with a Renderer.
             material_index: Material slot index (0-based).
             material_guid: GUID of the replacement Material asset (32-char hex).
+            material_path: Asset path of the replacement Material (e.g. "Assets/Materials/Foo.mat").
         """
-        return send_action(
-            action="set_material",
-            hierarchy_path=hierarchy_path, material_index=material_index,
-            material_guid=material_guid,
-        )
+        kwargs: dict[str, Any] = {
+            "hierarchy_path": hierarchy_path,
+            "material_index": material_index,
+        }
+        if material_guid:
+            kwargs["material_guid"] = material_guid
+        if material_path:
+            kwargs["material_path"] = material_path
+        return send_action(action="set_material", **kwargs)
+
+    @server.tool()
+    def editor_find_renderers_by_material(
+        material_guid: str = "",
+        material_path: str = "",
+    ) -> dict[str, Any]:
+        """Find all renderers using a specific material in the current scene.
+
+        Returns renderer paths and slot indices. Specify either material_guid
+        or material_path (not both).
+
+        Args:
+            material_guid: GUID of the material to search for.
+            material_path: Asset path of the material (e.g. "Assets/Materials/Foo.mat").
+        """
+        kwargs: dict[str, Any] = {}
+        if material_guid:
+            kwargs["material_guid"] = material_guid
+        if material_path:
+            kwargs["material_path"] = material_path
+        return send_action(action="find_renderers_by_material", **kwargs)
 
     @server.tool()
     def editor_delete(
@@ -1380,7 +1409,7 @@ def create_server(
         - Float: "0.5"
         - Int: "2"
         - Color: "[1, 0.8, 0.6, 1]" (RGBA)
-        - Texture: "guid:abc123..." or "" (null)
+        - Texture: "guid:abc123..." or "path:Assets/Tex/foo.png" or "" (null)
 
         Args:
             asset_path: Path to the .mat file.
