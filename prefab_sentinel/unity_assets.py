@@ -230,6 +230,22 @@ def resolve_scope_path(scope: str, project_root: Path) -> Path:
     return resolved
 
 
+def resolve_asset_path(path: str, project_root: Path | None) -> Path:
+    """Resolve asset path, joining ``Assets/...`` paths with project root.
+
+    If *path* is relative (e.g. ``Assets/Foo/Bar.prefab``) and doesn't exist
+    as-is, tries joining with *project_root*.
+    """
+    from prefab_sentinel.wsl_compat import to_wsl_path
+
+    resolved = Path(to_wsl_path(path))
+    if not resolved.is_file() and project_root and not resolved.is_absolute():
+        joined = (project_root / resolved).resolve()
+        if joined.is_file():
+            return joined
+    return resolved
+
+
 def relative_to_root(path: Path, root: Path) -> str:
     """Return *path* relative to *root* as a POSIX string.
 

@@ -24,7 +24,11 @@ except ImportError as exc:
         "pip install prefab-sentinel[mcp]"
     ) from exc
 
-from prefab_sentinel.editor_bridge import build_set_camera_kwargs, send_action
+from prefab_sentinel.editor_bridge import (
+    build_set_camera_kwargs,
+    get_last_bridge_version,
+    send_action,
+)
 from prefab_sentinel.fuzzy_match import suggest_similar
 from prefab_sentinel.patch_plan import PLAN_VERSION
 from prefab_sentinel.patch_revert import revert_overrides as revert_overrides_impl
@@ -36,9 +40,8 @@ from prefab_sentinel.symbol_tree import (
     SymbolNotFoundError,
     SymbolTree,
 )
-from prefab_sentinel.unity_assets import decode_text_file
+from prefab_sentinel.unity_assets import decode_text_file, resolve_asset_path
 from prefab_sentinel.unity_yaml_parser import CLASS_ID_MONOBEHAVIOUR
-from prefab_sentinel.wsl_compat import to_wsl_path
 
 __all__ = ["create_server"]
 
@@ -84,7 +87,7 @@ def create_server(
 
     def _read_asset(path: str) -> tuple[str, Path]:
         """Read a Unity asset file, returning (text, resolved_path)."""
-        resolved = Path(to_wsl_path(path))
+        resolved = resolve_asset_path(path, session.project_root)
         if not resolved.is_file():
             msg = f"File not found: {path}"
             raise FileNotFoundError(msg)
@@ -161,15 +164,32 @@ def create_server(
         """Show current session state: cached items, scope, project root.
 
         Use this to check whether caches are warm or if activate_project
-        needs to be called.
+        needs to be called. Also reports bridge version mismatch if detected.
         """
+        from importlib.metadata import version as pkg_version
+
+        python_version = pkg_version("prefab-sentinel")
+        bridge_ver = get_last_bridge_version()
+
+        diagnostics: list[dict[str, str]] = []
+        if bridge_ver and bridge_ver != python_version:
+            diagnostics.append({
+                "detail": f"Bridge version mismatch: Bridge={bridge_ver}, Python={python_version}. "
+                          "Update Bridge C# files and run editor_recompile.",
+                "evidence": f"bridge_version={bridge_ver}, package_version={python_version}",
+            })
+
+        status = session.status()
+        status["python_version"] = python_version
+        status["bridge_version"] = bridge_ver
+
         return {
             "success": True,
-            "severity": "info",
+            "severity": "warning" if diagnostics else "info",
             "code": "SESSION_STATUS",
             "message": "Current session status",
-            "data": session.status(),
-            "diagnostics": [],
+            "data": status,
+            "diagnostics": diagnostics,
         }
 
     # ------------------------------------------------------------------

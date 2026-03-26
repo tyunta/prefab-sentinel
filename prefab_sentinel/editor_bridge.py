@@ -28,6 +28,8 @@ from prefab_sentinel.bridge_constants import (
 PROTOCOL_VERSION = 1
 # Empirical: sufficient for typical Inspector operations in loaded projects
 DEFAULT_TIMEOUT_SEC = 30
+# Cached bridge version from last successful response
+_last_bridge_version: str | None = None
 DEFAULT_POLL_INTERVAL = 1.0
 
 SUPPORTED_ACTIONS = frozenset(
@@ -190,6 +192,12 @@ def send_action(
 
             payload.setdefault("bridge_mode", "editor")
             payload.setdefault("action", action)
+
+            # Cache bridge version from response
+            global _last_bridge_version
+            if "bridge_version" in payload:
+                _last_bridge_version = payload["bridge_version"]
+
             return payload
 
         time.sleep(DEFAULT_POLL_INTERVAL)
@@ -221,6 +229,11 @@ def bridge_status() -> dict[str, Any]:
         "mode": mode or None,
         "watch_dir": watch_dir or None,
     }
+
+
+def get_last_bridge_version() -> str | None:
+    """Return the bridge_version from the last successful response, or None."""
+    return _last_bridge_version
 
 
 def build_set_camera_kwargs(

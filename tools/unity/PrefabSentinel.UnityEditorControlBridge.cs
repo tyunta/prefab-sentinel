@@ -17,6 +17,7 @@ namespace PrefabSentinel
     public static class UnityEditorControlBridge
     {
         public const int ProtocolVersion = 1;
+        public const string BridgeVersion = "0.5.82";
 
         /// <summary>All action strings handled by this bridge.</summary>
         public static readonly HashSet<string> SupportedActions = new HashSet<string>
@@ -245,6 +246,7 @@ namespace PrefabSentinel
         public sealed class EditorControlResponse
         {
             public int protocol_version = ProtocolVersion;
+            public string bridge_version = BridgeVersion;
             public bool success = false;
             public string severity = "error";
             public string code = string.Empty;
@@ -399,11 +401,20 @@ namespace PrefabSentinel
                     Texture2D tex = null;
                     try
                     {
+                        // Force scene state update before capture (non-focus safe)
+                        EditorApplication.QueuePlayerLoopUpdate();
+                        bool wasAlwaysRefresh = sceneView.sceneViewState.alwaysRefresh;
+                        sceneView.sceneViewState.alwaysRefresh = true;
+                        sceneView.Repaint();
+
                         rt = new RenderTexture(w, h, 24);
                         RenderTexture prev = cam.targetTexture;
                         cam.targetTexture = rt;
                         cam.Render();
                         cam.targetTexture = prev;
+
+                        // Restore alwaysRefresh
+                        sceneView.sceneViewState.alwaysRefresh = wasAlwaysRefresh;
 
                         RenderTexture.active = rt;
                         tex = new Texture2D(w, h, TextureFormat.RGB24, false);
@@ -580,7 +591,7 @@ namespace PrefabSentinel
             sceneView.FrameSelected();
             if (request.zoom > 0f)
                 sceneView.size = request.zoom;
-            RepaintAllViews(sceneView);
+            ForceRenderAndRepaint(sceneView);
 
             CameraSnapshot cam = CaptureCameraState(sceneView);
             var data = BuildCameraData(cam);
@@ -737,9 +748,15 @@ namespace PrefabSentinel
             mats[request.material_index] = mat;
             renderer.sharedMaterials = mats;
 
-            return BuildSuccess("EDITOR_CTRL_SET_MATERIAL_OK",
+            var resp = BuildSuccess("EDITOR_CTRL_SET_MATERIAL_OK",
                 $"Set material[{request.material_index}] to {assetPath}",
                 data: new EditorControlData { executed = true, read_only = false });
+            resp.diagnostics = new[] { new EditorControlDiagnostic
+            {
+                detail = "Runtime modification — save the scene (File > Save) to persist.",
+                evidence = "Undo.RecordObject"
+            }};
+            return resp;
         }
 
         private static EditorControlResponse HandleDeleteObject(EditorControlRequest request)
@@ -909,16 +926,24 @@ namespace PrefabSentinel
         }
 
         /// <summary>
-        /// Aggressive repaint: immediate + delayed, all views.
-        /// Ensures changes are visible even when Unity is in the background.
+        /// Force GPU rendering + GUI repaint. Works even when Unity is unfocused.
+        /// QueuePlayerLoopUpdate forces skinning/physics recalculation,
+        /// alwaysRefresh ensures SceneView renders even without focus.
         /// </summary>
-        private static void RepaintAllViews(SceneView sceneView)
+        private static void ForceRenderAndRepaint(SceneView sceneView)
         {
+            EditorApplication.QueuePlayerLoopUpdate();
+
+            bool wasAlwaysRefresh = sceneView.sceneViewState.alwaysRefresh;
+            sceneView.sceneViewState.alwaysRefresh = true;
+
             sceneView.Repaint();
             SceneView.RepaintAll();
             UnityEditorInternal.InternalEditorUtility.RepaintAllViews();
+
             EditorApplication.delayCall += () =>
             {
+                sceneView.sceneViewState.alwaysRefresh = wasAlwaysRefresh;
                 sceneView.Repaint();
                 SceneView.RepaintAll();
             };
@@ -1039,7 +1064,7 @@ namespace PrefabSentinel
             if (request.camera_orthographic >= 0)
                 sceneView.orthographic = request.camera_orthographic == 1;
 
-            RepaintAllViews(sceneView);
+            ForceRenderAndRepaint(sceneView);
 
             // Return previous + current state
             CameraSnapshot current = CaptureCameraState(sceneView);
@@ -1311,8 +1336,14 @@ namespace PrefabSentinel
                                     $"Texture GUID not found: {guid}");
                             var tex = AssetDatabase.LoadAssetAtPath<Texture>(texPath);
                             if (tex == null)
+                            {
+                                if (texPath.EndsWith(".mat"))
+                                    return BuildError("EDITOR_CTRL_SET_MAT_PROP_WRONG_GUID",
+                                        $"The specified GUID points to a material asset '{texPath}'. " +
+                                        "Please specify a texture GUID instead.");
                                 return BuildError("EDITOR_CTRL_PROPERTY_TYPE_MISMATCH",
-                                    $"Failed to load texture at: {texPath}");
+                                    $"Failed to load texture from GUID '{guid}' (resolved to '{texPath}').");
+                            }
                             mat.SetTexture(request.property_name, tex);
                         }
                         else
@@ -1361,9 +1392,9 @@ namespace PrefabSentinel
             }
 
             SceneView sv = SceneView.lastActiveSceneView;
-            if (sv != null) RepaintAllViews(sv);
+            if (sv != null) ForceRenderAndRepaint(sv);
 
-            return BuildSuccess("EDITOR_CTRL_SET_MATERIAL_PROPERTY_OK",
+            var resp = BuildSuccess("EDITOR_CTRL_SET_MATERIAL_PROPERTY_OK",
                 $"Set {request.property_name} on material '{mat.name}'",
                 data: new EditorControlData
                 {
@@ -1376,6 +1407,12 @@ namespace PrefabSentinel
                     total_entries = 1,
                     executed = true
                 });
+            resp.diagnostics = new[] { new EditorControlDiagnostic
+            {
+                detail = "Runtime modification — save the scene (File > Save) to persist.",
+                evidence = "Undo.RecordObject"
+            }};
+            return resp;
         }
 
         private static void CollectChildren(Transform parent, int maxDepth, int currentDepth, List<ChildEntry> result)
@@ -1652,9 +1689,9 @@ namespace PrefabSentinel
             smr.SetBlendShapeWeight(index, weight);
 
             SceneView sv = SceneView.lastActiveSceneView;
-            if (sv != null) RepaintAllViews(sv);
+            if (sv != null) ForceRenderAndRepaint(sv);
 
-            return BuildSuccess("EDITOR_CTRL_BLEND_SHAPE_SET_OK",
+            var resp = BuildSuccess("EDITOR_CTRL_BLEND_SHAPE_SET_OK",
                 $"BlendShape '{request.blend_shape_name}' set from {before} to {weight}",
                 data: new EditorControlData
                 {
@@ -1664,6 +1701,12 @@ namespace PrefabSentinel
                     blend_shape_after = weight,
                     executed = true,
                 });
+            resp.diagnostics = new[] { new EditorControlDiagnostic
+            {
+                detail = "Runtime modification — save the scene (File > Save) to persist.",
+                evidence = "Undo.RecordObject"
+            }};
+            return resp;
         }
 
         private static EditorControlResponse HandleListMenuItems(EditorControlRequest request)
@@ -1765,7 +1808,7 @@ namespace PrefabSentinel
 
         // ── Response Builders ──
 
-        private static EditorControlResponse BuildSuccess(string code, string message, EditorControlData data = null)
+        internal static EditorControlResponse BuildSuccess(string code, string message, EditorControlData data = null)
         {
             return new EditorControlResponse
             {
@@ -1778,7 +1821,7 @@ namespace PrefabSentinel
             };
         }
 
-        private static EditorControlResponse BuildError(string code, string message)
+        internal static EditorControlResponse BuildError(string code, string message)
         {
             return new EditorControlResponse
             {
