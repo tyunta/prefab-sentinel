@@ -73,7 +73,7 @@ prefab-sentinel-mcp --transport streamable-http
 |--------|------|
 | `activate_project` | プロジェクトスコープ設定 + キャッシュ warm（セッション開始時に呼ぶ） |
 | `get_project_status` | セッション状態（キャッシュ件数、スコープ、watcher 動作状況）の表示 |
-| `get_unity_symbols` | アセットのシンボルツリー取得（GameObject/Component 階層） |
+| `get_unity_symbols` | アセットのシンボルツリー取得（GameObject/Component 階層、`expand_nested=true` で Nested Prefab 展開） |
 | `find_unity_symbol` | 人間可読パス（例: `CharacterBody/MeshRenderer`）でオブジェクト検索。`show_origin=true` で Variant チェーンのオリジン注釈付き |
 | `diff_unity_symbols` | Variant と Base の差分のみ返す（override プロパティ + オリジン注釈） |
 | `find_referencing_assets` | GUID/パスの参照元アセット検索 |
@@ -86,7 +86,7 @@ prefab-sentinel-mcp --transport streamable-http
 | `list_serialized_fields` | C# スクリプトのシリアライズ対象フィールド一覧（パス・クラス名・GUID 指定、`include_inherited` で基底クラス含む） |
 | `validate_field_rename` | フィールドリネームの影響分析（派生クラス経由の影響含む、影響アセット一覧、衝突検出） |
 | `check_field_coverage` | C# フィールドと YAML propertyPath の不一致検出（継承チェーン解決済み、未使用/孤立） |
-| `inspect_materials` | レンダラーごとのマテリアルスロット表示（override/inherited マーカー付き） |
+| `inspect_materials` | レンダラーごとのマテリアルスロット表示（override/inherited マーカー、Nested Prefab フォールバック、`source_prefab` 注釈付き） |
 | `inspect_material_asset` | .mat ファイルのシェーダー・プロパティ・テクスチャ参照を構造化データで返す（read-only） |
 | `set_material_property` | .mat ファイルのプロパティをオフライン YAML 編集（dry-run/confirm ゲート付き） |
 | `validate_structure` | YAML 内部構造の検証（fileID 重複、Transform 整合性） |
@@ -94,7 +94,7 @@ prefab-sentinel-mcp --transport streamable-http
 | `validate_runtime` | UdonSharp コンパイル + ClientSim 実行検証 |
 | `patch_apply` | パッチ計画の検証・適用（JSON 文字列入力、dry-run/confirm ゲート付き） |
 | `revert_overrides` | Prefab Variant から特定プロパティの override を YAML レベルで削除（dry-run/confirm ゲート付き） |
-| `editor_screenshot` | Unity Editor の Scene/Game ビューのスクリーンショット取得 |
+| `editor_screenshot` | Unity Editor の Scene/Game ビューのスクリーンショット取得（`refresh=true` で事前に AssetDatabase.Refresh 実行） |
 | `editor_select` | Hierarchy 内の GameObject を選択（Prefab Stage 対応） |
 | `editor_frame` | 選択オブジェクトを Scene ビューでフレーミング |
 | `editor_get_camera` | Scene ビューのカメラ状態取得（position, rotation, pivot, size, orthographic） |
