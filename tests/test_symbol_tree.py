@@ -7,6 +7,7 @@ import unittest
 from prefab_sentinel.symbol_tree import (
     AmbiguousSymbolError,
     SymbolKind,
+    SymbolNode,
     SymbolNotFoundError,
     SymbolTree,
 )
@@ -510,6 +511,44 @@ class TestSymbolTreeRectTransform(unittest.TestCase):
         tree = SymbolTree.build(text, "test.prefab")
         matches = tree.resolve("Canvas/RectTransform")
         self.assertEqual(len(matches), 1)
+
+
+class TestSymbolNodePrefabInstance(unittest.TestCase):
+    """SymbolNode with PREFAB_INSTANCE kind and source_prefab."""
+
+    def test_prefab_instance_kind_value(self) -> None:
+        self.assertEqual(SymbolKind.PREFAB_INSTANCE.value, "prefab_instance")
+
+    def test_source_prefab_default_empty(self) -> None:
+        node = SymbolNode(
+            kind=SymbolKind.PREFAB_INSTANCE,
+            name="[PrefabInstance: test.prefab]",
+            file_id="999",
+            class_id="1001",
+        )
+        self.assertEqual(node.source_prefab, "")
+
+    def test_to_dict_includes_source_prefab(self) -> None:
+        node = SymbolNode(
+            kind=SymbolKind.PREFAB_INSTANCE,
+            name="[PrefabInstance: Assets/Shirt.prefab]",
+            file_id="999",
+            class_id="1001",
+            source_prefab="Assets/Shirt.prefab",
+        )
+        d = node.to_dict()
+        self.assertEqual(d["kind"], "prefab_instance")
+        self.assertEqual(d["source_prefab"], "Assets/Shirt.prefab")
+
+    def test_to_dict_omits_empty_source_prefab(self) -> None:
+        node = SymbolNode(
+            kind=SymbolKind.GAME_OBJECT,
+            name="Root",
+            file_id="100",
+            class_id="1",
+        )
+        d = node.to_dict()
+        self.assertNotIn("source_prefab", d)
 
 
 if __name__ == "__main__":

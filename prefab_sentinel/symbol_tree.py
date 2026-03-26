@@ -50,6 +50,7 @@ class SymbolKind(StrEnum):
     GAME_OBJECT = "game_object"
     COMPONENT = "component"
     PROPERTY = "property"
+    PREFAB_INSTANCE = "prefab_instance"
 
 
 @dataclass(slots=True)
@@ -65,6 +66,7 @@ class SymbolNode:
     script_name: str = ""
     depth: int = 0
     properties: dict[str, str] = field(default_factory=dict)
+    source_prefab: str = ""
 
     def to_dict(self, depth_limit: int | None = None) -> dict[str, Any]:
         """Serialize to a JSON-compatible dict with optional depth truncation."""
@@ -81,6 +83,8 @@ class SymbolNode:
             result["script_name"] = self.script_name
         if self.properties:
             result["properties"] = dict(self.properties)
+        if self.source_prefab:
+            result["source_prefab"] = self.source_prefab
         if depth_limit is None or depth_limit > 0:
             child_limit = None if depth_limit is None else depth_limit - 1
             if self.children:
