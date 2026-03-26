@@ -842,6 +842,7 @@ def create_server(
         view: str = "scene",
         width: int = 0,
         height: int = 0,
+        refresh: bool = True,
     ) -> dict[str, Any]:
         """Capture a screenshot of the Unity Editor.
 
@@ -849,7 +850,13 @@ def create_server(
             view: Which view to capture ("scene" or "game").
             width: Capture width in pixels (0 = current window size).
             height: Capture height in pixels (0 = current window size).
+            refresh: Refresh the asset database before capturing (default True).
         """
+        if refresh:
+            try:
+                send_action(action="refresh_asset_database")
+            except Exception:
+                logger.warning("Pre-screenshot refresh failed", exc_info=True)
         return send_action(action="capture_screenshot", view=view, width=width, height=height)
 
     @server.tool()
