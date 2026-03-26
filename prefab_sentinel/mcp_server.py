@@ -180,6 +180,7 @@ def create_server(
     def get_unity_symbols(
         asset_path: str,
         depth: int = 1,
+        expand_nested: bool = False,
     ) -> dict[str, Any]:
         """Get the symbol tree (GameObject/Component hierarchy) of a Unity asset.
 
@@ -187,11 +188,23 @@ def create_server(
             asset_path: Asset file path (.prefab, .unity, .asset).
             depth: Expansion depth. 0=root GOs only, 1=GOs+components,
                    2=components+properties.
+            expand_nested: Expand Nested Prefab instances into the tree.
         """
         text, resolved = _read_asset(asset_path)
         include_props = depth >= 2
+        guid_to_asset_path = None
+        if expand_nested and session.project_root:
+            from prefab_sentinel.unity_assets import collect_project_guid_index
+
+            guid_to_asset_path = collect_project_guid_index(
+                session.project_root, include_package_cache=False,
+            )
         tree = session.get_symbol_tree(
-            resolved, text, include_properties=include_props,
+            resolved,
+            text,
+            include_properties=include_props,
+            expand_nested=expand_nested,
+            guid_to_asset_path=guid_to_asset_path,
         )
         return {
             "asset_path": asset_path,

@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, call, patch
 
 from prefab_sentinel.mcp_server import create_server
 from prefab_sentinel.session import ProjectSession
+from prefab_sentinel.symbol_tree import SymbolTree
 from tests.yaml_helpers import (
     YAML_HEADER,
     make_gameobject,
@@ -208,6 +209,28 @@ class TestSymbolToolsWithMonoBehaviour(unittest.TestCase):
                 },
             ))
             self.assertEqual(1, len(result["matches"]))
+
+
+class TestGetUnitySymbolsExpandNested(unittest.TestCase):
+    """Test expand_nested parameter wiring in get_unity_symbols."""
+
+    def test_expand_nested_passed_to_build(self) -> None:
+        import tempfile
+
+        text = YAML_HEADER + make_gameobject("100", "Root", ["200"]) + make_transform("200", "100")
+        server = create_server(project_root=None)
+
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "test.prefab"
+            p.write_text(text, encoding="utf-8")
+            with patch("prefab_sentinel.symbol_tree.SymbolTree.build", wraps=SymbolTree.build) as mock_build:
+                _run(server.call_tool(
+                    "get_unity_symbols",
+                    {"asset_path": str(p), "expand_nested": True},
+                ))
+                mock_build.assert_called_once()
+                _, kwargs = mock_build.call_args
+                self.assertTrue(kwargs.get("expand_nested"))
 
 
 class TestOrchestratorTools(unittest.TestCase):
