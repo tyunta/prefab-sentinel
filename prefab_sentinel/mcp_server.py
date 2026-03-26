@@ -1003,7 +1003,7 @@ def create_server(
         hierarchy_path: str,
         material_index: int,
         property_name: str,
-        value: str,
+        value: str | list | int | float,
     ) -> dict[str, Any]:
         """Set a shader property value on a material at runtime.
 
@@ -1020,12 +1020,14 @@ def create_server(
                 Vector: "[0, 1, 0, 0]" (XYZW)
                 Texture: "guid:abc123..." or "" (null)
         """
+        import json as _json
+        str_value = value if isinstance(value, str) else _json.dumps(value)
         return send_action(
             action="set_material_property",
             hierarchy_path=hierarchy_path,
             material_index=material_index,
             property_name=property_name,
-            property_value=value,
+            property_value=str_value,
         )
 
     @server.tool()
@@ -1447,7 +1449,7 @@ def create_server(
 
     @server.tool()
     def patch_apply(
-        plan: str,
+        plan: str | dict,
         confirm: bool = False,
         change_reason: str = "",
         scope: str | None = None,
@@ -1477,14 +1479,18 @@ def create_server(
             runtime_max_diagnostics: Max diagnostics for runtime validation.
         """
         import json as _json
-        try:
-            plan_dict = _json.loads(plan)
-        except (ValueError, TypeError) as exc:
-            return {
-                "success": False, "severity": "error", "code": "INVALID_PLAN_JSON",
-                "message": f"Failed to parse plan JSON: {exc}",
-                "data": {}, "diagnostics": [],
-            }
+        # Pydantic 2.11+ may pre-parse JSON strings into dicts
+        if isinstance(plan, dict):
+            plan_dict = plan
+        else:
+            try:
+                plan_dict = _json.loads(plan)
+            except (ValueError, TypeError) as exc:
+                return {
+                    "success": False, "severity": "error", "code": "INVALID_PLAN_JSON",
+                    "message": f"Failed to parse plan JSON: {exc}",
+                    "data": {}, "diagnostics": [],
+                }
 
         orch = session.get_orchestrator()
         try:
