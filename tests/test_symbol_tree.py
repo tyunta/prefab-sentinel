@@ -526,7 +526,7 @@ class TestSymbolTreeNestedExpansion(unittest.TestCase):
         child_path.parent.mkdir(parents=True, exist_ok=True)
         child_text = (
             YAML_HEADER
-            + make_gameobject("500", "ChildRoot", ["600"])
+            + make_gameobject("500", "ChildRoot", ["600", "700"])
             + make_transform("600", "500")
             + make_meshrenderer("700", "500")
         )
@@ -635,6 +635,55 @@ class TestSymbolTreeNestedExpansion(unittest.TestCase):
             pi_dicts = [c for c in avatar.get("children", []) if c.get("kind") == "prefab_instance"]
             self.assertEqual(len(pi_dicts), 1)
             self.assertIn("source_prefab", pi_dicts[0])
+
+
+class TestSymbolTreeNestedResolution(unittest.TestCase):
+    """Path resolution through PrefabInstance boundaries."""
+
+    CHILD_GUID = "aabbccdd11223344aabbccdd11223344"
+
+    def _write_child_prefab(self, tmpdir: Path) -> Path:
+        child_path = tmpdir / "Assets" / "Child.prefab"
+        child_path.parent.mkdir(parents=True, exist_ok=True)
+        child_text = (
+            YAML_HEADER
+            + make_gameobject("500", "ChildRoot", ["600", "700"])
+            + make_transform("600", "500")
+            + make_meshrenderer("700", "500")
+        )
+        child_path.write_text(child_text)
+        return child_path
+
+    def _parent_text_with_instance(self) -> str:
+        return (
+            YAML_HEADER
+            + make_gameobject("100", "Avatar", ["200"])
+            + make_transform("200", "100")
+            + make_prefab_instance("300", self.CHILD_GUID, transform_parent="200")
+        )
+
+    def test_resolve_through_prefab_instance(self) -> None:
+        """Avatar/ChildRoot resolves — PrefabInstance boundary is transparent."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            child_path = self._write_child_prefab(Path(tmpdir))
+            guid_map = {self.CHILD_GUID: child_path}
+            text = self._parent_text_with_instance()
+            tree = SymbolTree.build(text, "test.prefab", expand_nested=True, guid_to_asset_path=guid_map)
+            matches = tree.resolve("Avatar")
+            self.assertEqual(len(matches), 1)
+            # ChildRoot is inside PrefabInstance which is a child of Avatar
+            matches = tree.resolve("Avatar/ChildRoot")
+            self.assertEqual(len(matches), 1)
+            self.assertEqual(matches[0].name, "ChildRoot")
+
+    def test_resolve_nested_path_through_prefab_instance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            child_path = self._write_child_prefab(Path(tmpdir))
+            guid_map = {self.CHILD_GUID: child_path}
+            text = self._parent_text_with_instance()
+            tree = SymbolTree.build(text, "test.prefab", expand_nested=True, guid_to_asset_path=guid_map)
+            matches = tree.resolve("Avatar/ChildRoot/MeshRenderer")
+            self.assertEqual(len(matches), 1)
 
 
 class TestSymbolNodePrefabInstance(unittest.TestCase):

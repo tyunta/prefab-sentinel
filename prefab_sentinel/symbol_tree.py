@@ -398,6 +398,14 @@ class SymbolTree:
         if seg_idx >= len(segments):
             return candidates
 
+        # Flatten PrefabInstance nodes: replace with their children
+        flat_candidates: list[SymbolNode] = []
+        for node in candidates:
+            if node.kind == SymbolKind.PREFAB_INSTANCE:
+                flat_candidates.extend(node.children)
+            else:
+                flat_candidates.append(node)
+
         segment = segments[seg_idx]
         is_last = seg_idx == len(segments) - 1
 
@@ -407,7 +415,7 @@ class SymbolTree:
             base_name = dup_match.group(1)
             target_idx = int(dup_match.group(2))
             count = 0
-            for node in candidates:
+            for node in flat_candidates:
                 if node.name == base_name:
                     if count == target_idx:
                         if is_last:
@@ -418,8 +426,8 @@ class SymbolTree:
                     count += 1
             return []
 
-        # Match current segment against candidates
-        matched = [n for n in candidates if self._segment_matches(n, segment)]
+        # Match current segment against flat candidates
+        matched = [n for n in flat_candidates if self._segment_matches(n, segment)]
 
         if is_last:
             return matched
