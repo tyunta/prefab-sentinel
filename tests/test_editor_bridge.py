@@ -190,6 +190,7 @@ class TestSupportedActions(unittest.TestCase):
             "set_blend_shape",
             "list_menu_items",
             "execute_menu_item",
+            "find_renderers_by_material",
         }
         self.assertEqual(expected, SUPPORTED_ACTIONS)
 
