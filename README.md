@@ -112,6 +112,10 @@ prefab-sentinel-mcp --transport streamable-http
 | `editor_instantiate` | Prefab を現在の Scene にインスタンス化 |
 | `editor_set_material` | ランタイムでレンダラーのマテリアルスロットを差し替え（Undo 対応） |
 | `editor_delete` | Hierarchy から GameObject を削除（Undo 対応） |
+| `editor_get_blend_shapes` | SkinnedMeshRenderer の BlendShape 名とウェイト一覧を取得 |
+| `editor_set_blend_shape` | BlendShape ウェイトを名前で設定（Undo 対応） |
+| `editor_list_menu_items` | リフレクション経由で `[MenuItem]` エントリを一覧表示 |
+| `editor_execute_menu_item` | メニューアイテムをパスで実行（deny-list 付き） |
 
 **Claude Desktop 設定例:**
 
