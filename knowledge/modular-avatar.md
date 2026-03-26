@@ -141,6 +141,7 @@ confidence: medium
 ## SerializedProperty リファレンス (L3)
 
 ソースバージョン: 1.12.5 (PF-TEST) + 1.16.2 (Shiratsume) 差分検証済み
+検証方法: .cs ソースコード読み + .meta ファイルの GUID 抽出（inspect 実測なし → confidence: medium）
 
 ### Script GUID テーブル
 

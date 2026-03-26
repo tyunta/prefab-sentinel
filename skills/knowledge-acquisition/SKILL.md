@@ -61,6 +61,7 @@ VRChat エコシステムツールのナレッジを体系的に調査し `knowl
 | `get_unity_symbols` | コンポーネント階層の構造取得 | Phase 3 |
 | `inspect_hierarchy` | Transform 構造の取得 | Phase 3 |
 | `inspect_materials` | マテリアル・シェーダー情報の取得 | Phase 3 |
+| `inspect_material_asset` | マテリアルアセットのシェーダープロパティ詳細取得 | Phase 3 |
 | Web 検索 / WebFetch | 公式ドキュメント取得 | Phase 1 |
 
 ## 実行ルール
