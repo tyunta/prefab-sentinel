@@ -40,6 +40,9 @@ namespace PrefabSentinel
             "set_material_property",
             "run_integration_tests",
             "vrcsdk_upload",
+            // Phase 2: BlendShape + Menu
+            "get_blend_shapes", "set_blend_shape",
+            "list_menu_items", "execute_menu_item",
         };
 
         // ── Request / Response DTOs ──
@@ -105,6 +108,14 @@ namespace PrefabSentinel
             public string release_status = string.Empty;  // "public" | "private", empty = no change
             public bool confirm = false;                  // dry-run gate
             public string platforms = string.Empty;  // JSON array: "[\"windows\",\"android\"]"
+
+            // Phase 2: BlendShape
+            public string filter = string.Empty;            // name substring filter / menu prefix
+            public string blend_shape_name = string.Empty;  // BlendShape name
+            public float blend_shape_weight = 0f;           // BlendShape weight (0-100)
+
+            // Phase 2: Menu
+            public string menu_path = string.Empty;         // menu item path
         }
 
         [Serializable]
@@ -154,6 +165,21 @@ namespace PrefabSentinel
         }
 
         [Serializable]
+        public sealed class BlendShapeEntry
+        {
+            public int index = 0;
+            public string name = string.Empty;
+            public float weight = 0f;
+        }
+
+        [Serializable]
+        public sealed class MenuItemEntry
+        {
+            public string path = string.Empty;
+            public string shortcut = string.Empty;
+        }
+
+        [Serializable]
         public sealed class EditorControlData
         {
             public string output_path = string.Empty;
@@ -190,6 +216,17 @@ namespace PrefabSentinel
             // multi-platform upload results
             public string platform_results_json = string.Empty;
             public bool original_target_restored = false;
+
+            // Phase 2: BlendShape
+            public BlendShapeEntry[] blend_shapes = Array.Empty<BlendShapeEntry>();
+            public string renderer_path = string.Empty;
+            public int blend_shape_index = 0;
+            public string blend_shape_name = string.Empty;
+            public float blend_shape_before = 0f;
+            public float blend_shape_after = 0f;
+
+            // Phase 2: Menu
+            public MenuItemEntry[] menu_items = Array.Empty<MenuItemEntry>();
 
             // error hint suggestions
             public string[] suggestions = Array.Empty<string>();
@@ -289,6 +326,19 @@ namespace PrefabSentinel
                     break;
                 case "run_integration_tests":
                     response = HandleRunIntegrationTests();
+                    break;
+                // Phase 2: BlendShape + Menu
+                case "get_blend_shapes":
+                    response = HandleGetBlendShapes(request);
+                    break;
+                case "set_blend_shape":
+                    response = HandleSetBlendShape(request);
+                    break;
+                case "list_menu_items":
+                    response = HandleListMenuItems(request);
+                    break;
+                case "execute_menu_item":
+                    response = HandleExecuteMenuItem(request);
                     break;
                 case "vrcsdk_upload":
 #if VRC_SDK_VRCSDK3
@@ -1391,6 +1441,28 @@ namespace PrefabSentinel
                     read_only = true,
                     executed = true,
                 });
+        }
+
+        // ── Phase 2: BlendShape + Menu ──
+
+        private static EditorControlResponse HandleGetBlendShapes(EditorControlRequest request)
+        {
+            return BuildError("NOT_IMPLEMENTED", "HandleGetBlendShapes not yet implemented");
+        }
+
+        private static EditorControlResponse HandleSetBlendShape(EditorControlRequest request)
+        {
+            return BuildError("NOT_IMPLEMENTED", "HandleSetBlendShape not yet implemented");
+        }
+
+        private static EditorControlResponse HandleListMenuItems(EditorControlRequest request)
+        {
+            return BuildError("NOT_IMPLEMENTED", "HandleListMenuItems not yet implemented");
+        }
+
+        private static EditorControlResponse HandleExecuteMenuItem(EditorControlRequest request)
+        {
+            return BuildError("NOT_IMPLEMENTED", "HandleExecuteMenuItem not yet implemented");
         }
 
         // ── Response Builders ──
