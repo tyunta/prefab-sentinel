@@ -9,11 +9,11 @@ confidence: medium
 
 ## 概要 (L1)
 
-非破壊アバター改変ツール。NDMF (Non-Destructive Modular Framework) プラグインとして動作し、ビルド時にコンポーネントを処理してアバターを組み立てる。最終アバターにはランタイムコンポーネントが残らない（IEditorOnly 実装）。
+非破壊アバター改変ツール。独自のビルドパイプラインを持ち、ビルド時にコンポーネントを処理してアバターを組み立てる。NDMF には依存せず、VRCFury 独自の hook で VRChat SDK のビルドプロセスに統合される。最終アバターにはランタイムコンポーネントが残らない（`IVrcfEditorOnly` → 新 SDK では `IEditorOnly` 継承、旧 SDK ではホワイトリストパッチで除去）。
 
 **解決する問題**: アニメーター統合・トグル・ジェスチャー・SPS (Super Penetration System) などの設定を非破壊で構成する。手動でアニメーターレイヤーやパラメーターを組む煩雑さを排除し、コンポーネント1つで完結させる。
 
-**NDMF との関係**: VRCFury は NDMF のビルドパイプライン内で処理される。VRCFury 固有のビルドパスはビルド時にのみ実行される。
+**NDMF との関係**: VRCFury は NDMF に依存しないが、NDMF がプロジェクトに存在する場合は NDMF 側が VRCFury のビルドフックを認識して実行順序を調整する（NDMF が VRCFury を呼ぶ側）。
 
 **アーキテクチャ**: Modular Avatar と異なり、VRCFury は「1つの MonoBehaviour (`VRCFury`) + `[SerializeReference]` による多態」パターンを採用している。`VRCFury.content` フィールドに `FeatureModel` 派生クラスがシリアライズされ、1コンポーネント = 1機能となる。SPS 系 (HapticPlug, HapticSocket) と GlobalCollider のみ独立した MonoBehaviour を持つ。
 
