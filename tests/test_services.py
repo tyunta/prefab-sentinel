@@ -1249,6 +1249,55 @@ class SerializedObjectServiceTests(unittest.TestCase):
         self.assertEqual("SER_DRY_RUN_OK", response.code)
         self.assertEqual(3, len(response.data["diff"]))
 
+    def test_dry_run_scene_find_component_accepts_scene_handle(self) -> None:
+        svc = SerializedObjectService()
+        response = svc.dry_run_resource_plan(
+            resource={
+                "id": "scene",
+                "kind": "scene",
+                "path": "Assets/Test.unity",
+                "mode": "open",
+            },
+            ops=[
+                {"op": "open_scene"},
+                {
+                    "op": "find_component",
+                    "target": "$scene",
+                    "type": "Camera",
+                    "result": "cam",
+                },
+                {"op": "save_scene"},
+            ],
+        )
+        self.assertTrue(response.success)
+        self.assertEqual("SER_DRY_RUN_OK", response.code)
+
+    def test_dry_run_scene_add_component_rejects_scene_handle(self) -> None:
+        svc = SerializedObjectService()
+        response = svc.dry_run_resource_plan(
+            resource={
+                "id": "scene",
+                "kind": "scene",
+                "path": "Assets/Test.unity",
+                "mode": "open",
+            },
+            ops=[
+                {"op": "open_scene"},
+                {
+                    "op": "add_component",
+                    "target": "$scene",
+                    "type": "Light",
+                    "result": "light",
+                },
+                {"op": "save_scene"},
+            ],
+        )
+        self.assertFalse(response.success)
+        # Should report handle kind mismatch
+        self.assertTrue(
+            any("game object" in d.detail or "game object" in d.evidence for d in response.diagnostics)
+        )
+
     def test_dry_run_resource_plan_rejects_non_prefab_target_for_create_mode(self) -> None:
         svc = SerializedObjectService()
         response = svc.dry_run_resource_plan(

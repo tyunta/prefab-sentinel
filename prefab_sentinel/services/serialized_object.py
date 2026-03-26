@@ -2259,6 +2259,7 @@ class SerializedObjectService:
                 )
             )
             return
+        expected_kind = {"scene", "game_object"} if op_name == "find_component" else "game_object"
         object_handle = self._require_handle_ref(
             target=ctx.target,
             index=index,
@@ -2266,7 +2267,7 @@ class SerializedObjectService:
             op=op,
             known_handles=ctx.known_handles,
             diagnostics=ctx.diagnostics,
-            expected_kind="game_object",
+            expected_kind=expected_kind,
         )
         type_name = op.get("type")
         if object_handle is None:
