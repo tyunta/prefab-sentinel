@@ -284,12 +284,31 @@ namespace PrefabSentinel
                 return;
             }
 
-            EditorControlResponse response;
+            EditorControlResponse response = null;
+            bool deferred = false;
             switch (request.action)
             {
                 case "capture_screenshot":
-                    response = HandleCaptureScreenshot(request, requestPath);
+                {
+                    bool isScene = string.Equals(request.view, "scene", StringComparison.OrdinalIgnoreCase);
+                    if (isScene)
+                    {
+                        // Defer Scene view capture by 1 frame for skinning recalculation
+                        EditorApplication.QueuePlayerLoopUpdate();
+                        string rp = responsePath;  // capture for closure
+                        EditorApplication.delayCall += () =>
+                        {
+                            var r = HandleCaptureScreenshot(request, requestPath);
+                            WriteResponse(rp, r);
+                        };
+                        deferred = true;
+                    }
+                    else
+                    {
+                        response = HandleCaptureScreenshot(request, requestPath);
+                    }
                     break;
+                }
                 case "select_object":
                     response = HandleSelectObject(request);
                     break;
@@ -358,12 +377,7 @@ namespace PrefabSentinel
                     response = HandleFindRenderersByMaterial(request);
                     break;
                 case "vrcsdk_upload":
-#if VRC_SDK_VRCSDK3
-                    response = VRCSDKUploadHandler.Handle(request);
-#else
-                    response = BuildError("VRCSDK_NOT_AVAILABLE",
-                        "VRC SDK not found in project. Install VRChat SDK 3.x");
-#endif
+                    response = TryHandleVrcsdkUpload(request);
                     break;
                 default:
                     response = BuildError(
@@ -372,7 +386,8 @@ namespace PrefabSentinel
                     break;
             }
 
-            WriteResponse(responsePath, response);
+            if (!deferred)
+                WriteResponse(responsePath, response);
         }
 
         // ── Action Handlers ──
@@ -407,20 +422,11 @@ namespace PrefabSentinel
                     Texture2D tex = null;
                     try
                     {
-                        // Force scene state update before capture (non-focus safe)
-                        EditorApplication.QueuePlayerLoopUpdate();
-                        bool wasAlwaysRefresh = sceneView.sceneViewState.alwaysRefresh;
-                        sceneView.sceneViewState.alwaysRefresh = true;
-                        sceneView.Repaint();
-
                         rt = new RenderTexture(w, h, 24);
                         RenderTexture prev = cam.targetTexture;
                         cam.targetTexture = rt;
                         cam.Render();
                         cam.targetTexture = prev;
-
-                        // Restore alwaysRefresh
-                        sceneView.sceneViewState.alwaysRefresh = wasAlwaysRefresh;
 
                         RenderTexture.active = rt;
                         tex = new Texture2D(w, h, TextureFormat.RGB24, false);
@@ -1985,6 +1991,30 @@ namespace PrefabSentinel
             for (int i = 0; i < count; i++)
                 names.Add(shader.GetPropertyName(i));
             return names;
+        }
+
+        private static EditorControlResponse TryHandleVrcsdkUpload(EditorControlRequest request)
+        {
+            var handlerType = System.Type.GetType(
+                "PrefabSentinel.VRCSDKUploadHandler, Assembly-CSharp-Editor");
+            if (handlerType == null)
+                return BuildError("VRCSDK_NOT_AVAILABLE",
+                    "VRCSDKUploadHandler not found. Deploy VRCSDKUploadHandler.cs to Assets/Editor/ " +
+                    "or VRC SDK is not installed in this project.");
+            var method = handlerType.GetMethod("Handle",
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+            if (method == null)
+                return BuildError("VRCSDK_NOT_AVAILABLE",
+                    "VRCSDKUploadHandler.Handle method not found. Check VRCSDKUploadHandler.cs version.");
+            try
+            {
+                return (EditorControlResponse)method.Invoke(null, new object[] { request });
+            }
+            catch (System.Reflection.TargetInvocationException ex)
+            {
+                var inner = ex.InnerException ?? ex;
+                return BuildError("VRCSDK_UPLOAD_FAILED", inner.Message);
+            }
         }
 
         private static void WriteResponse(string responsePath, EditorControlResponse response)
