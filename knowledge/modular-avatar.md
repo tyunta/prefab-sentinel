@@ -1,6 +1,6 @@
 ---
 tool: modular-avatar
-version_tested: "1.12.5"
+version_tested: "1.16.2"
 last_updated: 2026-03-26
 confidence: medium
 ---
@@ -52,9 +52,13 @@ confidence: medium
 |---|---|---|
 | MA Object Toggle | GameObject の active/inactive を条件で切替 | 衣装パーツのオン/オフ。activeSelf プロキシパラメーターを生成 |
 | MA Shape Changer | ブレンドシェイプの値を条件で変更・削除 | 衣装着用時の体メッシュ貫通防止シェイプ駆動 |
-| MA Material Swap | マテリアルを条件で差替 | カラーバリエーション切替 |
+| MA Material Swap | マテリアルを From/To ペアで条件付き差替 (1.13+) | カラーバリエーション切替。QuickSwapMode で同ディレクトリ/兄弟ディレクトリの自動マッチあり |
 | MA Material Setter | マテリアルプロパティを条件で変更 | 色やパラメーターの条件付き変更 |
-| MA Mesh Cutter | メッシュ頂点を条件で非表示 | NaNimation 技術でボーンウェイト操作。頂点フィルタ: ByAxis, ByMask, ByShape, ByBone |
+| MA Mesh Cutter | メッシュ頂点を条件で非表示 (1.13+) | NaNimation 技術でボーンウェイト操作。子に頂点フィルタコンポーネントを配置して範囲指定 |
+| VertexFilterByAxis | 軸方向で頂点フィルタリング (1.13+) | Mesh Cutter の子に配置。center + axis で切断面を定義 |
+| VertexFilterByBone | ボーンウェイトで頂点フィルタリング (1.13+) | Mesh Cutter の子に配置。指定ボーンのウェイト閾値で選別 |
+| VertexFilterByMask | テクスチャマスクで頂点フィルタリング (1.13+) | Mesh Cutter の子に配置。白/黒で削除面を指定 |
+| VertexFilterByShape | シェイプキーで頂点フィルタリング (1.13+) | Mesh Cutter の子に配置。シェイプキーの移動量閾値で選別 |
 
 **NaNimation**: メッシュ複製なしで条件付き頂点非表示を実現する技術。NaN ボーンを追加し、非表示にしたい頂点のボーンウェイトをそこへ割り当て、ボーンスケールのアニメーションで表示/非表示を制御する。
 
@@ -83,7 +87,8 @@ confidence: medium
 | MA Replace Object | ビルド時にオブジェクトを差し替え | 条件付きオブジェクト置換 |
 | MA Convert Constraints | Unity Constraints を VRChat 互換に変換 | VRChat の制約システムへの移行 |
 | MA PhysBone Blocker | PhysBone の影響を遮断 | 衣装のボーンが PhysBone に巻き込まれるのを防止 |
-| MA Platform Filter | プラットフォーム別のコンポーネント有効/無効 | Quest/PC で異なる構成 |
+| MA Global Collider | PhysBone コライダーを標準スロットに差替 (1.13+) | Head/Hand 等の標準コライダーをカスタム形状で上書き。radius/height/position/rotation で形状定義 |
+| MA Platform Filter | プラットフォーム別のコンポーネント有効/無効 (1.13+) | Quest/PC で異なる構成。m_excludePlatform + m_platform で制御 |
 | MA MMD Layer Control | MMD ワールド互換レイヤー制御 | MMD ワールドでの互換性確保 |
 | MA Move Independently | 独立した移動 | 特定オブジェクトの独立トランスフォーム制御 |
 | MA VRChat Settings | VRChat 固有設定の上書き | アバター全体の VRChat パラメーター |
@@ -135,7 +140,7 @@ confidence: medium
 
 ## SerializedProperty リファレンス (L3)
 
-ソースバージョン: 1.12.5（PF-TEST プロジェクトインストール済み）
+ソースバージョン: 1.12.5 (PF-TEST) + 1.16.2 (Shiratsume) 差分検証済み
 
 ### Script GUID テーブル
 
@@ -167,6 +172,15 @@ confidence: medium
 | ModularAvatarShapeChanger | `2db441f589c3407bb6fb5f02ff8ab541` | |
 | ModularAvatarObjectToggle | `a162bb8ec7e24a5abcf457887f1df3fa` | |
 | ModularAvatarMaterialSetter | `0adf335711644e34b6c635e94ae61fa7` | |
+| ModularAvatarMaterialSwap | `b259b73280ead4e4fbbdafc5e29175d1` | 1.13+ |
+| ModularAvatarMeshCutter | `762726b8618cac7419e39bdc2b572b3d` | 1.13+ |
+| ModularAvatarGlobalCollider | `49bb23f95a7baca4186efa68bc5891b6` | 1.13+ |
+| ModularAvatarPlatformFilter | `8c8a67d5c01849629fa90c3b2eded93f` | 1.13+ |
+| ModularAvatarRenameVRChatCollisionTags | `04802bf95b218724a9f4b97003067857` | 1.13+ |
+| VertexFilterByAxisComponent | `660848d04d7443b5b6fcfb627e6be5ea` | 1.13+ |
+| VertexFilterByBoneComponent | `f8e2c9a1b3d44c6d9a7e5f2c1b8d3e4f` | 1.13+ |
+| VertexFilterByMaskComponent | `96a7b00b1dae4a02b61b29bf02241063` | 1.13+ |
+| VertexFilterByShapeComponent | `da7788c69fae9ff4abae088a0dc92c5b` | 1.13+ |
 
 ### 共通型
 
@@ -268,6 +282,7 @@ confidence: medium
 | `m_shapes.Array.data[n].Object.referencePath` | string | ターゲットメッシュのパス |
 | `m_shapes.Array.data[n].ShapeName` | string | ブレンドシェイプ名 |
 | `m_shapes.Array.data[n].ChangeType` | ShapeChangeType | Delete=0, Set=1 |
+| `m_threshold` | float | 頂点移動量の閾値 (デフォルト: 0.01) **1.16.2 で追加** |
 | `m_shapes.Array.data[n].Value` | float | 設定値 |
 
 #### MA Object Toggle
@@ -340,12 +355,92 @@ confidence: medium
 |---|---|---|
 | `Mode` | RemoveMode | Remove=0, DontRemove=1 |
 
+#### MA Material Swap (1.13+)
+| propertyPath | 型 | 説明 |
+|---|---|---|
+| `m_inverted` | bool | 条件反転 |
+| `m_root.referencePath` | string | ルートオブジェクトのパス |
+| `m_swaps` | List\<MatSwap\> | マテリアル差替ペアリスト |
+| `m_swaps.Array.data[n].From` | Material | 差替元マテリアル |
+| `m_swaps.Array.data[n].To` | Material | 差替先マテリアル |
+| `m_quickSwapMode` | QuickSwapMode | None=0, SameDirectory=1, SiblingDirectory=2 |
+
+#### MA Mesh Cutter (1.13+)
+| propertyPath | 型 | 説明 |
+|---|---|---|
+| `m_inverted` | bool | 条件反転 |
+| `m_object.referencePath` | string | ターゲットメッシュのパス |
+| `m_multiMode` | MeshCutterMultiMode | VertexUnion=0, VertexIntersection=1 |
+
+子に VertexFilter 系コンポーネントを配置して切断範囲を指定する。
+
+#### VertexFilterByAxisComponent (1.13+)
+| propertyPath | 型 | 説明 |
+|---|---|---|
+| `m_center` | Vector3 | 切断面の中心 |
+| `m_axis` | Vector3 | 切断方向 (デフォルト: Vector3.left) |
+
+#### VertexFilterByBoneComponent (1.13+)
+| propertyPath | 型 | 説明 |
+|---|---|---|
+| `m_bone.referencePath` | string | フィルタ対象ボーンのパス |
+| `m_threshold` | float | ウェイト閾値 (0-1, デフォルト: 0.01) |
+
+#### VertexFilterByMaskComponent (1.13+)
+| propertyPath | 型 | 説明 |
+|---|---|---|
+| `m_materialIndex` | int | マテリアルスロット番号 |
+| `m_maskTexture` | Texture2D | マスクテクスチャ |
+| `m_deleteMode` | ByMaskMode | DeleteBlack=0, DeleteWhite=1 |
+
+#### VertexFilterByShapeComponent (1.13+)
+| propertyPath | 型 | 説明 |
+|---|---|---|
+| `m_threshold` | float | 移動量閾値 (デフォルト: 0.001) |
+| `m_shapes` | string[] | フィルタ対象のシェイプキー名 |
+
+#### MA Global Collider (1.13+)
+| propertyPath | 型 | 説明 |
+|---|---|---|
+| `m_manualRemap` | bool | 手動リマップ |
+| `m_colliderToHijack` | GlobalCollider | Head, Torso, HandLeft/Right, FingerIndex/Middle/Ring/LittleLeft/Right, FootLeft/Right, None |
+| `m_lowPriority` | bool | 低優先度 |
+| `m_rootTransform.referencePath` | string | ルートトランスフォームのパス |
+| `m_copyHijackedShape` | bool | ハイジャック先の形状をコピー |
+| `m_visualizeGizmo` | bool | ギズモ表示 (デフォルト: true) |
+| `m_radius` | float | コライダー半径 (デフォルト: 0.05) |
+| `m_height` | float | コライダー高さ (デフォルト: 0.2) |
+| `m_position` | Vector3 | コライダー位置 |
+| `m_rotation` | Quaternion | コライダー回転 |
+
+#### MA Platform Filter (1.13+)
+| propertyPath | 型 | 説明 |
+|---|---|---|
+| `m_excludePlatform` | bool | プラットフォームを除外 (デフォルト: true) |
+| `m_platform` | string | 対象プラットフォーム |
+
+#### MA Rename VRChat Collision Tags (1.13+)
+| propertyPath | 型 | 説明 |
+|---|---|---|
+| `configs` | List\<RenameCollisionTagConfig\> | リネーム設定リスト |
+| `configs.Array.data[n].name` | string | 元のタグ名 |
+| `configs.Array.data[n].autoRename` | bool | 自動リネーム |
+| `configs.Array.data[n].renameTo` | string | リネーム先 |
+
 ### 設計上の注意点
 
 - **AvatarObjectReference** は `referencePath` (文字列パス) と `targetObject` (直接参照) の二重参照構造。プレファブ内では `referencePath` が主、ビルド時に `targetObject` へ解決される。
 - **FormerlySerializedAs** が 3 箇所: `legacyLocked`←"locked", `legacyScaleProxy`←"scaleProxy", `m_shapes`←"Shapes"。旧バージョンからのマイグレーション時に注意。
 - マーカーコンポーネント (フィールドなし) が 5 種: VisibleHeadAccessory, WorldFixedObject, WorldScaleObject, ConvertConstraints, PBBlocker。存在のみで機能する。
 - **MMDLayerControl** は StateMachineBehaviour 継承で、GameObject ではなく Animator State Machine に付与される唯一のコンポーネント。
+
+### 1.12.5 → 1.16.2 変更サマリー
+
+- **新コンポーネント 9 種**: MaterialSwap, MeshCutter, 4 VertexFilter, GlobalCollider, PlatformFilter, RenameVRChatCollisionTags
+- **フィールド追加 1 件**: ShapeChanger に `m_threshold` (float)
+- **構造変更**: MenuItem が PortableMenuControl でプラットフォーム抽象化。Control が nullable に。非 VRCSDK 環境でも動作可能に。
+- **非推奨**: SyncParameterSequence のフィールドが `[Obsolete]` に（1.16 以降は暗黙管理）
+- **削除コンポーネント**: なし
 
 ## 実運用で学んだこと
 
