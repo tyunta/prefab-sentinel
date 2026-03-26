@@ -21,6 +21,7 @@ from tests.yaml_helpers import (
     YAML_HEADER,
     make_gameobject,
     make_meshrenderer_with_materials,
+    make_prefab_instance,
     make_prefab_variant,
     make_skinned_mesh_renderer,
     make_transform,
@@ -630,6 +631,127 @@ class TestInspectMaterialsIntegration(unittest.TestCase):
             self.assertEqual(len(result.renderers), 1)
             self.assertEqual(len(result.renderers[0].slots), 1)
             self.assertTrue(result.renderers[0].slots[0].is_override)
+
+
+class TestNestedPrefabMaterialFallback(unittest.TestCase):
+    """Section D: Variant with renderer in nested (child) prefab."""
+
+    CHILD_GUID = "cc112233445566778899aabbccddeeff"
+    MAT_GUID = "aaaa1111bbbb2222cccc3333dddd4444"
+
+    def _setup_project(self, tmpdir: Path) -> tuple[Path, Path]:
+        """Create a project with base prefab containing PrefabInstance + child prefab with renderer."""
+        project = tmpdir / "Assets"
+        project.mkdir()
+
+        # Child prefab with a SkinnedMeshRenderer
+        child = project / "Child.prefab"
+        child_text = (
+            YAML_HEADER
+            + make_gameobject("500", "Body", ["600", "700"])
+            + make_transform("600", "500")
+            + make_skinned_mesh_renderer("700", "500", material_guids=[self.MAT_GUID])
+        )
+        child.write_text(child_text)
+
+        # Child.prefab.meta
+        meta = project / "Child.prefab.meta"
+        meta.write_text(f"fileFormatVersion: 2\nguid: {self.CHILD_GUID}\n")
+
+        # Material .mat file
+        mat = project / "TestMat.mat"
+        mat.write_text("%YAML 1.1\n--- !u!21 &2100000\nMaterial:\n  m_Name: TestMat\n")
+        mat_meta = project / "TestMat.mat.meta"
+        mat_meta.write_text(f"fileFormatVersion: 2\nguid: {self.MAT_GUID}\n")
+
+        # Base prefab — has PrefabInstance but NO renderer blocks
+        base = project / "Base.prefab"
+        base_text = (
+            YAML_HEADER
+            + make_gameobject("100", "Avatar", ["200"])
+            + make_transform("200", "100")
+            + make_prefab_instance("300", self.CHILD_GUID)
+        )
+        base.write_text(base_text)
+
+        base_guid = "11112222333344445555666677778888"
+        base_meta = project / "Base.prefab.meta"
+        base_meta.write_text(f"fileFormatVersion: 2\nguid: {base_guid}\n")
+
+        # Variant referencing base — also has no renderer blocks
+        variant = project / "Variant.prefab"
+        variant_text = (
+            YAML_HEADER
+            + "--- !u!1001 &100100000\n"
+            + "PrefabInstance:\n"
+            + "  m_Modification:\n"
+            + "    m_TransformParent: {fileID: 0}\n"
+            + "    m_Modifications: []\n"
+            + f"  m_SourcePrefab: {{fileID: 100100000, guid: {base_guid}, type: 3}}\n"
+        )
+        variant.write_text(variant_text)
+
+        return tmpdir, variant
+
+    def test_nested_fallback_finds_renderer_in_child_prefab(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_root, variant = self._setup_project(Path(tmpdir))
+            result = inspect_materials(str(variant), project_root=project_root)
+            self.assertGreater(len(result.renderers), 0)
+            self.assertEqual(result.renderers[0].game_object_name, "Body")
+
+    def test_nested_fallback_sets_source_prefab(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_root, variant = self._setup_project(Path(tmpdir))
+            result = inspect_materials(str(variant), project_root=project_root)
+            self.assertGreater(len(result.renderers), 0)
+            self.assertIn("Child.prefab", result.renderers[0].source_prefab)
+
+    def test_nested_fallback_no_renderer_anywhere_produces_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project = Path(tmpdir) / "Assets"
+            project.mkdir()
+
+            # Child prefab with NO renderer
+            child = project / "Child.prefab"
+            child_text = (
+                YAML_HEADER
+                + make_gameobject("500", "Empty", ["600"])
+                + make_transform("600", "500")
+            )
+            child.write_text(child_text)
+            meta = project / "Child.prefab.meta"
+            meta.write_text(f"fileFormatVersion: 2\nguid: {self.CHILD_GUID}\n")
+
+            # Base with PrefabInstance
+            base = project / "Base.prefab"
+            base_text = (
+                YAML_HEADER
+                + make_gameobject("100", "Avatar", ["200"])
+                + make_transform("200", "100")
+                + make_prefab_instance("300", self.CHILD_GUID)
+            )
+            base.write_text(base_text)
+            base_guid = "11112222333344445555666677778888"
+            base_meta = project / "Base.prefab.meta"
+            base_meta.write_text(f"fileFormatVersion: 2\nguid: {base_guid}\n")
+
+            # Variant
+            variant = project / "Variant.prefab"
+            variant_text = (
+                YAML_HEADER
+                + "--- !u!1001 &100100000\n"
+                + "PrefabInstance:\n"
+                + "  m_Modification:\n"
+                + "    m_TransformParent: {fileID: 0}\n"
+                + "    m_Modifications: []\n"
+                + f"  m_SourcePrefab: {{fileID: 100100000, guid: {base_guid}, type: 3}}\n"
+            )
+            variant.write_text(variant_text)
+
+            result = inspect_materials(str(variant), project_root=Path(tmpdir))
+            self.assertEqual(len(result.renderers), 0)
+            self.assertGreater(len(result.diagnostics), 0)
 
 
 class TestMaterialDataModelExtensions(unittest.TestCase):
