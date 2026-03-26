@@ -279,5 +279,45 @@ class TestSetCameraParams(unittest.TestCase):
         self.assertEqual(kwargs["camera_orthographic"], 1)
 
 
+class TestResolveAssetPath(unittest.TestCase):
+    """Validate resolve_asset_path joins Assets/... paths with project root."""
+
+    def test_relative_assets_path_resolved(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        from prefab_sentinel.unity_assets import resolve_asset_path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            assets_dir = Path(tmpdir) / "Assets"
+            assets_dir.mkdir()
+            fake_asset = assets_dir / "test.prefab"
+            fake_asset.write_text("%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Test\n")
+
+            resolved = resolve_asset_path("Assets/test.prefab", Path(tmpdir))
+            self.assertEqual(resolved, fake_asset.resolve())
+
+    def test_absolute_path_unchanged(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        from prefab_sentinel.unity_assets import resolve_asset_path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fake_asset = Path(tmpdir) / "test.prefab"
+            fake_asset.write_text("%YAML 1.1\n")
+
+            resolved = resolve_asset_path(str(fake_asset), Path(tmpdir))
+            self.assertEqual(resolved, fake_asset)
+
+    def test_no_project_root_returns_as_is(self) -> None:
+        from pathlib import Path
+
+        from prefab_sentinel.unity_assets import resolve_asset_path
+
+        resolved = resolve_asset_path("Assets/nonexistent.prefab", None)
+        self.assertEqual(resolved, Path("Assets/nonexistent.prefab"))
+
+
 if __name__ == "__main__":
     unittest.main()
