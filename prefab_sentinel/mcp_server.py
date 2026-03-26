@@ -1241,6 +1241,78 @@ def create_server(
         return send_action(action="delete_object", hierarchy_path=hierarchy_path)
 
     # ------------------------------------------------------------------
+    # Editor Bridge – Phase 2: BlendShape + Menu
+    # ------------------------------------------------------------------
+
+    @server.tool()
+    def editor_get_blend_shapes(
+        hierarchy_path: str,
+        filter: str = "",
+    ) -> dict[str, Any]:
+        """Get BlendShape names and current weight values from a SkinnedMeshRenderer.
+
+        Args:
+            hierarchy_path: Hierarchy path to the GameObject with a SkinnedMeshRenderer.
+            filter: Substring filter on BlendShape names (empty = return all).
+        """
+        return send_action(
+            action="get_blend_shapes",
+            hierarchy_path=hierarchy_path,
+            filter=filter,
+        )
+
+    @server.tool()
+    def editor_set_blend_shape(
+        hierarchy_path: str,
+        name: str,
+        weight: float,
+    ) -> dict[str, Any]:
+        """Set a BlendShape weight by name on a SkinnedMeshRenderer (Undo-able).
+
+        Args:
+            hierarchy_path: Hierarchy path to the GameObject with a SkinnedMeshRenderer.
+            name: BlendShape name (exact match).
+            weight: Weight value (0-100).
+        """
+        return send_action(
+            action="set_blend_shape",
+            hierarchy_path=hierarchy_path,
+            blend_shape_name=name,
+            blend_shape_weight=weight,
+        )
+
+    @server.tool()
+    def editor_list_menu_items(
+        prefix: str = "",
+    ) -> dict[str, Any]:
+        """List Unity Editor menu items registered via [MenuItem] attribute.
+
+        Args:
+            prefix: Path prefix filter (e.g. "Tools/", "CONTEXT/"). Empty = all items.
+        """
+        return send_action(
+            action="list_menu_items",
+            filter=prefix,
+        )
+
+    @server.tool()
+    def editor_execute_menu_item(
+        menu_path: str,
+    ) -> dict[str, Any]:
+        """Execute a Unity Editor menu item by path.
+
+        Some menu items may display modal dialogs that block the Editor.
+        Dangerous paths (File/New Scene, File/New Project, Assets/Delete) are denied.
+
+        Args:
+            menu_path: Full menu path (e.g. "Tools/NDMF/Manual Bake").
+        """
+        return send_action(
+            action="execute_menu_item",
+            menu_path=menu_path,
+        )
+
+    # ------------------------------------------------------------------
     # Inspection tools (orchestrator-backed)
     # ------------------------------------------------------------------
 

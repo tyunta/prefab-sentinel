@@ -70,6 +70,8 @@ class TestToolRegistration(unittest.TestCase):
             "editor_get_camera", "editor_set_camera",
             "editor_refresh", "editor_recompile", "editor_instantiate",
             "editor_set_material", "editor_delete",
+            "editor_get_blend_shapes", "editor_set_blend_shape",
+            "editor_list_menu_items", "editor_execute_menu_item",
             "editor_list_children", "editor_list_materials", "editor_list_roots",
             "editor_get_material_property", "editor_set_material_property",
             "editor_console", "editor_run_tests",
@@ -83,7 +85,7 @@ class TestToolRegistration(unittest.TestCase):
     def test_tool_count(self) -> None:
         server = create_server()
         tools = _run(server.list_tools())
-        self.assertEqual(41, len(tools))
+        self.assertEqual(45, len(tools))
 
 
 class TestSymbolTools(unittest.TestCase):
@@ -2117,6 +2119,63 @@ class TestEditorWriteTools(unittest.TestCase):
                 "platforms": ["windows", "android"],
             }))
         self.assertEqual(result["data"]["platforms"], ["windows", "android"])
+
+    def test_editor_get_blend_shapes_delegates(self) -> None:
+        server = create_server()
+        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+            _run(server.call_tool("editor_get_blend_shapes", {
+                "hierarchy_path": "/Avatar/Body", "filter": "vrc.v_",
+            }))
+        mock_send.assert_called_once_with(
+            action="get_blend_shapes",
+            hierarchy_path="/Avatar/Body", filter="vrc.v_",
+        )
+
+    def test_editor_get_blend_shapes_default_filter(self) -> None:
+        server = create_server()
+        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+            _run(server.call_tool("editor_get_blend_shapes", {
+                "hierarchy_path": "/Avatar/Body",
+            }))
+        mock_send.assert_called_once_with(
+            action="get_blend_shapes",
+            hierarchy_path="/Avatar/Body", filter="",
+        )
+
+    def test_editor_set_blend_shape_delegates(self) -> None:
+        server = create_server()
+        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+            _run(server.call_tool("editor_set_blend_shape", {
+                "hierarchy_path": "/Avatar/Body", "name": "vrc.blink", "weight": 75.0,
+            }))
+        mock_send.assert_called_once_with(
+            action="set_blend_shape",
+            hierarchy_path="/Avatar/Body",
+            blend_shape_name="vrc.blink",
+            blend_shape_weight=75.0,
+        )
+
+    def test_editor_list_menu_items_delegates(self) -> None:
+        server = create_server()
+        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+            _run(server.call_tool("editor_list_menu_items", {"prefix": "Tools/"}))
+        mock_send.assert_called_once_with(action="list_menu_items", filter="Tools/")
+
+    def test_editor_list_menu_items_default_prefix(self) -> None:
+        server = create_server()
+        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+            _run(server.call_tool("editor_list_menu_items", {}))
+        mock_send.assert_called_once_with(action="list_menu_items", filter="")
+
+    def test_editor_execute_menu_item_delegates(self) -> None:
+        server = create_server()
+        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+            _run(server.call_tool("editor_execute_menu_item", {
+                "menu_path": "Tools/NDMF/Manual Bake",
+            }))
+        mock_send.assert_called_once_with(
+            action="execute_menu_item", menu_path="Tools/NDMF/Manual Bake",
+        )
 
 
 class TestInspectionTools(unittest.TestCase):
