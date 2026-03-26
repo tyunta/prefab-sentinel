@@ -944,13 +944,16 @@ class Phase1Orchestrator:
                 }
                 for slot in renderer.slots
             ]
-            renderer_data.append({
+            entry: dict[str, object] = {
                 "game_object_name": renderer.game_object_name,
                 "renderer_type": renderer.renderer_type,
                 "file_id": renderer.file_id,
                 "slot_count": len(renderer.slots),
                 "slots": slot_data,
-            })
+            }
+            if renderer.source_prefab:
+                entry["source_prefab"] = renderer.source_prefab
+            renderer_data.append(entry)
 
         data: dict[str, object] = {
             "target_path": target_path,
@@ -967,6 +970,8 @@ class Phase1Orchestrator:
                 1 for r in result.renderers for s in r.slots if s.is_override
             )
             data["override_count"] = override_count
+        if result.diagnostics:
+            data["diagnostics"] = result.diagnostics
 
         return success_response(
             "INSPECT_MATERIALS_RESULT",

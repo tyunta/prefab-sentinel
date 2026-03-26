@@ -754,6 +754,63 @@ class TestNestedPrefabMaterialFallback(unittest.TestCase):
             self.assertGreater(len(result.diagnostics), 0)
 
 
+class TestOrchestratorMaterialsSerialization(unittest.TestCase):
+    """Orchestrator includes source_prefab and diagnostics in response."""
+
+    def test_orchestrator_includes_source_prefab(self) -> None:
+        from prefab_sentinel.orchestrator import Phase1Orchestrator
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project = Path(tmpdir) / "Assets"
+            project.mkdir()
+
+            child_guid = "cc112233445566778899aabbccddeeff"
+            mat_guid = "aaaa1111bbbb2222cccc3333dddd4444"
+
+            child = project / "Child.prefab"
+            child_text = (
+                YAML_HEADER
+                + make_gameobject("500", "Body", ["600", "700"])
+                + make_transform("600", "500")
+                + make_skinned_mesh_renderer("700", "500", material_guids=[mat_guid])
+            )
+            child.write_text(child_text)
+            (project / "Child.prefab.meta").write_text(f"fileFormatVersion: 2\nguid: {child_guid}\n")
+            (project / "TestMat.mat").write_text("%YAML 1.1\n--- !u!21 &2100000\nMaterial:\n  m_Name: TestMat\n")
+            (project / "TestMat.mat.meta").write_text(f"fileFormatVersion: 2\nguid: {mat_guid}\n")
+
+            base = project / "Base.prefab"
+            base_text = (
+                YAML_HEADER
+                + make_gameobject("100", "Avatar", ["200"])
+                + make_transform("200", "100")
+                + make_prefab_instance("300", child_guid)
+            )
+            base.write_text(base_text)
+            base_guid = "11112222333344445555666677778888"
+            (project / "Base.prefab.meta").write_text(f"fileFormatVersion: 2\nguid: {base_guid}\n")
+
+            variant = project / "Variant.prefab"
+            variant_text = (
+                YAML_HEADER
+                + "--- !u!1001 &100100000\n"
+                + "PrefabInstance:\n"
+                + "  m_Modification:\n"
+                + "    m_TransformParent: {fileID: 0}\n"
+                + "    m_Modifications: []\n"
+                + f"  m_SourcePrefab: {{fileID: 100100000, guid: {base_guid}, type: 3}}\n"
+            )
+            variant.write_text(variant_text)
+
+            orch = Phase1Orchestrator.default(project_root=Path(tmpdir))
+            response = orch.inspect_materials(str(variant))
+            self.assertTrue(response.success)
+            renderers = response.data.get("renderers", [])
+            self.assertGreater(len(renderers), 0)
+            self.assertIn("source_prefab", renderers[0])
+            self.assertIn("Child.prefab", renderers[0]["source_prefab"])
+
+
 class TestMaterialDataModelExtensions(unittest.TestCase):
     """New fields: RendererMaterials.source_prefab and MaterialInspectionResult.diagnostics."""
 
