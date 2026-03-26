@@ -82,15 +82,14 @@ namespace PrefabSentinel
             public int depth = 1;
 
             // camera (get_camera / set_camera)
-            // Mode A (absolute): position + rotation + size
-            public float[] camera_position = null;   // [x, y, z] world coords
-            public float[] camera_rotation = null;   // [yaw, pitch, roll] euler degrees
-            public float camera_size = -1f;          // SceneView.size; -1 = keep current
-            // Mode B (pivot orbit): pivot + yaw/pitch/distance
+            // Pivot orbit: pivot + yaw/pitch/distance
             public float[] camera_pivot = null;      // [x, y, z] pivot point
             public float yaw = float.NaN;           // NaN = keep current
             public float pitch = float.NaN;
-            public float distance = -1f;             // -1 = keep current
+            public float distance = -1f;             // SceneView.size; -1 = keep current
+            // Position mode: camera_position + camera_look_at or yaw/pitch
+            public float[] camera_position = null;   // [x, y, z] camera world coords
+            public float[] camera_look_at = null;    // [x, y, z] look-at target
             // Shared
             public int camera_orthographic = -1;     // -1 = keep, 0 = perspective, 1 = ortho
 
@@ -203,6 +202,16 @@ namespace PrefabSentinel
             public float[] camera_pivot = null;        // [x, y, z]
             public float camera_size = 0f;
             public bool camera_orthographic = false;
+            // Previous camera state (set_camera only)
+            public float[] previous_camera_position = null;
+            public float[] previous_camera_euler = null;
+            public float[] previous_camera_pivot = null;
+            public float previous_camera_size = 0f;
+            public bool previous_camera_orthographic = false;
+            // Bounds info (frame_selected only)
+            public float[] bounds_center = null;     // [x, y, z] world-space AABB center
+            public float[] bounds_extents = null;    // [x, y, z] half-size
+
             public bool read_only = true;
             public bool executed = false;
 
@@ -546,29 +555,42 @@ namespace PrefabSentinel
 
         private static EditorControlResponse HandleFrameSelected(EditorControlRequest request)
         {
-            if (Selection.activeGameObject == null)
+            GameObject selectedGo = Selection.activeGameObject;
+            if (selectedGo == null)
                 return BuildError("EDITOR_CTRL_NO_SELECTION", "No GameObject is selected. Use select_object first.");
 
             SceneView sceneView = SceneView.lastActiveSceneView;
             if (sceneView == null)
                 return BuildError("EDITOR_CTRL_NO_SCENE_VIEW", "No active SceneView found.");
 
-            float zoom = request.zoom;
-            EditorApplication.delayCall += () =>
+            string objectName = selectedGo.name;
+
+            // Collect bounds info
+            float[] boundsCenter = null;
+            float[] boundsExtents = null;
+            Renderer renderer = selectedGo.GetComponentInChildren<Renderer>();
+            if (renderer != null)
             {
-                sceneView.FrameSelected();
-                if (zoom > 0f)
-                    sceneView.size = zoom;
-                sceneView.Repaint();
-            };
+                Bounds b = renderer.bounds;
+                boundsCenter = new[] { b.center.x, b.center.y, b.center.z };
+                boundsExtents = new[] { b.extents.x, b.extents.y, b.extents.z };
+            }
+
+            // Frame synchronously so we can capture post-frame camera state
+            sceneView.FrameSelected();
+            if (request.zoom > 0f)
+                sceneView.size = request.zoom;
+            RepaintAllViews(sceneView);
+
+            CameraSnapshot cam = CaptureCameraState(sceneView);
+            var data = BuildCameraData(cam);
+            data.selected_object = objectName;
+            data.bounds_center = boundsCenter;
+            data.bounds_extents = boundsExtents;
 
             return BuildSuccess("EDITOR_CTRL_FRAME_OK",
-                $"Framed: {Selection.activeGameObject.name}" + (request.zoom > 0f ? $" (zoom={request.zoom})" : ""),
-                data: new EditorControlData
-                {
-                    selected_object = Selection.activeGameObject.name,
-                    executed = true
-                });
+                $"Framed: {objectName}" + (request.zoom > 0f ? $" (zoom={request.zoom})" : ""),
+                data: data);
         }
 
         private static EditorControlResponse HandleInstantiateToScene(EditorControlRequest request)
@@ -647,6 +669,8 @@ namespace PrefabSentinel
 
         private static EditorControlResponse HandleRecompileScripts()
         {
+            // Refresh first so Unity sees newly copied/modified C# files
+            AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
             // Schedule compilation on next frame so that the response JSON
             // is written to disk before domain reload destroys this context.
             EditorApplication.delayCall += () =>
@@ -654,7 +678,7 @@ namespace PrefabSentinel
                 CompilationPipeline.RequestScriptCompilation();
             };
             return BuildSuccess("EDITOR_CTRL_RECOMPILE_OK",
-                "Script recompilation scheduled (domain reload will follow)",
+                "AssetDatabase.Refresh completed; script recompilation scheduled (domain reload will follow)",
                 data: new EditorControlData { executed = true });
         }
 
@@ -830,33 +854,88 @@ namespace PrefabSentinel
                 });
         }
 
+        // ── Camera helpers ──
+
+        private struct CameraSnapshot
+        {
+            public float[] position;
+            public float[] rotation_quat;
+            public float[] euler;
+            public float[] pivot;
+            public float size;
+            public bool orthographic;
+        }
+
+        private static CameraSnapshot CaptureCameraState(SceneView sv)
+        {
+            Vector3 pos = sv.camera.transform.position;
+            Quaternion rot = sv.rotation;
+            Vector3 e = rot.eulerAngles;
+            float yaw = (e.y + 180f) % 360f;
+            float pitch = e.x > 180f ? e.x - 360f : e.x;
+            return new CameraSnapshot
+            {
+                position = new[] { pos.x, pos.y, pos.z },
+                rotation_quat = new[] { rot.x, rot.y, rot.z, rot.w },
+                euler = new[] { yaw, pitch, 0f },
+                pivot = new[] { sv.pivot.x, sv.pivot.y, sv.pivot.z },
+                size = sv.size,
+                orthographic = sv.orthographic
+            };
+        }
+
+        private static EditorControlData BuildCameraData(CameraSnapshot current, CameraSnapshot? previous = null)
+        {
+            var data = new EditorControlData
+            {
+                camera_position = current.position,
+                camera_rotation_quat = current.rotation_quat,
+                camera_euler = current.euler,
+                camera_pivot = current.pivot,
+                camera_size = current.size,
+                camera_orthographic = current.orthographic,
+                executed = true
+            };
+            if (previous.HasValue)
+            {
+                var prev = previous.Value;
+                data.previous_camera_position = prev.position;
+                data.previous_camera_euler = prev.euler;
+                data.previous_camera_pivot = prev.pivot;
+                data.previous_camera_size = prev.size;
+                data.previous_camera_orthographic = prev.orthographic;
+            }
+            return data;
+        }
+
+        /// <summary>
+        /// Aggressive repaint: immediate + delayed, all views.
+        /// Ensures changes are visible even when Unity is in the background.
+        /// </summary>
+        private static void RepaintAllViews(SceneView sceneView)
+        {
+            sceneView.Repaint();
+            SceneView.RepaintAll();
+            UnityEditorInternal.InternalEditorUtility.RepaintAllViews();
+            EditorApplication.delayCall += () =>
+            {
+                sceneView.Repaint();
+                SceneView.RepaintAll();
+            };
+        }
+
+        // ── Camera handlers ──
+
         private static EditorControlResponse HandleGetCamera()
         {
             SceneView sceneView = SceneView.lastActiveSceneView;
             if (sceneView == null)
                 return BuildError("EDITOR_CTRL_NO_SCENE_VIEW", "No active SceneView found.");
 
-            Vector3 pos = sceneView.camera.transform.position;
-            Quaternion rot = sceneView.rotation;
-            Vector3 euler = rot.eulerAngles;
-            Vector3 pivot = sceneView.pivot;
-
-            // Convert Unity euler (y=yaw applied raw) to our convention: yaw=0 means front (+Z)
-            float yaw = (euler.y + 180f) % 360f;
-            float pitchVal = euler.x > 180f ? euler.x - 360f : euler.x;
-
+            CameraSnapshot snap = CaptureCameraState(sceneView);
             return BuildSuccess("EDITOR_CTRL_CAMERA_GET_OK",
-                $"Camera position=({pos.x:F2}, {pos.y:F2}, {pos.z:F2})",
-                data: new EditorControlData
-                {
-                    camera_position = new[] { pos.x, pos.y, pos.z },
-                    camera_rotation_quat = new[] { rot.x, rot.y, rot.z, rot.w },
-                    camera_euler = new[] { yaw, pitchVal, 0f },
-                    camera_pivot = new[] { pivot.x, pivot.y, pivot.z },
-                    camera_size = sceneView.size,
-                    camera_orthographic = sceneView.orthographic,
-                    executed = true
-                });
+                $"Camera position=({snap.position[0]:F2}, {snap.position[1]:F2}, {snap.position[2]:F2})",
+                data: BuildCameraData(snap));
         }
 
         private static EditorControlResponse HandleSetCamera(EditorControlRequest request)
@@ -865,88 +944,107 @@ namespace PrefabSentinel
             if (sceneView == null)
                 return BuildError("EDITOR_CTRL_NO_SCENE_VIEW", "No active SceneView found.");
 
-            bool hasModeA = request.camera_position != null || request.camera_rotation != null;
-            bool hasModeB = request.camera_pivot != null || !float.IsNaN(request.yaw) || !float.IsNaN(request.pitch);
+            // Capture previous state before any changes
+            CameraSnapshot previous = CaptureCameraState(sceneView);
 
-            if (hasModeA && hasModeB)
+            bool hasPosition = request.camera_position != null && request.camera_position.Length == 3;
+            bool hasLookAt = request.camera_look_at != null && request.camera_look_at.Length == 3;
+            bool hasPivot = request.camera_pivot != null && request.camera_pivot.Length == 3;
+            bool hasYaw = !float.IsNaN(request.yaw);
+            bool hasPitch = !float.IsNaN(request.pitch);
+            bool hasDistance = request.distance >= 0f;
+
+            // Conflict checks
+            if (hasPosition && hasPivot)
                 return BuildError("EDITOR_CTRL_CAMERA_CONFLICT",
-                    "Cannot mix Mode A (position/rotation) and Mode B (pivot/yaw/pitch). Use one mode.");
+                    "Cannot specify both 'position' (camera world coords) and 'pivot' (orbit center). Use one.");
+            if (hasLookAt && !hasPosition)
+                return BuildError("EDITOR_CTRL_CAMERA_CONFLICT",
+                    "'look_at' requires 'position' to be set.");
 
-            if (hasModeA)
+            // Read current FoV before changes
+            float fov = sceneView.camera.fieldOfView;
+
+            if (hasPosition)
             {
-                // Mode A: absolute position/rotation
-                if (request.camera_position != null && request.camera_position.Length == 3)
+                Vector3 cameraPos = new Vector3(
+                    request.camera_position[0],
+                    request.camera_position[1],
+                    request.camera_position[2]);
+
+                if (hasLookAt)
                 {
-                    sceneView.pivot = new Vector3(
-                        request.camera_position[0],
-                        request.camera_position[1],
-                        request.camera_position[2]);
-                    // Position sets pivot directly; SceneView computes camera pos from pivot+rotation+size
+                    // Position + look_at mode
+                    Vector3 lookAt = new Vector3(
+                        request.camera_look_at[0],
+                        request.camera_look_at[1],
+                        request.camera_look_at[2]);
+                    Vector3 direction = (lookAt - cameraPos).normalized;
+                    float dist = Vector3.Distance(cameraPos, lookAt);
+
+                    sceneView.pivot = lookAt;
+                    sceneView.rotation = Quaternion.LookRotation(direction);
+                    if (sceneView.orthographic)
+                        sceneView.size = dist * 0.5f;
+                    else
+                        sceneView.size = dist * Mathf.Tan(fov * 0.5f * Mathf.Deg2Rad);
                 }
-                if (request.camera_rotation != null && request.camera_rotation.Length == 3)
+                else
                 {
-                    // Our convention: yaw=0 = front (+Z). Unity: yaw=0 = back. Offset by 180.
-                    float internalYaw = (request.camera_rotation[0] + 180f) % 360f;
-                    float internalPitch = request.camera_rotation[1];
-                    sceneView.rotation = Quaternion.Euler(internalPitch, internalYaw, 0f);
+                    // Position + yaw/pitch mode: reverse-calculate pivot
+                    if (hasDistance)
+                        sceneView.size = request.distance;
+
+                    Vector3 currentEuler = sceneView.rotation.eulerAngles;
+                    float curYaw = (currentEuler.y + 180f) % 360f;
+                    float curPitch = currentEuler.x > 180f ? currentEuler.x - 360f : currentEuler.x;
+                    float newYaw = hasYaw ? request.yaw : curYaw;
+                    float newPitch = hasPitch ? request.pitch : curPitch;
+                    float internalYaw = (newYaw + 180f) % 360f;
+                    Quaternion rot = Quaternion.Euler(newPitch, internalYaw, 0f);
+                    sceneView.rotation = rot;
+
+                    float cameraDistance;
+                    if (sceneView.orthographic)
+                        cameraDistance = sceneView.size * 2f;
+                    else
+                        cameraDistance = sceneView.size / Mathf.Tan(fov * 0.5f * Mathf.Deg2Rad);
+                    sceneView.pivot = cameraPos + rot * new Vector3(0, 0, cameraDistance);
                 }
-                if (request.camera_size >= 0f)
-                    sceneView.size = request.camera_size;
             }
-            else if (hasModeB)
+            else
             {
-                // Mode B: pivot orbit
-                if (request.camera_pivot != null && request.camera_pivot.Length == 3)
+                // Pivot orbit mode (unified from old Mode A/B)
+                if (hasPivot)
                 {
                     sceneView.pivot = new Vector3(
                         request.camera_pivot[0],
                         request.camera_pivot[1],
                         request.camera_pivot[2]);
                 }
-                if (!float.IsNaN(request.yaw) || !float.IsNaN(request.pitch))
+                if (hasYaw || hasPitch)
                 {
                     Vector3 currentEuler = sceneView.rotation.eulerAngles;
-                    // Recover current yaw in our convention
                     float curYaw = (currentEuler.y + 180f) % 360f;
                     float curPitch = currentEuler.x > 180f ? currentEuler.x - 360f : currentEuler.x;
-
-                    float newYaw = float.IsNaN(request.yaw) ? curYaw : request.yaw;
-                    float newPitch = float.IsNaN(request.pitch) ? curPitch : request.pitch;
-
-                    // Convert back to Unity convention
+                    float newYaw = hasYaw ? request.yaw : curYaw;
+                    float newPitch = hasPitch ? request.pitch : curPitch;
                     float internalYaw = (newYaw + 180f) % 360f;
                     sceneView.rotation = Quaternion.Euler(newPitch, internalYaw, 0f);
                 }
-                if (request.distance >= 0f)
+                if (hasDistance)
                     sceneView.size = request.distance;
             }
-            // else: no camera params → no-op, just return current state
 
             if (request.camera_orthographic >= 0)
                 sceneView.orthographic = request.camera_orthographic == 1;
 
-            sceneView.Repaint();
+            RepaintAllViews(sceneView);
 
-            // Return updated state (same as HandleGetCamera)
-            Vector3 pos = sceneView.camera.transform.position;
-            Quaternion rot = sceneView.rotation;
-            Vector3 euler = rot.eulerAngles;
-            Vector3 piv = sceneView.pivot;
-            float retYaw = (euler.y + 180f) % 360f;
-            float retPitch = euler.x > 180f ? euler.x - 360f : euler.x;
-
-            return BuildSuccess("EDITOR_CTRL_CAMERA_SET_OK",
-                $"Camera updated",
-                data: new EditorControlData
-                {
-                    camera_position = new[] { pos.x, pos.y, pos.z },
-                    camera_rotation_quat = new[] { rot.x, rot.y, rot.z, rot.w },
-                    camera_euler = new[] { retYaw, retPitch, 0f },
-                    camera_pivot = new[] { piv.x, piv.y, piv.z },
-                    camera_size = sceneView.size,
-                    camera_orthographic = sceneView.orthographic,
-                    executed = true
-                });
+            // Return previous + current state
+            CameraSnapshot current = CaptureCameraState(sceneView);
+            return BuildSuccess("EDITOR_CTRL_CAMERA_SET_OK", "Camera updated",
+                data: BuildCameraData(current, previous));
         }
 
         private static EditorControlResponse HandleListRoots(EditorControlRequest request)
@@ -1262,6 +1360,9 @@ namespace PrefabSentinel
                     break;
             }
 
+            SceneView sv = SceneView.lastActiveSceneView;
+            if (sv != null) RepaintAllViews(sv);
+
             return BuildSuccess("EDITOR_CTRL_SET_MATERIAL_PROPERTY_OK",
                 $"Set {request.property_name} on material '{mat.name}'",
                 data: new EditorControlData
@@ -1549,6 +1650,9 @@ namespace PrefabSentinel
 
             Undo.RecordObject(smr, $"Set BlendShape {request.blend_shape_name}");
             smr.SetBlendShapeWeight(index, weight);
+
+            SceneView sv = SceneView.lastActiveSceneView;
+            if (sv != null) RepaintAllViews(sv);
 
             return BuildSuccess("EDITOR_CTRL_BLEND_SHAPE_SET_OK",
                 $"BlendShape '{request.blend_shape_name}' set from {before} to {weight}",

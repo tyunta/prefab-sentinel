@@ -221,3 +221,43 @@ def bridge_status() -> dict[str, Any]:
         "mode": mode or None,
         "watch_dir": watch_dir or None,
     }
+
+
+def build_set_camera_kwargs(
+    *,
+    pivot: str = "",
+    yaw: float = float("nan"),
+    pitch: float = float("nan"),
+    distance: float = -1.0,
+    orthographic: int = -1,
+    position: str = "",
+    look_at: str = "",
+) -> dict[str, Any]:
+    """Build send_action kwargs from set_camera parameters.
+
+    Keeps parameter parsing separate from MCP server for testability.
+    """
+    import json as _json
+    import math
+
+    kwargs: dict[str, Any] = {}
+
+    if position:
+        p = _json.loads(position)
+        kwargs["camera_position"] = [p["x"], p["y"], p["z"]]
+    if look_at:
+        la = _json.loads(look_at)
+        kwargs["camera_look_at"] = [la["x"], la["y"], la["z"]]
+    if pivot:
+        pv = _json.loads(pivot)
+        kwargs["camera_pivot"] = [pv["x"], pv["y"], pv["z"]]
+    if not math.isnan(yaw):
+        kwargs["yaw"] = yaw
+    if not math.isnan(pitch):
+        kwargs["pitch"] = pitch
+    if distance >= 0:
+        kwargs["distance"] = distance
+    if orthographic >= 0:
+        kwargs["camera_orthographic"] = orthographic
+
+    return kwargs

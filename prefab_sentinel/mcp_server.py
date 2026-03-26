@@ -24,7 +24,7 @@ except ImportError as exc:
         "pip install prefab-sentinel[mcp]"
     ) from exc
 
-from prefab_sentinel.editor_bridge import send_action
+from prefab_sentinel.editor_bridge import build_set_camera_kwargs, send_action
 from prefab_sentinel.fuzzy_match import suggest_similar
 from prefab_sentinel.patch_plan import PLAN_VERSION
 from prefab_sentinel.patch_revert import revert_overrides as revert_overrides_impl
@@ -894,6 +894,10 @@ def create_server(
     ) -> dict[str, Any]:
         """Frame the selected object in Scene view.
 
+        Returns bounds info (bounds_center, bounds_extents) and post-frame
+        camera state. Use bounds to understand where the object center is
+        (e.g., SkinnedMeshRenderer bounds may center at feet).
+
         Args:
             zoom: Scene view distance factor (SceneView.size). 0 = keep current.
                 Larger values zoom OUT, smaller values zoom IN. Typical: 0.1-5.0.
@@ -911,63 +915,37 @@ def create_server(
 
     @server.tool()
     def editor_set_camera(
-        position: str = "",
-        rotation: str = "",
-        size: float = -1.0,
         pivot: str = "",
         yaw: float = float("nan"),
         pitch: float = float("nan"),
         distance: float = -1.0,
         orthographic: int = -1,
+        position: str = "",
+        look_at: str = "",
     ) -> dict[str, Any]:
-        """Set Scene view camera. Two modes (cannot mix):
+        """Set Scene view camera.
 
-        Mode A (absolute): position, rotation, size
-        Mode B (pivot orbit): pivot, yaw, pitch, distance
+        Pivot orbit mode: pivot, yaw, pitch, distance
+        Position mode: position + look_at, or position + yaw/pitch
 
-        Euler convention: yaw=0 = front (+Z direction).
+        Cannot mix position and pivot. Euler convention: yaw=0 = front (+Z).
         Omitted params keep their current value.
 
+        Returns previous and current camera state.
+
         Args:
-            position: JSON '{"x":0,"y":1,"z":-5}' — world position.
-            rotation: JSON '{"yaw":0,"pitch":15,"roll":0}' — euler degrees.
-            size: SceneView zoom level (>=0 to set, -1 = keep).
             pivot: JSON '{"x":0,"y":0,"z":0}' — orbit center.
-            yaw: Horizontal rotation in degrees (Mode B).
-            pitch: Vertical rotation in degrees (Mode B).
-            distance: Distance from pivot (Mode B, >=0 to set, -1 = keep).
+            yaw: Horizontal rotation in degrees.
+            pitch: Vertical rotation in degrees.
+            distance: SceneView.size (>=0 to set, -1 = keep).
             orthographic: -1=keep, 0=perspective, 1=orthographic.
+            position: JSON '{"x":0,"y":1,"z":-5}' — camera world position.
+            look_at: JSON '{"x":0,"y":1,"z":0}' — look-at target (requires position).
         """
-        import json as _json
-        import math
-
-        kwargs: dict[str, Any] = {}
-
-        # Mode A params
-        if position:
-            p = _json.loads(position)
-            kwargs["camera_position"] = [p["x"], p["y"], p["z"]]
-        if rotation:
-            r = _json.loads(rotation)
-            kwargs["camera_rotation"] = [r.get("yaw", 0), r.get("pitch", 0), r.get("roll", 0)]
-        if size >= 0:
-            kwargs["camera_size"] = size
-
-        # Mode B params
-        if pivot:
-            pv = _json.loads(pivot)
-            kwargs["camera_pivot"] = [pv["x"], pv["y"], pv["z"]]
-        if not math.isnan(yaw):
-            kwargs["yaw"] = yaw
-        if not math.isnan(pitch):
-            kwargs["pitch"] = pitch
-        if distance >= 0:
-            kwargs["distance"] = distance
-
-        # Shared
-        if orthographic >= 0:
-            kwargs["camera_orthographic"] = orthographic
-
+        kwargs = build_set_camera_kwargs(
+            pivot=pivot, yaw=yaw, pitch=pitch, distance=distance,
+            orthographic=orthographic, position=position, look_at=look_at,
+        )
         return send_action(action="set_camera", **kwargs)
 
     @server.tool()

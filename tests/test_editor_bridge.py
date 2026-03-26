@@ -221,5 +221,63 @@ class TestCameraActions(unittest.TestCase):
             self.assertEqual("EDITOR_BRIDGE_MODE", result["code"])
 
 
+class TestSetCameraParams(unittest.TestCase):
+    """Validate editor_set_camera parameter conversion."""
+
+    def test_pivot_orbit_kwargs(self) -> None:
+        from prefab_sentinel.editor_bridge import build_set_camera_kwargs as _build_set_camera_kwargs
+
+        kwargs = _build_set_camera_kwargs(
+            pivot='{"x":0,"y":1.3,"z":0}',
+            yaw=345.0,
+            pitch=8.0,
+            distance=0.28,
+        )
+        self.assertEqual(kwargs["camera_pivot"], [0, 1.3, 0])
+        self.assertEqual(kwargs["yaw"], 345.0)
+        self.assertEqual(kwargs["pitch"], 8.0)
+        self.assertEqual(kwargs["distance"], 0.28)
+        self.assertNotIn("camera_position", kwargs)
+        self.assertNotIn("camera_look_at", kwargs)
+
+    def test_position_look_at_kwargs(self) -> None:
+        from prefab_sentinel.editor_bridge import build_set_camera_kwargs as _build_set_camera_kwargs
+
+        kwargs = _build_set_camera_kwargs(
+            position='{"x":0,"y":1.5,"z":-1}',
+            look_at='{"x":0,"y":1.3,"z":0}',
+        )
+        self.assertEqual(kwargs["camera_position"], [0, 1.5, -1])
+        self.assertEqual(kwargs["camera_look_at"], [0, 1.3, 0])
+        self.assertNotIn("camera_pivot", kwargs)
+
+    def test_position_yaw_pitch_kwargs(self) -> None:
+        from prefab_sentinel.editor_bridge import build_set_camera_kwargs as _build_set_camera_kwargs
+
+        kwargs = _build_set_camera_kwargs(
+            position='{"x":0,"y":1.5,"z":-1}',
+            yaw=0.0,
+            pitch=10.0,
+            distance=0.5,
+        )
+        self.assertEqual(kwargs["camera_position"], [0, 1.5, -1])
+        self.assertEqual(kwargs["yaw"], 0.0)
+        self.assertEqual(kwargs["pitch"], 10.0)
+        self.assertEqual(kwargs["distance"], 0.5)
+        self.assertNotIn("camera_look_at", kwargs)
+
+    def test_omitted_params_excluded(self) -> None:
+        from prefab_sentinel.editor_bridge import build_set_camera_kwargs as _build_set_camera_kwargs
+
+        kwargs = _build_set_camera_kwargs(yaw=180.0)
+        self.assertEqual(kwargs, {"yaw": 180.0})
+
+    def test_orthographic_passed(self) -> None:
+        from prefab_sentinel.editor_bridge import build_set_camera_kwargs as _build_set_camera_kwargs
+
+        kwargs = _build_set_camera_kwargs(orthographic=1)
+        self.assertEqual(kwargs["camera_orthographic"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()
