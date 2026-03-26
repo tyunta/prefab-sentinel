@@ -185,6 +185,11 @@ class TestSupportedActions(unittest.TestCase):
             "set_material_property",
             "run_integration_tests",
             "vrcsdk_upload",
+            # Phase 2: BlendShape + Menu
+            "get_blend_shapes",
+            "set_blend_shape",
+            "list_menu_items",
+            "execute_menu_item",
         }
         self.assertEqual(expected, SUPPORTED_ACTIONS)
 
