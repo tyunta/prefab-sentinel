@@ -174,8 +174,16 @@ namespace PrefabSentinel
             {
                 UnityEditorControlBridge.RunFromPaths(requestPath, responsePath);
             }
+            else if (string.IsNullOrEmpty(header.action))
+            {
+                WriteErrorResponse(responsePath, "EDITOR_BRIDGE_UNKNOWN_ACTION",
+                    "Empty action field in request.",
+                    UnityEditorControlBridge.ProtocolVersion);
+            }
             else
             {
+                // PatchBridge handles all remaining known actions (no SupportedActions set).
+                // If the action is truly unknown, PatchBridge will report its own error.
                 UnityPatchBridge.ApplyFromPaths(requestPath, responsePath);
             }
 
