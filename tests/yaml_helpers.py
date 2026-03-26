@@ -156,3 +156,33 @@ def make_monobehaviour(
         for fname, fval in fields.items():
             lines += f"  {fname}: {fval}\n"
     return lines
+
+
+def make_prefab_instance(
+    file_id: str,
+    source_guid: str,
+    *,
+    transform_parent: str = "0",
+    stripped_children: list[tuple[str, str]] | None = None,
+) -> str:
+    """Build a PrefabInstance block (class ID 1001) with m_SourcePrefab.
+
+    Args:
+        file_id: FileID of the PrefabInstance.
+        source_guid: GUID of the source prefab.
+        transform_parent: FileID of the parent Transform (0 = root).
+        stripped_children: Optional list of (file_id, class_id) for stripped blocks.
+    """
+    block = (
+        f"--- !u!1001 &{file_id}\n"
+        f"PrefabInstance:\n"
+        f"  m_Modification:\n"
+        f"    m_TransformParent: {{fileID: {transform_parent}}}\n"
+        f"    m_Modifications: []\n"
+        f"  m_SourcePrefab: {{fileID: 100100000, guid: {source_guid}, type: 3}}\n"
+    )
+    children_text = ""
+    if stripped_children:
+        for child_fid, child_class_id in stripped_children:
+            children_text += f"--- !u!{child_class_id} &{child_fid} stripped\n"
+    return block + children_text
