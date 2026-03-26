@@ -293,7 +293,10 @@ namespace PrefabSentinel
                     bool isScene = string.Equals(request.view, "scene", StringComparison.OrdinalIgnoreCase);
                     if (isScene)
                     {
-                        // Defer Scene view capture by 1 frame for skinning recalculation
+                        // Focus SceneView to ensure rendering pipeline runs even when unfocused,
+                        // then defer capture by 1 frame for skinning recalculation
+                        SceneView sv = SceneView.lastActiveSceneView;
+                        if (sv != null) sv.Focus();
                         EditorApplication.QueuePlayerLoopUpdate();
                         string rp = responsePath;  // capture for closure
                         EditorApplication.delayCall += () =>
