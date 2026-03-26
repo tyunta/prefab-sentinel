@@ -108,37 +108,46 @@ class ProjectSession:
         text: str,
         *,
         include_properties: bool = False,
+        expand_nested: bool = False,
+        guid_to_asset_path: dict[str, Path] | None = None,
     ) -> SymbolTree:
         """Return a SymbolTree, using mtime-based caching.
 
         A cached tree built with ``include_properties=True`` satisfies
         requests for both True and False.  A tree built with False is
         rebuilt when True is requested.
-        """
-        mtime = self._stat_mtime(path)
 
-        if mtime is not None:
-            cached = self._symbol_cache.get(path)
-            if (
-                cached is not None
-                and cached.mtime == mtime
-                and (not include_properties or cached.include_properties)
-            ):
-                return cached.tree
+        When *expand_nested* is True, the cache is bypassed (expanded
+        trees depend on child prefab files whose mtime is not tracked).
+        """
+        if not expand_nested:
+            mtime = self._stat_mtime(path)
+            if mtime is not None:
+                cached = self._symbol_cache.get(path)
+                if (
+                    cached is not None
+                    and cached.mtime == mtime
+                    and (not include_properties or cached.include_properties)
+                ):
+                    return cached.tree
 
         tree = SymbolTree.build(
             text,
             str(path),
             self.script_name_map(),
             include_properties=include_properties,
+            expand_nested=expand_nested,
+            guid_to_asset_path=guid_to_asset_path,
         )
 
-        if mtime is not None:
-            self._symbol_cache[path] = _SymbolCacheEntry(
-                mtime=mtime,
-                include_properties=include_properties,
-                tree=tree,
-            )
+        if not expand_nested:
+            mtime = self._stat_mtime(path)
+            if mtime is not None:
+                self._symbol_cache[path] = _SymbolCacheEntry(
+                    mtime=mtime,
+                    include_properties=include_properties,
+                    tree=tree,
+                )
 
         return tree
 

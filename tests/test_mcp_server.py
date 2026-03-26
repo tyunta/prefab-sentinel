@@ -7,10 +7,11 @@ import json
 import unittest
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 from prefab_sentinel.mcp_server import create_server
 from prefab_sentinel.session import ProjectSession
+from prefab_sentinel.symbol_tree import SymbolTree
 from tests.yaml_helpers import (
     YAML_HEADER,
     make_gameobject,
@@ -208,6 +209,28 @@ class TestSymbolToolsWithMonoBehaviour(unittest.TestCase):
                 },
             ))
             self.assertEqual(1, len(result["matches"]))
+
+
+class TestGetUnitySymbolsExpandNested(unittest.TestCase):
+    """Test expand_nested parameter wiring in get_unity_symbols."""
+
+    def test_expand_nested_passed_to_build(self) -> None:
+        import tempfile
+
+        text = YAML_HEADER + make_gameobject("100", "Root", ["200"]) + make_transform("200", "100")
+        server = create_server(project_root=None)
+
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "test.prefab"
+            p.write_text(text, encoding="utf-8")
+            with patch("prefab_sentinel.symbol_tree.SymbolTree.build", wraps=SymbolTree.build) as mock_build:
+                _run(server.call_tool(
+                    "get_unity_symbols",
+                    {"asset_path": str(p), "expand_nested": True},
+                ))
+                mock_build.assert_called_once()
+                _, kwargs = mock_build.call_args
+                self.assertTrue(kwargs.get("expand_nested"))
 
 
 class TestOrchestratorTools(unittest.TestCase):
@@ -1733,15 +1756,42 @@ class TestEditorReadOnlyTools(unittest.TestCase):
     def test_editor_screenshot_delegates(self) -> None:
         server = create_server()
         mock_response = {"success": True, "data": {"output_path": "/tmp/shot.png"}}
-        with patch("prefab_sentinel.mcp_server.send_action", return_value=mock_response):
+        with patch("prefab_sentinel.mcp_server.send_action", return_value=mock_response) as mock_send:
             _, result = _run(server.call_tool("editor_screenshot", {"view": "game", "width": 1920}))
         self.assertEqual(mock_response, result)
+        # Default refresh=True: refresh + capture = 2 calls
+        self.assertEqual(mock_send.call_count, 2)
 
     def test_editor_screenshot_defaults(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_screenshot", {}))
+        # Default refresh=True means 2 calls: refresh + capture
+        self.assertEqual(mock_send.call_count, 2)
+        mock_send.assert_any_call(action="capture_screenshot", view="scene", width=0, height=0)
+
+    def test_editor_screenshot_refresh_true_calls_refresh_then_capture(self) -> None:
+        server = create_server()
+        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+            _run(server.call_tool("editor_screenshot", {"refresh": True}))
+        self.assertEqual(mock_send.call_count, 2)
+        calls = mock_send.call_args_list
+        self.assertEqual(calls[0], call(action="refresh_asset_database"))
+        self.assertEqual(calls[1], call(action="capture_screenshot", view="scene", width=0, height=0))
+
+    def test_editor_screenshot_refresh_false_skips_refresh(self) -> None:
+        server = create_server()
+        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+            _run(server.call_tool("editor_screenshot", {"refresh": False}))
         mock_send.assert_called_once_with(action="capture_screenshot", view="scene", width=0, height=0)
+
+    def test_editor_screenshot_refresh_failure_still_captures(self) -> None:
+        server = create_server()
+        responses = [Exception("refresh failed"), {"success": True, "data": {"output_path": "/shot.png"}}]
+        with patch("prefab_sentinel.mcp_server.send_action", side_effect=responses) as mock_send:
+            _, result = _run(server.call_tool("editor_screenshot", {"refresh": True}))
+        self.assertEqual(mock_send.call_count, 2)
+        self.assertTrue(result["success"])
 
     def test_editor_select_delegates(self) -> None:
         server = create_server()

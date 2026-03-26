@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from prefab_sentinel.unity_assets import (
@@ -23,6 +23,7 @@ from prefab_sentinel.unity_assets import (
     resolve_scope_path,
 )
 from prefab_sentinel.unity_yaml_parser import (
+    CLASS_ID_PREFAB_INSTANCE,
     YamlBlock,
     parse_game_objects,
     split_yaml_blocks,
@@ -155,6 +156,7 @@ class RendererMaterials:
     renderer_type: str
     file_id: str
     slots: list[MaterialSlot]
+    source_prefab: str = ""
 
 
 @dataclass(slots=True)
@@ -165,6 +167,7 @@ class MaterialInspectionResult:
     is_variant: bool
     base_prefab_path: str | None
     renderers: list[RendererMaterials]
+    diagnostics: list[str] = field(default_factory=list)
 
 
 def _parse_renderer_materials(block: YamlBlock) -> list[tuple[str, str]]:
@@ -373,7 +376,10 @@ def _inspect_variant_materials(
         base_text = parent_text
         if _has_renderer_blocks(parent_text):
             break
-        # Continue walking if this level also has no renderer blocks
+        # Stop if parent is a base prefab (has real GameObjects).
+        # Only continue walking variant→variant chains.
+        if parse_game_objects(split_yaml_blocks(parent_text)):
+            break
         current_text = parent_text
 
     if base_text is None:
@@ -431,7 +437,7 @@ def _inspect_variant_materials(
             slots=slots,
         ))
 
-    # Fallback: base has only stripped renderers (Model Prefab wrapping FBX).
+    # Fallback 1: base has only stripped renderers (Model Prefab wrapping FBX).
     # Extract material data from m_Modifications instead of renderer blocks.
     if not renderers:
         renderers = _build_stripped_renderer_materials(
@@ -439,11 +445,19 @@ def _inspect_variant_materials(
             guid_index, project_root, material_overrides,
         )
 
+    # Fallback 2: Nested Prefab expansion — renderer in a child prefab
+    diagnostics: list[str] = []
+    if not renderers and base_text is not None:
+        renderers, diagnostics = _collect_nested_renderers(
+            base_text, guid_index, project_root,
+        )
+
     return MaterialInspectionResult(
         target_path=target_path,
         is_variant=True,
         base_prefab_path=base_prefab_path_str,
         renderers=renderers,
+        diagnostics=diagnostics,
     )
 
 
@@ -539,6 +553,53 @@ def _build_stripped_renderer_materials(
     return renderers
 
 
+def _collect_nested_renderers(
+    base_text: str,
+    guid_index: dict[str, Path],
+    project_root: Path,
+) -> tuple[list[RendererMaterials], list[str]]:
+    """Collect renderers from Nested Prefab instances in *base_text*.
+
+    Returns (renderers, diagnostics).
+    """
+    blocks = split_yaml_blocks(base_text)
+    renderers: list[RendererMaterials] = []
+
+    for block in blocks:
+        if block.class_id != CLASS_ID_PREFAB_INSTANCE:
+            continue
+        source_match = SOURCE_PREFAB_PATTERN.search(block.text)
+        if source_match is None:
+            continue
+        child_guid = normalize_guid(source_match.group(2))
+        child_path = guid_index.get(child_guid)
+        if child_path is None or not child_path.exists():
+            continue
+        try:
+            child_text = decode_text_file(child_path)
+        except (OSError, UnicodeDecodeError):
+            continue
+
+        child_result = _inspect_base_materials(
+            str(child_path), child_text, project_root, guid_index,
+        )
+        # Stamp source_prefab on each renderer
+        try:
+            rel = child_path.resolve().relative_to(project_root.resolve()).as_posix()
+        except ValueError:
+            rel = child_path.as_posix()
+        for r in child_result.renderers:
+            r.source_prefab = rel
+        renderers.extend(child_result.renderers)
+
+    diagnostics: list[str] = []
+    if not renderers:
+        diagnostics.append(
+            "No renderer blocks found in base prefab or nested prefabs"
+        )
+    return renderers, diagnostics
+
+
 def _parse_material_overrides(
     variant_text: str,
     out: dict[tuple[str, int], str],
@@ -556,10 +617,12 @@ def _parse_material_overrides(
 
 def format_materials(result: MaterialInspectionResult) -> str:
     """Format material inspection result as human-readable text."""
-    if not result.renderers:
+    if not result.renderers and not result.diagnostics:
         return "(no renderer components found)"
 
     lines: list[str] = []
+    if not result.renderers:
+        lines.append("(no renderer components found)")
     for renderer in result.renderers:
         lines.append(f"{renderer.game_object_name} ({renderer.renderer_type})")
         if not renderer.slots:
@@ -572,4 +635,6 @@ def format_materials(result: MaterialInspectionResult) -> str:
                 lines.append(f"  [{slot.index}] {name}{path_part}  {marker}")
             else:
                 lines.append(f"  [{slot.index}] {name}{path_part}")
+    for diag in result.diagnostics:
+        lines.append(f"[diagnostic] {diag}")
     return "\n".join(lines)

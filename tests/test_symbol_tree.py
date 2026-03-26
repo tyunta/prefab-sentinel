@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 
 from prefab_sentinel.symbol_tree import (
     AmbiguousSymbolError,
     SymbolKind,
+    SymbolNode,
     SymbolNotFoundError,
     SymbolTree,
 )
@@ -15,6 +18,7 @@ from tests.yaml_helpers import (
     make_gameobject,
     make_meshrenderer,
     make_monobehaviour,
+    make_prefab_instance,
     make_transform,
 )
 
@@ -510,6 +514,233 @@ class TestSymbolTreeRectTransform(unittest.TestCase):
         tree = SymbolTree.build(text, "test.prefab")
         matches = tree.resolve("Canvas/RectTransform")
         self.assertEqual(len(matches), 1)
+
+
+class TestSymbolTreeNestedExpansion(unittest.TestCase):
+    """SymbolTree.build with expand_nested=True."""
+
+    CHILD_GUID = "aabbccdd11223344aabbccdd11223344"
+
+    def _write_child_prefab(self, tmpdir: Path) -> Path:
+        child_path = tmpdir / "Assets" / "Child.prefab"
+        child_path.parent.mkdir(parents=True, exist_ok=True)
+        child_text = (
+            YAML_HEADER
+            + make_gameobject("500", "ChildRoot", ["600", "700"])
+            + make_transform("600", "500")
+            + make_meshrenderer("700", "500")
+        )
+        child_path.write_text(child_text)
+        return child_path
+
+    def _parent_text_with_instance(self) -> str:
+        return (
+            YAML_HEADER
+            + make_gameobject("100", "Avatar", ["200"])
+            + make_transform("200", "100")
+            + make_prefab_instance("300", self.CHILD_GUID, transform_parent="200")
+        )
+
+    def test_expand_nested_false_skips_prefab_instances(self) -> None:
+        text = self._parent_text_with_instance()
+        tree = SymbolTree.build(text, "test.prefab", expand_nested=False)
+        self.assertEqual(len(tree.roots), 1)
+        self.assertEqual(tree.roots[0].name, "Avatar")
+
+    def test_expand_nested_true_without_guid_map_skips(self) -> None:
+        text = self._parent_text_with_instance()
+        tree = SymbolTree.build(text, "test.prefab", expand_nested=True, guid_to_asset_path=None)
+        self.assertEqual(len(tree.roots), 1)
+
+    def test_expand_nested_true_creates_marker_node(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            child_path = self._write_child_prefab(Path(tmpdir))
+            guid_map = {self.CHILD_GUID: child_path}
+            text = self._parent_text_with_instance()
+            tree = SymbolTree.build(text, "test.prefab", expand_nested=True, guid_to_asset_path=guid_map)
+            avatar = tree.roots[0]
+            pi_nodes = [c for c in avatar.children if c.kind == SymbolKind.PREFAB_INSTANCE]
+            self.assertEqual(len(pi_nodes), 1)
+            pi = pi_nodes[0]
+            self.assertEqual(pi.class_id, "1001")
+            self.assertIn("Child.prefab", pi.source_prefab)
+
+    def test_expanded_prefab_instance_has_child_nodes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            child_path = self._write_child_prefab(Path(tmpdir))
+            guid_map = {self.CHILD_GUID: child_path}
+            text = self._parent_text_with_instance()
+            tree = SymbolTree.build(text, "test.prefab", expand_nested=True, guid_to_asset_path=guid_map)
+            avatar = tree.roots[0]
+            pi = [c for c in avatar.children if c.kind == SymbolKind.PREFAB_INSTANCE][0]
+            child_gos = [c for c in pi.children if c.kind == SymbolKind.GAME_OBJECT]
+            self.assertEqual(len(child_gos), 1)
+            self.assertEqual(child_gos[0].name, "ChildRoot")
+
+    def test_unresolvable_guid_creates_unresolved_marker(self) -> None:
+        text = self._parent_text_with_instance()
+        guid_map: dict[str, Path] = {}
+        tree = SymbolTree.build(text, "test.prefab", expand_nested=True, guid_to_asset_path=guid_map)
+        avatar = tree.roots[0]
+        pi_nodes = [c for c in avatar.children if c.kind == SymbolKind.PREFAB_INSTANCE]
+        self.assertEqual(len(pi_nodes), 1)
+        self.assertIn("Unresolved", pi_nodes[0].name)
+        self.assertEqual(pi_nodes[0].children, [])
+
+    def test_prefab_instance_marker_in_file_id_index(self) -> None:
+        text = self._parent_text_with_instance()
+        guid_map: dict[str, Path] = {}
+        tree = SymbolTree.build(text, "test.prefab", expand_nested=True, guid_to_asset_path=guid_map)
+        node = tree.resolve_file_id("300")
+        self.assertIsNotNone(node)
+        self.assertEqual(node.kind, SymbolKind.PREFAB_INSTANCE)
+
+    def test_nested_child_nodes_not_in_file_id_index(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            child_path = self._write_child_prefab(Path(tmpdir))
+            guid_map = {self.CHILD_GUID: child_path}
+            text = self._parent_text_with_instance()
+            tree = SymbolTree.build(text, "test.prefab", expand_nested=True, guid_to_asset_path=guid_map)
+            self.assertIsNone(tree.resolve_file_id("500"))
+            self.assertIsNone(tree.resolve_file_id("600"))
+
+    def test_missing_file_creates_unresolved_marker(self) -> None:
+        """GUID maps to a path but the file doesn't exist on disk."""
+        missing_path = Path("/nonexistent/Bad.prefab")
+        guid_map = {self.CHILD_GUID: missing_path}
+        text = self._parent_text_with_instance()
+        tree = SymbolTree.build(text, "test.prefab", expand_nested=True, guid_to_asset_path=guid_map)
+        avatar = tree.roots[0]
+        pi_nodes = [c for c in avatar.children if c.kind == SymbolKind.PREFAB_INSTANCE]
+        self.assertEqual(len(pi_nodes), 1)
+        self.assertIn("Unresolved", pi_nodes[0].name)
+
+    def test_depth_limit_stops_expansion(self) -> None:
+        text = self._parent_text_with_instance()
+        guid_map: dict[str, Path] = {}
+        tree = SymbolTree.build(text, "test.prefab", expand_nested=True, guid_to_asset_path=guid_map, _depth=10)
+        avatar = tree.roots[0]
+        pi_nodes = [c for c in avatar.children if c.kind == SymbolKind.PREFAB_INSTANCE]
+        self.assertEqual(len(pi_nodes), 0)
+
+    def test_to_dict_on_expanded_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            child_path = self._write_child_prefab(Path(tmpdir))
+            guid_map = {self.CHILD_GUID: child_path}
+            text = self._parent_text_with_instance()
+            tree = SymbolTree.build(text, "test.prefab", expand_nested=True, guid_to_asset_path=guid_map)
+            overview = tree.to_overview(depth=3)
+            self.assertTrue(len(overview) > 0)
+            avatar = overview[0]
+            pi_dicts = [c for c in avatar.get("children", []) if c.get("kind") == "prefab_instance"]
+            self.assertEqual(len(pi_dicts), 1)
+            self.assertIn("source_prefab", pi_dicts[0])
+
+
+class TestSymbolTreeNestedResolution(unittest.TestCase):
+    """Path resolution through PrefabInstance boundaries."""
+
+    CHILD_GUID = "aabbccdd11223344aabbccdd11223344"
+
+    def _write_child_prefab(self, tmpdir: Path) -> Path:
+        child_path = tmpdir / "Assets" / "Child.prefab"
+        child_path.parent.mkdir(parents=True, exist_ok=True)
+        child_text = (
+            YAML_HEADER
+            + make_gameobject("500", "ChildRoot", ["600", "700"])
+            + make_transform("600", "500")
+            + make_meshrenderer("700", "500")
+        )
+        child_path.write_text(child_text)
+        return child_path
+
+    def _parent_text_with_instance(self) -> str:
+        return (
+            YAML_HEADER
+            + make_gameobject("100", "Avatar", ["200"])
+            + make_transform("200", "100")
+            + make_prefab_instance("300", self.CHILD_GUID, transform_parent="200")
+        )
+
+    def test_resolve_through_prefab_instance(self) -> None:
+        """Avatar/ChildRoot resolves — PrefabInstance boundary is transparent."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            child_path = self._write_child_prefab(Path(tmpdir))
+            guid_map = {self.CHILD_GUID: child_path}
+            text = self._parent_text_with_instance()
+            tree = SymbolTree.build(text, "test.prefab", expand_nested=True, guid_to_asset_path=guid_map)
+            matches = tree.resolve("Avatar")
+            self.assertEqual(len(matches), 1)
+            # ChildRoot is inside PrefabInstance which is a child of Avatar
+            matches = tree.resolve("Avatar/ChildRoot")
+            self.assertEqual(len(matches), 1)
+            self.assertEqual(matches[0].name, "ChildRoot")
+
+    def test_resolve_nested_path_through_prefab_instance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            child_path = self._write_child_prefab(Path(tmpdir))
+            guid_map = {self.CHILD_GUID: child_path}
+            text = self._parent_text_with_instance()
+            tree = SymbolTree.build(text, "test.prefab", expand_nested=True, guid_to_asset_path=guid_map)
+            matches = tree.resolve("Avatar/ChildRoot/MeshRenderer")
+            self.assertEqual(len(matches), 1)
+
+
+class TestSymbolNodePrefabInstance(unittest.TestCase):
+    """SymbolNode with PREFAB_INSTANCE kind and source_prefab."""
+
+    def test_prefab_instance_kind_value(self) -> None:
+        self.assertEqual(SymbolKind.PREFAB_INSTANCE.value, "prefab_instance")
+
+    def test_source_prefab_default_empty(self) -> None:
+        node = SymbolNode(
+            kind=SymbolKind.PREFAB_INSTANCE,
+            name="[PrefabInstance: test.prefab]",
+            file_id="999",
+            class_id="1001",
+        )
+        self.assertEqual(node.source_prefab, "")
+
+    def test_to_dict_includes_source_prefab(self) -> None:
+        node = SymbolNode(
+            kind=SymbolKind.PREFAB_INSTANCE,
+            name="[PrefabInstance: Assets/Shirt.prefab]",
+            file_id="999",
+            class_id="1001",
+            source_prefab="Assets/Shirt.prefab",
+        )
+        d = node.to_dict()
+        self.assertEqual(d["kind"], "prefab_instance")
+        self.assertEqual(d["source_prefab"], "Assets/Shirt.prefab")
+
+    def test_to_dict_omits_empty_source_prefab(self) -> None:
+        node = SymbolNode(
+            kind=SymbolKind.GAME_OBJECT,
+            name="Root",
+            file_id="100",
+            class_id="1",
+        )
+        d = node.to_dict()
+        self.assertNotIn("source_prefab", d)
+
+
+class TestSessionCacheBypass(unittest.TestCase):
+    """Session.get_symbol_tree bypasses cache when expand_nested=True."""
+
+    def test_expand_nested_bypasses_cache(self) -> None:
+        from prefab_sentinel.session import ProjectSession
+
+        session = ProjectSession()
+        text = YAML_HEADER + make_gameobject("100", "Root", ["200"]) + make_transform("200", "100")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "test.prefab"
+            path.write_text(text)
+            # First call caches
+            tree1 = session.get_symbol_tree(path, text)
+            # Second call with expand_nested should NOT return cached
+            tree2 = session.get_symbol_tree(path, text, expand_nested=True)
+            # They should be different objects (not cached)
+            self.assertIsNot(tree1, tree2)
 
 
 if __name__ == "__main__":

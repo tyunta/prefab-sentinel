@@ -19,8 +19,10 @@ from typing import Any
 
 from prefab_sentinel.hierarchy import CLASS_NAMES
 from prefab_sentinel.udon_wiring import analyze_wiring
+from prefab_sentinel.unity_assets import SOURCE_PREFAB_PATTERN, decode_text_file, normalize_guid
 from prefab_sentinel.unity_yaml_parser import (
     CLASS_ID_MONOBEHAVIOUR,
+    CLASS_ID_PREFAB_INSTANCE,
     TRANSFORM_CLASS_IDS,
     ComponentInfo,
     parse_components,
@@ -45,11 +47,15 @@ _MB_SEGMENT_RE = re.compile(r"^MonoBehaviour\((.+)\)$")
 # Matches "name#N" for duplicate-sibling disambiguation
 _DUP_SEGMENT_RE = re.compile(r"^(.+)#(\d+)$")
 
+_MAX_NESTED_DEPTH = 10
+_TRANSFORM_PARENT_RE = re.compile(r"m_TransformParent:\s*\{fileID:\s*(\d+)")
+
 
 class SymbolKind(StrEnum):
     GAME_OBJECT = "game_object"
     COMPONENT = "component"
     PROPERTY = "property"
+    PREFAB_INSTANCE = "prefab_instance"
 
 
 @dataclass(slots=True)
@@ -65,6 +71,7 @@ class SymbolNode:
     script_name: str = ""
     depth: int = 0
     properties: dict[str, str] = field(default_factory=dict)
+    source_prefab: str = ""
 
     def to_dict(self, depth_limit: int | None = None) -> dict[str, Any]:
         """Serialize to a JSON-compatible dict with optional depth truncation."""
@@ -81,6 +88,8 @@ class SymbolNode:
             result["script_name"] = self.script_name
         if self.properties:
             result["properties"] = dict(self.properties)
+        if self.source_prefab:
+            result["source_prefab"] = self.source_prefab
         if depth_limit is None or depth_limit > 0:
             child_limit = None if depth_limit is None else depth_limit - 1
             if self.children:
@@ -116,6 +125,9 @@ class SymbolTree:
         guid_to_script_name: dict[str, str] | None = None,
         *,
         include_properties: bool = False,
+        expand_nested: bool = False,
+        guid_to_asset_path: dict[str, Path] | None = None,
+        _depth: int = 0,
     ) -> SymbolTree:
         """Build a symbol tree from Unity YAML text.
 
@@ -126,6 +138,11 @@ class SymbolTree:
                 for resolving MonoBehaviour script names.
             include_properties: When True, populate property-level nodes
                 for MonoBehaviour serialized fields.
+            expand_nested: When True, expand PrefabInstance nodes into
+                their child Prefab's tree (recursive).
+            guid_to_asset_path: GUID -> Path map for resolving nested Prefabs.
+                Required when expand_nested=True.
+            _depth: Internal recursion depth counter (do not set externally).
         """
         script_map = guid_to_script_name or {}
 
@@ -271,6 +288,66 @@ class SymbolTree:
 
         roots = [_build_go_node(fid, 0) for fid in root_go_fids]
 
+        # --- Nested Prefab expansion ---
+        if expand_nested and guid_to_asset_path is not None and _depth < _MAX_NESTED_DEPTH:
+            for block in blocks:
+                if block.class_id != CLASS_ID_PREFAB_INSTANCE:
+                    continue
+                source_match = SOURCE_PREFAB_PATTERN.search(block.text)
+                if source_match is None:
+                    continue
+                guid = normalize_guid(source_match.group(2))
+                child_path = guid_to_asset_path.get(guid)
+
+                resolved = False
+                child_text = ""
+                if child_path is not None and child_path.exists():
+                    try:
+                        child_text = decode_text_file(child_path)
+                        resolved = True
+                    except (OSError, UnicodeDecodeError):
+                        resolved = False
+
+                if resolved:
+                    rel_path = child_path.as_posix()  # type: ignore[union-attr]
+                    child_tree = cls.build(
+                        child_text,
+                        rel_path,
+                        guid_to_script_name,
+                        include_properties=include_properties,
+                        expand_nested=True,
+                        guid_to_asset_path=guid_to_asset_path,
+                        _depth=_depth + 1,
+                    )
+                    marker = SymbolNode(
+                        kind=SymbolKind.PREFAB_INSTANCE,
+                        name=f"[PrefabInstance: {rel_path}]",
+                        file_id=block.file_id,
+                        class_id=CLASS_ID_PREFAB_INSTANCE,
+                        children=child_tree.roots,
+                        source_prefab=rel_path,
+                    )
+                else:
+                    marker = SymbolNode(
+                        kind=SymbolKind.PREFAB_INSTANCE,
+                        name=f"[Unresolved: {guid}]",
+                        file_id=block.file_id,
+                        class_id=CLASS_ID_PREFAB_INSTANCE,
+                        children=[],
+                        source_prefab=guid,
+                    )
+                file_id_index[block.file_id] = marker
+
+                # Attach to parent GO via m_TransformParent
+                tp_match = _TRANSFORM_PARENT_RE.search(block.text)
+                parent_t_fid = tp_match.group(1) if tp_match else "0"
+                parent_go_fid = transform_to_go.get(parent_t_fid, "")
+                parent_node = file_id_index.get(parent_go_fid)
+                if parent_node is not None:
+                    parent_node.children.append(marker)
+                else:
+                    roots.append(marker)
+
         return cls(
             asset_path=asset_path,
             roots=roots,
@@ -321,6 +398,14 @@ class SymbolTree:
         if seg_idx >= len(segments):
             return candidates
 
+        # Flatten PrefabInstance nodes: replace with their children
+        flat_candidates: list[SymbolNode] = []
+        for node in candidates:
+            if node.kind == SymbolKind.PREFAB_INSTANCE:
+                flat_candidates.extend(node.children)
+            else:
+                flat_candidates.append(node)
+
         segment = segments[seg_idx]
         is_last = seg_idx == len(segments) - 1
 
@@ -330,7 +415,7 @@ class SymbolTree:
             base_name = dup_match.group(1)
             target_idx = int(dup_match.group(2))
             count = 0
-            for node in candidates:
+            for node in flat_candidates:
                 if node.name == base_name:
                     if count == target_idx:
                         if is_last:
@@ -341,8 +426,8 @@ class SymbolTree:
                     count += 1
             return []
 
-        # Match current segment against candidates
-        matched = [n for n in candidates if self._segment_matches(n, segment)]
+        # Match current segment against flat candidates
+        matched = [n for n in flat_candidates if self._segment_matches(n, segment)]
 
         if is_last:
             return matched
