@@ -484,10 +484,11 @@ Add a new import after the existing imports (after line 30):
 from prefab_sentinel.unity_assets import SOURCE_PREFAB_PATTERN, decode_text_file, normalize_guid
 ```
 
-Add the depth constant before the `SymbolTree` class:
+Add constants before the `SymbolTree` class (after the `_DUP_SEGMENT_RE` line):
 
 ```python
 _MAX_NESTED_DEPTH = 10
+_TRANSFORM_PARENT_RE = re.compile(r"m_TransformParent:\s*\{fileID:\s*(\d+)")
 ```
 
 Update the `build()` signature and add expansion logic. The key changes to `build()`:
@@ -573,9 +574,6 @@ def build(
     roots = [_build_go_node(fid, 0) for fid in root_go_fids]
 
     # --- Nested Prefab expansion ---
-    _TRANSFORM_PARENT_RE = re.compile(
-        r"m_TransformParent:\s*\{fileID:\s*(\d+)"
-    )
     if expand_nested and guid_to_asset_path and _depth < _MAX_NESTED_DEPTH:
         for block in blocks:
             if block.class_id != CLASS_ID_PREFAB_INSTANCE:
@@ -881,25 +879,19 @@ git commit -m "feat: bypass session cache for expand_nested=True"
 
 - [ ] **Step 1: Write delegation test**
 
-In `tests/test_mcp_server.py`, first add the `session` import at the top of the file (it is the module-level `session` instance used in `mcp_server.py`):
-
-```python
-from prefab_sentinel.mcp_server import session
-```
-
-Then add the test:
+In `tests/test_mcp_server.py`, add the test. Note: `session` is a closure variable inside `create_server()`, so we cannot import it directly. Instead, patch `SymbolTree.build` and verify the `expand_nested` argument propagates:
 
 ```python
 def test_get_unity_symbols_expand_nested(self) -> None:
     server = create_server()
+    mock_tree = MagicMock(to_overview=MagicMock(return_value=[]))
     with (
         patch("prefab_sentinel.mcp_server._read_asset", return_value=("yaml", Path("/test.prefab"))),
-        patch.object(session, "get_symbol_tree") as mock_tree,
+        patch("prefab_sentinel.symbol_tree.SymbolTree.build", return_value=mock_tree) as mock_build,
     ):
-        mock_tree.return_value = MagicMock(to_overview=MagicMock(return_value=[]))
         _run(server.call_tool("get_unity_symbols", {"asset_path": "test.prefab", "expand_nested": True}))
-    mock_tree.assert_called_once()
-    _, kwargs = mock_tree.call_args
+    mock_build.assert_called_once()
+    _, kwargs = mock_build.call_args
     self.assertTrue(kwargs.get("expand_nested"))
 ```
 
@@ -1357,7 +1349,7 @@ In `_inspect_variant_materials`, after the `_build_stripped_renderer_materials` 
         )
 
     # Fallback 3: Nested Prefab expansion — renderer in a child prefab
-    diagnostics: list[str] = []
+    diagnostics: list[str] = []  # always initialized (used in return below)
     if not renderers and base_text is not None:
         renderers, diagnostics = _collect_nested_renderers(
             base_text, guid_index, project_root,
