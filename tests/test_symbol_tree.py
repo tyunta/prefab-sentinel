@@ -724,5 +724,24 @@ class TestSymbolNodePrefabInstance(unittest.TestCase):
         self.assertNotIn("source_prefab", d)
 
 
+class TestSessionCacheBypass(unittest.TestCase):
+    """Session.get_symbol_tree bypasses cache when expand_nested=True."""
+
+    def test_expand_nested_bypasses_cache(self) -> None:
+        from prefab_sentinel.session import ProjectSession
+
+        session = ProjectSession()
+        text = YAML_HEADER + make_gameobject("100", "Root", ["200"]) + make_transform("200", "100")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "test.prefab"
+            path.write_text(text)
+            # First call caches
+            tree1 = session.get_symbol_tree(path, text)
+            # Second call with expand_nested should NOT return cached
+            tree2 = session.get_symbol_tree(path, text, expand_nested=True)
+            # They should be different objects (not cached)
+            self.assertIsNot(tree1, tree2)
+
+
 if __name__ == "__main__":
     unittest.main()
