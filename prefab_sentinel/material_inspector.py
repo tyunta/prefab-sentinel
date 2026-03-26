@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from prefab_sentinel.unity_assets import (
@@ -155,6 +155,7 @@ class RendererMaterials:
     renderer_type: str
     file_id: str
     slots: list[MaterialSlot]
+    source_prefab: str = ""
 
 
 @dataclass(slots=True)
@@ -165,6 +166,7 @@ class MaterialInspectionResult:
     is_variant: bool
     base_prefab_path: str | None
     renderers: list[RendererMaterials]
+    diagnostics: list[str] = field(default_factory=list)
 
 
 def _parse_renderer_materials(block: YamlBlock) -> list[tuple[str, str]]:
@@ -556,10 +558,12 @@ def _parse_material_overrides(
 
 def format_materials(result: MaterialInspectionResult) -> str:
     """Format material inspection result as human-readable text."""
-    if not result.renderers:
+    if not result.renderers and not result.diagnostics:
         return "(no renderer components found)"
 
     lines: list[str] = []
+    if not result.renderers:
+        lines.append("(no renderer components found)")
     for renderer in result.renderers:
         lines.append(f"{renderer.game_object_name} ({renderer.renderer_type})")
         if not renderer.slots:
@@ -572,4 +576,6 @@ def format_materials(result: MaterialInspectionResult) -> str:
                 lines.append(f"  [{slot.index}] {name}{path_part}  {marker}")
             else:
                 lines.append(f"  [{slot.index}] {name}{path_part}")
+    for diag in result.diagnostics:
+        lines.append(f"[diagnostic] {diag}")
     return "\n".join(lines)

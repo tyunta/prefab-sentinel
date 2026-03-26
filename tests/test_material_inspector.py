@@ -632,5 +632,39 @@ class TestInspectMaterialsIntegration(unittest.TestCase):
             self.assertTrue(result.renderers[0].slots[0].is_override)
 
 
+class TestMaterialDataModelExtensions(unittest.TestCase):
+    """New fields: RendererMaterials.source_prefab and MaterialInspectionResult.diagnostics."""
+
+    def test_renderer_materials_source_prefab_default(self) -> None:
+        r = RendererMaterials(
+            game_object_name="Body",
+            renderer_type="SkinnedMeshRenderer",
+            file_id="100",
+            slots=[],
+        )
+        self.assertEqual(r.source_prefab, "")
+
+    def test_material_inspection_result_diagnostics_default(self) -> None:
+        result = MaterialInspectionResult(
+            target_path="test.prefab",
+            is_variant=False,
+            base_prefab_path=None,
+            renderers=[],
+        )
+        self.assertEqual(result.diagnostics, [])
+
+    def test_format_materials_includes_diagnostics(self) -> None:
+        result = MaterialInspectionResult(
+            target_path="test.prefab",
+            is_variant=False,
+            base_prefab_path=None,
+            renderers=[],
+            diagnostics=["No renderers found in base or nested prefabs"],
+        )
+        text = format_materials(result)
+        self.assertIn("[diagnostic]", text)
+        self.assertIn("No renderers found", text)
+
+
 if __name__ == "__main__":
     unittest.main()

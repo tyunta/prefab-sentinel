@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "prefab-sentinel"
-version = "0.5.77"
+version = "0.5.78"
 description = "Prefab Sentinel — Unity Prefab/Scene inspection and editing toolkit."
 requires-python = ">=3.11"
 readme = "README.md"
@@ -50,7 +50,7 @@ disable_error_code = ["arg-type", "index", "assignment", "var-annotated", "no-re
 packages = ["prefab_sentinel"]
 
 [tool.bumpversion]
-current_version = "0.5.77"
+current_version = "0.5.78"
 commit = false
 tag = false
 allow_dirty = true
