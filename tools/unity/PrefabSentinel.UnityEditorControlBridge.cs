@@ -2008,24 +2008,29 @@ namespace PrefabSentinel
             if (string.IsNullOrEmpty(request.new_name))
                 return BuildError("EDITOR_CTRL_CREATE_EMPTY_NO_NAME", "new_name (object name) is required.");
 
+            // Validate parent before creating to avoid leaked GameObjects
+            Transform parentTransform = null;
+            if (!string.IsNullOrEmpty(request.hierarchy_path))
+            {
+                var parentGo = GameObject.Find(request.hierarchy_path);
+                if (parentGo == null)
+                    return BuildError("EDITOR_CTRL_CREATE_EMPTY_PARENT_NOT_FOUND",
+                        $"Parent not found: {request.hierarchy_path}");
+                parentTransform = parentGo.transform;
+            }
+
             var go = new GameObject(request.new_name);
             Undo.RegisterCreatedObjectUndo(go, $"PrefabSentinel: Create {request.new_name}");
 
-            if (!string.IsNullOrEmpty(request.hierarchy_path))
-            {
-                var parent = GameObject.Find(request.hierarchy_path);
-                if (parent == null)
-                    return BuildError("EDITOR_CTRL_CREATE_EMPTY_PARENT_NOT_FOUND",
-                        $"Parent not found: {request.hierarchy_path}");
-                Undo.SetTransformParent(go.transform, parent.transform,
+            if (parentTransform != null)
+                Undo.SetTransformParent(go.transform, parentTransform,
                     $"PrefabSentinel: SetParent {request.new_name}");
-            }
 
             if (TryParseVector3(request.property_value, out Vector3 pos))
                 go.transform.localPosition = pos;
 
             string path = GetHierarchyPath(go);
-            return BuildSuccess("EDITOR_CTRL_CREATE_EMPTY_OK",
+            var resp = BuildSuccess("EDITOR_CTRL_CREATE_EMPTY_OK",
                 $"Created empty GameObject '{request.new_name}' at {path}",
                 data: new EditorControlData
                 {
@@ -2034,6 +2039,12 @@ namespace PrefabSentinel
                     executed = true,
                     read_only = false,
                 });
+            resp.diagnostics = new[] { new EditorControlDiagnostic
+            {
+                detail = "Runtime modification — save the scene (File > Save) to persist.",
+                evidence = "Undo.RegisterCreatedObjectUndo"
+            }};
+            return resp;
         }
 
         private static EditorControlResponse HandleEditorCreatePrimitive(EditorControlRequest request)
@@ -2053,6 +2064,17 @@ namespace PrefabSentinel
                     "Valid: Cube, Sphere, Cylinder, Capsule, Plane, Quad.");
             }
 
+            // Validate parent before creating to avoid leaked GameObjects
+            Transform parentTransform = null;
+            if (!string.IsNullOrEmpty(request.hierarchy_path))
+            {
+                var parentGo = GameObject.Find(request.hierarchy_path);
+                if (parentGo == null)
+                    return BuildError("EDITOR_CTRL_CREATE_PRIM_PARENT_NOT_FOUND",
+                        $"Parent not found: {request.hierarchy_path}");
+                parentTransform = parentGo.transform;
+            }
+
             var go = GameObject.CreatePrimitive(primType);
             Undo.RegisterCreatedObjectUndo(go, $"PrefabSentinel: Create {request.primitive_type}");
 
@@ -2062,15 +2084,9 @@ namespace PrefabSentinel
                 go.name = request.new_name;
             }
 
-            if (!string.IsNullOrEmpty(request.hierarchy_path))
-            {
-                var parent = GameObject.Find(request.hierarchy_path);
-                if (parent == null)
-                    return BuildError("EDITOR_CTRL_CREATE_PRIM_PARENT_NOT_FOUND",
-                        $"Parent not found: {request.hierarchy_path}");
-                Undo.SetTransformParent(go.transform, parent.transform,
+            if (parentTransform != null)
+                Undo.SetTransformParent(go.transform, parentTransform,
                     $"PrefabSentinel: SetParent {go.name}");
-            }
 
             if (TryParseVector3(request.property_value, out Vector3 position))
                 go.transform.localPosition = position;
@@ -2080,7 +2096,7 @@ namespace PrefabSentinel
                 go.transform.localEulerAngles = rot;
 
             string primPath = GetHierarchyPath(go);
-            return BuildSuccess("EDITOR_CTRL_CREATE_PRIM_OK",
+            var resp = BuildSuccess("EDITOR_CTRL_CREATE_PRIM_OK",
                 $"Created {request.primitive_type} '{go.name}' at {primPath}",
                 data: new EditorControlData
                 {
@@ -2089,6 +2105,12 @@ namespace PrefabSentinel
                     executed = true,
                     read_only = false,
                 });
+            resp.diagnostics = new[] { new EditorControlDiagnostic
+            {
+                detail = "Runtime modification — save the scene (File > Save) to persist.",
+                evidence = "Undo.RegisterCreatedObjectUndo"
+            }};
+            return resp;
         }
 
         private static EditorControlResponse HandleEditorBatchCreate(EditorControlRequest request)
@@ -2163,7 +2185,7 @@ namespace PrefabSentinel
 
             Undo.CollapseUndoOperations(undoGroup);
 
-            return BuildSuccess("EDITOR_CTRL_BATCH_CREATE_OK",
+            var batchCreateResp = BuildSuccess("EDITOR_CTRL_BATCH_CREATE_OK",
                 $"Created {createdPaths.Count} objects",
                 data: new EditorControlData
                 {
@@ -2171,6 +2193,12 @@ namespace PrefabSentinel
                     read_only = false,
                     suggestions = createdPaths.ToArray(),
                 });
+            batchCreateResp.diagnostics = new[] { new EditorControlDiagnostic
+            {
+                detail = "Runtime modification — save the scene (File > Save) to persist.",
+                evidence = "Undo.CollapseUndoOperations"
+            }};
+            return batchCreateResp;
         }
 
         private static EditorControlResponse HandleEditorBatchSetProperty(EditorControlRequest request)
@@ -2221,7 +2249,7 @@ namespace PrefabSentinel
 
             Undo.CollapseUndoOperations(undoGroup);
 
-            return BuildSuccess("EDITOR_CTRL_BATCH_SET_OK",
+            var batchSetResp = BuildSuccess("EDITOR_CTRL_BATCH_SET_OK",
                 $"Set {results.Count} properties",
                 data: new EditorControlData
                 {
@@ -2229,6 +2257,12 @@ namespace PrefabSentinel
                     read_only = false,
                     suggestions = results.ToArray(),
                 });
+            batchSetResp.diagnostics = new[] { new EditorControlDiagnostic
+            {
+                detail = "Runtime modification — save the scene (File > Save) to persist.",
+                evidence = "Undo.CollapseUndoOperations"
+            }};
+            return batchSetResp;
         }
 
         private static EditorControlResponse HandleEditorOpenScene(EditorControlRequest request)
