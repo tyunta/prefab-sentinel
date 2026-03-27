@@ -48,6 +48,33 @@ __all__ = ["create_server"]
 
 logger = logging.getLogger(__name__)
 
+_KNOWLEDGE_URI_PREFIX = "resource://prefab-sentinel/knowledge/"
+_KNOWLEDGE_DIR = Path(__file__).parent.parent / "knowledge"
+
+
+def _extract_description(path: Path) -> str:
+    """Extract description from YAML frontmatter without external dependencies.
+
+    Parses flat key-value frontmatter (no nested structures).
+    Falls back to file stem if no frontmatter or relevant fields.
+    """
+    text = path.read_text(encoding="utf-8")
+    if not text.startswith("---"):
+        return path.stem
+    end = text.find("---", 3)
+    if end < 0:
+        return path.stem
+    fm: dict[str, str] = {}
+    for line in text[3:end].strip().splitlines():
+        if ":" in line:
+            key, _, val = line.partition(":")
+            fm[key.strip()] = val.strip().strip('"').strip("'")
+    if "description" in fm:
+        return fm["description"]
+    if "tool" in fm:
+        return f"{fm['tool']} knowledge"
+    return path.stem
+
 
 def create_server(
     project_root: str | Path | None = None,
@@ -81,6 +108,24 @@ def create_server(
         ),
         lifespan=_lifespan,
     )
+
+    # ------------------------------------------------------------------
+    # Knowledge resources
+    # ------------------------------------------------------------------
+
+    def _make_reader(file_path: Path):  # noqa: ANN202
+        """Create a closure-based reader to avoid FastMCP parameter mismatch."""
+        @server.resource(
+            f"{_KNOWLEDGE_URI_PREFIX}{file_path.name}",
+            name=file_path.stem,
+            description=_extract_description(file_path),
+        )
+        def _read_knowledge() -> str:
+            return file_path.read_text(encoding="utf-8")
+
+    if _KNOWLEDGE_DIR.is_dir():
+        for _md_file in sorted(_KNOWLEDGE_DIR.glob("*.md")):
+            _make_reader(_md_file)
 
     # ------------------------------------------------------------------
     # Helpers (closure-scoped, not exposed as tools)
@@ -142,6 +187,11 @@ def create_server(
                 (e.g. "Assets/Tyunta/SoulLinkerSystem").
         """
         result = await session.activate(scope)
+        result["suggested_reads"] = session.suggest_reads()
+        result["knowledge_hint"] = (
+            "Other knowledge files available via Glob('knowledge/*.md') "
+            f"or MCP Resources ({_KNOWLEDGE_URI_PREFIX})"
+        )
         diagnostics: list[dict[str, Any]] = [
             {
                 "message": (

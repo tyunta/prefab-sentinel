@@ -18,7 +18,11 @@ from typing import Any
 from prefab_sentinel.editor_bridge import bridge_status
 from prefab_sentinel.orchestrator import Phase1Orchestrator
 from prefab_sentinel.symbol_tree import SymbolTree, build_script_name_map
-from prefab_sentinel.unity_assets import find_project_root, resolve_scope_path
+from prefab_sentinel.unity_assets import (
+    collect_project_guid_index,
+    find_project_root,
+    resolve_scope_path,
+)
 from prefab_sentinel.wsl_compat import to_wsl_path
 
 __all__ = ["ProjectSession"]
@@ -58,6 +62,7 @@ class ProjectSession:
 
         # Caches
         self._orchestrator: Phase1Orchestrator | None = None
+        self._guid_index: dict[str, Path] | None = None
         self._script_name_map: dict[str, str] | None = None
         self._symbol_cache: dict[Path, _SymbolCacheEntry] = {}
 
@@ -158,6 +163,77 @@ class ProjectSession:
                 return {}
             self._script_name_map = build_script_name_map(self._project_root)
         return self._script_name_map
+
+    def guid_index(self) -> dict[str, Path]:
+        """Return the cached GUID index, building on first call.
+
+        Known limitation: build_script_name_map() internally calls
+        collect_project_guid_index(), so the first activate_project
+        scans the GUID index twice. Tracked in
+        project_improve_guid_index_cache_unification.md.
+        """
+        if self._guid_index is None:
+            if self._project_root is None:
+                return {}
+            self._guid_index = collect_project_guid_index(
+                self._project_root, include_package_cache=False,
+            )
+        return self._guid_index
+
+    # ------------------------------------------------------------------
+    # Knowledge suggestions
+    # ------------------------------------------------------------------
+
+    _SELF_KNOWLEDGE: list[str] = [
+        "knowledge/prefab-sentinel-editor-camera.md",
+        "knowledge/prefab-sentinel-material-operations.md",
+        "knowledge/prefab-sentinel-patch-patterns.md",
+        "knowledge/prefab-sentinel-variant-patterns.md",
+        "knowledge/prefab-sentinel-wiring-triage.md",
+        "knowledge/prefab-sentinel-workflow-patterns.md",
+    ]
+
+    # Case-insensitive substring matching against script_name_map values
+    # and guid_index asset path strings.
+    # Note: "liltoon" (lowercase) intentionally omitted — case-insensitive
+    # matching makes "lilToon" sufficient.
+    _KEYWORD_TO_KNOWLEDGE: dict[str, str] = {
+        "UdonSharp": "knowledge/udonsharp.md",
+        "UdonBehaviour": "knowledge/udonsharp.md",
+        "VRCSceneDescriptor": "knowledge/vrchat-sdk-worlds.md",
+        "VRC_SceneDescriptor": "knowledge/vrchat-sdk-worlds.md",
+        "VRCAvatarDescriptor": "knowledge/vrchat-sdk-avatars.md",
+        "ModularAvatar": "knowledge/modular-avatar.md",
+        "VRCFury": "knowledge/vrcfury.md",
+        "AvatarOptimizer": "knowledge/avatar-optimizer.md",
+        "lilToon": "knowledge/liltoon.md",
+        "NDMF": "knowledge/ndmf.md",
+        "nadena.dev.ndmf": "knowledge/ndmf.md",
+    }
+
+    def suggest_reads(self) -> list[str]:
+        """Return knowledge file paths relevant to the current project.
+
+        Combines prefab-sentinel's own knowledge (always) with ecosystem
+        knowledge detected via script_name_map values and guid_index
+        asset paths.
+        """
+        ecosystem: set[str] = set()
+
+        script_lower = [v.lower() for v in self.script_name_map().values()]
+        guid_lower = [str(p).lower() for p in self.guid_index().values()]
+
+        for keyword, knowledge_file in self._KEYWORD_TO_KNOWLEDGE.items():
+            kw_lower = keyword.lower()
+            if any(kw_lower in v for v in script_lower) or any(
+                kw_lower in p for p in guid_lower
+            ):
+                ecosystem.add(knowledge_file)
+
+        if ecosystem:
+            ecosystem.add("knowledge/vrchat-sdk-base.md")
+
+        return sorted(self._SELF_KNOWLEDGE) + sorted(ecosystem)
 
     def get_symbol_tree(
         self,
@@ -269,6 +345,7 @@ class ProjectSession:
         all depend on the GUID index.
         """
         self._orchestrator = None
+        self._guid_index = None
         self._script_name_map = None
         self._symbol_cache.clear()
         logger.debug("Invalidated GUID index + script map + SymbolTree + orchestrator")
@@ -302,6 +379,7 @@ class ProjectSession:
     def invalidate_all(self) -> None:
         """Full cache reset."""
         self._orchestrator = None
+        self._guid_index = None
         self._script_name_map = None
         self._symbol_cache.clear()
         logger.debug("Invalidated all caches")

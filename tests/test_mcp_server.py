@@ -2538,5 +2538,166 @@ class TestPatchApplyTool(unittest.TestCase):
         self.assertIsNone(call_kwargs["change_reason"])
 
 
+# ---------------------------------------------------------------------------
+# activate_project suggested_reads
+# ---------------------------------------------------------------------------
+
+
+class TestActivateProjectSuggestedReads(unittest.TestCase):
+    """activate_project response includes suggested_reads."""
+
+    @patch("prefab_sentinel.session.collect_project_guid_index")
+    @patch("prefab_sentinel.session.build_script_name_map")
+    @patch("prefab_sentinel.session.Phase1Orchestrator")
+    @patch("prefab_sentinel.session.resolve_scope_path")
+    @patch("prefab_sentinel.session.find_project_root")
+    def test_response_contains_suggested_reads(
+        self,
+        mock_find: MagicMock,
+        mock_resolve: MagicMock,
+        mock_orch: MagicMock,
+        mock_build: MagicMock,
+        mock_guid: MagicMock,
+    ) -> None:
+        mock_find.return_value = Path("/unity")
+        mock_resolve.return_value = Path("/unity/Assets/MyScope")
+        mock_build.return_value = {}
+        mock_guid.return_value = {}
+        server = create_server()
+        _, result = _run(server.call_tool("activate_project", {"scope": "Assets/MyScope"}))
+        self.assertIn("suggested_reads", result["data"])
+        self.assertIsInstance(result["data"]["suggested_reads"], list)
+        self.assertTrue(
+            any("prefab-sentinel" in r for r in result["data"]["suggested_reads"])
+        )
+
+    @patch("prefab_sentinel.session.collect_project_guid_index")
+    @patch("prefab_sentinel.session.build_script_name_map")
+    @patch("prefab_sentinel.session.Phase1Orchestrator")
+    @patch("prefab_sentinel.session.resolve_scope_path")
+    @patch("prefab_sentinel.session.find_project_root")
+    def test_response_contains_knowledge_hint(
+        self,
+        mock_find: MagicMock,
+        mock_resolve: MagicMock,
+        mock_orch: MagicMock,
+        mock_build: MagicMock,
+        mock_guid: MagicMock,
+    ) -> None:
+        mock_find.return_value = Path("/unity")
+        mock_resolve.return_value = Path("/unity/Assets/MyScope")
+        mock_build.return_value = {}
+        mock_guid.return_value = {}
+        server = create_server()
+        _, result = _run(server.call_tool("activate_project", {"scope": "Assets/MyScope"}))
+        self.assertIn("knowledge_hint", result["data"])
+        from prefab_sentinel.mcp_server import _KNOWLEDGE_URI_PREFIX
+        self.assertIn(_KNOWLEDGE_URI_PREFIX, result["data"]["knowledge_hint"])
+
+
+# ---------------------------------------------------------------------------
+# Knowledge MCP Resources
+# ---------------------------------------------------------------------------
+
+
+class TestKnowledgeResources(unittest.TestCase):
+    """knowledge/*.md files are registered as MCP Resources."""
+
+    def test_resources_registered(self) -> None:
+        """At least one knowledge resource is registered."""
+        server = create_server()
+        resources = _run(server.list_resources())
+        uris = [r.uri for r in resources]
+        knowledge_uris = [u for u in uris if "knowledge/" in str(u)]
+        self.assertGreater(len(knowledge_uris), 0)
+
+    def test_resource_uri_scheme(self) -> None:
+        """All knowledge resources use the expected URI scheme."""
+        from prefab_sentinel.mcp_server import _KNOWLEDGE_URI_PREFIX
+        server = create_server()
+        resources = _run(server.list_resources())
+        for r in resources:
+            uri_str = str(r.uri)
+            if "knowledge/" in uri_str:
+                self.assertTrue(
+                    uri_str.startswith(_KNOWLEDGE_URI_PREFIX),
+                    f"Unexpected URI: {uri_str}",
+                )
+                self.assertTrue(uri_str.endswith(".md"), f"Not .md: {uri_str}")
+
+    def test_resource_read_returns_content(self) -> None:
+        """Reading a knowledge resource returns non-empty markdown text."""
+        server = create_server()
+        resources = _run(server.list_resources())
+        knowledge_resources = [
+            r for r in resources if "knowledge/" in str(r.uri)
+        ]
+        self.assertGreater(len(knowledge_resources), 0)
+        # Read the first one
+        uri = str(knowledge_resources[0].uri)
+        content = _run(server.read_resource(uri))
+        # content is a list with one item (text or blob)
+        text = content[0].content if hasattr(content[0], "content") else str(content[0])
+        self.assertGreater(len(text), 0)
+
+    def test_resource_has_description(self) -> None:
+        """Each knowledge resource has a non-empty description."""
+        server = create_server()
+        resources = _run(server.list_resources())
+        for r in resources:
+            if "knowledge/" in str(r.uri):
+                self.assertTrue(
+                    r.description and len(r.description) > 0,
+                    f"Missing description for {r.uri}",
+                )
+
+
+# ---------------------------------------------------------------------------
+# _extract_description
+# ---------------------------------------------------------------------------
+
+
+class TestExtractDescription(unittest.TestCase):
+    """_extract_description handles various frontmatter formats."""
+
+    def _extract(self, content: str) -> str:
+        """Write content to a temp file and extract description."""
+        with tempfile.NamedTemporaryFile(
+            suffix=".md", mode="w", delete=False, encoding="utf-8"
+        ) as f:
+            f.write(content)
+            f.flush()
+            path = Path(f.name)
+        try:
+            from prefab_sentinel.mcp_server import _extract_description
+            return _extract_description(path)
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_with_description_field(self) -> None:
+        content = "---\ntool: foo\ndescription: A helpful guide\n---\n# Title\n"
+        self.assertEqual("A helpful guide", self._extract(content))
+
+    def test_with_tool_field_only(self) -> None:
+        content = "---\ntool: liltoon\nversion_tested: 1.0\n---\n# Title\n"
+        self.assertEqual("liltoon knowledge", self._extract(content))
+
+    def test_no_frontmatter(self) -> None:
+        content = "# Just a markdown file\nSome content.\n"
+        result = self._extract(content)
+        # Returns the file stem (temp file name)
+        self.assertIsInstance(result, str)
+        self.assertGreater(len(result), 0)
+
+    def test_incomplete_frontmatter(self) -> None:
+        content = "---\ntool: broken\n# No closing delimiter\n"
+        result = self._extract(content)
+        self.assertIsInstance(result, str)
+
+    def test_quoted_values_stripped(self) -> None:
+        content = '---\ntool: "udonsharp"\n---\n# Title\n'
+        self.assertEqual("udonsharp knowledge", self._extract(content))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -605,5 +605,121 @@ class TestResolveScope(unittest.TestCase):
         self.assertEqual("", session.resolve_scope(""))
 
 
+# ---------------------------------------------------------------------------
+# suggest_reads
+# ---------------------------------------------------------------------------
+
+
+class TestSuggestReads(unittest.TestCase):
+    """suggest_reads() returns knowledge file paths based on project content."""
+
+    def test_always_includes_prefab_sentinel_knowledge(self) -> None:
+        """Even with empty maps, prefab-sentinel's own knowledge is returned."""
+        session = ProjectSession()
+        reads = session.suggest_reads()
+        expected_prefixes = [
+            "knowledge/prefab-sentinel-editor-camera.md",
+            "knowledge/prefab-sentinel-material-operations.md",
+            "knowledge/prefab-sentinel-patch-patterns.md",
+            "knowledge/prefab-sentinel-variant-patterns.md",
+            "knowledge/prefab-sentinel-wiring-triage.md",
+            "knowledge/prefab-sentinel-workflow-patterns.md",
+        ]
+        for path in expected_prefixes:
+            self.assertIn(path, reads)
+
+    @patch("prefab_sentinel.session.collect_project_guid_index")
+    @patch("prefab_sentinel.session.build_script_name_map")
+    def test_detects_udonsharp_from_script_name_map(
+        self, mock_build: MagicMock, mock_guid: MagicMock
+    ) -> None:
+        mock_build.return_value = {
+            "abc123": "UdonSharpBehaviour",  # contains "UdonSharp" → match
+            "def456": "MyUdonSharpScript",   # contains "UdonSharp" → match
+        }
+        mock_guid.return_value = {}
+        session = ProjectSession(project_root=Path("/fake"))
+        reads = session.suggest_reads()
+        self.assertIn("knowledge/udonsharp.md", reads)
+        self.assertIn("knowledge/vrchat-sdk-base.md", reads)
+
+    @patch("prefab_sentinel.session.collect_project_guid_index")
+    @patch("prefab_sentinel.session.build_script_name_map")
+    def test_detects_liltoon_from_guid_index(
+        self, mock_build: MagicMock, mock_guid: MagicMock
+    ) -> None:
+        mock_build.return_value = {}
+        mock_guid.return_value = {
+            "aaa": Path("/proj/Assets/lilToon/Shader/lts.shader"),
+        }
+        session = ProjectSession(project_root=Path("/fake"))
+        reads = session.suggest_reads()
+        self.assertIn("knowledge/liltoon.md", reads)
+        self.assertIn("knowledge/vrchat-sdk-base.md", reads)
+
+    @patch("prefab_sentinel.session.collect_project_guid_index")
+    @patch("prefab_sentinel.session.build_script_name_map")
+    def test_no_ecosystem_match_no_base(
+        self, mock_build: MagicMock, mock_guid: MagicMock
+    ) -> None:
+        """When no ecosystem keyword matches, vrchat-sdk-base is NOT included."""
+        mock_build.return_value = {"guid1": "SomeRandomScript"}
+        mock_guid.return_value = {}
+        session = ProjectSession(project_root=Path("/fake"))
+        reads = session.suggest_reads()
+        self.assertNotIn("knowledge/vrchat-sdk-base.md", reads)
+
+    @patch("prefab_sentinel.session.collect_project_guid_index")
+    @patch("prefab_sentinel.session.build_script_name_map")
+    def test_deduplication(
+        self, mock_build: MagicMock, mock_guid: MagicMock
+    ) -> None:
+        """Same knowledge file matched by multiple keywords is returned once."""
+        mock_build.return_value = {
+            "g1": "UdonSharpBehaviourWrapper",
+            "g2": "UdonBehaviourSync",
+        }
+        mock_guid.return_value = {}
+        session = ProjectSession(project_root=Path("/fake"))
+        reads = session.suggest_reads()
+        count = reads.count("knowledge/udonsharp.md")
+        self.assertEqual(1, count)
+
+    @patch("prefab_sentinel.session.collect_project_guid_index")
+    @patch("prefab_sentinel.session.build_script_name_map")
+    def test_sorted_prefab_sentinel_first(
+        self, mock_build: MagicMock, mock_guid: MagicMock
+    ) -> None:
+        """prefab-sentinel knowledge comes before ecosystem knowledge."""
+        mock_build.return_value = {"g1": "VRCAvatarDescriptor"}
+        mock_guid.return_value = {}
+        session = ProjectSession(project_root=Path("/fake"))
+        reads = session.suggest_reads()
+        ps_indices = [i for i, r in enumerate(reads) if "prefab-sentinel" in r]
+        eco_indices = [i for i, r in enumerate(reads) if "prefab-sentinel" not in r]
+        if ps_indices and eco_indices:
+            self.assertLess(max(ps_indices), min(eco_indices))
+
+    @patch("prefab_sentinel.session.collect_project_guid_index")
+    @patch("prefab_sentinel.session.build_script_name_map")
+    def test_detects_ndmf_from_asmdef_path(
+        self, mock_build: MagicMock, mock_guid: MagicMock
+    ) -> None:
+        mock_build.return_value = {}
+        mock_guid.return_value = {
+            "xyz": Path("/proj/Packages/nadena.dev.ndmf/Runtime/NDMF.asmdef"),
+        }
+        session = ProjectSession(project_root=Path("/fake"))
+        reads = session.suggest_reads()
+        self.assertIn("knowledge/ndmf.md", reads)
+
+    def test_no_project_root_returns_only_prefab_sentinel(self) -> None:
+        """Without project_root, only prefab-sentinel knowledge is returned."""
+        session = ProjectSession()
+        reads = session.suggest_reads()
+        for r in reads:
+            self.assertIn("prefab-sentinel", r)
+
+
 if __name__ == "__main__":
     unittest.main()
