@@ -149,16 +149,19 @@ C# (.cs) → UdonSharp Compiler → Udon Assembly → Udon VM bytecode
 ## L3: Prefab Sentinel での UdonSharp 操作
 
 ### できること
-| 操作 | ツール |
-|------|--------|
-| Prefab 階層構築 | YAML 直接編集 |
-| 階層検証 | `inspect_hierarchy` |
-| UdonSharp フィールド参照検証 | `inspect_wiring` |
-| フィールド値閲覧 | `find_unity_symbol` (include_properties) |
-| スクリプト認識・コンパイルトリガー | `editor_refresh` / `editor_recompile` |
-| コンパイルエラー確認 | `editor_console` |
-| プログラムアセット作成 | `create_udon_program_asset` ブリッジアクション（v0.5.84+、リフレクション経由） |
-| UdonBehaviour backing setup | `add_component` PatchBridge `TrySetupUdonSharpBacking()` で自動処理（v0.5.84+） |
+| 操作 | ツール | バージョン |
+|------|--------|-----------|
+| GameObject 作成 | `editor_execute_menu_item` (Create Empty / Create Empty Child) | v0.5.82+ |
+| リネーム | `editor_rename` | v0.5.84+ |
+| コンポーネント追加 | `editor_add_component` (UdonSharp 含む、backing 自動生成) | v0.5.84+ |
+| プログラムアセット作成 | `editor_create_udon_program_asset` (リフレクション経由) | v0.5.84+ |
+| UdonSharp フィールド配線 | `editor_set_property` (`object_reference` でヒエラルキーパス指定) | v0.5.85+ |
+| Prefab 化 | `editor_save_as_prefab` (`PrefabUtility.SaveAsPrefabAsset`) | v0.5.85+ |
+| 階層検証 | `inspect_hierarchy` | v0.5.82+ |
+| フィールド参照検証 | `inspect_wiring` | v0.5.82+ |
+| フィールド値閲覧 | `find_unity_symbol` (include_properties) | v0.5.82+ |
+| スクリプト認識 | `editor_refresh` / `editor_recompile` | v0.5.82+ |
+| コンパイルエラー確認 | `editor_console` | v0.5.82+ |
 
 ### ブリッジ実装詳細
 
@@ -179,18 +182,18 @@ C# (.cs) → UdonSharp Compiler → Udon Assembly → Udon VM bytecode
 6. backing UdonBehaviour の `programSource` にアセットを設定
 
 ### できないこと（制約）
-- `set_property` での UdonSharp フィールド変更（Udon VM シリアライズ形式が異なる）
-- 非 open-mode での `add_component`（既存 Prefab へのコンポーネント追加は open-mode 不可）
+- `editor_add_component` で Unity 標準コンポーネントに `UnityEngine.` 完全修飾名が必要な場合がある（`BoxCollider` → `UnityEngine.BoxCollider`）
+- 非 open-mode での `add_component`（YAML patch 版）は既存 Prefab へのコンポーネント追加に制限あり
 
-### 推奨ワークフロー
-1. C# スクリプト (.cs) を作成
+### 推奨ワークフロー (v0.5.85+ — 全工程 MCP 完結)
+1. C# スクリプト (.cs) を作成（Write ツール）
 2. `editor_refresh` / `editor_recompile` で Unity に認識させる
-3. `create_udon_program_asset` でプログラムアセット作成（または Unity で手動作成）
-4. YAML 直接編集で Prefab の階層（GameObject + Transform）を構築
-5. `inspect_hierarchy` で階層を検証
-6. Unity Inspector で UdonSharp コンポーネントを追加・フィールド設定
-7. `inspect_wiring` で参照の整合性を検証
-8. `validate_refs` で壊れた参照がないことを確認
+3. `editor_create_udon_program_asset` でプログラムアセット作成
+4. `editor_execute_menu_item` (`Create Empty` / `Create Empty Child`) + `editor_rename` で GameObject 階層を構築
+5. `editor_add_component` で UdonSharp コンポーネント追加（backing UdonBehaviour 自動生成）
+6. `editor_set_property` で UdonSharp フィールド配線（`object_reference` にヒエラルキーパス指定）
+7. `editor_save_as_prefab` で正規 Prefab 化（`PrefabUtility.SaveAsPrefabAsset`）
+8. `inspect_hierarchy` + `inspect_wiring` + `validate_refs` で検証
 
 ## 実運用で学んだこと
 
@@ -219,3 +222,10 @@ C# (.cs) → UdonSharp Compiler → Udon Assembly → Udon VM bytecode
   - VRCSDK3.dll `661092b4961be7145bfbe56e1e62337b` — VRCWorld の SceneDescriptor で確認
 - backing UdonBehaviour が Controller に正しく追加されている（`guid:45115577` のコンポーネントとして確認）
 - `4ecd63eff847044b68db9453ce219299` — PipelineManager（VRCWorld に付随）
+
+### v0.5.85 フルワークフロー検証 (2026-03-27)
+- `editor_set_property` で UdonSharp フィールド (`targetObject`) への ObjectReference 配線に成功
+- `editor_save_as_prefab` で `PrefabUtility.SaveAsPrefabAsset` による正規 Prefab 化に成功
+- `editor_add_component` で `UnityEngine.BoxCollider` は完全修飾名が必要（`BoxCollider` だけだと `TYPE_NOT_FOUND`）
+- `editor_execute_menu_item` で `GameObject/Create Empty Child` を使えば選択中の GO の子として作成可能
+- 全工程（スクリプト作成 → プログラムアセット → 階層構築 → コンポーネント追加 → 配線 → Prefab 化 → 検証）が MCP のみで完結
