@@ -148,52 +148,15 @@ C# (.cs) → UdonSharp Compiler → Udon Assembly → Udon VM bytecode
 
 ## L3: Prefab Sentinel での UdonSharp 操作
 
-### できること
-| 操作 | ツール | バージョン |
-|------|--------|-----------|
-| GameObject 作成 | `editor_execute_menu_item` (Create Empty / Create Empty Child) | v0.5.82+ |
-| リネーム | `editor_rename` | v0.5.84+ |
-| コンポーネント追加 | `editor_add_component` (UdonSharp 含む、backing 自動生成) | v0.5.84+ |
-| プログラムアセット作成 | `editor_create_udon_program_asset` (リフレクション経由) | v0.5.84+ |
-| UdonSharp フィールド配線 | `editor_set_property` (`object_reference` でヒエラルキーパス指定) | v0.5.85+ |
-| Prefab 化 | `editor_save_as_prefab` (`PrefabUtility.SaveAsPrefabAsset`) | v0.5.85+ |
-| 階層検証 | `inspect_hierarchy` | v0.5.82+ |
-| フィールド参照検証 | `inspect_wiring` | v0.5.82+ |
-| フィールド値閲覧 | `find_unity_symbol` (include_properties) | v0.5.82+ |
-| スクリプト認識 | `editor_refresh` / `editor_recompile` | v0.5.82+ |
-| コンパイルエラー確認 | `editor_console` | v0.5.82+ |
-
-### ブリッジ実装詳細
-
-#### create_udon_program_asset (UnityEditorControlBridge.cs:1909-1951)
-1. `AssetDatabase.LoadAssetAtPath<MonoScript>(scriptPath)` で .cs を読み込み
-2. リフレクションで `UdonSharp.UdonSharpProgramAsset` 型を解決
-3. `ScriptableObject.CreateInstance(assetType)` で生成
-4. `sourceCsScript` フィールドをリフレクションで設定
-5. `AssetDatabase.CreateAsset()` で .cs 横に .asset として保存
-6. UdonSharp コンパイラが残り（`serializedUdonProgramAsset`, `serializationData`）を自動補完
-
-#### TrySetupUdonSharpBacking (UnityPatchBridge.cs:3080-3186)
-1. コンポーネント型が `UdonSharpBehaviour` 継承か検出
-2. 同一 GO に backing `UdonBehaviour` を追加
-3. `_udonSharpBackingUdonBehaviour` プロパティでリンク
-4. `GetAllUdonSharpPrograms()` で全プログラムアセットをスキャン
-5. `sourceCsScript.GetClass()` でスクリプトクラスをマッチ
-6. backing UdonBehaviour の `programSource` にアセットを設定
-
-### できないこと（制約）
-- `editor_add_component` で Unity 標準コンポーネントに `UnityEngine.` 完全修飾名が必要な場合がある（`BoxCollider` → `UnityEngine.BoxCollider`）
-- 非 open-mode での `add_component`（YAML patch 版）は既存 Prefab へのコンポーネント追加に制限あり
-
-### 推奨ワークフロー (v0.5.85+ — 全工程 MCP 完結)
-1. C# スクリプト (.cs) を作成（Write ツール）
-2. `editor_refresh` / `editor_recompile` で Unity に認識させる
-3. `editor_create_udon_program_asset` でプログラムアセット作成
-4. `editor_execute_menu_item` (`Create Empty` / `Create Empty Child`) + `editor_rename` で GameObject 階層を構築
+### 推奨ワークフロー
+1. C# スクリプト (.cs) を作成
+2. `editor_recompile` で Unity に認識させる
+3. `editor_create_udon_program_asset` でプログラムアセット (.asset) 作成
+4. GameObject 階層を構築（`Create Empty Child` + `editor_rename`）
 5. `editor_add_component` で UdonSharp コンポーネント追加（backing UdonBehaviour 自動生成）
-6. `editor_set_property` で UdonSharp フィールド配線（`object_reference` にヒエラルキーパス指定）
-7. `editor_save_as_prefab` で正規 Prefab 化（`PrefabUtility.SaveAsPrefabAsset`）
-8. `inspect_hierarchy` + `inspect_wiring` + `validate_refs` で検証
+6. `editor_set_property` でフィールド配線（`object_reference` にヒエラルキーパス指定）
+7. `editor_save_as_prefab` で Prefab 化
+8. `inspect_wiring` + `validate_refs` で検証
 
 ## 実運用で学んだこと
 
