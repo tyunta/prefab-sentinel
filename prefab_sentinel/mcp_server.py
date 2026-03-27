@@ -1279,6 +1279,62 @@ def create_server(
         return send_action(action="find_renderers_by_material", **kwargs)
 
     @server.tool()
+    def editor_rename(
+        hierarchy_path: str,
+        new_name: str,
+    ) -> dict[str, Any]:
+        """Rename a GameObject in the scene (Undo-able).
+
+        Args:
+            hierarchy_path: Hierarchy path to the GameObject.
+            new_name: New name for the GameObject.
+        """
+        return send_action(
+            action="editor_rename",
+            hierarchy_path=hierarchy_path,
+            new_name=new_name,
+        )
+
+    @server.tool()
+    def editor_add_component(
+        hierarchy_path: str,
+        component_type: str,
+    ) -> dict[str, Any]:
+        """Add a component to a GameObject at runtime (Undo-able).
+
+        Type resolution: tries fully qualified name, then searches all assemblies,
+        then tries UnityEngine namespace.
+
+        Args:
+            hierarchy_path: Hierarchy path to the target GameObject.
+            component_type: Component type name (e.g. "BoxCollider", "UnityEngine.AudioSource",
+                "MyNamespace.MyComponent").
+        """
+        return send_action(
+            action="editor_add_component",
+            hierarchy_path=hierarchy_path,
+            component_type=component_type,
+        )
+
+    @server.tool()
+    def editor_create_udon_program_asset(
+        script_path: str,
+        output_path: str = "",
+    ) -> dict[str, Any]:
+        """Create an UdonSharpProgramAsset (.asset) for an UdonSharp C# script.
+
+        Requires UdonSharp to be installed in the Unity project.
+
+        Args:
+            script_path: Asset path to the .cs file (e.g. "Assets/Scripts/MyBehaviour.cs").
+            output_path: Output .asset path. Defaults to same directory as script with .asset extension.
+        """
+        kwargs: dict[str, Any] = {"asset_path": script_path}
+        if output_path:
+            kwargs["description"] = output_path
+        return send_action(action="create_udon_program_asset", **kwargs)
+
+    @server.tool()
     def editor_delete(
         hierarchy_path: str,
     ) -> dict[str, Any]:
