@@ -50,6 +50,9 @@ namespace PrefabSentinel
             "editor_rename",
             "editor_add_component",
             "create_udon_program_asset",
+            // Phase 5: SetProperty + SaveAsPrefab
+            "editor_set_property",
+            "save_as_prefab",
         };
 
         // ── Request / Response DTOs ──
@@ -127,6 +130,9 @@ namespace PrefabSentinel
             // Phase 4: Rename + AddComponent + Udon
             public string new_name = string.Empty;
             public string component_type = string.Empty;
+
+            // Phase 5: SetProperty + SaveAsPrefab
+            public string object_reference = string.Empty;
         }
 
         [Serializable]
@@ -373,6 +379,12 @@ namespace PrefabSentinel
                     break;
                 case "create_udon_program_asset":
                     response = HandleCreateUdonProgramAsset(request);
+                    break;
+                case "editor_set_property":
+                    response = HandleEditorSetProperty(request);
+                    break;
+                case "save_as_prefab":
+                    response = HandleSaveAsPrefab(request);
                     break;
                 case "vrcsdk_upload":
                     response = TryHandleVrcsdkUpload(request);
@@ -1948,6 +1960,18 @@ namespace PrefabSentinel
                     asset_path = request.asset_path,
                     executed = true,
                 });
+        }
+
+        // ── Phase 5: SetProperty + SaveAsPrefab ──
+
+        private static EditorControlResponse HandleEditorSetProperty(EditorControlRequest request)
+        {
+            return BuildError("EDITOR_CTRL_SET_PROP_NOT_IMPL", "Not yet implemented.");
+        }
+
+        private static EditorControlResponse HandleSaveAsPrefab(EditorControlRequest request)
+        {
+            return BuildError("EDITOR_CTRL_SAVE_PREFAB_NOT_IMPL", "Not yet implemented.");
         }
 
         private static EditorControlResponse HandleListMenuItems(EditorControlRequest request)
