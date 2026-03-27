@@ -1917,6 +1917,7 @@ namespace PrefabSentinel
 
             // 3. Search all loaded assemblies by simple name (handles short names
             //    like "BoxCollider" that live in UnityEngine.PhysicsModule etc.)
+            //    First match wins; use fully qualified name to disambiguate.
             foreach (var asm in System.AppDomain.CurrentDomain.GetAssemblies())
             {
                 try
@@ -1949,7 +1950,7 @@ namespace PrefabSentinel
             if (compType == null)
                 return BuildError("EDITOR_CTRL_ADD_COMP_TYPE_NOT_FOUND",
                     $"Component type not found: {request.component_type}. " +
-                    "Use fully qualified name (e.g. 'UnityEngine.BoxCollider').");
+                    "Short names (e.g. 'BoxCollider') and fully qualified names both work.");
 
             var added = Undo.AddComponent(go, compType);
             if (added == null)
