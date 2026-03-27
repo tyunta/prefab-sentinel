@@ -67,7 +67,7 @@ class TestToolRegistration(unittest.TestCase):
             "diff_unity_symbols", "set_property",
             "add_component", "remove_component",
             "list_serialized_fields", "validate_field_rename", "check_field_coverage",
-            # New 18 tools
+            # Editor bridge tools
             "editor_screenshot", "editor_select", "editor_frame",
             "editor_get_camera", "editor_set_camera",
             "editor_refresh", "editor_recompile", "editor_instantiate",
@@ -77,9 +77,13 @@ class TestToolRegistration(unittest.TestCase):
             "editor_list_children", "editor_list_materials", "editor_list_roots",
             "editor_get_material_property", "editor_set_material_property",
             "editor_console", "editor_run_tests",
+            "editor_find_renderers_by_material",
+            "editor_rename", "editor_add_component",
+            "editor_create_udon_program_asset",
+            "editor_set_property", "editor_save_as_prefab",
+            # Inspection + orchestrator tools
             "inspect_materials", "inspect_material_asset", "set_material_property",
             "validate_structure", "revert_overrides", "vrcsdk_upload",
-            # Phase 2: AI workflow tools
             "inspect_hierarchy", "validate_runtime", "patch_apply",
         }
         self.assertEqual(expected, tool_names)
@@ -87,7 +91,7 @@ class TestToolRegistration(unittest.TestCase):
     def test_tool_count(self) -> None:
         server = create_server()
         tools = _run(server.list_tools())
-        self.assertEqual(45, len(tools))
+        self.assertEqual(51, len(tools))
 
 
 class TestSymbolTools(unittest.TestCase):

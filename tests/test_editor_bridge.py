@@ -194,6 +194,8 @@ class TestSupportedActions(unittest.TestCase):
             "editor_rename",
             "editor_add_component",
             "create_udon_program_asset",
+            "editor_set_property",
+            "save_as_prefab",
         }
         self.assertEqual(expected, SUPPORTED_ACTIONS)
 

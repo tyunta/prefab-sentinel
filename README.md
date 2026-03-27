@@ -116,6 +116,8 @@ prefab-sentinel-mcp --transport streamable-http
 | `editor_set_blend_shape` | BlendShape ウェイトを名前で設定（Undo 対応） |
 | `editor_list_menu_items` | リフレクション経由で `[MenuItem]` エントリを一覧表示 |
 | `editor_execute_menu_item` | メニューアイテムをパスで実行（deny-list 付き） |
+| `editor_set_property` | SerializedObject API 経由でコンポーネントのプロパティを設定（UdonSharp 対応） |
+| `editor_save_as_prefab` | シーン上の GameObject を Prefab / Prefab Variant として保存 |
 
 **Claude Desktop 設定例:**
 
