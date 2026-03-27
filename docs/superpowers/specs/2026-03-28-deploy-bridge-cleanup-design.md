@@ -18,15 +18,21 @@
 
 ### トリガー
 
-デプロイ先 (`target_path`) が `Assets/Editor/PrefabSentinel/` の場合、親ディレクトリ (`Assets/Editor/`) 直下に `PrefabSentinel.*.cs` が残存していると CS0101 が発生する。
+`target_path.parent` 直下に `PrefabSentinel.*.cs` が残存していると、`target_path` 内の同名ファイルと CS0101 重複定義エラーが発生する。典型例は旧デプロイ先 `Assets/Editor/` 直下のファイルと新デプロイ先 `Assets/Editor/PrefabSentinel/` の共存。
+
+清掃は `target_path.parent` に対して常に実行する（特定パス名に依存しない）。`target_path == target_path.parent` の場合（旧パスへの直接デプロイ）、全ファイルが除外対象外となり清掃は実質 no-op になる。
 
 ### 動作
 
 1. デプロイ前に `target_path.parent` を走査（直下のみ、再帰しない）
 2. `PrefabSentinel.*.cs` にマッチするファイルを収集
 3. ターゲットディレクトリ内のファイルは除外（`target_path` 配下は対象外）
-4. 該当ファイルを削除
+4. 該当ファイルと対応する `.meta` ファイル（存在すれば）を削除
 5. レスポンスに結果を格納
+
+### `.meta` ファイルの扱い
+
+Unity は `.cs` ファイルごとに `.meta` ファイルを生成する。`.cs` だけ削除すると孤立した `.meta` が残り、domain reload のたびに警告が出る。旧 `.cs` を削除する際は `{filename}.meta` も存在すれば一緒に削除する。
 
 ### レスポンス
 
@@ -63,7 +69,7 @@
 
 ### 問題
 
-`PrefabSentinel.VRCSDKUploadHandler.cs` は VRC SDK の特定の API (`GetBuildTargetGroup`, `IVRCSdkWorldBuilderApi` 等) に依存する。SDK バージョンが合わないプロジェクトではコンパイルエラーになる。
+`PrefabSentinel.VRCSDKUploadHandler.cs` は `#if VRC_SDK_VRCSDK3` で囲まれているが、ガード内で SDK の新しい API (`GetBuildTargetGroup`, `IVRCSdkWorldBuilderApi` 等) を使用する。SDK が存在するがバージョンが古いプロジェクトではプリプロセッサガードを通過した上でコンパイルエラーになる。C# の `#if` はパッケージの存在のみをチェックし、API バージョンを区別できないため、ファイル単位の除外が最も確実。
 
 ### パラメータ
 
@@ -80,14 +86,18 @@ def deploy_bridge(
 ### 除外ロジック
 
 ```python
-_OPTIONAL_FILES = {"PrefabSentinel.VRCSDKUploadHandler.cs"}
+_UPLOAD_HANDLER = "PrefabSentinel.VRCSDKUploadHandler.cs"
 
 for cs_file in sorted(plugin_tools.glob("*.cs")):
-    if cs_file.name in _OPTIONAL_FILES and not include_upload_handler:
+    if cs_file.name == _UPLOAD_HANDLER and not include_upload_handler:
         skipped_files.append(cs_file.name)
         continue
     # ... copy
 ```
+
+### ターゲット内の既存ファイル清掃
+
+`include_upload_handler=False` の場合、ターゲットディレクトリに過去のデプロイで残った `VRCSDKUploadHandler.cs` (+ `.meta`) が存在すれば削除する。スキップしただけでは既存のコピーが残りコンパイルエラーが継続するため。
 
 ### レスポンス
 
