@@ -1936,11 +1936,117 @@ namespace PrefabSentinel
 
         // ── Phase 6: Batch Operations + Scene ──
 
+        private static bool TryParseVector3(string csv, out Vector3 result)
+        {
+            result = Vector3.zero;
+            if (string.IsNullOrEmpty(csv)) return false;
+            var parts = csv.Split(',');
+            if (parts.Length < 3) return false;
+            var ci = System.Globalization.CultureInfo.InvariantCulture;
+            return float.TryParse(parts[0].Trim(), System.Globalization.NumberStyles.Float, ci, out result.x)
+                && float.TryParse(parts[1].Trim(), System.Globalization.NumberStyles.Float, ci, out result.y)
+                && float.TryParse(parts[2].Trim(), System.Globalization.NumberStyles.Float, ci, out result.z);
+        }
+
+        private static string GetHierarchyPath(GameObject go)
+        {
+            string path = "/" + go.name;
+            var t = go.transform.parent;
+            while (t != null)
+            {
+                path = "/" + t.name + path;
+                t = t.parent;
+            }
+            return path;
+        }
+
         private static EditorControlResponse HandleEditorCreateEmpty(EditorControlRequest request)
-        { return BuildError("NOT_IMPL", "Not yet implemented."); }
+        {
+            if (string.IsNullOrEmpty(request.new_name))
+                return BuildError("EDITOR_CTRL_CREATE_EMPTY_NO_NAME", "new_name (object name) is required.");
+
+            var go = new GameObject(request.new_name);
+            Undo.RegisterCreatedObjectUndo(go, $"PrefabSentinel: Create {request.new_name}");
+
+            if (!string.IsNullOrEmpty(request.hierarchy_path))
+            {
+                var parent = GameObject.Find(request.hierarchy_path);
+                if (parent == null)
+                    return BuildError("EDITOR_CTRL_CREATE_EMPTY_PARENT_NOT_FOUND",
+                        $"Parent not found: {request.hierarchy_path}");
+                Undo.SetTransformParent(go.transform, parent.transform,
+                    $"PrefabSentinel: SetParent {request.new_name}");
+            }
+
+            if (TryParseVector3(request.property_value, out Vector3 pos))
+                go.transform.localPosition = pos;
+
+            string path = GetHierarchyPath(go);
+            return BuildSuccess("EDITOR_CTRL_CREATE_EMPTY_OK",
+                $"Created empty GameObject '{request.new_name}' at {path}",
+                data: new EditorControlData
+                {
+                    selected_object = request.new_name,
+                    output_path = path,
+                    executed = true,
+                    read_only = false,
+                });
+        }
 
         private static EditorControlResponse HandleEditorCreatePrimitive(EditorControlRequest request)
-        { return BuildError("NOT_IMPL", "Not yet implemented."); }
+        {
+            if (string.IsNullOrEmpty(request.primitive_type))
+                return BuildError("EDITOR_CTRL_CREATE_PRIM_NO_TYPE", "primitive_type is required.");
+
+            PrimitiveType primType;
+            try
+            {
+                primType = (PrimitiveType)System.Enum.Parse(typeof(PrimitiveType), request.primitive_type, true);
+            }
+            catch (System.ArgumentException)
+            {
+                return BuildError("EDITOR_CTRL_CREATE_PRIM_BAD_TYPE",
+                    $"Invalid primitive_type: {request.primitive_type}. " +
+                    "Valid: Cube, Sphere, Cylinder, Capsule, Plane, Quad.");
+            }
+
+            var go = GameObject.CreatePrimitive(primType);
+            Undo.RegisterCreatedObjectUndo(go, $"PrefabSentinel: Create {request.primitive_type}");
+
+            if (!string.IsNullOrEmpty(request.new_name))
+            {
+                Undo.RecordObject(go, $"PrefabSentinel: Rename {go.name}");
+                go.name = request.new_name;
+            }
+
+            if (!string.IsNullOrEmpty(request.hierarchy_path))
+            {
+                var parent = GameObject.Find(request.hierarchy_path);
+                if (parent == null)
+                    return BuildError("EDITOR_CTRL_CREATE_PRIM_PARENT_NOT_FOUND",
+                        $"Parent not found: {request.hierarchy_path}");
+                Undo.SetTransformParent(go.transform, parent.transform,
+                    $"PrefabSentinel: SetParent {go.name}");
+            }
+
+            if (TryParseVector3(request.property_value, out Vector3 position))
+                go.transform.localPosition = position;
+            if (TryParseVector3(request.scale, out Vector3 scl))
+                go.transform.localScale = scl;
+            if (TryParseVector3(request.rotation, out Vector3 rot))
+                go.transform.localEulerAngles = rot;
+
+            string primPath = GetHierarchyPath(go);
+            return BuildSuccess("EDITOR_CTRL_CREATE_PRIM_OK",
+                $"Created {request.primitive_type} '{go.name}' at {primPath}",
+                data: new EditorControlData
+                {
+                    selected_object = go.name,
+                    output_path = primPath,
+                    executed = true,
+                    read_only = false,
+                });
+        }
 
         private static EditorControlResponse HandleEditorBatchCreate(EditorControlRequest request)
         { return BuildError("NOT_IMPL", "Not yet implemented."); }
