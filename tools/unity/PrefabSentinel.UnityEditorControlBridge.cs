@@ -2049,10 +2049,144 @@ namespace PrefabSentinel
         }
 
         private static EditorControlResponse HandleEditorBatchCreate(EditorControlRequest request)
-        { return BuildError("NOT_IMPL", "Not yet implemented."); }
+        {
+            if (string.IsNullOrEmpty(request.batch_objects_json))
+                return BuildError("EDITOR_CTRL_BATCH_CREATE_NO_DATA", "batch_objects_json is required.");
+
+            BatchObjectArray wrapper;
+            try
+            {
+                wrapper = JsonUtility.FromJson<BatchObjectArray>(
+                    "{\"items\":" + request.batch_objects_json + "}");
+            }
+            catch (System.Exception ex)
+            {
+                return BuildError("EDITOR_CTRL_BATCH_CREATE_JSON_ERROR",
+                    $"Failed to parse batch_objects_json: {ex.Message}");
+            }
+
+            if (wrapper.items == null || wrapper.items.Length == 0)
+                return BuildError("EDITOR_CTRL_BATCH_CREATE_EMPTY", "batch_objects_json is empty.");
+
+            int undoGroup = Undo.GetCurrentGroup();
+            Undo.SetCurrentGroupName("PrefabSentinel: Batch Create");
+
+            var createdPaths = new System.Collections.Generic.List<string>();
+
+            foreach (var spec in wrapper.items)
+            {
+                GameObject go;
+                if (!string.IsNullOrEmpty(spec.type) && !string.Equals(spec.type, "Empty", System.StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        var primType = (PrimitiveType)System.Enum.Parse(typeof(PrimitiveType), spec.type, true);
+                        go = GameObject.CreatePrimitive(primType);
+                    }
+                    catch (System.ArgumentException)
+                    {
+                        Undo.CollapseUndoOperations(undoGroup);
+                        return BuildError("EDITOR_CTRL_BATCH_CREATE_BAD_TYPE",
+                            $"Invalid type at index {createdPaths.Count}: {spec.type}. " +
+                            "Valid: Cube, Sphere, Cylinder, Capsule, Plane, Quad, Empty.");
+                    }
+                }
+                else
+                {
+                    go = new GameObject("GameObject");
+                }
+                Undo.RegisterCreatedObjectUndo(go, $"PrefabSentinel: Create {spec.name}");
+
+                if (!string.IsNullOrEmpty(spec.name))
+                    go.name = spec.name;
+
+                if (!string.IsNullOrEmpty(spec.parent))
+                {
+                    var parent = GameObject.Find(spec.parent);
+                    if (parent != null)
+                        Undo.SetTransformParent(go.transform, parent.transform,
+                            $"PrefabSentinel: SetParent {go.name}");
+                }
+
+                if (TryParseVector3(spec.position, out Vector3 pos))
+                    go.transform.localPosition = pos;
+                if (TryParseVector3(spec.scale, out Vector3 scl))
+                    go.transform.localScale = scl;
+                if (TryParseVector3(spec.rotation, out Vector3 rot))
+                    go.transform.localEulerAngles = rot;
+
+                createdPaths.Add(GetHierarchyPath(go));
+            }
+
+            Undo.CollapseUndoOperations(undoGroup);
+
+            return BuildSuccess("EDITOR_CTRL_BATCH_CREATE_OK",
+                $"Created {createdPaths.Count} objects",
+                data: new EditorControlData
+                {
+                    executed = true,
+                    read_only = false,
+                    suggestions = createdPaths.ToArray(),
+                });
+        }
 
         private static EditorControlResponse HandleEditorBatchSetProperty(EditorControlRequest request)
-        { return BuildError("NOT_IMPL", "Not yet implemented."); }
+        {
+            if (string.IsNullOrEmpty(request.batch_operations_json))
+                return BuildError("EDITOR_CTRL_BATCH_SET_NO_DATA", "batch_operations_json is required.");
+
+            BatchSetPropertyArray wrapper;
+            try
+            {
+                wrapper = JsonUtility.FromJson<BatchSetPropertyArray>(
+                    "{\"items\":" + request.batch_operations_json + "}");
+            }
+            catch (System.Exception ex)
+            {
+                return BuildError("EDITOR_CTRL_BATCH_SET_JSON_ERROR",
+                    $"Failed to parse batch_operations_json: {ex.Message}");
+            }
+
+            if (wrapper.items == null || wrapper.items.Length == 0)
+                return BuildError("EDITOR_CTRL_BATCH_SET_EMPTY", "batch_operations_json is empty.");
+
+            int undoGroup = Undo.GetCurrentGroup();
+            Undo.SetCurrentGroupName("PrefabSentinel: Batch SetProperty");
+
+            var results = new System.Collections.Generic.List<string>();
+
+            foreach (var op in wrapper.items)
+            {
+                var subReq = new EditorControlRequest
+                {
+                    action = "editor_set_property",
+                    hierarchy_path = op.hierarchy_path,
+                    component_type = op.component_type,
+                    property_name = op.property_name,
+                    property_value = op.value,
+                    object_reference = op.object_reference,
+                };
+                var subResp = HandleEditorSetProperty(subReq);
+                if (!subResp.success)
+                {
+                    Undo.CollapseUndoOperations(undoGroup);
+                    return BuildError("EDITOR_CTRL_BATCH_SET_FAILED",
+                        $"Operation failed at index {results.Count}: {subResp.message}");
+                }
+                results.Add($"{op.hierarchy_path}/{op.component_type}.{op.property_name}");
+            }
+
+            Undo.CollapseUndoOperations(undoGroup);
+
+            return BuildSuccess("EDITOR_CTRL_BATCH_SET_OK",
+                $"Set {results.Count} properties",
+                data: new EditorControlData
+                {
+                    executed = true,
+                    read_only = false,
+                    suggestions = results.ToArray(),
+                });
+        }
 
         private static EditorControlResponse HandleEditorOpenScene(EditorControlRequest request)
         { return BuildError("NOT_IMPL", "Not yet implemented."); }
