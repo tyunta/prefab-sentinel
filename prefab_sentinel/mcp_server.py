@@ -1417,6 +1417,64 @@ def create_server(
             menu_path=menu_path,
         )
 
+    @server.tool()
+    def editor_set_property(
+        hierarchy_path: str,
+        component_type: str,
+        property_name: str,
+        value: str = "",
+        object_reference: str = "",
+    ) -> dict[str, Any]:
+        """Set a serialized property on a component via Unity's SerializedObject API.
+
+        Supports all SerializedProperty types including UdonSharp fields.
+        Type is auto-detected from the property. Use value for primitives/enum,
+        object_reference for ObjectReference fields.
+
+        For object_reference, specify a hierarchy path (e.g. "/ToggleTarget")
+        for scene objects, or an asset path (e.g. "Assets/Materials/Red.mat")
+        for project assets. Append :ComponentType to reference a specific
+        component (e.g. "/MyObj:AudioSource").
+
+        Args:
+            hierarchy_path: Hierarchy path to the GameObject.
+            component_type: Component type name (simple or fully qualified).
+            property_name: SerializedProperty path (e.g. "targetObject", "m_Speed").
+            value: Value for primitive/enum properties (auto-parsed by type).
+            object_reference: Hierarchy path or asset path for ObjectReference properties.
+        """
+        kwargs: dict[str, Any] = {
+            "hierarchy_path": hierarchy_path,
+            "component_type": component_type,
+            "property_name": property_name,
+        }
+        if object_reference:
+            kwargs["object_reference"] = object_reference
+        else:
+            kwargs["property_value"] = value
+        return send_action(action="editor_set_property", **kwargs)
+
+    @server.tool()
+    def editor_save_as_prefab(
+        hierarchy_path: str,
+        asset_path: str,
+    ) -> dict[str, Any]:
+        """Save a scene GameObject as a Prefab or Prefab Variant asset.
+
+        If the GameObject is a Prefab instance (connected to a base),
+        the result is automatically a Prefab Variant.
+        If it's a plain GameObject, a new original Prefab is created.
+
+        Args:
+            hierarchy_path: Hierarchy path to the GameObject to save.
+            asset_path: Output .prefab path (e.g. "Assets/Prefabs/MyObj.prefab").
+        """
+        return send_action(
+            action="save_as_prefab",
+            hierarchy_path=hierarchy_path,
+            asset_path=asset_path,
+        )
+
     # ------------------------------------------------------------------
     # Inspection tools (orchestrator-backed)
     # ------------------------------------------------------------------
