@@ -2,12 +2,12 @@
 tool: udonsharp
 version_tested: "VRC SDK 3.7+ / UdonSharp 1.x"
 last_updated: 2026-03-27
-confidence: mixed
+confidence: high
 ---
 
 # UdonSharp Prefab 構築パターン
 
-> confidence: L3・実運用セクション = high / L1-L2 新規追加セクション = medium
+> Phase 3 実環境検証済み。Script GUID、inspect_wiring、validate_refs で実測確認。
 
 ## L1: 基本構造
 
@@ -209,3 +209,12 @@ C# (.cs) → UdonSharp Compiler → Udon Assembly → Udon VM bytecode
 - .asset は .cs を書いただけでは自動生成されない
 - Unity で手動作成（Create > U# Script）か、ブリッジの `create_udon_program_asset` アクションで作成
 - 作成後、UdonSharp コンパイラが `serializedUdonProgramAsset` と `serializationData` を自動補完
+
+### Phase 3 実測検証結果 (2026-03-27)
+- `inspect_wiring`: DualButtonController prefab で null 参照 0件、フィールド名が C# ソースと一致
+- `validate_refs`: 528 参照スキャン、破損 0件
+- Script GUID 実測確認:
+  - UdonBehaviour `45115577ef41a5b4ca741ed302693907` — VRCWorld と DualButtonController 両方で確認
+  - VRCSDK3.dll `661092b4961be7145bfbe56e1e62337b` — VRCWorld の SceneDescriptor で確認
+- backing UdonBehaviour が Controller に正しく追加されている（`guid:45115577` のコンポーネントとして確認）
+- `4ecd63eff847044b68db9453ce219299` — PipelineManager（VRCWorld に付随）
