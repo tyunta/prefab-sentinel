@@ -38,11 +38,13 @@ Unity は `.cs` ファイルごとに `.meta` ファイルを生成する。`.cs
 
 ```python
 "data": {
-    "removed_old_files": ["Assets/Editor/PrefabSentinel.EditorBridge.cs", ...],
+    "removed_old_files": ["PrefabSentinel.EditorBridge.cs", "PrefabSentinel.EditorBridge.cs.meta", ...],
     "copied_files": [...],
     ...
 }
 ```
+
+ファイル名のみ（bare filename）。`copied_files` と同じ形式。親ディレクトリは diagnostics メッセージに含まれる。
 
 ```python
 "diagnostics": [
