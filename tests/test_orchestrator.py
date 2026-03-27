@@ -735,6 +735,34 @@ class InspectWiringVariantOverrideAnnotationTests(unittest.TestCase):
             self.assertNotIn("is_overridden", fd)
 
 
+class ValidateAllWiringTests(unittest.TestCase):
+    def test_single_file(self) -> None:
+        from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
+
+        text = (
+            YAML_HEADER
+            + make_gameobject("100", "TestObj", ["200"])
+            + make_monobehaviour("200", "100", guid="abcd" * 8)
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "test.prefab"
+            p.write_text(text, encoding="utf-8")
+            orch = Phase1Orchestrator.default()
+            result = orch.validate_all_wiring(target_path=str(p))
+            resp = result.to_dict()
+            self.assertTrue(resp["success"])
+            self.assertEqual(1, resp["data"]["files_scanned"])
+            self.assertGreaterEqual(resp["data"]["total_components"], 1)
+
+    def test_no_scope_returns_error(self) -> None:
+        orch = _make_orchestrator()
+        orch.prefab_variant.project_root = None
+        result = orch.validate_all_wiring()
+        resp = result.to_dict()
+        self.assertFalse(resp["success"])
+        self.assertEqual("VALIDATE_WIRING_NO_SCOPE", resp["code"])
+
+
 class InspectWhereUsedTests(unittest.TestCase):
     def test_passthrough(self) -> None:
         orch = _make_orchestrator()
