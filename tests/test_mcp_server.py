@@ -86,17 +86,20 @@ class TestToolRegistration(unittest.TestCase):
             "editor_batch_create", "editor_batch_set_property",
             "editor_open_scene", "editor_save_scene",
             "editor_batch_add_component", "editor_create_scene",
+            # Infrastructure tools
+            "deploy_bridge",
             # Inspection + orchestrator tools
             "inspect_materials", "inspect_material_asset", "set_material_property",
             "validate_structure", "revert_overrides", "vrcsdk_upload",
-            "inspect_hierarchy", "validate_runtime", "patch_apply",
+            "inspect_hierarchy", "validate_runtime", "validate_all_wiring",
+            "patch_apply",
         }
         self.assertEqual(expected, tool_names)
 
     def test_tool_count(self) -> None:
         server = create_server()
         tools = _run(server.list_tools())
-        self.assertEqual(60, len(tools))
+        self.assertEqual(62, len(tools))
 
 
 class TestSymbolTools(unittest.TestCase):

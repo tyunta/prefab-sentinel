@@ -1859,6 +1859,22 @@ def create_server(
         )
         return resp.to_dict()
 
+    @server.tool()
+    def validate_all_wiring(
+        asset_path: str = "",
+    ) -> dict[str, Any]:
+        """Scan all .prefab/.unity files in scope for null references.
+
+        Aggregates inspect_wiring results across the entire scope (or a single file).
+        Returns a summary with total component count, null reference count,
+        and per-file breakdown.
+
+        Args:
+            asset_path: Single .unity/.prefab file to scan. Empty = scan entire scope.
+        """
+        orch = session.get_orchestrator()
+        return orch.validate_all_wiring(target_path=asset_path).to_dict()
+
     # ------------------------------------------------------------------
     # AI workflow tools
     # ------------------------------------------------------------------
