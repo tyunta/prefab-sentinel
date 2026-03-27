@@ -20,7 +20,7 @@
 
 `target_path.parent` 直下に `PrefabSentinel.*.cs` が残存していると、`target_path` 内の同名ファイルと CS0101 重複定義エラーが発生する。典型例は旧デプロイ先 `Assets/Editor/` 直下のファイルと新デプロイ先 `Assets/Editor/PrefabSentinel/` の共存。
 
-清掃は `target_path.parent` に対して常に実行する（特定パス名に依存しない）。`target_path == target_path.parent` の場合（旧パスへの直接デプロイ）、全ファイルが除外対象外となり清掃は実質 no-op になる。
+清掃は `target_path.parent` に対して常に実行する（特定パス名に依存しない）。`target_path.parent` に `PrefabSentinel.*.cs` が見つからなければ no-op。
 
 ### 動作
 
