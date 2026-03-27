@@ -131,6 +131,45 @@ class TestScriptNameMapCaching(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# GUID index caching
+# ---------------------------------------------------------------------------
+
+
+class TestGuidIndexCaching(unittest.TestCase):
+    """collect_project_guid_index is called once and result cached."""
+
+    @patch("prefab_sentinel.session.collect_project_guid_index")
+    def test_cached_across_calls(self, mock_collect: MagicMock) -> None:
+        mock_collect.return_value = {"guid1": Path("/proj/Assets/foo.prefab")}
+        root = Path("/fake/project")
+        session = ProjectSession(project_root=root)
+
+        idx1 = session.guid_index()
+        idx2 = session.guid_index()
+
+        self.assertIs(idx1, idx2)
+        mock_collect.assert_called_once_with(root, include_package_cache=False)
+
+    @patch("prefab_sentinel.session.collect_project_guid_index")
+    def test_returns_empty_when_no_root(self, mock_collect: MagicMock) -> None:
+        session = ProjectSession()
+        result = session.guid_index()
+        self.assertEqual(result, {})
+        mock_collect.assert_not_called()
+
+    @patch("prefab_sentinel.session.collect_project_guid_index")
+    def test_cleared_by_invalidate_guid_index(self, mock_collect: MagicMock) -> None:
+        mock_collect.return_value = {"g": Path("/p")}
+        session = ProjectSession(project_root=Path("/fake"))
+
+        session.guid_index()
+        session.invalidate_guid_index()
+        session.guid_index()
+
+        self.assertEqual(mock_collect.call_count, 2)
+
+
+# ---------------------------------------------------------------------------
 # SymbolTree mtime caching
 # ---------------------------------------------------------------------------
 
@@ -234,6 +273,7 @@ class TestInvalidationCascades(unittest.TestCase):
         session.invalidate_guid_index()
 
         self.assertIsNone(session._orchestrator)
+        self.assertIsNone(session._guid_index)
         self.assertIsNone(session._script_name_map)
 
     def test_invalidate_guid_index_clears_symbol_cache(self) -> None:
@@ -304,6 +344,7 @@ class TestInvalidationCascades(unittest.TestCase):
 
             self.assertEqual(len(session._symbol_cache), 0)
             self.assertIsNone(session._orchestrator)
+            self.assertIsNone(session._guid_index)
             self.assertIsNone(session._script_name_map)
 
 
