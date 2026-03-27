@@ -66,6 +66,7 @@ SUPPORTED_ACTIONS = frozenset(
         # Phase 5: SetProperty + SaveAsPrefab
         "editor_set_property",
         "save_as_prefab",
+        "editor_set_parent",
     }
 )
 

@@ -53,6 +53,7 @@ namespace PrefabSentinel
             // Phase 5: SetProperty + SaveAsPrefab
             "editor_set_property",
             "save_as_prefab",
+            "editor_set_parent",
         };
 
         // ── Request / Response DTOs ──
@@ -385,6 +386,9 @@ namespace PrefabSentinel
                     break;
                 case "save_as_prefab":
                     response = HandleSaveAsPrefab(request);
+                    break;
+                case "editor_set_parent":
+                    response = HandleEditorSetParent(request);
                     break;
                 case "vrcsdk_upload":
                     response = TryHandleVrcsdkUpload(request);
@@ -1856,14 +1860,54 @@ namespace PrefabSentinel
             return resp;
         }
 
+        private static EditorControlResponse HandleEditorSetParent(EditorControlRequest request)
+        {
+            if (string.IsNullOrEmpty(request.hierarchy_path))
+                return BuildError("EDITOR_CTRL_SET_PARENT_NO_PATH", "hierarchy_path is required.");
+
+            var child = GameObject.Find(request.hierarchy_path);
+            if (child == null)
+                return BuildError("EDITOR_CTRL_SET_PARENT_NOT_FOUND",
+                    $"GameObject not found: {request.hierarchy_path}");
+
+            Transform newParent = null;
+            if (!string.IsNullOrEmpty(request.new_name))
+            {
+                var parentGo = GameObject.Find(request.new_name);
+                if (parentGo == null)
+                    return BuildError("EDITOR_CTRL_SET_PARENT_PARENT_NOT_FOUND",
+                        $"Parent GameObject not found: {request.new_name}");
+                newParent = parentGo.transform;
+            }
+
+            Undo.SetTransformParent(child.transform, newParent,
+                $"PrefabSentinel: SetParent {child.name}");
+
+            string parentName = newParent != null ? newParent.name : "(scene root)";
+            var resp = BuildSuccess("EDITOR_CTRL_SET_PARENT_OK",
+                $"Moved '{child.name}' under '{parentName}'",
+                data: new EditorControlData
+                {
+                    selected_object = child.name,
+                    executed = true,
+                    read_only = false,
+                });
+            resp.diagnostics = new[] { new EditorControlDiagnostic
+            {
+                detail = "Runtime modification — save the scene (File > Save) to persist.",
+                evidence = "Undo.SetTransformParent"
+            }};
+            return resp;
+        }
+
         private static System.Type ResolveComponentType(string typeName)
         {
-            // 1. Fully qualified name
+            // 1. Fully qualified name (fastest path)
             var t = System.Type.GetType(typeName);
             if (t != null && typeof(Component).IsAssignableFrom(t))
                 return t;
 
-            // 2. Search all loaded assemblies
+            // 2. Search all loaded assemblies by full name
             foreach (var asm in System.AppDomain.CurrentDomain.GetAssemblies())
             {
                 t = asm.GetType(typeName);
@@ -1871,10 +1915,21 @@ namespace PrefabSentinel
                     return t;
             }
 
-            // 3. Try UnityEngine namespace
-            t = System.Type.GetType($"UnityEngine.{typeName}, UnityEngine.CoreModule");
-            if (t != null && typeof(Component).IsAssignableFrom(t))
-                return t;
+            // 3. Search all loaded assemblies by simple name (handles short names
+            //    like "BoxCollider" that live in UnityEngine.PhysicsModule etc.)
+            //    First match wins; use fully qualified name to disambiguate.
+            foreach (var asm in System.AppDomain.CurrentDomain.GetAssemblies())
+            {
+                try
+                {
+                    foreach (var type in asm.GetExportedTypes())
+                    {
+                        if (type.Name == typeName && typeof(Component).IsAssignableFrom(type))
+                            return type;
+                    }
+                }
+                catch (System.ReflectionTypeLoadException) { }
+            }
 
             return null;
         }
@@ -1895,7 +1950,7 @@ namespace PrefabSentinel
             if (compType == null)
                 return BuildError("EDITOR_CTRL_ADD_COMP_TYPE_NOT_FOUND",
                     $"Component type not found: {request.component_type}. " +
-                    "Use fully qualified name (e.g. 'UnityEngine.BoxCollider').");
+                    "Short names (e.g. 'BoxCollider') and fully qualified names both work.");
 
             var added = Undo.AddComponent(go, compType);
             if (added == null)
@@ -1903,10 +1958,11 @@ namespace PrefabSentinel
                     $"Failed to add component: {request.component_type}");
 
             var resp = BuildSuccess("EDITOR_CTRL_ADD_COMP_OK",
-                $"Added {compType.Name} to {request.hierarchy_path}",
+                $"Added {compType.FullName} to {request.hierarchy_path}",
                 data: new EditorControlData
                 {
                     selected_object = go.name,
+                    asset_path = compType.FullName,
                     executed = true,
                     read_only = false,
                 });
