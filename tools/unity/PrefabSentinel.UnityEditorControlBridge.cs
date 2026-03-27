@@ -2957,6 +2957,7 @@ namespace PrefabSentinel
                     asset_path = request.asset_path,
                     output_path = scene.name,
                     executed = true,
+                    read_only = false,
                 });
         }
 

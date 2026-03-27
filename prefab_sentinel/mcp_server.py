@@ -1731,12 +1731,20 @@ def create_server(
         """Add components to multiple GameObjects in a single request (Undo-grouped).
 
         Each operation dict must contain: hierarchy_path, component_type.
-        Optional: properties (list of {name, value/object_reference} dicts).
+        Optional: properties (list of {name, value/object_reference} dicts) —
+        automatically serialized to properties_json for the bridge.
 
         Args:
             operations: List of add-component operations.
         """
         import json
+
+        # Pre-serialize properties lists to properties_json strings
+        # (matches editor_add_component's handling)
+        for op in operations:
+            props = op.pop("properties", None)
+            if props and "properties_json" not in op:
+                op["properties_json"] = json.dumps(props, ensure_ascii=False)
 
         return send_action(
             action="editor_batch_add_component",
