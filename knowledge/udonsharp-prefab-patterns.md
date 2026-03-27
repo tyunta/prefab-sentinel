@@ -31,6 +31,7 @@ C# (.cs) → UdonSharp Compiler → Udon Assembly → Udon VM bytecode
 | UdonSharpProgramAsset | `c333ccfdd0cbdbc4ca30cef2dd6e6b9b` | `UdonSharp` | Editor |
 | UdonSharpBehaviour | `3c6e5249679282e459858775b10f38d0` | `UdonSharp` | Runtime |
 | UdonBehaviour | `45115577ef41a5b4ca741ed302693907` | `VRC.Udon` | Runtime |
+| PipelineManager | `4ecd63eff847044b68db9453ce219299` | `VRC.Core` | Runtime（VRCWorld に付随） |
 
 ### UdonSharpProgramAsset の SerializedField
 | フィールド | 型 | 用途 |
