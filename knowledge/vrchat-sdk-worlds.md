@@ -2,62 +2,99 @@
 
 version_tested: VRC SDK 3.7+ / ClientSim
 last_updated: 2026-03-27
-confidence: low (Phase 1 デスクリサーチのみ)
+confidence: medium (Phase 1-2 デスクリサーチ + ソースコード分析)
 
 ## L1: 基本概要
 
 VRChat World SDK 3 は UdonSharp / Udon Graph でインタラクティブなワールドを構築するための SDK。
 
+## L2: Script GUID リファレンス
+
+**ランタイム DLL**: `VRCSDK3.dll` (GUID: `661092b4961be7145bfbe56e1e62337b`)
+
+| コンポーネント | 名前空間 | DLL/ソース |
+|--------------|----------|-----------|
+| VRCSceneDescriptor | `VRC.SDK3.Components` | VRCSDK3.dll |
+| VRCPickup | `VRC.SDK3.Components` | VRCSDK3.dll |
+| VRCStation | `VRC.SDK3.Components` | VRCSDK3.dll |
+| VRCObjectSync | `VRC.SDK3.Components` | VRCSDK3.dll |
+| VRCObjectPool | `VRC.SDK3.Components` | VRCSDK3.dll |
+| VRCMirrorReflection | `VRC.SDK3.Components` | VRCSDK3.dll |
+| UdonBehaviour | `VRC.Udon` | Runtime/Udon/ (GUID: `45115577ef41a5b4ca741ed302693907`) |
+
 ## L2: コアコンポーネント
 
-### VRC_SceneDescriptor（必須 — 1シーンに1つ）
-- **名前空間**: `VRC.SDKBase`
+### VRCSceneDescriptor（必須 — 1シーンに1つ）
+- **名前空間**: `VRC.SDK3.Components`
 - **役割**: ワールド定義。存在しないとビルド不可
-- **主要プロパティ**:
+- **SerializedField**:
   - `spawns`: Transform[] — スポーン地点配列
-  - `spawnOrder`: Default / Random / InOrder / Demo
+  - `spawnRadius`: float — スポーン分散半径
+  - `spawnOrder`: enum — Default / Random / InOrder / Demo
+  - `spawnOrientation`: enum
+  - `ReferenceCamera`: Camera — プレイヤーカメラ設定
   - `RespawnHeightY`: float — この Y 以下でリスポーン
-  - `ObjectBehaviourAtRespawn`: Destroy / Respawn
-  - `ReferenceCamera`: Camera — プレイヤーカメラ設定（クリッピング、Post Processing）
+  - `ObjectBehaviourAtRespawnHeight`: enum — Destroy / Respawn
+  - `ForbidUserPortals`: bool
+  - `DynamicPrefabs`: bool
+  - `DynamicMaterials`: bool
+  - `interactThruLayers`: int (LayerMask)
 
-### VRC_ObjectSync
+### VRCObjectSync
+- **名前空間**: `VRC.SDK3.Components`
 - **役割**: GameObject の Transform をネットワーク同期
 - **必須**: 同一 GO に Rigidbody
-- **主要プロパティ**:
-  - `AllowCollisionOwnershipTransfer`: 衝突時オーナーシップ自動移譲
-  - `SetKinematic()` / `SetGravity()`: Rigidbody は VRCObjectSync 経由で制御（直接変更不可）
+- **制御**: `SetKinematic()` / `SetGravity()` — Rigidbody は VRCObjectSync 経由で制御（直接変更不可）
 
-### VRC_Pickup
+### VRCPickup
+- **名前空間**: `VRC.SDK3.Components`
 - **役割**: オブジェクトを掴む/使う
 - **必須**: Rigidbody + Collider。VRCObjectSync との併用が一般的
-- **主要プロパティ**:
-  - `InteractionText` / `UseText`: UI 表示テキスト
-  - `proximity`: 掴める距離
-  - `AutoHold`: true=グラブでアタッチ / false=離すとドロップ
-  - `orientation`: ExactGun / ExactGrip / Any / None
+- **SerializedField**:
+  - `InteractionText` / `UseText`: string — UI テキスト
+  - `proximity`: float — 掴める距離
+  - `AutoHold`: AutoHoldMode enum (No/Yes/Sometimes/AutoDetect)
+  - `orientation`: PickupOrientation enum (Any/Grip/Gun)
+  - `pickupable`: bool
+  - `allowManipulationWhenEquipped`: bool
+  - `ExactGun` / `ExactGrip`: Transform — ハンドポジション
+  - `DisallowTheft`: bool
 - **Udon イベント**: `OnPickup`, `OnDrop`, `OnPickupUseDown/Up`
 
-### VRC_Station
+### VRCStation
+- **名前空間**: `VRC.SDK3.Components`
 - **役割**: プレイヤーが座る/乗る
 - **必須**: Collider (Is Trigger 推奨)
-- **主要プロパティ**:
+- **SerializedField**:
   - `stationEnterPlayerLocation` / `stationExitPlayerLocation`: Transform
-  - `PlayerMobility`: Mobile / Immobilize / ImmobilizeForVehicle
-  - `disableStationExit`: 自発的退出を禁止
-  - `animatorController`: 着席アニメーション
+  - `PlayerMobility`: Mobility enum (Immobile/Mobile)
+  - `disableStationExit`: bool
+  - `seated`: bool
+  - `animatorController`: AnimatorController
+  - `canUseStationFromStation`: bool
 - **制約**: Entry と Exit は 2m 以内に配置
 
-### VRC_MirrorReflection
+### VRCMirrorReflection
+- **名前空間**: `VRC.SDK3.Components`
 - **役割**: ワールド内ミラー
 - **必須**: MeshRenderer
-- **主要プロパティ**:
-  - `m_ReflectLayers`: LayerMask — 反射するレイヤー（パフォーマンスの核）
+- **主要プロパティ**: `m_ReflectLayers` (LayerMask)
 - **パフォーマンス**: デフォルト OFF 推奨。低品質/高品質の 2 段階切り替えが定石
 
 ### VRCObjectPool
+- **名前空間**: `VRC.SDK3.Components`
 - **役割**: ネットワーク同期オブジェクトプール
-- **API**: `TryToSpawn()` — オーナーのみ。プールから 1 つアクティブ化して返す
+- **API**: `TryToSpawn()` — オーナーのみ
 - **用途**: 弾丸、ドロップアイテム、動的生成系ギミック
+
+### その他のコンポーネント
+- `VRCAvatarPedestal` — アバター試着台
+- `VRCPortalMarker` — ポータル
+- `VRCSpatialAudioSource` — 空間オーディオ
+- `VRCUiShape` — UI インタラクション
+- `VRCPlayerObject` — プレイヤー永続化
+- `VRCEnablePersistence` — 永続化有効化
+- `VRCVisualDamage` — ビジュアルダメージ
 
 ## L2: レイヤー構成
 

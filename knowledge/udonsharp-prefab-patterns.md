@@ -2,7 +2,7 @@
 
 version_tested: VRC SDK 3.7+ / UdonSharp 1.x
 last_updated: 2026-03-27
-confidence: medium (Phase 1-2 デスクリサーチ + 実プロジェクト部分検証)
+confidence: medium (Phase 1-2 デスクリサーチ + ソースコード分析)
 
 ## L1: 基本構造
 
@@ -19,6 +19,38 @@ C# (.cs) → UdonSharp Compiler → Udon Assembly → Udon VM bytecode
    - `hasInteractEvent`: Interact() の有無
    - `serializationData`: フィールド定義（Odin Serializer 形式）
 3. **SerializedUdonPrograms/ 内の .asset** — コンパイル済みバイトコード
+
+### Script GUID リファレンス
+| クラス | GUID | 名前空間 | 場所 |
+|--------|------|----------|------|
+| UdonSharpProgramAsset | `c333ccfdd0cbdbc4ca30cef2dd6e6b9b` | `UdonSharp` | Editor |
+| UdonSharpBehaviour | `3c6e5249679282e459858775b10f38d0` | `UdonSharp` | Runtime |
+| UdonBehaviour | `45115577ef41a5b4ca741ed302693907` | `VRC.Udon` | Runtime |
+
+### UdonSharpProgramAsset の SerializedField
+| フィールド | 型 | 用途 |
+|-----------|-----|------|
+| `sourceCsScript` | MonoScript | 元の C# スクリプト参照 |
+| `scriptVersion` | UdonSharpProgramVersion | ソーススクリプトバージョン |
+| `compiledVersion` | UdonSharpProgramVersion | コンパイル済みバージョン |
+| `behaviourSyncMode` | BehaviourSyncMode | ネットワーク同期モード |
+| `hasInteractEvent` | bool | Interact() の有無 |
+| `scriptID` | long | スクリプト固有 ID |
+| `serializationData` | SerializationData | Odin Serializer でのフィールド定義 |
+
+### UdonSharpBehaviour の隠しフィールド
+| フィールド | 型 | 用途 |
+|-----------|-----|------|
+| `_udonSharpBackingUdonBehaviour` | UdonBehaviour | **必須**: ランタイム UdonBehaviour へのリンク |
+| `serializationData` | SerializationData | 複雑データのシリアライズ |
+
+### UdonBehaviour の SerializedField
+| フィールド | 型 | 用途 |
+|-----------|-----|------|
+| `programSource` | AbstractUdonProgramSource | プログラムソース（Editor only） |
+| `serializedProgramAsset` | AbstractSerializedUdonProgramAsset | コンパイル済みプログラム |
+| `_syncMethod` | SyncType | ネットワーク同期モード |
+| `publicVariables` | IUdonVariableTable | 公開変数テーブル（Odin） |
 
 ### 同期モードの対応
 | UdonSharp 属性 | .asset の behaviourSyncMode 値 | 用途 |
@@ -119,8 +151,26 @@ C# (.cs) → UdonSharp Compiler → Udon Assembly → Udon VM bytecode
 | フィールド値閲覧 | `find_unity_symbol` (include_properties) |
 | スクリプト認識・コンパイルトリガー | `editor_refresh` / `editor_recompile` |
 | コンパイルエラー確認 | `editor_console` |
-| プログラムアセット作成 | `create_udon_program_asset` ブリッジアクション（v0.5.84+） |
-| UdonBehaviour backing setup | `add_component` PatchBridge 内で自動処理（v0.5.84+） |
+| プログラムアセット作成 | `create_udon_program_asset` ブリッジアクション（v0.5.84+、リフレクション経由） |
+| UdonBehaviour backing setup | `add_component` PatchBridge `TrySetupUdonSharpBacking()` で自動処理（v0.5.84+） |
+
+### ブリッジ実装詳細
+
+#### create_udon_program_asset (UnityEditorControlBridge.cs:1909-1951)
+1. `AssetDatabase.LoadAssetAtPath<MonoScript>(scriptPath)` で .cs を読み込み
+2. リフレクションで `UdonSharp.UdonSharpProgramAsset` 型を解決
+3. `ScriptableObject.CreateInstance(assetType)` で生成
+4. `sourceCsScript` フィールドをリフレクションで設定
+5. `AssetDatabase.CreateAsset()` で .cs 横に .asset として保存
+6. UdonSharp コンパイラが残り（`serializedUdonProgramAsset`, `serializationData`）を自動補完
+
+#### TrySetupUdonSharpBacking (UnityPatchBridge.cs:3080-3186)
+1. コンポーネント型が `UdonSharpBehaviour` 継承か検出
+2. 同一 GO に backing `UdonBehaviour` を追加
+3. `_udonSharpBackingUdonBehaviour` プロパティでリンク
+4. `GetAllUdonSharpPrograms()` で全プログラムアセットをスキャン
+5. `sourceCsScript.GetClass()` でスクリプトクラスをマッチ
+6. backing UdonBehaviour の `programSource` にアセットを設定
 
 ### できないこと（制約）
 - `set_property` での UdonSharp フィールド変更（Udon VM シリアライズ形式が異なる）
