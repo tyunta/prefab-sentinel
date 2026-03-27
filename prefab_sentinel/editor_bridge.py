@@ -67,6 +67,13 @@ SUPPORTED_ACTIONS = frozenset(
         "editor_set_property",
         "save_as_prefab",
         "editor_set_parent",
+        # Phase 6: Batch Operations + Scene
+        "editor_create_empty",
+        "editor_create_primitive",
+        "editor_batch_create",
+        "editor_batch_set_property",
+        "editor_open_scene",
+        "editor_save_scene",
     }
 )
 

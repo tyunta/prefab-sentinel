@@ -82,6 +82,9 @@ class TestToolRegistration(unittest.TestCase):
             "editor_create_udon_program_asset",
             "editor_set_property", "editor_save_as_prefab",
             "editor_set_parent",
+            "editor_create_empty", "editor_create_primitive",
+            "editor_batch_create", "editor_batch_set_property",
+            "editor_open_scene", "editor_save_scene",
             # Inspection + orchestrator tools
             "inspect_materials", "inspect_material_asset", "set_material_property",
             "validate_structure", "revert_overrides", "vrcsdk_upload",
@@ -92,7 +95,7 @@ class TestToolRegistration(unittest.TestCase):
     def test_tool_count(self) -> None:
         server = create_server()
         tools = _run(server.list_tools())
-        self.assertEqual(52, len(tools))
+        self.assertEqual(58, len(tools))
 
 
 class TestSymbolTools(unittest.TestCase):
