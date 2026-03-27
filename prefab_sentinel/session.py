@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -93,6 +94,62 @@ class ProjectSession:
                 project_root=self._project_root,
             )
         return self._orchestrator
+
+    _BRIDGE_VERSION_RE = re.compile(r'BridgeVersion\s*=\s*"([^"]+)"')
+
+    def detect_bridge_version(self) -> str | None:
+        """Detect the BridgeVersion from the Unity project's Editor bridge files.
+
+        Searches for PrefabSentinel.UnityEditorControlBridge.cs in the project's
+        Assets/ directory tree and extracts the BridgeVersion constant.
+        Returns None if not found.
+        """
+        if self._project_root is None:
+            return None
+        editor_dir = self._project_root / "Assets"
+        if not editor_dir.is_dir():
+            return None
+        for cs_file in editor_dir.rglob("PrefabSentinel.UnityEditorControlBridge.cs"):
+            try:
+                text = cs_file.read_text(encoding="utf-8-sig", errors="replace")
+                m = self._BRIDGE_VERSION_RE.search(text)
+                if m:
+                    return m.group(1)
+            except OSError:
+                continue
+        return None
+
+    def check_bridge_version(self) -> dict[str, Any] | None:
+        """Check if the Unity project's Bridge version matches the plugin version.
+
+        Returns a diagnostic dict if mismatch detected, None if OK.
+        """
+        detected = self.detect_bridge_version()
+        if detected is None:
+            return {
+                "severity": "warning",
+                "code": "BRIDGE_NOT_FOUND",
+                "message": "Bridge C# files not found in project. "
+                "Deploy with deploy_bridge tool or copy tools/unity/*.cs "
+                "to Assets/Editor/PrefabSentinel/",
+            }
+        from importlib.metadata import version
+
+        plugin_version = version("prefab-sentinel")
+
+        if detected != plugin_version:
+            return {
+                "severity": "warning",
+                "code": "BRIDGE_VERSION_MISMATCH",
+                "message": f"Bridge version {detected}, plugin version {plugin_version}. "
+                "Use deploy_bridge tool to update.",
+                "data": {
+                    "bridge_version": detected,
+                    "plugin_version": plugin_version,
+                    "bridge_update_available": True,
+                },
+            }
+        return None
 
     def script_name_map(self) -> dict[str, str]:
         """Return the cached script name map, building on first call."""

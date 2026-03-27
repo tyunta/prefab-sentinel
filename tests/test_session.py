@@ -483,6 +483,52 @@ class TestShutdown(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Bridge version detection
+# ---------------------------------------------------------------------------
+
+
+class TestBridgeVersionDetection(unittest.TestCase):
+    def test_detects_version_from_cs_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "Assets" / "Editor" / "PrefabSentinel").mkdir(parents=True)
+            cs = root / "Assets" / "Editor" / "PrefabSentinel" / "PrefabSentinel.UnityEditorControlBridge.cs"
+            cs.write_text('public const string BridgeVersion = "1.2.3";', encoding="utf-8")
+            session = ProjectSession(project_root=root)
+            self.assertEqual("1.2.3", session.detect_bridge_version())
+
+    def test_returns_none_when_no_bridge(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "Assets").mkdir()
+            session = ProjectSession(project_root=root)
+            self.assertIsNone(session.detect_bridge_version())
+
+    def test_returns_none_when_no_project_root(self) -> None:
+        session = ProjectSession()
+        self.assertIsNone(session.detect_bridge_version())
+
+    def test_check_bridge_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "Assets" / "Editor").mkdir(parents=True)
+            cs = root / "Assets" / "Editor" / "PrefabSentinel.UnityEditorControlBridge.cs"
+            cs.write_text('public const string BridgeVersion = "0.0.1";', encoding="utf-8")
+            session = ProjectSession(project_root=root)
+            diag = session.check_bridge_version()
+            self.assertIsNotNone(diag)
+            self.assertEqual("BRIDGE_VERSION_MISMATCH", diag["code"])
+
+    def test_check_bridge_not_found(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "Assets").mkdir()
+            session = ProjectSession(project_root=root)
+            diag = session.check_bridge_version()
+            self.assertIsNotNone(diag)
+            self.assertEqual("BRIDGE_NOT_FOUND", diag["code"])
+
+
 # Watcher exception logging
 # ---------------------------------------------------------------------------
 
