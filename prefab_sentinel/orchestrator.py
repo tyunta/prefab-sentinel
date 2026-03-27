@@ -802,6 +802,79 @@ class Phase1Orchestrator:
             diagnostics=diagnostics,
         )
 
+    def validate_all_wiring(
+        self,
+        *,
+        target_path: str = "",
+    ) -> ToolResponse:
+        """Run inspect_wiring on all .prefab/.unity files in scope.
+
+        Args:
+            target_path: Single file to scan. Empty = scan entire scope.
+
+        Returns:
+            Aggregated null-reference summary across all scanned files.
+        """
+        if target_path:
+            paths = [Path(target_path)]
+        else:
+            project_root = self.prefab_variant.project_root
+            if project_root is None:
+                return error_response(
+                    "VALIDATE_WIRING_NO_SCOPE",
+                    "No scope set. Call activate_project first.",
+                )
+            paths = sorted(
+                p for p in self.reference_resolver.collect_scope_files(project_root)
+                if p.suffix in (".prefab", ".unity")
+            )
+
+        if not paths:
+            return success_response(
+                "VALIDATE_WIRING_EMPTY",
+                "No .prefab or .unity files found in scope.",
+                data={"files_scanned": 0, "total_components": 0, "total_null_refs": 0},
+            )
+
+        total_components = 0
+        total_null_refs = 0
+        null_refs_by_file: list[dict[str, object]] = []
+
+        for p in paths:
+            try:
+                result = self.inspect_wiring(target_path=str(p))
+                resp_dict = result.to_dict()
+                if not resp_dict.get("success", False):
+                    continue
+                components = resp_dict.get("data", {}).get("components", [])
+                comp_count = len(components)
+                null_count = sum(
+                    len(c.get("null_field_names") or [])
+                    for c in components
+                )
+                total_components += comp_count
+                total_null_refs += null_count
+                if null_count > 0:
+                    null_refs_by_file.append({
+                        "file": str(p),
+                        "null_refs": null_count,
+                        "components": comp_count,
+                    })
+            except Exception:
+                continue
+
+        return success_response(
+            "VALIDATE_WIRING_OK",
+            f"Scanned {len(paths)} files: "
+            f"{total_components} components, {total_null_refs} null references",
+            data={
+                "files_scanned": len(paths),
+                "total_components": total_components,
+                "total_null_refs": total_null_refs,
+                "null_refs_by_file": null_refs_by_file,
+            },
+        )
+
     def inspect_hierarchy(
         self,
         target_path: str,
