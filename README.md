@@ -127,6 +127,8 @@ prefab-sentinel-mcp --transport streamable-http
 | `editor_save_scene` | シーンを保存 |
 | `editor_batch_add_component` | 複数オブジェクトにコンポーネントを一括追加 (Undo グループ、初期値対応) |
 | `editor_create_scene` | 新規空シーンを作成して保存 |
+| `deploy_bridge` | Unity プロジェクトの Bridge C# ファイルを自動更新 |
+| `validate_all_wiring` | スコープ内の全 .prefab/.unity の null 参照を一括スキャン |
 
 **Claude Desktop 設定例:**
 
