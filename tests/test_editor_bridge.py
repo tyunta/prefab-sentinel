@@ -203,6 +203,8 @@ class TestSupportedActions(unittest.TestCase):
             "editor_batch_set_property",
             "editor_open_scene",
             "editor_save_scene",
+            "editor_batch_add_component",
+            "editor_create_scene",
         }
         self.assertEqual(expected, SUPPORTED_ACTIONS)
 
