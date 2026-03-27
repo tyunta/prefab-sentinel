@@ -141,22 +141,26 @@ def create_server(
                 (e.g. "Assets/Tyunta/SoulLinkerSystem").
         """
         result = await session.activate(scope)
+        diagnostics: list[dict[str, Any]] = [
+            {
+                "message": (
+                    f"Scope '{scope}' will be used as default for: "
+                    "validate_refs, find_referencing_assets, "
+                    "validate_field_rename, check_field_coverage."
+                ),
+                "severity": "info",
+            },
+        ]
+        bridge_diag = session.check_bridge_version()
+        if bridge_diag:
+            diagnostics.append(bridge_diag)
         return {
             "success": True,
             "severity": "info",
             "code": "SESSION_ACTIVATED",
             "message": f"Project activated with scope: {scope}",
             "data": result,
-            "diagnostics": [
-                {
-                    "message": (
-                        f"Scope '{scope}' will be used as default for: "
-                        "validate_refs, find_referencing_assets, "
-                        "validate_field_rename, check_field_coverage."
-                    ),
-                    "severity": "info",
-                },
-            ],
+            "diagnostics": diagnostics,
         }
 
     @server.tool()
