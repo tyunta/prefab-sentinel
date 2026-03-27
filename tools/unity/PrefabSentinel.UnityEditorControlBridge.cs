@@ -17,7 +17,7 @@ namespace PrefabSentinel
     public static class UnityEditorControlBridge
     {
         public const int ProtocolVersion = 1;
-        public const string BridgeVersion = "0.5.82";
+        public const string BridgeVersion = "0.5.110";
 
         /// <summary>All action strings handled by this bridge.</summary>
         public static readonly HashSet<string> SupportedActions = new HashSet<string>
@@ -311,7 +311,8 @@ namespace PrefabSentinel
             {
                 WriteResponse(responsePath, BuildError(
                     "EDITOR_CTRL_PROTOCOL_VERSION",
-                    $"Expected protocol_version {ProtocolVersion}, got {request.protocol_version}."));
+                    $"Bridge protocol v{request.protocol_version}, required v{ProtocolVersion}. " +
+                    "Update Bridge: copy tools/unity/*.cs from prefab-sentinel to Assets/Editor/PrefabSentinel/"));
                 return;
             }
 
@@ -2353,7 +2354,7 @@ namespace PrefabSentinel
                             return type;
                     }
                 }
-                catch (System.ReflectionTypeLoadException) { }
+                catch (System.Reflection.ReflectionTypeLoadException) { }
             }
 
             return null;
