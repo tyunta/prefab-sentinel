@@ -1934,6 +1934,49 @@ namespace PrefabSentinel
             return resp;
         }
 
+        /// <summary>Apply a string value to a SerializedProperty based on its type (best-effort).</summary>
+        private static bool ApplyPropertyValue(SerializedProperty prop, string v)
+        {
+            var ci = System.Globalization.CultureInfo.InvariantCulture;
+            switch (prop.propertyType)
+            {
+                case SerializedPropertyType.Integer:
+                    if (int.TryParse(v, System.Globalization.NumberStyles.Integer, ci, out int iv))
+                    { prop.intValue = iv; return true; }
+                    return false;
+                case SerializedPropertyType.Float:
+                    if (float.TryParse(v, System.Globalization.NumberStyles.Float, ci, out float fv))
+                    { prop.floatValue = fv; return true; }
+                    return false;
+                case SerializedPropertyType.Boolean:
+                    if (bool.TryParse(v, out bool bv))
+                    { prop.boolValue = bv; return true; }
+                    return false;
+                case SerializedPropertyType.String:
+                    prop.stringValue = v; return true;
+                case SerializedPropertyType.Enum:
+                {
+#pragma warning disable 0618
+                    int idx = System.Array.IndexOf(prop.enumNames, v);
+#pragma warning restore 0618
+                    if (idx >= 0) { prop.enumValueIndex = idx; return true; }
+                    if (int.TryParse(v, out int ei)) { prop.enumValueIndex = ei; return true; }
+                    return false;
+                }
+                case SerializedPropertyType.Vector3:
+                {
+                    var parts = v.Split(',');
+                    if (parts.Length >= 3
+                        && float.TryParse(parts[0].Trim(), System.Globalization.NumberStyles.Float, ci, out float x)
+                        && float.TryParse(parts[1].Trim(), System.Globalization.NumberStyles.Float, ci, out float y)
+                        && float.TryParse(parts[2].Trim(), System.Globalization.NumberStyles.Float, ci, out float z))
+                    { prop.vector3Value = new Vector3(x, y, z); return true; }
+                    return false;
+                }
+                default: return false;
+            }
+        }
+
         // ── Phase 6: Batch Operations + Scene ──
 
         private static bool TryParseVector3(string csv, out Vector3 result)
@@ -2189,10 +2232,64 @@ namespace PrefabSentinel
         }
 
         private static EditorControlResponse HandleEditorOpenScene(EditorControlRequest request)
-        { return BuildError("NOT_IMPL", "Not yet implemented."); }
+        {
+            if (string.IsNullOrEmpty(request.asset_path))
+                return BuildError("EDITOR_CTRL_OPEN_SCENE_NO_PATH", "asset_path is required.");
+
+            if (!System.IO.File.Exists(request.asset_path))
+                return BuildError("EDITOR_CTRL_OPEN_SCENE_NOT_FOUND",
+                    $"Scene file not found: {request.asset_path}");
+
+            var mode = string.Equals(request.open_scene_mode, "additive",
+                System.StringComparison.OrdinalIgnoreCase)
+                ? OpenSceneMode.Additive
+                : OpenSceneMode.Single;
+
+            var scene = EditorSceneManager.OpenScene(request.asset_path, mode);
+
+            return BuildSuccess("EDITOR_CTRL_OPEN_SCENE_OK",
+                $"Opened scene: {request.asset_path} ({request.open_scene_mode})",
+                data: new EditorControlData
+                {
+                    asset_path = request.asset_path,
+                    output_path = scene.name,
+                    executed = true,
+                });
+        }
 
         private static EditorControlResponse HandleEditorSaveScene(EditorControlRequest request)
-        { return BuildError("NOT_IMPL", "Not yet implemented."); }
+        {
+            if (!string.IsNullOrEmpty(request.asset_path))
+            {
+                var scene = SceneManager.GetActiveScene();
+                bool ok = EditorSceneManager.SaveScene(scene, request.asset_path);
+                if (!ok)
+                    return BuildError("EDITOR_CTRL_SAVE_SCENE_FAILED",
+                        $"Failed to save scene to: {request.asset_path}");
+                return BuildSuccess("EDITOR_CTRL_SAVE_SCENE_OK",
+                    $"Saved scene to: {request.asset_path}",
+                    data: new EditorControlData
+                    {
+                        asset_path = request.asset_path,
+                        executed = true,
+                    });
+            }
+            else
+            {
+                bool ok = EditorSceneManager.SaveOpenScenes();
+                if (!ok)
+                    return BuildError("EDITOR_CTRL_SAVE_SCENE_FAILED",
+                        "Failed to save open scenes.");
+                var scene = SceneManager.GetActiveScene();
+                return BuildSuccess("EDITOR_CTRL_SAVE_SCENE_OK",
+                    $"Saved all open scenes (active: {scene.name})",
+                    data: new EditorControlData
+                    {
+                        asset_path = scene.path,
+                        executed = true,
+                    });
+            }
+        }
 
         private static System.Type ResolveComponentType(string typeName)
         {
@@ -2250,6 +2347,36 @@ namespace PrefabSentinel
             if (added == null)
                 return BuildError("EDITOR_CTRL_ADD_COMP_FAILED",
                     $"Failed to add component: {request.component_type}");
+
+            // Apply initial properties if provided
+            if (!string.IsNullOrEmpty(request.properties_json))
+            {
+                try
+                {
+                    var propWrapper = JsonUtility.FromJson<PropertyEntryArray>(
+                        "{\"items\":" + request.properties_json + "}");
+                    if (propWrapper.items != null)
+                    {
+                        var so = new SerializedObject(added);
+                        foreach (var entry in propWrapper.items)
+                        {
+                            var prop = so.FindProperty(entry.name);
+                            if (prop == null) continue;
+                            if (!string.IsNullOrEmpty(entry.object_reference))
+                            {
+                                var (obj, _) = ResolveObjectReference(entry.object_reference);
+                                if (obj != null) prop.objectReferenceValue = obj;
+                            }
+                            else if (!string.IsNullOrEmpty(entry.value))
+                            {
+                                ApplyPropertyValue(prop, entry.value);
+                            }
+                        }
+                        so.ApplyModifiedProperties();
+                    }
+                }
+                catch (System.Exception) { /* best-effort; component already added */ }
+            }
 
             var resp = BuildSuccess("EDITOR_CTRL_ADD_COMP_OK",
                 $"Added {compType.FullName} to {request.hierarchy_path}",
