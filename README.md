@@ -118,6 +118,7 @@ prefab-sentinel-mcp --transport streamable-http
 | `editor_execute_menu_item` | メニューアイテムをパスで実行（deny-list 付き） |
 | `editor_set_property` | SerializedObject API 経由でコンポーネントのプロパティを設定（UdonSharp 対応） |
 | `editor_save_as_prefab` | シーン上の GameObject を Prefab / Prefab Variant として保存 |
+| `editor_set_parent` | 既存 GameObject の親子関係を変更（Undo 対応） |
 
 **Claude Desktop 設定例:**
 
