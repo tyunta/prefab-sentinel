@@ -1964,10 +1964,14 @@ namespace PrefabSentinel
 
         // ── Phase 5: SetProperty + SaveAsPrefab ──
 
-        private static UnityEngine.Object ResolveObjectReference(string reference)
+        /// <summary>
+        /// Resolve an object reference string to a UnityEngine.Object.
+        /// Returns (object, errorDetail). errorDetail is null on success.
+        /// </summary>
+        private static (UnityEngine.Object obj, string error) ResolveObjectReference(string reference)
         {
             if (string.IsNullOrEmpty(reference))
-                return null;
+                return (null, "object_reference is empty.");
 
             // 1. Check for component specifier (path:ComponentType)
             string goPath = reference;
@@ -1986,15 +1990,22 @@ namespace PrefabSentinel
                 if (componentName != null)
                 {
                     var compType = ResolveComponentType(componentName);
-                    if (compType != null)
-                        return go.GetComponent(compType);
-                    return null;
+                    if (compType == null)
+                        return (null, $"Component type not found: {componentName}");
+                    var comp = go.GetComponent(compType);
+                    if (comp == null)
+                        return (null, $"GameObject '{goPath}' has no {componentName} component.");
+                    return (comp, null);
                 }
-                return go;
+                return (go, null);
             }
 
             // 3. Try asset path
-            return AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(reference);
+            var asset = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(reference);
+            if (asset != null)
+                return (asset, null);
+
+            return (null, $"Not found in scene hierarchy or project assets: {reference}");
         }
 
         private static EditorControlResponse HandleEditorSetProperty(EditorControlRequest request)
@@ -2012,6 +2023,9 @@ namespace PrefabSentinel
             if (!hasValue && !hasRef)
                 return BuildError("EDITOR_CTRL_SET_PROP_NO_VALUE",
                     "Either property_value or object_reference is required.");
+            if (hasValue && hasRef)
+                return BuildError("EDITOR_CTRL_SET_PROP_BOTH_VALUE",
+                    "Provide property_value or object_reference, not both.");
 
             // ── Resolve target ──
             var go = GameObject.Find(request.hierarchy_path);
@@ -2056,7 +2070,10 @@ namespace PrefabSentinel
                         break;
                     case SerializedPropertyType.Enum:
                     {
-                        // Try name match first, then numeric index
+                        // enumNames returns internal C# names (preferred for programmatic input).
+                        // enumDisplayNames (Unity 2021.1+) returns formatted display names which
+                        // may contain spaces; unsuitable for API input.
+#pragma warning disable 0618  // enumNames deprecated but intentionally used
                         int idx = System.Array.IndexOf(prop.enumNames, v);
                         if (idx >= 0)
                             prop.enumValueIndex = idx;
@@ -2065,6 +2082,7 @@ namespace PrefabSentinel
                         else
                             return BuildError("EDITOR_CTRL_SET_PROP_TYPE_MISMATCH",
                                 $"Enum value '{v}' not found. Valid: {string.Join(", ", prop.enumNames)}");
+#pragma warning restore 0618
                         break;
                     }
                     case SerializedPropertyType.Color:
@@ -2121,10 +2139,10 @@ namespace PrefabSentinel
                     case SerializedPropertyType.ObjectReference:
                     {
                         string refPath = hasRef ? request.object_reference : v;
-                        var obj = ResolveObjectReference(refPath);
+                        var (obj, refError) = ResolveObjectReference(refPath);
                         if (obj == null)
                             return BuildError("EDITOR_CTRL_SET_PROP_REF_NOT_FOUND",
-                                $"Object reference not found: {refPath}");
+                                refError ?? $"Object reference not found: {refPath}");
                         prop.objectReferenceValue = obj;
                         break;
                     }

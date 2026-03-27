@@ -1417,6 +1417,10 @@ def create_server(
             menu_path=menu_path,
         )
 
+    # ------------------------------------------------------------------
+    # Phase 5: SetProperty + SaveAsPrefab
+    # ------------------------------------------------------------------
+
     @server.tool()
     def editor_set_property(
         hierarchy_path: str,
@@ -1436,6 +1440,9 @@ def create_server(
         for project assets. Append :ComponentType to reference a specific
         component (e.g. "/MyObj:AudioSource").
 
+        Note: Setting a String property to empty string is not supported
+        (indistinguishable from "no value provided").
+
         Args:
             hierarchy_path: Hierarchy path to the GameObject.
             component_type: Component type name (simple or fully qualified).
@@ -1443,6 +1450,15 @@ def create_server(
             value: Value for primitive/enum properties (auto-parsed by type).
             object_reference: Hierarchy path or asset path for ObjectReference properties.
         """
+        if value and object_reference:
+            return {
+                "success": False,
+                "severity": "error",
+                "code": "EDITOR_CTRL_SET_PROP_BOTH_VALUE",
+                "message": "Provide value or object_reference, not both.",
+                "data": {},
+                "diagnostics": [],
+            }
         kwargs: dict[str, Any] = {
             "hierarchy_path": hierarchy_path,
             "component_type": component_type,
@@ -1464,6 +1480,7 @@ def create_server(
         If the GameObject is a Prefab instance (connected to a base),
         the result is automatically a Prefab Variant.
         If it's a plain GameObject, a new original Prefab is created.
+        The scene instance is not reconnected to the new Prefab asset.
 
         Args:
             hierarchy_path: Hierarchy path to the GameObject to save.
