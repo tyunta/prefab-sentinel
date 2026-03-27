@@ -2159,7 +2159,65 @@ namespace PrefabSentinel
 
         private static EditorControlResponse HandleSaveAsPrefab(EditorControlRequest request)
         {
-            return BuildError("EDITOR_CTRL_SAVE_PREFAB_NOT_IMPL", "Not yet implemented.");
+            if (string.IsNullOrEmpty(request.hierarchy_path))
+                return BuildError("EDITOR_CTRL_SAVE_PREFAB_NO_PATH", "hierarchy_path is required.");
+            if (string.IsNullOrEmpty(request.asset_path))
+                return BuildError("EDITOR_CTRL_SAVE_PREFAB_NO_OUTPUT", "asset_path is required.");
+            if (!request.asset_path.EndsWith(".prefab", System.StringComparison.OrdinalIgnoreCase))
+                return BuildError("EDITOR_CTRL_SAVE_PREFAB_BAD_EXT",
+                    $"asset_path must end with .prefab: {request.asset_path}");
+
+            var go = GameObject.Find(request.hierarchy_path);
+            if (go == null)
+                return BuildError("EDITOR_CTRL_SAVE_PREFAB_NOT_FOUND",
+                    $"GameObject not found: {request.hierarchy_path}");
+
+            // Ensure output directory exists
+            string dir = System.IO.Path.GetDirectoryName(request.asset_path);
+            if (!string.IsNullOrEmpty(dir) && !System.IO.Directory.Exists(dir))
+                System.IO.Directory.CreateDirectory(dir);
+
+            // Detect if this will become a Variant
+            bool isVariant = PrefabUtility.IsPartOfPrefabInstance(go);
+            string basePrefabPath = "";
+            if (isVariant)
+            {
+                var baseObj = PrefabUtility.GetCorrespondingObjectFromSource(go);
+                if (baseObj != null)
+                    basePrefabPath = AssetDatabase.GetAssetPath(baseObj);
+            }
+
+            bool success;
+            PrefabUtility.SaveAsPrefabAsset(go, request.asset_path, out success);
+            if (!success)
+                return BuildError("EDITOR_CTRL_SAVE_PREFAB_FAILED",
+                    $"SaveAsPrefabAsset failed for: {request.asset_path}");
+
+            string kind = isVariant ? "Prefab Variant" : "Prefab";
+            var resp = BuildSuccess("EDITOR_CTRL_SAVE_PREFAB_OK",
+                $"Saved {request.hierarchy_path} as {kind}: {request.asset_path}",
+                data: new EditorControlData
+                {
+                    output_path = request.asset_path,
+                    asset_path = basePrefabPath,
+                    executed = true,
+                    read_only = false,
+                });
+
+            var diags = new System.Collections.Generic.List<EditorControlDiagnostic>();
+            diags.Add(new EditorControlDiagnostic
+            {
+                detail = $"Created as {kind}.",
+                evidence = "PrefabUtility.SaveAsPrefabAsset"
+            });
+            if (isVariant && !string.IsNullOrEmpty(basePrefabPath))
+                diags.Add(new EditorControlDiagnostic
+                {
+                    detail = $"Base Prefab: {basePrefabPath}",
+                    evidence = "PrefabUtility.GetCorrespondingObjectFromSource"
+                });
+            resp.diagnostics = diags.ToArray();
+            return resp;
         }
 
         private static EditorControlResponse HandleListMenuItems(EditorControlRequest request)
