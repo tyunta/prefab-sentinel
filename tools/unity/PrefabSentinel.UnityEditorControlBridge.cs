@@ -54,6 +54,13 @@ namespace PrefabSentinel
             "editor_set_property",
             "save_as_prefab",
             "editor_set_parent",
+            // Phase 6: Batch Operations + Scene
+            "editor_create_empty",
+            "editor_create_primitive",
+            "editor_batch_create",
+            "editor_batch_set_property",
+            "editor_open_scene",
+            "editor_save_scene",
         };
 
         // ── Request / Response DTOs ──
@@ -134,6 +141,15 @@ namespace PrefabSentinel
 
             // Phase 5: SetProperty + SaveAsPrefab
             public string object_reference = string.Empty;
+
+            // Phase 6: Batch Operations + Scene
+            public string primitive_type = string.Empty;
+            public string scale = string.Empty;
+            public string rotation = string.Empty;
+            public string batch_objects_json = string.Empty;
+            public string batch_operations_json = string.Empty;
+            public string properties_json = string.Empty;
+            public string open_scene_mode = "single";
         }
 
         [Serializable]
@@ -389,6 +405,24 @@ namespace PrefabSentinel
                     break;
                 case "editor_set_parent":
                     response = HandleEditorSetParent(request);
+                    break;
+                case "editor_create_empty":
+                    response = HandleEditorCreateEmpty(request);
+                    break;
+                case "editor_create_primitive":
+                    response = HandleEditorCreatePrimitive(request);
+                    break;
+                case "editor_batch_create":
+                    response = HandleEditorBatchCreate(request);
+                    break;
+                case "editor_batch_set_property":
+                    response = HandleEditorBatchSetProperty(request);
+                    break;
+                case "editor_open_scene":
+                    response = HandleEditorOpenScene(request);
+                    break;
+                case "editor_save_scene":
+                    response = HandleEditorSaveScene(request);
                     break;
                 case "vrcsdk_upload":
                     response = TryHandleVrcsdkUpload(request);
@@ -1900,6 +1934,26 @@ namespace PrefabSentinel
             return resp;
         }
 
+        // ── Phase 6: Batch Operations + Scene ──
+
+        private static EditorControlResponse HandleEditorCreateEmpty(EditorControlRequest request)
+        { return BuildError("NOT_IMPL", "Not yet implemented."); }
+
+        private static EditorControlResponse HandleEditorCreatePrimitive(EditorControlRequest request)
+        { return BuildError("NOT_IMPL", "Not yet implemented."); }
+
+        private static EditorControlResponse HandleEditorBatchCreate(EditorControlRequest request)
+        { return BuildError("NOT_IMPL", "Not yet implemented."); }
+
+        private static EditorControlResponse HandleEditorBatchSetProperty(EditorControlRequest request)
+        { return BuildError("NOT_IMPL", "Not yet implemented."); }
+
+        private static EditorControlResponse HandleEditorOpenScene(EditorControlRequest request)
+        { return BuildError("NOT_IMPL", "Not yet implemented."); }
+
+        private static EditorControlResponse HandleEditorSaveScene(EditorControlRequest request)
+        { return BuildError("NOT_IMPL", "Not yet implemented."); }
+
         private static System.Type ResolveComponentType(string typeName)
         {
             // 1. Fully qualified name (fastest path)
@@ -2390,6 +2444,46 @@ namespace PrefabSentinel
             return BuildSuccess("EDITOR_CTRL_MENU_EXEC_OK",
                 $"Menu item executed: {request.menu_path}");
         }
+
+        // ── Batch Operation DTOs ──
+
+        [Serializable]
+        private sealed class BatchObjectSpec
+        {
+            public string type = string.Empty;
+            public string name = string.Empty;
+            public string parent = string.Empty;
+            public string position = string.Empty;
+            public string scale = string.Empty;
+            public string rotation = string.Empty;
+        }
+
+        [Serializable]
+        private sealed class BatchObjectArray { public BatchObjectSpec[] items; }
+
+        [Serializable]
+        private sealed class BatchSetPropertyOp
+        {
+            public string hierarchy_path = string.Empty;
+            public string component_type = string.Empty;
+            public string property_name = string.Empty;
+            public string value = string.Empty;
+            public string object_reference = string.Empty;
+        }
+
+        [Serializable]
+        private sealed class BatchSetPropertyArray { public BatchSetPropertyOp[] items; }
+
+        [Serializable]
+        private sealed class PropertyEntry
+        {
+            public string name = string.Empty;
+            public string value = string.Empty;
+            public string object_reference = string.Empty;
+        }
+
+        [Serializable]
+        private sealed class PropertyEntryArray { public PropertyEntry[] items; }
 
         // ── Response Builders ──
 
