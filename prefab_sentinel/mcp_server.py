@@ -197,13 +197,15 @@ def create_server(
         target_path = _Path(target_dir).resolve()
 
         # Path traversal guard: target must be within project root
+        # Uses is_relative_to (Python 3.9+) to avoid prefix-collision bypass
+        # (e.g. /project_evil matching /project with startswith)
         project_resolved = project_root.resolve()
-        if not str(target_path).startswith(str(project_resolved)):
+        if not target_path.is_relative_to(project_resolved):
             return {
                 "success": False,
                 "severity": "error",
                 "code": "DEPLOY_OUTSIDE_PROJECT",
-                "message": f"target_dir must be within the project: {project_root}",
+                "message": f"target_dir must be within the project: {project_resolved}",
                 "data": {},
                 "diagnostics": [],
             }
