@@ -222,9 +222,10 @@ def create_server(
     ) -> dict[str, Any]:
         """Deploy or update Bridge C# files to the Unity project.
 
-        Copies tools/unity/*.cs from prefab-sentinel to the target directory.
-        Cleans up old Bridge files from the parent directory to prevent
-        CS0101 duplicate definition errors.
+        Copies Bridge C# files to the target directory. Source files are
+        read from _bridge_files/ (wheel install) or tools/unity/ (source
+        tree). Cleans up old Bridge files from the parent directory to
+        prevent CS0101 duplicate definition errors.
         Triggers editor_refresh after copying to reload assets.
 
         Args:
@@ -269,15 +270,19 @@ def create_server(
 
         target_path.mkdir(parents=True, exist_ok=True)
 
-        # Find plugin's tools/unity/ directory (source tree only)
-        plugin_tools = _Path(__file__).parent.parent / "tools" / "unity"
+        # Find Bridge source files: prefer _bridge_files/ (wheel install)
+        # over tools/unity/ (editable/source install).
+        plugin_tools = _Path(__file__).parent / "_bridge_files"
+        if not plugin_tools.is_dir():
+            plugin_tools = _Path(__file__).parent.parent / "tools" / "unity"
         if not plugin_tools.is_dir():
             return {
                 "success": False,
                 "severity": "error",
                 "code": "DEPLOY_SOURCE_NOT_FOUND",
-                "message": "Bridge source directory (tools/unity/) not found. "
-                "deploy_bridge requires running from the source tree.",
+                "message": "Bridge source directory not found. "
+                "Ensure tools/unity/ exists (source) or package includes "
+                "_bridge_files/ (wheel install).",
                 "data": {},
                 "diagnostics": [],
             }

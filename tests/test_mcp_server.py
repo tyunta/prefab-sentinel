@@ -2790,6 +2790,35 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         infos = [d for d in result["diagnostics"] if d["severity"] == "info"]
         self.assertTrue(any("VRCSDKUploadHandler" in d["message"] for d in infos))
 
+    @patch("prefab_sentinel.mcp_server.send_action")
+    def test_uses_bridge_files_dir_when_available(self, _mock: MagicMock) -> None:
+        """When _bridge_files/ exists (wheel install), uses it over tools/unity/."""
+        # Create _bridge_files in a temp dir and patch __file__ to point there
+        fake_pkg = self._tmp / "fake_pkg" / "prefab_sentinel"
+        fake_pkg.mkdir(parents=True)
+        bridge_dir = fake_pkg / "_bridge_files"
+        bridge_dir.mkdir()
+        test_cs = bridge_dir / "PrefabSentinel.TestBridge.cs"
+        test_cs.write_text("// from _bridge_files", encoding="utf-8")
+
+        import prefab_sentinel.mcp_server as mcp_mod
+        original_file = mcp_mod.__file__
+        mcp_mod.__file__ = str(fake_pkg / "mcp_server.py")
+        try:
+            server = create_server(project_root=str(self._project_root))
+            _, result = _run(server.call_tool(
+                "deploy_bridge",
+                {"target_dir": str(self._target)},
+            ))
+        finally:
+            mcp_mod.__file__ = original_file
+
+        self.assertTrue(result["success"])
+        # Should have copied from _bridge_files, not tools/unity/
+        self.assertIn("PrefabSentinel.TestBridge.cs", result["data"]["copied_files"])
+        # Should NOT contain files from tools/unity/
+        self.assertNotIn("PrefabSentinel.EditorBridge.cs", result["data"]["copied_files"])
+
 
 # ---------------------------------------------------------------------------
 # _extract_description
