@@ -74,6 +74,9 @@ SUPPORTED_ACTIONS = frozenset(
         "editor_batch_set_property",
         "editor_open_scene",
         "editor_save_scene",
+        # Phase 7: UX Review improvements
+        "editor_batch_add_component",
+        "editor_create_scene",
     }
 )
 

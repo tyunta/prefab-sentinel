@@ -1643,6 +1643,46 @@ def create_server(
         return send_action(action="editor_save_scene", **kwargs)
 
     # ------------------------------------------------------------------
+    # Phase 7: UX Review improvements
+    # ------------------------------------------------------------------
+
+    @server.tool()
+    def editor_batch_add_component(
+        operations: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Add components to multiple GameObjects in a single request (Undo-grouped).
+
+        Each operation dict must contain: hierarchy_path, component_type.
+        Optional: properties (list of {name, value/object_reference} dicts).
+
+        Args:
+            operations: List of add-component operations.
+        """
+        import json
+
+        return send_action(
+            action="editor_batch_add_component",
+            batch_operations_json=json.dumps(operations, ensure_ascii=False),
+        )
+
+    @server.tool()
+    def editor_create_scene(
+        scene_path: str,
+    ) -> dict[str, Any]:
+        """Create a new empty Unity scene and save it to the specified path.
+
+        Replaces the current scene with a new empty one. Use editor_save_scene
+        first if you need to preserve the current scene.
+
+        Args:
+            scene_path: Asset path for the new scene (e.g. "Assets/Scenes/NewScene.unity").
+        """
+        return send_action(
+            action="editor_create_scene",
+            asset_path=scene_path,
+        )
+
+    # ------------------------------------------------------------------
     # Inspection tools (orchestrator-backed)
     # ------------------------------------------------------------------
 
