@@ -1964,9 +1964,197 @@ namespace PrefabSentinel
 
         // ── Phase 5: SetProperty + SaveAsPrefab ──
 
+        private static UnityEngine.Object ResolveObjectReference(string reference)
+        {
+            if (string.IsNullOrEmpty(reference))
+                return null;
+
+            // 1. Check for component specifier (path:ComponentType)
+            string goPath = reference;
+            string componentName = null;
+            int colonIdx = reference.LastIndexOf(':');
+            if (colonIdx > 0)
+            {
+                goPath = reference.Substring(0, colonIdx);
+                componentName = reference.Substring(colonIdx + 1);
+            }
+
+            // 2. Try scene hierarchy
+            var go = GameObject.Find(goPath);
+            if (go != null)
+            {
+                if (componentName != null)
+                {
+                    var compType = ResolveComponentType(componentName);
+                    if (compType != null)
+                        return go.GetComponent(compType);
+                    return null;
+                }
+                return go;
+            }
+
+            // 3. Try asset path
+            return AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(reference);
+        }
+
         private static EditorControlResponse HandleEditorSetProperty(EditorControlRequest request)
         {
-            return BuildError("EDITOR_CTRL_SET_PROP_NOT_IMPL", "Not yet implemented.");
+            // ── Validation ──
+            if (string.IsNullOrEmpty(request.hierarchy_path))
+                return BuildError("EDITOR_CTRL_SET_PROP_NO_PATH", "hierarchy_path is required.");
+            if (string.IsNullOrEmpty(request.component_type))
+                return BuildError("EDITOR_CTRL_SET_PROP_NO_COMP", "component_type is required.");
+            if (string.IsNullOrEmpty(request.property_name))
+                return BuildError("EDITOR_CTRL_SET_PROP_NO_FIELD", "property_name is required.");
+
+            bool hasValue = !string.IsNullOrEmpty(request.property_value);
+            bool hasRef = !string.IsNullOrEmpty(request.object_reference);
+            if (!hasValue && !hasRef)
+                return BuildError("EDITOR_CTRL_SET_PROP_NO_VALUE",
+                    "Either property_value or object_reference is required.");
+
+            // ── Resolve target ──
+            var go = GameObject.Find(request.hierarchy_path);
+            if (go == null)
+                return BuildError("EDITOR_CTRL_SET_PROP_NOT_FOUND",
+                    $"GameObject not found: {request.hierarchy_path}");
+
+            System.Type compType = ResolveComponentType(request.component_type);
+            if (compType == null)
+                return BuildError("EDITOR_CTRL_SET_PROP_COMP_NOT_FOUND",
+                    $"Component type not found: {request.component_type}");
+
+            var component = go.GetComponent(compType);
+            if (component == null)
+                return BuildError("EDITOR_CTRL_SET_PROP_COMP_NOT_FOUND",
+                    $"Component {request.component_type} not found on {request.hierarchy_path}");
+
+            // ── Find property ──
+            var so = new SerializedObject(component);
+            var prop = so.FindProperty(request.property_name);
+            if (prop == null)
+                return BuildError("EDITOR_CTRL_SET_PROP_FIELD_NOT_FOUND",
+                    $"Property not found: {request.property_name} on {request.component_type}");
+
+            // ── Set value by type ──
+            string v = request.property_value;
+            try
+            {
+                switch (prop.propertyType)
+                {
+                    case SerializedPropertyType.Integer:
+                        prop.intValue = int.Parse(v, System.Globalization.CultureInfo.InvariantCulture);
+                        break;
+                    case SerializedPropertyType.Float:
+                        prop.floatValue = float.Parse(v, System.Globalization.CultureInfo.InvariantCulture);
+                        break;
+                    case SerializedPropertyType.Boolean:
+                        prop.boolValue = bool.Parse(v);
+                        break;
+                    case SerializedPropertyType.String:
+                        prop.stringValue = v;
+                        break;
+                    case SerializedPropertyType.Enum:
+                    {
+                        // Try name match first, then numeric index
+                        int idx = System.Array.IndexOf(prop.enumNames, v);
+                        if (idx >= 0)
+                            prop.enumValueIndex = idx;
+                        else if (int.TryParse(v, out int numIdx))
+                            prop.enumValueIndex = numIdx;
+                        else
+                            return BuildError("EDITOR_CTRL_SET_PROP_TYPE_MISMATCH",
+                                $"Enum value '{v}' not found. Valid: {string.Join(", ", prop.enumNames)}");
+                        break;
+                    }
+                    case SerializedPropertyType.Color:
+                    {
+                        var parts = v.Split(',');
+                        if (parts.Length < 3)
+                            return BuildError("EDITOR_CTRL_SET_PROP_TYPE_MISMATCH",
+                                "Color requires 3 or 4 comma-separated floats (r,g,b[,a]).");
+                        float r = float.Parse(parts[0].Trim(), System.Globalization.CultureInfo.InvariantCulture);
+                        float g = float.Parse(parts[1].Trim(), System.Globalization.CultureInfo.InvariantCulture);
+                        float b = float.Parse(parts[2].Trim(), System.Globalization.CultureInfo.InvariantCulture);
+                        float a = parts.Length >= 4
+                            ? float.Parse(parts[3].Trim(), System.Globalization.CultureInfo.InvariantCulture)
+                            : 1f;
+                        prop.colorValue = new Color(r, g, b, a);
+                        break;
+                    }
+                    case SerializedPropertyType.Vector2:
+                    {
+                        var parts = v.Split(',');
+                        if (parts.Length < 2)
+                            return BuildError("EDITOR_CTRL_SET_PROP_TYPE_MISMATCH",
+                                "Vector2 requires 2 comma-separated floats (x,y).");
+                        prop.vector2Value = new Vector2(
+                            float.Parse(parts[0].Trim(), System.Globalization.CultureInfo.InvariantCulture),
+                            float.Parse(parts[1].Trim(), System.Globalization.CultureInfo.InvariantCulture));
+                        break;
+                    }
+                    case SerializedPropertyType.Vector3:
+                    {
+                        var parts = v.Split(',');
+                        if (parts.Length < 3)
+                            return BuildError("EDITOR_CTRL_SET_PROP_TYPE_MISMATCH",
+                                "Vector3 requires 3 comma-separated floats (x,y,z).");
+                        prop.vector3Value = new Vector3(
+                            float.Parse(parts[0].Trim(), System.Globalization.CultureInfo.InvariantCulture),
+                            float.Parse(parts[1].Trim(), System.Globalization.CultureInfo.InvariantCulture),
+                            float.Parse(parts[2].Trim(), System.Globalization.CultureInfo.InvariantCulture));
+                        break;
+                    }
+                    case SerializedPropertyType.Vector4:
+                    {
+                        var parts = v.Split(',');
+                        if (parts.Length < 4)
+                            return BuildError("EDITOR_CTRL_SET_PROP_TYPE_MISMATCH",
+                                "Vector4 requires 4 comma-separated floats (x,y,z,w).");
+                        prop.vector4Value = new Vector4(
+                            float.Parse(parts[0].Trim(), System.Globalization.CultureInfo.InvariantCulture),
+                            float.Parse(parts[1].Trim(), System.Globalization.CultureInfo.InvariantCulture),
+                            float.Parse(parts[2].Trim(), System.Globalization.CultureInfo.InvariantCulture),
+                            float.Parse(parts[3].Trim(), System.Globalization.CultureInfo.InvariantCulture));
+                        break;
+                    }
+                    case SerializedPropertyType.ObjectReference:
+                    {
+                        string refPath = hasRef ? request.object_reference : v;
+                        var obj = ResolveObjectReference(refPath);
+                        if (obj == null)
+                            return BuildError("EDITOR_CTRL_SET_PROP_REF_NOT_FOUND",
+                                $"Object reference not found: {refPath}");
+                        prop.objectReferenceValue = obj;
+                        break;
+                    }
+                    default:
+                        return BuildError("EDITOR_CTRL_SET_PROP_TYPE_MISMATCH",
+                            $"Unsupported property type: {prop.propertyType}");
+                }
+            }
+            catch (System.FormatException ex)
+            {
+                return BuildError("EDITOR_CTRL_SET_PROP_TYPE_MISMATCH",
+                    $"Failed to parse value '{v}' for {prop.propertyType}: {ex.Message}");
+            }
+
+            so.ApplyModifiedProperties();
+
+            var resp = BuildSuccess("EDITOR_CTRL_SET_PROP_OK",
+                $"Set {request.property_name} on {request.component_type} at {request.hierarchy_path}",
+                data: new EditorControlData
+                {
+                    selected_object = go.name,
+                    executed = true,
+                    read_only = false,
+                });
+            resp.diagnostics = new[] { new EditorControlDiagnostic
+            {
+                detail = $"Property type: {prop.propertyType}. Save the scene to persist.",
+                evidence = "SerializedObject.ApplyModifiedProperties"
+            }};
+            return resp;
         }
 
         private static EditorControlResponse HandleSaveAsPrefab(EditorControlRequest request)
