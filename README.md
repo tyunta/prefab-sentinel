@@ -119,6 +119,12 @@ prefab-sentinel-mcp --transport streamable-http
 | `editor_set_property` | SerializedObject API 経由でコンポーネントのプロパティを設定（UdonSharp 対応） |
 | `editor_save_as_prefab` | シーン上の GameObject を Prefab / Prefab Variant として保存 |
 | `editor_set_parent` | 既存 GameObject の親子関係を変更（Undo 対応） |
+| `editor_create_empty` | 空の GameObject を名前・親・位置指定で作成 |
+| `editor_create_primitive` | プリミティブ (Cube/Sphere 等) を1回で作成 (位置・スケール・回転指定) |
+| `editor_batch_create` | 複数オブジェクトを1リクエストで一括生成 (Undo グループ) |
+| `editor_batch_set_property` | 複数プロパティを1リクエストで一括設定 (Undo グループ) |
+| `editor_open_scene` | シーンを開く (single/additive) |
+| `editor_save_scene` | シーンを保存 |
 
 **Claude Desktop 設定例:**
 
