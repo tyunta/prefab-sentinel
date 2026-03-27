@@ -59,6 +59,10 @@ SUPPORTED_ACTIONS = frozenset(
         "list_menu_items",
         "execute_menu_item",
         "find_renderers_by_material",
+        # Phase 4: Rename + AddComponent + Udon
+        "editor_rename",
+        "editor_add_component",
+        "create_udon_program_asset",
     }
 )
 

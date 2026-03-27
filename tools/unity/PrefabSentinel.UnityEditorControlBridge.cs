@@ -46,6 +46,10 @@ namespace PrefabSentinel
             "list_menu_items", "execute_menu_item",
             // Phase 3: Material reverse lookup
             "find_renderers_by_material",
+            // Phase 4: Rename + AddComponent + Udon
+            "editor_rename",
+            "editor_add_component",
+            "create_udon_program_asset",
         };
 
         // ── Request / Response DTOs ──
@@ -119,6 +123,10 @@ namespace PrefabSentinel
 
             // Phase 2: Menu
             public string menu_path = string.Empty;         // menu item path
+
+            // Phase 4: Rename + AddComponent + Udon
+            public string new_name = string.Empty;
+            public string component_type = string.Empty;
         }
 
         [Serializable]
@@ -284,34 +292,12 @@ namespace PrefabSentinel
                 return;
             }
 
-            EditorControlResponse response = null;
-            bool deferred = false;
+            EditorControlResponse response;
             switch (request.action)
             {
                 case "capture_screenshot":
-                {
-                    bool isScene = string.Equals(request.view, "scene", StringComparison.OrdinalIgnoreCase);
-                    if (isScene)
-                    {
-                        // Focus SceneView to ensure rendering pipeline runs even when unfocused,
-                        // then defer capture by 1 frame for skinning recalculation
-                        SceneView sv = SceneView.lastActiveSceneView;
-                        if (sv != null) sv.Focus();
-                        EditorApplication.QueuePlayerLoopUpdate();
-                        string rp = responsePath;  // capture for closure
-                        EditorApplication.delayCall += () =>
-                        {
-                            var r = HandleCaptureScreenshot(request, requestPath);
-                            WriteResponse(rp, r);
-                        };
-                        deferred = true;
-                    }
-                    else
-                    {
-                        response = HandleCaptureScreenshot(request, requestPath);
-                    }
+                    response = HandleCaptureScreenshot(request, requestPath);
                     break;
-                }
                 case "select_object":
                     response = HandleSelectObject(request);
                     break;
@@ -379,6 +365,15 @@ namespace PrefabSentinel
                 case "find_renderers_by_material":
                     response = HandleFindRenderersByMaterial(request);
                     break;
+                case "editor_rename":
+                    response = HandleEditorRename(request);
+                    break;
+                case "editor_add_component":
+                    response = HandleEditorAddComponent(request);
+                    break;
+                case "create_udon_program_asset":
+                    response = HandleCreateUdonProgramAsset(request);
+                    break;
                 case "vrcsdk_upload":
                     response = TryHandleVrcsdkUpload(request);
                     break;
@@ -389,8 +384,7 @@ namespace PrefabSentinel
                     break;
             }
 
-            if (!deferred)
-                WriteResponse(responsePath, response);
+            WriteResponse(responsePath, response);
         }
 
         // ── Action Handlers ──
@@ -425,11 +419,21 @@ namespace PrefabSentinel
                     Texture2D tex = null;
                     try
                     {
+                        // Force skinning recalculation so blend shape / material
+                        // changes are reflected even when Unity is unfocused
+                        var smrs = UnityEngine.Object.FindObjectsOfType<SkinnedMeshRenderer>();
+                        foreach (var smr in smrs)
+                            smr.forceMatrixRecalculationPerRender = true;
+
                         rt = new RenderTexture(w, h, 24);
                         RenderTexture prev = cam.targetTexture;
                         cam.targetTexture = rt;
                         cam.Render();
                         cam.targetTexture = prev;
+
+                        // Restore to avoid per-frame overhead
+                        foreach (var smr in smrs)
+                            smr.forceMatrixRecalculationPerRender = false;
 
                         RenderTexture.active = rt;
                         tex = new Texture2D(w, h, TextureFormat.RGB24, false);
@@ -1802,6 +1806,146 @@ namespace PrefabSentinel
                 {
                     material_slots = matches.ToArray(),
                     total_entries = renderers.Length,
+                    executed = true,
+                });
+        }
+
+        // ── Phase 4: Rename + AddComponent + Udon ──
+
+        private static EditorControlResponse HandleEditorRename(EditorControlRequest request)
+        {
+            if (string.IsNullOrEmpty(request.hierarchy_path))
+                return BuildError("EDITOR_CTRL_RENAME_NO_PATH", "hierarchy_path is required.");
+            if (string.IsNullOrEmpty(request.new_name))
+                return BuildError("EDITOR_CTRL_RENAME_NO_NAME", "new_name is required.");
+
+            var go = GameObject.Find(request.hierarchy_path);
+            if (go == null)
+                return BuildError("EDITOR_CTRL_RENAME_NOT_FOUND",
+                    $"GameObject not found: {request.hierarchy_path}");
+
+            string oldName = go.name;
+            Undo.RecordObject(go, $"PrefabSentinel: Rename {oldName}");
+            go.name = request.new_name;
+
+            var resp = BuildSuccess("EDITOR_CTRL_RENAME_OK",
+                $"Renamed '{oldName}' to '{request.new_name}'",
+                data: new EditorControlData
+                {
+                    selected_object = request.new_name,
+                    executed = true,
+                    read_only = false,
+                });
+            resp.diagnostics = new[] { new EditorControlDiagnostic
+            {
+                detail = "Runtime modification — save the scene (File > Save) to persist.",
+                evidence = "Undo.RecordObject"
+            }};
+            return resp;
+        }
+
+        private static System.Type ResolveComponentType(string typeName)
+        {
+            // 1. Fully qualified name
+            var t = System.Type.GetType(typeName);
+            if (t != null && typeof(Component).IsAssignableFrom(t))
+                return t;
+
+            // 2. Search all loaded assemblies
+            foreach (var asm in System.AppDomain.CurrentDomain.GetAssemblies())
+            {
+                t = asm.GetType(typeName);
+                if (t != null && typeof(Component).IsAssignableFrom(t))
+                    return t;
+            }
+
+            // 3. Try UnityEngine namespace
+            t = System.Type.GetType($"UnityEngine.{typeName}, UnityEngine.CoreModule");
+            if (t != null && typeof(Component).IsAssignableFrom(t))
+                return t;
+
+            return null;
+        }
+
+        private static EditorControlResponse HandleEditorAddComponent(EditorControlRequest request)
+        {
+            if (string.IsNullOrEmpty(request.hierarchy_path))
+                return BuildError("EDITOR_CTRL_ADD_COMP_NO_PATH", "hierarchy_path is required.");
+            if (string.IsNullOrEmpty(request.component_type))
+                return BuildError("EDITOR_CTRL_ADD_COMP_NO_TYPE", "component_type is required.");
+
+            var go = GameObject.Find(request.hierarchy_path);
+            if (go == null)
+                return BuildError("EDITOR_CTRL_ADD_COMP_NOT_FOUND",
+                    $"GameObject not found: {request.hierarchy_path}");
+
+            System.Type compType = ResolveComponentType(request.component_type);
+            if (compType == null)
+                return BuildError("EDITOR_CTRL_ADD_COMP_TYPE_NOT_FOUND",
+                    $"Component type not found: {request.component_type}. " +
+                    "Use fully qualified name (e.g. 'UnityEngine.BoxCollider').");
+
+            var added = Undo.AddComponent(go, compType);
+            if (added == null)
+                return BuildError("EDITOR_CTRL_ADD_COMP_FAILED",
+                    $"Failed to add component: {request.component_type}");
+
+            var resp = BuildSuccess("EDITOR_CTRL_ADD_COMP_OK",
+                $"Added {compType.Name} to {request.hierarchy_path}",
+                data: new EditorControlData
+                {
+                    selected_object = go.name,
+                    executed = true,
+                    read_only = false,
+                });
+            resp.diagnostics = new[] { new EditorControlDiagnostic
+            {
+                detail = "Runtime modification — save the scene (File > Save) to persist.",
+                evidence = "Undo.AddComponent"
+            }};
+            return resp;
+        }
+
+        private static EditorControlResponse HandleCreateUdonProgramAsset(EditorControlRequest request)
+        {
+            if (string.IsNullOrEmpty(request.asset_path))
+                return BuildError("EDITOR_CTRL_UDON_NO_SCRIPT", "asset_path (.cs file) is required.");
+
+            var script = AssetDatabase.LoadAssetAtPath<MonoScript>(request.asset_path);
+            if (script == null)
+                return BuildError("EDITOR_CTRL_UDON_SCRIPT_NOT_FOUND",
+                    $"MonoScript not found: {request.asset_path}");
+
+            // Resolve UdonSharpProgramAsset via reflection
+            var assetType = System.Type.GetType(
+                "UdonSharp.UdonSharpProgramAsset, UdonSharp.Editor");
+            if (assetType == null)
+                return BuildError("EDITOR_CTRL_UDON_NOT_AVAILABLE",
+                    "UdonSharp.Editor not found. Is UdonSharp installed?");
+
+            var asset = ScriptableObject.CreateInstance(assetType);
+
+            // Set sourceCsScript field
+            var field = assetType.GetField("sourceCsScript",
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic
+                | System.Reflection.BindingFlags.Instance);
+            if (field != null)
+                field.SetValue(asset, script);
+
+            // Output path: use description field if provided, otherwise derive from .cs path
+            string outputPath = string.IsNullOrEmpty(request.description)
+                ? request.asset_path.Replace(".cs", ".asset")
+                : request.description;
+
+            AssetDatabase.CreateAsset(asset, outputPath);
+            AssetDatabase.SaveAssets();
+
+            return BuildSuccess("EDITOR_CTRL_UDON_ASSET_CREATED",
+                $"Created Udon Program Asset: {outputPath}",
+                data: new EditorControlData
+                {
+                    output_path = outputPath,
+                    asset_path = request.asset_path,
                     executed = true,
                 });
         }

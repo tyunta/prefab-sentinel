@@ -191,6 +191,9 @@ class TestSupportedActions(unittest.TestCase):
             "list_menu_items",
             "execute_menu_item",
             "find_renderers_by_material",
+            "editor_rename",
+            "editor_add_component",
+            "create_udon_program_asset",
         }
         self.assertEqual(expected, SUPPORTED_ACTIONS)
 

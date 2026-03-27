@@ -5,8 +5,6 @@ using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using VRC.Core;
-using VRC.SDK3.Avatars.Components;
-using VRC.SDK3A.Editor;
 using VRC.SDKBase;
 using VRC.SDKBase.Editor.Api;
 using static PrefabSentinel.UnityEditorControlBridge;
@@ -44,7 +42,12 @@ namespace PrefabSentinel
                 if (prefab == null)
                     return BuildError("VRCSDK_ASSET_NOT_FOUND",
                         $"Asset not found or not a GameObject: {request.asset_path}");
-                if (prefab.GetComponent<VRCAvatarDescriptor>() == null)
+                var avatarDescType = System.Type.GetType(
+                    "VRC.SDK3.Avatars.Components.VRCAvatarDescriptor, VRC.SDK3A");
+                if (avatarDescType == null)
+                    return BuildError("VRCSDK_AVATAR_SDK_NOT_FOUND",
+                        "Avatar SDK (VRC.SDK3A) not installed. Cannot upload avatars from this project.");
+                if (prefab.GetComponent(avatarDescType) == null)
                     return BuildError("VRCSDK_MISSING_DESCRIPTOR",
                         $"No VRCAvatarDescriptor found on: {request.asset_path}");
             }
@@ -174,15 +177,37 @@ namespace PrefabSentinel
 
         private static void BuildAndUploadAvatar(EditorControlRequest request)
         {
-            if (!VRCSdkControlPanel.TryGetBuilder<IVRCSdkAvatarBuilderApi>(out var builder))
-                throw new InvalidOperationException("Failed to get IVRCSdkAvatarBuilderApi. Is VRC SDK properly installed?");
+            // Resolve IVRCSdkAvatarBuilderApi via reflection (Avatar SDK may not be installed)
+            var avatarBuilderType = System.Type.GetType(
+                "VRC.SDK3A.Editor.IVRCSdkAvatarBuilderApi, VRC.SDK3A.Editor");
+            if (avatarBuilderType == null)
+                throw new InvalidOperationException(
+                    "Avatar SDK (VRC.SDK3A.Editor) not installed. Cannot upload avatars from this project.");
+
+            var tryGetMethod = typeof(VRCSdkControlPanel).GetMethod("TryGetBuilder");
+            if (tryGetMethod == null)
+                throw new InvalidOperationException("VRCSdkControlPanel.TryGetBuilder not found.");
+
+            var genericMethod = tryGetMethod.MakeGenericMethod(avatarBuilderType);
+            var args = new object[] { null };
+            bool success = (bool)genericMethod.Invoke(null, args);
+            if (!success || args[0] == null)
+                throw new InvalidOperationException(
+                    "Failed to get Avatar Builder. Open VRChat SDK panel first.");
+
+            var builder = args[0];
 
             var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(request.asset_path);
             var pipelineManager = prefab.GetComponent<PipelineManager>();
             if (pipelineManager != null)
                 pipelineManager.blueprintId = request.blueprint_id;
 
-            builder.BuildAndUpload(prefab, null).GetAwaiter().GetResult();
+            // builder.BuildAndUpload(prefab, null).GetAwaiter().GetResult()
+            var buildMethod = builder.GetType().GetMethod("BuildAndUpload");
+            if (buildMethod == null)
+                throw new InvalidOperationException("BuildAndUpload method not found on avatar builder.");
+            var task = (System.Threading.Tasks.Task)buildMethod.Invoke(builder, new object[] { prefab, null });
+            task.GetAwaiter().GetResult();
         }
 
         private static void BuildAndUploadWorld(EditorControlRequest request)
