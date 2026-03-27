@@ -1974,6 +1974,11 @@ namespace PrefabSentinel
                     { prop.vector3Value = new Vector3(x, y, z); return true; }
                     return false;
                 }
+                case SerializedPropertyType.ArraySize:
+                case SerializedPropertyType.FixedBufferSize:
+                    if (int.TryParse(v, System.Globalization.NumberStyles.Integer, ci, out int av))
+                    { prop.intValue = av; return true; }
+                    return false;
                 default: return false;
             }
         }
@@ -2648,6 +2653,10 @@ namespace PrefabSentinel
                             float.Parse(parts[3].Trim(), System.Globalization.CultureInfo.InvariantCulture));
                         break;
                     }
+                    case SerializedPropertyType.ArraySize:
+                    case SerializedPropertyType.FixedBufferSize:
+                        prop.intValue = int.Parse(v, System.Globalization.CultureInfo.InvariantCulture);
+                        break;
                     case SerializedPropertyType.ObjectReference:
                     {
                         string refPath = hasRef ? request.object_reference : v;
