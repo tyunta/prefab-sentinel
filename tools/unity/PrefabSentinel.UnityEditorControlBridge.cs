@@ -61,6 +61,9 @@ namespace PrefabSentinel
             "editor_batch_set_property",
             "editor_open_scene",
             "editor_save_scene",
+            // Phase 7: UX Review improvements
+            "editor_batch_add_component",
+            "editor_create_scene",
         };
 
         // ── Request / Response DTOs ──
@@ -424,6 +427,12 @@ namespace PrefabSentinel
                     break;
                 case "editor_save_scene":
                     response = HandleEditorSaveScene(request);
+                    break;
+                case "editor_batch_add_component":
+                    response = HandleEditorBatchAddComponent(request);
+                    break;
+                case "editor_create_scene":
+                    response = HandleEditorCreateScene(request);
                     break;
                 case "vrcsdk_upload":
                     response = TryHandleVrcsdkUpload(request);
@@ -2856,6 +2865,101 @@ namespace PrefabSentinel
                 $"Menu item executed: {request.menu_path}");
         }
 
+        // ── Phase 7: UX Review improvements ──
+
+        private static EditorControlResponse HandleEditorBatchAddComponent(EditorControlRequest request)
+        {
+            if (string.IsNullOrEmpty(request.batch_operations_json))
+                return BuildError("EDITOR_CTRL_BATCH_ADD_COMP_NO_DATA",
+                    "batch_operations_json is required.");
+
+            BatchAddComponentArray wrapper;
+            try
+            {
+                wrapper = JsonUtility.FromJson<BatchAddComponentArray>(
+                    "{\"items\":" + request.batch_operations_json + "}");
+            }
+            catch (System.Exception ex)
+            {
+                return BuildError("EDITOR_CTRL_BATCH_ADD_COMP_JSON_ERROR",
+                    $"Failed to parse batch_operations_json: {ex.Message}");
+            }
+
+            if (wrapper.items == null || wrapper.items.Length == 0)
+                return BuildError("EDITOR_CTRL_BATCH_ADD_COMP_EMPTY",
+                    "batch_operations_json is empty.");
+
+            int undoGroup = Undo.GetCurrentGroup();
+            Undo.SetCurrentGroupName("PrefabSentinel: Batch AddComponent");
+
+            var results = new System.Collections.Generic.List<string>();
+
+            foreach (var op in wrapper.items)
+            {
+                var subReq = new EditorControlRequest
+                {
+                    action = "editor_add_component",
+                    hierarchy_path = op.hierarchy_path,
+                    component_type = op.component_type,
+                    properties_json = op.properties_json,
+                };
+                var subResp = HandleEditorAddComponent(subReq);
+                if (!subResp.success)
+                {
+                    Undo.CollapseUndoOperations(undoGroup);
+                    return BuildError("EDITOR_CTRL_BATCH_ADD_COMP_FAILED",
+                        $"Operation failed at index {results.Count}: {subResp.message}");
+                }
+                results.Add($"{op.hierarchy_path}: {op.component_type}");
+            }
+
+            Undo.CollapseUndoOperations(undoGroup);
+
+            var resp = BuildSuccess("EDITOR_CTRL_BATCH_ADD_COMP_OK",
+                $"Added {results.Count} components",
+                data: new EditorControlData
+                {
+                    executed = true,
+                    read_only = false,
+                    suggestions = results.ToArray(),
+                });
+            resp.diagnostics = new[] { new EditorControlDiagnostic
+            {
+                detail = "Runtime modification — save the scene (File > Save) to persist.",
+                evidence = "Undo.CollapseUndoOperations"
+            }};
+            return resp;
+        }
+
+        private static EditorControlResponse HandleEditorCreateScene(EditorControlRequest request)
+        {
+            if (string.IsNullOrEmpty(request.asset_path))
+                return BuildError("EDITOR_CTRL_CREATE_SCENE_NO_PATH", "asset_path is required.");
+
+            if (!request.asset_path.EndsWith(".unity", System.StringComparison.OrdinalIgnoreCase))
+                return BuildError("EDITOR_CTRL_CREATE_SCENE_BAD_EXT",
+                    $"asset_path must end with .unity: {request.asset_path}");
+
+            string dir = System.IO.Path.GetDirectoryName(request.asset_path);
+            if (!string.IsNullOrEmpty(dir) && !System.IO.Directory.Exists(dir))
+                System.IO.Directory.CreateDirectory(dir);
+
+            var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
+            bool ok = EditorSceneManager.SaveScene(scene, request.asset_path);
+            if (!ok)
+                return BuildError("EDITOR_CTRL_CREATE_SCENE_FAILED",
+                    $"Failed to save new scene to: {request.asset_path}");
+
+            return BuildSuccess("EDITOR_CTRL_CREATE_SCENE_OK",
+                $"Created new scene: {request.asset_path}",
+                data: new EditorControlData
+                {
+                    asset_path = request.asset_path,
+                    output_path = scene.name,
+                    executed = true,
+                });
+        }
+
         // ── Batch Operation DTOs ──
 
         [Serializable]
@@ -2895,6 +2999,17 @@ namespace PrefabSentinel
 
         [Serializable]
         private sealed class PropertyEntryArray { public PropertyEntry[] items; }
+
+        [Serializable]
+        private sealed class BatchAddComponentOp
+        {
+            public string hierarchy_path = string.Empty;
+            public string component_type = string.Empty;
+            public string properties_json = string.Empty;
+        }
+
+        [Serializable]
+        private sealed class BatchAddComponentArray { public BatchAddComponentOp[] items; }
 
         // ── Response Builders ──
 
