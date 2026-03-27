@@ -64,7 +64,7 @@
 - pre-commit hook は `ruff check` → パッチバンプ → `uv lock` の順で実行される（`.git/hooks/pre-commit`）。lint 失敗時はコミット中断。
 - minor/major バンプは手動: `uv run bump-my-version bump minor|major`。
 - パッチバンプはフィーチャーブランチを含む全コミットで走らせる（`SKIP_BUMP=1` は原則使わない）。
-- バージョン記述箇所は `pyproject.toml` と `.claude-plugin/plugin.json` の 2 箇所（`[tool.bumpversion]` で一括管理）。
+- バージョン記述箇所は `pyproject.toml`、`.claude-plugin/plugin.json`、`tools/unity/PrefabSentinel.UnityEditorControlBridge.cs` の 3 箇所（`[tool.bumpversion]` で一括管理）。
 
 ## Editor リモート操作の行動規約
 - スクショ（`editor screenshot`）はトリアージの起点として使い、データソースにしない。

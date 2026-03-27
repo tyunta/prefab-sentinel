@@ -17,7 +17,7 @@ namespace PrefabSentinel
     public static class UnityEditorControlBridge
     {
         public const int ProtocolVersion = 1;
-        public const string BridgeVersion = "0.5.110";
+        public const string BridgeVersion = "0.5.141";
 
         /// <summary>All action strings handled by this bridge.</summary>
         public static readonly HashSet<string> SupportedActions = new HashSet<string>
