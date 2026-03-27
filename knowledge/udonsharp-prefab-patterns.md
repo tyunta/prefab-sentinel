@@ -1,8 +1,13 @@
+---
+tool: udonsharp
+version_tested: "VRC SDK 3.7+ / UdonSharp 1.x"
+last_updated: 2026-03-27
+confidence: mixed
+---
+
 # UdonSharp Prefab 構築パターン
 
-version_tested: VRC SDK 3.7+ / UdonSharp 1.x
-last_updated: 2026-03-27
-confidence: medium (Phase 1-2 デスクリサーチ + ソースコード分析)
+> confidence: L3・実運用セクション = high / L1-L2 新規追加セクション = medium
 
 ## L1: 基本構造
 
@@ -128,7 +133,7 @@ C# (.cs) → UdonSharp Compiler → Udon Assembly → Udon VM bytecode
 5. リモート側で `OnDeserialization()` が発火
 
 ### `[FieldChangeCallback]`
-同期変数の変更時にプロパティ setter を発火。`Update()` でのポーリング不要。
+同期変数の変更時にプロパティエミュレーション（フィールド＋メソッドペア）を発火。標準 C# プロパティ構文 `{ get; set; }` ではなく UdonSharp 独自の命名規約で動作する。`Update()` でのポーリング不要。
 
 ### 帯域制限
 - 合計 ~11 KB/秒
@@ -184,6 +189,7 @@ C# (.cs) → UdonSharp Compiler → Udon Assembly → Udon VM bytecode
 5. `inspect_hierarchy` で階層を検証
 6. Unity Inspector で UdonSharp コンポーネントを追加・フィールド設定
 7. `inspect_wiring` で参照の整合性を検証
+8. `validate_refs` で壊れた参照がないことを確認
 
 ## 実運用で学んだこと
 
