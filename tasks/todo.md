@@ -203,7 +203,8 @@
 
 ## Editor Bridge 基盤強化 — Phase 1 (2026-03-25)
 
-- [ ] Group A: Camera GET/SET (Tasks 1-3) — C# HandleGetCamera/HandleSetCamera + Python MCP tools + テスト
-- [ ] Group B: Auto-Refresh + Bridge Status (Tasks 4-6) — bridge_status() + maybe_auto_refresh() + write tools 統合 + session status
-- [ ] Group C: Bridge エラーメッセージ改善 (Task 7) — actionable setup hints
-- [ ] Group D: 全体検証 + README 更新 (Task 8) — regression test + tool table update
+- [x] Group A: Camera GET/SET (Tasks 1-3) — C# HandleGetCamera/HandleSetCamera + Python MCP tools + テスト
+- [x] Group B: Auto-Refresh + Bridge Status (Tasks 4-6) — bridge_status() + maybe_auto_refresh() + write tools 統合 + session status
+- [x] Group C: Bridge エラーメッセージ改善 (Task 7) — actionable setup hints
+- [x] Group D: 全体検証 + README 更新 (Task 8) — regression test + tool table update
+- [x] 検証: 1180 tests pass, lint clean, README updated
