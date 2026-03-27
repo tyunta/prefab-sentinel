@@ -285,15 +285,17 @@ def create_server(
         diagnostics: list[dict[str, Any]] = []
 
         # Phase 1: Clean up old Bridge files from parent directory.
-        # The glob is non-recursive on parent_dir, so matches are always
-        # direct children of parent_dir (never inside target_path).
+        # Only runs when parent differs from target (deploying to a
+        # subdirectory). When target == parent (e.g. deploying directly
+        # to Assets/Editor/), skip to avoid deleting files we're about
+        # to deploy.
         removed_old_files: list[str] = []
         parent_dir = target_path.parent
-        if parent_dir.is_dir():
+        if parent_dir.is_dir() and parent_dir != target_path:
             for old_file in sorted(parent_dir.glob("PrefabSentinel.*.cs")):
                 old_file.unlink()
                 removed_old_files.append(old_file.name)
-                meta_file = old_file.with_suffix(".cs.meta")
+                meta_file = _Path(str(old_file) + ".meta")
                 if meta_file.exists():
                     meta_file.unlink()
                     removed_old_files.append(meta_file.name)
@@ -309,8 +311,8 @@ def create_server(
 
         # Phase 2: Clean up stale upload handler from target if excluded
         if not include_upload_handler:
-            for suffix in (".cs", ".cs.meta"):
-                stale = target_path / _UPLOAD_HANDLER.replace(".cs", suffix)
+            for stale_name in (_UPLOAD_HANDLER, _UPLOAD_HANDLER + ".meta"):
+                stale = target_path / stale_name
                 if stale.exists():
                     stale.unlink()
 
