@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -295,7 +296,7 @@ class TestResolveScopePathWsl(unittest.TestCase):
     @patch("prefab_sentinel.unity_assets.to_wsl_path")
     def test_windows_scope_converted(self, mock_to_wsl: MagicMock) -> None:
         """When scope is a Windows path, to_wsl_path is called before Path()."""
-        import tempfile
+
 
         with tempfile.TemporaryDirectory() as tmpdir:
             mock_to_wsl.return_value = tmpdir
@@ -308,7 +309,7 @@ class TestResolveScopePathWsl(unittest.TestCase):
     @patch("prefab_sentinel.unity_assets.to_wsl_path", side_effect=lambda p: p)
     def test_posix_scope_unchanged(self, mock_to_wsl: MagicMock) -> None:
         """POSIX paths pass through to_wsl_path unchanged."""
-        import tempfile
+
 
         with tempfile.TemporaryDirectory() as tmpdir:
             from prefab_sentinel.unity_assets import resolve_scope_path
@@ -329,7 +330,7 @@ class TestFindProjectRootWsl(unittest.TestCase):
     @patch("prefab_sentinel.unity_assets.to_wsl_path")
     def test_windows_start_path_converted(self, mock_to_wsl: MagicMock) -> None:
         """Windows path passed to find_project_root gets converted via to_wsl_path."""
-        import tempfile
+
 
         with tempfile.TemporaryDirectory() as tmpdir:
             # Create Assets/ so find_project_root succeeds

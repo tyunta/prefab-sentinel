@@ -385,10 +385,15 @@ class ReferenceResolverService:
         ignored_missing_asset_guid_occurrences = Counter()
         scanned_files = 0
         scanned_refs = 0
+        # unreadable_files: SOURCE files in scope that could not be decoded
+        # (e.g. binary assets, encoding errors). These files are skipped entirely.
         unreadable_files = 0
         total_broken = 0
         skipped_external_prefab_fileid_checks = 0
         skipped_external_prefab_fileid_details: list[dict[str, str]] = []
+        # skipped_unreadable_target_checks: individual reference checks skipped
+        # because the TARGET file (referenced by GUID) could not be decoded.
+        # Distinct from unreadable_files (source vs target).
         skipped_unreadable_target_checks = 0
 
         def record_issue(
