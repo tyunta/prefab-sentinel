@@ -287,7 +287,7 @@ class TestResolveAssetPath(unittest.TestCase):
     """Validate resolve_asset_path joins Assets/... paths with project root."""
 
     def test_relative_assets_path_resolved(self) -> None:
-        import tempfile
+
         from pathlib import Path
 
         from prefab_sentinel.unity_assets import resolve_asset_path
@@ -302,7 +302,7 @@ class TestResolveAssetPath(unittest.TestCase):
             self.assertEqual(resolved, fake_asset.resolve())
 
     def test_absolute_path_unchanged(self) -> None:
-        import tempfile
+
         from pathlib import Path
 
         from prefab_sentinel.unity_assets import resolve_asset_path

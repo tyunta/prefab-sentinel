@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
@@ -103,7 +104,7 @@ class TestSymbolTools(unittest.TestCase):
         return p
 
     def test_get_unity_symbols_depth0(self) -> None:
-        import tempfile
+
 
         with tempfile.TemporaryDirectory() as td:
             prefab = self._write_prefab(Path(td))
@@ -122,7 +123,7 @@ class TestSymbolTools(unittest.TestCase):
             self.assertNotIn("severity", result)
 
     def test_get_unity_symbols_depth1(self) -> None:
-        import tempfile
+
 
         with tempfile.TemporaryDirectory() as td:
             prefab = self._write_prefab(Path(td))
@@ -137,7 +138,7 @@ class TestSymbolTools(unittest.TestCase):
             self.assertIn("MeshRenderer", child_names)
 
     def test_find_unity_symbol_found(self) -> None:
-        import tempfile
+
 
         with tempfile.TemporaryDirectory() as td:
             prefab = self._write_prefab(Path(td))
@@ -151,7 +152,7 @@ class TestSymbolTools(unittest.TestCase):
             self.assertNotIn("success", result)
 
     def test_find_unity_symbol_not_found(self) -> None:
-        import tempfile
+
 
         with tempfile.TemporaryDirectory() as td:
             prefab = self._write_prefab(Path(td))
@@ -164,7 +165,7 @@ class TestSymbolTools(unittest.TestCase):
             self.assertNotIn("success", result)
 
     def test_find_unity_symbol_component_path(self) -> None:
-        import tempfile
+
 
         with tempfile.TemporaryDirectory() as td:
             prefab = self._write_prefab(Path(td))
@@ -189,7 +190,7 @@ class TestSymbolToolsWithMonoBehaviour(unittest.TestCase):
     """Test symbol tools with MonoBehaviour components."""
 
     def test_find_monobehaviour_with_script_name(self) -> None:
-        import tempfile
+
 
         text = YAML_HEADER + "\n".join([
             make_gameobject("100", "Player", ["200", "300"]),
@@ -215,7 +216,7 @@ class TestGetUnitySymbolsExpandNested(unittest.TestCase):
     """Test expand_nested parameter wiring in get_unity_symbols."""
 
     def test_expand_nested_passed_to_build(self) -> None:
-        import tempfile
+
 
         text = YAML_HEADER + make_gameobject("100", "Root", ["200"]) + make_transform("200", "100")
         server = create_server(project_root=None)
@@ -411,7 +412,7 @@ class TestFindUnitySymbolShowOrigin(unittest.TestCase):
 
     def test_show_origin_false_returns_flat_properties(self) -> None:
         """Default show_origin=False keeps properties as {name: value}."""
-        import tempfile
+
 
         text = YAML_HEADER + "\n".join([
             make_gameobject("100", "Player", ["200", "300"]),
@@ -445,7 +446,7 @@ class TestFindUnitySymbolShowOrigin(unittest.TestCase):
         Uses a MonoBehaviour with a reference field so analyze_wiring()
         populates properties (it only captures fileID/GUID references).
         """
-        import tempfile
+
 
         # Use a reference field that analyze_wiring will capture
         text = YAML_HEADER + "\n".join([
@@ -502,7 +503,7 @@ class TestFindUnitySymbolShowOrigin(unittest.TestCase):
 
     def test_show_origin_on_non_variant_degrades_gracefully(self) -> None:
         """show_origin=True on a non-variant still returns results (no origin)."""
-        import tempfile
+
 
         text = YAML_HEADER + "\n".join([
             make_gameobject("100", "Cube", ["200", "300"]),
@@ -549,7 +550,7 @@ class TestFindUnitySymbolShowOrigin(unittest.TestCase):
 
     def test_annotate_origins_logs_on_exception(self) -> None:
         """When orchestrator raises, _annotate_origins logs debug and returns."""
-        import tempfile
+
 
         text = YAML_HEADER + "\n".join([
             make_gameobject("100", "Cube", ["200", "300"]),
@@ -621,7 +622,7 @@ class TestSetPropertyTool(unittest.TestCase):
 
     def test_set_property_dry_run(self) -> None:
         """confirm=False returns dry-run preview."""
-        import tempfile
+
 
         text = self._prefab_with_meshrenderer()
         server = create_server()
@@ -656,7 +657,7 @@ class TestSetPropertyTool(unittest.TestCase):
 
     def test_set_property_confirm(self) -> None:
         """confirm=True applies the change."""
-        import tempfile
+
 
         text = self._prefab_with_meshrenderer()
         server = create_server()
@@ -691,7 +692,7 @@ class TestSetPropertyTool(unittest.TestCase):
 
     def test_set_property_symbol_not_found(self) -> None:
         """Returns error when symbol path doesn't resolve."""
-        import tempfile
+
 
         text = self._prefab_with_meshrenderer()
         server = create_server()
@@ -717,7 +718,7 @@ class TestSetPropertyTool(unittest.TestCase):
 
     def test_set_property_not_a_component(self) -> None:
         """Returns error when symbol path points to a GameObject."""
-        import tempfile
+
 
         text = self._prefab_with_meshrenderer()
         server = create_server()
@@ -742,7 +743,7 @@ class TestSetPropertyTool(unittest.TestCase):
 
     def test_set_property_builtin_component_name(self) -> None:
         """Built-in component resolves to its type name in the plan."""
-        import tempfile
+
 
         text = self._prefab_with_meshrenderer()
         server = create_server()
@@ -777,7 +778,7 @@ class TestSetPropertyTool(unittest.TestCase):
 
     def test_set_property_monobehaviour_script_name(self) -> None:
         """MonoBehaviour resolves to its script name for the component field."""
-        import tempfile
+
 
         text = self._prefab_with_monobehaviour()
         mock_resp = self._mock_patch_apply_response()
@@ -820,7 +821,7 @@ class TestSetPropertyTool(unittest.TestCase):
 
     def test_set_property_monobehaviour_no_script_name(self) -> None:
         """Returns error when MonoBehaviour has no resolved script name."""
-        import tempfile
+
 
         text = self._prefab_with_monobehaviour()
         server = create_server()  # No project_root → no script map
@@ -844,7 +845,7 @@ class TestSetPropertyTool(unittest.TestCase):
 
     def test_set_property_passes_change_reason(self) -> None:
         """change_reason is forwarded to the orchestrator."""
-        import tempfile
+
 
         text = self._prefab_with_meshrenderer()
         server = create_server()
@@ -877,7 +878,7 @@ class TestSetPropertyTool(unittest.TestCase):
 
     def test_set_property_plan_structure(self) -> None:
         """Constructed plan follows V2 format."""
-        import tempfile
+
 
         text = self._prefab_with_meshrenderer()
         server = create_server()
@@ -919,7 +920,7 @@ class TestSetPropertyTool(unittest.TestCase):
 
     def test_set_property_symbol_resolution_metadata(self) -> None:
         """Response includes symbol_resolution metadata."""
-        import tempfile
+
 
         text = self._prefab_with_meshrenderer()
         server = create_server()
@@ -1224,7 +1225,7 @@ class TestAddComponentTool(unittest.TestCase):
         return resp
 
     def test_add_component_dry_run_on_root(self) -> None:
-        import tempfile
+
 
         text = self._prefab_with_child()
         server = create_server()
@@ -1260,7 +1261,7 @@ class TestAddComponentTool(unittest.TestCase):
         self.assertTrue(call_kwargs["dry_run"])
 
     def test_add_component_on_child(self) -> None:
-        import tempfile
+
 
         text = self._prefab_with_child()
         server = create_server()
@@ -1293,7 +1294,7 @@ class TestAddComponentTool(unittest.TestCase):
         self.assertEqual("BoxCollider", op["type"])
 
     def test_add_component_symbol_not_found(self) -> None:
-        import tempfile
+
 
         text = self._prefab_with_child()
         server = create_server()
@@ -1318,7 +1319,7 @@ class TestAddComponentTool(unittest.TestCase):
 
     def test_add_component_rejects_component_path(self) -> None:
         """add_component requires a game_object, not a component."""
-        import tempfile
+
 
         text = self._prefab_with_child()
         server = create_server()
@@ -1340,7 +1341,7 @@ class TestAddComponentTool(unittest.TestCase):
         self.assertEqual("SYMBOL_NOT_GAME_OBJECT", result["code"])
 
     def test_add_component_confirm_invalidates_cache(self) -> None:
-        import tempfile
+
 
         text = self._prefab_with_child()
         server = create_server()
@@ -1373,7 +1374,7 @@ class TestAddComponentTool(unittest.TestCase):
         self.assertTrue(call_kwargs["confirm"])
 
     def test_add_component_symbol_resolution_metadata(self) -> None:
-        import tempfile
+
 
         text = self._prefab_with_child()
         server = create_server()
@@ -1430,7 +1431,7 @@ class TestRemoveComponentTool(unittest.TestCase):
         return resp
 
     def test_remove_component_dry_run(self) -> None:
-        import tempfile
+
 
         text = self._prefab_with_meshrenderer()
         server = create_server()
@@ -1464,7 +1465,7 @@ class TestRemoveComponentTool(unittest.TestCase):
         self.assertTrue(call_kwargs["dry_run"])
 
     def test_remove_component_confirm(self) -> None:
-        import tempfile
+
 
         text = self._prefab_with_meshrenderer()
         server = create_server()
@@ -1496,7 +1497,7 @@ class TestRemoveComponentTool(unittest.TestCase):
         self.assertTrue(call_kwargs["confirm"])
 
     def test_remove_component_symbol_not_found(self) -> None:
-        import tempfile
+
 
         text = self._prefab_with_meshrenderer()
         server = create_server()
@@ -1520,7 +1521,7 @@ class TestRemoveComponentTool(unittest.TestCase):
 
     def test_remove_component_rejects_gameobject_path(self) -> None:
         """remove_component requires a component, not a game_object."""
-        import tempfile
+
 
         text = self._prefab_with_meshrenderer()
         server = create_server()
@@ -1541,7 +1542,7 @@ class TestRemoveComponentTool(unittest.TestCase):
         self.assertEqual("SYMBOL_NOT_COMPONENT", result["code"])
 
     def test_remove_component_symbol_resolution_metadata(self) -> None:
-        import tempfile
+
 
         text = self._prefab_with_meshrenderer()
         server = create_server()

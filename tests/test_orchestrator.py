@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -277,7 +278,7 @@ class ReadTargetFilePathResolutionTests(unittest.TestCase):
     """_read_target_file resolves relative paths via project_root."""
 
     def test_relative_path_resolved_via_project_root(self) -> None:
-        import tempfile
+
 
         with tempfile.TemporaryDirectory() as tmpdir:
             assets = Path(tmpdir) / "Assets"
@@ -293,7 +294,7 @@ class ReadTargetFilePathResolutionTests(unittest.TestCase):
             self.assertIn("m_Name: X", result)
 
     def test_absolute_path_still_works(self) -> None:
-        import tempfile
+
 
         with tempfile.TemporaryDirectory() as tmpdir:
             target = Path(tmpdir) / "Test.prefab"
@@ -307,7 +308,7 @@ class ReadTargetFilePathResolutionTests(unittest.TestCase):
             self.assertIn("m_Name: Y", result)
 
     def test_nonexistent_relative_path_returns_error(self) -> None:
-        import tempfile
+
 
         with tempfile.TemporaryDirectory() as tmpdir:
             orch = _make_orchestrator()
@@ -321,7 +322,7 @@ class ReadTargetFilePathResolutionTests(unittest.TestCase):
 
 class FileTypeGuardTests(unittest.TestCase):
     def test_inspect_wiring_warns_on_controller_file(self) -> None:
-        import tempfile
+
 
         text = "--- !u!91 &100\nAnimatorController:\n  m_Name: Test\n"
         with tempfile.NamedTemporaryFile(suffix=".controller", mode="w", delete=False) as f:
@@ -335,7 +336,7 @@ class FileTypeGuardTests(unittest.TestCase):
         self.assertEqual(".controller", result.data["file_type"])
 
     def test_inspect_wiring_warns_on_anim_file(self) -> None:
-        import tempfile
+
 
         text = "--- !u!74 &100\nAnimationClip:\n  m_Name: Test\n"
         with tempfile.NamedTemporaryFile(suffix=".anim", mode="w", delete=False) as f:
@@ -348,7 +349,7 @@ class FileTypeGuardTests(unittest.TestCase):
         self.assertEqual("INSPECT_WIRING_NO_MONOBEHAVIOURS", result.code)
 
     def test_inspect_hierarchy_warns_on_anim_file(self) -> None:
-        import tempfile
+
 
         text = "--- !u!74 &100\nAnimationClip:\n  m_Name: Test\n"
         with tempfile.NamedTemporaryFile(suffix=".anim", mode="w", delete=False) as f:
@@ -362,7 +363,7 @@ class FileTypeGuardTests(unittest.TestCase):
         self.assertEqual(".anim", result.data["file_type"])
 
     def test_inspect_structure_annotates_checks_on_controller_file(self) -> None:
-        import tempfile
+
 
         text = "--- !u!91 &100\nAnimatorController:\n  m_Name: Test\n"
         with tempfile.NamedTemporaryFile(suffix=".controller", mode="w", delete=False) as f:
@@ -376,7 +377,7 @@ class FileTypeGuardTests(unittest.TestCase):
         self.assertIn(".controller", result.data["skip_reason"])
 
     def test_inspect_structure_all_checks_on_prefab(self) -> None:
-        import tempfile
+
 
         from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_transform
 
@@ -393,7 +394,7 @@ class FileTypeGuardTests(unittest.TestCase):
 
     def test_inspect_wiring_normal_on_prefab(self) -> None:
         """Prefab files should proceed normally, not trigger the guard."""
-        import tempfile
+
 
         from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
 
@@ -413,7 +414,7 @@ class FileTypeGuardTests(unittest.TestCase):
 class InspectWiringTests(unittest.TestCase):
     def test_script_name_and_game_object_name(self) -> None:
         """inspect_wiring should include script_name and game_object_name in component summaries."""
-        import tempfile
+
 
         from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
 
@@ -445,7 +446,7 @@ class InspectWiringTests(unittest.TestCase):
 
     def test_script_name_empty_on_project_root_failure(self) -> None:
         """script_name should be empty when project root cannot be determined."""
-        import tempfile
+
 
         from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
 
@@ -472,7 +473,7 @@ class InspectWiringTests(unittest.TestCase):
 
     def test_null_ratio_and_null_field_names_in_output(self) -> None:
         """inspect_wiring output includes null_ratio and null_field_names per component."""
-        import tempfile
+
 
         from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
 
@@ -527,7 +528,7 @@ class InspectWiringVariantTests(unittest.TestCase):
         )
 
     def test_variant_resolves_base_wiring(self) -> None:
-        import tempfile
+
 
         base_text = self._make_base_text()
         variant_text = self._make_variant_text()
@@ -573,7 +574,7 @@ class InspectWiringVariantTests(unittest.TestCase):
         self.assertGreater(result.data["component_count"], 0)
 
     def test_non_variant_has_no_variant_fields(self) -> None:
-        import tempfile
+
 
         from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
 
@@ -594,7 +595,7 @@ class InspectWiringVariantTests(unittest.TestCase):
 
     def test_variant_chain_resolution_failure_falls_through(self) -> None:
         """If chain resolution returns no usable base, analyze the variant text as-is."""
-        import tempfile
+
 
         variant_text = self._make_variant_text()
         with tempfile.NamedTemporaryFile(suffix=".prefab", mode="w", delete=False) as f:
@@ -649,7 +650,7 @@ class InspectWiringVariantOverrideAnnotationTests(unittest.TestCase):
 
     def test_variant_override_count_in_response(self) -> None:
         """Component with overrides should have override_count in response."""
-        import tempfile
+
 
         base_text = self._make_base_text()
         variant_text = self._make_variant_text()
@@ -707,7 +708,7 @@ class InspectWiringVariantOverrideAnnotationTests(unittest.TestCase):
 
     def test_non_variant_no_override_fields(self) -> None:
         """Non-variant should not have override_count or is_overridden in response."""
-        import tempfile
+
 
         from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
 
@@ -1207,7 +1208,7 @@ class TestListSerializedFields(unittest.TestCase):
         return orch
 
     def test_list_fields_by_path(self) -> None:
-        import tempfile
+
 
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -1234,7 +1235,7 @@ class TestListSerializedFields(unittest.TestCase):
         self.assertEqual("aaaa1111bbbb2222cccc3333dddd4444", result.data["script_guid"])
 
     def test_list_fields_by_guid(self) -> None:
-        import tempfile
+
 
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -1255,7 +1256,7 @@ class TestListSerializedFields(unittest.TestCase):
         self.assertEqual("value", result.data["fields"][0]["name"])
 
     def test_nonexistent_path_returns_error(self) -> None:
-        import tempfile
+
 
         with tempfile.TemporaryDirectory() as td:
             orch = self._make_orch_with_root(Path(td))
@@ -1265,7 +1266,7 @@ class TestListSerializedFields(unittest.TestCase):
         self.assertEqual("CSF_RESOLVE_FAILED", result.code)
 
     def test_response_has_read_only_flag(self) -> None:
-        import tempfile
+
 
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -1324,7 +1325,7 @@ class TestValidateFieldRename(unittest.TestCase):
         return orch, root, guid
 
     def test_rename_finds_affected_assets(self) -> None:
-        import tempfile
+
 
         with tempfile.TemporaryDirectory() as td:
             orch, root, guid = self._setup_project(td)
@@ -1338,7 +1339,7 @@ class TestValidateFieldRename(unittest.TestCase):
         self.assertFalse(result.data["conflict"])
 
     def test_rename_detects_conflict(self) -> None:
-        import tempfile
+
 
         with tempfile.TemporaryDirectory() as td:
             orch, root, guid = self._setup_project(td)
@@ -1350,7 +1351,7 @@ class TestValidateFieldRename(unittest.TestCase):
         self.assertTrue(result.data["conflict"])
 
     def test_rename_nonexistent_field(self) -> None:
-        import tempfile
+
 
         with tempfile.TemporaryDirectory() as td:
             orch, root, guid = self._setup_project(td)
@@ -1363,7 +1364,7 @@ class TestValidateFieldRename(unittest.TestCase):
         self.assertIn("moveSpeed", result.data["available_fields"])
 
     def test_rename_script_not_found(self) -> None:
-        import tempfile
+
 
         with tempfile.TemporaryDirectory() as td:
             orch = _make_orchestrator()
@@ -1376,7 +1377,7 @@ class TestValidateFieldRename(unittest.TestCase):
         self.assertEqual("CSF_RESOLVE_FAILED", result.code)
 
     def test_rename_with_scope(self) -> None:
-        import tempfile
+
 
         with tempfile.TemporaryDirectory() as td:
             orch, root, guid = self._setup_project(td)
@@ -1392,7 +1393,7 @@ class TestValidateFieldRename(unittest.TestCase):
         self.assertEqual(1, result.data["affected_count"])
 
     def test_rename_with_scope_excluding_file(self) -> None:
-        import tempfile
+
 
         with tempfile.TemporaryDirectory() as td:
             orch, root, guid = self._setup_project(td)
@@ -1410,7 +1411,7 @@ class TestValidateFieldRename(unittest.TestCase):
         self.assertEqual(0, result.data["affected_count"])
 
     def test_rename_response_has_read_only_flag(self) -> None:
-        import tempfile
+
 
         with tempfile.TemporaryDirectory() as td:
             orch, root, guid = self._setup_project(td)
@@ -1470,7 +1471,7 @@ class TestCheckFieldCoverage(unittest.TestCase):
         return orch, root
 
     def test_detects_unused_and_orphaned(self) -> None:
-        import tempfile
+
 
         with tempfile.TemporaryDirectory() as td:
             orch, root = self._setup_coverage_project(td)
@@ -1488,7 +1489,7 @@ class TestCheckFieldCoverage(unittest.TestCase):
         self.assertIn("legacyField", orphaned_names)
 
     def test_all_fields_matched(self) -> None:
-        import tempfile
+
 
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -1530,7 +1531,7 @@ class TestCheckFieldCoverage(unittest.TestCase):
         self.assertEqual(1, result.data["components_checked"])
 
     def test_no_yaml_files_in_scope(self) -> None:
-        import tempfile
+
 
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -1550,7 +1551,7 @@ class TestCheckFieldCoverage(unittest.TestCase):
         self.assertEqual(0, result.data["orphaned_count"])
 
     def test_external_script_skipped(self) -> None:
-        import tempfile
+
 
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -1582,7 +1583,7 @@ class TestCheckFieldCoverage(unittest.TestCase):
         self.assertEqual(0, result.data["components_checked"])
 
     def test_response_has_read_only_flag(self) -> None:
-        import tempfile
+
 
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
