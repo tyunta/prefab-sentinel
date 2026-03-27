@@ -10,6 +10,7 @@ Requires the ``mcp`` optional dependency::
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 from contextlib import asynccontextmanager
@@ -161,6 +162,79 @@ def create_server(
             "message": f"Project activated with scope: {scope}",
             "data": result,
             "diagnostics": diagnostics,
+        }
+
+    @server.tool()
+    def deploy_bridge(
+        target_dir: str = "",
+    ) -> dict[str, Any]:
+        """Deploy or update Bridge C# files to the Unity project.
+
+        Copies tools/unity/*.cs from prefab-sentinel to the target directory.
+        Triggers editor_refresh after copying to reload assets.
+
+        Args:
+            target_dir: Target directory in Unity project.
+                Default: {project_root}/Assets/Editor/PrefabSentinel/
+        """
+        import shutil
+        from pathlib import Path as _Path
+
+        project_root = session.project_root
+        if project_root is None:
+            return {
+                "success": False,
+                "severity": "error",
+                "code": "DEPLOY_NO_PROJECT",
+                "message": "No project activated. Call activate_project first.",
+                "data": {},
+                "diagnostics": [],
+            }
+
+        if not target_dir:
+            target_dir = str(project_root / "Assets" / "Editor" / "PrefabSentinel")
+
+        target_path = _Path(target_dir)
+        target_path.mkdir(parents=True, exist_ok=True)
+
+        # Find plugin's tools/unity/ directory
+        plugin_tools = _Path(__file__).parent.parent / "tools" / "unity"
+        if not plugin_tools.is_dir():
+            return {
+                "success": False,
+                "severity": "error",
+                "code": "DEPLOY_SOURCE_NOT_FOUND",
+                "message": "Bridge source directory (tools/unity/) not found.",
+                "data": {},
+                "diagnostics": [],
+            }
+
+        old_version = session.detect_bridge_version()
+        copied_files: list[str] = []
+
+        for cs_file in sorted(plugin_tools.glob("*.cs")):
+            dest = target_path / cs_file.name
+            shutil.copy2(cs_file, dest)
+            copied_files.append(cs_file.name)
+
+        new_version = session.detect_bridge_version()
+
+        # Trigger asset refresh (best-effort)
+        with contextlib.suppress(Exception):
+            send_action(action="refresh_asset_database")
+
+        return {
+            "success": True,
+            "severity": "info",
+            "code": "DEPLOY_OK",
+            "message": f"Deployed {len(copied_files)} files to {target_dir}",
+            "data": {
+                "copied_files": copied_files,
+                "old_version": old_version,
+                "new_version": new_version,
+                "target_dir": target_dir,
+            },
+            "diagnostics": [],
         }
 
     @server.tool()
