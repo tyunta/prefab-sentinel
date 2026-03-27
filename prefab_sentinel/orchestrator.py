@@ -860,7 +860,10 @@ class Phase1Orchestrator:
                         "null_refs": null_count,
                         "components": comp_count,
                     })
-            except Exception:
+            except Exception as exc:
+                logging.getLogger(__name__).debug(
+                    "validate_all_wiring: skipped %s: %s", p, exc,
+                )
                 continue
 
         return success_response(

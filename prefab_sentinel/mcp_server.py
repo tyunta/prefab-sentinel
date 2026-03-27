@@ -194,17 +194,31 @@ def create_server(
         if not target_dir:
             target_dir = str(project_root / "Assets" / "Editor" / "PrefabSentinel")
 
-        target_path = _Path(target_dir)
+        target_path = _Path(target_dir).resolve()
+
+        # Path traversal guard: target must be within project root
+        project_resolved = project_root.resolve()
+        if not str(target_path).startswith(str(project_resolved)):
+            return {
+                "success": False,
+                "severity": "error",
+                "code": "DEPLOY_OUTSIDE_PROJECT",
+                "message": f"target_dir must be within the project: {project_root}",
+                "data": {},
+                "diagnostics": [],
+            }
+
         target_path.mkdir(parents=True, exist_ok=True)
 
-        # Find plugin's tools/unity/ directory
+        # Find plugin's tools/unity/ directory (source tree only)
         plugin_tools = _Path(__file__).parent.parent / "tools" / "unity"
         if not plugin_tools.is_dir():
             return {
                 "success": False,
                 "severity": "error",
                 "code": "DEPLOY_SOURCE_NOT_FOUND",
-                "message": "Bridge source directory (tools/unity/) not found.",
+                "message": "Bridge source directory (tools/unity/) not found. "
+                "deploy_bridge requires running from the source tree.",
                 "data": {},
                 "diagnostics": [],
             }
