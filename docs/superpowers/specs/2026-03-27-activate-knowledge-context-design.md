@@ -64,7 +64,7 @@ _KEYWORD_TO_KNOWLEDGE: dict[str, str] = {
 
 **検出できないナレッジファイルの扱い:** マッピングテーブルにないコミュニティツール (kawaii-posing, face-emo 等) は `suggested_reads` に含まれない。`knowledge_hint` + MCP Resources (B) でカバーする。新ツールのナレッジを追加した際はマッピングテーブルも更新する。
 
-**`vrchat-sdk-base.md`** は VRChat SDK 共通基盤知識。VRC 系キーワードが 1 つでもマッチしたら一緒に返す。
+**`vrchat-sdk-base.md`** は VRChat SDK 共通基盤知識。マッピングテーブル内のいずれかのキーワードがマッチしたら (= エコシステム knowledge が 1 つ以上検出されたら) 一緒に返す。
 
 ### 重複排除と順序
 
@@ -128,24 +128,30 @@ YAML frontmatter に `description` フィールドがあればそれを使う。
 
 ```python
 def _extract_description(path: Path) -> str:
+    """Extract description from YAML frontmatter without external dependencies.
+
+    Parses flat key-value frontmatter (no nested structures).
+    Falls back to file stem if no frontmatter or relevant fields.
+    """
     text = path.read_text(encoding="utf-8")
-    if text.startswith("---"):
-        end = text.find("---", 3)
-        if end > 0:
-            import yaml
-            try:
-                fm = yaml.safe_load(text[3:end])
-                if isinstance(fm, dict):
-                    if "description" in fm:
-                        return fm["description"]
-                    if "tool" in fm:
-                        return f"{fm['tool']} knowledge"
-            except Exception:
-                pass
+    if not text.startswith("---"):
+        return path.stem
+    end = text.find("---", 3)
+    if end < 0:
+        return path.stem
+    fm: dict[str, str] = {}
+    for line in text[3:end].strip().splitlines():
+        if ":" in line:
+            key, _, val = line.partition(":")
+            fm[key.strip()] = val.strip()
+    if "description" in fm:
+        return fm["description"]
+    if "tool" in fm:
+        return f"{fm['tool']} knowledge"
     return path.stem
 ```
 
-注意: `yaml` は既存依存 (`pyyaml`) として利用可能。
+注意: PyYAML に依存しない。knowledge ファイルの frontmatter は flat key-value のみなので、行分割パーサーで十分。
 
 ---
 
@@ -153,7 +159,7 @@ def _extract_description(path: Path) -> str:
 
 | ファイル | 変更 |
 |---------|------|
-| `prefab_sentinel/session.py` | `suggest_reads()` メソッド追加 (マッピングテーブル + script_name_map/guid_index 検索) |
+| `prefab_sentinel/session.py` | `suggest_reads()` メソッド追加 (マッピングテーブル + script_name_map/guid_index 検索)。guid_index アクセスは `collect_project_guid_index(project_root)` を直接呼び出す (既存の orchestrator と同パターン) |
 | `prefab_sentinel/mcp_server.py` | activate_project レスポンスに suggested_reads 追加、MCP Resources 動的登録 |
 | `tests/test_session.py` | suggest_reads テスト (キーワードマッチ、空 map、重複排除、knowledge 未存在) |
 | `tests/test_mcp_server.py` | ツール登録テスト更新 |
