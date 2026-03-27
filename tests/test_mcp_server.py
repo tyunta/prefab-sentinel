@@ -2653,6 +2653,145 @@ class TestKnowledgeResources(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# deploy_bridge cleanup and exclusion
+# ---------------------------------------------------------------------------
+
+
+class TestDeployBridgeCleanup(unittest.TestCase):
+    """deploy_bridge old file cleanup and upload handler exclusion."""
+
+    def setUp(self) -> None:
+        self._tmp = Path(tempfile.mkdtemp())
+        self._project_root = self._tmp / "UnityProject"
+        self._project_root.mkdir()
+        self._target = self._project_root / "Assets" / "Editor" / "PrefabSentinel"
+        self._target.mkdir(parents=True)
+
+    def tearDown(self) -> None:
+        import shutil
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    @patch("prefab_sentinel.mcp_server.send_action")
+    def test_removes_old_files_from_parent(self, _mock: MagicMock) -> None:
+        """Old PrefabSentinel.*.cs in parent dir are removed before deploy."""
+        parent = self._target.parent
+        old_cs = parent / "PrefabSentinel.EditorBridge.cs"
+        old_meta = parent / "PrefabSentinel.EditorBridge.cs.meta"
+        old_cs.write_text("// old", encoding="utf-8")
+        old_meta.write_text("guid: abc", encoding="utf-8")
+
+        server = create_server(project_root=str(self._project_root))
+        _, result = _run(server.call_tool(
+            "deploy_bridge",
+            {"target_dir": str(self._target)},
+        ))
+
+        self.assertTrue(result["success"])
+        self.assertIn("PrefabSentinel.EditorBridge.cs", result["data"]["removed_old_files"])
+        self.assertIn("PrefabSentinel.EditorBridge.cs.meta", result["data"]["removed_old_files"])
+        self.assertFalse(old_cs.exists())
+        self.assertFalse(old_meta.exists())
+
+    @patch("prefab_sentinel.mcp_server.send_action")
+    def test_no_old_files_no_removal(self, _mock: MagicMock) -> None:
+        """When parent has no old files, removed_old_files is empty."""
+        server = create_server(project_root=str(self._project_root))
+        _, result = _run(server.call_tool(
+            "deploy_bridge",
+            {"target_dir": str(self._target)},
+        ))
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["data"]["removed_old_files"], [])
+
+    @patch("prefab_sentinel.mcp_server.send_action")
+    def test_first_deploy_no_old_files(self, _mock: MagicMock) -> None:
+        """First deploy to a new path has no old files to clean up."""
+        deep_target = self._project_root / "Assets" / "NewDir" / "SubDir" / "Bridge"
+        server = create_server(project_root=str(self._project_root))
+        _, result = _run(server.call_tool(
+            "deploy_bridge",
+            {"target_dir": str(deep_target)},
+        ))
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["data"]["removed_old_files"], [])
+
+    @patch("prefab_sentinel.mcp_server.send_action")
+    def test_upload_handler_excluded_by_default(self, _mock: MagicMock) -> None:
+        """VRCSDKUploadHandler.cs is not copied when include_upload_handler=False."""
+        server = create_server(project_root=str(self._project_root))
+        _, result = _run(server.call_tool(
+            "deploy_bridge",
+            {"target_dir": str(self._target)},
+        ))
+
+        self.assertTrue(result["success"])
+        self.assertNotIn("PrefabSentinel.VRCSDKUploadHandler.cs", result["data"]["copied_files"])
+        self.assertIn("PrefabSentinel.VRCSDKUploadHandler.cs", result["data"]["skipped_files"])
+        self.assertFalse((self._target / "PrefabSentinel.VRCSDKUploadHandler.cs").exists())
+
+    @patch("prefab_sentinel.mcp_server.send_action")
+    def test_upload_handler_included_when_requested(self, _mock: MagicMock) -> None:
+        """VRCSDKUploadHandler.cs IS copied when include_upload_handler=True."""
+        server = create_server(project_root=str(self._project_root))
+        _, result = _run(server.call_tool(
+            "deploy_bridge",
+            {"target_dir": str(self._target), "include_upload_handler": True},
+        ))
+
+        self.assertTrue(result["success"])
+        self.assertIn("PrefabSentinel.VRCSDKUploadHandler.cs", result["data"]["copied_files"])
+        self.assertEqual(result["data"]["skipped_files"], [])
+        self.assertTrue((self._target / "PrefabSentinel.VRCSDKUploadHandler.cs").exists())
+
+    @patch("prefab_sentinel.mcp_server.send_action")
+    def test_stale_upload_handler_removed_from_target(self, _mock: MagicMock) -> None:
+        """Previously deployed VRCSDKUploadHandler.cs is removed when excluded."""
+        stale_cs = self._target / "PrefabSentinel.VRCSDKUploadHandler.cs"
+        stale_meta = self._target / "PrefabSentinel.VRCSDKUploadHandler.cs.meta"
+        stale_cs.write_text("// old upload handler", encoding="utf-8")
+        stale_meta.write_text("guid: xyz", encoding="utf-8")
+
+        server = create_server(project_root=str(self._project_root))
+        _, result = _run(server.call_tool(
+            "deploy_bridge",
+            {"target_dir": str(self._target)},
+        ))
+
+        self.assertTrue(result["success"])
+        self.assertFalse(stale_cs.exists())
+        self.assertFalse(stale_meta.exists())
+
+    @patch("prefab_sentinel.mcp_server.send_action")
+    def test_diagnostics_warn_on_old_file_removal(self, _mock: MagicMock) -> None:
+        """Diagnostics include warning when old files are removed."""
+        parent = self._target.parent
+        (parent / "PrefabSentinel.EditorBridge.cs").write_text("// old", encoding="utf-8")
+
+        server = create_server(project_root=str(self._project_root))
+        _, result = _run(server.call_tool(
+            "deploy_bridge",
+            {"target_dir": str(self._target)},
+        ))
+
+        warnings = [d for d in result["diagnostics"] if d["severity"] == "warning"]
+        self.assertTrue(any("old Bridge" in d["message"] for d in warnings))
+
+    @patch("prefab_sentinel.mcp_server.send_action")
+    def test_diagnostics_info_on_skip(self, _mock: MagicMock) -> None:
+        """Diagnostics include info when upload handler is skipped."""
+        server = create_server(project_root=str(self._project_root))
+        _, result = _run(server.call_tool(
+            "deploy_bridge",
+            {"target_dir": str(self._target)},
+        ))
+
+        infos = [d for d in result["diagnostics"] if d["severity"] == "info"]
+        self.assertTrue(any("VRCSDKUploadHandler" in d["message"] for d in infos))
+
+
+# ---------------------------------------------------------------------------
 # _extract_description
 # ---------------------------------------------------------------------------
 

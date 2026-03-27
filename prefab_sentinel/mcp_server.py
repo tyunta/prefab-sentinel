@@ -50,6 +50,7 @@ logger = logging.getLogger(__name__)
 
 _KNOWLEDGE_URI_PREFIX = "resource://prefab-sentinel/knowledge/"
 _KNOWLEDGE_DIR = Path(__file__).parent.parent / "knowledge"
+_UPLOAD_HANDLER = "PrefabSentinel.VRCSDKUploadHandler.cs"
 
 
 def _extract_description(path: Path) -> str:
@@ -217,15 +218,21 @@ def create_server(
     @server.tool()
     def deploy_bridge(
         target_dir: str = "",
+        include_upload_handler: bool = False,
     ) -> dict[str, Any]:
         """Deploy or update Bridge C# files to the Unity project.
 
         Copies tools/unity/*.cs from prefab-sentinel to the target directory.
+        Cleans up old Bridge files from the parent directory to prevent
+        CS0101 duplicate definition errors.
         Triggers editor_refresh after copying to reload assets.
 
         Args:
             target_dir: Target directory in Unity project.
                 Default: {project_root}/Assets/Editor/PrefabSentinel/
+            include_upload_handler: Deploy VRCSDKUploadHandler.cs.
+                Default False — excluded because it requires specific
+                VRC SDK API versions that may not be present.
         """
         import shutil
         from pathlib import Path as _Path
@@ -275,15 +282,61 @@ def create_server(
                 "diagnostics": [],
             }
 
+        diagnostics: list[dict[str, Any]] = []
+
+        # Phase 1: Clean up old Bridge files from parent directory.
+        # The glob is non-recursive on parent_dir, so matches are always
+        # direct children of parent_dir (never inside target_path).
+        removed_old_files: list[str] = []
+        parent_dir = target_path.parent
+        if parent_dir.is_dir():
+            for old_file in sorted(parent_dir.glob("PrefabSentinel.*.cs")):
+                old_file.unlink()
+                removed_old_files.append(old_file.name)
+                meta_file = old_file.with_suffix(".cs.meta")
+                if meta_file.exists():
+                    meta_file.unlink()
+                    removed_old_files.append(meta_file.name)
+
+        if removed_old_files:
+            diagnostics.append({
+                "severity": "warning",
+                "message": (
+                    f"Removed {len(removed_old_files)} old Bridge file(s) from "
+                    f"{parent_dir} to prevent CS0101 duplicate definitions"
+                ),
+            })
+
+        # Phase 2: Clean up stale upload handler from target if excluded
+        if not include_upload_handler:
+            for suffix in (".cs", ".cs.meta"):
+                stale = target_path / _UPLOAD_HANDLER.replace(".cs", suffix)
+                if stale.exists():
+                    stale.unlink()
+
+        # Phase 3: Copy source files
         old_version = session.detect_bridge_version()
         copied_files: list[str] = []
+        skipped_files: list[str] = []
 
         for cs_file in sorted(plugin_tools.glob("*.cs")):
+            if cs_file.name == _UPLOAD_HANDLER and not include_upload_handler:
+                skipped_files.append(cs_file.name)
+                continue
             dest = target_path / cs_file.name
             shutil.copy2(cs_file, dest)
             copied_files.append(cs_file.name)
 
         new_version = session.detect_bridge_version()
+
+        if skipped_files:
+            diagnostics.append({
+                "severity": "info",
+                "message": (
+                    f"Skipped {', '.join(skipped_files)} "
+                    "(optional, set include_upload_handler=true to deploy)"
+                ),
+            })
 
         # Trigger asset refresh (best-effort)
         with contextlib.suppress(Exception):
@@ -296,11 +349,13 @@ def create_server(
             "message": f"Deployed {len(copied_files)} files to {target_dir}",
             "data": {
                 "copied_files": copied_files,
+                "skipped_files": skipped_files,
+                "removed_old_files": removed_old_files,
                 "old_version": old_version,
                 "new_version": new_version,
                 "target_dir": target_dir,
             },
-            "diagnostics": [],
+            "diagnostics": diagnostics,
         }
 
     @server.tool()
