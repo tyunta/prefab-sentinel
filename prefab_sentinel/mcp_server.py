@@ -1492,6 +1492,25 @@ def create_server(
             asset_path=asset_path,
         )
 
+    @server.tool()
+    def editor_set_parent(
+        hierarchy_path: str,
+        parent_path: str = "",
+    ) -> dict[str, Any]:
+        """Set the parent of a GameObject in the scene hierarchy (Undo-able).
+
+        Move an existing GameObject under a new parent, or to the scene root.
+
+        Args:
+            hierarchy_path: Hierarchy path to the child GameObject to move.
+            parent_path: Hierarchy path to the new parent. Empty = move to scene root.
+        """
+        return send_action(
+            action="editor_set_parent",
+            hierarchy_path=hierarchy_path,
+            new_name=parent_path,
+        )
+
     # ------------------------------------------------------------------
     # Inspection tools (orchestrator-backed)
     # ------------------------------------------------------------------
