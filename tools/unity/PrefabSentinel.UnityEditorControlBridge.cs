@@ -180,6 +180,8 @@ namespace PrefabSentinel
             public string path = string.Empty;
             public int child_count = 0;
             public int depth = 0;
+            public bool active = true;
+            public string tag = "Untagged";
         }
 
         [Serializable]
@@ -1184,7 +1186,9 @@ namespace PrefabSentinel
                             name = root.name,
                             path = "/" + root.name,
                             child_count = root.transform.childCount,
-                            depth = 0
+                            depth = 0,
+                            active = root.activeSelf,
+                            tag = root.tag
                         }},
                         total_entries = 1,
                         read_only = true,
@@ -1208,7 +1212,9 @@ namespace PrefabSentinel
                     name = rootObjects[i].name,
                     path = "/" + rootObjects[i].name,
                     child_count = rootObjects[i].transform.childCount,
-                    depth = 0
+                    depth = 0,
+                    active = rootObjects[i].activeSelf,
+                    tag = rootObjects[i].tag
                 });
             }
 
@@ -1527,7 +1533,9 @@ namespace PrefabSentinel
                     name = child.name,
                     path = GetHierarchyPath(child),
                     child_count = child.childCount,
-                    depth = currentDepth + 1
+                    depth = currentDepth + 1,
+                    active = child.gameObject.activeSelf,
+                    tag = child.gameObject.tag
                 });
                 if (currentDepth + 1 < maxDepth)
                     CollectChildren(child, maxDepth, currentDepth + 1, result);
