@@ -8,9 +8,17 @@ Transform, and component-script metadata.  Used by ``udon_wiring``,
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass
+from pathlib import Path
+from typing import NamedTuple
 
-from prefab_sentinel.unity_assets import normalize_guid
+from prefab_sentinel.unity_assets import (
+    SOURCE_PREFAB_PATTERN,
+    decode_text_file,
+    normalize_guid,
+    relative_to_root,
+)
 
 DOCUMENT_HEADER_PATTERN = re.compile(r"^--- !u!(\d+) &(-?\d+)( stripped)?", re.MULTILINE)
 
@@ -22,6 +30,8 @@ CLASS_ID_MONOBEHAVIOUR = "114"
 CLASS_ID_PREFAB_INSTANCE = "1001"
 
 TRANSFORM_CLASS_IDS = frozenset({CLASS_ID_TRANSFORM, CLASS_ID_RECTTRANSFORM})
+
+MAX_NESTED_DEPTH = 10
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -243,3 +253,46 @@ def parse_components(blocks: list[YamlBlock]) -> dict[str, ComponentInfo]:
             script_guid=script_guid,
         )
     return result
+
+
+# ---------------------------------------------------------------------------
+# Nested Prefab traversal
+# ---------------------------------------------------------------------------
+
+
+class NestedPrefabChild(NamedTuple):
+    text: str
+    path: Path
+    rel_posix: str
+
+
+def iter_nested_prefab_children(
+    text: str,
+    guid_index: dict[str, Path],
+    project_root: Path,
+    _depth: int = 0,
+) -> Iterator[NestedPrefabChild]:
+    """Yield ``(text, path, rel_posix)`` for each nested prefab in *text*, recursively."""
+    blocks = split_yaml_blocks(text)
+    for block in blocks:
+        if block.class_id != CLASS_ID_PREFAB_INSTANCE:
+            continue
+        source_match = SOURCE_PREFAB_PATTERN.search(block.text)
+        if source_match is None:
+            continue
+        child_guid = normalize_guid(source_match.group(2))
+        child_path = guid_index.get(child_guid)
+        if child_path is None or not child_path.exists():
+            continue
+        try:
+            child_text = decode_text_file(child_path)
+        except (OSError, UnicodeDecodeError):
+            continue
+
+        rel = relative_to_root(child_path, project_root)
+        yield NestedPrefabChild(child_text, child_path, rel)
+
+        if _depth + 1 < MAX_NESTED_DEPTH:
+            yield from iter_nested_prefab_children(
+                child_text, guid_index, project_root, _depth=_depth + 1,
+            )

@@ -1627,6 +1627,230 @@ class TestInvalidationDelegation(unittest.TestCase):
         orch.serialized_object.invalidate_before_cache.assert_called_once()
 
 
+# ---------------------------------------------------------------------------
+# Nested Prefab wiring traversal tests (TDD for Issue #17)
+# ---------------------------------------------------------------------------
+
+_CHILD_WIRING_GUID = "55555555555555555555555555555555"
+_SCRIPT_GUID_UDON_SHARP = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb01"
+_SCRIPT_GUID_UDON_BEHAVIOUR = "45115577ef41a5b4ca741ed302693907"
+_SCRIPT_GUID_CUSTOM = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1"
+
+
+def _write_prefab_with_meta(
+    assets_dir: Path, name: str, guid: str, text: str,
+) -> Path:
+    """Write a .prefab and its .meta to disk, returning the prefab path."""
+    prefab_path = assets_dir / name
+    prefab_path.write_text(text, encoding="utf-8")
+    meta_path = assets_dir / f"{name}.meta"
+    meta_path.write_text(
+        f"fileFormatVersion: 2\nguid: {guid}\n", encoding="utf-8",
+    )
+    return prefab_path
+
+
+class TestNestedWiringTraversal(unittest.TestCase):
+    """Tests for Nested Prefab wiring traversal in inspect_wiring (Issue #17)."""
+
+    def test_nested_prefab_wiring_traversal(self) -> None:
+        """Base.prefab has PrefabInstance→Child; Child has a MonoBehaviour.
+
+        inspect_wiring should find the nested component with source_prefab annotation.
+        """
+        from tests.yaml_helpers import (
+            YAML_HEADER,
+            make_gameobject,
+            make_monobehaviour,
+            make_prefab_instance,
+            make_transform,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            assets_dir = tmp_path / "Assets"
+            assets_dir.mkdir()
+
+            # Child.prefab — has a MonoBehaviour with a field
+            child_text = (
+                YAML_HEADER
+                + make_gameobject("1", "ChildObj", ["2", "3"])
+                + make_transform("2", "1")
+                + make_monobehaviour("3", "1", guid=_SCRIPT_GUID_CUSTOM)
+                + "  myRef: {fileID: 1}\n"
+            )
+            _write_prefab_with_meta(
+                assets_dir, "Child.prefab", _CHILD_WIRING_GUID, child_text,
+            )
+
+            # Base.prefab — PrefabInstance→Child, no direct MonoBehaviours
+            base_text = (
+                YAML_HEADER
+                + make_gameobject("10", "BaseRoot", ["20"])
+                + make_transform("20", "10")
+                + make_prefab_instance("30", _CHILD_WIRING_GUID)
+            )
+            base_path = _write_prefab_with_meta(
+                assets_dir, "Base.prefab", "66666666666666666666666666666666", base_text,
+            )
+
+            orch = _make_orchestrator()
+            orch.prefab_variant.project_root = tmp_path
+            with patch(
+                "prefab_sentinel.orchestrator.collect_project_guid_index",
+                return_value={_CHILD_WIRING_GUID: assets_dir / "Child.prefab"},
+            ):
+                result = orch.inspect_wiring(str(base_path))
+
+            self.assertEqual("INSPECT_WIRING_RESULT", result.code)
+            self.assertGreaterEqual(
+                result.data["component_count"], 1,
+                "Expected at least 1 component from nested prefab",
+            )
+            has_source_prefab = any(
+                "source_prefab" in c for c in result.data["components"]
+            )
+            self.assertTrue(
+                has_source_prefab,
+                "Expected at least one component with source_prefab key",
+            )
+
+    def test_udon_only_filter_with_nested(self) -> None:
+        """Child has 2 MonoBehaviours — one UdonSharp, one custom.
+
+        udon_only=True should filter out the non-Udon component from nested results.
+        """
+        from tests.yaml_helpers import (
+            YAML_HEADER,
+            make_gameobject,
+            make_monobehaviour,
+            make_prefab_instance,
+            make_transform,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            assets_dir = tmp_path / "Assets"
+            assets_dir.mkdir()
+
+            # Child.prefab — 2 MonoBehaviours: one UdonSharp, one custom
+            # UdonSharp components use a custom script GUID + _udonSharpBackingUdonBehaviour
+            # pointing to a backing UdonBehaviour block (which uses the generic GUID).
+            child_text = (
+                YAML_HEADER
+                + make_gameobject("1", "ChildObj", ["2", "3", "4", "5"])
+                + make_transform("2", "1")
+                + make_monobehaviour("3", "1", guid=_SCRIPT_GUID_CUSTOM)
+                + "  someField: {fileID: 1}\n"
+                + make_monobehaviour("4", "1", guid=_SCRIPT_GUID_UDON_SHARP)
+                + "  _udonSharpBackingUdonBehaviour: {fileID: 5}\n"
+                + "  programSource: {fileID: 11400000, guid: deadbeefdeadbeefdeadbeefdeadbeef, type: 2}\n"
+                + make_monobehaviour("5", "1", guid=_SCRIPT_GUID_UDON_BEHAVIOUR)
+                + "  serializedProgramAsset: {fileID: 11400000, guid: deadbeefdeadbeefdeadbeefdeadbeef, type: 2}\n"
+            )
+            _write_prefab_with_meta(
+                assets_dir, "Child.prefab", _CHILD_WIRING_GUID, child_text,
+            )
+
+            # Base.prefab — PrefabInstance→Child only
+            base_text = (
+                YAML_HEADER
+                + make_gameobject("10", "BaseRoot", ["20"])
+                + make_transform("20", "10")
+                + make_prefab_instance("30", _CHILD_WIRING_GUID)
+            )
+            base_path = _write_prefab_with_meta(
+                assets_dir, "Base.prefab", "66666666666666666666666666666666", base_text,
+            )
+
+            orch = _make_orchestrator()
+            orch.prefab_variant.project_root = tmp_path
+            with patch(
+                "prefab_sentinel.orchestrator.collect_project_guid_index",
+                return_value={_CHILD_WIRING_GUID: assets_dir / "Child.prefab"},
+            ):
+                result = orch.inspect_wiring(str(base_path), udon_only=True)
+
+            self.assertEqual("INSPECT_WIRING_RESULT", result.code)
+            nested_components = [
+                c for c in result.data["components"] if "source_prefab" in c
+            ]
+            # Must have at least 1 nested component (the UdonSharp one from Child)
+            self.assertGreaterEqual(
+                len(nested_components), 1,
+                "Expected at least 1 nested component after udon_only filter",
+            )
+            # Only the UdonSharp component should remain (custom filtered out)
+            for comp in nested_components:
+                self.assertTrue(
+                    comp["is_udon_sharp"],
+                    f"Expected only UdonSharp components with udon_only=True, got {comp}",
+                )
+
+    def test_base_and_nested_components_distinguished(self) -> None:
+        """Base has a direct MonoBehaviour; Child also has one.
+
+        Base components should lack source_prefab; nested ones should have it.
+        """
+        from tests.yaml_helpers import (
+            YAML_HEADER,
+            make_gameobject,
+            make_monobehaviour,
+            make_prefab_instance,
+            make_transform,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            assets_dir = tmp_path / "Assets"
+            assets_dir.mkdir()
+
+            # Child.prefab — has a MonoBehaviour
+            child_text = (
+                YAML_HEADER
+                + make_gameobject("1", "ChildObj", ["2", "3"])
+                + make_transform("2", "1")
+                + make_monobehaviour("3", "1", guid=_SCRIPT_GUID_CUSTOM)
+                + "  childRef: {fileID: 1}\n"
+            )
+            _write_prefab_with_meta(
+                assets_dir, "Child.prefab", _CHILD_WIRING_GUID, child_text,
+            )
+
+            # Base.prefab — direct MonoBehaviour + PrefabInstance→Child
+            base_text = (
+                YAML_HEADER
+                + make_gameobject("10", "BaseObj", ["20", "30"])
+                + make_transform("20", "10")
+                + make_monobehaviour("30", "10", guid=_SCRIPT_GUID_CUSTOM)
+                + "  baseRef: {fileID: 10}\n"
+                + make_prefab_instance("40", _CHILD_WIRING_GUID)
+            )
+            base_path = _write_prefab_with_meta(
+                assets_dir, "Base.prefab", "66666666666666666666666666666666", base_text,
+            )
+
+            orch = _make_orchestrator()
+            orch.prefab_variant.project_root = tmp_path
+            with patch(
+                "prefab_sentinel.orchestrator.collect_project_guid_index",
+                return_value={_CHILD_WIRING_GUID: assets_dir / "Child.prefab"},
+            ):
+                result = orch.inspect_wiring(str(base_path))
+
+            self.assertEqual("INSPECT_WIRING_RESULT", result.code)
+            comps = result.data["components"]
+            # Total should be 2: 1 base + 1 nested
+            self.assertEqual(
+                result.data["component_count"], 2,
+                f"Expected 2 components (base + nested), got {result.data['component_count']}",
+            )
+            base_comps = [c for c in comps if "source_prefab" not in c]
+            nested_comps = [c for c in comps if "source_prefab" in c]
+            self.assertEqual(len(base_comps), 1, "Expected 1 base component")
+            self.assertEqual(len(nested_comps), 1, "Expected 1 nested component")
+
+
 class InspectMaterialsRelativePathTests(unittest.TestCase):
     """Regression tests for GitHub Issue #14: relative paths must resolve via project_root."""
 
