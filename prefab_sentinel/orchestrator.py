@@ -37,18 +37,17 @@ from prefab_sentinel.services.reference_resolver import ReferenceResolverService
 from prefab_sentinel.services.runtime_validation import RuntimeValidationService
 from prefab_sentinel.services.serialized_object import SerializedObjectService
 from prefab_sentinel.structure_validator import validate_structure
-from prefab_sentinel.udon_wiring import analyze_wiring
+from prefab_sentinel.udon_wiring import ComponentWiring, WiringResult, analyze_wiring
 from prefab_sentinel.unity_assets import (
     GAMEOBJECT_BEARING_SUFFIXES,
     SOURCE_PREFAB_PATTERN,
     collect_project_guid_index,
     decode_text_file,
-    find_project_root,
     resolve_scope_path,
 )
+from prefab_sentinel.unity_yaml_parser import iter_nested_prefab_children
 
 __all__ = ["Phase1Orchestrator"]
-
 
 
 def _relative_path(path: Path, root: Path) -> str:
@@ -57,6 +56,75 @@ def _relative_path(path: Path, root: Path) -> str:
         return str(path.relative_to(root))
     except ValueError:
         return str(path)
+
+
+def _component_to_dict(
+    comp: ComponentWiring,
+    go_name: str,
+    guid_to_name: dict[str, str],
+    *,
+    source_prefab: str | None = None,
+) -> dict[str, object]:
+    """Serialize a ComponentWiring to the inspect_wiring response dict."""
+    field_dicts = []
+    for f in comp.fields:
+        fd: dict[str, object] = {
+            "name": f.name, "file_id": f.file_id,
+            "guid": f.guid, "line": f.line,
+        }
+        if f.is_overridden:
+            fd["is_overridden"] = True
+        field_dicts.append(fd)
+    cd: dict[str, object] = {
+        "file_id": comp.file_id,
+        "game_object_file_id": comp.game_object_file_id,
+        "game_object_name": go_name,
+        "script_guid": comp.script_guid,
+        "script_name": guid_to_name.get(comp.script_guid, ""),
+        "is_udon_sharp": comp.is_udon_sharp,
+        "field_count": len(comp.fields),
+        "null_ratio": f"{len(comp.null_field_names)}/{len(comp.fields)}",
+        "null_field_names": comp.null_field_names,
+        "fields": field_dicts,
+    }
+    if source_prefab is not None:
+        cd["source_prefab"] = source_prefab
+    if comp.override_count > 0:
+        cd["override_count"] = comp.override_count
+    return cd
+
+
+def _collect_nested_wiring_components(
+    text: str,
+    *,
+    udon_only: bool,
+    guid_index: dict[str, Path],
+    project_root: Path,
+    guid_to_name: dict[str, str],
+) -> tuple[list[dict[str, object]], list[WiringResult]]:
+    """Collect wiring components from Nested Prefab instances in *text*.
+
+    Returns (component_dicts, nested_results) where nested_results contains
+    all WiringResult objects from nested prefabs for diagnostic aggregation.
+    """
+    components: list[dict[str, object]] = []
+    nested_results: list[WiringResult] = []
+
+    for child in iter_nested_prefab_children(text, guid_index, project_root):
+        child_result = analyze_wiring(
+            child.text, str(child.path), udon_only=udon_only,
+        )
+        nested_results.append(child_result)
+
+        child_gos = child_result.game_objects
+        for comp in child_result.components:
+            go = child_gos.get(comp.game_object_file_id)
+            go_name = go.name if go and go.name else ""
+            components.append(
+                _component_to_dict(comp, go_name, guid_to_name, source_prefab=child.rel_posix)
+            )
+
+    return components, nested_results
 
 
 @dataclass(slots=True)
@@ -740,14 +808,12 @@ class Phase1Orchestrator:
         )
         success = result.max_severity not in (Severity.ERROR, Severity.CRITICAL)
 
-        def _go_name(comp_go_fid: str) -> str:
-            go = result.game_objects.get(comp_go_fid)
-            return go.name if go and go.name else ""
-
         # Best-effort GUID→script name resolution
+        proj_root: Path | None = None
+        guid_index: dict[str, Path] = {}
         guid_to_name: dict[str, str] = {}
         try:
-            proj_root = find_project_root(Path(target_path))
+            proj_root = self.prefab_variant.project_root
             guid_index = collect_project_guid_index(proj_root, include_package_cache=False)
             for guid, asset_path in guid_index.items():
                 if asset_path.suffix == ".cs":
@@ -757,40 +823,38 @@ class Phase1Orchestrator:
 
         component_summaries = []
         for comp in result.components:
-            field_dicts = []
-            for f in comp.fields:
-                fd: dict[str, object] = {
-                    "name": f.name,
-                    "file_id": f.file_id,
-                    "guid": f.guid,
-                    "line": f.line,
-                }
-                if f.is_overridden:
-                    fd["is_overridden"] = True
-                field_dicts.append(fd)
-            cd: dict[str, object] = {
-                "file_id": comp.file_id,
-                "game_object_file_id": comp.game_object_file_id,
-                "game_object_name": _go_name(comp.game_object_file_id),
-                "script_guid": comp.script_guid,
-                "script_name": guid_to_name.get(comp.script_guid, ""),
-                "is_udon_sharp": comp.is_udon_sharp,
-                "field_count": len(comp.fields),
-                "null_ratio": f"{len(comp.null_field_names)}/{len(comp.fields)}",
-                "null_field_names": comp.null_field_names,
-                "fields": field_dicts,
-            }
-            if comp.override_count > 0:
-                cd["override_count"] = comp.override_count
-            component_summaries.append(cd)
+            go = result.game_objects.get(comp.game_object_file_id)
+            go_name = go.name if go and go.name else ""
+            component_summaries.append(
+                _component_to_dict(comp, go_name, guid_to_name)
+            )
+
+        # --- Nested Prefab expansion ---
+        nested_null_refs: list[Diagnostic] = []
+        nested_broken_refs: list[Diagnostic] = []
+        nested_dup_refs: list[Diagnostic] = []
+        if proj_root is not None and guid_index:
+            nested_components, nested_results = _collect_nested_wiring_components(
+                text,
+                udon_only=udon_only,
+                guid_index=guid_index,
+                project_root=proj_root,
+                guid_to_name=guid_to_name,
+            )
+            component_summaries.extend(nested_components)
+            for nr in nested_results:
+                nested_null_refs.extend(nr.null_references)
+                nested_broken_refs.extend(nr.internal_broken_refs)
+                nested_dup_refs.extend(nr.duplicate_references)
+
         data: dict[str, object] = {
             "target_path": target_path,
             "udon_only": udon_only,
             "read_only": True,
-            "component_count": len(result.components),
-            "null_reference_count": len(result.null_references),
-            "internal_broken_ref_count": len(result.internal_broken_refs),
-            "duplicate_reference_count": len(result.duplicate_references),
+            "component_count": len(component_summaries),
+            "null_reference_count": len(result.null_references) + len(nested_null_refs),
+            "internal_broken_ref_count": len(result.internal_broken_refs) + len(nested_broken_refs),
+            "duplicate_reference_count": len(result.duplicate_references) + len(nested_dup_refs),
             "components": component_summaries,
         }
         if is_variant:
@@ -1002,7 +1066,7 @@ class Phase1Orchestrator:
             )
 
         try:
-            result = inspect_materials(target_path)
+            result = inspect_materials(target_path, project_root=self.prefab_variant.project_root)
         except (OSError, UnicodeDecodeError) as exc:
             return error_response(
                 "INSPECT_MATERIALS_READ_ERROR",
@@ -1089,7 +1153,7 @@ class Phase1Orchestrator:
             )
 
         try:
-            result = _inspect_material_asset(target_path)
+            result = _inspect_material_asset(target_path, project_root=self.prefab_variant.project_root)
         except (OSError, UnicodeDecodeError, ValueError) as exc:
             return error_response(
                 "INSPECT_MATERIAL_ASSET_READ_ERROR",

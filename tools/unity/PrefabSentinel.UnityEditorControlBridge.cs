@@ -180,6 +180,8 @@ namespace PrefabSentinel
             public string path = string.Empty;
             public int child_count = 0;
             public int depth = 0;
+            public bool active = true;
+            public string tag = "Untagged";
         }
 
         [Serializable]
@@ -421,6 +423,9 @@ namespace PrefabSentinel
                     break;
                 case "editor_batch_set_property":
                     response = HandleEditorBatchSetProperty(request);
+                    break;
+                case "editor_batch_set_material_property":
+                    response = HandleEditorBatchSetMaterialProperty(request);
                     break;
                 case "editor_open_scene":
                     response = HandleEditorOpenScene(request);
@@ -1184,7 +1189,9 @@ namespace PrefabSentinel
                             name = root.name,
                             path = "/" + root.name,
                             child_count = root.transform.childCount,
-                            depth = 0
+                            depth = 0,
+                            active = root.activeSelf,
+                            tag = root.tag
                         }},
                         total_entries = 1,
                         read_only = true,
@@ -1208,7 +1215,9 @@ namespace PrefabSentinel
                     name = rootObjects[i].name,
                     path = "/" + rootObjects[i].name,
                     child_count = rootObjects[i].transform.childCount,
-                    depth = 0
+                    depth = 0,
+                    active = rootObjects[i].activeSelf,
+                    tag = rootObjects[i].tag
                 });
             }
 
@@ -1517,6 +1526,69 @@ namespace PrefabSentinel
             return resp;
         }
 
+        private static EditorControlResponse HandleEditorBatchSetMaterialProperty(EditorControlRequest request)
+        {
+            if (string.IsNullOrEmpty(request.batch_operations_json))
+                return BuildError("EDITOR_CTRL_BATCH_SET_MAT_PROP_NO_DATA", "batch_operations_json is required.");
+
+            BatchSetMaterialPropertyArray wrapper;
+            try
+            {
+                wrapper = JsonUtility.FromJson<BatchSetMaterialPropertyArray>(
+                    "{\"items\":" + request.batch_operations_json + "}");
+            }
+            catch (System.Exception ex)
+            {
+                return BuildError("EDITOR_CTRL_BATCH_SET_MAT_PROP_JSON_ERROR",
+                    $"Failed to parse batch_operations_json: {ex.Message}");
+            }
+
+            if (wrapper.items == null || wrapper.items.Length == 0)
+                return BuildError("EDITOR_CTRL_BATCH_SET_MAT_PROP_EMPTY", "batch_operations_json is empty.");
+
+            int undoGroup = Undo.GetCurrentGroup();
+            Undo.SetCurrentGroupName("PrefabSentinel: Batch SetMaterialProperty");
+
+            var setNames = new System.Collections.Generic.List<string>();
+
+            foreach (var op in wrapper.items)
+            {
+                var subReq = new EditorControlRequest
+                {
+                    action = "set_material_property",
+                    hierarchy_path = request.hierarchy_path,
+                    material_index = request.material_index,
+                    property_name = op.name,
+                    property_value = op.value,
+                };
+                var subResp = HandleSetMaterialProperty(subReq);
+                if (!subResp.success)
+                {
+                    Undo.CollapseUndoOperations(undoGroup);
+                    return BuildError("EDITOR_CTRL_BATCH_SET_MAT_PROP_FAILED",
+                        $"Operation failed at index {setNames.Count}: {subResp.message}");
+                }
+                setNames.Add(op.name);
+            }
+
+            Undo.CollapseUndoOperations(undoGroup);
+
+            var batchResp = BuildSuccess("EDITOR_CTRL_BATCH_SET_MAT_PROP_OK",
+                $"Set {setNames.Count} material properties",
+                data: new EditorControlData
+                {
+                    executed = true,
+                    read_only = false,
+                    suggestions = setNames.ToArray(),
+                });
+            batchResp.diagnostics = new[] { new EditorControlDiagnostic
+            {
+                detail = "Runtime modification \u2014 save the scene (File > Save) to persist.",
+                evidence = "Undo.CollapseUndoOperations"
+            }};
+            return batchResp;
+        }
+
         private static void CollectChildren(Transform parent, int maxDepth, int currentDepth, List<ChildEntry> result)
         {
             for (int i = 0; i < parent.childCount; i++)
@@ -1527,7 +1599,9 @@ namespace PrefabSentinel
                     name = child.name,
                     path = GetHierarchyPath(child),
                     child_count = child.childCount,
-                    depth = currentDepth + 1
+                    depth = currentDepth + 1,
+                    active = child.gameObject.activeSelf,
+                    tag = child.gameObject.tag
                 });
                 if (currentDepth + 1 < maxDepth)
                     CollectChildren(child, maxDepth, currentDepth + 1, result);
@@ -2989,6 +3063,16 @@ namespace PrefabSentinel
 
         [Serializable]
         private sealed class BatchSetPropertyArray { public BatchSetPropertyOp[] items; }
+
+        [Serializable]
+        private sealed class BatchSetMaterialPropertyOp
+        {
+            public string name = string.Empty;
+            public string value = string.Empty;
+        }
+
+        [Serializable]
+        private sealed class BatchSetMaterialPropertyArray { public BatchSetMaterialPropertyOp[] items; }
 
         [Serializable]
         private sealed class PropertyEntry

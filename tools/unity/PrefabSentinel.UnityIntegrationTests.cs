@@ -103,6 +103,17 @@ namespace PrefabSentinel
         }
 
         [Serializable]
+        private sealed class ChildEntryReadback
+        {
+            public string name = string.Empty;
+            public string path = string.Empty;
+            public int child_count = 0;
+            public int depth = 0;
+            public bool active = true;
+            public string tag = "Untagged";
+        }
+
+        [Serializable]
         private sealed class EditorControlDataReadback
         {
             public string instantiated_object = string.Empty;
@@ -110,6 +121,7 @@ namespace PrefabSentinel
             public int deleted_child_count = 0;
             public string[] root_objects = Array.Empty<string>();
             public int total_entries = 0;
+            public ChildEntryReadback[] children = Array.Empty<ChildEntryReadback>();
             public bool executed = false;
         }
 
@@ -2080,6 +2092,14 @@ namespace PrefabSentinel
             var err = AssertEditorControlSuccess(name, resp);
             if (err != null) return err;
             if (!resp.data.executed) return Fail(name, "Expected executed=true.");
+
+            if (resp.data.children == null || resp.data.children.Length < 1)
+                return Fail(name, "Expected at least 1 root entry in children array.");
+            var firstRoot = resp.data.children[0];
+            if (!firstRoot.active)
+                return Fail(name, $"Expected first root active=true, got {firstRoot.active}.");
+            if (string.IsNullOrEmpty(firstRoot.tag))
+                return Fail(name, $"Expected non-empty tag on first root entry, got '{firstRoot.tag}'.");
             return Pass(name);
         }
 
@@ -2164,6 +2184,14 @@ namespace PrefabSentinel
                 if (err != null) return err;
                 if (resp.data.total_entries < 1)
                     return Fail(name, $"Expected at least 1 child, got {resp.data.total_entries}.");
+
+                if (resp.data.children == null || resp.data.children.Length < 1)
+                    return Fail(name, "Expected children array with at least 1 entry.");
+                var firstChild = resp.data.children[0];
+                if (!firstChild.active)
+                    return Fail(name, $"Expected first child active=true, got {firstChild.active}.");
+                if (firstChild.tag != "Untagged")
+                    return Fail(name, $"Expected first child tag='Untagged', got '{firstChild.tag}'.");
                 return Pass(name);
             }
             finally
