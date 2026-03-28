@@ -78,8 +78,10 @@ def _extract_description(path: Path) -> str:
 
 
 def _normalize_material_value(value: str | list | int | float) -> str:
-    """Serialize a material property value to its string representation."""
-    return value if isinstance(value, str) else json.dumps(value)
+    """Normalize a material property value to string for Bridge transmission."""
+    if isinstance(value, str):
+        return value
+    return json.dumps(value)
 
 
 def create_server(
@@ -1264,32 +1266,6 @@ def create_server(
         )
 
     @server.tool()
-    def editor_batch_set_material_property(
-        hierarchy_path: str,
-        material_index: int,
-        properties: list[dict[str, str | list | int | float]],
-    ) -> dict[str, Any]:
-        """Set multiple shader properties on one material in a single request (Undo-grouped).
-
-        Args:
-            hierarchy_path: Hierarchy path to the GameObject with a Renderer.
-            material_index: Material slot index (0-based).
-            properties: List of property dicts, each with "name" and "value".
-                Value formats are the same as editor_set_material_property.
-        """
-        normalized = [
-            {"name": prop["name"], "value": _normalize_material_value(prop["value"])}
-            for prop in properties
-        ]
-
-        return send_action(
-            action="editor_batch_set_material_property",
-            hierarchy_path=hierarchy_path,
-            material_index=material_index,
-            batch_operations_json=json.dumps(normalized, ensure_ascii=False),
-        )
-
-    @server.tool()
     def editor_console(
         max_entries: int = 200,
         log_type_filter: str = "all",
@@ -1850,6 +1826,49 @@ def create_server(
         return send_action(
             action="editor_batch_set_property",
             batch_operations_json=json.dumps(operations, ensure_ascii=False),
+        )
+
+    @server.tool()
+    def editor_batch_set_material_property(
+        properties: list[dict[str, str | list | int | float]],
+        hierarchy_path: str = "",
+        material_index: int = -1,
+        material_path: str = "",
+        material_guid: str = "",
+    ) -> dict[str, Any]:
+        """Set multiple shader properties on one material in a single request (Undo-grouped).
+
+        Target the material by ONE of:
+        - Renderer: hierarchy_path + material_index
+        - Direct: material_path or material_guid
+
+        Args:
+            properties: List of property dicts, each with "name" and "value".
+                Value formats are the same as editor_set_material_property.
+            hierarchy_path: Hierarchy path to the GameObject with a Renderer.
+            material_index: Material slot index (0-based). Required with hierarchy_path.
+            material_path: Asset path to .mat file (e.g. "Assets/Materials/Hair.mat").
+            material_guid: GUID of the Material asset (32-char hex).
+        """
+        normalized = [
+            {"name": prop["name"], "value": _normalize_material_value(prop["value"])}
+            for prop in properties
+        ]
+
+        kwargs: dict[str, Any] = {
+            "batch_operations_json": json.dumps(normalized, ensure_ascii=False),
+        }
+        if hierarchy_path:
+            kwargs["hierarchy_path"] = hierarchy_path
+            kwargs["material_index"] = material_index
+        if material_path:
+            kwargs["material_path"] = material_path
+        if material_guid:
+            kwargs["material_guid"] = material_guid
+
+        return send_action(
+            action="editor_batch_set_material_property",
+            **kwargs,
         )
 
     @server.tool()

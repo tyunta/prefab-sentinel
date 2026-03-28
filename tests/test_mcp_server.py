@@ -2051,11 +2051,43 @@ class TestEditorWriteTools(unittest.TestCase):
         self.assertEqual(args.kwargs["action"], "editor_batch_set_material_property")
         self.assertEqual(args.kwargs["hierarchy_path"], "/Avatar/Hair")
         self.assertEqual(args.kwargs["material_index"], 0)
-        import json
         ops = json.loads(args.kwargs["batch_operations_json"])
         self.assertEqual(len(ops), 2)
-        self.assertEqual(ops[0], {"name": "_Color", "value": "[1, 0, 0, 1]"})
-        self.assertEqual(ops[1], {"name": "_MainTexHSVG", "value": "[0.02, 0.48, 1.18, 1]"})
+        self.assertEqual(ops[0]["name"], "_Color")
+        self.assertEqual(ops[0]["value"], "[1, 0, 0, 1]")
+        # list value should be JSON-stringified
+        self.assertEqual(ops[1]["value"], "[0.02, 0.48, 1.18, 1]")
+
+    def test_editor_batch_set_material_property_by_path_delegates(self) -> None:
+        server = create_server()
+        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+            _run(server.call_tool("editor_batch_set_material_property", {
+                "material_path": "Assets/Materials/Hair.mat",
+                "properties": [
+                    {"name": "_Color", "value": "[1, 1, 1, 1]"},
+                ],
+            }))
+        args = mock_send.call_args
+        self.assertEqual(args.kwargs["action"], "editor_batch_set_material_property")
+        self.assertEqual(args.kwargs["material_path"], "Assets/Materials/Hair.mat")
+        self.assertNotIn("hierarchy_path", args.kwargs)
+        self.assertNotIn("material_index", args.kwargs)
+
+    def test_editor_batch_set_material_property_by_guid_delegates(self) -> None:
+        server = create_server()
+        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+            _run(server.call_tool("editor_batch_set_material_property", {
+                "material_guid": "abc123def456abc123def456abc123de",
+                "properties": [
+                    {"name": "_Float", "value": 0.5},
+                ],
+            }))
+        args = mock_send.call_args
+        self.assertEqual(args.kwargs["action"], "editor_batch_set_material_property")
+        self.assertEqual(args.kwargs["material_guid"], "abc123def456abc123def456abc123de")
+        self.assertNotIn("hierarchy_path", args.kwargs)
+        ops = json.loads(args.kwargs["batch_operations_json"])
+        self.assertEqual(ops[0]["value"], "0.5")
 
     def test_editor_delete_delegates(self) -> None:
         server = create_server()
