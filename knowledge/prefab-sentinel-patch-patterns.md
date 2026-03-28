@@ -5,8 +5,8 @@
 | 項目 | 値 |
 |------|---|
 | 対象 | patch_apply で使う JSON パッチ計画の実例 |
-| version_tested | prefab-sentinel 0.5.71 |
-| last_updated | 2026-03-26 |
+| version_tested | prefab-sentinel 0.5.110 |
+| last_updated | 2026-03-27 |
 | confidence | high |
 
 ## L1: 基本パターン

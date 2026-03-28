@@ -5,8 +5,8 @@
 | 項目 | 値 |
 |------|---|
 | 対象 | inspect_wiring の結果の読み方と対処法 |
-| version_tested | prefab-sentinel 0.5.71 |
-| last_updated | 2026-03-26 |
+| version_tested | prefab-sentinel 0.5.110 |
+| last_updated | 2026-03-27 |
 | confidence | high |
 
 ## L1: 分類と対処
@@ -35,3 +35,9 @@
 ### Variant ファイルの注意点
 - Variant に対して `inspect_wiring` を実行すると、ベース Prefab のコンポーネントも自動解析される
 - override で上書きされた参照は Variant 側の値が表示される
+
+## 実運用で学んだこと
+
+- `editor_batch_set_property` で大量配線する場合、配線先のパスは `:ComponentType` サフィックスで型を明示すると確実（例: `/Lobby/PlateB:PressurePlate`）
+- 配列型フィールドの MCP 制約は workflow-patterns.md「実運用で学んだこと」を参照
+- `editor_add_component` の `properties` パラメータで `BoxCollider` の `m_IsTrigger=true` を追加時に同時設定できる

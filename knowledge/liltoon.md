@@ -1,7 +1,7 @@
 ---
 tool: liltoon
 version_tested: "2.3.2"
-last_updated: 2026-03-26
+last_updated: 2026-03-28
 confidence: medium
 ---
 
@@ -705,6 +705,40 @@ lilToon のシェーダーは「ユーザーが選択するエントリポイン
 - 文字/柄を消すには: マスクの該当 UV 領域を黒塗り
 - 別柄にするには: マスクに別パターンを白で描く → MatCap の質感で柄が表示される
 - マスクはメインテクスチャと同じ UV を共有するため、UV アトラス上の位置特定が必要
+- confidence: high
+
+### _MainTexHSVG による髪色調整 (2026-03-28 実測)
+- `_MainTexHSVG` = (H色相シフト, S彩度倍率, V明度倍率, Gガンマ)、デフォルト (0, 1, 1, 1)
+- **透き通った金髪の作り方**: S=0.45〜0.55（彩度控えめで透明感）、V=1.2〜1.3（明るめ）、H=0.03（黄金方向への微調整）
+- S を 0.6 以上にするとオレンジ/赤みが残る。0.4 以下だとくすんで灰色に近づく
+- V を 1.3 以上にすると薄い部分（猫耳先端等）が白飛びする
+- テクスチャの元色が重要。暗い茶色ベース（tuki）より明るいベース（yume）の方が金色を作りやすい
+- `_MainGradationStrength` はカスタムランプの影響度。強すぎると HSVG の調整を打ち消すので 0.3〜0.5 程度に抑える
+- confidence: high
+
+### 髪の透き通り表現 (2026-03-28 実測)
+- シェーダー `lts_twotrans_o`（TwoPass Transparent + Outline）が前提
+- `_BacklightColor` を HDR 値（>1.0）にすると逆光時に髪を透かした光の表現が強くなる
+- 金髪の場合: (2.0〜2.2, 1.8〜2.0, 1.5〜1.6) で暖色系の透き通りが出る
+- `_BacklightBorder` / `_BacklightDirectivity` で透き通りの範囲・指向性を制御
+- confidence: high
+
+### 複数テクスチャスロットの同期 (2026-03-28 実測)
+- liltoon の髪マテリアルでは `_MainTex` / `_BaseMap` / `_BaseColorMap` / `_ShadowColorTex` / `_OutlineTex` に同じテクスチャが設定されていることが多い
+- テクスチャを差し替える場合は全スロットを揃えて変更する。`_MainTex` だけ変えると影色やアウトラインが旧テクスチャの色のまま残る
+- confidence: high
+
+### カラーテーマの統一調整 (2026-03-28 実測)
+- 髪色を変更する場合、以下のカラープロパティを全て整合させる必要がある:
+  - `_Color`: メインティント
+  - `_ShadowColor` / `_Shadow2ndColor`: 影色（「少し茶色」等の深み）
+  - `_ShadowBorderColor`: 影境界色
+  - `_MatCapColor`: ツヤの色
+  - `_RimColor` / `_RimShadeColor`: 縁光の色
+  - `_ReflectionColor`: 反射色
+  - `_OutlineColor`: アウトライン色
+  - `_BacklightColor`: 透過光色
+- 1つでも合わない色が残ると違和感が出る
 - confidence: high
 
 ### UV アトラス共有マテリアルの swap テクニック (2026-03-26 実測)

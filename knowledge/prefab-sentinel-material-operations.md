@@ -5,8 +5,8 @@
 | 項目 | 値 |
 |------|---|
 | 対象 | MCP ツールによるマテリアル読み書きパターン |
-| version_tested | prefab-sentinel 0.5.71 |
-| last_updated | 2026-03-26 |
+| version_tested | prefab-sentinel 0.5.131 |
+| last_updated | 2026-03-28 |
 | confidence | high |
 
 ## L1: ツール選択
@@ -37,10 +37,17 @@ editor_screenshot()
 ```
 editor_set_material_property(
     property_name="_MainTex",
-    property_value='{"guid":"<新テクスチャのGUID>","fileID":2800000}'
+    value="path:Assets/Foo/Bar/texture.png"
 )
 ```
-fileID 2800000 はテクスチャアセットの標準 fileID。
+`path:Assets/...` 形式で指定可能（GUID 指定も可: `guid:abc123...`）。
+
+liltoon では同一テクスチャが複数スロットに設定されていることが多い。髪マテリアルの場合:
+- `_MainTex`, `_BaseMap`, `_BaseColorMap`: メインカラー
+- `_ShadowColorTex`: 影色テクスチャ（メインと同じことが多い）
+- `_OutlineTex`: アウトライン色（メインと同じことが多い）
+
+全スロットを揃えて変更しないと色が不整合になる。
 
 ### float プロパティ調整
 ```
@@ -55,3 +62,17 @@ editor_set_material_property(property_name="_MainColorPower", property_value="0.
 - `editor_list_materials` / `editor_get_material_property` / `editor_set_material_property` はいずれも <1s で応答
 - `editor_set_material_property` の型はシェーダー定義から自動判定される（明示不要）
 - `editor_screenshot` と組み合わせた反復調整が非常にスムーズ
+
+### 2026-03-28: Variant とシーン実体の乖離
+- `inspect_materials` はオフラインで Prefab ファイルを解析するため、シーン上でオーバーライドされたマテリアル割り当てが反映されない場合がある
+- Prefab Variant が深いネスト（Variant → Base → Nested Prefab）の場合、`inspect_materials` は最も深い Nested Prefab のレンダラーしか返さないことがある
+- **実態確認は `editor_list_materials` を使う**。特に「Prefab が古い」とユーザーが言った場合は必ずシーン側を確認
+
+### 2026-03-28: 外部マテリアルの編集手順
+- Assets/Tyunta 以外のマテリアルは readonly ルールに従いコピーしてから編集
+- 手順: bash で .mat をコピー → `editor_refresh` → `editor_set_material` でスロット差し替え → `editor_set_material_property` で調整
+- .mat.meta もコピーすると GUID が重複するため、コピーせず Unity に新規生成させる方が安全
+
+### 2026-03-28: editor_screenshot のタイミング問題
+- `editor_recompile` 後のドメインリロード中はスクショが失敗する（レスポンスファイル未生成）
+- スクショ自体は撮れているがレスポンスが返らないケースがある。`ls -t screenshots/` でファイル存在を確認し、Read で取得すれば回避可能
