@@ -3040,7 +3040,7 @@ namespace PrefabSentinel
             };
         }
 
-        private static EditorControlResponse BuildError(string code, string message, EditorControlData data)
+        internal static EditorControlResponse BuildError(string code, string message, EditorControlData data)
         {
             return new EditorControlResponse
             {

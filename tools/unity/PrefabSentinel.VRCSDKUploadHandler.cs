@@ -147,7 +147,7 @@ namespace PrefabSentinel
 
                 // Restore original build target (always, even on failure)
                 restored = EditorUserBuildSettings.SwitchActiveBuildTarget(
-                    EditorUserBuildSettings.GetBuildTargetGroup(originalTarget), originalTarget);
+                    BuildPipeline.GetBuildTargetGroup(originalTarget), originalTarget);
             }
 
             totalSw.Stop();
@@ -175,45 +175,57 @@ namespace PrefabSentinel
                 data: data);
         }
 
-        private static void BuildAndUploadAvatar(EditorControlRequest request)
+        private static object ResolveBuilder(string assemblyQualifiedTypeName, string sdkDisplayName)
         {
-            // Resolve IVRCSdkAvatarBuilderApi via reflection (Avatar SDK may not be installed)
-            var avatarBuilderType = System.Type.GetType(
-                "VRC.SDK3A.Editor.IVRCSdkAvatarBuilderApi, VRC.SDK3A.Editor");
-            if (avatarBuilderType == null)
+            var builderType = System.Type.GetType(assemblyQualifiedTypeName);
+            if (builderType == null)
                 throw new InvalidOperationException(
-                    "Avatar SDK (VRC.SDK3A.Editor) not installed. Cannot upload avatars from this project.");
+                    $"{sdkDisplayName} not installed. Cannot proceed.");
 
             var tryGetMethod = typeof(VRCSdkControlPanel).GetMethod("TryGetBuilder");
             if (tryGetMethod == null)
                 throw new InvalidOperationException("VRCSdkControlPanel.TryGetBuilder not found.");
 
-            var genericMethod = tryGetMethod.MakeGenericMethod(avatarBuilderType);
+            var genericMethod = tryGetMethod.MakeGenericMethod(builderType);
             var args = new object[] { null };
             bool success = (bool)genericMethod.Invoke(null, args);
             if (!success || args[0] == null)
                 throw new InvalidOperationException(
-                    "Failed to get Avatar Builder. Open VRChat SDK panel first.");
+                    $"Failed to get builder for {sdkDisplayName}. Open VRChat SDK panel first.");
 
-            var builder = args[0];
+            return args[0];
+        }
+
+        private static void InvokeBuildAndUpload(object builder, GameObject target, string builderKind)
+        {
+            var buildMethod = builder.GetType().GetMethod("BuildAndUpload");
+            if (buildMethod == null)
+                throw new InvalidOperationException(
+                    $"BuildAndUpload method not found on {builderKind}.");
+            var task = (System.Threading.Tasks.Task)buildMethod.Invoke(
+                builder, new object[] { target, null });
+            task.GetAwaiter().GetResult();
+        }
+
+        private static void BuildAndUploadAvatar(EditorControlRequest request)
+        {
+            var builder = ResolveBuilder(
+                "VRC.SDK3A.Editor.IVRCSdkAvatarBuilderApi, VRC.SDK3A.Editor",
+                "Avatar SDK (VRC.SDK3A.Editor)");
 
             var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(request.asset_path);
             var pipelineManager = prefab.GetComponent<PipelineManager>();
             if (pipelineManager != null)
                 pipelineManager.blueprintId = request.blueprint_id;
 
-            // builder.BuildAndUpload(prefab, null).GetAwaiter().GetResult()
-            var buildMethod = builder.GetType().GetMethod("BuildAndUpload");
-            if (buildMethod == null)
-                throw new InvalidOperationException("BuildAndUpload method not found on avatar builder.");
-            var task = (System.Threading.Tasks.Task)buildMethod.Invoke(builder, new object[] { prefab, null });
-            task.GetAwaiter().GetResult();
+            InvokeBuildAndUpload(builder, prefab, "avatar builder");
         }
 
         private static void BuildAndUploadWorld(EditorControlRequest request)
         {
-            if (!VRCSdkControlPanel.TryGetBuilder<IVRCSdkWorldBuilderApi>(out var builder))
-                throw new InvalidOperationException("Failed to get IVRCSdkWorldBuilderApi. Is VRC SDK properly installed?");
+            var builder = ResolveBuilder(
+                "VRC.SDK3.Editor.IVRCSdkWorldBuilderApi, VRC.SDK3.Editor",
+                "World SDK (VRC.SDK3.Editor)");
 
             var scene = EditorSceneManager.OpenScene(request.asset_path, OpenSceneMode.Single);
             if (!scene.IsValid())
@@ -224,7 +236,7 @@ namespace PrefabSentinel
             if (pipelineManager != null)
                 pipelineManager.blueprintId = request.blueprint_id;
 
-            builder.BuildAndUpload(descriptor.gameObject, null).GetAwaiter().GetResult();
+            InvokeBuildAndUpload(builder, descriptor.gameObject, "world builder");
         }
 
         private static BuildTarget ToBuildTarget(string platform) => platform switch
