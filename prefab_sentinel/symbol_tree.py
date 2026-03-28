@@ -23,6 +23,7 @@ from prefab_sentinel.unity_assets import SOURCE_PREFAB_PATTERN, decode_text_file
 from prefab_sentinel.unity_yaml_parser import (
     CLASS_ID_MONOBEHAVIOUR,
     CLASS_ID_PREFAB_INSTANCE,
+    MAX_NESTED_DEPTH,
     TRANSFORM_CLASS_IDS,
     ComponentInfo,
     parse_components,
@@ -47,7 +48,6 @@ _MB_SEGMENT_RE = re.compile(r"^MonoBehaviour\((.+)\)$")
 # Matches "name#N" for duplicate-sibling disambiguation
 _DUP_SEGMENT_RE = re.compile(r"^(.+)#(\d+)$")
 
-_MAX_NESTED_DEPTH = 10
 _TRANSFORM_PARENT_RE = re.compile(r"m_TransformParent:\s*\{fileID:\s*(\d+)")
 
 
@@ -289,7 +289,7 @@ class SymbolTree:
         roots = [_build_go_node(fid, 0) for fid in root_go_fids]
 
         # --- Nested Prefab expansion ---
-        if expand_nested and guid_to_asset_path is not None and _depth < _MAX_NESTED_DEPTH:
+        if expand_nested and guid_to_asset_path is not None and _depth < MAX_NESTED_DEPTH:
             for block in blocks:
                 if block.class_id != CLASS_ID_PREFAB_INSTANCE:
                     continue

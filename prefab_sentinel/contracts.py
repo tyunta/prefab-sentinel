@@ -12,6 +12,8 @@ __all__ = [
     "max_severity",
     "error_response",
     "success_response",
+    "error_dict",
+    "success_dict",
 ]
 
 
@@ -139,4 +141,43 @@ def success_response(
         data=data or {},
         diagnostics=diagnostics or [],
     )
+
+
+# ---------------------------------------------------------------------------
+# Untyped dict envelope helpers
+# ---------------------------------------------------------------------------
+
+
+def error_dict(
+    code: str,
+    message: str,
+    data: dict[str, Any] | None = None,
+    diagnostics: list[Any] | None = None,
+) -> dict[str, Any]:
+    """Build a failed result dict for write-operation pipelines."""
+    return {
+        "success": False,
+        "severity": "error",
+        "code": code,
+        "message": message,
+        "data": data or {},
+        "diagnostics": diagnostics or [],
+    }
+
+
+def success_dict(
+    code: str,
+    message: str,
+    data: dict[str, Any] | None = None,
+    diagnostics: list[Any] | None = None,
+) -> dict[str, Any]:
+    """Build a successful result dict for write-operation pipelines."""
+    return {
+        "success": True,
+        "severity": "info",
+        "code": code,
+        "message": message,
+        "data": data or {},
+        "diagnostics": diagnostics or [],
+    }
 
