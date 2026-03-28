@@ -77,6 +77,11 @@ def _extract_description(path: Path) -> str:
     return path.stem
 
 
+def _normalize_material_value(value: str | list | int | float) -> str:
+    """Serialize a material property value to its string representation."""
+    return value if isinstance(value, str) else json.dumps(value)
+
+
 def create_server(
     project_root: str | Path | None = None,
 ) -> FastMCP:
@@ -1242,14 +1247,38 @@ def create_server(
                 Vector: "[0, 1, 0, 0]" (XYZW)
                 Texture: "guid:abc123..." or "path:Assets/Tex/foo.png" or "" (null)
         """
-        import json as _json
-        str_value = value if isinstance(value, str) else _json.dumps(value)
         return send_action(
             action="set_material_property",
             hierarchy_path=hierarchy_path,
             material_index=material_index,
             property_name=property_name,
-            property_value=str_value,
+            property_value=_normalize_material_value(value),
+        )
+
+    @server.tool()
+    def editor_batch_set_material_property(
+        hierarchy_path: str,
+        material_index: int,
+        properties: list[dict[str, str | list | int | float]],
+    ) -> dict[str, Any]:
+        """Set multiple shader properties on one material in a single request (Undo-grouped).
+
+        Args:
+            hierarchy_path: Hierarchy path to the GameObject with a Renderer.
+            material_index: Material slot index (0-based).
+            properties: List of property dicts, each with "name" and "value".
+                Value formats are the same as editor_set_material_property.
+        """
+        normalized = [
+            {"name": prop["name"], "value": _normalize_material_value(prop["value"])}
+            for prop in properties
+        ]
+
+        return send_action(
+            action="editor_batch_set_material_property",
+            hierarchy_path=hierarchy_path,
+            material_index=material_index,
+            batch_operations_json=json.dumps(normalized, ensure_ascii=False),
         )
 
     @server.tool()
