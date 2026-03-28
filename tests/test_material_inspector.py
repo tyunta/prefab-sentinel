@@ -845,5 +845,301 @@ class TestMaterialDataModelExtensions(unittest.TestCase):
         self.assertIn("No renderers found", text)
 
 
+# ---------------------------------------------------------------------------
+# Nested Prefab recursive traversal tests (TDD for Issue #17)
+# ---------------------------------------------------------------------------
+
+# Fixture GUIDs for nested prefab tests
+_LEAF_GUID = "11111111111111111111111111111111"
+_MID_GUID = "22222222222222222222222222222222"
+_BASE_NESTED_GUID = "33333333333333333333333333333333"
+_CHILD_GUID = "44444444444444444444444444444444"
+
+
+def _write_prefab_with_meta(
+    assets_dir: Path, name: str, guid: str, text: str,
+) -> Path:
+    """Write a .prefab and its .meta to disk, returning the prefab path."""
+    prefab_path = assets_dir / name
+    prefab_path.write_text(text, encoding="utf-8")
+    meta_path = assets_dir / f"{name}.meta"
+    meta_path.write_text(
+        f"fileFormatVersion: 2\nguid: {guid}\n", encoding="utf-8",
+    )
+    return prefab_path
+
+
+class TestNestedRecursiveTraversal(unittest.TestCase):
+    """Tests for recursive Nested Prefab material traversal (Issue #17)."""
+
+    def test_3_level_deep_nesting(self) -> None:
+        """Variant → Base (has PrefabInstance→Mid) → Mid (has PrefabInstance→Leaf) → Leaf (has renderer).
+
+        All three levels should be traversed and the Leaf renderer collected.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            assets_dir = tmp_path / "Assets"
+            assets_dir.mkdir()
+
+            # Leaf.prefab — has a SkinnedMeshRenderer
+            leaf_text = (
+                YAML_HEADER
+                + make_gameobject("1", "LeafMesh", ["2", "3"])
+                + make_transform("2", "1")
+                + make_skinned_mesh_renderer("3", "1", [MAT_GUID_A])
+            )
+            _write_prefab_with_meta(assets_dir, "Leaf.prefab", _LEAF_GUID, leaf_text)
+
+            # Mid.prefab — has PrefabInstance → Leaf, no direct renderers
+            mid_text = (
+                YAML_HEADER
+                + make_gameobject("10", "MidRoot", ["20"])
+                + make_transform("20", "10")
+                + make_prefab_instance("30", _LEAF_GUID)
+            )
+            _write_prefab_with_meta(assets_dir, "Mid.prefab", _MID_GUID, mid_text)
+
+            # Base.prefab — has PrefabInstance → Mid, no direct renderers
+            base_text = (
+                YAML_HEADER
+                + make_gameobject("100", "BaseRoot", ["200"])
+                + make_transform("200", "100")
+                + make_prefab_instance("300", _MID_GUID)
+            )
+            _write_prefab_with_meta(
+                assets_dir, "Base.prefab", _BASE_NESTED_GUID, base_text,
+            )
+
+            # Variant.prefab — variant of Base
+            variant_text = (
+                YAML_HEADER
+                + make_prefab_variant(source_guid=_BASE_NESTED_GUID, modifications=[])
+            )
+            variant_path = assets_dir / "Variant.prefab"
+            variant_path.write_text(variant_text, encoding="utf-8")
+
+            result = inspect_materials(str(variant_path), project_root=tmp_path)
+            self.assertGreaterEqual(len(result.renderers), 1)
+            source_prefabs = [r.source_prefab for r in result.renderers]
+            self.assertTrue(
+                any("Leaf.prefab" in sp for sp in source_prefabs),
+                f"Expected a renderer from Leaf.prefab, got source_prefabs={source_prefabs}",
+            )
+
+    def test_mixed_direct_and_nested_renderers(self) -> None:
+        """Non-variant base has a direct renderer AND a PrefabInstance→Child with another renderer.
+
+        Both renderers should be returned.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            assets_dir = tmp_path / "Assets"
+            assets_dir.mkdir()
+
+            # Child.prefab — has a SkinnedMeshRenderer
+            child_text = (
+                YAML_HEADER
+                + make_gameobject("1", "ChildMesh", ["2", "3"])
+                + make_transform("2", "1")
+                + make_skinned_mesh_renderer("3", "1", [MAT_GUID_B])
+            )
+            _write_prefab_with_meta(assets_dir, "Child.prefab", _CHILD_GUID, child_text)
+
+            # Base.prefab — direct renderer + PrefabInstance→Child
+            base_text = (
+                YAML_HEADER
+                + make_gameobject("10", "DirectMesh", ["20", "30"])
+                + make_transform("20", "10")
+                + make_skinned_mesh_renderer("30", "10", [MAT_GUID_A])
+                + make_prefab_instance("40", _CHILD_GUID)
+            )
+            base_path = _write_prefab_with_meta(
+                assets_dir, "Base.prefab", _BASE_NESTED_GUID, base_text,
+            )
+
+            result = inspect_materials(str(base_path), project_root=tmp_path)
+            self.assertEqual(
+                len(result.renderers), 2,
+                f"Expected 2 renderers (direct + nested), got {len(result.renderers)}",
+            )
+
+    def test_depth_limit_stops_recursion(self) -> None:
+        """A chain of 12 nested prefabs: renderer at depth 10 IS reachable, depth 11 is NOT."""
+        from prefab_sentinel.material_inspector import _collect_nested_renderers
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            assets_dir = tmp_path / "Assets"
+            assets_dir.mkdir()
+
+            # Build a chain: level_0 → level_1 → ... → level_11
+            guids = [f"{i:032x}" for i in range(12)]
+
+            # level_11 (deepest, unreachable) has a renderer
+            deepest_text = (
+                YAML_HEADER
+                + make_gameobject("1", "UnreachableMesh", ["2", "3"])
+                + make_transform("2", "1")
+                + make_skinned_mesh_renderer("3", "1", [MAT_GUID_A])
+            )
+            _write_prefab_with_meta(
+                assets_dir, "level_11.prefab", guids[11], deepest_text,
+            )
+
+            # level_10 has a renderer AND a PrefabInstance → level_11
+            level10_text = (
+                YAML_HEADER
+                + make_gameobject("1", "ReachableMesh", ["2", "3"])
+                + make_transform("2", "1")
+                + make_skinned_mesh_renderer("3", "1", [MAT_GUID_B])
+                + make_prefab_instance("40", guids[11])
+            )
+            _write_prefab_with_meta(
+                assets_dir, "level_10.prefab", guids[10], level10_text,
+            )
+
+            # levels 1-9: each references the next level
+            for i in range(9, 0, -1):
+                level_text = (
+                    YAML_HEADER
+                    + make_gameobject("10", f"Level{i}", ["20"])
+                    + make_transform("20", "10")
+                    + make_prefab_instance("30", guids[i + 1])
+                )
+                _write_prefab_with_meta(
+                    assets_dir, f"level_{i}.prefab", guids[i], level_text,
+                )
+
+            # level_0 (top) references level_1
+            top_text = (
+                YAML_HEADER
+                + make_gameobject("10", "Level0", ["20"])
+                + make_transform("20", "10")
+                + make_prefab_instance("30", guids[1])
+            )
+            _write_prefab_with_meta(
+                assets_dir, "level_0.prefab", guids[0], top_text,
+            )
+
+            guid_index = {
+                guids[i]: assets_dir / f"level_{i}.prefab" for i in range(12)
+            }
+
+            renderers, _diags = _collect_nested_renderers(
+                top_text, guid_index, tmp_path,
+            )
+            renderer_names = [r.game_object_name for r in renderers]
+            # Depth 10 renderer IS reachable (recursion depth 9 < 10)
+            self.assertIn(
+                "ReachableMesh", renderer_names,
+                "Renderer at depth 10 should be collected (recursion depth 9)",
+            )
+            # Depth 11 renderer is NOT reachable (recursion depth 10 == limit)
+            self.assertNotIn(
+                "UnreachableMesh", renderer_names,
+                "Renderer beyond depth 10 should not be collected",
+            )
+
+    def test_collect_nested_renderers_recurses_into_children(self) -> None:
+        """_collect_nested_renderers should recurse: Base → Mid → Leaf.
+
+        Currently it only goes 1 level deep. After the fix it should find
+        Leaf's renderer through Mid's PrefabInstance.
+        """
+        from prefab_sentinel.material_inspector import _collect_nested_renderers
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            assets_dir = tmp_path / "Assets"
+            assets_dir.mkdir()
+
+            # Leaf.prefab — has a SkinnedMeshRenderer
+            leaf_text = (
+                YAML_HEADER
+                + make_gameobject("1", "LeafRenderer", ["2", "3"])
+                + make_transform("2", "1")
+                + make_skinned_mesh_renderer("3", "1", [MAT_GUID_A])
+            )
+            _write_prefab_with_meta(assets_dir, "Leaf.prefab", _LEAF_GUID, leaf_text)
+
+            # Mid.prefab — PrefabInstance → Leaf, no direct renderers
+            mid_text = (
+                YAML_HEADER
+                + make_gameobject("10", "MidRoot", ["20"])
+                + make_transform("20", "10")
+                + make_prefab_instance("30", _LEAF_GUID)
+            )
+            _write_prefab_with_meta(assets_dir, "Mid.prefab", _MID_GUID, mid_text)
+
+            # Base text — PrefabInstance → Mid
+            base_text = (
+                YAML_HEADER
+                + make_gameobject("100", "BaseRoot", ["200"])
+                + make_transform("200", "100")
+                + make_prefab_instance("300", _MID_GUID)
+            )
+
+            guid_index = {
+                _LEAF_GUID: assets_dir / "Leaf.prefab",
+                _MID_GUID: assets_dir / "Mid.prefab",
+            }
+
+            renderers, _diags = _collect_nested_renderers(
+                base_text, guid_index, tmp_path,
+            )
+            # Should find Leaf's renderer through recursive traversal
+            self.assertEqual(
+                len(renderers), 1,
+                f"Expected 1 renderer from Leaf via Mid, got {len(renderers)}",
+            )
+            self.assertEqual(renderers[0].game_object_name, "LeafRenderer")
+
+    def test_variant_mixed_direct_and_nested_renderers(self) -> None:
+        """Variant whose base has a direct renderer AND a PrefabInstance→Child with renderer.
+
+        Both renderers should be returned (verifies the variant-path guard fix).
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            assets_dir = tmp_path / "Assets"
+            assets_dir.mkdir()
+
+            # Child.prefab — has a SkinnedMeshRenderer
+            child_text = (
+                YAML_HEADER
+                + make_gameobject("1", "ChildMesh", ["2", "3"])
+                + make_transform("2", "1")
+                + make_skinned_mesh_renderer("3", "1", [MAT_GUID_B])
+            )
+            _write_prefab_with_meta(assets_dir, "Child.prefab", _CHILD_GUID, child_text)
+
+            # Base.prefab — direct renderer + PrefabInstance→Child
+            base_text = (
+                YAML_HEADER
+                + make_gameobject("10", "DirectMesh", ["20", "30"])
+                + make_transform("20", "10")
+                + make_skinned_mesh_renderer("30", "10", [MAT_GUID_A])
+                + make_prefab_instance("40", _CHILD_GUID)
+            )
+            _write_prefab_with_meta(
+                assets_dir, "Base.prefab", _BASE_NESTED_GUID, base_text,
+            )
+
+            # Variant.prefab — variant of Base
+            variant_text = (
+                YAML_HEADER
+                + make_prefab_variant(source_guid=_BASE_NESTED_GUID, modifications=[])
+            )
+            variant_path = assets_dir / "Variant.prefab"
+            variant_path.write_text(variant_text, encoding="utf-8")
+
+            result = inspect_materials(str(variant_path), project_root=tmp_path)
+            self.assertEqual(
+                len(result.renderers), 2,
+                f"Expected 2 renderers (direct + nested), got {len(result.renderers)}",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
