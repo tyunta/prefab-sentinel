@@ -143,7 +143,7 @@ def _extract_description(path: Path) -> str:
     for line in text[3:end].strip().splitlines():
         if ":" in line:
             key, _, val = line.partition(":")
-            fm[key.strip()] = val.strip()
+            fm[key.strip()] = val.strip().strip('"').strip("'")
     if "description" in fm:
         return fm["description"]
     if "tool" in fm:
