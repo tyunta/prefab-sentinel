@@ -99,9 +99,9 @@ prefab-sentinel-mcp --transport streamable-http
 | `editor_frame` | 選択オブジェクトを Scene ビューでフレーミング |
 | `editor_get_camera` | Scene ビューのカメラ状態取得（position, rotation, pivot, size, orthographic） |
 | `editor_set_camera` | Scene ビューのカメラ設定（Mode A: 絶対座標 / Mode B: pivot 周回。yaw=0 が正面） |
-| `editor_list_children` | GameObject の子オブジェクト一覧 |
+| `editor_list_children` | GameObject の子オブジェクト一覧（各エントリに `active`/`tag` を含む） |
 | `editor_list_materials` | ランタイムのレンダラーのマテリアルスロット一覧 |
-| `editor_list_roots` | 現在の Scene / Prefab Stage のルートオブジェクト一覧 |
+| `editor_list_roots` | 現在の Scene / Prefab Stage のルートオブジェクト一覧（各エントリに `active`/`tag` を含む） |
 | `editor_get_material_property` | ランタイムのシェーダープロパティ値を読み取り |
 | `editor_set_material_property` | ランタイムでシェーダープロパティを設定（型はシェーダー定義から自動判定、Undo 対応） |
 | `editor_console` | Unity Console のログエントリを構造化データとして取得 |
@@ -123,12 +123,26 @@ prefab-sentinel-mcp --transport streamable-http
 | `editor_create_primitive` | プリミティブ (Cube/Sphere 等) を1回で作成 (位置・スケール・回転指定) |
 | `editor_batch_create` | 複数オブジェクトを1リクエストで一括生成 (Undo グループ) |
 | `editor_batch_set_property` | 複数プロパティを1リクエストで一括設定 (Undo グループ) |
+| `editor_batch_set_material_property` | 同一マテリアルの複数シェーダープロパティを1リクエストで一括設定 (Undo グループ) |
 | `editor_open_scene` | シーンを開く (single/additive) |
 | `editor_save_scene` | シーンを保存 |
 | `editor_batch_add_component` | 複数オブジェクトにコンポーネントを一括追加 (Undo グループ、初期値対応) |
 | `editor_create_scene` | 新規空シーンを作成して保存 |
 | `deploy_bridge` | Unity プロジェクトの Bridge C# ファイルを自動更新 |
 | `validate_all_wiring` | スコープ内の全 .prefab/.unity の null 参照を一括スキャン |
+
+**`editor_list_children` / `editor_list_roots` レスポンスエントリ例:**
+
+```json
+{
+  "name": "Hair_Base",
+  "path": "/Avatar/Hair_Base",
+  "child_count": 0,
+  "depth": 1,
+  "active": false,
+  "tag": "EditorOnly"
+}
+```
 
 **Claude Desktop 設定例:**
 

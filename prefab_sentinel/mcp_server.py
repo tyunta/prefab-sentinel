@@ -77,6 +77,11 @@ def _extract_description(path: Path) -> str:
     return path.stem
 
 
+def _normalize_material_value(value: str | list | int | float) -> str:
+    """Serialize a material property value to its string representation."""
+    return value if isinstance(value, str) else json.dumps(value)
+
+
 def create_server(
     project_root: str | Path | None = None,
 ) -> FastMCP:
@@ -312,15 +317,22 @@ def create_server(
                 ),
             })
 
-        # Phase 2: Clean up stale upload handler from target if excluded
-        if not include_upload_handler:
-            for stale_name in (_UPLOAD_HANDLER, _UPLOAD_HANDLER + ".meta"):
-                stale = target_path / stale_name
-                if stale.exists():
-                    stale.unlink()
+        old_version = session.detect_bridge_version()
+
+        # Phase 2: Clean target directory for fresh deploy
+        removed_stale_files: list[str] = []
+        for stale in sorted(target_path.iterdir()):
+            if stale.is_file():
+                stale.unlink()
+                removed_stale_files.append(stale.name)
+
+        if removed_stale_files:
+            diagnostics.append({
+                "severity": "info",
+                "message": f"Cleared {len(removed_stale_files)} file(s) from {target_dir} before redeploy",
+            })
 
         # Phase 3: Copy source files
-        old_version = session.detect_bridge_version()
         copied_files: list[str] = []
         skipped_files: list[str] = []
 
@@ -356,6 +368,7 @@ def create_server(
                 "copied_files": copied_files,
                 "skipped_files": skipped_files,
                 "removed_old_files": removed_old_files,
+                "removed_stale_files": removed_stale_files,
                 "old_version": old_version,
                 "new_version": new_version,
                 "target_dir": target_dir,
@@ -1242,14 +1255,38 @@ def create_server(
                 Vector: "[0, 1, 0, 0]" (XYZW)
                 Texture: "guid:abc123..." or "path:Assets/Tex/foo.png" or "" (null)
         """
-        import json as _json
-        str_value = value if isinstance(value, str) else _json.dumps(value)
         return send_action(
             action="set_material_property",
             hierarchy_path=hierarchy_path,
             material_index=material_index,
             property_name=property_name,
-            property_value=str_value,
+            property_value=_normalize_material_value(value),
+        )
+
+    @server.tool()
+    def editor_batch_set_material_property(
+        hierarchy_path: str,
+        material_index: int,
+        properties: list[dict[str, str | list | int | float]],
+    ) -> dict[str, Any]:
+        """Set multiple shader properties on one material in a single request (Undo-grouped).
+
+        Args:
+            hierarchy_path: Hierarchy path to the GameObject with a Renderer.
+            material_index: Material slot index (0-based).
+            properties: List of property dicts, each with "name" and "value".
+                Value formats are the same as editor_set_material_property.
+        """
+        normalized = [
+            {"name": prop["name"], "value": _normalize_material_value(prop["value"])}
+            for prop in properties
+        ]
+
+        return send_action(
+            action="editor_batch_set_material_property",
+            hierarchy_path=hierarchy_path,
+            material_index=material_index,
+            batch_operations_json=json.dumps(normalized, ensure_ascii=False),
         )
 
     @server.tool()
