@@ -91,6 +91,7 @@ class TestToolRegistration(unittest.TestCase):
             "deploy_bridge",
             # Inspection + orchestrator tools
             "inspect_materials", "inspect_material_asset", "set_material_property",
+            "copy_asset", "rename_asset",
             "validate_structure", "revert_overrides", "vrcsdk_upload",
             "inspect_hierarchy", "validate_runtime", "validate_all_wiring",
             "patch_apply",
@@ -100,7 +101,7 @@ class TestToolRegistration(unittest.TestCase):
     def test_tool_count(self) -> None:
         server = create_server()
         tools = _run(server.list_tools())
-        self.assertEqual(63, len(tools))
+        self.assertEqual(65, len(tools))
 
 
 class TestSymbolTools(unittest.TestCase):
@@ -2994,6 +2995,64 @@ class TestExtractDescription(unittest.TestCase):
     def test_quoted_values_stripped(self) -> None:
         content = '---\ntool: "udonsharp"\n---\n# Title\n'
         self.assertEqual("udonsharp knowledge", self._extract(content))
+
+
+class TestCopyAssetTool(unittest.TestCase):
+    """Tests for the copy_asset MCP tool."""
+
+    def test_delegates_to_orchestrator(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.to_dict.return_value = {"success": True, "data": {"m_name_after": "copied"}}
+        mock_orch = MagicMock()
+        mock_orch.copy_asset.return_value = mock_resp
+
+        server = create_server()
+        with patch.object(
+            ProjectSession, "get_orchestrator", return_value=mock_orch,
+        ):
+            _, result = _run(server.call_tool("copy_asset", {
+                "source_path": "Assets/Mat/A.mat",
+                "dest_path": "Assets/Mat/B.mat",
+                "confirm": True,
+                "change_reason": "duplicate material",
+            }))
+
+        self.assertTrue(result["success"])
+        mock_orch.copy_asset.assert_called_once_with(
+            source_path="Assets/Mat/A.mat",
+            dest_path="Assets/Mat/B.mat",
+            dry_run=False,
+            change_reason="duplicate material",
+        )
+
+
+class TestRenameAssetTool(unittest.TestCase):
+    """Tests for the rename_asset MCP tool."""
+
+    def test_delegates_to_orchestrator(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.to_dict.return_value = {"success": True, "data": {"m_name_after": "renamed"}}
+        mock_orch = MagicMock()
+        mock_orch.rename_asset.return_value = mock_resp
+
+        server = create_server()
+        with patch.object(
+            ProjectSession, "get_orchestrator", return_value=mock_orch,
+        ):
+            _, result = _run(server.call_tool("rename_asset", {
+                "asset_path": "Assets/Mat/Old.mat",
+                "new_name": "New.mat",
+                "confirm": True,
+                "change_reason": "rename for clarity",
+            }))
+
+        self.assertTrue(result["success"])
+        mock_orch.rename_asset.assert_called_once_with(
+            asset_path="Assets/Mat/Old.mat",
+            new_name="New.mat",
+            dry_run=False,
+            change_reason="rename for clarity",
+        )
 
 
 if __name__ == "__main__":

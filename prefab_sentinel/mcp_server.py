@@ -1999,6 +1999,62 @@ def create_server(
         return resp.to_dict()
 
     @server.tool()
+    def copy_asset(
+        source_path: str,
+        dest_path: str,
+        confirm: bool = False,
+        change_reason: str = "",
+    ) -> dict[str, Any]:
+        """Copy a Unity text asset with automatic m_Name sync and .meta generation.
+
+        Two-phase workflow:
+        - confirm=False (default): dry-run preview showing planned changes.
+        - confirm=True: applies the copy and writes new .meta.
+
+        Args:
+            source_path: Path to the source asset file.
+            dest_path: Path for the new copy.
+            confirm: Set True to apply (False = dry-run only).
+            change_reason: Required when confirm=True. Audit log reason.
+        """
+        orch = session.get_orchestrator()
+        resp = orch.copy_asset(
+            source_path=source_path,
+            dest_path=dest_path,
+            dry_run=not confirm,
+            change_reason=change_reason or None,
+        )
+        return resp.to_dict()
+
+    @server.tool()
+    def rename_asset(
+        asset_path: str,
+        new_name: str,
+        confirm: bool = False,
+        change_reason: str = "",
+    ) -> dict[str, Any]:
+        """Rename a Unity text asset with automatic m_Name sync and .meta rename.
+
+        Two-phase workflow:
+        - confirm=False (default): dry-run preview showing planned changes.
+        - confirm=True: applies the rename.
+
+        Args:
+            asset_path: Path to the asset file to rename.
+            new_name: New filename (with extension, e.g. "NewName.mat").
+            confirm: Set True to apply (False = dry-run only).
+            change_reason: Required when confirm=True. Audit log reason.
+        """
+        orch = session.get_orchestrator()
+        resp = orch.rename_asset(
+            asset_path=asset_path,
+            new_name=new_name,
+            dry_run=not confirm,
+            change_reason=change_reason or None,
+        )
+        return resp.to_dict()
+
+    @server.tool()
     def validate_structure(asset_path: str) -> dict[str, Any]:
         """Validate internal YAML structure (fileID duplicates, Transform consistency).
 

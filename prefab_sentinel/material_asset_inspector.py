@@ -13,6 +13,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from prefab_sentinel.contracts import error_dict as _error_dict, success_dict as _success_dict
 from prefab_sentinel.fuzzy_match import suggest_similar
 from prefab_sentinel.unity_assets import (
     collect_project_guid_index,
@@ -336,42 +337,6 @@ def format_material_asset(result: MaterialAssetResult) -> str:
     for i in result.ints:
         lines.append(f"  {i.name}: {i.value}")
     return "\n".join(lines)
-
-
-# ---------------------------------------------------------------------------
-# Writer helpers
-# ---------------------------------------------------------------------------
-
-
-def _error_dict(
-    code: str,
-    message: str,
-    data: dict | None = None,
-    diagnostics: list | None = None,
-) -> dict:
-    return {
-        "success": False,
-        "severity": "error",
-        "code": code,
-        "message": message,
-        "data": data or {},
-        "diagnostics": diagnostics or [],
-    }
-
-
-def _success_dict(
-    code: str,
-    message: str,
-    data: dict | None = None,
-) -> dict:
-    return {
-        "success": True,
-        "severity": "info",
-        "code": code,
-        "message": message,
-        "data": data or {},
-        "diagnostics": [],
-    }
 
 
 def _find_property(

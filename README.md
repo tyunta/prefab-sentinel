@@ -89,6 +89,8 @@ prefab-sentinel-mcp --transport streamable-http
 | `inspect_materials` | レンダラーごとのマテリアルスロット表示（override/inherited マーカー、Nested Prefab フォールバック、`source_prefab` 注釈付き） |
 | `inspect_material_asset` | .mat ファイルのシェーダー・プロパティ・テクスチャ参照を構造化データで返す（read-only） |
 | `set_material_property` | .mat ファイルのプロパティをオフライン YAML 編集（dry-run/confirm ゲート付き） |
+| `copy_asset` | アセットファイルをコピーし m_Name を自動同期、新 .meta を生成（dry-run/confirm ゲート付き） |
+| `rename_asset` | アセットファイルをリネームし m_Name を自動同期、.meta を追従リネーム（dry-run/confirm ゲート付き） |
 | `validate_structure` | YAML 内部構造の検証（fileID 重複、Transform 整合性） |
 | `inspect_hierarchy` | GameObject 階層ツリー表示（深度制限、コンポーネント注釈対応） |
 | `validate_runtime` | UdonSharp コンパイル + ClientSim 実行検証 |

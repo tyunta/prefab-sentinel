@@ -6,7 +6,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from prefab_sentinel.contracts import (
     Diagnostic,
@@ -18,6 +18,10 @@ from prefab_sentinel.contracts import (
 )
 from prefab_sentinel.editor_bridge import bridge_status, send_action
 from prefab_sentinel.hierarchy import HierarchyNode, analyze_hierarchy, format_tree
+from prefab_sentinel.asset_file_ops import (
+    copy_asset as _copy_asset,
+    rename_asset as _rename_asset,
+)
 from prefab_sentinel.material_asset_inspector import (
     format_material_asset,
     inspect_material_asset as _inspect_material_asset,
@@ -1207,6 +1211,50 @@ class Phase1Orchestrator:
             data=data,
         )
 
+    def _execute_write_op(
+        self,
+        core_fn: Callable[..., dict],
+        core_kwargs: dict[str, Any],
+        diag_path: str,
+        reason_error_code: str,
+        dry_run: bool,
+        change_reason: str | None,
+    ) -> ToolResponse:
+        """Run a write operation through the standard gate→execute→wrap pipeline.
+
+        Shared by all write operations (set_material_property, copy_asset,
+        rename_asset) to enforce the change_reason gate, auto-refresh, and
+        dict→ToolResponse conversion in one place.
+        """
+        if not dry_run and not change_reason:
+            return error_response(
+                reason_error_code,
+                "change_reason is required when confirm=True",
+            )
+
+        result = core_fn(**core_kwargs, dry_run=dry_run)
+
+        if not dry_run and result.get("success"):
+            result["data"]["auto_refresh"] = self.maybe_auto_refresh()
+
+        severity = Severity.INFO if result["success"] else Severity.ERROR
+        return ToolResponse(
+            success=result["success"],
+            severity=severity,
+            code=result["code"],
+            message=result["message"],
+            data=result.get("data", {}),
+            diagnostics=[
+                Diagnostic(
+                    path=diag_path,
+                    location="",
+                    detail=d.get("detail", ""),
+                    evidence=d.get("evidence", ""),
+                )
+                for d in result.get("diagnostics", [])
+            ],
+        )
+
     def set_material_property(
         self,
         target_path: str,
@@ -1228,35 +1276,69 @@ class Phase1Orchestrator:
         Returns:
             ``ToolResponse`` with before/after data.
         """
-        if not dry_run and not change_reason:
-            return error_response(
-                "MAT_PROP_REASON_REQUIRED",
-                "change_reason is required when confirm=True",
-            )
-
-        result = _write_material_property(
-            target_path, property_name, value, dry_run=dry_run,
+        return self._execute_write_op(
+            _write_material_property,
+            {"target_path": target_path, "property_name": property_name, "value": value},
+            diag_path=target_path,
+            reason_error_code="MAT_PROP_REASON_REQUIRED",
+            dry_run=dry_run,
+            change_reason=change_reason,
         )
 
-        if not dry_run and result.get("success"):
-            result["data"]["auto_refresh"] = self.maybe_auto_refresh()
+    def copy_asset(
+        self,
+        source_path: str,
+        dest_path: str,
+        *,
+        dry_run: bool = True,
+        change_reason: str | None = None,
+    ) -> ToolResponse:
+        """Copy a Unity text asset with m_Name sync and .meta generation.
 
-        severity = Severity.INFO if result["success"] else Severity.ERROR
-        return ToolResponse(
-            success=result["success"],
-            severity=severity,
-            code=result["code"],
-            message=result["message"],
-            data=result.get("data", {}),
-            diagnostics=[
-                Diagnostic(
-                    path=target_path,
-                    location="",
-                    detail=d.get("detail", ""),
-                    evidence=d.get("evidence", ""),
-                )
-                for d in result.get("diagnostics", [])
-            ],
+        Args:
+            source_path: Path to the source asset file.
+            dest_path: Path for the new copy.
+            dry_run: If True, preview only.
+            change_reason: Required when dry_run=False.
+
+        Returns:
+            ``ToolResponse`` with copy result data.
+        """
+        return self._execute_write_op(
+            _copy_asset,
+            {"source_path": str(source_path), "dest_path": str(dest_path)},
+            diag_path=source_path,
+            reason_error_code="ASSET_OP_REASON_REQUIRED",
+            dry_run=dry_run,
+            change_reason=change_reason,
+        )
+
+    def rename_asset(
+        self,
+        asset_path: str,
+        new_name: str,
+        *,
+        dry_run: bool = True,
+        change_reason: str | None = None,
+    ) -> ToolResponse:
+        """Rename a Unity text asset with m_Name sync and .meta rename.
+
+        Args:
+            asset_path: Path to the asset file to rename.
+            new_name: New filename (with extension).
+            dry_run: If True, preview only.
+            change_reason: Required when dry_run=False.
+
+        Returns:
+            ``ToolResponse`` with rename result data.
+        """
+        return self._execute_write_op(
+            _rename_asset,
+            {"asset_path": str(asset_path), "new_name": str(new_name)},
+            diag_path=asset_path,
+            reason_error_code="ASSET_OP_REASON_REQUIRED",
+            dry_run=dry_run,
+            change_reason=change_reason,
         )
 
     def inspect_structure(
