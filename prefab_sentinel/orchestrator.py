@@ -39,7 +39,6 @@ from prefab_sentinel.unity_assets import (
     SOURCE_PREFAB_PATTERN,
     collect_project_guid_index,
     decode_text_file,
-    find_project_root,
     resolve_scope_path,
 )
 from prefab_sentinel.unity_yaml_parser import iter_nested_prefab_children
@@ -810,7 +809,7 @@ class Phase1Orchestrator:
         guid_index: dict[str, Path] = {}
         guid_to_name: dict[str, str] = {}
         try:
-            proj_root = find_project_root(Path(target_path))
+            proj_root = self.prefab_variant.project_root
             guid_index = collect_project_guid_index(proj_root, include_package_cache=False)
             for guid, asset_path in guid_index.items():
                 if asset_path.suffix == ".cs":
@@ -1063,7 +1062,7 @@ class Phase1Orchestrator:
             )
 
         try:
-            result = inspect_materials(target_path)
+            result = inspect_materials(target_path, project_root=self.prefab_variant.project_root)
         except (OSError, UnicodeDecodeError) as exc:
             return error_response(
                 "INSPECT_MATERIALS_READ_ERROR",
@@ -1150,7 +1149,7 @@ class Phase1Orchestrator:
             )
 
         try:
-            result = _inspect_material_asset(target_path)
+            result = _inspect_material_asset(target_path, project_root=self.prefab_variant.project_root)
         except (OSError, UnicodeDecodeError, ValueError) as exc:
             return error_response(
                 "INSPECT_MATERIAL_ASSET_READ_ERROR",

@@ -312,15 +312,22 @@ def create_server(
                 ),
             })
 
-        # Phase 2: Clean up stale upload handler from target if excluded
-        if not include_upload_handler:
-            for stale_name in (_UPLOAD_HANDLER, _UPLOAD_HANDLER + ".meta"):
-                stale = target_path / stale_name
-                if stale.exists():
-                    stale.unlink()
+        old_version = session.detect_bridge_version()
+
+        # Phase 2: Clean target directory for fresh deploy
+        removed_stale_files: list[str] = []
+        for stale in sorted(target_path.iterdir()):
+            if stale.is_file():
+                stale.unlink()
+                removed_stale_files.append(stale.name)
+
+        if removed_stale_files:
+            diagnostics.append({
+                "severity": "info",
+                "message": f"Cleared {len(removed_stale_files)} file(s) from {target_dir} before redeploy",
+            })
 
         # Phase 3: Copy source files
-        old_version = session.detect_bridge_version()
         copied_files: list[str] = []
         skipped_files: list[str] = []
 
@@ -356,6 +363,7 @@ def create_server(
                 "copied_files": copied_files,
                 "skipped_files": skipped_files,
                 "removed_old_files": removed_old_files,
+                "removed_stale_files": removed_stale_files,
                 "old_version": old_version,
                 "new_version": new_version,
                 "target_dir": target_dir,

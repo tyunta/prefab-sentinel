@@ -2762,6 +2762,8 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertFalse(stale_cs.exists())
         self.assertFalse(stale_meta.exists())
+        self.assertIn("PrefabSentinel.VRCSDKUploadHandler.cs", result["data"]["removed_stale_files"])
+        self.assertIn("PrefabSentinel.VRCSDKUploadHandler.cs.meta", result["data"]["removed_stale_files"])
 
     @patch("prefab_sentinel.mcp_server.send_action")
     def test_diagnostics_warn_on_old_file_removal(self, _mock: MagicMock) -> None:
@@ -2789,6 +2791,111 @@ class TestDeployBridgeCleanup(unittest.TestCase):
 
         infos = [d for d in result["diagnostics"] if d["severity"] == "info"]
         self.assertTrue(any("VRCSDKUploadHandler" in d["message"] for d in infos))
+
+    @patch("prefab_sentinel.mcp_server.send_action")
+    def test_clean_redeploy_removes_all_target_files(self, _mock: MagicMock) -> None:
+        """All pre-existing files in target_dir are removed before deploy."""
+        (self._target / "Dummy.cs").write_text("// dummy", encoding="utf-8")
+        (self._target / "Dummy.cs.meta").write_text("guid: dummy", encoding="utf-8")
+
+        server = create_server(project_root=str(self._project_root))
+        _, result = _run(server.call_tool(
+            "deploy_bridge",
+            {"target_dir": str(self._target)},
+        ))
+
+        self.assertTrue(result["success"])
+        self.assertFalse((self._target / "Dummy.cs").exists())
+        self.assertFalse((self._target / "Dummy.cs.meta").exists())
+
+    @patch("prefab_sentinel.mcp_server.send_action")
+    def test_full_then_excluded_redeploy_no_residue(self, _mock: MagicMock) -> None:
+        """Full deploy then excluded redeploy leaves no upload handler residue."""
+        server = create_server(project_root=str(self._project_root))
+
+        _, result1 = _run(server.call_tool(
+            "deploy_bridge",
+            {"target_dir": str(self._target), "include_upload_handler": True},
+        ))
+        self.assertTrue(result1["success"])
+        self.assertTrue(
+            (self._target / "PrefabSentinel.VRCSDKUploadHandler.cs").exists(),
+        )
+
+        _, result2 = _run(server.call_tool(
+            "deploy_bridge",
+            {"target_dir": str(self._target), "include_upload_handler": False},
+        ))
+        self.assertTrue(result2["success"])
+        self.assertFalse(
+            (self._target / "PrefabSentinel.VRCSDKUploadHandler.cs").exists(),
+        )
+        self.assertFalse(
+            (self._target / "PrefabSentinel.VRCSDKUploadHandler.cs.meta").exists(),
+        )
+        self.assertIn(
+            "PrefabSentinel.VRCSDKUploadHandler.cs",
+            result2["data"]["removed_stale_files"],
+        )
+
+    @patch("prefab_sentinel.mcp_server.send_action")
+    def test_clean_redeploy_preserves_subdirectories(self, _mock: MagicMock) -> None:
+        """Subdirectories inside target_dir survive the clean phase."""
+        subdir = self._target / "subdir"
+        subdir.mkdir()
+        (subdir / "keep.txt").write_text("keep", encoding="utf-8")
+
+        server = create_server(project_root=str(self._project_root))
+        _, result = _run(server.call_tool(
+            "deploy_bridge",
+            {"target_dir": str(self._target)},
+        ))
+
+        self.assertTrue(result["success"])
+        self.assertTrue(subdir.is_dir())
+        self.assertTrue((subdir / "keep.txt").exists())
+        self.assertIsInstance(result["data"]["removed_stale_files"], list)
+
+    @patch("prefab_sentinel.mcp_server.send_action")
+    def test_removed_stale_files_in_response(self, _mock: MagicMock) -> None:
+        """Stale files removed during clean phase appear in response data."""
+        (self._target / "OldFile.cs").write_text("// old", encoding="utf-8")
+
+        server = create_server(project_root=str(self._project_root))
+        _, result = _run(server.call_tool(
+            "deploy_bridge",
+            {"target_dir": str(self._target)},
+        ))
+
+        self.assertTrue(result["success"])
+        self.assertIn("OldFile.cs", result["data"]["removed_stale_files"])
+
+    @patch("prefab_sentinel.mcp_server.send_action")
+    def test_clean_redeploy_diagnostic_message(self, _mock: MagicMock) -> None:
+        """Clearing files produces an info diagnostic with 'Cleared' message."""
+        (self._target / "Stale.cs").write_text("// stale", encoding="utf-8")
+
+        server = create_server(project_root=str(self._project_root))
+        _, result = _run(server.call_tool(
+            "deploy_bridge",
+            {"target_dir": str(self._target)},
+        ))
+
+        infos = [d for d in result["diagnostics"] if d["severity"] == "info"]
+        self.assertTrue(any("Cleared" in d["message"] for d in infos))
+
+    @patch("prefab_sentinel.mcp_server.send_action")
+    def test_first_deploy_empty_removed_stale(self, _mock: MagicMock) -> None:
+        """First deploy to empty target_dir has empty removed_stale_files."""
+        fresh_target = self._project_root / "Assets" / "Editor" / "FreshDeploy"
+        server = create_server(project_root=str(self._project_root))
+        _, result = _run(server.call_tool(
+            "deploy_bridge",
+            {"target_dir": str(fresh_target)},
+        ))
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["data"]["removed_stale_files"], [])
 
     @patch("prefab_sentinel.mcp_server.send_action")
     def test_uses_bridge_files_dir_when_available(self, _mock: MagicMock) -> None:
