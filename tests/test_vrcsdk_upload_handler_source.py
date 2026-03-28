@@ -19,7 +19,7 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-class TestCS0117_GetBuildTargetGroup(unittest.TestCase):
+class TestCS0117GetBuildTargetGroup(unittest.TestCase):
     """CS0117: EditorUserBuildSettings.GetBuildTargetGroup does not exist."""
 
     def test_should_use_buildpipeline_not_editoruserbuildsettings(self) -> None:
@@ -39,7 +39,7 @@ class TestCS0117_GetBuildTargetGroup(unittest.TestCase):
         )
 
 
-class TestCS1501_BuildErrorVisibility(unittest.TestCase):
+class TestCS1501BuildErrorVisibility(unittest.TestCase):
     """CS1501: 3-arg BuildError must be internal (not private)."""
 
     def test_three_arg_build_error_should_be_internal(self) -> None:
@@ -64,7 +64,7 @@ class TestCS1501_BuildErrorVisibility(unittest.TestCase):
         )
 
 
-class TestCS0246_BuildAndUploadWorldReflection(unittest.TestCase):
+class TestCS0246BuildAndUploadWorldReflection(unittest.TestCase):
     """CS0246: IVRCSdkWorldBuilderApi direct type reference must be removed."""
 
     def test_should_not_reference_world_builder_type_directly(self) -> None:
