@@ -84,6 +84,7 @@ class TestToolRegistration(unittest.TestCase):
             "editor_set_parent",
             "editor_create_empty", "editor_create_primitive",
             "editor_batch_create", "editor_batch_set_property",
+            "editor_batch_set_material_property",
             "editor_open_scene", "editor_save_scene",
             "editor_batch_add_component", "editor_create_scene",
             # Infrastructure tools
@@ -99,7 +100,7 @@ class TestToolRegistration(unittest.TestCase):
     def test_tool_count(self) -> None:
         server = create_server()
         tools = _run(server.list_tools())
-        self.assertEqual(62, len(tools))
+        self.assertEqual(63, len(tools))
 
 
 class TestSymbolTools(unittest.TestCase):
@@ -2033,6 +2034,27 @@ class TestEditorWriteTools(unittest.TestCase):
             property_name="_Color",
             property_value="[1, 0, 0, 1]",
         )
+
+    def test_editor_batch_set_material_property_delegates(self) -> None:
+        server = create_server()
+        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+            _run(server.call_tool("editor_batch_set_material_property", {
+                "hierarchy_path": "/Avatar/Hair",
+                "material_index": 0,
+                "properties": [
+                    {"name": "_Color", "value": "[1, 0, 0, 1]"},
+                    {"name": "_MainTexHSVG", "value": [0.02, 0.48, 1.18, 1]},
+                ],
+            }))
+        args = mock_send.call_args
+        self.assertEqual(args.kwargs["action"], "editor_batch_set_material_property")
+        self.assertEqual(args.kwargs["hierarchy_path"], "/Avatar/Hair")
+        self.assertEqual(args.kwargs["material_index"], 0)
+        import json
+        ops = json.loads(args.kwargs["batch_operations_json"])
+        self.assertEqual(len(ops), 2)
+        self.assertEqual(ops[0], {"name": "_Color", "value": "[1, 0, 0, 1]"})
+        self.assertEqual(ops[1], {"name": "_MainTexHSVG", "value": "[0.02, 0.48, 1.18, 1]"})
 
     def test_editor_delete_delegates(self) -> None:
         server = create_server()

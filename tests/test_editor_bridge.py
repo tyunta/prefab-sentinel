@@ -201,6 +201,7 @@ class TestSupportedActions(unittest.TestCase):
             "editor_create_primitive",
             "editor_batch_create",
             "editor_batch_set_property",
+            "editor_batch_set_material_property",
             "editor_open_scene",
             "editor_save_scene",
             "editor_batch_add_component",
