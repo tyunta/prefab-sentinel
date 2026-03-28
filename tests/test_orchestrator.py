@@ -403,11 +403,7 @@ class FileTypeGuardTests(unittest.TestCase):
             f.write(text)
             f.flush()
             orch = _make_orchestrator()
-            with patch(
-                "prefab_sentinel.orchestrator.find_project_root",
-                side_effect=Exception("no project"),
-            ):
-                result = orch.inspect_wiring(f.name)
+            result = orch.inspect_wiring(f.name)
         self.assertEqual("INSPECT_WIRING_RESULT", result.code)
 
 
@@ -428,11 +424,8 @@ class InspectWiringTests(unittest.TestCase):
             f.write(text)
             f.flush()
             orch = _make_orchestrator()
-            # Mock find_project_root and collect_project_guid_index
+            orch.prefab_variant.project_root = Path("/fake")
             with patch(
-                "prefab_sentinel.orchestrator.find_project_root",
-                return_value=Path("/fake"),
-            ), patch(
                 "prefab_sentinel.orchestrator.collect_project_guid_index",
                 return_value={"aabbccdd11223344aabbccdd11223344": Path("/fake/Assets/Scripts/MyScript.cs")},
             ):
@@ -445,7 +438,7 @@ class InspectWiringTests(unittest.TestCase):
         self.assertEqual(comps[0]["script_name"], "MyScript")
 
     def test_script_name_empty_on_project_root_failure(self) -> None:
-        """script_name should be empty when project root cannot be determined."""
+        """script_name should be empty when project_root is None (no active project)."""
 
 
         from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
@@ -460,11 +453,8 @@ class InspectWiringTests(unittest.TestCase):
             f.write(text)
             f.flush()
             orch = _make_orchestrator()
-            with patch(
-                "prefab_sentinel.orchestrator.find_project_root",
-                side_effect=Exception("no project root"),
-            ):
-                result = orch.inspect_wiring(f.name)
+            orch.prefab_variant.project_root = None
+            result = orch.inspect_wiring(f.name)
 
         self.assertTrue(result.success)
         comps = result.data["components"]
@@ -489,11 +479,7 @@ class InspectWiringTests(unittest.TestCase):
             f.write(text)
             f.flush()
             orch = _make_orchestrator()
-            with patch(
-                "prefab_sentinel.orchestrator.find_project_root",
-                side_effect=Exception("no project"),
-            ):
-                result = orch.inspect_wiring(f.name)
+            result = orch.inspect_wiring(f.name)
 
         self.assertTrue(result.success)
         comps = result.data["components"]
@@ -561,11 +547,7 @@ class InspectWiringVariantTests(unittest.TestCase):
             "PVR_OVERRIDES_OK",
             {"overrides": [], "override_count": 0},
         )
-        with patch(
-            "prefab_sentinel.orchestrator.find_project_root",
-            side_effect=Exception("no project"),
-        ):
-            result = orch.inspect_wiring(variant_path)
+        result = orch.inspect_wiring(variant_path)
 
         self.assertEqual("INSPECT_WIRING_RESULT", result.code)
         self.assertTrue(result.data.get("is_variant"))
@@ -583,11 +565,7 @@ class InspectWiringVariantTests(unittest.TestCase):
             f.write(text)
             f.flush()
             orch = _make_orchestrator()
-            with patch(
-                "prefab_sentinel.orchestrator.find_project_root",
-                side_effect=Exception("no project"),
-            ):
-                result = orch.inspect_wiring(f.name)
+            result = orch.inspect_wiring(f.name)
 
         self.assertEqual("INSPECT_WIRING_RESULT", result.code)
         self.assertNotIn("is_variant", result.data)
@@ -609,11 +587,7 @@ class InspectWiringVariantTests(unittest.TestCase):
             "CHAIN_OK",
             {"chain": [{"path": variant_path, "guid": "variant_guid"}]},
         )
-        with patch(
-            "prefab_sentinel.orchestrator.find_project_root",
-            side_effect=Exception("no project"),
-        ):
-            result = orch.inspect_wiring(variant_path)
+        result = orch.inspect_wiring(variant_path)
 
         self.assertEqual("INSPECT_WIRING_RESULT", result.code)
         # Should not be marked as variant since no base was found
@@ -690,11 +664,7 @@ class InspectWiringVariantOverrideAnnotationTests(unittest.TestCase):
                 "override_count": 2,
             },
         )
-        with patch(
-            "prefab_sentinel.orchestrator.find_project_root",
-            side_effect=Exception("no project"),
-        ):
-            result = orch.inspect_wiring(variant_path)
+        result = orch.inspect_wiring(variant_path)
 
         self.assertTrue(result.success)
         comps = result.data["components"]
@@ -722,11 +692,7 @@ class InspectWiringVariantOverrideAnnotationTests(unittest.TestCase):
             f.write(text)
             f.flush()
             orch = _make_orchestrator()
-            with patch(
-                "prefab_sentinel.orchestrator.find_project_root",
-                side_effect=Exception("no project"),
-            ):
-                result = orch.inspect_wiring(f.name)
+            result = orch.inspect_wiring(f.name)
 
         comps = result.data["components"]
         self.assertEqual(len(comps), 1)
@@ -1659,6 +1625,93 @@ class TestInvalidationDelegation(unittest.TestCase):
         orch = self._make_orchestrator()
         orch.invalidate_before_cache()
         orch.serialized_object.invalidate_before_cache.assert_called_once()
+
+
+class InspectMaterialsRelativePathTests(unittest.TestCase):
+    """Regression tests for GitHub Issue #14: relative paths must resolve via project_root."""
+
+    def test_inspect_materials_relative_path(self) -> None:
+        from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_transform
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            assets = root / "Assets"
+            assets.mkdir()
+            prefab = assets / "Test.prefab"
+            text = (
+                YAML_HEADER
+                + make_gameobject("100", "Root", ["200", "300"])
+                + make_transform("200", "100")
+                + "--- !u!23 &300\nMeshRenderer:\n  m_GameObject: {fileID: 100}\n"
+                + "  m_Materials:\n  - {fileID: 0}\n"
+            )
+            prefab.write_text(text, encoding="utf-8")
+
+            orch = _make_orchestrator()
+            orch.prefab_variant.project_root = root
+            result = orch.inspect_materials("Assets/Test.prefab")
+
+        self.assertTrue(result.success)
+        self.assertEqual("INSPECT_MATERIALS_RESULT", result.code)
+
+    def test_inspect_material_asset_relative_path(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            assets = root / "Assets"
+            assets.mkdir()
+            mat = assets / "Test.mat"
+            mat.write_text(
+                "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n"
+                "--- !u!21 &2100000\nMaterial:\n"
+                "  m_Name: Test\n"
+                "  m_Shader: {fileID: 4800000, guid: abcdef01234567890abcdef012345678, type: 3}\n"
+                "  m_SavedProperties:\n"
+                "    serializedVersion: 3\n"
+                "    m_TexEnvs: []\n"
+                "    m_Ints: []\n"
+                "    m_Floats: []\n"
+                "    m_Colors: []\n",
+                encoding="utf-8",
+            )
+
+            orch = _make_orchestrator()
+            orch.prefab_variant.project_root = root
+            result = orch.inspect_material_asset("Assets/Test.mat")
+
+        self.assertTrue(result.success)
+        self.assertEqual("INSPECT_MATERIAL_ASSET_RESULT", result.code)
+
+    def test_inspect_wiring_relative_path_guid_resolution(self) -> None:
+        from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            assets = root / "Assets"
+            assets.mkdir()
+
+            guid = "aabbccdd11223344aabbccdd11223344"
+            cs = assets / "MyScript.cs"
+            cs.write_text("public class MyScript : MonoBehaviour {}\n", encoding="utf-8")
+            meta = Path(str(cs) + ".meta")
+            meta.write_text(f"fileFormatVersion: 2\nguid: {guid}\n", encoding="utf-8")
+
+            prefab = assets / "Test.prefab"
+            text = (
+                YAML_HEADER
+                + make_gameobject("100", "Obj", ["200"])
+                + make_monobehaviour("200", "100", guid=guid)
+            )
+            prefab.write_text(text, encoding="utf-8")
+
+            orch = _make_orchestrator()
+            orch.prefab_variant.project_root = root
+            result = orch.inspect_wiring("Assets/Test.prefab")
+
+        self.assertTrue(result.success)
+        self.assertEqual("INSPECT_WIRING_RESULT", result.code)
+        comps = result.data["components"]
+        self.assertTrue(len(comps) >= 1)
+        self.assertEqual("MyScript", comps[0]["script_name"])
 
 
 if __name__ == "__main__":
