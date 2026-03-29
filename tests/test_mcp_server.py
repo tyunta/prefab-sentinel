@@ -79,6 +79,7 @@ class TestToolRegistration(unittest.TestCase):
             "editor_console", "editor_run_tests",
             "editor_find_renderers_by_material",
             "editor_rename", "editor_add_component",
+            "editor_remove_component",
             "editor_create_udon_program_asset",
             "editor_set_property", "editor_save_as_prefab",
             "editor_set_parent",
@@ -101,7 +102,7 @@ class TestToolRegistration(unittest.TestCase):
     def test_tool_count(self) -> None:
         server = create_server()
         tools = _run(server.list_tools())
-        self.assertEqual(65, len(tools))
+        self.assertEqual(66, len(tools))
 
 
 class TestSymbolTools(unittest.TestCase):
@@ -2155,6 +2156,34 @@ class TestEditorWriteTools(unittest.TestCase):
         with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_delete", {"hierarchy_path": "/OldObject"}))
         mock_send.assert_called_once_with(action="delete_object", hierarchy_path="/OldObject")
+
+    def test_editor_remove_component_delegates(self) -> None:
+        server = create_server()
+        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+            _run(server.call_tool("editor_remove_component", {
+                "hierarchy_path": "/Player",
+                "component_type": "BoxCollider",
+            }))
+        mock_send.assert_called_once_with(
+            action="editor_remove_component",
+            hierarchy_path="/Player",
+            component_type="BoxCollider",
+        )
+
+    def test_editor_remove_component_with_index(self) -> None:
+        server = create_server()
+        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+            _run(server.call_tool("editor_remove_component", {
+                "hierarchy_path": "/Player",
+                "component_type": "BoxCollider",
+                "index": 1,
+            }))
+        mock_send.assert_called_once_with(
+            action="editor_remove_component",
+            hierarchy_path="/Player",
+            component_type="BoxCollider",
+            component_index=1,
+        )
 
     def test_vrcsdk_upload_delegates(self) -> None:
         """Default platforms=["windows"] is serialized and passed to send_action."""

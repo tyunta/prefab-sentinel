@@ -3,11 +3,16 @@ from __future__ import annotations
 import logging
 import re
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
+from prefab_sentinel.asset_file_ops import (
+    copy_asset as _copy_asset,
+    rename_asset as _rename_asset,
+)
 from prefab_sentinel.contracts import (
     Diagnostic,
     Severity,
@@ -18,10 +23,6 @@ from prefab_sentinel.contracts import (
 )
 from prefab_sentinel.editor_bridge import bridge_status, send_action
 from prefab_sentinel.hierarchy import HierarchyNode, analyze_hierarchy, format_tree
-from prefab_sentinel.asset_file_ops import (
-    copy_asset as _copy_asset,
-    rename_asset as _rename_asset,
-)
 from prefab_sentinel.material_asset_inspector import (
     format_material_asset,
     inspect_material_asset as _inspect_material_asset,

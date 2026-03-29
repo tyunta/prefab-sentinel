@@ -14,7 +14,6 @@ from prefab_sentinel.asset_file_ops import (
     copy_asset,
     rename_asset,
 )
-
 from prefab_sentinel.unity_assets import decode_text_file
 
 _FIXTURES = Path(__file__).parent / "fixtures" / "mat"

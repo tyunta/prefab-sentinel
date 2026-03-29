@@ -193,6 +193,7 @@ class TestSupportedActions(unittest.TestCase):
             "find_renderers_by_material",
             "editor_rename",
             "editor_add_component",
+            "editor_remove_component",
             "create_udon_program_asset",
             "editor_set_property",
             "save_as_prefab",
