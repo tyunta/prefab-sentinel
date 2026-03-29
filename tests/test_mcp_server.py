@@ -1207,6 +1207,67 @@ class TestSessionTools(unittest.TestCase):
         self.assertTrue(after["data"]["orchestrator_cached"])
         self.assertTrue(after["data"]["script_map_cached"])
 
+    @patch("prefab_sentinel.session.build_script_name_map")
+    @patch("prefab_sentinel.session.Phase1Orchestrator")
+    @patch("prefab_sentinel.session.resolve_scope_path")
+    def test_activate_project_with_explicit_project_root(
+        self,
+        mock_resolve: MagicMock,
+        mock_orch: MagicMock,
+        mock_build: MagicMock,
+    ) -> None:
+        mock_build.return_value = {"g1": "ScriptA"}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            assets = Path(tmpdir) / "Assets"
+            assets.mkdir()
+            mock_resolve.return_value = assets / "MyScope"
+
+            server = create_server()
+            _, result = _run(server.call_tool(
+                "activate_project",
+                {"scope": "Assets/MyScope", "project_root": tmpdir},
+            ))
+
+            self.assertTrue(result["success"])
+            self.assertEqual(
+                str(Path(tmpdir).resolve()), result["data"]["project_root"]
+            )
+
+    def test_activate_project_with_invalid_project_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            server = create_server()
+            _, result = _run(server.call_tool(
+                "activate_project",
+                {"scope": "Assets/X", "project_root": tmpdir},
+            ))
+
+            self.assertFalse(result["success"])
+            self.assertEqual("INVALID_PROJECT_ROOT", result["code"])
+
+    @patch("prefab_sentinel.session.build_script_name_map")
+    @patch("prefab_sentinel.session.Phase1Orchestrator")
+    @patch("prefab_sentinel.session.resolve_scope_path")
+    @patch("prefab_sentinel.session.find_project_root")
+    def test_activate_project_without_project_root_backward_compat(
+        self,
+        mock_find: MagicMock,
+        mock_resolve: MagicMock,
+        mock_orch: MagicMock,
+        mock_build: MagicMock,
+    ) -> None:
+        mock_find.return_value = Path("/unity")
+        mock_resolve.return_value = Path("/unity/Assets/MyScope")
+        mock_build.return_value = {"g1": "ScriptA"}
+
+        server = create_server()
+        _, result = _run(server.call_tool(
+            "activate_project",
+            {"scope": "Assets/MyScope"},
+        ))
+
+        self.assertTrue(result["success"])
+        self.assertEqual("SESSION_ACTIVATED", result["code"])
+
 
 class TestAddComponentTool(unittest.TestCase):
     """Test the add_component MCP tool."""

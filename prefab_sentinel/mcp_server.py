@@ -33,7 +33,7 @@ from prefab_sentinel.editor_bridge import (
 from prefab_sentinel.fuzzy_match import suggest_similar
 from prefab_sentinel.patch_plan import PLAN_VERSION
 from prefab_sentinel.patch_revert import revert_overrides as revert_overrides_impl
-from prefab_sentinel.session import ProjectSession
+from prefab_sentinel.session import InvalidProjectRootError, ProjectSession
 from prefab_sentinel.symbol_tree import (
     AmbiguousSymbolError,
     SymbolKind,
@@ -176,6 +176,7 @@ def create_server(
     @server.tool()
     async def activate_project(
         scope: str,
+        project_root: str = "",
     ) -> dict[str, Any]:
         """Set the project scope and warm caches for subsequent requests.
 
@@ -186,8 +187,24 @@ def create_server(
         Args:
             scope: Path to the Assets subdirectory to work with
                 (e.g. "Assets/Tyunta/SoulLinkerSystem").
+            project_root: Unity project root directory. Optional.
+                Priority: this argument > UNITYTOOL_UNITY_PROJECT_PATH env var
+                > auto-detect from scope path.
         """
-        result = await session.activate(scope)
+        try:
+            result = await session.activate(
+                scope,
+                project_root=project_root or None,
+            )
+        except InvalidProjectRootError as exc:
+            return {
+                "success": False,
+                "severity": "error",
+                "code": "INVALID_PROJECT_ROOT",
+                "message": str(exc),
+                "data": {},
+                "diagnostics": [],
+            }
         result["suggested_reads"] = session.suggest_reads()
         result["knowledge_hint"] = (
             "Other knowledge files available via Glob('knowledge/*.md') "
