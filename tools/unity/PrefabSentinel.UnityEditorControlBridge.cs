@@ -63,6 +63,7 @@ namespace PrefabSentinel
             "editor_save_scene",
             // Phase 7: UX Review improvements
             "editor_batch_add_component",
+            "editor_remove_component",
             "editor_create_scene",
         };
 
@@ -141,6 +142,7 @@ namespace PrefabSentinel
             // Phase 4: Rename + AddComponent + Udon
             public string new_name = string.Empty;
             public string component_type = string.Empty;
+            public int component_index = -1;  // -1 = unspecified
 
             // Phase 5: SetProperty + SaveAsPrefab
             public string object_reference = string.Empty;
@@ -228,6 +230,7 @@ namespace PrefabSentinel
             public string deleted_object = string.Empty;
             public int deleted_child_count = 0;
             public int total_entries = 0;
+            public int component_count = 0;
             public ConsoleLogEntry[] entries = Array.Empty<ConsoleLogEntry>();
             public ChildEntry[] children = Array.Empty<ChildEntry>();
             public MaterialSlotEntry[] material_slots = Array.Empty<MaterialSlotEntry>();
@@ -430,6 +433,9 @@ namespace PrefabSentinel
                     break;
                 case "editor_batch_add_component":
                     response = HandleEditorBatchAddComponent(request);
+                    break;
+                case "editor_remove_component":
+                    response = HandleEditorRemoveComponent(request);
                     break;
                 case "editor_create_scene":
                     response = HandleEditorCreateScene(request);
@@ -2440,6 +2446,78 @@ namespace PrefabSentinel
             {
                 detail = "Runtime modification — save the scene (File > Save) to persist.",
                 evidence = "Undo.AddComponent"
+            }};
+            return resp;
+        }
+
+        private static EditorControlResponse HandleEditorRemoveComponent(EditorControlRequest request)
+        {
+            if (string.IsNullOrEmpty(request.hierarchy_path))
+                return BuildError("EDITOR_CTRL_REM_COMP_NO_PATH", "hierarchy_path is required.");
+            if (string.IsNullOrEmpty(request.component_type))
+                return BuildError("EDITOR_CTRL_REM_COMP_NO_TYPE", "component_type is required.");
+
+            var go = GameObject.Find(request.hierarchy_path);
+            if (go == null)
+                return BuildError("EDITOR_CTRL_REM_COMP_NOT_FOUND",
+                    $"GameObject not found: {request.hierarchy_path}");
+
+            System.Type compType = ResolveComponentType(request.component_type);
+            if (compType == null)
+                return BuildError("EDITOR_CTRL_REM_COMP_TYPE_NOT_FOUND",
+                    $"Component type not found: {request.component_type}. " +
+                    "Short names (e.g. 'BoxCollider') and fully qualified names both work.");
+
+            var components = go.GetComponents(compType);
+            if (components.Length == 0)
+                return BuildError("EDITOR_CTRL_REM_COMP_NONE",
+                    $"No {request.component_type} component found on {request.hierarchy_path}");
+
+            Component target;
+            if (request.component_index == -1)
+            {
+                if (components.Length == 1)
+                {
+                    target = components[0];
+                }
+                else
+                {
+                    return BuildError("EDITOR_CTRL_REM_COMP_AMBIGUOUS",
+                        $"Found {components.Length} {request.component_type} components on {request.hierarchy_path}. " +
+                        $"Specify index (0-{components.Length - 1}) to select.",
+                        new EditorControlData { component_count = components.Length });
+                }
+            }
+            else
+            {
+                if (request.component_index < 0 || request.component_index >= components.Length)
+                    return BuildError("EDITOR_CTRL_REM_COMP_INDEX_OUT_OF_RANGE",
+                        $"index {request.component_index} out of range. " +
+                        $"{request.hierarchy_path} has {components.Length} {request.component_type} component(s) " +
+                        $"(valid: 0-{components.Length - 1}).",
+                        new EditorControlData { component_count = components.Length });
+                target = components[request.component_index];
+            }
+
+            if (target is Transform)
+                return BuildError("EDITOR_CTRL_REM_COMP_IS_TRANSFORM",
+                    "Cannot remove Transform — it is a required component.");
+
+            Undo.DestroyObjectImmediate(target);
+
+            var resp = BuildSuccess("EDITOR_CTRL_REM_COMP_OK",
+                $"Removed {compType.FullName} from {request.hierarchy_path}",
+                data: new EditorControlData
+                {
+                    selected_object = go.name,
+                    asset_path = compType.FullName,
+                    executed = true,
+                    read_only = false,
+                });
+            resp.diagnostics = new[] { new EditorControlDiagnostic
+            {
+                detail = "Runtime modification — save the scene (File > Save) to persist.",
+                evidence = "Undo.DestroyObjectImmediate"
             }};
             return resp;
         }

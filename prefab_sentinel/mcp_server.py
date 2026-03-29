@@ -1527,6 +1527,34 @@ def create_server(
         return send_action(action="editor_add_component", **kwargs)
 
     @server.tool()
+    def editor_remove_component(
+        hierarchy_path: str,
+        component_type: str,
+        index: int | None = None,
+    ) -> dict[str, Any]:
+        """Remove a component from a GameObject at runtime (Undo-able).
+
+        Type resolution: tries fully qualified name, then searches all assemblies
+        by simple name.
+
+        When multiple components of the same type exist, specify index to select
+        which one to remove.  If omitted and the type is ambiguous (count > 1),
+        the call fails with EDITOR_CTRL_REM_COMP_AMBIGUOUS.
+
+        Args:
+            hierarchy_path: Hierarchy path to the target GameObject.
+            component_type: Component type name (e.g. "BoxCollider").
+            index: 0-based index when multiple components of the same type exist.
+        """
+        kwargs: dict[str, Any] = {
+            "hierarchy_path": hierarchy_path,
+            "component_type": component_type,
+        }
+        if index is not None:
+            kwargs["component_index"] = index
+        return send_action(action="editor_remove_component", **kwargs)
+
+    @server.tool()
     def editor_create_udon_program_asset(
         script_path: str,
         output_path: str = "",

@@ -125,6 +125,7 @@ prefab-sentinel-mcp --transport streamable-http
 | `editor_batch_set_property` | 複数プロパティを1リクエストで一括設定 (Undo グループ) |
 | `editor_open_scene` | シーンを開く (single/additive) |
 | `editor_save_scene` | シーンを保存 |
+| `editor_remove_component` | ランタイムで GameObject からコンポーネントを削除（Undo 対応、同型複数時は index 必須） |
 | `editor_batch_add_component` | 複数オブジェクトにコンポーネントを一括追加 (Undo グループ、初期値対応) |
 | `editor_create_scene` | 新規空シーンを作成して保存 |
 | `deploy_bridge` | Unity プロジェクトの Bridge C# ファイルを自動更新 |
