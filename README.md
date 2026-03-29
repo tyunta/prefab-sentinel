@@ -71,7 +71,7 @@ prefab-sentinel-mcp --transport streamable-http
 
 | ツール | 説明 |
 |--------|------|
-| `activate_project` | プロジェクトスコープ設定 + キャッシュ warm（セッション開始時に呼ぶ） |
+| `activate_project` | プロジェクトスコープ設定 + キャッシュ warm（セッション開始時に呼ぶ）。`project_root` で Unity プロジェクトルートを明示指定可 |
 | `get_project_status` | セッション状態（キャッシュ件数、スコープ、watcher 動作状況）の表示 |
 | `get_unity_symbols` | アセットのシンボルツリー取得（GameObject/Component 階層、`expand_nested=true` で Nested Prefab 展開） |
 | `find_unity_symbol` | 人間可読パス（例: `CharacterBody/MeshRenderer`）でオブジェクト検索。`show_origin=true` で Variant チェーンのオリジン注釈付き |

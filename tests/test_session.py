@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import tempfile
 import unittest
 from collections.abc import Generator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from prefab_sentinel.session import ProjectSession
+from prefab_sentinel.bridge_constants import UNITY_PROJECT_PATH_ENV
+from prefab_sentinel.session import InvalidProjectRootError, ProjectSession
 from tests.yaml_helpers import (
     YAML_HEADER,
     make_gameobject,
@@ -493,6 +495,130 @@ class TestActivate(unittest.TestCase):
         self.assertIs(orch1, orch2)
         # build_script_name_map called only once
         mock_build.assert_called_once()
+
+    # -- project_root parameter tests --
+
+    @patch("prefab_sentinel.session.build_script_name_map")
+    @patch("prefab_sentinel.session.Phase1Orchestrator")
+    @patch("prefab_sentinel.session.resolve_scope_path")
+    def test_activate_explicit_project_root_overrides_existing(
+        self,
+        mock_resolve: MagicMock,
+        mock_orch: MagicMock,
+        mock_build: MagicMock,
+    ) -> None:
+        mock_build.return_value = {}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            assets = Path(tmpdir) / "Assets"
+            assets.mkdir()
+            mock_resolve.return_value = assets / "Scope"
+
+            session = ProjectSession(project_root=Path("/old"))
+            result = asyncio.run(
+                session.activate("Assets/Scope", project_root=tmpdir)
+            )
+
+            self.assertEqual(session.project_root, Path(tmpdir).resolve())
+            self.assertTrue(result["orchestrator_cached"])
+
+    @patch("prefab_sentinel.session.build_script_name_map")
+    @patch("prefab_sentinel.session.Phase1Orchestrator")
+    @patch("prefab_sentinel.session.resolve_scope_path")
+    @patch("prefab_sentinel.session.find_project_root")
+    def test_activate_env_var_fallback(
+        self,
+        mock_find: MagicMock,
+        mock_resolve: MagicMock,
+        mock_orch: MagicMock,
+        mock_build: MagicMock,
+    ) -> None:
+        mock_build.return_value = {}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            assets = Path(tmpdir) / "Assets"
+            assets.mkdir()
+            mock_resolve.return_value = assets / "Scope"
+
+            with patch.dict(os.environ, {UNITY_PROJECT_PATH_ENV: tmpdir}):
+                session = ProjectSession()
+                asyncio.run(session.activate("Assets/Scope"))
+
+            mock_find.assert_not_called()
+            self.assertEqual(session.project_root, Path(tmpdir).resolve())
+
+    def test_activate_env_var_invalid_path_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.dict(os.environ, {UNITY_PROJECT_PATH_ENV: tmpdir}):
+                session = ProjectSession()
+                with self.assertRaises(InvalidProjectRootError):
+                    asyncio.run(session.activate("Assets/Scope"))
+
+    def test_activate_explicit_root_invalid_path_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            session = ProjectSession()
+            with self.assertRaises(InvalidProjectRootError):
+                asyncio.run(
+                    session.activate("Assets/Scope", project_root=tmpdir)
+                )
+
+    @patch("prefab_sentinel.session.build_script_name_map")
+    @patch("prefab_sentinel.session.Phase1Orchestrator")
+    @patch("prefab_sentinel.session.resolve_scope_path")
+    @patch("prefab_sentinel.session.find_project_root")
+    def test_activate_auto_detect_when_no_root_specified(
+        self,
+        mock_find: MagicMock,
+        mock_resolve: MagicMock,
+        mock_orch: MagicMock,
+        mock_build: MagicMock,
+    ) -> None:
+        mock_find.return_value = Path("/unity")
+        mock_resolve.return_value = Path("/unity/Assets/Scope")
+        mock_build.return_value = {}
+
+        env_clean = {
+            k: v for k, v in os.environ.items()
+            if k != UNITY_PROJECT_PATH_ENV
+        }
+        with patch.dict(os.environ, env_clean, clear=True):
+            session = ProjectSession()
+            asyncio.run(session.activate("Assets/Scope"))
+
+        mock_find.assert_called_once()
+        self.assertEqual(session.project_root, Path("/unity"))
+
+    @patch("prefab_sentinel.session.build_script_name_map")
+    @patch("prefab_sentinel.session.Phase1Orchestrator")
+    @patch("prefab_sentinel.session.resolve_scope_path")
+    def test_activate_project_root_change_clears_cache(
+        self,
+        mock_resolve: MagicMock,
+        mock_orch: MagicMock,
+        mock_build: MagicMock,
+    ) -> None:
+        mock_build.return_value = {}
+        with (
+            tempfile.TemporaryDirectory() as dir1,
+            tempfile.TemporaryDirectory() as dir2,
+        ):
+            (Path(dir1) / "Assets").mkdir()
+            (Path(dir2) / "Assets").mkdir()
+            mock_resolve.side_effect = [
+                Path(dir1) / "Assets" / "Scope",
+                Path(dir2) / "Assets" / "Scope",
+            ]
+
+            session = ProjectSession()
+            asyncio.run(session.activate("Assets/Scope", project_root=dir1))
+
+            with patch.object(session, "invalidate_all") as mock_inv, \
+                 patch.object(session, "_stop_watcher") as mock_stop:
+                asyncio.run(
+                    session.activate("Assets/Scope", project_root=dir2)
+                )
+                mock_inv.assert_called_once()
+                mock_stop.assert_awaited_once()
+
+            self.assertEqual(session.project_root, Path(dir2).resolve())
 
 
 # ---------------------------------------------------------------------------

@@ -10,11 +10,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from prefab_sentinel.bridge_constants import UNITY_PROJECT_PATH_ENV
 from prefab_sentinel.editor_bridge import bridge_status
 from prefab_sentinel.orchestrator import Phase1Orchestrator
 from prefab_sentinel.symbol_tree import SymbolTree, build_script_name_map
@@ -25,9 +27,13 @@ from prefab_sentinel.unity_assets import (
 )
 from prefab_sentinel.wsl_compat import to_wsl_path
 
-__all__ = ["ProjectSession"]
+__all__ = ["InvalidProjectRootError", "ProjectSession"]
 
 logger = logging.getLogger(__name__)
+
+
+class InvalidProjectRootError(FileNotFoundError):
+    """Raised when a specified Unity project root lacks an Assets/ directory."""
 
 
 # ---------------------------------------------------------------------------
@@ -288,18 +294,55 @@ class ProjectSession:
     # Session management
     # ------------------------------------------------------------------
 
-    async def activate(self, scope: str) -> dict[str, Any]:
+    @staticmethod
+    def _resolve_and_validate_project_root(
+        raw_path: str, *, source_label: str = "",
+    ) -> Path:
+        """Resolve *raw_path* and verify it contains an ``Assets/`` directory.
+
+        Raises :class:`InvalidProjectRootError` when validation fails.
+        """
+        resolved = Path(to_wsl_path(raw_path)).resolve()
+        if not (resolved / "Assets").is_dir():
+            context = f" from {source_label}" if source_label else ""
+            msg = (
+                f"Invalid Unity project root{context}: {resolved} "
+                "(Assets/ directory not found)"
+            )
+            raise InvalidProjectRootError(msg)
+        return resolved
+
+    async def activate(self, scope: str, *, project_root: str | None = None) -> dict[str, Any]:
         """Set project scope, warm caches, and start watcher.
 
         If re-activated with a different scope, stale caches are cleared
         and the watcher is restarted on the new scope path.
 
+        Args:
+            scope: Path to the Assets subdirectory to work with.
+            project_root: Unity project root directory. Optional.
+                Priority: this argument > UNITYTOOL_UNITY_PROJECT_PATH env var
+                > auto-detect from scope path.
+
         Returns the session status dict.
         """
         scope_path = Path(to_wsl_path(scope))
 
-        if self._project_root is None:
-            self._project_root = find_project_root(scope_path)
+        if project_root is not None:
+            resolved_root = self._resolve_and_validate_project_root(project_root)
+            if self._project_root is not None and resolved_root != self._project_root:
+                self.invalidate_all()
+                await self._stop_watcher()
+                self._scope = None
+            self._project_root = resolved_root
+        elif self._project_root is None:
+            env_path = os.environ.get(UNITY_PROJECT_PATH_ENV, "").strip()
+            if env_path:
+                self._project_root = self._resolve_and_validate_project_root(
+                    env_path, source_label=UNITY_PROJECT_PATH_ENV,
+                )
+            else:
+                self._project_root = find_project_root(scope_path)
 
         new_scope = resolve_scope_path(scope, self._project_root)
 
