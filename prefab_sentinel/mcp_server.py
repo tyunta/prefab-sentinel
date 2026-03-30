@@ -50,7 +50,6 @@ logger = logging.getLogger(__name__)
 
 _KNOWLEDGE_URI_PREFIX = "resource://prefab-sentinel/knowledge/"
 _KNOWLEDGE_DIR = Path(__file__).parent.parent / "knowledge"
-_UPLOAD_HANDLER = "PrefabSentinel.VRCSDKUploadHandler.cs"
 
 
 def _extract_description(path: Path) -> str:
@@ -242,22 +241,18 @@ def create_server(
     @server.tool()
     def deploy_bridge(
         target_dir: str = "",
-        include_upload_handler: bool = False,
     ) -> dict[str, Any]:
         """Deploy or update Bridge C# files to the Unity project.
 
-        Copies Bridge C# files to the target directory. Source files are
-        read from _bridge_files/ (wheel install) or tools/unity/ (source
-        tree). Cleans up old Bridge files from the parent directory to
-        prevent CS0101 duplicate definition errors.
+        Copies Bridge C# and .asmdef files to the target directory. Source
+        files are read from _bridge_files/ (wheel install) or tools/unity/
+        (source tree). Cleans up old Bridge files from the parent directory
+        to prevent CS0101 duplicate definition errors.
         Triggers editor_refresh after copying to reload assets.
 
         Args:
             target_dir: Target directory in Unity project.
                 Default: {project_root}/Assets/Editor/PrefabSentinel/
-            include_upload_handler: Deploy VRCSDKUploadHandler.cs.
-                Default False — excluded because it requires specific
-                VRC SDK API versions that may not be present.
         """
         import shutil
         from pathlib import Path as _Path
@@ -353,26 +348,15 @@ def create_server(
 
         # Phase 3: Copy source files
         copied_files: list[str] = []
-        skipped_files: list[str] = []
 
-        for cs_file in sorted(plugin_tools.glob("*.cs")):
-            if cs_file.name == _UPLOAD_HANDLER and not include_upload_handler:
-                skipped_files.append(cs_file.name)
-                continue
-            dest = target_path / cs_file.name
-            shutil.copy2(cs_file, dest)
-            copied_files.append(cs_file.name)
+        for src_file in sorted(
+            list(plugin_tools.glob("*.cs")) + list(plugin_tools.glob("*.asmdef"))
+        ):
+            dest = target_path / src_file.name
+            shutil.copy2(src_file, dest)
+            copied_files.append(src_file.name)
 
         new_version = session.detect_bridge_version()
-
-        if skipped_files:
-            diagnostics.append({
-                "severity": "info",
-                "message": (
-                    f"Skipped {', '.join(skipped_files)} "
-                    "(optional, set include_upload_handler=true to deploy)"
-                ),
-            })
 
         # Trigger asset refresh (best-effort)
         with contextlib.suppress(Exception):
@@ -385,7 +369,6 @@ def create_server(
             "message": f"Deployed {len(copied_files)} files to {target_dir}",
             "data": {
                 "copied_files": copied_files,
-                "skipped_files": skipped_files,
                 "removed_old_files": removed_old_files,
                 "removed_stale_files": removed_stale_files,
                 "old_version": old_version,

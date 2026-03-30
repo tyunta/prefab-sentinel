@@ -2798,12 +2798,12 @@ class TestKnowledgeResources(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# deploy_bridge cleanup and exclusion
+# deploy_bridge cleanup and unconditional deploy
 # ---------------------------------------------------------------------------
 
 
 class TestDeployBridgeCleanup(unittest.TestCase):
-    """deploy_bridge old file cleanup and upload handler exclusion."""
+    """deploy_bridge old file cleanup and unconditional deploy."""
 
     def setUp(self) -> None:
         self._tmp = Path(tempfile.mkdtemp())
@@ -2863,41 +2863,21 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertEqual(result["data"]["removed_old_files"], [])
 
     @patch("prefab_sentinel.mcp_server.send_action")
-    def test_upload_handler_excluded_by_default(self, _mock: MagicMock) -> None:
-        """VRCSDKUploadHandler.cs is not copied when include_upload_handler=False."""
+    def test_upload_handler_always_deployed(self, _mock: MagicMock) -> None:
+        """VRCSDKUploadHandler.cs is always copied unconditionally."""
         server = create_server(project_root=str(self._project_root))
         _, result = _run(server.call_tool(
             "deploy_bridge",
             {"target_dir": str(self._target)},
-        ))
-
-        self.assertTrue(result["success"])
-        self.assertNotIn("PrefabSentinel.VRCSDKUploadHandler.cs", result["data"]["copied_files"])
-        self.assertIn("PrefabSentinel.VRCSDKUploadHandler.cs", result["data"]["skipped_files"])
-        self.assertFalse((self._target / "PrefabSentinel.VRCSDKUploadHandler.cs").exists())
-
-    @patch("prefab_sentinel.mcp_server.send_action")
-    def test_upload_handler_included_when_requested(self, _mock: MagicMock) -> None:
-        """VRCSDKUploadHandler.cs IS copied when include_upload_handler=True."""
-        server = create_server(project_root=str(self._project_root))
-        _, result = _run(server.call_tool(
-            "deploy_bridge",
-            {"target_dir": str(self._target), "include_upload_handler": True},
         ))
 
         self.assertTrue(result["success"])
         self.assertIn("PrefabSentinel.VRCSDKUploadHandler.cs", result["data"]["copied_files"])
-        self.assertEqual(result["data"]["skipped_files"], [])
         self.assertTrue((self._target / "PrefabSentinel.VRCSDKUploadHandler.cs").exists())
 
     @patch("prefab_sentinel.mcp_server.send_action")
-    def test_stale_upload_handler_removed_from_target(self, _mock: MagicMock) -> None:
-        """Previously deployed VRCSDKUploadHandler.cs is removed when excluded."""
-        stale_cs = self._target / "PrefabSentinel.VRCSDKUploadHandler.cs"
-        stale_meta = self._target / "PrefabSentinel.VRCSDKUploadHandler.cs.meta"
-        stale_cs.write_text("// old upload handler", encoding="utf-8")
-        stale_meta.write_text("guid: xyz", encoding="utf-8")
-
+    def test_asmdef_deployed(self, _mock: MagicMock) -> None:
+        """PrefabSentinel.Editor.asmdef is copied alongside C# files."""
         server = create_server(project_root=str(self._project_root))
         _, result = _run(server.call_tool(
             "deploy_bridge",
@@ -2905,10 +2885,20 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         ))
 
         self.assertTrue(result["success"])
-        self.assertFalse(stale_cs.exists())
-        self.assertFalse(stale_meta.exists())
-        self.assertIn("PrefabSentinel.VRCSDKUploadHandler.cs", result["data"]["removed_stale_files"])
-        self.assertIn("PrefabSentinel.VRCSDKUploadHandler.cs.meta", result["data"]["removed_stale_files"])
+        self.assertIn("PrefabSentinel.Editor.asmdef", result["data"]["copied_files"])
+        self.assertTrue((self._target / "PrefabSentinel.Editor.asmdef").exists())
+
+    @patch("prefab_sentinel.mcp_server.send_action")
+    def test_no_skipped_files_in_response(self, _mock: MagicMock) -> None:
+        """Response data must not contain skipped_files key."""
+        server = create_server(project_root=str(self._project_root))
+        _, result = _run(server.call_tool(
+            "deploy_bridge",
+            {"target_dir": str(self._target)},
+        ))
+
+        self.assertTrue(result["success"])
+        self.assertNotIn("skipped_files", result["data"])
 
     @patch("prefab_sentinel.mcp_server.send_action")
     def test_diagnostics_warn_on_old_file_removal(self, _mock: MagicMock) -> None:
@@ -2926,18 +2916,6 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertTrue(any("old Bridge" in d["message"] for d in warnings))
 
     @patch("prefab_sentinel.mcp_server.send_action")
-    def test_diagnostics_info_on_skip(self, _mock: MagicMock) -> None:
-        """Diagnostics include info when upload handler is skipped."""
-        server = create_server(project_root=str(self._project_root))
-        _, result = _run(server.call_tool(
-            "deploy_bridge",
-            {"target_dir": str(self._target)},
-        ))
-
-        infos = [d for d in result["diagnostics"] if d["severity"] == "info"]
-        self.assertTrue(any("VRCSDKUploadHandler" in d["message"] for d in infos))
-
-    @patch("prefab_sentinel.mcp_server.send_action")
     def test_clean_redeploy_removes_all_target_files(self, _mock: MagicMock) -> None:
         """All pre-existing files in target_dir are removed before deploy."""
         (self._target / "Dummy.cs").write_text("// dummy", encoding="utf-8")
@@ -2952,36 +2930,6 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertFalse((self._target / "Dummy.cs").exists())
         self.assertFalse((self._target / "Dummy.cs.meta").exists())
-
-    @patch("prefab_sentinel.mcp_server.send_action")
-    def test_full_then_excluded_redeploy_no_residue(self, _mock: MagicMock) -> None:
-        """Full deploy then excluded redeploy leaves no upload handler residue."""
-        server = create_server(project_root=str(self._project_root))
-
-        _, result1 = _run(server.call_tool(
-            "deploy_bridge",
-            {"target_dir": str(self._target), "include_upload_handler": True},
-        ))
-        self.assertTrue(result1["success"])
-        self.assertTrue(
-            (self._target / "PrefabSentinel.VRCSDKUploadHandler.cs").exists(),
-        )
-
-        _, result2 = _run(server.call_tool(
-            "deploy_bridge",
-            {"target_dir": str(self._target), "include_upload_handler": False},
-        ))
-        self.assertTrue(result2["success"])
-        self.assertFalse(
-            (self._target / "PrefabSentinel.VRCSDKUploadHandler.cs").exists(),
-        )
-        self.assertFalse(
-            (self._target / "PrefabSentinel.VRCSDKUploadHandler.cs.meta").exists(),
-        )
-        self.assertIn(
-            "PrefabSentinel.VRCSDKUploadHandler.cs",
-            result2["data"]["removed_stale_files"],
-        )
 
     @patch("prefab_sentinel.mcp_server.send_action")
     def test_clean_redeploy_preserves_subdirectories(self, _mock: MagicMock) -> None:

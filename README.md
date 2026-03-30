@@ -131,7 +131,7 @@ prefab-sentinel-mcp --transport streamable-http
 | `editor_remove_component` | ランタイムで GameObject からコンポーネントを削除（Undo 対応、同型複数時は index 必須） |
 | `editor_batch_add_component` | 複数オブジェクトにコンポーネントを一括追加 (Undo グループ、初期値対応) |
 | `editor_create_scene` | 新規空シーンを作成して保存 |
-| `deploy_bridge` | Unity プロジェクトの Bridge C# ファイルを自動更新 |
+| `deploy_bridge` | Unity プロジェクトの Bridge C# / .asmdef ファイルを自動更新（VRCSDKUploadHandler.cs は常時デプロイ、SDK バージョン互換は条件付きコンパイルで対応） |
 | `validate_all_wiring` | スコープ内の全 .prefab/.unity の null 参照を一括スキャン |
 
 **`editor_list_children` / `editor_list_roots` レスポンスエントリ例:**
