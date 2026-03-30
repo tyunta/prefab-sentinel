@@ -15,7 +15,7 @@ import json
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 try:
     from mcp.server.fastmcp import FastMCP
@@ -435,19 +435,21 @@ def create_server(
     @server.tool()
     def get_unity_symbols(
         asset_path: str,
-        depth: int = 1,
+        depth: int | None = None,
+        detail: Literal["summary", "fields", "full"] = "full",
         expand_nested: bool = False,
     ) -> dict[str, Any]:
         """Get the symbol tree (GameObject/Component hierarchy) of a Unity asset.
 
         Args:
             asset_path: Asset file path (.prefab, .unity, .asset).
-            depth: Expansion depth. 0=root GOs only, 1=GOs+components,
-                   2=components+properties.
+            depth: Max child levels to include. None=full tree, 0=root GOs only.
+            detail: Information richness per node. "summary"=kind+name,
+                    "fields"=+field name list, "full"=all info.
             expand_nested: Expand Nested Prefab instances into the tree.
         """
         text, resolved = _read_asset(asset_path)
-        include_props = depth >= 2
+        include_props = detail != "summary"
         guid_to_asset_path = None
         if expand_nested and session.project_root:
             from prefab_sentinel.unity_assets import collect_project_guid_index
@@ -465,7 +467,8 @@ def create_server(
         return {
             "asset_path": asset_path,
             "depth": depth,
-            "symbols": tree.to_overview(depth=depth),
+            "detail": detail,
+            "symbols": tree.to_overview(depth=depth, detail=detail),
         }
 
     @server.tool()
@@ -473,7 +476,7 @@ def create_server(
         asset_path: str,
         symbol_path: str,
         depth: int = 0,
-        include_properties: bool = False,
+        include_fields: bool = False,
         show_origin: bool = False,
     ) -> dict[str, Any]:
         """Find a Unity object by its human-readable symbol path.
@@ -488,14 +491,14 @@ def create_server(
             asset_path: Asset file path.
             symbol_path: Human-readable path to the target object.
             depth: How deep to expand below the matched node.
-            include_properties: Include serialized field values.
+            include_fields: Include all field values for matched symbols.
             show_origin: Annotate properties with Variant chain origin
-                (which Prefab set each value). Implies include_properties.
+                (which Prefab set each value). Implies include_fields.
         """
-        props = include_properties or show_origin
+        fields = include_fields or show_origin
         text, resolved = _read_asset(asset_path)
         tree = session.get_symbol_tree(
-            resolved, text, include_properties=props,
+            resolved, text, include_properties=fields,
         )
         results = tree.query(symbol_path, depth=depth)
         if results and show_origin:

@@ -73,27 +73,41 @@ class SymbolNode:
     properties: dict[str, str] = field(default_factory=dict)
     source_prefab: str = ""
 
-    def to_dict(self, depth_limit: int | None = None) -> dict[str, Any]:
-        """Serialize to a JSON-compatible dict with optional depth truncation."""
+    def to_dict(self, depth_limit: int | None = None, *, detail: str = "full") -> dict[str, Any]:
+        """Serialize to a JSON-compatible dict with optional depth truncation.
+
+        Args:
+            depth_limit: Max child levels to include. None = unlimited.
+            detail: Information richness per node.
+                ``"summary"`` = kind + name only.
+                ``"fields"``  = kind + name + sorted field_names.
+                ``"full"``    = all fields (backward-compatible default).
+        """
         result: dict[str, Any] = {
             "kind": self.kind.value,
             "name": self.name,
-            "file_id": self.file_id,
         }
-        if self.class_id:
-            result["class_id"] = self.class_id
-        if self.script_guid:
-            result["script_guid"] = self.script_guid
-        if self.script_name:
-            result["script_name"] = self.script_name
-        if self.properties:
-            result["properties"] = dict(self.properties)
-        if self.source_prefab:
-            result["source_prefab"] = self.source_prefab
+        if detail == "fields" and self.properties:
+            result["field_names"] = sorted(self.properties.keys())
+        if detail == "full":
+            result["file_id"] = self.file_id
+            if self.class_id:
+                result["class_id"] = self.class_id
+            if self.script_guid:
+                result["script_guid"] = self.script_guid
+            if self.script_name:
+                result["script_name"] = self.script_name
+            if self.properties:
+                result["properties"] = dict(self.properties)
+            if self.source_prefab:
+                result["source_prefab"] = self.source_prefab
         if depth_limit is None or depth_limit > 0:
             child_limit = None if depth_limit is None else depth_limit - 1
-            if self.children:
-                result["children"] = [c.to_dict(child_limit) for c in self.children]
+            children_to_serialize = self.children
+            if detail != "full":
+                children_to_serialize = [c for c in self.children if c.kind != SymbolKind.PROPERTY]
+            if children_to_serialize:
+                result["children"] = [c.to_dict(child_limit, detail=detail) for c in children_to_serialize]
         return result
 
 
@@ -470,27 +484,24 @@ class SymbolTree:
         self,
         symbol_path: str,
         depth: int = 0,
-        include_properties: bool = False,
     ) -> list[dict[str, Any]]:
         """Query the tree at a symbol path, returning serialized results.
 
         Args:
             symbol_path: Path to query (empty string for roots).
             depth: How many levels below the match to include.
-            include_properties: Include property values in output.
         """
         nodes = self.roots if not symbol_path else self.resolve(symbol_path)
-
         return [n.to_dict(depth_limit=depth) for n in nodes]
 
-    def to_overview(self, depth: int = 0) -> list[dict[str, Any]]:
+    def to_overview(self, depth: int | None = None, *, detail: str = "full") -> list[dict[str, Any]]:
         """Serialize the tree to a JSON-compatible overview.
 
         Args:
-            depth: 0 = root GOs only, 1 = GOs + components,
-                   2 = components + properties.
+            depth: Max child levels. None = unlimited (full tree).
+            detail: Information richness per node (summary/fields/full).
         """
-        return [root.to_dict(depth_limit=depth) for root in self.roots]
+        return [root.to_dict(depth_limit=depth, detail=detail) for root in self.roots]
 
 
 # ---------------------------------------------------------------------------

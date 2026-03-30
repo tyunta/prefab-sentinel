@@ -388,6 +388,222 @@ class TestSymbolTreeProperties(unittest.TestCase):
         self.assertEqual(mb_nodes[0].children, [])
 
 
+class TestSymbolNodeDetailSerialization(unittest.TestCase):
+    """SymbolNode.to_dict with detail parameter."""
+
+    def _build_component_node_with_properties(self) -> SymbolNode:
+        """Component node with properties and property children."""
+        prop_a = SymbolNode(
+            kind=SymbolKind.PROPERTY,
+            name="speed",
+            file_id="",
+            class_id="",
+            depth=2,
+            properties={"speed": "5.0"},
+        )
+        prop_b = SymbolNode(
+            kind=SymbolKind.PROPERTY,
+            name="target",
+            file_id="",
+            class_id="",
+            depth=2,
+            properties={"target": "{fileID: 0}"},
+        )
+        return SymbolNode(
+            kind=SymbolKind.COMPONENT,
+            name="MonoBehaviour(PlayerScript)",
+            file_id="300",
+            class_id="114",
+            script_guid="aaaa1111bbbb2222cccc3333dddd4444",
+            script_name="PlayerScript",
+            depth=1,
+            properties={"speed": "5.0", "target": "{fileID: 0}"},
+            children=[prop_a, prop_b],
+        )
+
+    def _build_go_with_component(self) -> SymbolNode:
+        """GO node with a component child that has properties."""
+        comp = self._build_component_node_with_properties()
+        return SymbolNode(
+            kind=SymbolKind.GAME_OBJECT,
+            name="Player",
+            file_id="100",
+            class_id="1",
+            depth=0,
+            children=[comp],
+        )
+
+    def test_detail_summary_returns_kind_and_name_only(self) -> None:
+        node = self._build_component_node_with_properties()
+        d = node.to_dict(detail="summary")
+        self.assertEqual(d["kind"], "component")
+        self.assertEqual(d["name"], "MonoBehaviour(PlayerScript)")
+        self.assertNotIn("file_id", d)
+        self.assertNotIn("class_id", d)
+        self.assertNotIn("script_guid", d)
+        self.assertNotIn("script_name", d)
+        self.assertNotIn("properties", d)
+        self.assertNotIn("field_names", d)
+
+    def test_detail_fields_returns_field_names(self) -> None:
+        node = self._build_component_node_with_properties()
+        d = node.to_dict(detail="fields")
+        self.assertEqual(d["kind"], "component")
+        self.assertEqual(d["name"], "MonoBehaviour(PlayerScript)")
+        self.assertEqual(d["field_names"], ["speed", "target"])
+        self.assertNotIn("file_id", d)
+        self.assertNotIn("class_id", d)
+        self.assertNotIn("script_guid", d)
+        self.assertNotIn("script_name", d)
+        self.assertNotIn("properties", d)
+
+    def test_detail_full_returns_all_fields(self) -> None:
+        node = self._build_component_node_with_properties()
+        d = node.to_dict(detail="full")
+        self.assertEqual(d["kind"], "component")
+        self.assertEqual(d["name"], "MonoBehaviour(PlayerScript)")
+        self.assertEqual(d["file_id"], "300")
+        self.assertEqual(d["class_id"], "114")
+        self.assertEqual(d["script_guid"], "aaaa1111bbbb2222cccc3333dddd4444")
+        self.assertEqual(d["script_name"], "PlayerScript")
+        self.assertIn("properties", d)
+        self.assertNotIn("field_names", d)
+
+    def test_default_detail_is_full(self) -> None:
+        node = self._build_component_node_with_properties()
+        d_default = node.to_dict()
+        d_full = node.to_dict(detail="full")
+        self.assertEqual(d_default, d_full)
+
+    def test_detail_summary_excludes_property_children(self) -> None:
+        node = self._build_component_node_with_properties()
+        d = node.to_dict(detail="summary")
+        children = d.get("children", [])
+        prop_children = [c for c in children if c.get("kind") == "property"]
+        self.assertEqual(prop_children, [])
+
+    def test_detail_fields_excludes_property_children(self) -> None:
+        node = self._build_component_node_with_properties()
+        d = node.to_dict(detail="fields")
+        children = d.get("children", [])
+        prop_children = [c for c in children if c.get("kind") == "property"]
+        self.assertEqual(prop_children, [])
+
+    def test_detail_full_includes_property_children(self) -> None:
+        node = self._build_component_node_with_properties()
+        d = node.to_dict(detail="full")
+        children = d.get("children", [])
+        prop_children = [c for c in children if c.get("kind") == "property"]
+        self.assertEqual(len(prop_children), 2)
+
+    def test_detail_propagates_to_children(self) -> None:
+        go = self._build_go_with_component()
+        d = go.to_dict(detail="summary")
+        comp_child = d["children"][0]
+        self.assertEqual(set(comp_child.keys()), {"kind", "name"})
+
+    def test_detail_fields_propagates_to_children(self) -> None:
+        go = self._build_go_with_component()
+        d = go.to_dict(detail="fields")
+        comp_child = d["children"][0]
+        self.assertIn("field_names", comp_child)
+        self.assertNotIn("properties", comp_child)
+
+    def test_detail_with_depth_limit(self) -> None:
+        go = self._build_go_with_component()
+        d = go.to_dict(depth_limit=0, detail="summary")
+        self.assertNotIn("children", d)
+
+    def test_go_node_summary_has_kind_and_name_only(self) -> None:
+        go = self._build_go_with_component()
+        d = go.to_dict(depth_limit=0, detail="summary")
+        self.assertEqual(d["kind"], "game_object")
+        self.assertEqual(d["name"], "Player")
+        self.assertNotIn("file_id", d)
+        self.assertNotIn("class_id", d)
+
+    def test_field_names_are_sorted(self) -> None:
+        node = self._build_component_node_with_properties()
+        d = node.to_dict(detail="fields")
+        self.assertEqual(d["field_names"], sorted(d["field_names"]))
+
+    def test_node_without_properties_has_empty_field_names(self) -> None:
+        node = SymbolNode(
+            kind=SymbolKind.COMPONENT,
+            name="Transform",
+            file_id="200",
+            class_id="4",
+            depth=1,
+        )
+        d = node.to_dict(detail="fields")
+        self.assertNotIn("field_names", d)
+
+
+class TestSymbolTreeToOverviewDetail(unittest.TestCase):
+    """SymbolTree.to_overview with detail and new depth defaults."""
+
+    def _build_tree_with_props(self) -> SymbolTree:
+        text = (
+            YAML_HEADER
+            + make_gameobject("100", "Root", ["200", "300"])
+            + make_transform("200", "100", children_file_ids=["500"])
+            + make_monobehaviour(
+                "300", "100",
+                fields={"speed": "{fileID: 0}", "health": "{fileID: 0}"},
+            )
+            + make_gameobject("400", "Child", ["500"])
+            + make_transform("500", "400", father_file_id="200")
+        )
+        return SymbolTree.build(text, "test.prefab", include_properties=True)
+
+    def test_to_overview_default_depth_none_returns_full_tree(self) -> None:
+        tree = self._build_tree_with_props()
+        overview = tree.to_overview()
+        root = overview[0]
+        self.assertIn("children", root)
+        go_children = [c for c in root["children"] if c.get("kind") == "game_object"]
+        self.assertGreater(len(go_children), 0)
+
+    def test_to_overview_with_summary(self) -> None:
+        tree = self._build_tree_with_props()
+        overview = tree.to_overview(depth=1, detail="summary")
+        root = overview[0]
+        comp_children = [c for c in root["children"] if c.get("kind") == "component"]
+        for comp in comp_children:
+            self.assertNotIn("file_id", comp)
+            self.assertNotIn("properties", comp)
+
+    def test_to_overview_with_fields(self) -> None:
+        tree = self._build_tree_with_props()
+        overview = tree.to_overview(depth=1, detail="fields")
+        root = overview[0]
+        mb_children = [c for c in root["children"] if c.get("kind") == "component" and "MonoBehaviour" in c.get("name", "")]
+        for mb in mb_children:
+            self.assertIn("field_names", mb)
+            self.assertNotIn("properties", mb)
+
+    def test_to_overview_depth_none_detail_full_is_default(self) -> None:
+        tree = self._build_tree_with_props()
+        overview_default = tree.to_overview()
+        overview_explicit = tree.to_overview(depth=None, detail="full")
+        self.assertEqual(overview_default, overview_explicit)
+
+
+class TestSymbolTreeQueryCleanup(unittest.TestCase):
+    """SymbolTree.query with dead include_properties parameter removed."""
+
+    def test_query_works_without_include_properties(self) -> None:
+        text = (
+            YAML_HEADER
+            + make_gameobject("100", "Root", ["200"])
+            + make_transform("200", "100")
+        )
+        tree = SymbolTree.build(text, "test.prefab")
+        result = tree.query("Root", depth=0)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["name"], "Root")
+
+
 class TestSymbolTreeToOverview(unittest.TestCase):
     """SymbolTree.to_overview at various depths."""
 

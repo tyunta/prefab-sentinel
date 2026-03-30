@@ -201,6 +201,175 @@ class TestSymbolTools(unittest.TestCase):
             ))
 
 
+class TestGetUnitySymbolsDetail(unittest.TestCase):
+    """Test get_unity_symbols with detail parameter."""
+
+    def setUp(self) -> None:
+        self.server = create_server()
+
+    def _write_prefab_with_mb(self, tmp_dir: Path) -> Path:
+        text = YAML_HEADER + "\n".join([
+            make_gameobject("100", "Player", ["200", "300"]),
+            make_transform("200", "100"),
+            make_monobehaviour(
+                "300", "100",
+                fields={"speed": "{fileID: 0}", "health": "{fileID: 0}"},
+            ),
+        ])
+        p = tmp_dir / "test.prefab"
+        p.write_text(text, encoding="utf-8")
+        return p
+
+    def test_detail_summary_returns_minimal_nodes(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            prefab = self._write_prefab_with_mb(Path(td))
+            _, result = _run(self.server.call_tool(
+                "get_unity_symbols",
+                {"asset_path": str(prefab), "depth": 1, "detail": "summary"},
+            ))
+            symbols = result["symbols"]
+            root = symbols[0]
+            for child in root.get("children", []):
+                self.assertNotIn("file_id", child)
+                self.assertNotIn("properties", child)
+                self.assertNotIn("field_names", child)
+
+    def test_detail_fields_returns_field_names(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            prefab = self._write_prefab_with_mb(Path(td))
+            _, result = _run(self.server.call_tool(
+                "get_unity_symbols",
+                {"asset_path": str(prefab), "depth": 1, "detail": "fields"},
+            ))
+            symbols = result["symbols"]
+            root = symbols[0]
+            mb_children = [
+                c for c in root.get("children", [])
+                if "MonoBehaviour" in c.get("name", "")
+            ]
+            self.assertGreater(len(mb_children), 0)
+            for mb in mb_children:
+                self.assertIn("field_names", mb)
+                self.assertNotIn("properties", mb)
+
+    def test_default_depth_none_returns_full_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            prefab = self._write_prefab_with_mb(Path(td))
+            _, result = _run(self.server.call_tool(
+                "get_unity_symbols",
+                {"asset_path": str(prefab)},
+            ))
+            symbols = result["symbols"]
+            root = symbols[0]
+            self.assertIn("children", root)
+
+    def test_explicit_depth_1_limits_children(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            prefab = self._write_prefab_with_mb(Path(td))
+            _, result = _run(self.server.call_tool(
+                "get_unity_symbols",
+                {"asset_path": str(prefab), "depth": 1},
+            ))
+            symbols = result["symbols"]
+            root = symbols[0]
+            self.assertIn("children", root)
+            for child in root["children"]:
+                self.assertNotIn("children", child)
+
+    def test_response_includes_detail_key(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            prefab = self._write_prefab_with_mb(Path(td))
+            _, result = _run(self.server.call_tool(
+                "get_unity_symbols",
+                {"asset_path": str(prefab), "detail": "summary"},
+            ))
+            self.assertEqual(result["detail"], "summary")
+
+    def test_response_detail_key_defaults_to_full(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            prefab = self._write_prefab_with_mb(Path(td))
+            _, result = _run(self.server.call_tool(
+                "get_unity_symbols",
+                {"asset_path": str(prefab)},
+            ))
+            self.assertEqual(result["detail"], "full")
+
+
+class TestFindUnitySymbolIncludeFields(unittest.TestCase):
+    """Test find_unity_symbol with include_fields (renamed from include_properties)."""
+
+    def setUp(self) -> None:
+        self.server = create_server()
+
+    def _write_prefab_with_mb(self, tmp_dir: Path) -> Path:
+        text = YAML_HEADER + "\n".join([
+            make_gameobject("100", "Player", ["200", "300"]),
+            make_transform("200", "100"),
+            make_monobehaviour(
+                "300", "100",
+                fields={"speed": "{fileID: 0}"},
+            ),
+        ])
+        p = tmp_dir / "test.prefab"
+        p.write_text(text, encoding="utf-8")
+        return p
+
+    def test_include_fields_false_default_no_properties(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            prefab = self._write_prefab_with_mb(Path(td))
+            _, result = _run(self.server.call_tool(
+                "find_unity_symbol",
+                {"asset_path": str(prefab), "symbol_path": "Player/MonoBehaviour"},
+            ))
+            match = result["matches"][0]
+            self.assertNotIn("properties", match)
+
+    def test_include_fields_true_has_properties(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            prefab = self._write_prefab_with_mb(Path(td))
+            _, result = _run(self.server.call_tool(
+                "find_unity_symbol",
+                {
+                    "asset_path": str(prefab),
+                    "symbol_path": "Player/MonoBehaviour",
+                    "include_fields": True,
+                },
+            ))
+            match = result["matches"][0]
+            self.assertIn("properties", match)
+
+    def test_show_origin_implies_include_fields(self) -> None:
+        text = YAML_HEADER + "\n".join([
+            make_gameobject("100", "Player", ["200", "300"]),
+            make_transform("200", "100"),
+            make_monobehaviour(
+                "300", "100",
+                fields={"ref": "{fileID: 100, guid: 00000000000000000000000000000000, type: 2}"},
+            ),
+        ])
+        server = create_server()
+        mock_resp = MagicMock()
+        mock_resp.success = False
+
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "test.prefab"
+            p.write_text(text, encoding="utf-8")
+            with patch("prefab_sentinel.session.Phase1Orchestrator") as mock_cls:
+                mock_orch = MagicMock()
+                mock_orch.prefab_variant.resolve_chain_values_with_origin.return_value = mock_resp
+                mock_cls.default.return_value = mock_orch
+                _, result = _run(server.call_tool(
+                    "find_unity_symbol",
+                    {
+                        "asset_path": str(p),
+                        "symbol_path": "Player/MonoBehaviour",
+                        "show_origin": True,
+                    },
+                ))
+            match = result["matches"][0]
+            self.assertIn("properties", match)
+
+
 class TestSymbolToolsWithMonoBehaviour(unittest.TestCase):
     """Test symbol tools with MonoBehaviour components."""
 
@@ -444,7 +613,7 @@ class TestFindUnitySymbolShowOrigin(unittest.TestCase):
                 {
                     "asset_path": str(p),
                     "symbol_path": "Player/MonoBehaviour",
-                    "include_properties": True,
+                    "include_fields": True,
                 },
             ))
 
