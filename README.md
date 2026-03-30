@@ -81,6 +81,7 @@ prefab-sentinel-mcp --transport streamable-http
 | `inspect_wiring` | MonoBehaviour フィールド配線の分析 |
 | `inspect_variant` | Prefab Variant の override チェーン分析 |
 | `set_property` | シンボルパスでコンポーネントのフィールド値を設定（dry-run/confirm ゲート付き） |
+| `copy_component_fields` | 同一型コンポーネント間でシリアライズフィールド値をコピー（cross-asset/same-asset、dry-run/confirm ゲート付き） |
 | `add_component` | シンボルパスで指定した GameObject にコンポーネントを追加（dry-run/confirm ゲート付き） |
 | `remove_component` | シンボルパスで指定したコンポーネントを削除（dry-run/confirm ゲート付き） |
 | `list_serialized_fields` | C# スクリプトのシリアライズ対象フィールド一覧（パス・クラス名・GUID 指定、`include_inherited` で基底クラス含む） |
@@ -1158,11 +1159,11 @@ before / after diff + validation steps の抜粋:
 - ノイズ判定に使えるよう、`top_missing_asset_guids` に missing GUID 上位を返す。
 - `ignore_asset_guids` パラメータで missing GUID を一時的に無視でき、集計は `ignored_missing_asset_occurrences` / `top_ignored_missing_asset_guids` で確認できる。
 - `find_referencing_assets` も同じ既定除外を適用し、`Library` など非本番スコープを走査しない。
-- 書き込み操作は `patch_apply`（confirm モード）、`set_property`、`add_component`、`remove_component`、`revert_overrides` の各 MCP ツールで利用可能。
+- 書き込み操作は `patch_apply`（confirm モード）、`set_property`、`copy_component_fields`、`add_component`、`remove_component`、`revert_overrides` の各 MCP ツールで利用可能。
 
 ### 17.8.1 エラーヒント ("Did you mean...?")
 
-- `SYMBOL_NOT_FOUND` エラー（`set_property`, `add_component`, `remove_component`）は `data.suggestions` に類似 symbol_path のリスト（最大 3 件）を含む。
+- `SYMBOL_NOT_FOUND` エラー（`set_property`, `copy_component_fields`, `add_component`, `remove_component`）は `data.suggestions` に類似 symbol_path のリスト（最大 3 件）を含む。
 - `MAT_PROP_NOT_FOUND` エラー（`inspect_material_asset` の書き込みモード）は `data.suggestions` に類似プロパティ名のリスト（最大 3 件）を含む。既存の `data.available_properties`（全プロパティ名リスト）も維持される。
 - `EDITOR_CTRL_PROPERTY_NOT_FOUND` エラー（`editor_get_material_property`, `editor_set_material_property`）は `data.suggestions` に類似シェーダープロパティ名のリスト（最大 3 件）を含む。
 - 候補なしの場合は `suggestions` は空配列 `[]`。
