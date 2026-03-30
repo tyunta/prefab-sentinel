@@ -19,6 +19,10 @@ namespace PrefabSentinel
         public const int ProtocolVersion = 1;
         public const string BridgeVersion = "0.5.143";
 
+        /// <summary>Actions that write their response file asynchronously (not on return).</summary>
+        public static readonly System.Collections.Generic.HashSet<string> AsyncActions =
+            new System.Collections.Generic.HashSet<string> { "vrcsdk_upload" };
+
         /// <summary>All action strings handled by this bridge.</summary>
         public static readonly HashSet<string> SupportedActions = new HashSet<string>
         {
@@ -447,7 +451,7 @@ namespace PrefabSentinel
                     response = HandleEditorCreateScene(request);
                     break;
                 case "vrcsdk_upload":
-                    response = TryHandleVrcsdkUpload(request);
+                    response = TryHandleVrcsdkUpload(request, responsePath);
                     break;
                 default:
                     response = BuildError(
@@ -456,7 +460,8 @@ namespace PrefabSentinel
                     break;
             }
 
-            WriteResponse(responsePath, response);
+            if (response != null)
+                WriteResponse(responsePath, response);
         }
 
         // ── Action Handlers ──
@@ -3344,7 +3349,7 @@ namespace PrefabSentinel
             return names;
         }
 
-        private static EditorControlResponse TryHandleVrcsdkUpload(EditorControlRequest request)
+        private static EditorControlResponse TryHandleVrcsdkUpload(EditorControlRequest request, string responsePath)
         {
             var handlerType = System.Type.GetType(
                 "PrefabSentinel.VRCSDKUploadHandler, Assembly-CSharp-Editor");
@@ -3352,14 +3357,25 @@ namespace PrefabSentinel
                 return BuildError("VRCSDK_NOT_AVAILABLE",
                     "VRCSDKUploadHandler not found. Deploy VRCSDKUploadHandler.cs to Assets/Editor/ " +
                     "or VRC SDK is not installed in this project.");
-            var method = handlerType.GetMethod("Handle",
+            var handleMethod = handlerType.GetMethod("Handle",
                 System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
-            if (method == null)
+            if (handleMethod == null)
                 return BuildError("VRCSDK_NOT_AVAILABLE",
                     "VRCSDKUploadHandler.Handle method not found. Check VRCSDKUploadHandler.cs version.");
             try
             {
-                return (EditorControlResponse)method.Invoke(null, new object[] { request });
+                var response = (EditorControlResponse)handleMethod.Invoke(null, new object[] { request });
+                if (response != null)
+                    return response;
+
+                // null means async path: invoke HandleAsync(request, responsePath)
+                var handleAsyncMethod = handlerType.GetMethod("HandleAsync",
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                if (handleAsyncMethod == null)
+                    return BuildError("VRCSDK_NOT_AVAILABLE",
+                        "VRCSDKUploadHandler.HandleAsync method not found. Check VRCSDKUploadHandler.cs version.");
+                handleAsyncMethod.Invoke(null, new object[] { request, responsePath });
+                return null;
             }
             catch (System.Reflection.TargetInvocationException ex)
             {
@@ -3368,7 +3384,7 @@ namespace PrefabSentinel
             }
         }
 
-        private static void WriteResponse(string responsePath, EditorControlResponse response)
+        internal static void WriteResponse(string responsePath, EditorControlResponse response)
         {
             try
             {

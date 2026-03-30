@@ -187,9 +187,13 @@ namespace PrefabSentinel
                 UnityPatchBridge.ApplyFromPaths(requestPath, responsePath);
             }
 
+            // Async actions write the response file later
+            bool isAsyncAction = isEditorControl
+                && UnityEditorControlBridge.AsyncActions.Contains(header.action);
+
             // Atomic write: the bridge methods write directly to responsePath.
             // If the response file doesn't exist at this point, something went wrong.
-            if (!File.Exists(responsePath))
+            if (!isAsyncAction && !File.Exists(responsePath))
             {
                 int pv = isEditorControl ? UnityEditorControlBridge.ProtocolVersion
                        : isRuntime ? UnityRuntimeValidationBridge.ProtocolVersion
