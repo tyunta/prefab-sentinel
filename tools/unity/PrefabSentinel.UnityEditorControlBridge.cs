@@ -70,6 +70,8 @@ namespace PrefabSentinel
             "editor_batch_add_component",
             "editor_remove_component",
             "editor_create_scene",
+            // Phase 8: Reflection
+            "editor_reflect",
         };
 
         // ── Request / Response DTOs ──
@@ -160,6 +162,13 @@ namespace PrefabSentinel
             public string batch_operations_json = string.Empty;
             public string properties_json = string.Empty;
             public string open_scene_mode = "single";
+
+            // Phase 8: Reflection
+            public string reflect_action = string.Empty;
+            public string query = string.Empty;
+            public string scope = "all";
+            public string class_name = string.Empty;
+            public string member_name = string.Empty;
         }
 
         [Serializable]
@@ -287,6 +296,9 @@ namespace PrefabSentinel
 
             // error hint suggestions
             public string[] suggestions = Array.Empty<string>();
+
+            // Phase 8: Reflection
+            public string reflect_result_json = string.Empty;
         }
 
         [Serializable]
@@ -452,6 +464,9 @@ namespace PrefabSentinel
                     break;
                 case "vrcsdk_upload":
                     response = TryHandleVrcsdkUpload(request, responsePath);
+                    break;
+                case "editor_reflect":
+                    response = EditorReflectHandler.Handle(request);
                     break;
                 default:
                     response = BuildError(

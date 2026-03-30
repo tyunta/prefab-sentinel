@@ -79,6 +79,8 @@ SUPPORTED_ACTIONS = frozenset(
         # Phase 7: UX Review improvements
         "editor_batch_add_component",
         "editor_create_scene",
+        # Phase 8: Reflection
+        "editor_reflect",
     }
 )
 
