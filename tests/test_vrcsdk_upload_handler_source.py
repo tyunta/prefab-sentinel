@@ -106,9 +106,9 @@ class TestCS0246BuildAndUploadWorldReflection(unittest.TestCase):
         self.assertIn('"BuildAndUpload"', world_method)
 
     def test_resolve_builder_helper_exists_with_reflection_pattern(self) -> None:
-        """ResolveBuilder helper must contain the shared reflection boilerplate."""
+        """ResolveBuilderAsync helper must contain the shared reflection boilerplate."""
         source = _read(UPLOAD_HANDLER)
-        helper = _extract_method(source, "ResolveBuilder")
+        helper = _extract_method(source, "ResolveBuilderAsync")
         for pattern_desc, pattern in [
             ("Type.GetType reflection", "System.Type.GetType("),
             ("GetMethods + Array.Find", "Array.Find("),
@@ -135,9 +135,9 @@ class TestCS0246BuildAndUploadWorldReflection(unittest.TestCase):
             ("World", world_method),
         ]:
             self.assertIn(
-                "ResolveBuilder(",
+                "ResolveBuilderAsync(",
                 method_body,
-                f"{method_name} method must call ResolveBuilder",
+                f"{method_name} method must call ResolveBuilderAsync",
             )
             self.assertIn(
                 "await",
@@ -176,6 +176,51 @@ class TestHandleAsyncFullProtection(unittest.TestCase):
         )
 
 
+class TestLoginPollingInHandleAsync(unittest.TestCase):
+    """Login polling must be in HandleAsync, not as a gate in Handle."""
+
+    def test_handle_should_not_check_login(self) -> None:
+        """Handle() method body must NOT contain APIUser.IsLoggedIn."""
+        source = _read(UPLOAD_HANDLER)
+        handle_body = _extract_method(source, "Handle")
+        self.assertNotIn(
+            "APIUser.IsLoggedIn",
+            handle_body,
+            "Handle() must not gate on APIUser.IsLoggedIn — login polling belongs in HandleAsync",
+        )
+
+    def test_handle_async_should_contain_login_polling(self) -> None:
+        """HandleAsync must poll APIUser.IsLoggedIn with Task.Delay and open SDK panel."""
+        source = _read(UPLOAD_HANDLER)
+        method_body = _extract_method(source, "HandleAsync")
+        self.assertIn("APIUser.IsLoggedIn", method_body)
+        self.assertIn("Task.Delay", method_body)
+        self.assertIn("ExecuteMenuItem", method_body)
+
+    def test_handle_async_login_timeout_returns_error(self) -> None:
+        """HandleAsync must return VRCSDK_NOT_LOGGED_IN on login poll timeout."""
+        source = _read(UPLOAD_HANDLER)
+        method_body = _extract_method(source, "HandleAsync")
+        self.assertIn("VRCSDK_NOT_LOGGED_IN", method_body)
+
+
+class TestResolveBuilderAsyncRetry(unittest.TestCase):
+    """ResolveBuilder must be async with retry polling."""
+
+    def test_resolve_builder_is_async(self) -> None:
+        """Method signature must contain 'async Task<object>'."""
+        source = _read(UPLOAD_HANDLER)
+        method_body = _extract_method(source, "ResolveBuilderAsync")
+        self.assertIn("async Task<object>", method_body)
+
+    def test_resolve_builder_contains_retry_polling(self) -> None:
+        """ResolveBuilderAsync must poll with Task.Delay and open SDK panel."""
+        source = _read(UPLOAD_HANDLER)
+        method_body = _extract_method(source, "ResolveBuilderAsync")
+        self.assertIn("Task.Delay", method_body)
+        self.assertIn("ExecuteMenuItem", method_body)
+
+
 class TestVRCApiTypeConstant(unittest.TestCase):
     """VRCApi assembly-qualified type name must be a single constant, not duplicated."""
 
@@ -193,6 +238,50 @@ class TestVRCApiTypeConstant(unittest.TestCase):
         literal = '"VRC.SDKBase.Editor.Api.VRCApi, VRC.SDKBase.Editor"'
         count = source.count(literal)
         self.assertEqual(count, 1, f"VRCApi type string literal appears {count} times, expected 1")
+
+
+class TestShowSdkPanelMenuItemConstant(unittest.TestCase):
+    """SDK panel menu path must be a single constant, not duplicated (AR-001)."""
+
+    def test_constant_declared(self) -> None:
+        """ShowSdkPanelMenuItem constant must be declared at class level."""
+        source = _read(UPLOAD_HANDLER)
+        self.assertIn(
+            'private const string ShowSdkPanelMenuItem = "VRChat SDK/Show Control Panel"',
+            source,
+        )
+
+    def test_menu_path_literal_not_duplicated(self) -> None:
+        """The literal menu path string must appear exactly once (in the constant declaration)."""
+        source = _read(UPLOAD_HANDLER)
+        literal = '"VRChat SDK/Show Control Panel"'
+        count = source.count(literal)
+        self.assertEqual(count, 1, f"SDK panel menu path literal appears {count} times, expected 1")
+
+
+class TestLoginPollingInsideTryCatch(unittest.TestCase):
+    """Login polling must be inside the outermost try-catch of HandleAsync (AR-002)."""
+
+    def test_login_polling_inside_try_block(self) -> None:
+        """APIUser.IsLoggedIn check must appear after 'try {' in HandleAsync."""
+        source = _read(UPLOAD_HANDLER)
+        method_body = _extract_method(source, "HandleAsync")
+        try_pos = method_body.find("try")
+        login_pos = method_body.find("APIUser.IsLoggedIn")
+        self.assertGreater(try_pos, 0, "try block not found in HandleAsync")
+        self.assertGreater(login_pos, try_pos, "Login polling must be inside the try block")
+
+    def test_no_login_check_before_try(self) -> None:
+        """No APIUser.IsLoggedIn reference should appear before the first 'try' in HandleAsync."""
+        source = _read(UPLOAD_HANDLER)
+        method_body = _extract_method(source, "HandleAsync")
+        try_pos = method_body.find("try")
+        before_try = method_body[:try_pos]
+        self.assertNotIn(
+            "APIUser.IsLoggedIn",
+            before_try,
+            "Login polling must not appear before the outermost try block",
+        )
 
 
 def _extract_method(source: str, method_name: str) -> str:

@@ -23,6 +23,7 @@ namespace PrefabSentinel
     public static class VRCSDKUploadHandler
     {
         private const string VRCApiTypeName = "VRC.SDKBase.Editor.Api.VRCApi, VRC.SDKBase.Editor";
+        private const string ShowSdkPanelMenuItem = "VRChat SDK/Show Control Panel";
         public static EditorControlResponse Handle(EditorControlRequest request)
         {
             // --- Input validation ---
@@ -35,11 +36,6 @@ namespace PrefabSentinel
                 return BuildError("VRCSDK_ASSET_NOT_FOUND", "asset_path is required.");
             if (string.IsNullOrEmpty(request.blueprint_id))
                 return BuildError("VRCSDK_MISSING_BLUEPRINT_ID", "blueprint_id is required (existing asset update only).");
-
-            // --- Login check ---
-            if (!APIUser.IsLoggedIn)
-                return BuildError("VRCSDK_NOT_LOGGED_IN",
-                    "VRC SDK not logged in. Log in via VRChat SDK control panel.");
 
             // --- Asset validation ---
             if (request.target_type == "avatar")
@@ -106,6 +102,23 @@ namespace PrefabSentinel
 
             try
             {
+                if (!APIUser.IsLoggedIn)
+                {
+                    EditorApplication.ExecuteMenuItem(ShowSdkPanelMenuItem);
+                    const int loginPollIntervalMs = 100;
+                    const int loginPollMaxIterations = 300; // 30 seconds total
+                    for (int i = 0; i < loginPollMaxIterations; i++)
+                    {
+                        await Task.Delay(loginPollIntervalMs);
+                        if (APIUser.IsLoggedIn) break;
+                    }
+                    if (!APIUser.IsLoggedIn)
+                    {
+                        WriteResponse(responsePath, BuildError("VRCSDK_NOT_LOGGED_IN",
+                            "Timed out waiting for VRC SDK login (30s). Log in via the VRChat SDK control panel."));
+                        return;
+                    }
+                }
                 try
                 {
                     for (int i = 0; i < platforms.Length; i++)
@@ -198,7 +211,7 @@ namespace PrefabSentinel
             }
         }
 
-        private static object ResolveBuilder(string assemblyQualifiedTypeName, string sdkDisplayName)
+        private static async Task<object> ResolveBuilderAsync(string assemblyQualifiedTypeName, string sdkDisplayName)
         {
             var builderType = System.Type.GetType(assemblyQualifiedTypeName);
             if (builderType == null)
@@ -215,15 +228,27 @@ namespace PrefabSentinel
             var args = new object[] { null };
             bool success = (bool)genericMethod.Invoke(null, args);
             if (!success || args[0] == null)
+            {
+                EditorApplication.ExecuteMenuItem(ShowSdkPanelMenuItem);
+                const int builderPollIntervalMs = 100;
+                const int builderPollMaxIterations = 50; // 5 seconds total
+                for (int i = 0; i < builderPollMaxIterations; i++)
+                {
+                    await Task.Delay(builderPollIntervalMs);
+                    args[0] = null;
+                    success = (bool)genericMethod.Invoke(null, args);
+                    if (success && args[0] != null) return args[0];
+                }
                 throw new InvalidOperationException(
-                    $"Failed to get builder for {sdkDisplayName}. Open VRChat SDK panel first.");
+                    $"Timed out waiting for builder for {sdkDisplayName} (5s). Open VRChat SDK panel first.");
+            }
 
             return args[0];
         }
 
         private static async Task BuildAndUploadAvatarAsync(EditorControlRequest request)
         {
-            var builder = ResolveBuilder(
+            var builder = await ResolveBuilderAsync(
                 "VRC.SDK3A.Editor.IVRCSdkAvatarBuilderApi, VRC.SDK3A.Editor",
                 "Avatar SDK (VRC.SDK3A.Editor)");
 
@@ -252,7 +277,7 @@ namespace PrefabSentinel
 
         private static async Task BuildAndUploadWorldAsync(EditorControlRequest request)
         {
-            var builder = ResolveBuilder(
+            var builder = await ResolveBuilderAsync(
                 "VRC.SDK3.Editor.IVRCSdkWorldBuilderApi, VRC.SDK3.Editor",
                 "World SDK (VRC.SDK3.Editor)");
 

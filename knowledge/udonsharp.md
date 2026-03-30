@@ -1,7 +1,7 @@
 ---
 tool: udonsharp
 version_tested: "VRC SDK 3.7+ / UdonSharp 1.x"
-last_updated: 2026-03-27
+last_updated: 2026-03-29
 confidence: high
 ---
 
@@ -119,6 +119,25 @@ C# (.cs) → UdonSharp Compiler → Udon Assembly → Udon VM bytecode
 | Pickup | `OnPickup()`, `OnDrop()`, `OnPickupUseDown/Up()` |
 | Station | `OnStationEntered/Exited(VRCPlayerApi)` |
 | Collision | `OnPlayerTriggerEnter/Stay/Exit(VRCPlayerApi)` |
+
+### エリア判定パターン
+
+`OnPlayerTriggerEnter/Exit` はトリガーコライダーと **同一 GameObject** 上の UdonBehaviour でのみ発火する。任意の Collider でエリア判定したい場合は `Collider.ClosestPoint` による位置ベース判定を使う。
+
+```csharp
+// 任意の Collider（別 GO でも可）でプレイヤーの内外判定
+var pos = Networking.LocalPlayer.GetPosition();
+bool inside = Vector3.Distance(pos, areaCollider.ClosestPoint(pos)) < 0.01f;
+```
+
+| 方式 | 制約 | 用途 |
+|------|------|------|
+| `OnPlayerTriggerEnter/Exit` | 同一 GO 必須、isTrigger 必須 | コライダーと UdonBehaviour が同居できる場合 |
+| `ClosestPoint` ポーリング | 任意 GO、任意 Collider 形状 | エリアコライダーを別オブジェクトに分離したい場合 |
+
+- `ClosestPoint` は isTrigger の有無に関わらず動作するが、プレイヤーが通過できるよう isTrigger=true が必要
+- ポーリング間隔は用途に応じて調整（60秒クリアなら1秒間隔で十分）
+- ボタン押下時に即判定して初期状態を正しくセットする
 
 ### コンポーネント間通信パターン
 - 型付き参照で直接メソッド呼び出し: `controller._PressA()`
