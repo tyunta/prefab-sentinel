@@ -88,6 +88,8 @@ class TestToolRegistration(unittest.TestCase):
             "editor_batch_set_material_property",
             "editor_open_scene", "editor_save_scene",
             "editor_batch_add_component", "editor_create_scene",
+            # Reflection tool
+            "editor_reflect",
             # Infrastructure tools
             "deploy_bridge",
             # Inspection + orchestrator tools
@@ -102,7 +104,7 @@ class TestToolRegistration(unittest.TestCase):
     def test_tool_count(self) -> None:
         server = create_server()
         tools = _run(server.list_tools())
-        self.assertEqual(66, len(tools))
+        self.assertEqual(67, len(tools))
 
 
 class TestSymbolTools(unittest.TestCase):

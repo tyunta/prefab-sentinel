@@ -1996,6 +1996,101 @@ def create_server(
         )
 
     # ------------------------------------------------------------------
+    # Reflection tool (editor_reflect)
+    # ------------------------------------------------------------------
+
+    _valid_reflect_actions = frozenset({"search", "get_type", "get_member"})
+    _valid_reflect_scopes = frozenset({"unity", "packages", "project", "all"})
+
+    def _reflect_error(code: str, message: str) -> dict[str, Any]:
+        return {
+            "success": False,
+            "severity": "error",
+            "code": code,
+            "message": message,
+            "data": {},
+            "diagnostics": [],
+        }
+
+    @server.tool()
+    def editor_reflect(
+        action: str,
+        class_name: str = "",
+        member_name: str = "",
+        query: str = "",
+        scope: str = "all",
+    ) -> dict[str, Any]:
+        """Inspect Unity C# APIs via runtime reflection.
+
+        Three actions:
+        - search: Find types by name. Returns ranked matches (exact > starts_with > contains), max 25.
+        - get_type: List members (methods/properties/fields/events), base class, interfaces, extensions.
+        - get_member: Detailed info for a specific member (signature, overloads, type, etc.).
+
+        Args:
+            action: "search", "get_type", or "get_member".
+            class_name: Type name (required for get_type, get_member). Short or fully qualified.
+            member_name: Member name (required for get_member).
+            query: Search query string (required for search).
+            scope: Assembly scope filter for search: "unity", "packages", "project", or "all".
+        """
+        if action not in _valid_reflect_actions:
+            return _reflect_error(
+                "EDITOR_REFLECT_UNKNOWN_ACTION",
+                f"Unknown action: '{action}'. Supported: search, get_type, get_member.",
+            )
+
+        if scope not in _valid_reflect_scopes:
+            return _reflect_error(
+                "EDITOR_REFLECT_INVALID_SCOPE",
+                f"Invalid scope: '{scope}'. Supported: unity, packages, project, all.",
+            )
+
+        if action == "search" and not query:
+            return _reflect_error(
+                "EDITOR_REFLECT_MISSING_PARAM",
+                "'query' is required for search.",
+            )
+
+        if action in ("get_type", "get_member") and not class_name:
+            return _reflect_error(
+                "EDITOR_REFLECT_MISSING_PARAM",
+                "'class_name' is required for get_type/get_member.",
+            )
+
+        if action == "get_member" and not member_name:
+            return _reflect_error(
+                "EDITOR_REFLECT_MISSING_PARAM",
+                "'member_name' is required for get_member.",
+            )
+
+        result = send_action(
+            action="editor_reflect",
+            reflect_action=action,
+            query=query,
+            scope=scope,
+            class_name=class_name,
+            member_name=member_name,
+        )
+
+        if not result.get("success"):
+            return result
+
+        data = result.setdefault("data", {})
+        if isinstance(data, dict):
+            raw_json = data.pop("reflect_result_json", "")
+            if raw_json:
+                try:
+                    data.update(json.loads(raw_json))
+                except json.JSONDecodeError as exc:
+                    return _reflect_error(
+                        "EDITOR_REFLECT_PARSE",
+                        f"Failed to parse reflect_result_json: {exc}",
+                    )
+
+        return result
+
+    # ------------------------------------------------------------------
     # Inspection tools (orchestrator-backed)
     # ------------------------------------------------------------------
 

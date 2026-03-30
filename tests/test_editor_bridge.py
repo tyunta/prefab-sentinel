@@ -207,6 +207,7 @@ class TestSupportedActions(unittest.TestCase):
             "editor_save_scene",
             "editor_batch_add_component",
             "editor_create_scene",
+            "editor_reflect",
         }
         self.assertEqual(expected, SUPPORTED_ACTIONS)
 
