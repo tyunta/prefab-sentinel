@@ -29,7 +29,7 @@ class TestClassNamingConvention(unittest.TestCase):
         self.assertEqual(
             violations,
             [],
-            f"Classes with underscores violate N801:\n" + "\n".join(violations),
+            "Classes with underscores violate N801:\n" + "\n".join(violations),
         )
 
     def test_expected_class_names_exist(self) -> None:

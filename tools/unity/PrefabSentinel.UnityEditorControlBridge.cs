@@ -17,7 +17,7 @@ namespace PrefabSentinel
     public static class UnityEditorControlBridge
     {
         public const int ProtocolVersion = 1;
-        public const string BridgeVersion = "0.5.142";
+        public const string BridgeVersion = "0.5.143";
 
         /// <summary>All action strings handled by this bridge.</summary>
         public static readonly HashSet<string> SupportedActions = new HashSet<string>
@@ -59,10 +59,12 @@ namespace PrefabSentinel
             "editor_create_primitive",
             "editor_batch_create",
             "editor_batch_set_property",
+            "editor_batch_set_material_property",
             "editor_open_scene",
             "editor_save_scene",
             // Phase 7: UX Review improvements
             "editor_batch_add_component",
+            "editor_remove_component",
             "editor_create_scene",
         };
 
@@ -141,6 +143,7 @@ namespace PrefabSentinel
             // Phase 4: Rename + AddComponent + Udon
             public string new_name = string.Empty;
             public string component_type = string.Empty;
+            public int component_index = -1;  // -1 = unspecified
 
             // Phase 5: SetProperty + SaveAsPrefab
             public string object_reference = string.Empty;
@@ -180,6 +183,8 @@ namespace PrefabSentinel
             public string path = string.Empty;
             public int child_count = 0;
             public int depth = 0;
+            public bool active = true;
+            public string tag = "Untagged";
         }
 
         [Serializable]
@@ -228,6 +233,7 @@ namespace PrefabSentinel
             public string deleted_object = string.Empty;
             public int deleted_child_count = 0;
             public int total_entries = 0;
+            public int component_count = 0;
             public ConsoleLogEntry[] entries = Array.Empty<ConsoleLogEntry>();
             public ChildEntry[] children = Array.Empty<ChildEntry>();
             public MaterialSlotEntry[] material_slots = Array.Empty<MaterialSlotEntry>();
@@ -422,6 +428,9 @@ namespace PrefabSentinel
                 case "editor_batch_set_property":
                     response = HandleEditorBatchSetProperty(request);
                     break;
+                case "editor_batch_set_material_property":
+                    response = HandleEditorBatchSetMaterialProperty(request);
+                    break;
                 case "editor_open_scene":
                     response = HandleEditorOpenScene(request);
                     break;
@@ -430,6 +439,9 @@ namespace PrefabSentinel
                     break;
                 case "editor_batch_add_component":
                     response = HandleEditorBatchAddComponent(request);
+                    break;
+                case "editor_remove_component":
+                    response = HandleEditorRemoveComponent(request);
                     break;
                 case "editor_create_scene":
                     response = HandleEditorCreateScene(request);
@@ -1184,7 +1196,9 @@ namespace PrefabSentinel
                             name = root.name,
                             path = "/" + root.name,
                             child_count = root.transform.childCount,
-                            depth = 0
+                            depth = 0,
+                            active = root.activeSelf,
+                            tag = root.tag
                         }},
                         total_entries = 1,
                         read_only = true,
@@ -1208,7 +1222,9 @@ namespace PrefabSentinel
                     name = rootObjects[i].name,
                     path = "/" + rootObjects[i].name,
                     child_count = rootObjects[i].transform.childCount,
-                    depth = 0
+                    depth = 0,
+                    active = rootObjects[i].activeSelf,
+                    tag = rootObjects[i].tag
                 });
             }
 
@@ -1355,119 +1371,12 @@ namespace PrefabSentinel
                 return BuildError("EDITOR_CTRL_SHADER_NULL",
                     $"Material at index {request.material_index} has no shader assigned.");
 
-            // Find property in shader
-            int propIdx = shader.FindPropertyIndex(request.property_name);
-            if (propIdx < 0)
-                return BuildError("EDITOR_CTRL_PROPERTY_NOT_FOUND",
-                    $"Property '{request.property_name}' not found on shader '{shader.name}'.",
-                    new EditorControlData
-                    {
-                        suggestions = SuggestSimilar(request.property_name, CollectShaderPropertyNames(shader)),
-                    });
-
-            var propType = shader.GetPropertyType(propIdx);
-            string val = request.property_value;
-
             Undo.RecordObject(mat, $"Set {request.property_name}");
 
-            try
-            {
-                switch (propType)
-                {
-                    case UnityEngine.Rendering.ShaderPropertyType.Float:
-                    case UnityEngine.Rendering.ShaderPropertyType.Range:
-                        mat.SetFloat(request.property_name, float.Parse(val, System.Globalization.CultureInfo.InvariantCulture));
-                        break;
+            var applyError = ApplyMaterialPropertyValue(mat, request.property_name, request.property_value);
+            if (applyError != null) return applyError;
 
-                    case UnityEngine.Rendering.ShaderPropertyType.Int:
-                        mat.SetInteger(request.property_name, int.Parse(val, System.Globalization.CultureInfo.InvariantCulture));
-                        break;
-
-                    case UnityEngine.Rendering.ShaderPropertyType.Color:
-                    {
-                        // Parse "[r, g, b, a]"
-                        var trimmed = val.Trim('[', ']');
-                        var parts = trimmed.Split(',');
-                        if (parts.Length != 4)
-                            return BuildError("EDITOR_CTRL_PROPERTY_TYPE_MISMATCH",
-                                $"Color requires [r,g,b,a], got {parts.Length} components.");
-                        mat.SetColor(request.property_name, new Color(
-                            float.Parse(parts[0].Trim(), System.Globalization.CultureInfo.InvariantCulture),
-                            float.Parse(parts[1].Trim(), System.Globalization.CultureInfo.InvariantCulture),
-                            float.Parse(parts[2].Trim(), System.Globalization.CultureInfo.InvariantCulture),
-                            float.Parse(parts[3].Trim(), System.Globalization.CultureInfo.InvariantCulture)));
-                        break;
-                    }
-
-                    case UnityEngine.Rendering.ShaderPropertyType.Vector:
-                    {
-                        var trimmed = val.Trim('[', ']');
-                        var parts = trimmed.Split(',');
-                        if (parts.Length != 4)
-                            return BuildError("EDITOR_CTRL_PROPERTY_TYPE_MISMATCH",
-                                $"Vector requires [x,y,z,w], got {parts.Length} components.");
-                        mat.SetVector(request.property_name, new Vector4(
-                            float.Parse(parts[0].Trim(), System.Globalization.CultureInfo.InvariantCulture),
-                            float.Parse(parts[1].Trim(), System.Globalization.CultureInfo.InvariantCulture),
-                            float.Parse(parts[2].Trim(), System.Globalization.CultureInfo.InvariantCulture),
-                            float.Parse(parts[3].Trim(), System.Globalization.CultureInfo.InvariantCulture)));
-                        break;
-                    }
-
-                    case UnityEngine.Rendering.ShaderPropertyType.Texture:
-                    {
-                        if (string.IsNullOrEmpty(val))
-                        {
-                            mat.SetTexture(request.property_name, null);
-                        }
-                        else if (val.StartsWith("guid:"))
-                        {
-                            string guid = val.Substring(5);
-                            string texPath = AssetDatabase.GUIDToAssetPath(guid);
-                            if (string.IsNullOrEmpty(texPath))
-                                return BuildError("EDITOR_CTRL_PROPERTY_TYPE_MISMATCH",
-                                    $"Texture GUID not found: {guid}");
-                            var tex = AssetDatabase.LoadAssetAtPath<Texture>(texPath);
-                            if (tex == null)
-                            {
-                                if (texPath.EndsWith(".mat"))
-                                    return BuildError("EDITOR_CTRL_SET_MAT_PROP_WRONG_GUID",
-                                        $"The specified GUID points to a material asset '{texPath}'. " +
-                                        "Please specify a texture GUID instead.");
-                                return BuildError("EDITOR_CTRL_PROPERTY_TYPE_MISMATCH",
-                                    $"Failed to load texture from GUID '{guid}' (resolved to '{texPath}').");
-                            }
-                            mat.SetTexture(request.property_name, tex);
-                        }
-                        else if (val.StartsWith("path:"))
-                        {
-                            string texPath = val.Substring(5);
-                            var tex = AssetDatabase.LoadAssetAtPath<Texture>(texPath);
-                            if (tex == null)
-                                return BuildError("EDITOR_CTRL_PROPERTY_TYPE_MISMATCH",
-                                    $"Texture not found at path: {texPath}");
-                            mat.SetTexture(request.property_name, tex);
-                        }
-                        else
-                        {
-                            return BuildError("EDITOR_CTRL_PROPERTY_TYPE_MISMATCH",
-                                "Texture value must be 'guid:<hex>', 'path:<asset_path>', or empty string for null.");
-                        }
-                        break;
-                    }
-
-                    default:
-                        return BuildError("EDITOR_CTRL_PROPERTY_TYPE_MISMATCH",
-                            $"Unsupported property type: {propType}");
-                }
-            }
-            catch (FormatException ex)
-            {
-                return BuildError("EDITOR_CTRL_PROPERTY_TYPE_MISMATCH",
-                    $"Failed to parse value '{val}' for {propType}: {ex.Message}");
-            }
-
-            // Read back the value to confirm
+            var propType = shader.GetPropertyType(shader.FindPropertyIndex(request.property_name));
             string readBack;
             switch (propType)
             {
@@ -1517,6 +1426,126 @@ namespace PrefabSentinel
             return resp;
         }
 
+        /// <summary>
+        /// Apply a single shader property value to a material.
+        /// Returns null on success, or an error response on failure.
+        /// The caller is responsible for Undo.RecordObject before calling this method.
+        /// </summary>
+        private static EditorControlResponse ApplyMaterialPropertyValue(
+            Material mat, string propertyName, string propertyValue)
+        {
+            var shader = mat.shader;
+            int propIdx = shader.FindPropertyIndex(propertyName);
+            if (propIdx < 0)
+                return BuildError("EDITOR_CTRL_PROPERTY_NOT_FOUND",
+                    $"Property '{propertyName}' not found on shader '{shader.name}'.",
+                    new EditorControlData
+                    {
+                        suggestions = SuggestSimilar(propertyName, CollectShaderPropertyNames(shader)),
+                    });
+
+            var propType = shader.GetPropertyType(propIdx);
+            string val = propertyValue;
+
+            try
+            {
+                switch (propType)
+                {
+                    case UnityEngine.Rendering.ShaderPropertyType.Float:
+                    case UnityEngine.Rendering.ShaderPropertyType.Range:
+                        mat.SetFloat(propertyName, float.Parse(val, System.Globalization.CultureInfo.InvariantCulture));
+                        break;
+
+                    case UnityEngine.Rendering.ShaderPropertyType.Int:
+                        mat.SetInteger(propertyName, int.Parse(val, System.Globalization.CultureInfo.InvariantCulture));
+                        break;
+
+                    case UnityEngine.Rendering.ShaderPropertyType.Color:
+                    {
+                        var trimmed = val.Trim('[', ']');
+                        var parts = trimmed.Split(',');
+                        if (parts.Length != 4)
+                            return BuildError("EDITOR_CTRL_PROPERTY_TYPE_MISMATCH",
+                                $"Color requires [r,g,b,a], got {parts.Length} components.");
+                        mat.SetColor(propertyName, new Color(
+                            float.Parse(parts[0].Trim(), System.Globalization.CultureInfo.InvariantCulture),
+                            float.Parse(parts[1].Trim(), System.Globalization.CultureInfo.InvariantCulture),
+                            float.Parse(parts[2].Trim(), System.Globalization.CultureInfo.InvariantCulture),
+                            float.Parse(parts[3].Trim(), System.Globalization.CultureInfo.InvariantCulture)));
+                        break;
+                    }
+
+                    case UnityEngine.Rendering.ShaderPropertyType.Vector:
+                    {
+                        var trimmed = val.Trim('[', ']');
+                        var parts = trimmed.Split(',');
+                        if (parts.Length != 4)
+                            return BuildError("EDITOR_CTRL_PROPERTY_TYPE_MISMATCH",
+                                $"Vector requires [x,y,z,w], got {parts.Length} components.");
+                        mat.SetVector(propertyName, new Vector4(
+                            float.Parse(parts[0].Trim(), System.Globalization.CultureInfo.InvariantCulture),
+                            float.Parse(parts[1].Trim(), System.Globalization.CultureInfo.InvariantCulture),
+                            float.Parse(parts[2].Trim(), System.Globalization.CultureInfo.InvariantCulture),
+                            float.Parse(parts[3].Trim(), System.Globalization.CultureInfo.InvariantCulture)));
+                        break;
+                    }
+
+                    case UnityEngine.Rendering.ShaderPropertyType.Texture:
+                    {
+                        if (string.IsNullOrEmpty(val))
+                        {
+                            mat.SetTexture(propertyName, null);
+                        }
+                        else if (val.StartsWith("guid:"))
+                        {
+                            string guid = val.Substring(5);
+                            string texPath = AssetDatabase.GUIDToAssetPath(guid);
+                            if (string.IsNullOrEmpty(texPath))
+                                return BuildError("EDITOR_CTRL_PROPERTY_TYPE_MISMATCH",
+                                    $"Texture GUID not found: {guid}");
+                            var tex = AssetDatabase.LoadAssetAtPath<Texture>(texPath);
+                            if (tex == null)
+                            {
+                                if (texPath.EndsWith(".mat"))
+                                    return BuildError("EDITOR_CTRL_SET_MAT_PROP_WRONG_GUID",
+                                        $"The specified GUID points to a material asset '{texPath}'. " +
+                                        "Please specify a texture GUID instead.");
+                                return BuildError("EDITOR_CTRL_PROPERTY_TYPE_MISMATCH",
+                                    $"Failed to load texture from GUID '{guid}' (resolved to '{texPath}').");
+                            }
+                            mat.SetTexture(propertyName, tex);
+                        }
+                        else if (val.StartsWith("path:"))
+                        {
+                            string texPath = val.Substring(5);
+                            var tex = AssetDatabase.LoadAssetAtPath<Texture>(texPath);
+                            if (tex == null)
+                                return BuildError("EDITOR_CTRL_PROPERTY_TYPE_MISMATCH",
+                                    $"Texture not found at path: {texPath}");
+                            mat.SetTexture(propertyName, tex);
+                        }
+                        else
+                        {
+                            return BuildError("EDITOR_CTRL_PROPERTY_TYPE_MISMATCH",
+                                "Texture value must be 'guid:<hex>', 'path:<asset_path>', or empty string for null.");
+                        }
+                        break;
+                    }
+
+                    default:
+                        return BuildError("EDITOR_CTRL_PROPERTY_TYPE_MISMATCH",
+                            $"Unsupported property type: {propType}");
+                }
+            }
+            catch (FormatException ex)
+            {
+                return BuildError("EDITOR_CTRL_PROPERTY_TYPE_MISMATCH",
+                    $"Failed to parse value '{val}' for {propType}: {ex.Message}");
+            }
+
+            return null;
+        }
+
         private static void CollectChildren(Transform parent, int maxDepth, int currentDepth, List<ChildEntry> result)
         {
             for (int i = 0; i < parent.childCount; i++)
@@ -1527,7 +1556,9 @@ namespace PrefabSentinel
                     name = child.name,
                     path = GetHierarchyPath(child),
                     child_count = child.childCount,
-                    depth = currentDepth + 1
+                    depth = currentDepth + 1,
+                    active = child.gameObject.activeSelf,
+                    tag = child.gameObject.tag
                 });
                 if (currentDepth + 1 < maxDepth)
                     CollectChildren(child, maxDepth, currentDepth + 1, result);
@@ -2280,6 +2311,132 @@ namespace PrefabSentinel
             return batchSetResp;
         }
 
+        private static EditorControlResponse HandleEditorBatchSetMaterialProperty(EditorControlRequest request)
+        {
+            if (string.IsNullOrEmpty(request.batch_operations_json))
+                return BuildError("EDITOR_CTRL_BATCH_SET_MAT_PROP_NO_DATA",
+                    "batch_operations_json is required.");
+
+            BatchSetMaterialPropertyArray wrapper;
+            try
+            {
+                wrapper = JsonUtility.FromJson<BatchSetMaterialPropertyArray>(
+                    "{\"items\":" + request.batch_operations_json + "}");
+            }
+            catch (System.Exception ex)
+            {
+                return BuildError("EDITOR_CTRL_BATCH_SET_MAT_PROP_JSON_ERROR",
+                    $"Failed to parse batch_operations_json: {ex.Message}");
+            }
+
+            if (wrapper.items == null || wrapper.items.Length == 0)
+                return BuildError("EDITOR_CTRL_BATCH_SET_MAT_PROP_EMPTY",
+                    "batch_operations_json is empty.");
+
+            bool hasHierarchy = !string.IsNullOrEmpty(request.hierarchy_path);
+            bool hasMatPath = !string.IsNullOrEmpty(request.material_path);
+            bool hasMatGuid = !string.IsNullOrEmpty(request.material_guid);
+
+            if (hasHierarchy && (hasMatPath || hasMatGuid))
+                return BuildError("EDITOR_CTRL_BATCH_SET_MAT_PROP_CONFLICT",
+                    "Cannot specify both hierarchy_path and material_path/material_guid. Use one targeting mode.");
+
+            if (!hasHierarchy && !hasMatPath && !hasMatGuid)
+                return BuildError("EDITOR_CTRL_BATCH_SET_MAT_PROP_NO_TARGET",
+                    "Specify a target: hierarchy_path + material_index, or material_path, or material_guid.");
+
+            int undoGroup = Undo.GetCurrentGroup();
+            Undo.SetCurrentGroupName("PrefabSentinel: Batch SetMaterialProperty");
+
+            var results = new System.Collections.Generic.List<string>();
+
+            if (hasHierarchy)
+            {
+                foreach (var op in wrapper.items)
+                {
+                    var subReq = new EditorControlRequest
+                    {
+                        action = "set_material_property",
+                        hierarchy_path = request.hierarchy_path,
+                        material_index = request.material_index,
+                        property_name = op.name,
+                        property_value = op.value,
+                    };
+                    var subResp = HandleSetMaterialProperty(subReq);
+                    if (!subResp.success)
+                    {
+                        Undo.CollapseUndoOperations(undoGroup);
+                        return BuildError("EDITOR_CTRL_BATCH_SET_MAT_PROP_FAILED",
+                            $"Operation failed at index {results.Count}: {subResp.message}");
+                    }
+                    results.Add(op.name);
+                }
+            }
+            else
+            {
+                if (hasMatPath && hasMatGuid)
+                    return BuildError("EDITOR_CTRL_BATCH_SET_MAT_PROP_MAT_CONFLICT",
+                        "Cannot specify both material_path and material_guid. Use one.");
+
+                string guid = request.material_guid;
+                if (hasMatPath)
+                {
+                    guid = AssetDatabase.AssetPathToGUID(request.material_path);
+                    if (string.IsNullOrEmpty(guid))
+                        return BuildError("EDITOR_CTRL_BATCH_SET_MAT_PROP_NOT_FOUND",
+                            $"Material not found at path: {request.material_path}");
+                }
+
+                string assetPath = AssetDatabase.GUIDToAssetPath(guid);
+                if (string.IsNullOrEmpty(assetPath))
+                    return BuildError("EDITOR_CTRL_BATCH_SET_MAT_PROP_NOT_FOUND",
+                        $"No asset found for GUID: {guid}");
+
+                var mat = AssetDatabase.LoadAssetAtPath<Material>(assetPath);
+                if (mat == null)
+                    return BuildError("EDITOR_CTRL_BATCH_SET_MAT_PROP_NOT_FOUND",
+                        $"Failed to load Material at: {assetPath}");
+
+                var shader = mat.shader;
+                if (shader == null)
+                    return BuildError("EDITOR_CTRL_BATCH_SET_MAT_PROP_NOT_FOUND",
+                        $"Material '{mat.name}' has no shader assigned.");
+
+                Undo.RecordObject(mat, "PrefabSentinel: Batch SetMaterialProperty");
+
+                foreach (var op in wrapper.items)
+                {
+                    var applyError = ApplyMaterialPropertyValue(mat, op.name, op.value);
+                    if (applyError != null)
+                    {
+                        Undo.CollapseUndoOperations(undoGroup);
+                        return BuildError("EDITOR_CTRL_BATCH_SET_MAT_PROP_FAILED",
+                            $"Operation failed at index {results.Count}: {applyError.message}");
+                    }
+                    results.Add(op.name);
+                }
+
+                SceneView sv = SceneView.lastActiveSceneView;
+                if (sv != null) ForceRenderAndRepaint(sv);
+            }
+
+            Undo.CollapseUndoOperations(undoGroup);
+
+            var resp = BuildSuccess("EDITOR_CTRL_BATCH_SET_MAT_PROP_OK",
+                $"Set {results.Count} material properties",
+                data: new EditorControlData
+                {
+                    executed = true, read_only = false,
+                    suggestions = results.ToArray(),
+                });
+            resp.diagnostics = new[] { new EditorControlDiagnostic
+            {
+                detail = "Runtime modification — save the scene (File > Save) to persist.",
+                evidence = "Undo.CollapseUndoOperations"
+            }};
+            return resp;
+        }
+
         private static EditorControlResponse HandleEditorOpenScene(EditorControlRequest request)
         {
             if (string.IsNullOrEmpty(request.asset_path))
@@ -2440,6 +2597,78 @@ namespace PrefabSentinel
             {
                 detail = "Runtime modification — save the scene (File > Save) to persist.",
                 evidence = "Undo.AddComponent"
+            }};
+            return resp;
+        }
+
+        private static EditorControlResponse HandleEditorRemoveComponent(EditorControlRequest request)
+        {
+            if (string.IsNullOrEmpty(request.hierarchy_path))
+                return BuildError("EDITOR_CTRL_REM_COMP_NO_PATH", "hierarchy_path is required.");
+            if (string.IsNullOrEmpty(request.component_type))
+                return BuildError("EDITOR_CTRL_REM_COMP_NO_TYPE", "component_type is required.");
+
+            var go = GameObject.Find(request.hierarchy_path);
+            if (go == null)
+                return BuildError("EDITOR_CTRL_REM_COMP_NOT_FOUND",
+                    $"GameObject not found: {request.hierarchy_path}");
+
+            System.Type compType = ResolveComponentType(request.component_type);
+            if (compType == null)
+                return BuildError("EDITOR_CTRL_REM_COMP_TYPE_NOT_FOUND",
+                    $"Component type not found: {request.component_type}. " +
+                    "Short names (e.g. 'BoxCollider') and fully qualified names both work.");
+
+            var components = go.GetComponents(compType);
+            if (components.Length == 0)
+                return BuildError("EDITOR_CTRL_REM_COMP_NONE",
+                    $"No {request.component_type} component found on {request.hierarchy_path}");
+
+            Component target;
+            if (request.component_index == -1)
+            {
+                if (components.Length == 1)
+                {
+                    target = components[0];
+                }
+                else
+                {
+                    return BuildError("EDITOR_CTRL_REM_COMP_AMBIGUOUS",
+                        $"Found {components.Length} {request.component_type} components on {request.hierarchy_path}. " +
+                        $"Specify index (0-{components.Length - 1}) to select.",
+                        new EditorControlData { component_count = components.Length });
+                }
+            }
+            else
+            {
+                if (request.component_index < 0 || request.component_index >= components.Length)
+                    return BuildError("EDITOR_CTRL_REM_COMP_INDEX_OUT_OF_RANGE",
+                        $"index {request.component_index} out of range. " +
+                        $"{request.hierarchy_path} has {components.Length} {request.component_type} component(s) " +
+                        $"(valid: 0-{components.Length - 1}).",
+                        new EditorControlData { component_count = components.Length });
+                target = components[request.component_index];
+            }
+
+            if (target is Transform)
+                return BuildError("EDITOR_CTRL_REM_COMP_IS_TRANSFORM",
+                    "Cannot remove Transform — it is a required component.");
+
+            Undo.DestroyObjectImmediate(target);
+
+            var resp = BuildSuccess("EDITOR_CTRL_REM_COMP_OK",
+                $"Removed {compType.FullName} from {request.hierarchy_path}",
+                data: new EditorControlData
+                {
+                    selected_object = go.name,
+                    asset_path = compType.FullName,
+                    executed = true,
+                    read_only = false,
+                });
+            resp.diagnostics = new[] { new EditorControlDiagnostic
+            {
+                detail = "Runtime modification — save the scene (File > Save) to persist.",
+                evidence = "Undo.DestroyObjectImmediate"
             }};
             return resp;
         }
@@ -2989,6 +3218,16 @@ namespace PrefabSentinel
 
         [Serializable]
         private sealed class BatchSetPropertyArray { public BatchSetPropertyOp[] items; }
+
+        [Serializable]
+        private sealed class BatchSetMaterialPropertyOp
+        {
+            public string name = string.Empty;
+            public string value = string.Empty;
+        }
+
+        [Serializable]
+        private sealed class BatchSetMaterialPropertyArray { public BatchSetMaterialPropertyOp[] items; }
 
         [Serializable]
         private sealed class PropertyEntry

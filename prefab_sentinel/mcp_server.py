@@ -33,7 +33,7 @@ from prefab_sentinel.editor_bridge import (
 from prefab_sentinel.fuzzy_match import suggest_similar
 from prefab_sentinel.patch_plan import PLAN_VERSION
 from prefab_sentinel.patch_revert import revert_overrides as revert_overrides_impl
-from prefab_sentinel.session import ProjectSession
+from prefab_sentinel.session import InvalidProjectRootError, ProjectSession
 from prefab_sentinel.symbol_tree import (
     AmbiguousSymbolError,
     SymbolKind,
@@ -75,6 +75,13 @@ def _extract_description(path: Path) -> str:
     if "tool" in fm:
         return f"{fm['tool']} knowledge"
     return path.stem
+
+
+def _normalize_material_value(value: str | list | int | float) -> str:
+    """Normalize a material property value to string for Bridge transmission."""
+    if isinstance(value, str):
+        return value
+    return json.dumps(value)
 
 
 def create_server(
@@ -176,6 +183,7 @@ def create_server(
     @server.tool()
     async def activate_project(
         scope: str,
+        project_root: str = "",
     ) -> dict[str, Any]:
         """Set the project scope and warm caches for subsequent requests.
 
@@ -186,8 +194,24 @@ def create_server(
         Args:
             scope: Path to the Assets subdirectory to work with
                 (e.g. "Assets/Tyunta/SoulLinkerSystem").
+            project_root: Unity project root directory. Optional.
+                Priority: this argument > UNITYTOOL_UNITY_PROJECT_PATH env var
+                > auto-detect from scope path.
         """
-        result = await session.activate(scope)
+        try:
+            result = await session.activate(
+                scope,
+                project_root=project_root or None,
+            )
+        except InvalidProjectRootError as exc:
+            return {
+                "success": False,
+                "severity": "error",
+                "code": "INVALID_PROJECT_ROOT",
+                "message": str(exc),
+                "data": {},
+                "diagnostics": [],
+            }
         result["suggested_reads"] = session.suggest_reads()
         result["knowledge_hint"] = (
             "Other knowledge files available via Glob('knowledge/*.md') "
@@ -312,15 +336,22 @@ def create_server(
                 ),
             })
 
-        # Phase 2: Clean up stale upload handler from target if excluded
-        if not include_upload_handler:
-            for stale_name in (_UPLOAD_HANDLER, _UPLOAD_HANDLER + ".meta"):
-                stale = target_path / stale_name
-                if stale.exists():
-                    stale.unlink()
+        old_version = session.detect_bridge_version()
+
+        # Phase 2: Clean target directory for fresh deploy
+        removed_stale_files: list[str] = []
+        for stale in sorted(target_path.iterdir()):
+            if stale.is_file():
+                stale.unlink()
+                removed_stale_files.append(stale.name)
+
+        if removed_stale_files:
+            diagnostics.append({
+                "severity": "info",
+                "message": f"Cleared {len(removed_stale_files)} file(s) from {target_dir} before redeploy",
+            })
 
         # Phase 3: Copy source files
-        old_version = session.detect_bridge_version()
         copied_files: list[str] = []
         skipped_files: list[str] = []
 
@@ -356,6 +387,7 @@ def create_server(
                 "copied_files": copied_files,
                 "skipped_files": skipped_files,
                 "removed_old_files": removed_old_files,
+                "removed_stale_files": removed_stale_files,
                 "old_version": old_version,
                 "new_version": new_version,
                 "target_dir": target_dir,
@@ -1242,14 +1274,12 @@ def create_server(
                 Vector: "[0, 1, 0, 0]" (XYZW)
                 Texture: "guid:abc123..." or "path:Assets/Tex/foo.png" or "" (null)
         """
-        import json as _json
-        str_value = value if isinstance(value, str) else _json.dumps(value)
         return send_action(
             action="set_material_property",
             hierarchy_path=hierarchy_path,
             material_index=material_index,
             property_name=property_name,
-            property_value=str_value,
+            property_value=_normalize_material_value(value),
         )
 
     @server.tool()
@@ -1525,6 +1555,34 @@ def create_server(
 
             kwargs["properties_json"] = json.dumps(properties, ensure_ascii=False)
         return send_action(action="editor_add_component", **kwargs)
+
+    @server.tool()
+    def editor_remove_component(
+        hierarchy_path: str,
+        component_type: str,
+        index: int | None = None,
+    ) -> dict[str, Any]:
+        """Remove a component from a GameObject at runtime (Undo-able).
+
+        Type resolution: tries fully qualified name, then searches all assemblies
+        by simple name.
+
+        When multiple components of the same type exist, specify index to select
+        which one to remove.  If omitted and the type is ambiguous (count > 1),
+        the call fails with EDITOR_CTRL_REM_COMP_AMBIGUOUS.
+
+        Args:
+            hierarchy_path: Hierarchy path to the target GameObject.
+            component_type: Component type name (e.g. "BoxCollider").
+            index: 0-based index when multiple components of the same type exist.
+        """
+        kwargs: dict[str, Any] = {
+            "hierarchy_path": hierarchy_path,
+            "component_type": component_type,
+        }
+        if index is not None:
+            kwargs["component_index"] = index
+        return send_action(action="editor_remove_component", **kwargs)
 
     @server.tool()
     def editor_create_udon_program_asset(
@@ -1816,6 +1874,49 @@ def create_server(
         )
 
     @server.tool()
+    def editor_batch_set_material_property(
+        properties: list[dict[str, str | list | int | float]],
+        hierarchy_path: str = "",
+        material_index: int = -1,
+        material_path: str = "",
+        material_guid: str = "",
+    ) -> dict[str, Any]:
+        """Set multiple shader properties on one material in a single request (Undo-grouped).
+
+        Target the material by ONE of:
+        - Renderer: hierarchy_path + material_index
+        - Direct: material_path or material_guid
+
+        Args:
+            properties: List of property dicts, each with "name" and "value".
+                Value formats are the same as editor_set_material_property.
+            hierarchy_path: Hierarchy path to the GameObject with a Renderer.
+            material_index: Material slot index (0-based). Required with hierarchy_path.
+            material_path: Asset path to .mat file (e.g. "Assets/Materials/Hair.mat").
+            material_guid: GUID of the Material asset (32-char hex).
+        """
+        normalized = [
+            {"name": prop["name"], "value": _normalize_material_value(prop["value"])}
+            for prop in properties
+        ]
+
+        kwargs: dict[str, Any] = {
+            "batch_operations_json": json.dumps(normalized, ensure_ascii=False),
+        }
+        if hierarchy_path:
+            kwargs["hierarchy_path"] = hierarchy_path
+            kwargs["material_index"] = material_index
+        if material_path:
+            kwargs["material_path"] = material_path
+        if material_guid:
+            kwargs["material_guid"] = material_guid
+
+        return send_action(
+            action="editor_batch_set_material_property",
+            **kwargs,
+        )
+
+    @server.tool()
     def editor_open_scene(
         scene_path: str,
         mode: str = "single",
@@ -1956,6 +2057,62 @@ def create_server(
             target_path=asset_path,
             property_name=property_name,
             value=value,
+            dry_run=not confirm,
+            change_reason=change_reason or None,
+        )
+        return resp.to_dict()
+
+    @server.tool()
+    def copy_asset(
+        source_path: str,
+        dest_path: str,
+        confirm: bool = False,
+        change_reason: str = "",
+    ) -> dict[str, Any]:
+        """Copy a Unity text asset with automatic m_Name sync and .meta generation.
+
+        Two-phase workflow:
+        - confirm=False (default): dry-run preview showing planned changes.
+        - confirm=True: applies the copy and writes new .meta.
+
+        Args:
+            source_path: Path to the source asset file.
+            dest_path: Path for the new copy.
+            confirm: Set True to apply (False = dry-run only).
+            change_reason: Required when confirm=True. Audit log reason.
+        """
+        orch = session.get_orchestrator()
+        resp = orch.copy_asset(
+            source_path=source_path,
+            dest_path=dest_path,
+            dry_run=not confirm,
+            change_reason=change_reason or None,
+        )
+        return resp.to_dict()
+
+    @server.tool()
+    def rename_asset(
+        asset_path: str,
+        new_name: str,
+        confirm: bool = False,
+        change_reason: str = "",
+    ) -> dict[str, Any]:
+        """Rename a Unity text asset with automatic m_Name sync and .meta rename.
+
+        Two-phase workflow:
+        - confirm=False (default): dry-run preview showing planned changes.
+        - confirm=True: applies the rename.
+
+        Args:
+            asset_path: Path to the asset file to rename.
+            new_name: New filename (with extension, e.g. "NewName.mat").
+            confirm: Set True to apply (False = dry-run only).
+            change_reason: Required when confirm=True. Audit log reason.
+        """
+        orch = session.get_orchestrator()
+        resp = orch.rename_asset(
+            asset_path=asset_path,
+            new_name=new_name,
             dry_run=not confirm,
             change_reason=change_reason or None,
         )

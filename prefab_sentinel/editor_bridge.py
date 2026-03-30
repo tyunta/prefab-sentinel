@@ -62,6 +62,7 @@ SUPPORTED_ACTIONS = frozenset(
         # Phase 4: Rename + AddComponent + Udon
         "editor_rename",
         "editor_add_component",
+        "editor_remove_component",
         "create_udon_program_asset",
         # Phase 5: SetProperty + SaveAsPrefab
         "editor_set_property",
@@ -72,6 +73,7 @@ SUPPORTED_ACTIONS = frozenset(
         "editor_create_primitive",
         "editor_batch_create",
         "editor_batch_set_property",
+        "editor_batch_set_material_property",
         "editor_open_scene",
         "editor_save_scene",
         # Phase 7: UX Review improvements

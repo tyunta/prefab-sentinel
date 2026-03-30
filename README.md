@@ -71,7 +71,7 @@ prefab-sentinel-mcp --transport streamable-http
 
 | ツール | 説明 |
 |--------|------|
-| `activate_project` | プロジェクトスコープ設定 + キャッシュ warm（セッション開始時に呼ぶ） |
+| `activate_project` | プロジェクトスコープ設定 + キャッシュ warm（セッション開始時に呼ぶ）。`project_root` で Unity プロジェクトルートを明示指定可 |
 | `get_project_status` | セッション状態（キャッシュ件数、スコープ、watcher 動作状況）の表示 |
 | `get_unity_symbols` | アセットのシンボルツリー取得（GameObject/Component 階層、`expand_nested=true` で Nested Prefab 展開） |
 | `find_unity_symbol` | 人間可読パス（例: `CharacterBody/MeshRenderer`）でオブジェクト検索。`show_origin=true` で Variant チェーンのオリジン注釈付き |
@@ -89,6 +89,8 @@ prefab-sentinel-mcp --transport streamable-http
 | `inspect_materials` | レンダラーごとのマテリアルスロット表示（override/inherited マーカー、Nested Prefab フォールバック、`source_prefab` 注釈付き） |
 | `inspect_material_asset` | .mat ファイルのシェーダー・プロパティ・テクスチャ参照を構造化データで返す（read-only） |
 | `set_material_property` | .mat ファイルのプロパティをオフライン YAML 編集（dry-run/confirm ゲート付き） |
+| `copy_asset` | アセットファイルをコピーし m_Name を自動同期、新 .meta を生成（dry-run/confirm ゲート付き） |
+| `rename_asset` | アセットファイルをリネームし m_Name を自動同期、.meta を追従リネーム（dry-run/confirm ゲート付き） |
 | `validate_structure` | YAML 内部構造の検証（fileID 重複、Transform 整合性） |
 | `inspect_hierarchy` | GameObject 階層ツリー表示（深度制限、コンポーネント注釈対応） |
 | `validate_runtime` | UdonSharp コンパイル + ClientSim 実行検証 |
@@ -99,9 +101,9 @@ prefab-sentinel-mcp --transport streamable-http
 | `editor_frame` | 選択オブジェクトを Scene ビューでフレーミング |
 | `editor_get_camera` | Scene ビューのカメラ状態取得（position, rotation, pivot, size, orthographic） |
 | `editor_set_camera` | Scene ビューのカメラ設定（Mode A: 絶対座標 / Mode B: pivot 周回。yaw=0 が正面） |
-| `editor_list_children` | GameObject の子オブジェクト一覧 |
+| `editor_list_children` | GameObject の子オブジェクト一覧（各エントリに `active`/`tag` を含む） |
 | `editor_list_materials` | ランタイムのレンダラーのマテリアルスロット一覧 |
-| `editor_list_roots` | 現在の Scene / Prefab Stage のルートオブジェクト一覧 |
+| `editor_list_roots` | 現在の Scene / Prefab Stage のルートオブジェクト一覧（各エントリに `active`/`tag` を含む） |
 | `editor_get_material_property` | ランタイムのシェーダープロパティ値を読み取り |
 | `editor_set_material_property` | ランタイムでシェーダープロパティを設定（型はシェーダー定義から自動判定、Undo 対応） |
 | `editor_console` | Unity Console のログエントリを構造化データとして取得 |
@@ -123,12 +125,27 @@ prefab-sentinel-mcp --transport streamable-http
 | `editor_create_primitive` | プリミティブ (Cube/Sphere 等) を1回で作成 (位置・スケール・回転指定) |
 | `editor_batch_create` | 複数オブジェクトを1リクエストで一括生成 (Undo グループ) |
 | `editor_batch_set_property` | 複数プロパティを1リクエストで一括設定 (Undo グループ) |
+| `editor_batch_set_material_property` | 同一マテリアルの複数シェーダープロパティを1リクエストで一括設定 (Undo グループ) |
 | `editor_open_scene` | シーンを開く (single/additive) |
 | `editor_save_scene` | シーンを保存 |
+| `editor_remove_component` | ランタイムで GameObject からコンポーネントを削除（Undo 対応、同型複数時は index 必須） |
 | `editor_batch_add_component` | 複数オブジェクトにコンポーネントを一括追加 (Undo グループ、初期値対応) |
 | `editor_create_scene` | 新規空シーンを作成して保存 |
 | `deploy_bridge` | Unity プロジェクトの Bridge C# ファイルを自動更新 |
 | `validate_all_wiring` | スコープ内の全 .prefab/.unity の null 参照を一括スキャン |
+
+**`editor_list_children` / `editor_list_roots` レスポンスエントリ例:**
+
+```json
+{
+  "name": "Hair_Base",
+  "path": "/Avatar/Hair_Base",
+  "child_count": 0,
+  "depth": 1,
+  "active": false,
+  "tag": "EditorOnly"
+}
+```
 
 **Claude Desktop 設定例:**
 

@@ -403,11 +403,7 @@ class FileTypeGuardTests(unittest.TestCase):
             f.write(text)
             f.flush()
             orch = _make_orchestrator()
-            with patch(
-                "prefab_sentinel.orchestrator.find_project_root",
-                side_effect=Exception("no project"),
-            ):
-                result = orch.inspect_wiring(f.name)
+            result = orch.inspect_wiring(f.name)
         self.assertEqual("INSPECT_WIRING_RESULT", result.code)
 
 
@@ -428,11 +424,8 @@ class InspectWiringTests(unittest.TestCase):
             f.write(text)
             f.flush()
             orch = _make_orchestrator()
-            # Mock find_project_root and collect_project_guid_index
+            orch.prefab_variant.project_root = Path("/fake")
             with patch(
-                "prefab_sentinel.orchestrator.find_project_root",
-                return_value=Path("/fake"),
-            ), patch(
                 "prefab_sentinel.orchestrator.collect_project_guid_index",
                 return_value={"aabbccdd11223344aabbccdd11223344": Path("/fake/Assets/Scripts/MyScript.cs")},
             ):
@@ -445,7 +438,7 @@ class InspectWiringTests(unittest.TestCase):
         self.assertEqual(comps[0]["script_name"], "MyScript")
 
     def test_script_name_empty_on_project_root_failure(self) -> None:
-        """script_name should be empty when project root cannot be determined."""
+        """script_name should be empty when project_root is None (no active project)."""
 
 
         from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
@@ -460,11 +453,8 @@ class InspectWiringTests(unittest.TestCase):
             f.write(text)
             f.flush()
             orch = _make_orchestrator()
-            with patch(
-                "prefab_sentinel.orchestrator.find_project_root",
-                side_effect=Exception("no project root"),
-            ):
-                result = orch.inspect_wiring(f.name)
+            orch.prefab_variant.project_root = None
+            result = orch.inspect_wiring(f.name)
 
         self.assertTrue(result.success)
         comps = result.data["components"]
@@ -489,11 +479,7 @@ class InspectWiringTests(unittest.TestCase):
             f.write(text)
             f.flush()
             orch = _make_orchestrator()
-            with patch(
-                "prefab_sentinel.orchestrator.find_project_root",
-                side_effect=Exception("no project"),
-            ):
-                result = orch.inspect_wiring(f.name)
+            result = orch.inspect_wiring(f.name)
 
         self.assertTrue(result.success)
         comps = result.data["components"]
@@ -561,11 +547,7 @@ class InspectWiringVariantTests(unittest.TestCase):
             "PVR_OVERRIDES_OK",
             {"overrides": [], "override_count": 0},
         )
-        with patch(
-            "prefab_sentinel.orchestrator.find_project_root",
-            side_effect=Exception("no project"),
-        ):
-            result = orch.inspect_wiring(variant_path)
+        result = orch.inspect_wiring(variant_path)
 
         self.assertEqual("INSPECT_WIRING_RESULT", result.code)
         self.assertTrue(result.data.get("is_variant"))
@@ -583,11 +565,7 @@ class InspectWiringVariantTests(unittest.TestCase):
             f.write(text)
             f.flush()
             orch = _make_orchestrator()
-            with patch(
-                "prefab_sentinel.orchestrator.find_project_root",
-                side_effect=Exception("no project"),
-            ):
-                result = orch.inspect_wiring(f.name)
+            result = orch.inspect_wiring(f.name)
 
         self.assertEqual("INSPECT_WIRING_RESULT", result.code)
         self.assertNotIn("is_variant", result.data)
@@ -609,11 +587,7 @@ class InspectWiringVariantTests(unittest.TestCase):
             "CHAIN_OK",
             {"chain": [{"path": variant_path, "guid": "variant_guid"}]},
         )
-        with patch(
-            "prefab_sentinel.orchestrator.find_project_root",
-            side_effect=Exception("no project"),
-        ):
-            result = orch.inspect_wiring(variant_path)
+        result = orch.inspect_wiring(variant_path)
 
         self.assertEqual("INSPECT_WIRING_RESULT", result.code)
         # Should not be marked as variant since no base was found
@@ -690,11 +664,7 @@ class InspectWiringVariantOverrideAnnotationTests(unittest.TestCase):
                 "override_count": 2,
             },
         )
-        with patch(
-            "prefab_sentinel.orchestrator.find_project_root",
-            side_effect=Exception("no project"),
-        ):
-            result = orch.inspect_wiring(variant_path)
+        result = orch.inspect_wiring(variant_path)
 
         self.assertTrue(result.success)
         comps = result.data["components"]
@@ -722,11 +692,7 @@ class InspectWiringVariantOverrideAnnotationTests(unittest.TestCase):
             f.write(text)
             f.flush()
             orch = _make_orchestrator()
-            with patch(
-                "prefab_sentinel.orchestrator.find_project_root",
-                side_effect=Exception("no project"),
-            ):
-                result = orch.inspect_wiring(f.name)
+            result = orch.inspect_wiring(f.name)
 
         comps = result.data["components"]
         self.assertEqual(len(comps), 1)
@@ -1659,6 +1625,317 @@ class TestInvalidationDelegation(unittest.TestCase):
         orch = self._make_orchestrator()
         orch.invalidate_before_cache()
         orch.serialized_object.invalidate_before_cache.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Nested Prefab wiring traversal tests (TDD for Issue #17)
+# ---------------------------------------------------------------------------
+
+_CHILD_WIRING_GUID = "55555555555555555555555555555555"
+_SCRIPT_GUID_UDON_SHARP = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb01"
+_SCRIPT_GUID_UDON_BEHAVIOUR = "45115577ef41a5b4ca741ed302693907"
+_SCRIPT_GUID_CUSTOM = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1"
+
+
+def _write_prefab_with_meta(
+    assets_dir: Path, name: str, guid: str, text: str,
+) -> Path:
+    """Write a .prefab and its .meta to disk, returning the prefab path."""
+    prefab_path = assets_dir / name
+    prefab_path.write_text(text, encoding="utf-8")
+    meta_path = assets_dir / f"{name}.meta"
+    meta_path.write_text(
+        f"fileFormatVersion: 2\nguid: {guid}\n", encoding="utf-8",
+    )
+    return prefab_path
+
+
+class TestNestedWiringTraversal(unittest.TestCase):
+    """Tests for Nested Prefab wiring traversal in inspect_wiring (Issue #17)."""
+
+    def test_nested_prefab_wiring_traversal(self) -> None:
+        """Base.prefab has PrefabInstance→Child; Child has a MonoBehaviour.
+
+        inspect_wiring should find the nested component with source_prefab annotation.
+        """
+        from tests.yaml_helpers import (
+            YAML_HEADER,
+            make_gameobject,
+            make_monobehaviour,
+            make_prefab_instance,
+            make_transform,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            assets_dir = tmp_path / "Assets"
+            assets_dir.mkdir()
+
+            # Child.prefab — has a MonoBehaviour with a field
+            child_text = (
+                YAML_HEADER
+                + make_gameobject("1", "ChildObj", ["2", "3"])
+                + make_transform("2", "1")
+                + make_monobehaviour("3", "1", guid=_SCRIPT_GUID_CUSTOM)
+                + "  myRef: {fileID: 1}\n"
+            )
+            _write_prefab_with_meta(
+                assets_dir, "Child.prefab", _CHILD_WIRING_GUID, child_text,
+            )
+
+            # Base.prefab — PrefabInstance→Child, no direct MonoBehaviours
+            base_text = (
+                YAML_HEADER
+                + make_gameobject("10", "BaseRoot", ["20"])
+                + make_transform("20", "10")
+                + make_prefab_instance("30", _CHILD_WIRING_GUID)
+            )
+            base_path = _write_prefab_with_meta(
+                assets_dir, "Base.prefab", "66666666666666666666666666666666", base_text,
+            )
+
+            orch = _make_orchestrator()
+            orch.prefab_variant.project_root = tmp_path
+            with patch(
+                "prefab_sentinel.orchestrator.collect_project_guid_index",
+                return_value={_CHILD_WIRING_GUID: assets_dir / "Child.prefab"},
+            ):
+                result = orch.inspect_wiring(str(base_path))
+
+            self.assertEqual("INSPECT_WIRING_RESULT", result.code)
+            self.assertGreaterEqual(
+                result.data["component_count"], 1,
+                "Expected at least 1 component from nested prefab",
+            )
+            has_source_prefab = any(
+                "source_prefab" in c for c in result.data["components"]
+            )
+            self.assertTrue(
+                has_source_prefab,
+                "Expected at least one component with source_prefab key",
+            )
+
+    def test_udon_only_filter_with_nested(self) -> None:
+        """Child has 2 MonoBehaviours — one UdonSharp, one custom.
+
+        udon_only=True should filter out the non-Udon component from nested results.
+        """
+        from tests.yaml_helpers import (
+            YAML_HEADER,
+            make_gameobject,
+            make_monobehaviour,
+            make_prefab_instance,
+            make_transform,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            assets_dir = tmp_path / "Assets"
+            assets_dir.mkdir()
+
+            # Child.prefab — 2 MonoBehaviours: one UdonSharp, one custom
+            # UdonSharp components use a custom script GUID + _udonSharpBackingUdonBehaviour
+            # pointing to a backing UdonBehaviour block (which uses the generic GUID).
+            child_text = (
+                YAML_HEADER
+                + make_gameobject("1", "ChildObj", ["2", "3", "4", "5"])
+                + make_transform("2", "1")
+                + make_monobehaviour("3", "1", guid=_SCRIPT_GUID_CUSTOM)
+                + "  someField: {fileID: 1}\n"
+                + make_monobehaviour("4", "1", guid=_SCRIPT_GUID_UDON_SHARP)
+                + "  _udonSharpBackingUdonBehaviour: {fileID: 5}\n"
+                + "  programSource: {fileID: 11400000, guid: deadbeefdeadbeefdeadbeefdeadbeef, type: 2}\n"
+                + make_monobehaviour("5", "1", guid=_SCRIPT_GUID_UDON_BEHAVIOUR)
+                + "  serializedProgramAsset: {fileID: 11400000, guid: deadbeefdeadbeefdeadbeefdeadbeef, type: 2}\n"
+            )
+            _write_prefab_with_meta(
+                assets_dir, "Child.prefab", _CHILD_WIRING_GUID, child_text,
+            )
+
+            # Base.prefab — PrefabInstance→Child only
+            base_text = (
+                YAML_HEADER
+                + make_gameobject("10", "BaseRoot", ["20"])
+                + make_transform("20", "10")
+                + make_prefab_instance("30", _CHILD_WIRING_GUID)
+            )
+            base_path = _write_prefab_with_meta(
+                assets_dir, "Base.prefab", "66666666666666666666666666666666", base_text,
+            )
+
+            orch = _make_orchestrator()
+            orch.prefab_variant.project_root = tmp_path
+            with patch(
+                "prefab_sentinel.orchestrator.collect_project_guid_index",
+                return_value={_CHILD_WIRING_GUID: assets_dir / "Child.prefab"},
+            ):
+                result = orch.inspect_wiring(str(base_path), udon_only=True)
+
+            self.assertEqual("INSPECT_WIRING_RESULT", result.code)
+            nested_components = [
+                c for c in result.data["components"] if "source_prefab" in c
+            ]
+            # Must have at least 1 nested component (the UdonSharp one from Child)
+            self.assertGreaterEqual(
+                len(nested_components), 1,
+                "Expected at least 1 nested component after udon_only filter",
+            )
+            # Only the UdonSharp component should remain (custom filtered out)
+            for comp in nested_components:
+                self.assertTrue(
+                    comp["is_udon_sharp"],
+                    f"Expected only UdonSharp components with udon_only=True, got {comp}",
+                )
+
+    def test_base_and_nested_components_distinguished(self) -> None:
+        """Base has a direct MonoBehaviour; Child also has one.
+
+        Base components should lack source_prefab; nested ones should have it.
+        """
+        from tests.yaml_helpers import (
+            YAML_HEADER,
+            make_gameobject,
+            make_monobehaviour,
+            make_prefab_instance,
+            make_transform,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            assets_dir = tmp_path / "Assets"
+            assets_dir.mkdir()
+
+            # Child.prefab — has a MonoBehaviour
+            child_text = (
+                YAML_HEADER
+                + make_gameobject("1", "ChildObj", ["2", "3"])
+                + make_transform("2", "1")
+                + make_monobehaviour("3", "1", guid=_SCRIPT_GUID_CUSTOM)
+                + "  childRef: {fileID: 1}\n"
+            )
+            _write_prefab_with_meta(
+                assets_dir, "Child.prefab", _CHILD_WIRING_GUID, child_text,
+            )
+
+            # Base.prefab — direct MonoBehaviour + PrefabInstance→Child
+            base_text = (
+                YAML_HEADER
+                + make_gameobject("10", "BaseObj", ["20", "30"])
+                + make_transform("20", "10")
+                + make_monobehaviour("30", "10", guid=_SCRIPT_GUID_CUSTOM)
+                + "  baseRef: {fileID: 10}\n"
+                + make_prefab_instance("40", _CHILD_WIRING_GUID)
+            )
+            base_path = _write_prefab_with_meta(
+                assets_dir, "Base.prefab", "66666666666666666666666666666666", base_text,
+            )
+
+            orch = _make_orchestrator()
+            orch.prefab_variant.project_root = tmp_path
+            with patch(
+                "prefab_sentinel.orchestrator.collect_project_guid_index",
+                return_value={_CHILD_WIRING_GUID: assets_dir / "Child.prefab"},
+            ):
+                result = orch.inspect_wiring(str(base_path))
+
+            self.assertEqual("INSPECT_WIRING_RESULT", result.code)
+            comps = result.data["components"]
+            # Total should be 2: 1 base + 1 nested
+            self.assertEqual(
+                result.data["component_count"], 2,
+                f"Expected 2 components (base + nested), got {result.data['component_count']}",
+            )
+            base_comps = [c for c in comps if "source_prefab" not in c]
+            nested_comps = [c for c in comps if "source_prefab" in c]
+            self.assertEqual(len(base_comps), 1, "Expected 1 base component")
+            self.assertEqual(len(nested_comps), 1, "Expected 1 nested component")
+
+
+class InspectMaterialsRelativePathTests(unittest.TestCase):
+    """Regression tests for GitHub Issue #14: relative paths must resolve via project_root."""
+
+    def test_inspect_materials_relative_path(self) -> None:
+        from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_transform
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            assets = root / "Assets"
+            assets.mkdir()
+            prefab = assets / "Test.prefab"
+            text = (
+                YAML_HEADER
+                + make_gameobject("100", "Root", ["200", "300"])
+                + make_transform("200", "100")
+                + "--- !u!23 &300\nMeshRenderer:\n  m_GameObject: {fileID: 100}\n"
+                + "  m_Materials:\n  - {fileID: 0}\n"
+            )
+            prefab.write_text(text, encoding="utf-8")
+
+            orch = _make_orchestrator()
+            orch.prefab_variant.project_root = root
+            result = orch.inspect_materials("Assets/Test.prefab")
+
+        self.assertTrue(result.success)
+        self.assertEqual("INSPECT_MATERIALS_RESULT", result.code)
+
+    def test_inspect_material_asset_relative_path(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            assets = root / "Assets"
+            assets.mkdir()
+            mat = assets / "Test.mat"
+            mat.write_text(
+                "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n"
+                "--- !u!21 &2100000\nMaterial:\n"
+                "  m_Name: Test\n"
+                "  m_Shader: {fileID: 4800000, guid: abcdef01234567890abcdef012345678, type: 3}\n"
+                "  m_SavedProperties:\n"
+                "    serializedVersion: 3\n"
+                "    m_TexEnvs: []\n"
+                "    m_Ints: []\n"
+                "    m_Floats: []\n"
+                "    m_Colors: []\n",
+                encoding="utf-8",
+            )
+
+            orch = _make_orchestrator()
+            orch.prefab_variant.project_root = root
+            result = orch.inspect_material_asset("Assets/Test.mat")
+
+        self.assertTrue(result.success)
+        self.assertEqual("INSPECT_MATERIAL_ASSET_RESULT", result.code)
+
+    def test_inspect_wiring_relative_path_guid_resolution(self) -> None:
+        from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            assets = root / "Assets"
+            assets.mkdir()
+
+            guid = "aabbccdd11223344aabbccdd11223344"
+            cs = assets / "MyScript.cs"
+            cs.write_text("public class MyScript : MonoBehaviour {}\n", encoding="utf-8")
+            meta = Path(str(cs) + ".meta")
+            meta.write_text(f"fileFormatVersion: 2\nguid: {guid}\n", encoding="utf-8")
+
+            prefab = assets / "Test.prefab"
+            text = (
+                YAML_HEADER
+                + make_gameobject("100", "Obj", ["200"])
+                + make_monobehaviour("200", "100", guid=guid)
+            )
+            prefab.write_text(text, encoding="utf-8")
+
+            orch = _make_orchestrator()
+            orch.prefab_variant.project_root = root
+            result = orch.inspect_wiring("Assets/Test.prefab")
+
+        self.assertTrue(result.success)
+        self.assertEqual("INSPECT_WIRING_RESULT", result.code)
+        comps = result.data["components"]
+        self.assertTrue(len(comps) >= 1)
+        self.assertEqual("MyScript", comps[0]["script_name"])
 
 
 if __name__ == "__main__":

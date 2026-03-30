@@ -23,8 +23,8 @@ from prefab_sentinel.unity_assets import (
     resolve_scope_path,
 )
 from prefab_sentinel.unity_yaml_parser import (
-    CLASS_ID_PREFAB_INSTANCE,
     YamlBlock,
+    iter_nested_prefab_children,
     parse_game_objects,
     split_yaml_blocks,
 )
@@ -251,7 +251,12 @@ def inspect_materials(
     text = decode_text_file(path)
     guid_index = collect_project_guid_index(proj_root, include_package_cache=False)
 
-    is_variant = SOURCE_PREFAB_PATTERN.search(text) is not None
+    # A Variant has m_SourcePrefab but no real (non-stripped) GameObjects;
+    # a base prefab with nested PrefabInstances also contains m_SourcePrefab
+    # blocks, so checking the full text is insufficient.
+    has_source_prefab = SOURCE_PREFAB_PATTERN.search(text) is not None
+    has_real_game_objects = bool(parse_game_objects(split_yaml_blocks(text)))
+    is_variant = has_source_prefab and not has_real_game_objects
 
     # For variants, we need to:
     # 1. Load the base prefab to get renderer blocks with materials
@@ -261,9 +266,15 @@ def inspect_materials(
             target_path, path, text, proj_root, guid_index,
         )
     else:
-        return _inspect_base_materials(
+        result = _inspect_base_materials(
             target_path, text, proj_root, guid_index,
         )
+        nested, nested_diags = _collect_nested_renderers(
+            text, guid_index, proj_root,
+        )
+        result.renderers.extend(nested)
+        result.diagnostics.extend(nested_diags)
+        return result
 
 
 def _inspect_base_materials(
@@ -445,12 +456,14 @@ def _inspect_variant_materials(
             guid_index, project_root, material_overrides,
         )
 
-    # Fallback 2: Nested Prefab expansion — renderer in a child prefab
+    # Nested Prefab expansion — renderer in a child prefab
     diagnostics: list[str] = []
-    if not renderers and base_text is not None:
-        renderers, diagnostics = _collect_nested_renderers(
+    if base_text is not None:
+        nested, nested_diags = _collect_nested_renderers(
             base_text, guid_index, project_root,
         )
+        renderers.extend(nested)
+        diagnostics.extend(nested_diags)
 
     return MaterialInspectionResult(
         target_path=target_path,
@@ -562,34 +575,14 @@ def _collect_nested_renderers(
 
     Returns (renderers, diagnostics).
     """
-    blocks = split_yaml_blocks(base_text)
     renderers: list[RendererMaterials] = []
 
-    for block in blocks:
-        if block.class_id != CLASS_ID_PREFAB_INSTANCE:
-            continue
-        source_match = SOURCE_PREFAB_PATTERN.search(block.text)
-        if source_match is None:
-            continue
-        child_guid = normalize_guid(source_match.group(2))
-        child_path = guid_index.get(child_guid)
-        if child_path is None or not child_path.exists():
-            continue
-        try:
-            child_text = decode_text_file(child_path)
-        except (OSError, UnicodeDecodeError):
-            continue
-
+    for child in iter_nested_prefab_children(base_text, guid_index, project_root):
         child_result = _inspect_base_materials(
-            str(child_path), child_text, project_root, guid_index,
+            str(child.path), child.text, project_root, guid_index,
         )
-        # Stamp source_prefab on each renderer
-        try:
-            rel = child_path.resolve().relative_to(project_root.resolve()).as_posix()
-        except ValueError:
-            rel = child_path.as_posix()
         for r in child_result.renderers:
-            r.source_prefab = rel
+            r.source_prefab = child.rel_posix
         renderers.extend(child_result.renderers)
 
     diagnostics: list[str] = []

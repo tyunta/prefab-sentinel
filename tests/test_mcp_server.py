@@ -79,17 +79,20 @@ class TestToolRegistration(unittest.TestCase):
             "editor_console", "editor_run_tests",
             "editor_find_renderers_by_material",
             "editor_rename", "editor_add_component",
+            "editor_remove_component",
             "editor_create_udon_program_asset",
             "editor_set_property", "editor_save_as_prefab",
             "editor_set_parent",
             "editor_create_empty", "editor_create_primitive",
             "editor_batch_create", "editor_batch_set_property",
+            "editor_batch_set_material_property",
             "editor_open_scene", "editor_save_scene",
             "editor_batch_add_component", "editor_create_scene",
             # Infrastructure tools
             "deploy_bridge",
             # Inspection + orchestrator tools
             "inspect_materials", "inspect_material_asset", "set_material_property",
+            "copy_asset", "rename_asset",
             "validate_structure", "revert_overrides", "vrcsdk_upload",
             "inspect_hierarchy", "validate_runtime", "validate_all_wiring",
             "patch_apply",
@@ -99,7 +102,7 @@ class TestToolRegistration(unittest.TestCase):
     def test_tool_count(self) -> None:
         server = create_server()
         tools = _run(server.list_tools())
-        self.assertEqual(62, len(tools))
+        self.assertEqual(66, len(tools))
 
 
 class TestSymbolTools(unittest.TestCase):
@@ -1207,6 +1210,67 @@ class TestSessionTools(unittest.TestCase):
         self.assertTrue(after["data"]["orchestrator_cached"])
         self.assertTrue(after["data"]["script_map_cached"])
 
+    @patch("prefab_sentinel.session.build_script_name_map")
+    @patch("prefab_sentinel.session.Phase1Orchestrator")
+    @patch("prefab_sentinel.session.resolve_scope_path")
+    def test_activate_project_with_explicit_project_root(
+        self,
+        mock_resolve: MagicMock,
+        mock_orch: MagicMock,
+        mock_build: MagicMock,
+    ) -> None:
+        mock_build.return_value = {"g1": "ScriptA"}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            assets = Path(tmpdir) / "Assets"
+            assets.mkdir()
+            mock_resolve.return_value = assets / "MyScope"
+
+            server = create_server()
+            _, result = _run(server.call_tool(
+                "activate_project",
+                {"scope": "Assets/MyScope", "project_root": tmpdir},
+            ))
+
+            self.assertTrue(result["success"])
+            self.assertEqual(
+                str(Path(tmpdir).resolve()), result["data"]["project_root"]
+            )
+
+    def test_activate_project_with_invalid_project_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            server = create_server()
+            _, result = _run(server.call_tool(
+                "activate_project",
+                {"scope": "Assets/X", "project_root": tmpdir},
+            ))
+
+            self.assertFalse(result["success"])
+            self.assertEqual("INVALID_PROJECT_ROOT", result["code"])
+
+    @patch("prefab_sentinel.session.build_script_name_map")
+    @patch("prefab_sentinel.session.Phase1Orchestrator")
+    @patch("prefab_sentinel.session.resolve_scope_path")
+    @patch("prefab_sentinel.session.find_project_root")
+    def test_activate_project_without_project_root_backward_compat(
+        self,
+        mock_find: MagicMock,
+        mock_resolve: MagicMock,
+        mock_orch: MagicMock,
+        mock_build: MagicMock,
+    ) -> None:
+        mock_find.return_value = Path("/unity")
+        mock_resolve.return_value = Path("/unity/Assets/MyScope")
+        mock_build.return_value = {"g1": "ScriptA"}
+
+        server = create_server()
+        _, result = _run(server.call_tool(
+            "activate_project",
+            {"scope": "Assets/MyScope"},
+        ))
+
+        self.assertTrue(result["success"])
+        self.assertEqual("SESSION_ACTIVATED", result["code"])
+
 
 class TestAddComponentTool(unittest.TestCase):
     """Test the add_component MCP tool."""
@@ -2034,11 +2098,92 @@ class TestEditorWriteTools(unittest.TestCase):
             property_value="[1, 0, 0, 1]",
         )
 
+    def test_editor_batch_set_material_property_delegates(self) -> None:
+        server = create_server()
+        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+            _run(server.call_tool("editor_batch_set_material_property", {
+                "hierarchy_path": "/Avatar/Hair",
+                "material_index": 0,
+                "properties": [
+                    {"name": "_Color", "value": "[1, 0, 0, 1]"},
+                    {"name": "_MainTexHSVG", "value": [0.02, 0.48, 1.18, 1]},
+                ],
+            }))
+        args = mock_send.call_args
+        self.assertEqual(args.kwargs["action"], "editor_batch_set_material_property")
+        self.assertEqual(args.kwargs["hierarchy_path"], "/Avatar/Hair")
+        self.assertEqual(args.kwargs["material_index"], 0)
+        ops = json.loads(args.kwargs["batch_operations_json"])
+        self.assertEqual(len(ops), 2)
+        self.assertEqual(ops[0]["name"], "_Color")
+        self.assertEqual(ops[0]["value"], "[1, 0, 0, 1]")
+        # list value should be JSON-stringified
+        self.assertEqual(ops[1]["value"], "[0.02, 0.48, 1.18, 1]")
+
+    def test_editor_batch_set_material_property_by_path_delegates(self) -> None:
+        server = create_server()
+        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+            _run(server.call_tool("editor_batch_set_material_property", {
+                "material_path": "Assets/Materials/Hair.mat",
+                "properties": [
+                    {"name": "_Color", "value": "[1, 1, 1, 1]"},
+                ],
+            }))
+        args = mock_send.call_args
+        self.assertEqual(args.kwargs["action"], "editor_batch_set_material_property")
+        self.assertEqual(args.kwargs["material_path"], "Assets/Materials/Hair.mat")
+        self.assertNotIn("hierarchy_path", args.kwargs)
+        self.assertNotIn("material_index", args.kwargs)
+
+    def test_editor_batch_set_material_property_by_guid_delegates(self) -> None:
+        server = create_server()
+        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+            _run(server.call_tool("editor_batch_set_material_property", {
+                "material_guid": "abc123def456abc123def456abc123de",
+                "properties": [
+                    {"name": "_Float", "value": 0.5},
+                ],
+            }))
+        args = mock_send.call_args
+        self.assertEqual(args.kwargs["action"], "editor_batch_set_material_property")
+        self.assertEqual(args.kwargs["material_guid"], "abc123def456abc123def456abc123de")
+        self.assertNotIn("hierarchy_path", args.kwargs)
+        ops = json.loads(args.kwargs["batch_operations_json"])
+        self.assertEqual(ops[0]["value"], "0.5")
+
     def test_editor_delete_delegates(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_delete", {"hierarchy_path": "/OldObject"}))
         mock_send.assert_called_once_with(action="delete_object", hierarchy_path="/OldObject")
+
+    def test_editor_remove_component_delegates(self) -> None:
+        server = create_server()
+        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+            _run(server.call_tool("editor_remove_component", {
+                "hierarchy_path": "/Player",
+                "component_type": "BoxCollider",
+            }))
+        mock_send.assert_called_once_with(
+            action="editor_remove_component",
+            hierarchy_path="/Player",
+            component_type="BoxCollider",
+        )
+
+    def test_editor_remove_component_with_index(self) -> None:
+        server = create_server()
+        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+            _run(server.call_tool("editor_remove_component", {
+                "hierarchy_path": "/Player",
+                "component_type": "BoxCollider",
+                "index": 1,
+            }))
+        mock_send.assert_called_once_with(
+            action="editor_remove_component",
+            hierarchy_path="/Player",
+            component_type="BoxCollider",
+            component_index=1,
+        )
 
     def test_vrcsdk_upload_delegates(self) -> None:
         """Default platforms=["windows"] is serialized and passed to send_action."""
@@ -2762,6 +2907,8 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertFalse(stale_cs.exists())
         self.assertFalse(stale_meta.exists())
+        self.assertIn("PrefabSentinel.VRCSDKUploadHandler.cs", result["data"]["removed_stale_files"])
+        self.assertIn("PrefabSentinel.VRCSDKUploadHandler.cs.meta", result["data"]["removed_stale_files"])
 
     @patch("prefab_sentinel.mcp_server.send_action")
     def test_diagnostics_warn_on_old_file_removal(self, _mock: MagicMock) -> None:
@@ -2789,6 +2936,111 @@ class TestDeployBridgeCleanup(unittest.TestCase):
 
         infos = [d for d in result["diagnostics"] if d["severity"] == "info"]
         self.assertTrue(any("VRCSDKUploadHandler" in d["message"] for d in infos))
+
+    @patch("prefab_sentinel.mcp_server.send_action")
+    def test_clean_redeploy_removes_all_target_files(self, _mock: MagicMock) -> None:
+        """All pre-existing files in target_dir are removed before deploy."""
+        (self._target / "Dummy.cs").write_text("// dummy", encoding="utf-8")
+        (self._target / "Dummy.cs.meta").write_text("guid: dummy", encoding="utf-8")
+
+        server = create_server(project_root=str(self._project_root))
+        _, result = _run(server.call_tool(
+            "deploy_bridge",
+            {"target_dir": str(self._target)},
+        ))
+
+        self.assertTrue(result["success"])
+        self.assertFalse((self._target / "Dummy.cs").exists())
+        self.assertFalse((self._target / "Dummy.cs.meta").exists())
+
+    @patch("prefab_sentinel.mcp_server.send_action")
+    def test_full_then_excluded_redeploy_no_residue(self, _mock: MagicMock) -> None:
+        """Full deploy then excluded redeploy leaves no upload handler residue."""
+        server = create_server(project_root=str(self._project_root))
+
+        _, result1 = _run(server.call_tool(
+            "deploy_bridge",
+            {"target_dir": str(self._target), "include_upload_handler": True},
+        ))
+        self.assertTrue(result1["success"])
+        self.assertTrue(
+            (self._target / "PrefabSentinel.VRCSDKUploadHandler.cs").exists(),
+        )
+
+        _, result2 = _run(server.call_tool(
+            "deploy_bridge",
+            {"target_dir": str(self._target), "include_upload_handler": False},
+        ))
+        self.assertTrue(result2["success"])
+        self.assertFalse(
+            (self._target / "PrefabSentinel.VRCSDKUploadHandler.cs").exists(),
+        )
+        self.assertFalse(
+            (self._target / "PrefabSentinel.VRCSDKUploadHandler.cs.meta").exists(),
+        )
+        self.assertIn(
+            "PrefabSentinel.VRCSDKUploadHandler.cs",
+            result2["data"]["removed_stale_files"],
+        )
+
+    @patch("prefab_sentinel.mcp_server.send_action")
+    def test_clean_redeploy_preserves_subdirectories(self, _mock: MagicMock) -> None:
+        """Subdirectories inside target_dir survive the clean phase."""
+        subdir = self._target / "subdir"
+        subdir.mkdir()
+        (subdir / "keep.txt").write_text("keep", encoding="utf-8")
+
+        server = create_server(project_root=str(self._project_root))
+        _, result = _run(server.call_tool(
+            "deploy_bridge",
+            {"target_dir": str(self._target)},
+        ))
+
+        self.assertTrue(result["success"])
+        self.assertTrue(subdir.is_dir())
+        self.assertTrue((subdir / "keep.txt").exists())
+        self.assertIsInstance(result["data"]["removed_stale_files"], list)
+
+    @patch("prefab_sentinel.mcp_server.send_action")
+    def test_removed_stale_files_in_response(self, _mock: MagicMock) -> None:
+        """Stale files removed during clean phase appear in response data."""
+        (self._target / "OldFile.cs").write_text("// old", encoding="utf-8")
+
+        server = create_server(project_root=str(self._project_root))
+        _, result = _run(server.call_tool(
+            "deploy_bridge",
+            {"target_dir": str(self._target)},
+        ))
+
+        self.assertTrue(result["success"])
+        self.assertIn("OldFile.cs", result["data"]["removed_stale_files"])
+
+    @patch("prefab_sentinel.mcp_server.send_action")
+    def test_clean_redeploy_diagnostic_message(self, _mock: MagicMock) -> None:
+        """Clearing files produces an info diagnostic with 'Cleared' message."""
+        (self._target / "Stale.cs").write_text("// stale", encoding="utf-8")
+
+        server = create_server(project_root=str(self._project_root))
+        _, result = _run(server.call_tool(
+            "deploy_bridge",
+            {"target_dir": str(self._target)},
+        ))
+
+        infos = [d for d in result["diagnostics"] if d["severity"] == "info"]
+        self.assertTrue(any("Cleared" in d["message"] for d in infos))
+
+    @patch("prefab_sentinel.mcp_server.send_action")
+    def test_first_deploy_empty_removed_stale(self, _mock: MagicMock) -> None:
+        """First deploy to empty target_dir has empty removed_stale_files."""
+        fresh_target = self._project_root / "Assets" / "Editor" / "FreshDeploy"
+        server = create_server(project_root=str(self._project_root))
+        _, result = _run(server.call_tool(
+            "deploy_bridge",
+            {"target_dir": str(fresh_target)},
+        ))
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["data"]["removed_stale_files"], [])
 
     @patch("prefab_sentinel.mcp_server.send_action")
     def test_uses_bridge_files_dir_when_available(self, _mock: MagicMock) -> None:
@@ -2865,6 +3117,64 @@ class TestExtractDescription(unittest.TestCase):
     def test_quoted_values_stripped(self) -> None:
         content = '---\ntool: "udonsharp"\n---\n# Title\n'
         self.assertEqual("udonsharp knowledge", self._extract(content))
+
+
+class TestCopyAssetTool(unittest.TestCase):
+    """Tests for the copy_asset MCP tool."""
+
+    def test_delegates_to_orchestrator(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.to_dict.return_value = {"success": True, "data": {"m_name_after": "copied"}}
+        mock_orch = MagicMock()
+        mock_orch.copy_asset.return_value = mock_resp
+
+        server = create_server()
+        with patch.object(
+            ProjectSession, "get_orchestrator", return_value=mock_orch,
+        ):
+            _, result = _run(server.call_tool("copy_asset", {
+                "source_path": "Assets/Mat/A.mat",
+                "dest_path": "Assets/Mat/B.mat",
+                "confirm": True,
+                "change_reason": "duplicate material",
+            }))
+
+        self.assertTrue(result["success"])
+        mock_orch.copy_asset.assert_called_once_with(
+            source_path="Assets/Mat/A.mat",
+            dest_path="Assets/Mat/B.mat",
+            dry_run=False,
+            change_reason="duplicate material",
+        )
+
+
+class TestRenameAssetTool(unittest.TestCase):
+    """Tests for the rename_asset MCP tool."""
+
+    def test_delegates_to_orchestrator(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.to_dict.return_value = {"success": True, "data": {"m_name_after": "renamed"}}
+        mock_orch = MagicMock()
+        mock_orch.rename_asset.return_value = mock_resp
+
+        server = create_server()
+        with patch.object(
+            ProjectSession, "get_orchestrator", return_value=mock_orch,
+        ):
+            _, result = _run(server.call_tool("rename_asset", {
+                "asset_path": "Assets/Mat/Old.mat",
+                "new_name": "New.mat",
+                "confirm": True,
+                "change_reason": "rename for clarity",
+            }))
+
+        self.assertTrue(result["success"])
+        mock_orch.rename_asset.assert_called_once_with(
+            asset_path="Assets/Mat/Old.mat",
+            new_name="New.mat",
+            dry_run=False,
+            change_reason="rename for clarity",
+        )
 
 
 if __name__ == "__main__":
