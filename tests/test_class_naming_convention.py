@@ -10,9 +10,9 @@ from pathlib import Path
 TARGET_FILE = Path("tests/test_vrcsdk_upload_handler_source.py")
 
 EXPECTED_CLASSES = (
-    "TestCs0117GetBuildTargetGroup",
-    "TestCs1501BuildErrorVisibility",
-    "TestCs0246BuildAndUploadWorldReflection",
+    "TestCS0117GetBuildTargetGroup",
+    "TestCS1501BuildErrorVisibility",
+    "TestCS0246BuildAndUploadWorldReflection",
 )
 
 REMOVED_CLASSES = (
