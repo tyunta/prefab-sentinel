@@ -1,4 +1,4 @@
-#if VRC_SDK_VRCSDK3
+#if VRC_SDK_VRCSDK3 && PS_VRCSDK_BASE_3_8_0
 using System;
 using System.Diagnostics;
 using System.Reflection;
@@ -402,4 +402,4 @@ namespace PrefabSentinel
         }
     }
 }
-#endif
+#endif // VRC_SDK_VRCSDK3 && PS_VRCSDK_BASE_3_8_0

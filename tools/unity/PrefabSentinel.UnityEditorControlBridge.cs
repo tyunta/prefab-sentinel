@@ -3366,8 +3366,8 @@ namespace PrefabSentinel
 
         private static EditorControlResponse TryHandleVrcsdkUpload(EditorControlRequest request, string responsePath)
         {
-            var handlerType = System.Type.GetType(
-                "PrefabSentinel.VRCSDKUploadHandler, Assembly-CSharp-Editor");
+            var handlerType = typeof(UnityEditorControlBridge).Assembly.GetType(
+                "PrefabSentinel.VRCSDKUploadHandler");
             if (handlerType == null)
                 return BuildError("VRCSDK_NOT_AVAILABLE",
                     "VRCSDKUploadHandler not found. Deploy VRCSDKUploadHandler.cs to Assets/Editor/ " +

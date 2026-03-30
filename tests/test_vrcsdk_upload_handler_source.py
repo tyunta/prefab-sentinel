@@ -259,6 +259,47 @@ class TestShowSdkPanelMenuItemConstant(unittest.TestCase):
         self.assertEqual(count, 1, f"SDK panel menu path literal appears {count} times, expected 1")
 
 
+class TestPreprocessorGuardVersionSpecific(unittest.TestCase):
+    """Preprocessor guard must require both SDK presence and version >= 3.8.0."""
+
+    def test_file_starts_with_version_specific_guard(self) -> None:
+        """First line must be '#if VRC_SDK_VRCSDK3 && PS_VRCSDK_BASE_3_8_0'."""
+        source = _read(UPLOAD_HANDLER)
+        first_line = source.splitlines()[0]
+        self.assertEqual(first_line, "#if VRC_SDK_VRCSDK3 && PS_VRCSDK_BASE_3_8_0")
+
+    def test_file_ends_with_matching_endif(self) -> None:
+        """Last non-empty line must be '#endif' with a comment referencing both symbols."""
+        source = _read(UPLOAD_HANDLER)
+        lines = [line for line in source.splitlines() if line.strip()]
+        last_line = lines[-1]
+        self.assertTrue(
+            last_line.startswith("#endif"),
+            f"Last line must start with #endif, got: {last_line}",
+        )
+        self.assertIn("VRC_SDK_VRCSDK3", last_line)
+        self.assertIn("PS_VRCSDK_BASE_3_8_0", last_line)
+
+
+class TestAssemblyLookupPattern(unittest.TestCase):
+    """TryHandleVrcsdkUpload must use assembly-agnostic type lookup."""
+
+    def test_uses_typeof_assembly_gettype(self) -> None:
+        """Must use typeof(UnityEditorControlBridge).Assembly.GetType pattern."""
+        source = _read(BRIDGE)
+        method_body = _extract_method(source, "TryHandleVrcsdkUpload")
+        self.assertIn(
+            "typeof(UnityEditorControlBridge).Assembly.GetType",
+            method_body,
+        )
+
+    def test_no_hardcoded_assembly_name(self) -> None:
+        """Must NOT contain 'Assembly-CSharp-Editor' string."""
+        source = _read(BRIDGE)
+        method_body = _extract_method(source, "TryHandleVrcsdkUpload")
+        self.assertNotIn("Assembly-CSharp-Editor", method_body)
+
+
 class TestLoginPollingInsideTryCatch(unittest.TestCase):
     """Login polling must be inside the outermost try-catch of HandleAsync (AR-002)."""
 
