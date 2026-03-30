@@ -90,19 +90,20 @@ class TestCS0246BuildAndUploadWorldReflection(unittest.TestCase):
             )
 
     def test_should_resolve_world_builder_via_reflection(self) -> None:
-        """BuildAndUploadWorld must pass the world builder type string to ResolveBuilder."""
+        """BuildAndUploadWorldAsync must pass the world builder type string to ResolveBuilder."""
         source = _read(UPLOAD_HANDLER)
-        world_method = _extract_method(source, "BuildAndUploadWorld")
+        world_method = _extract_method(source, "BuildAndUploadWorldAsync")
         self.assertIn(
             "VRC.SDK3.Editor.IVRCSdkWorldBuilderApi, VRC.SDK3.Editor",
             world_method,
         )
 
     def test_should_use_reflection_for_build_and_upload_call(self) -> None:
-        """BuildAndUploadWorld must invoke BuildAndUpload via reflection (InvokeBuildAndUpload)."""
+        """BuildAndUploadWorldAsync must resolve BuildAndUpload via Array.Find reflection."""
         source = _read(UPLOAD_HANDLER)
-        world_method = _extract_method(source, "BuildAndUploadWorld")
-        self.assertIn("InvokeBuildAndUpload(", world_method)
+        world_method = _extract_method(source, "BuildAndUploadWorldAsync")
+        self.assertIn("Array.Find(", world_method)
+        self.assertIn('"BuildAndUpload"', world_method)
 
     def test_resolve_builder_helper_exists_with_reflection_pattern(self) -> None:
         """ResolveBuilder helper must contain the shared reflection boilerplate."""
@@ -110,23 +111,24 @@ class TestCS0246BuildAndUploadWorldReflection(unittest.TestCase):
         helper = _extract_method(source, "ResolveBuilder")
         for pattern_desc, pattern in [
             ("Type.GetType reflection", "System.Type.GetType("),
-            ("TryGetBuilder reflection", 'GetMethod("TryGetBuilder")'),
+            ("GetMethods + Array.Find", "Array.Find("),
+            ("TryGetBuilder name check", '"TryGetBuilder"'),
             ("MakeGenericMethod", "MakeGenericMethod("),
         ]:
             self.assertIn(pattern, helper, f"ResolveBuilder missing: {pattern_desc}")
 
-    def test_invoke_build_and_upload_helper_exists(self) -> None:
-        """InvokeBuildAndUpload helper must contain BuildAndUpload reflection call."""
+    def test_invoke_static_async_helper_exists(self) -> None:
+        """InvokeStaticAsync helper must invoke methods via reflection and await the result."""
         source = _read(UPLOAD_HANDLER)
-        helper = _extract_method(source, "InvokeBuildAndUpload")
-        self.assertIn('GetMethod("BuildAndUpload")', helper)
-        self.assertIn("GetAwaiter().GetResult()", helper)
+        helper = _extract_method(source, "InvokeStaticAsync")
+        self.assertIn('GetProperty("Result")', helper)
+        self.assertIn("await task", helper)
 
     def test_both_methods_use_shared_helpers(self) -> None:
-        """Both BuildAndUploadAvatar and BuildAndUploadWorld must call the shared helpers."""
+        """Both BuildAndUploadAvatarAsync and BuildAndUploadWorldAsync must call the shared helpers."""
         source = _read(UPLOAD_HANDLER)
-        avatar_method = _extract_method(source, "BuildAndUploadAvatar")
-        world_method = _extract_method(source, "BuildAndUploadWorld")
+        avatar_method = _extract_method(source, "BuildAndUploadAvatarAsync")
+        world_method = _extract_method(source, "BuildAndUploadWorldAsync")
 
         for method_name, method_body in [
             ("Avatar", avatar_method),
@@ -138,16 +140,65 @@ class TestCS0246BuildAndUploadWorldReflection(unittest.TestCase):
                 f"{method_name} method must call ResolveBuilder",
             )
             self.assertIn(
-                "InvokeBuildAndUpload(",
+                "await",
                 method_body,
-                f"{method_name} method must call InvokeBuildAndUpload",
+                f"{method_name} method must await async operations",
             )
+
+
+class TestHandleAsyncFullProtection(unittest.TestCase):
+    """HandleAsync must wrap entire body in try-catch (async void must never leak exceptions)."""
+
+    def test_no_code_after_outermost_catch(self) -> None:
+        """All logic in HandleAsync must be inside the outermost try-catch."""
+        source = _read(UPLOAD_HANDLER)
+        method_body = _extract_method(source, "HandleAsync")
+        # After the outermost catch block closes, only closing brace of the method should remain
+        # Find the last "catch (Exception" which is the outermost catch
+        last_catch = method_body.rfind("catch (Exception")
+        self.assertGreater(last_catch, 0, "Outermost catch not found in HandleAsync")
+        # After the catch block, find the WriteResponse inside it
+        after_catch = method_body[last_catch:]
+        self.assertIn("WriteResponse(responsePath", after_catch)
+
+    def test_writeresponse_not_after_finally(self) -> None:
+        """WriteResponse calls must not appear between finally-close and method-close unprotected."""
+        source = _read(UPLOAD_HANDLER)
+        method_body = _extract_method(source, "HandleAsync")
+        # The finally block should be nested INSIDE the outer try, not at the same level
+        # Verify: "finally" appears before the outermost catch
+        finally_pos = method_body.find("finally")
+        last_catch_pos = method_body.rfind("catch (Exception")
+        self.assertGreater(
+            last_catch_pos,
+            finally_pos,
+            "Outermost catch must come after finally (finally is nested inside outer try)",
+        )
+
+
+class TestVRCApiTypeConstant(unittest.TestCase):
+    """VRCApi assembly-qualified type name must be a single constant, not duplicated."""
+
+    def test_vrcapi_type_defined_as_constant(self) -> None:
+        """VRCApiTypeName constant must be declared at class level."""
+        source = _read(UPLOAD_HANDLER)
+        self.assertIn(
+            'private const string VRCApiTypeName = "VRC.SDKBase.Editor.Api.VRCApi, VRC.SDKBase.Editor"',
+            source,
+        )
+
+    def test_vrcapi_type_string_not_duplicated(self) -> None:
+        """The literal VRCApi type string must appear exactly once (in the constant declaration)."""
+        source = _read(UPLOAD_HANDLER)
+        literal = '"VRC.SDKBase.Editor.Api.VRCApi, VRC.SDKBase.Editor"'
+        count = source.count(literal)
+        self.assertEqual(count, 1, f"VRCApi type string literal appears {count} times, expected 1")
 
 
 def _extract_method(source: str, method_name: str) -> str:
     """Extract the body of a named method from C# source (brace-counting)."""
     pattern = re.compile(
-        rf"(private|internal|public)\s+static\s+\w+\s+{re.escape(method_name)}\s*\(",
+        rf"(private|internal|public)\s+static\s+(?:async\s+)?\S+(?:\s*<[^>]+>)?\s+{re.escape(method_name)}(?:\s*<[^>]+>)?\s*\(",
     )
     match = pattern.search(source)
     if not match:
