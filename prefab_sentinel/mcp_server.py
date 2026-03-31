@@ -42,7 +42,14 @@ from prefab_sentinel.symbol_tree import (
     SymbolTree,
 )
 from prefab_sentinel.unity_assets import decode_text_file, resolve_asset_path
-from prefab_sentinel.unity_yaml_parser import CLASS_ID_MONOBEHAVIOUR
+from prefab_sentinel.unity_yaml_parser import (
+    CLASS_ID_MONOBEHAVIOUR,
+    split_yaml_blocks,
+)
+from prefab_sentinel.yaml_field_extraction import (
+    extract_block_fields,
+    parse_yaml_scalar,
+)
 
 __all__ = ["create_server"]
 
@@ -50,6 +57,19 @@ logger = logging.getLogger(__name__)
 
 _KNOWLEDGE_URI_PREFIX = "resource://prefab-sentinel/knowledge/"
 _KNOWLEDGE_DIR = Path(__file__).parent.parent / "knowledge"
+
+# Per-instance Unity metadata that must not be overwritten during copy-all.
+# m_Enabled and m_Name are intentionally included — they are user-visible.
+_COPY_SKIP_FIELDS = frozenset({
+    "m_ObjectHideFlags",
+    "m_CorrespondingSourceObject",
+    "m_PrefabInstance",
+    "m_PrefabAsset",
+    "m_GameObject",
+    "m_EditorHideFlags",
+    "m_Script",
+    "m_EditorClassIdentifier",
+})
 
 
 def _extract_description(path: Path) -> str:
@@ -174,6 +194,83 @@ def create_server(
 
         _walk(tree.roots, "")
         return paths
+
+    def _resolve_component_with_type(
+        tree: SymbolTree,
+        symbol_path: str,
+        asset_path: str,
+    ) -> tuple[SymbolNode, str, None] | tuple[None, None, dict[str, Any]]:
+        """Resolve a symbol path to a component node and its type name.
+
+        Returns ``(node, component_name, None)`` on success, or
+        ``(None, None, error_dict)`` on failure.
+        """
+        try:
+            node = tree.resolve_unique(symbol_path)
+        except SymbolNotFoundError:
+            suggestions = suggest_similar(
+                symbol_path, _collect_symbol_paths(tree),
+            )
+            return None, None, {
+                "success": False,
+                "severity": "error",
+                "code": "SYMBOL_NOT_FOUND",
+                "message": f"No component found at symbol path: {symbol_path!r}",
+                "data": {
+                    "asset_path": asset_path,
+                    "symbol_path": symbol_path,
+                    "suggestions": suggestions,
+                },
+                "diagnostics": [],
+            }
+        except AmbiguousSymbolError as exc:
+            return None, None, {
+                "success": False,
+                "severity": "error",
+                "code": "SYMBOL_AMBIGUOUS",
+                "message": str(exc),
+                "data": {"asset_path": asset_path, "symbol_path": symbol_path},
+                "diagnostics": [],
+            }
+
+        if node.kind != SymbolKind.COMPONENT:
+            return None, None, {
+                "success": False,
+                "severity": "error",
+                "code": "SYMBOL_NOT_COMPONENT",
+                "message": (
+                    f"Symbol path {symbol_path!r} resolves to a {node.kind.value}, "
+                    f"not a component. Provide a path to a component."
+                ),
+                "data": {
+                    "asset_path": asset_path,
+                    "symbol_path": symbol_path,
+                    "resolved_kind": node.kind.value,
+                },
+                "diagnostics": [],
+            }
+
+        try:
+            component_name = _resolve_component_name(node)
+        except ValueError as exc:
+            return None, None, {
+                "success": False,
+                "severity": "error",
+                "code": "SYMBOL_UNRESOLVABLE",
+                "message": str(exc),
+                "data": {"asset_path": asset_path, "symbol_path": symbol_path},
+                "diagnostics": [],
+            }
+
+        return node, component_name, None
+
+    def _find_block_by_file_id(text: str, file_id: str) -> str:
+        """Find the YAML block text for a given file ID."""
+        for block in split_yaml_blocks(text):
+            if block.file_id == file_id:
+                return block.text
+        msg = f"No YAML block found for fileID={file_id}"
+        raise ValueError(msg)
 
     # ------------------------------------------------------------------
     # Session management tools
@@ -686,67 +783,15 @@ def create_server(
             confirm: Set True to apply changes (False = dry-run only).
             change_reason: Human-readable reason for the change (audit trail).
         """
-        # 1. Symbol resolution
+        # 1-3. Resolve symbol → component → type name
         text, resolved = _read_asset(asset_path)
         tree = session.get_symbol_tree(resolved, text, include_properties=False)
-        try:
-            node = tree.resolve_unique(symbol_path)
-        except SymbolNotFoundError:
-            suggestions = suggest_similar(
-                symbol_path, _collect_symbol_paths(tree),
-            )
-            return {
-                "success": False,
-                "severity": "error",
-                "code": "SYMBOL_NOT_FOUND",
-                "message": f"No component found at symbol path: {symbol_path!r}",
-                "data": {
-                    "asset_path": asset_path,
-                    "symbol_path": symbol_path,
-                    "suggestions": suggestions,
-                },
-                "diagnostics": [],
-            }
-        except AmbiguousSymbolError as exc:
-            return {
-                "success": False,
-                "severity": "error",
-                "code": "SYMBOL_AMBIGUOUS",
-                "message": str(exc),
-                "data": {"asset_path": asset_path, "symbol_path": symbol_path},
-                "diagnostics": [],
-            }
-
-        # 2. Must be a component
-        if node.kind != SymbolKind.COMPONENT:
-            return {
-                "success": False,
-                "severity": "error",
-                "code": "SYMBOL_NOT_COMPONENT",
-                "message": (
-                    f"Symbol path {symbol_path!r} resolves to a {node.kind.value}, "
-                    f"not a component. Provide a path to a component."
-                ),
-                "data": {
-                    "asset_path": asset_path,
-                    "symbol_path": symbol_path,
-                    "resolved_kind": node.kind.value,
-                },
-                "diagnostics": [],
-            }
-
-        # 3. Resolve component type name
-        try:
-            component_name = _resolve_component_name(node)
-        except ValueError as exc:
-            return {
-                "success": False,
-                "severity": "error",
-                "code": "SYMBOL_UNRESOLVABLE",
-                "message": str(exc),
-                "data": {"asset_path": asset_path, "symbol_path": symbol_path},
-                "diagnostics": [],
-            }
+        node, component_name, err = _resolve_component_with_type(
+            tree, symbol_path, asset_path,
+        )
+        if err is not None:
+            return err
+        assert node is not None  # guaranteed by err check
 
         # 4. Build V2 patch plan
         plan: dict[str, object] = {
@@ -925,62 +970,12 @@ def create_server(
         """
         text, resolved = _read_asset(asset_path)
         tree = session.get_symbol_tree(resolved, text, include_properties=False)
-        try:
-            node = tree.resolve_unique(symbol_path)
-        except SymbolNotFoundError:
-            suggestions = suggest_similar(
-                symbol_path, _collect_symbol_paths(tree),
-            )
-            return {
-                "success": False,
-                "severity": "error",
-                "code": "SYMBOL_NOT_FOUND",
-                "message": f"No component found at symbol path: {symbol_path!r}",
-                "data": {
-                    "asset_path": asset_path,
-                    "symbol_path": symbol_path,
-                    "suggestions": suggestions,
-                },
-                "diagnostics": [],
-            }
-        except AmbiguousSymbolError as exc:
-            return {
-                "success": False,
-                "severity": "error",
-                "code": "SYMBOL_AMBIGUOUS",
-                "message": str(exc),
-                "data": {"asset_path": asset_path, "symbol_path": symbol_path},
-                "diagnostics": [],
-            }
-
-        if node.kind != SymbolKind.COMPONENT:
-            return {
-                "success": False,
-                "severity": "error",
-                "code": "SYMBOL_NOT_COMPONENT",
-                "message": (
-                    f"Symbol path {symbol_path!r} resolves to a {node.kind.value}, "
-                    f"not a component. Provide a path to a component."
-                ),
-                "data": {
-                    "asset_path": asset_path,
-                    "symbol_path": symbol_path,
-                    "resolved_kind": node.kind.value,
-                },
-                "diagnostics": [],
-            }
-
-        try:
-            component_name = _resolve_component_name(node)
-        except ValueError as exc:
-            return {
-                "success": False,
-                "severity": "error",
-                "code": "SYMBOL_UNRESOLVABLE",
-                "message": str(exc),
-                "data": {"asset_path": asset_path, "symbol_path": symbol_path},
-                "diagnostics": [],
-            }
+        node, component_name, err = _resolve_component_with_type(
+            tree, symbol_path, asset_path,
+        )
+        if err is not None:
+            return err
+        assert node is not None  # guaranteed by err check
 
         plan: dict[str, object] = {
             "plan_version": PLAN_VERSION,
@@ -1087,6 +1082,164 @@ def create_server(
         resolved_scope = session.resolve_scope(scope) or scope
         resp = orch.check_field_coverage(scope=resolved_scope)
         return resp.to_dict()
+
+    @server.tool()
+    def copy_component_fields(
+        src_asset_path: str,
+        src_symbol_path: str,
+        dst_asset_path: str,
+        dst_symbol_path: str,
+        fields: list[str] | None = None,
+        confirm: bool = False,
+        change_reason: str = "",
+    ) -> dict[str, Any]:
+        """Copy serialized field values between components of the same type.
+
+        Reads field values from the source component and writes them to
+        the destination via patch plan. Supports cross-asset and same-asset.
+
+        Two-phase workflow:
+        - confirm=False (default): dry-run preview of changes.
+        - confirm=True: applies changes to disk.
+
+        Args:
+            src_asset_path: Source asset file path.
+            src_symbol_path: Symbol path to the source component.
+            dst_asset_path: Destination asset file path.
+            dst_symbol_path: Symbol path to the destination component.
+            fields: Specific field names to copy. Omit to copy all user
+                fields. Warning: explicitly specifying system fields
+                (m_Script, m_GameObject) can corrupt component identity.
+            confirm: Set True to apply (False = dry-run only).
+            change_reason: Human-readable reason for the change (audit trail).
+        """
+        # 1-6. Read assets and resolve symbol → component → type
+        src_text, _src_resolved = _read_asset(src_asset_path)
+        dst_text, dst_resolved = _read_asset(dst_asset_path)
+
+        src_tree = session.get_symbol_tree(
+            _src_resolved, src_text, include_properties=False,
+        )
+        dst_tree = session.get_symbol_tree(
+            dst_resolved, dst_text, include_properties=False,
+        )
+
+        src_node, src_type, src_err = _resolve_component_with_type(
+            src_tree, src_symbol_path, src_asset_path,
+        )
+        if src_err is not None:
+            return src_err
+        assert src_node is not None  # guaranteed by err check
+
+        dst_node, dst_type, dst_err = _resolve_component_with_type(
+            dst_tree, dst_symbol_path, dst_asset_path,
+        )
+        if dst_err is not None:
+            return dst_err
+        assert dst_node is not None  # guaranteed by err check
+
+        # 7. Type match
+        if src_type != dst_type:
+            return {
+                "success": False,
+                "severity": "error",
+                "code": "TYPE_MISMATCH",
+                "message": (
+                    f"Source component type {src_type!r} does not match "
+                    f"destination type {dst_type!r}."
+                ),
+                "data": {"src_type": src_type, "dst_type": dst_type},
+                "diagnostics": [],
+            }
+
+        # 8-9. Extract fields from source YAML block
+        src_block = _find_block_by_file_id(src_text, src_node.file_id)
+        all_fields = extract_block_fields(src_block)
+
+        # 10. Filter fields
+        if fields is not None:
+            all_field_names = [name for name, _ in all_fields]
+            for f in fields:
+                if f not in all_field_names:
+                    return {
+                        "success": False,
+                        "severity": "error",
+                        "code": "FIELD_NOT_FOUND",
+                        "message": f"Field {f!r} not found on source component.",
+                        "data": {
+                            "field_name": f,
+                            "available_fields": all_field_names,
+                        },
+                        "diagnostics": [],
+                    }
+            requested = set(fields)
+            copy_pairs = [(n, v) for n, v in all_fields if n in requested]
+        else:
+            copy_pairs = [
+                (n, v) for n, v in all_fields if n not in _COPY_SKIP_FIELDS
+            ]
+
+        if not copy_pairs:
+            return {
+                "success": False,
+                "severity": "error",
+                "code": "NO_FIELDS_TO_COPY",
+                "message": "No copyable fields found on source component.",
+                "data": {
+                    "src_asset_path": src_asset_path,
+                    "src_symbol_path": src_symbol_path,
+                },
+                "diagnostics": [],
+            }
+
+        # 11-12. Build V2 patch plan
+        ops = [
+            {
+                "resource": "target",
+                "op": "set",
+                "component": dst_type,
+                "path": prop_path,
+                "value": parse_yaml_scalar(raw_value),
+            }
+            for prop_path, raw_value in copy_pairs
+        ]
+        plan: dict[str, object] = {
+            "plan_version": PLAN_VERSION,
+            "resources": [
+                {"id": "target", "path": dst_asset_path, "mode": "open"},
+            ],
+            "ops": ops,
+        }
+
+        # 13. Execute via orchestrator
+        orch = session.get_orchestrator()
+        resp = orch.patch_apply(
+            plan=plan,
+            dry_run=(not confirm),
+            confirm=confirm,
+            change_reason=change_reason or None,
+        )
+
+        auto_refresh = "skipped"
+        if confirm and resp.success:
+            session.invalidate_symbol_tree(dst_resolved)
+            auto_refresh = orch.maybe_auto_refresh()
+
+        result = resp.to_dict()
+        if confirm and resp.success:
+            result["auto_refresh"] = auto_refresh
+        result["copy_metadata"] = {
+            "src_asset_path": src_asset_path,
+            "src_symbol_path": src_symbol_path,
+            "src_component": src_type,
+            "src_file_id": src_node.file_id,
+            "dst_asset_path": dst_asset_path,
+            "dst_symbol_path": dst_symbol_path,
+            "dst_component": dst_type,
+            "dst_file_id": dst_node.file_id,
+            "fields_copied": [n for n, _ in copy_pairs],
+        }
+        return result
 
     # ------------------------------------------------------------------
     # Editor bridge tools (read-only)

@@ -98,13 +98,14 @@ class TestToolRegistration(unittest.TestCase):
             "validate_structure", "revert_overrides", "vrcsdk_upload",
             "inspect_hierarchy", "validate_runtime", "validate_all_wiring",
             "patch_apply",
+            "copy_component_fields",
         }
         self.assertEqual(expected, tool_names)
 
     def test_tool_count(self) -> None:
         server = create_server()
         tools = _run(server.list_tools())
-        self.assertEqual(67, len(tools))
+        self.assertEqual(68, len(tools))
 
 
 class TestSymbolTools(unittest.TestCase):
@@ -3294,6 +3295,549 @@ class TestRenameAssetTool(unittest.TestCase):
             dry_run=False,
             change_reason="rename for clarity",
         )
+
+
+class TestCopyComponentFieldsTool(unittest.TestCase):
+    """Test the copy_component_fields MCP tool."""
+
+    def _meshrenderer_prefab(self, go_name: str = "Cube") -> str:
+        return YAML_HEADER + "\n".join([
+            make_gameobject("100", go_name, ["200", "300"]),
+            make_transform("200", "100"),
+            (
+                "--- !u!23 &300\n"
+                "MeshRenderer:\n"
+                "  m_ObjectHideFlags: 0\n"
+                "  m_CorrespondingSourceObject: {fileID: 0}\n"
+                "  m_PrefabInstance: {fileID: 0}\n"
+                "  m_PrefabAsset: {fileID: 0}\n"
+                "  m_GameObject: {fileID: 100}\n"
+                "  m_Enabled: 1\n"
+                "  m_CastShadows: 1\n"
+                "  m_ReceiveShadows: 1\n"
+                "  m_Materials:\n"
+                "  - {fileID: 2100000, guid: aaa, type: 2}\n"
+            ),
+        ])
+
+    def _two_meshrenderer_prefab(self) -> str:
+        """Prefab with two GOs each having a MeshRenderer."""
+        return YAML_HEADER + "\n".join([
+            make_gameobject("100", "Parent", ["200", "300"]),
+            make_transform("200", "100", children_file_ids=["500"]),
+            (
+                "--- !u!23 &300\n"
+                "MeshRenderer:\n"
+                "  m_ObjectHideFlags: 0\n"
+                "  m_GameObject: {fileID: 100}\n"
+                "  m_Enabled: 1\n"
+                "  m_CastShadows: 1\n"
+            ),
+            make_gameobject("400", "Child", ["500", "600"]),
+            make_transform("500", "400", father_file_id="200"),
+            (
+                "--- !u!23 &600\n"
+                "MeshRenderer:\n"
+                "  m_ObjectHideFlags: 0\n"
+                "  m_GameObject: {fileID: 400}\n"
+                "  m_Enabled: 0\n"
+                "  m_CastShadows: 0\n"
+            ),
+        ])
+
+    def _monobehaviour_prefab(
+        self, guid: str = "aaaa1111bbbb2222cccc3333dddd4444",
+    ) -> str:
+        return YAML_HEADER + "\n".join([
+            make_gameobject("100", "Player", ["200", "300"]),
+            make_transform("200", "100"),
+            make_monobehaviour("300", "100", guid=guid, fields={
+                "speed": "5",
+                "health": "100",
+            }),
+        ])
+
+    def _system_fields_only_prefab(self) -> str:
+        """Prefab where MeshRenderer has ONLY system fields."""
+        return YAML_HEADER + "\n".join([
+            make_gameobject("100", "Empty", ["200", "300"]),
+            make_transform("200", "100"),
+            (
+                "--- !u!23 &300\n"
+                "MeshRenderer:\n"
+                "  m_ObjectHideFlags: 0\n"
+                "  m_CorrespondingSourceObject: {fileID: 0}\n"
+                "  m_PrefabInstance: {fileID: 0}\n"
+                "  m_PrefabAsset: {fileID: 0}\n"
+                "  m_GameObject: {fileID: 100}\n"
+                "  m_EditorHideFlags: 0\n"
+                "  m_Script: {fileID: 0}\n"
+                "  m_EditorClassIdentifier:\n"
+            ),
+        ])
+
+    def _mock_patch_apply_response(self, dry_run: bool = True) -> MagicMock:
+        resp = MagicMock()
+        resp.success = True
+        resp.to_dict.return_value = {
+            "success": True,
+            "severity": "info",
+            "code": "PATCH_APPLY_RESULT",
+            "message": "patch.apply dry-run completed." if dry_run else "patch.apply completed.",
+            "data": {"dry_run": dry_run, "confirm": not dry_run, "read_only": dry_run},
+            "diagnostics": [],
+        }
+        return resp
+
+    def test_copy_all_fields_dry_run(self) -> None:
+        """Copy all user fields with dry_run=True produces set ops."""
+        src_text = self._meshrenderer_prefab("Src")
+        dst_text = self._meshrenderer_prefab("Dst")
+        server = create_server()
+        mock_resp = self._mock_patch_apply_response(dry_run=True)
+
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "src.prefab"
+            dst = Path(td) / "dst.prefab"
+            src.write_text(src_text, encoding="utf-8")
+            dst.write_text(dst_text, encoding="utf-8")
+
+            with patch(
+                "prefab_sentinel.session.Phase1Orchestrator",
+            ) as mock_cls:
+                mock_orch = MagicMock()
+                mock_orch.patch_apply.return_value = mock_resp
+                mock_cls.default.return_value = mock_orch
+
+                _, result = _run(server.call_tool(
+                    "copy_component_fields",
+                    {
+                        "src_asset_path": str(src),
+                        "src_symbol_path": "Src/MeshRenderer",
+                        "dst_asset_path": str(dst),
+                        "dst_symbol_path": "Dst/MeshRenderer",
+                    },
+                ))
+
+        self.assertTrue(result["success"])
+        plan = mock_orch.patch_apply.call_args[1]["plan"]
+        op_paths = [op["path"] for op in plan["ops"]]
+        self.assertIn("m_Enabled", op_paths)
+        self.assertIn("m_CastShadows", op_paths)
+        self.assertIn("m_ReceiveShadows", op_paths)
+        # System fields must NOT be in ops
+        for op in plan["ops"]:
+            self.assertNotIn(op["path"], {
+                "m_ObjectHideFlags", "m_CorrespondingSourceObject",
+                "m_PrefabInstance", "m_PrefabAsset", "m_GameObject",
+                "m_EditorHideFlags", "m_Script", "m_EditorClassIdentifier",
+            })
+        self.assertTrue(mock_orch.patch_apply.call_args[1]["dry_run"])
+
+    def test_copy_specific_fields(self) -> None:
+        """When fields parameter is provided, only those fields appear in ops."""
+        src_text = self._meshrenderer_prefab("Src")
+        dst_text = self._meshrenderer_prefab("Dst")
+        server = create_server()
+        mock_resp = self._mock_patch_apply_response(dry_run=True)
+
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "src.prefab"
+            dst = Path(td) / "dst.prefab"
+            src.write_text(src_text, encoding="utf-8")
+            dst.write_text(dst_text, encoding="utf-8")
+
+            with patch(
+                "prefab_sentinel.session.Phase1Orchestrator",
+            ) as mock_cls:
+                mock_orch = MagicMock()
+                mock_orch.patch_apply.return_value = mock_resp
+                mock_cls.default.return_value = mock_orch
+
+                _, result = _run(server.call_tool(
+                    "copy_component_fields",
+                    {
+                        "src_asset_path": str(src),
+                        "src_symbol_path": "Src/MeshRenderer",
+                        "dst_asset_path": str(dst),
+                        "dst_symbol_path": "Dst/MeshRenderer",
+                        "fields": ["m_Enabled"],
+                    },
+                ))
+
+        self.assertTrue(result["success"])
+        plan = mock_orch.patch_apply.call_args[1]["plan"]
+        op_paths = [op["path"] for op in plan["ops"]]
+        self.assertEqual(["m_Enabled"], op_paths)
+
+    def test_copy_cross_asset(self) -> None:
+        """Source and destination in different files works."""
+        src_text = self._meshrenderer_prefab("Src")
+        dst_text = self._meshrenderer_prefab("Dst")
+        server = create_server()
+        mock_resp = self._mock_patch_apply_response(dry_run=True)
+
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "a.prefab"
+            dst = Path(td) / "b.prefab"
+            src.write_text(src_text, encoding="utf-8")
+            dst.write_text(dst_text, encoding="utf-8")
+
+            with patch(
+                "prefab_sentinel.session.Phase1Orchestrator",
+            ) as mock_cls:
+                mock_orch = MagicMock()
+                mock_orch.patch_apply.return_value = mock_resp
+                mock_cls.default.return_value = mock_orch
+
+                _, result = _run(server.call_tool(
+                    "copy_component_fields",
+                    {
+                        "src_asset_path": str(src),
+                        "src_symbol_path": "Src/MeshRenderer",
+                        "dst_asset_path": str(dst),
+                        "dst_symbol_path": "Dst/MeshRenderer",
+                    },
+                ))
+
+        self.assertTrue(result["success"])
+        plan = mock_orch.patch_apply.call_args[1]["plan"]
+        self.assertEqual(str(dst), plan["resources"][0]["path"])
+
+    def test_copy_same_asset(self) -> None:
+        """Source and destination in the same file, different GOs."""
+        text = self._two_meshrenderer_prefab()
+        server = create_server()
+        mock_resp = self._mock_patch_apply_response(dry_run=True)
+
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "test.prefab"
+            p.write_text(text, encoding="utf-8")
+
+            with patch(
+                "prefab_sentinel.session.Phase1Orchestrator",
+            ) as mock_cls:
+                mock_orch = MagicMock()
+                mock_orch.patch_apply.return_value = mock_resp
+                mock_cls.default.return_value = mock_orch
+
+                _, result = _run(server.call_tool(
+                    "copy_component_fields",
+                    {
+                        "src_asset_path": str(p),
+                        "src_symbol_path": "Parent/MeshRenderer",
+                        "dst_asset_path": str(p),
+                        "dst_symbol_path": "Parent/Child/MeshRenderer",
+                    },
+                ))
+
+        self.assertTrue(result["success"])
+
+    def test_copy_confirm(self) -> None:
+        """confirm=True triggers apply, cache invalidated."""
+        src_text = self._meshrenderer_prefab("Src")
+        dst_text = self._meshrenderer_prefab("Dst")
+        server = create_server()
+        mock_resp = self._mock_patch_apply_response(dry_run=False)
+
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "src.prefab"
+            dst = Path(td) / "dst.prefab"
+            src.write_text(src_text, encoding="utf-8")
+            dst.write_text(dst_text, encoding="utf-8")
+
+            with patch(
+                "prefab_sentinel.session.Phase1Orchestrator",
+            ) as mock_cls:
+                mock_orch = MagicMock()
+                mock_orch.patch_apply.return_value = mock_resp
+                mock_orch.maybe_auto_refresh.return_value = "done"
+                mock_cls.default.return_value = mock_orch
+
+                _, result = _run(server.call_tool(
+                    "copy_component_fields",
+                    {
+                        "src_asset_path": str(src),
+                        "src_symbol_path": "Src/MeshRenderer",
+                        "dst_asset_path": str(dst),
+                        "dst_symbol_path": "Dst/MeshRenderer",
+                        "confirm": True,
+                        "change_reason": "copy fields for test",
+                    },
+                ))
+
+        self.assertTrue(result["success"])
+        call_kwargs = mock_orch.patch_apply.call_args[1]
+        self.assertFalse(call_kwargs["dry_run"])
+        self.assertTrue(call_kwargs["confirm"])
+        self.assertIn("auto_refresh", result)
+
+    def test_copy_type_mismatch(self) -> None:
+        """Different component types return TYPE_MISMATCH error."""
+        src_text = self._meshrenderer_prefab("Src")
+        dst_text = YAML_HEADER + "\n".join([
+            make_gameobject("100", "Dst", ["200", "300"]),
+            make_transform("200", "100"),
+            (
+                "--- !u!33 &300\n"
+                "MeshFilter:\n"
+                "  m_ObjectHideFlags: 0\n"
+                "  m_GameObject: {fileID: 100}\n"
+            ),
+        ])
+        server = create_server()
+
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "src.prefab"
+            dst = Path(td) / "dst.prefab"
+            src.write_text(src_text, encoding="utf-8")
+            dst.write_text(dst_text, encoding="utf-8")
+
+            _, result = _run(server.call_tool(
+                "copy_component_fields",
+                {
+                    "src_asset_path": str(src),
+                    "src_symbol_path": "Src/MeshRenderer",
+                    "dst_asset_path": str(dst),
+                    "dst_symbol_path": "Dst/MeshFilter",
+                },
+            ))
+
+        self.assertFalse(result["success"])
+        self.assertEqual("TYPE_MISMATCH", result["code"])
+        self.assertIn("src_type", result["data"])
+        self.assertIn("dst_type", result["data"])
+
+    def test_copy_src_symbol_not_found(self) -> None:
+        """SYMBOL_NOT_FOUND when source symbol path doesn't resolve."""
+        src_text = self._meshrenderer_prefab("Src")
+        dst_text = self._meshrenderer_prefab("Dst")
+        server = create_server()
+
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "src.prefab"
+            dst = Path(td) / "dst.prefab"
+            src.write_text(src_text, encoding="utf-8")
+            dst.write_text(dst_text, encoding="utf-8")
+
+            _, result = _run(server.call_tool(
+                "copy_component_fields",
+                {
+                    "src_asset_path": str(src),
+                    "src_symbol_path": "NonExistent/MeshRenderer",
+                    "dst_asset_path": str(dst),
+                    "dst_symbol_path": "Dst/MeshRenderer",
+                },
+            ))
+
+        self.assertFalse(result["success"])
+        self.assertEqual("SYMBOL_NOT_FOUND", result["code"])
+        self.assertIn("suggestions", result["data"])
+
+    def test_copy_dst_symbol_not_found(self) -> None:
+        """SYMBOL_NOT_FOUND when destination symbol path doesn't resolve."""
+        src_text = self._meshrenderer_prefab("Src")
+        dst_text = self._meshrenderer_prefab("Dst")
+        server = create_server()
+
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "src.prefab"
+            dst = Path(td) / "dst.prefab"
+            src.write_text(src_text, encoding="utf-8")
+            dst.write_text(dst_text, encoding="utf-8")
+
+            _, result = _run(server.call_tool(
+                "copy_component_fields",
+                {
+                    "src_asset_path": str(src),
+                    "src_symbol_path": "Src/MeshRenderer",
+                    "dst_asset_path": str(dst),
+                    "dst_symbol_path": "NonExistent/MeshRenderer",
+                },
+            ))
+
+        self.assertFalse(result["success"])
+        self.assertEqual("SYMBOL_NOT_FOUND", result["code"])
+
+    def test_copy_src_not_component(self) -> None:
+        """SYMBOL_NOT_COMPONENT when source is a GameObject."""
+        src_text = self._meshrenderer_prefab("Src")
+        dst_text = self._meshrenderer_prefab("Dst")
+        server = create_server()
+
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "src.prefab"
+            dst = Path(td) / "dst.prefab"
+            src.write_text(src_text, encoding="utf-8")
+            dst.write_text(dst_text, encoding="utf-8")
+
+            _, result = _run(server.call_tool(
+                "copy_component_fields",
+                {
+                    "src_asset_path": str(src),
+                    "src_symbol_path": "Src",
+                    "dst_asset_path": str(dst),
+                    "dst_symbol_path": "Dst/MeshRenderer",
+                },
+            ))
+
+        self.assertFalse(result["success"])
+        self.assertEqual("SYMBOL_NOT_COMPONENT", result["code"])
+
+    def test_copy_dst_not_component(self) -> None:
+        """SYMBOL_NOT_COMPONENT for destination path."""
+        src_text = self._meshrenderer_prefab("Src")
+        dst_text = self._meshrenderer_prefab("Dst")
+        server = create_server()
+
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "src.prefab"
+            dst = Path(td) / "dst.prefab"
+            src.write_text(src_text, encoding="utf-8")
+            dst.write_text(dst_text, encoding="utf-8")
+
+            _, result = _run(server.call_tool(
+                "copy_component_fields",
+                {
+                    "src_asset_path": str(src),
+                    "src_symbol_path": "Src/MeshRenderer",
+                    "dst_asset_path": str(dst),
+                    "dst_symbol_path": "Dst",
+                },
+            ))
+
+        self.assertFalse(result["success"])
+        self.assertEqual("SYMBOL_NOT_COMPONENT", result["code"])
+
+    def test_copy_field_not_found(self) -> None:
+        """FIELD_NOT_FOUND when requested field doesn't exist on source."""
+        src_text = self._meshrenderer_prefab("Src")
+        dst_text = self._meshrenderer_prefab("Dst")
+        server = create_server()
+
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "src.prefab"
+            dst = Path(td) / "dst.prefab"
+            src.write_text(src_text, encoding="utf-8")
+            dst.write_text(dst_text, encoding="utf-8")
+
+            _, result = _run(server.call_tool(
+                "copy_component_fields",
+                {
+                    "src_asset_path": str(src),
+                    "src_symbol_path": "Src/MeshRenderer",
+                    "dst_asset_path": str(dst),
+                    "dst_symbol_path": "Dst/MeshRenderer",
+                    "fields": ["nonExistentField"],
+                },
+            ))
+
+        self.assertFalse(result["success"])
+        self.assertEqual("FIELD_NOT_FOUND", result["code"])
+        self.assertIn("available_fields", result["data"])
+
+    def test_copy_monobehaviour_fields(self) -> None:
+        """MonoBehaviour with custom fields copies correctly."""
+        src_text = self._monobehaviour_prefab()
+        dst_text = self._monobehaviour_prefab()
+        mock_resp = self._mock_patch_apply_response(dry_run=True)
+
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "src.prefab"
+            dst = Path(td) / "dst.prefab"
+            src.write_text(src_text, encoding="utf-8")
+            dst.write_text(dst_text, encoding="utf-8")
+
+            script_dir = Path(td) / "Assets" / "Scripts"
+            script_dir.mkdir(parents=True)
+            cs_file = script_dir / "PlayerScript.cs"
+            cs_file.write_text(
+                "using UnityEngine;\npublic class PlayerScript : MonoBehaviour {}\n",
+                encoding="utf-8",
+            )
+            meta_file = script_dir / "PlayerScript.cs.meta"
+            meta_file.write_text(
+                "fileFormatVersion: 2\nguid: aaaa1111bbbb2222cccc3333dddd4444\n",
+                encoding="utf-8",
+            )
+
+            with patch(
+                "prefab_sentinel.session.Phase1Orchestrator",
+            ) as mock_cls:
+                mock_orch = MagicMock()
+                mock_orch.patch_apply.return_value = mock_resp
+                mock_cls.default.return_value = mock_orch
+
+                server_inst = create_server(project_root=td)
+                _, result = _run(server_inst.call_tool(
+                    "copy_component_fields",
+                    {
+                        "src_asset_path": str(src),
+                        "src_symbol_path": "Player/MonoBehaviour(PlayerScript)",
+                        "dst_asset_path": str(dst),
+                        "dst_symbol_path": "Player/MonoBehaviour(PlayerScript)",
+                    },
+                ))
+
+        self.assertTrue(result["success"])
+        plan = mock_orch.patch_apply.call_args[1]["plan"]
+        op_paths = [op["path"] for op in plan["ops"]]
+        self.assertIn("speed", op_paths)
+        self.assertIn("health", op_paths)
+
+    def test_copy_no_fields_to_copy(self) -> None:
+        """NO_FIELDS_TO_COPY when source has only system fields."""
+        src_text = self._system_fields_only_prefab()
+        dst_text = self._meshrenderer_prefab("Dst")
+        server = create_server()
+
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "src.prefab"
+            dst = Path(td) / "dst.prefab"
+            src.write_text(src_text, encoding="utf-8")
+            dst.write_text(dst_text, encoding="utf-8")
+
+            _, result = _run(server.call_tool(
+                "copy_component_fields",
+                {
+                    "src_asset_path": str(src),
+                    "src_symbol_path": "Empty/MeshRenderer",
+                    "dst_asset_path": str(dst),
+                    "dst_symbol_path": "Dst/MeshRenderer",
+                },
+            ))
+
+        self.assertFalse(result["success"])
+        self.assertEqual("NO_FIELDS_TO_COPY", result["code"])
+        self.assertIn("src_asset_path", result["data"])
+        self.assertIn("src_symbol_path", result["data"])
+
+    def test_copy_monobehaviour_unresolvable(self) -> None:
+        """SYMBOL_UNRESOLVABLE when MonoBehaviour has no resolved script name."""
+        src_text = self._monobehaviour_prefab()
+        dst_text = self._monobehaviour_prefab()
+        server = create_server()
+
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "src.prefab"
+            dst = Path(td) / "dst.prefab"
+            src.write_text(src_text, encoding="utf-8")
+            dst.write_text(dst_text, encoding="utf-8")
+
+            _, result = _run(server.call_tool(
+                "copy_component_fields",
+                {
+                    "src_asset_path": str(src),
+                    "src_symbol_path": "Player/MonoBehaviour",
+                    "dst_asset_path": str(dst),
+                    "dst_symbol_path": "Player/MonoBehaviour",
+                },
+            ))
+
+        self.assertFalse(result["success"])
+        self.assertEqual("SYMBOL_UNRESOLVABLE", result["code"])
+        self.assertIn("asset_path", result["data"])
+        self.assertIn("symbol_path", result["data"])
 
 
 if __name__ == "__main__":
