@@ -791,6 +791,7 @@ def create_server(
         )
         if err is not None:
             return err
+        assert node is not None  # guaranteed by err check
 
         # 4. Build V2 patch plan
         plan: dict[str, object] = {
@@ -974,6 +975,7 @@ def create_server(
         )
         if err is not None:
             return err
+        assert node is not None  # guaranteed by err check
 
         plan: dict[str, object] = {
             "plan_version": PLAN_VERSION,
@@ -1127,12 +1129,14 @@ def create_server(
         )
         if src_err is not None:
             return src_err
+        assert src_node is not None  # guaranteed by err check
 
         dst_node, dst_type, dst_err = _resolve_component_with_type(
             dst_tree, dst_symbol_path, dst_asset_path,
         )
         if dst_err is not None:
             return dst_err
+        assert dst_node is not None  # guaranteed by err check
 
         # 7. Type match
         if src_type != dst_type:
