@@ -297,3 +297,22 @@ def build_set_camera_kwargs(
         kwargs["camera_orthographic"] = orthographic
 
     return kwargs
+
+
+def build_create_empty_kwargs(
+    *,
+    name: str,
+    parent_path: str = "",
+    position: str = "",
+) -> dict[str, str]:
+    """Build send_action kwargs from editor_create_empty parameters.
+
+    Omits empty optional fields so the bridge receives only explicitly
+    specified values.
+    """
+    kwargs: dict[str, str] = {"new_name": name}
+    if parent_path:
+        kwargs["hierarchy_path"] = parent_path
+    if position:
+        kwargs["property_value"] = position
+    return kwargs

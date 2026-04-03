@@ -17,7 +17,7 @@ namespace PrefabSentinel
     public static class UnityEditorControlBridge
     {
         public const int ProtocolVersion = 1;
-        public const string BridgeVersion = "0.5.146";
+        public const string BridgeVersion = "0.5.148";
 
         /// <summary>Actions that write their response file asynchronously (not on return).</summary>
         public static readonly System.Collections.Generic.HashSet<string> AsyncActions =
@@ -2034,6 +2034,48 @@ namespace PrefabSentinel
                     { prop.vector3Value = new Vector3(x, y, z); return true; }
                     return false;
                 }
+                case SerializedPropertyType.Color:
+                {
+                    var parts = v.Split(',');
+                    if (parts.Length < 3) return false;
+                    if (!float.TryParse(parts[0].Trim(), System.Globalization.NumberStyles.Float, ci, out float r)
+                        || !float.TryParse(parts[1].Trim(), System.Globalization.NumberStyles.Float, ci, out float g)
+                        || !float.TryParse(parts[2].Trim(), System.Globalization.NumberStyles.Float, ci, out float b))
+                        return false;
+                    float a = 1f;
+                    if (parts.Length >= 4
+                        && float.TryParse(parts[3].Trim(), System.Globalization.NumberStyles.Float, ci, out float aParsed))
+                        a = aParsed;
+                    prop.colorValue = new Color(r, g, b, a);
+                    return true;
+                }
+                case SerializedPropertyType.Vector2:
+                {
+                    var parts = v.Split(',');
+                    if (parts.Length >= 2
+                        && float.TryParse(parts[0].Trim(), System.Globalization.NumberStyles.Float, ci, out float x)
+                        && float.TryParse(parts[1].Trim(), System.Globalization.NumberStyles.Float, ci, out float y))
+                    { prop.vector2Value = new Vector2(x, y); return true; }
+                    return false;
+                }
+                case SerializedPropertyType.Vector4:
+                {
+                    var parts = v.Split(',');
+                    if (parts.Length >= 4
+                        && float.TryParse(parts[0].Trim(), System.Globalization.NumberStyles.Float, ci, out float x)
+                        && float.TryParse(parts[1].Trim(), System.Globalization.NumberStyles.Float, ci, out float y)
+                        && float.TryParse(parts[2].Trim(), System.Globalization.NumberStyles.Float, ci, out float z)
+                        && float.TryParse(parts[3].Trim(), System.Globalization.NumberStyles.Float, ci, out float w))
+                    { prop.vector4Value = new Vector4(x, y, z, w); return true; }
+                    return false;
+                }
+                case SerializedPropertyType.ObjectReference:
+                {
+                    var (obj, _) = ResolveObjectReference(v);
+                    if (obj != null)
+                    { prop.objectReferenceValue = obj; return true; }
+                    return false;
+                }
                 case SerializedPropertyType.ArraySize:
                 case SerializedPropertyType.FixedBufferSize:
                     if (int.TryParse(v, System.Globalization.NumberStyles.Integer, ci, out int av))
@@ -2055,18 +2097,6 @@ namespace PrefabSentinel
             return float.TryParse(parts[0].Trim(), System.Globalization.NumberStyles.Float, ci, out result.x)
                 && float.TryParse(parts[1].Trim(), System.Globalization.NumberStyles.Float, ci, out result.y)
                 && float.TryParse(parts[2].Trim(), System.Globalization.NumberStyles.Float, ci, out result.z);
-        }
-
-        private static string GetHierarchyPath(GameObject go)
-        {
-            string path = "/" + go.name;
-            var t = go.transform.parent;
-            while (t != null)
-            {
-                path = "/" + t.name + path;
-                t = t.parent;
-            }
-            return path;
         }
 
         private static EditorControlResponse HandleEditorCreateEmpty(EditorControlRequest request)
@@ -2095,7 +2125,7 @@ namespace PrefabSentinel
             if (TryParseVector3(request.property_value, out Vector3 pos))
                 go.transform.localPosition = pos;
 
-            string path = GetHierarchyPath(go);
+            string path = GetHierarchyPath(go.transform);
             var resp = BuildSuccess("EDITOR_CTRL_CREATE_EMPTY_OK",
                 $"Created empty GameObject '{request.new_name}' at {path}",
                 data: new EditorControlData
@@ -2161,7 +2191,7 @@ namespace PrefabSentinel
             if (TryParseVector3(request.rotation, out Vector3 rot))
                 go.transform.localEulerAngles = rot;
 
-            string primPath = GetHierarchyPath(go);
+            string primPath = GetHierarchyPath(go.transform);
             var resp = BuildSuccess("EDITOR_CTRL_CREATE_PRIM_OK",
                 $"Created {request.primitive_type} '{go.name}' at {primPath}",
                 data: new EditorControlData
@@ -2203,6 +2233,7 @@ namespace PrefabSentinel
             Undo.SetCurrentGroupName("PrefabSentinel: Batch Create");
 
             var createdPaths = new System.Collections.Generic.List<string>();
+            var warnings = new System.Collections.Generic.List<EditorControlDiagnostic>();
 
             foreach (var spec in wrapper.items)
             {
@@ -2237,6 +2268,14 @@ namespace PrefabSentinel
                     if (parent != null)
                         Undo.SetTransformParent(go.transform, parent.transform,
                             $"PrefabSentinel: SetParent {go.name}");
+                    else
+                        warnings.Add(new EditorControlDiagnostic
+                        {
+                            path = spec.parent,
+                            location = $"batch item index {createdPaths.Count}",
+                            detail = $"Parent not found: {spec.parent}. Object '{go.name}' created at scene root.",
+                            evidence = "GameObject.Find returned null"
+                        });
                 }
 
                 if (TryParseVector3(spec.position, out Vector3 pos))
@@ -2246,7 +2285,28 @@ namespace PrefabSentinel
                 if (TryParseVector3(spec.rotation, out Vector3 rot))
                     go.transform.localEulerAngles = rot;
 
-                createdPaths.Add(GetHierarchyPath(go));
+                if (spec.components != null)
+                {
+                    foreach (var compTypeName in spec.components)
+                    {
+                        if (string.IsNullOrEmpty(compTypeName)) continue;
+                        var compType = ResolveComponentType(compTypeName);
+                        if (compType == null)
+                        {
+                            warnings.Add(new EditorControlDiagnostic
+                            {
+                                path = GetHierarchyPath(go.transform),
+                                location = $"batch item index {createdPaths.Count}",
+                                detail = $"Component type not found: {compTypeName}. Skipped.",
+                                evidence = "ResolveComponentType returned null"
+                            });
+                            continue;
+                        }
+                        Undo.AddComponent(go, compType);
+                    }
+                }
+
+                createdPaths.Add(GetHierarchyPath(go.transform));
             }
 
             Undo.CollapseUndoOperations(undoGroup);
@@ -2259,11 +2319,15 @@ namespace PrefabSentinel
                     read_only = false,
                     suggestions = createdPaths.ToArray(),
                 });
-            batchCreateResp.diagnostics = new[] { new EditorControlDiagnostic
+            var diagList = new System.Collections.Generic.List<EditorControlDiagnostic>(warnings);
+            diagList.Add(new EditorControlDiagnostic
             {
                 detail = "Runtime modification — save the scene (File > Save) to persist.",
                 evidence = "Undo.CollapseUndoOperations"
-            }};
+            });
+            batchCreateResp.diagnostics = diagList.ToArray();
+            if (warnings.Count > 0)
+                batchCreateResp.severity = "warning";
             return batchCreateResp;
         }
 
@@ -3221,6 +3285,7 @@ namespace PrefabSentinel
             public string position = string.Empty;
             public string scale = string.Empty;
             public string rotation = string.Empty;
+            public string[] components;
         }
 
         [Serializable]
