@@ -24,6 +24,11 @@ from prefab_sentinel.bridge_constants import (
     BRIDGE_WATCH_DIR_ENV,
     UNITY_TIMEOUT_SEC_ENV as BRIDGE_TIMEOUT_ENV,
 )
+from prefab_sentinel.editor_bridge_builders import (  # noqa: F401
+    build_create_empty_kwargs,
+    build_set_camera_kwargs,
+)
+from prefab_sentinel.json_io import dump_json, load_json
 
 PROTOCOL_VERSION = 1
 # Empirical: sufficient for typical Inspector operations in loaded projects
@@ -179,7 +184,7 @@ def send_action(
     try:
         watch_dir.mkdir(parents=True, exist_ok=True)
         tmp_file.write_text(
-            json.dumps(request_payload, ensure_ascii=False),
+            dump_json(request_payload, indent=None),
             encoding="utf-8",
         )
         tmp_file.rename(request_file)
@@ -196,7 +201,7 @@ def send_action(
         if response_file.exists():
             try:
                 raw = response_file.read_text(encoding="utf-8")
-                payload = json.loads(raw)
+                payload = load_json(raw)
             except (OSError, json.JSONDecodeError) as exc:
                 return _error_response(
                     code="EDITOR_BRIDGE_RESPONSE_READ",
@@ -259,60 +264,3 @@ def get_last_bridge_version() -> str | None:
     return _last_bridge_version
 
 
-def build_set_camera_kwargs(
-    *,
-    pivot: str = "",
-    yaw: float = float("nan"),
-    pitch: float = float("nan"),
-    distance: float = -1.0,
-    orthographic: int = -1,
-    position: str = "",
-    look_at: str = "",
-) -> dict[str, Any]:
-    """Build send_action kwargs from set_camera parameters.
-
-    Keeps parameter parsing separate from MCP server for testability.
-    """
-    import json as _json
-    import math
-
-    kwargs: dict[str, Any] = {}
-
-    if position:
-        p = _json.loads(position)
-        kwargs["camera_position"] = [p["x"], p["y"], p["z"]]
-    if look_at:
-        la = _json.loads(look_at)
-        kwargs["camera_look_at"] = [la["x"], la["y"], la["z"]]
-    if pivot:
-        pv = _json.loads(pivot)
-        kwargs["camera_pivot"] = [pv["x"], pv["y"], pv["z"]]
-    if not math.isnan(yaw):
-        kwargs["yaw"] = yaw
-    if not math.isnan(pitch):
-        kwargs["pitch"] = pitch
-    if distance >= 0:
-        kwargs["distance"] = distance
-    if orthographic >= 0:
-        kwargs["camera_orthographic"] = orthographic
-
-    return kwargs
-
-
-def build_create_empty_kwargs(
-    *,
-    name: str,
-    parent_path: str = "",
-    position: str = "",
-) -> dict[str, str]:
-    """Build send_action kwargs from editor_create_empty parameters.
-
-    Omits empty optional fields so the bridge receives only explicitly
-    specified values.
-    """
-    kwargs: dict[str, str] = {"new_name": name}
-    if parent_path:
-        kwargs["hierarchy_path"] = parent_path
-    if position:
-        kwargs["property_value"] = position
-    return kwargs

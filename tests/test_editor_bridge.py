@@ -17,6 +17,7 @@ from prefab_sentinel.editor_bridge import (
     check_editor_bridge_env,
     send_action,
 )
+from prefab_sentinel.unity_assets import resolve_asset_path
 
 
 class TestCheckEditorBridgeEnv(unittest.TestCase):
@@ -134,7 +135,7 @@ class TestSendAction(unittest.TestCase):
                             },
                             "diagnostics": [],
                         }
-                        resp_path.write_text(json.dumps(resp))
+                        resp_path.write_text(json.dumps(resp), encoding="utf-8")
                         break
 
             import threading
@@ -297,46 +298,6 @@ class TestSetCameraParams(unittest.TestCase):
         self.assertEqual(kwargs["camera_orthographic"], 1)
 
 
-class TestResolveAssetPath(unittest.TestCase):
-    """Validate resolve_asset_path joins Assets/... paths with project root."""
-
-    def test_relative_assets_path_resolved(self) -> None:
-
-        from pathlib import Path
-
-        from prefab_sentinel.unity_assets import resolve_asset_path
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            assets_dir = Path(tmpdir) / "Assets"
-            assets_dir.mkdir()
-            fake_asset = assets_dir / "test.prefab"
-            fake_asset.write_text("%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Test\n")
-
-            resolved = resolve_asset_path("Assets/test.prefab", Path(tmpdir))
-            self.assertEqual(resolved, fake_asset.resolve())
-
-    def test_absolute_path_unchanged(self) -> None:
-
-        from pathlib import Path
-
-        from prefab_sentinel.unity_assets import resolve_asset_path
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            fake_asset = Path(tmpdir) / "test.prefab"
-            fake_asset.write_text("%YAML 1.1\n")
-
-            resolved = resolve_asset_path(str(fake_asset), Path(tmpdir))
-            self.assertEqual(resolved, fake_asset)
-
-    def test_no_project_root_returns_as_is(self) -> None:
-        from pathlib import Path
-
-        from prefab_sentinel.unity_assets import resolve_asset_path
-
-        resolved = resolve_asset_path("Assets/nonexistent.prefab", None)
-        self.assertEqual(resolved, Path("Assets/nonexistent.prefab"))
-
-
 class TestCreateEmptyKwargs(unittest.TestCase):
     """I4: build_create_empty_kwargs omits empty optional fields."""
 
@@ -373,6 +334,60 @@ class TestCreateEmptyKwargs(unittest.TestCase):
         self.assertEqual(result, {"new_name": "Obj"})
         self.assertNotIn("hierarchy_path", result)
         self.assertNotIn("property_value", result)
+
+
+class TestResolveAssetPath(unittest.TestCase):
+    """Validate resolve_asset_path joins Assets/... paths with project root."""
+
+    def test_relative_assets_path_resolved(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            assets_dir = Path(tmpdir) / "Assets"
+            assets_dir.mkdir()
+            fake_asset = assets_dir / "test.prefab"
+            fake_asset.write_text(
+                "%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Test\n",
+                encoding="utf-8",
+            )
+
+            resolved = resolve_asset_path("Assets/test.prefab", Path(tmpdir))
+            self.assertEqual(resolved, fake_asset.resolve())
+
+    def test_absolute_path_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fake_asset = Path(tmpdir) / "test.prefab"
+            fake_asset.write_text("%YAML 1.1\n", encoding="utf-8")
+
+            resolved = resolve_asset_path(str(fake_asset), Path(tmpdir))
+            self.assertEqual(resolved, fake_asset)
+
+    def test_no_project_root_returns_as_is(self) -> None:
+        resolved = resolve_asset_path("Assets/nonexistent.prefab", None)
+        self.assertEqual(resolved, Path("Assets/nonexistent.prefab"))
+
+    def test_path_traversal_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertRaises(ValueError) as ctx:
+                resolve_asset_path("Assets/../../etc/passwd", Path(tmpdir))
+            self.assertIn("escapes project root", str(ctx.exception))
+
+    def test_absolute_outside_root_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertRaises(ValueError) as ctx:
+                resolve_asset_path("/outside/path.prefab", Path(tmpdir))
+            self.assertIn("escapes project root", str(ctx.exception))
+
+    def test_valid_relative_inside_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            assets_dir = Path(tmpdir) / "Assets"
+            assets_dir.mkdir()
+            asset = assets_dir / "test.prefab"
+            asset.write_text("%YAML 1.1\n", encoding="utf-8")
+            resolved = resolve_asset_path("Assets/test.prefab", Path(tmpdir))
+            self.assertEqual(resolved, asset.resolve())
+
+    def test_no_root_skips_guard(self) -> None:
+        resolved = resolve_asset_path("../../etc/passwd", None)
+        self.assertEqual(resolved, Path("../../etc/passwd"))
 
 
 if __name__ == "__main__":

@@ -3,11 +3,12 @@ from __future__ import annotations
 import argparse
 import csv
 import glob
-import json
 import math
 import sys
 from pathlib import Path
 from typing import Any
+
+from prefab_sentinel.json_io import dump_json, load_json_file
 
 
 def _pass_pct(total: int, failures: int) -> float | None:
@@ -670,7 +671,7 @@ def _compute_profile_timeout_metrics(
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    path.write_text(dump_json(payload), encoding="utf-8")
 
 
 def _write_csv(out_path: Path, header: list[str], rows: list[dict[str, Any]]) -> None:
@@ -893,7 +894,7 @@ def _load_history_rows(
     include_targets = {target for target in args.target}
     rows: list[dict[str, Any]] = []
     for source in input_paths:
-        payload = json.loads(source.read_text(encoding="utf-8"))
+        payload = load_json_file(source)
         if not _is_smoke_batch_summary(payload):
             continue
         cases = payload.get("data", {}).get("cases", [])

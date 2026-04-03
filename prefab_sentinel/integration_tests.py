@@ -13,13 +13,13 @@ This module provides:
 
 from __future__ import annotations
 
-import json
 import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
 
 from prefab_sentinel.bridge_constants import VALID_SEVERITIES
+from prefab_sentinel.json_io import load_json
 from prefab_sentinel.wsl_compat import needs_windows_paths, split_unity_command, to_windows_path
 
 _CS_FILES = [
@@ -161,7 +161,7 @@ _REQUIRED_FIELDS = {"success", "severity", "code", "message", "data"}
 def parse_integration_results(results_path: Path) -> dict[str, Any]:
     """Read, validate, and return integration test results."""
     text = results_path.read_text(encoding="utf-8")
-    data: dict[str, Any] = json.loads(text)
+    data: dict[str, Any] = load_json(text)
 
     missing = _REQUIRED_FIELDS - set(data.keys())
     if missing:

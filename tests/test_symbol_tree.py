@@ -12,6 +12,7 @@ from prefab_sentinel.symbol_tree import (
     SymbolNode,
     SymbolNotFoundError,
     SymbolTree,
+    build_script_name_map,
 )
 from tests.yaml_helpers import (
     YAML_HEADER,
@@ -746,7 +747,7 @@ class TestSymbolTreeNestedExpansion(unittest.TestCase):
             + make_transform("600", "500")
             + make_meshrenderer("700", "500")
         )
-        child_path.write_text(child_text)
+        child_path.write_text(child_text, encoding="utf-8")
         return child_path
 
     def _parent_text_with_instance(self) -> str:
@@ -867,7 +868,7 @@ class TestSymbolTreeNestedResolution(unittest.TestCase):
             + make_transform("600", "500")
             + make_meshrenderer("700", "500")
         )
-        child_path.write_text(child_text)
+        child_path.write_text(child_text, encoding="utf-8")
         return child_path
 
     def _parent_text_with_instance(self) -> str:
@@ -950,13 +951,32 @@ class TestSessionCacheBypass(unittest.TestCase):
         text = YAML_HEADER + make_gameobject("100", "Root", ["200"]) + make_transform("200", "100")
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "test.prefab"
-            path.write_text(text)
+            path.write_text(text, encoding="utf-8")
             # First call caches
             tree1 = session.get_symbol_tree(path, text)
             # Second call with expand_nested should NOT return cached
             tree2 = session.get_symbol_tree(path, text, expand_nested=True)
             # They should be different objects (not cached)
             self.assertIsNot(tree1, tree2)
+
+
+class TestBuildScriptNameMap(unittest.TestCase):
+    """Direct unit tests for build_script_name_map."""
+
+    def test_empty_index(self) -> None:
+        result = build_script_name_map({})
+        self.assertEqual(result, {})
+
+    def test_single_cs_entry(self) -> None:
+        result = build_script_name_map({"abc": Path("Foo.cs")})
+        self.assertEqual(result, {"abc": "Foo"})
+
+    def test_filters_non_cs_entries(self) -> None:
+        result = build_script_name_map({
+            "abc": Path("Foo.cs"),
+            "def": Path("Bar.mat"),
+        })
+        self.assertEqual(result, {"abc": "Foo"})
 
 
 if __name__ == "__main__":

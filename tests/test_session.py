@@ -95,12 +95,14 @@ class TestScriptNameMapCaching(unittest.TestCase):
         mock_build.return_value = {"guid1": "MyScript"}
         root = Path("/fake/project")
         session = ProjectSession(project_root=root)
+        fake_index = {"guid1": Path("/fake/MyScript.cs")}
+        session._guid_index = fake_index
 
         map1 = session.script_name_map()
         map2 = session.script_name_map()
 
         self.assertIs(map1, map2)
-        mock_build.assert_called_once_with(root)
+        mock_build.assert_called_once_with(fake_index)
 
     @patch("prefab_sentinel.session.build_script_name_map")
     def test_returns_empty_when_no_root(self, mock_build: MagicMock) -> None:
@@ -109,9 +111,11 @@ class TestScriptNameMapCaching(unittest.TestCase):
         self.assertEqual(result, {})
         mock_build.assert_not_called()
 
+    @patch("prefab_sentinel.session.collect_project_guid_index")
     @patch("prefab_sentinel.session.build_script_name_map")
-    def test_cleared_by_invalidate_guid_index(self, mock_build: MagicMock) -> None:
+    def test_cleared_by_invalidate_guid_index(self, mock_build: MagicMock, mock_collect: MagicMock) -> None:
         mock_build.return_value = {"g": "S"}
+        mock_collect.return_value = {"g": Path("/fake/S.cs")}
         session = ProjectSession(project_root=Path("/fake"))
 
         session.script_name_map()
@@ -124,6 +128,8 @@ class TestScriptNameMapCaching(unittest.TestCase):
     def test_cleared_by_invalidate_script_map(self, mock_build: MagicMock) -> None:
         mock_build.return_value = {"g": "S"}
         session = ProjectSession(project_root=Path("/fake"))
+        fake_index = {"g": Path("/fake/S.cs")}
+        session._guid_index = fake_index
 
         session.script_name_map()
         session.invalidate_script_map()

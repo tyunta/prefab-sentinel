@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any, Self
 
+from prefab_sentinel.json_io import dump_json
 from prefab_sentinel.patch_plan import PLAN_VERSION, normalize_patch_plan
 
 
@@ -201,7 +201,7 @@ class PatchPlanBuilder:
         return normalize_patch_plan(raw)
 
     def to_json(self, *, indent: int = 2) -> str:
-        return json.dumps(self.build(), ensure_ascii=False, indent=indent)
+        return dump_json(self.build(), indent=indent)
 
     def write(self, path: str | Path) -> None:
         dest = Path(path)

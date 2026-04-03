@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse, error_response, success_response
+from prefab_sentinel.json_io import dump_json, load_json
 from prefab_sentinel.patch_plan import (
     PLAN_VERSION,
     build_bridge_request,
@@ -668,7 +669,7 @@ class SerializedObjectService:
         try:
             completed = subprocess.run(
                 list(self.bridge_command),
-                input=json.dumps(request_payload, ensure_ascii=False),
+                input=dump_json(request_payload, indent=None),
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -720,7 +721,7 @@ class SerializedObjectService:
             )
 
         try:
-            payload = json.loads(completed.stdout)
+            payload = load_json(completed.stdout)
         except json.JSONDecodeError as exc:
             return error_response(
                 "SER_BRIDGE_PROTOCOL",
@@ -3082,7 +3083,7 @@ class SerializedObjectService:
             )
 
         try:
-            loaded = json.loads(decode_text_file(target_path))
+            loaded = load_json(decode_text_file(target_path))
         except OSError as exc:
             return error_response(
                 "SER_IO_ERROR",
@@ -3143,7 +3144,7 @@ class SerializedObjectService:
 
         try:
             target_path.write_text(
-                f"{json.dumps(working, ensure_ascii=False, indent=2)}\n",
+                f"{dump_json(working)}\n",
                 encoding="utf-8",
             )
         except OSError as exc:
