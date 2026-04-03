@@ -18,14 +18,14 @@ class TestEditorReflectValidation(unittest.TestCase):
         self.server = create_server()
 
     def test_should_reject_unknown_action(self) -> None:
-        with patch("prefab_sentinel.mcp_server.send_action") as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_advanced.send_action") as mock_send:
             _, result = _run(self.server.call_tool("editor_reflect", {"action": "bogus"}))
         mock_send.assert_not_called()
         self.assertFalse(result["success"])
         self.assertEqual("EDITOR_REFLECT_UNKNOWN_ACTION", result["code"])
 
     def test_should_reject_invalid_scope(self) -> None:
-        with patch("prefab_sentinel.mcp_server.send_action") as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_advanced.send_action") as mock_send:
             _, result = _run(
                 self.server.call_tool("editor_reflect", {"action": "search", "query": "Foo", "scope": "invalid"})
             )
@@ -34,21 +34,21 @@ class TestEditorReflectValidation(unittest.TestCase):
         self.assertEqual("EDITOR_REFLECT_INVALID_SCOPE", result["code"])
 
     def test_should_reject_search_without_query(self) -> None:
-        with patch("prefab_sentinel.mcp_server.send_action") as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_advanced.send_action") as mock_send:
             _, result = _run(self.server.call_tool("editor_reflect", {"action": "search"}))
         mock_send.assert_not_called()
         self.assertFalse(result["success"])
         self.assertEqual("EDITOR_REFLECT_MISSING_PARAM", result["code"])
 
     def test_should_reject_get_type_without_class_name(self) -> None:
-        with patch("prefab_sentinel.mcp_server.send_action") as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_advanced.send_action") as mock_send:
             _, result = _run(self.server.call_tool("editor_reflect", {"action": "get_type"}))
         mock_send.assert_not_called()
         self.assertFalse(result["success"])
         self.assertEqual("EDITOR_REFLECT_MISSING_PARAM", result["code"])
 
     def test_should_reject_get_member_without_class_name(self) -> None:
-        with patch("prefab_sentinel.mcp_server.send_action") as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_advanced.send_action") as mock_send:
             _, result = _run(
                 self.server.call_tool("editor_reflect", {"action": "get_member", "member_name": "Position"})
             )
@@ -57,7 +57,7 @@ class TestEditorReflectValidation(unittest.TestCase):
         self.assertEqual("EDITOR_REFLECT_MISSING_PARAM", result["code"])
 
     def test_should_reject_get_member_without_member_name(self) -> None:
-        with patch("prefab_sentinel.mcp_server.send_action") as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_advanced.send_action") as mock_send:
             _, result = _run(
                 self.server.call_tool("editor_reflect", {"action": "get_member", "class_name": "Transform"})
             )
@@ -85,7 +85,7 @@ class TestEditorReflectResponseUnwrap(unittest.TestCase):
     def test_should_unwrap_reflect_result_json_into_data(self) -> None:
         inner = {"found": True, "name": "Transform", "full_name": "UnityEngine.Transform"}
         bridge_resp = self._make_bridge_response(inner)
-        with patch("prefab_sentinel.mcp_server.send_action", return_value=bridge_resp):
+        with patch("prefab_sentinel.mcp_tools_editor_advanced.send_action", return_value=bridge_resp):
             _, result = _run(
                 self.server.call_tool("editor_reflect", {"action": "get_type", "class_name": "Transform"})
             )
@@ -102,7 +102,7 @@ class TestEditorReflectResponseUnwrap(unittest.TestCase):
             "data": {"reflect_result_json": "{broken json!!!"},
             "diagnostics": [],
         }
-        with patch("prefab_sentinel.mcp_server.send_action", return_value=bridge_resp):
+        with patch("prefab_sentinel.mcp_tools_editor_advanced.send_action", return_value=bridge_resp):
             _, result = _run(
                 self.server.call_tool("editor_reflect", {"action": "get_type", "class_name": "Transform"})
             )
@@ -118,7 +118,7 @@ class TestEditorReflectResponseUnwrap(unittest.TestCase):
             "data": {},
             "diagnostics": [],
         }
-        with patch("prefab_sentinel.mcp_server.send_action", return_value=bridge_resp):
+        with patch("prefab_sentinel.mcp_tools_editor_advanced.send_action", return_value=bridge_resp):
             _, result = _run(
                 self.server.call_tool("editor_reflect", {"action": "search", "query": "Foo"})
             )
@@ -129,7 +129,7 @@ class TestEditorReflectResponseUnwrap(unittest.TestCase):
         for scope in ("unity", "packages", "project", "all"):
             inner = {"query": "Foo", "scope": scope, "count": 0, "results": [], "truncated": False}
             bridge_resp = self._make_bridge_response(inner)
-            with patch("prefab_sentinel.mcp_server.send_action", return_value=bridge_resp):
+            with patch("prefab_sentinel.mcp_tools_editor_advanced.send_action", return_value=bridge_resp):
                 _, result = _run(
                     self.server.call_tool("editor_reflect", {"action": "search", "query": "Foo", "scope": scope})
                 )

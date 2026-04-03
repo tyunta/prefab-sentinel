@@ -50,7 +50,7 @@ def _tmp_prefab() -> Generator[Path, None, None]:
 class TestOrchestratorCaching(unittest.TestCase):
     """Phase1Orchestrator is created once and reused."""
 
-    @patch("prefab_sentinel.session.Phase1Orchestrator")
+    @patch("prefab_sentinel.session_cache.Phase1Orchestrator")
     def test_cached_across_calls(self, mock_cls: MagicMock) -> None:
         mock_cls.default.return_value = MagicMock()
         session = ProjectSession()
@@ -61,7 +61,7 @@ class TestOrchestratorCaching(unittest.TestCase):
         self.assertIs(orch1, orch2)
         mock_cls.default.assert_called_once()
 
-    @patch("prefab_sentinel.session.Phase1Orchestrator")
+    @patch("prefab_sentinel.session_cache.Phase1Orchestrator")
     def test_passes_project_root(self, mock_cls: MagicMock) -> None:
         root = Path("/fake/project")
         session = ProjectSession(project_root=root)
@@ -69,7 +69,7 @@ class TestOrchestratorCaching(unittest.TestCase):
 
         mock_cls.default.assert_called_once_with(project_root=root)
 
-    @patch("prefab_sentinel.session.Phase1Orchestrator")
+    @patch("prefab_sentinel.session_cache.Phase1Orchestrator")
     def test_recreated_after_guid_invalidation(self, mock_cls: MagicMock) -> None:
         mock_cls.default.side_effect = [MagicMock(), MagicMock()]
         session = ProjectSession()
@@ -90,13 +90,13 @@ class TestOrchestratorCaching(unittest.TestCase):
 class TestScriptNameMapCaching(unittest.TestCase):
     """build_script_name_map is called once and result cached."""
 
-    @patch("prefab_sentinel.session.build_script_name_map")
+    @patch("prefab_sentinel.session_cache.build_script_name_map")
     def test_cached_across_calls(self, mock_build: MagicMock) -> None:
         mock_build.return_value = {"guid1": "MyScript"}
         root = Path("/fake/project")
         session = ProjectSession(project_root=root)
         fake_index = {"guid1": Path("/fake/MyScript.cs")}
-        session._guid_index = fake_index
+        session._cache._guid_index = fake_index
 
         map1 = session.script_name_map()
         map2 = session.script_name_map()
@@ -104,15 +104,15 @@ class TestScriptNameMapCaching(unittest.TestCase):
         self.assertIs(map1, map2)
         mock_build.assert_called_once_with(fake_index)
 
-    @patch("prefab_sentinel.session.build_script_name_map")
+    @patch("prefab_sentinel.session_cache.build_script_name_map")
     def test_returns_empty_when_no_root(self, mock_build: MagicMock) -> None:
         session = ProjectSession()
         result = session.script_name_map()
         self.assertEqual(result, {})
         mock_build.assert_not_called()
 
-    @patch("prefab_sentinel.session.collect_project_guid_index")
-    @patch("prefab_sentinel.session.build_script_name_map")
+    @patch("prefab_sentinel.session_cache.collect_project_guid_index")
+    @patch("prefab_sentinel.session_cache.build_script_name_map")
     def test_cleared_by_invalidate_guid_index(self, mock_build: MagicMock, mock_collect: MagicMock) -> None:
         mock_build.return_value = {"g": "S"}
         mock_collect.return_value = {"g": Path("/fake/S.cs")}
@@ -124,12 +124,12 @@ class TestScriptNameMapCaching(unittest.TestCase):
 
         self.assertEqual(mock_build.call_count, 2)
 
-    @patch("prefab_sentinel.session.build_script_name_map")
+    @patch("prefab_sentinel.session_cache.build_script_name_map")
     def test_cleared_by_invalidate_script_map(self, mock_build: MagicMock) -> None:
         mock_build.return_value = {"g": "S"}
         session = ProjectSession(project_root=Path("/fake"))
         fake_index = {"g": Path("/fake/S.cs")}
-        session._guid_index = fake_index
+        session._cache._guid_index = fake_index
 
         session.script_name_map()
         session.invalidate_script_map()
@@ -146,7 +146,7 @@ class TestScriptNameMapCaching(unittest.TestCase):
 class TestGuidIndexCaching(unittest.TestCase):
     """collect_project_guid_index is called once and result cached."""
 
-    @patch("prefab_sentinel.session.collect_project_guid_index")
+    @patch("prefab_sentinel.session_cache.collect_project_guid_index")
     def test_cached_across_calls(self, mock_collect: MagicMock) -> None:
         mock_collect.return_value = {"guid1": Path("/proj/Assets/foo.prefab")}
         root = Path("/fake/project")
@@ -158,14 +158,14 @@ class TestGuidIndexCaching(unittest.TestCase):
         self.assertIs(idx1, idx2)
         mock_collect.assert_called_once_with(root, include_package_cache=False)
 
-    @patch("prefab_sentinel.session.collect_project_guid_index")
+    @patch("prefab_sentinel.session_cache.collect_project_guid_index")
     def test_returns_empty_when_no_root(self, mock_collect: MagicMock) -> None:
         session = ProjectSession()
         result = session.guid_index()
         self.assertEqual(result, {})
         mock_collect.assert_not_called()
 
-    @patch("prefab_sentinel.session.collect_project_guid_index")
+    @patch("prefab_sentinel.session_cache.collect_project_guid_index")
     def test_cleared_by_invalidate_guid_index(self, mock_collect: MagicMock) -> None:
         mock_collect.return_value = {"g": Path("/p")}
         session = ProjectSession(project_root=Path("/fake"))
@@ -267,8 +267,8 @@ class TestSymbolTreeCaching(unittest.TestCase):
 class TestInvalidationCascades(unittest.TestCase):
     """invalidate_guid_index clears orchestrator + script map."""
 
-    @patch("prefab_sentinel.session.Phase1Orchestrator")
-    @patch("prefab_sentinel.session.build_script_name_map")
+    @patch("prefab_sentinel.session_cache.Phase1Orchestrator")
+    @patch("prefab_sentinel.session_cache.build_script_name_map")
     def test_guid_invalidation_cascades(
         self, mock_build: MagicMock, mock_orch: MagicMock
     ) -> None:
@@ -280,23 +280,23 @@ class TestInvalidationCascades(unittest.TestCase):
 
         session.invalidate_guid_index()
 
-        self.assertIsNone(session._orchestrator)
-        self.assertIsNone(session._guid_index)
-        self.assertIsNone(session._script_name_map)
+        self.assertIsNone(session._cache._orchestrator)
+        self.assertIsNone(session._cache._guid_index)
+        self.assertIsNone(session._cache._script_name_map)
 
     def test_invalidate_guid_index_clears_symbol_cache(self) -> None:
         with _tmp_prefab() as path:
             session = ProjectSession()
             session.get_symbol_tree(path, _simple_prefab_text())
-            self.assertEqual(len(session._symbol_cache), 1)
+            self.assertEqual(len(session._cache._symbol_cache), 1)
 
             session.invalidate_guid_index()
 
-            self.assertIsNone(session._script_name_map)
-            self.assertEqual(len(session._symbol_cache), 0)
+            self.assertIsNone(session._cache._script_name_map)
+            self.assertEqual(len(session._cache._symbol_cache), 0)
 
-    @patch("prefab_sentinel.session.Phase1Orchestrator")
-    @patch("prefab_sentinel.session.build_script_name_map")
+    @patch("prefab_sentinel.session_cache.Phase1Orchestrator")
+    @patch("prefab_sentinel.session_cache.build_script_name_map")
     def test_script_map_invalidation_does_not_cascade(
         self, mock_build: MagicMock, mock_orch: MagicMock
     ) -> None:
@@ -309,13 +309,13 @@ class TestInvalidationCascades(unittest.TestCase):
         session.invalidate_script_map()
 
         # Orchestrator not affected
-        self.assertIs(session._orchestrator, orch)
-        self.assertIsNone(session._script_name_map)
+        self.assertIs(session._cache._orchestrator, orch)
+        self.assertIsNone(session._cache._script_name_map)
 
     def test_invalidate_asset_caches_clears_text_and_before(self) -> None:
         session = ProjectSession()
         mock_orch = MagicMock()
-        session._orchestrator = mock_orch
+        session._cache._orchestrator = mock_orch
         path = Path("/project/Assets/Test.prefab")
 
         session.invalidate_asset_caches(path)
@@ -323,11 +323,11 @@ class TestInvalidationCascades(unittest.TestCase):
         mock_orch.invalidate_text_cache.assert_called_once_with(path)
         mock_orch.invalidate_before_cache.assert_called_once()
         # orchestrator NOT re-created
-        self.assertIs(session._orchestrator, mock_orch)
+        self.assertIs(session._cache._orchestrator, mock_orch)
 
     def test_invalidate_asset_caches_noop_without_orchestrator(self) -> None:
         session = ProjectSession()
-        self.assertIsNone(session._orchestrator)
+        self.assertIsNone(session._cache._orchestrator)
         # Should not raise
         session.invalidate_asset_caches(Path("/fake.prefab"))
 
@@ -335,25 +335,25 @@ class TestInvalidationCascades(unittest.TestCase):
         with _tmp_prefab() as path:
             session = ProjectSession()
             session.get_symbol_tree(path, _simple_prefab_text())
-            self.assertEqual(len(session._symbol_cache), 1)
+            self.assertEqual(len(session._cache._symbol_cache), 1)
 
             session.invalidate_script_map()
 
-            self.assertIsNone(session._script_name_map)
-            self.assertEqual(len(session._symbol_cache), 0)
+            self.assertIsNone(session._cache._script_name_map)
+            self.assertEqual(len(session._cache._symbol_cache), 0)
 
     def test_invalidate_all_clears_everything(self) -> None:
         with _tmp_prefab() as path:
             session = ProjectSession()
             session.get_symbol_tree(path, _simple_prefab_text())
-            self.assertEqual(len(session._symbol_cache), 1)
+            self.assertEqual(len(session._cache._symbol_cache), 1)
 
             session.invalidate_all()
 
-            self.assertEqual(len(session._symbol_cache), 0)
-            self.assertIsNone(session._orchestrator)
-            self.assertIsNone(session._guid_index)
-            self.assertIsNone(session._script_name_map)
+            self.assertEqual(len(session._cache._symbol_cache), 0)
+            self.assertIsNone(session._cache._orchestrator)
+            self.assertIsNone(session._cache._guid_index)
+            self.assertIsNone(session._cache._script_name_map)
 
 
 # ---------------------------------------------------------------------------
@@ -377,8 +377,8 @@ class TestStatus(unittest.TestCase):
         self.assertEqual(s["symbol_tree_paths"], [])
         self.assertFalse(s["watcher_running"])
 
-    @patch("prefab_sentinel.session.Phase1Orchestrator")
-    @patch("prefab_sentinel.session.build_script_name_map")
+    @patch("prefab_sentinel.session_cache.Phase1Orchestrator")
+    @patch("prefab_sentinel.session_cache.build_script_name_map")
     def test_after_warm(self, mock_build: MagicMock, mock_orch: MagicMock) -> None:
         mock_build.return_value = {"g1": "S1", "g2": "S2"}
         session = ProjectSession(project_root=Path("/fake"))
@@ -400,8 +400,8 @@ class TestStatus(unittest.TestCase):
 class TestActivate(unittest.TestCase):
     """activate() sets scope and warms caches."""
 
-    @patch("prefab_sentinel.session.build_script_name_map")
-    @patch("prefab_sentinel.session.Phase1Orchestrator")
+    @patch("prefab_sentinel.session_cache.build_script_name_map")
+    @patch("prefab_sentinel.session_cache.Phase1Orchestrator")
     @patch("prefab_sentinel.session.resolve_scope_path")
     @patch("prefab_sentinel.session.find_project_root")
     def test_activate_sets_scope(
@@ -423,8 +423,8 @@ class TestActivate(unittest.TestCase):
         self.assertTrue(result["orchestrator_cached"])
         self.assertTrue(result["script_map_cached"])
 
-    @patch("prefab_sentinel.session.build_script_name_map")
-    @patch("prefab_sentinel.session.Phase1Orchestrator")
+    @patch("prefab_sentinel.session_cache.build_script_name_map")
+    @patch("prefab_sentinel.session_cache.Phase1Orchestrator")
     @patch("prefab_sentinel.session.resolve_scope_path")
     def test_activate_with_existing_root(
         self,
@@ -443,8 +443,8 @@ class TestActivate(unittest.TestCase):
         self.assertEqual(session.project_root, root)
         mock_resolve.assert_called_once_with("Assets/Scope", root)
 
-    @patch("prefab_sentinel.session.build_script_name_map")
-    @patch("prefab_sentinel.session.Phase1Orchestrator")
+    @patch("prefab_sentinel.session_cache.build_script_name_map")
+    @patch("prefab_sentinel.session_cache.Phase1Orchestrator")
     @patch("prefab_sentinel.session.resolve_scope_path")
     @patch("prefab_sentinel.session.find_project_root")
     def test_reactivation_clears_caches_on_scope_change(
@@ -475,8 +475,8 @@ class TestActivate(unittest.TestCase):
         # build_script_name_map called twice (once per activation)
         self.assertEqual(mock_build.call_count, 2)
 
-    @patch("prefab_sentinel.session.build_script_name_map")
-    @patch("prefab_sentinel.session.Phase1Orchestrator")
+    @patch("prefab_sentinel.session_cache.build_script_name_map")
+    @patch("prefab_sentinel.session_cache.Phase1Orchestrator")
     @patch("prefab_sentinel.session.resolve_scope_path")
     @patch("prefab_sentinel.session.find_project_root")
     def test_reactivation_same_scope_keeps_caches(
@@ -504,8 +504,8 @@ class TestActivate(unittest.TestCase):
 
     # -- project_root parameter tests --
 
-    @patch("prefab_sentinel.session.build_script_name_map")
-    @patch("prefab_sentinel.session.Phase1Orchestrator")
+    @patch("prefab_sentinel.session_cache.build_script_name_map")
+    @patch("prefab_sentinel.session_cache.Phase1Orchestrator")
     @patch("prefab_sentinel.session.resolve_scope_path")
     def test_activate_explicit_project_root_overrides_existing(
         self,
@@ -527,8 +527,8 @@ class TestActivate(unittest.TestCase):
             self.assertEqual(session.project_root, Path(tmpdir).resolve())
             self.assertTrue(result["orchestrator_cached"])
 
-    @patch("prefab_sentinel.session.build_script_name_map")
-    @patch("prefab_sentinel.session.Phase1Orchestrator")
+    @patch("prefab_sentinel.session_cache.build_script_name_map")
+    @patch("prefab_sentinel.session_cache.Phase1Orchestrator")
     @patch("prefab_sentinel.session.resolve_scope_path")
     @patch("prefab_sentinel.session.find_project_root")
     def test_activate_env_var_fallback(
@@ -566,8 +566,8 @@ class TestActivate(unittest.TestCase):
                     session.activate("Assets/Scope", project_root=tmpdir)
                 )
 
-    @patch("prefab_sentinel.session.build_script_name_map")
-    @patch("prefab_sentinel.session.Phase1Orchestrator")
+    @patch("prefab_sentinel.session_cache.build_script_name_map")
+    @patch("prefab_sentinel.session_cache.Phase1Orchestrator")
     @patch("prefab_sentinel.session.resolve_scope_path")
     @patch("prefab_sentinel.session.find_project_root")
     def test_activate_auto_detect_when_no_root_specified(
@@ -592,8 +592,8 @@ class TestActivate(unittest.TestCase):
         mock_find.assert_called_once()
         self.assertEqual(session.project_root, Path("/unity"))
 
-    @patch("prefab_sentinel.session.build_script_name_map")
-    @patch("prefab_sentinel.session.Phase1Orchestrator")
+    @patch("prefab_sentinel.session_cache.build_script_name_map")
+    @patch("prefab_sentinel.session_cache.Phase1Orchestrator")
     @patch("prefab_sentinel.session.resolve_scope_path")
     def test_activate_project_root_change_clears_cache(
         self,
@@ -801,8 +801,8 @@ class TestSuggestReads(unittest.TestCase):
         for path in expected_prefixes:
             self.assertIn(path, reads)
 
-    @patch("prefab_sentinel.session.collect_project_guid_index")
-    @patch("prefab_sentinel.session.build_script_name_map")
+    @patch("prefab_sentinel.session_cache.collect_project_guid_index")
+    @patch("prefab_sentinel.session_cache.build_script_name_map")
     def test_detects_udonsharp_from_script_name_map(
         self, mock_build: MagicMock, mock_guid: MagicMock
     ) -> None:
@@ -816,8 +816,8 @@ class TestSuggestReads(unittest.TestCase):
         self.assertIn("knowledge/udonsharp.md", reads)
         self.assertIn("knowledge/vrchat-sdk-base.md", reads)
 
-    @patch("prefab_sentinel.session.collect_project_guid_index")
-    @patch("prefab_sentinel.session.build_script_name_map")
+    @patch("prefab_sentinel.session_cache.collect_project_guid_index")
+    @patch("prefab_sentinel.session_cache.build_script_name_map")
     def test_detects_liltoon_from_guid_index(
         self, mock_build: MagicMock, mock_guid: MagicMock
     ) -> None:
@@ -830,8 +830,8 @@ class TestSuggestReads(unittest.TestCase):
         self.assertIn("knowledge/liltoon.md", reads)
         self.assertIn("knowledge/vrchat-sdk-base.md", reads)
 
-    @patch("prefab_sentinel.session.collect_project_guid_index")
-    @patch("prefab_sentinel.session.build_script_name_map")
+    @patch("prefab_sentinel.session_cache.collect_project_guid_index")
+    @patch("prefab_sentinel.session_cache.build_script_name_map")
     def test_no_ecosystem_match_no_base(
         self, mock_build: MagicMock, mock_guid: MagicMock
     ) -> None:
@@ -842,8 +842,8 @@ class TestSuggestReads(unittest.TestCase):
         reads = session.suggest_reads()
         self.assertNotIn("knowledge/vrchat-sdk-base.md", reads)
 
-    @patch("prefab_sentinel.session.collect_project_guid_index")
-    @patch("prefab_sentinel.session.build_script_name_map")
+    @patch("prefab_sentinel.session_cache.collect_project_guid_index")
+    @patch("prefab_sentinel.session_cache.build_script_name_map")
     def test_deduplication(
         self, mock_build: MagicMock, mock_guid: MagicMock
     ) -> None:
@@ -858,8 +858,8 @@ class TestSuggestReads(unittest.TestCase):
         count = reads.count("knowledge/udonsharp.md")
         self.assertEqual(1, count)
 
-    @patch("prefab_sentinel.session.collect_project_guid_index")
-    @patch("prefab_sentinel.session.build_script_name_map")
+    @patch("prefab_sentinel.session_cache.collect_project_guid_index")
+    @patch("prefab_sentinel.session_cache.build_script_name_map")
     def test_sorted_prefab_sentinel_first(
         self, mock_build: MagicMock, mock_guid: MagicMock
     ) -> None:
@@ -873,8 +873,8 @@ class TestSuggestReads(unittest.TestCase):
         if ps_indices and eco_indices:
             self.assertLess(max(ps_indices), min(eco_indices))
 
-    @patch("prefab_sentinel.session.collect_project_guid_index")
-    @patch("prefab_sentinel.session.build_script_name_map")
+    @patch("prefab_sentinel.session_cache.collect_project_guid_index")
+    @patch("prefab_sentinel.session_cache.build_script_name_map")
     def test_detects_ndmf_from_asmdef_path(
         self, mock_build: MagicMock, mock_guid: MagicMock
     ) -> None:

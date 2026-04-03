@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, call, patch
 
 from prefab_sentinel.mcp_server import create_server
 from prefab_sentinel.session import ProjectSession
-from prefab_sentinel.symbol_tree import SymbolTree
+from prefab_sentinel.symbol_tree_builder import build_symbol_tree
 from tests.yaml_helpers import (
     YAML_HEADER,
     make_gameobject,
@@ -388,7 +388,7 @@ class TestFindUnitySymbolIncludeFields(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / "test.prefab"
             p.write_text(text, encoding="utf-8")
-            with patch("prefab_sentinel.session.Phase1Orchestrator") as mock_cls:
+            with patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.prefab_variant.resolve_chain_values_with_origin.return_value = mock_resp
                 mock_cls.default.return_value = mock_orch
@@ -442,7 +442,7 @@ class TestGetUnitySymbolsExpandNested(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / "test.prefab"
             p.write_text(text, encoding="utf-8")
-            with patch("prefab_sentinel.symbol_tree.SymbolTree.build", wraps=SymbolTree.build) as mock_build:
+            with patch("prefab_sentinel.session_cache.build_symbol_tree", wraps=build_symbol_tree) as mock_build:
                 _run(server.call_tool(
                     "get_unity_symbols",
                     {"asset_path": str(p), "expand_nested": True},
@@ -474,7 +474,7 @@ class TestOrchestratorTools(unittest.TestCase):
         server = self._make_server()
 
         with patch(
-            "prefab_sentinel.session.Phase1Orchestrator"
+            "prefab_sentinel.session_cache.Phase1Orchestrator"
         ) as mock_cls:
             mock_cls.default.return_value = mock_orch
             _, result = _run(server.call_tool(
@@ -502,7 +502,7 @@ class TestOrchestratorTools(unittest.TestCase):
         server = self._make_server()
 
         with patch(
-            "prefab_sentinel.session.Phase1Orchestrator"
+            "prefab_sentinel.session_cache.Phase1Orchestrator"
         ) as mock_cls:
             mock_cls.default.return_value = mock_orch
             _, result = _run(server.call_tool(
@@ -532,7 +532,7 @@ class TestOrchestratorTools(unittest.TestCase):
         server = self._make_server()
 
         with patch(
-            "prefab_sentinel.session.Phase1Orchestrator"
+            "prefab_sentinel.session_cache.Phase1Orchestrator"
         ) as mock_cls:
             mock_cls.default.return_value = mock_orch
             _, result = _run(server.call_tool(
@@ -557,7 +557,7 @@ class TestOrchestratorTools(unittest.TestCase):
         server = self._make_server()
 
         with patch(
-            "prefab_sentinel.session.Phase1Orchestrator"
+            "prefab_sentinel.session_cache.Phase1Orchestrator"
         ) as mock_cls:
             mock_cls.default.return_value = mock_orch
             _, result = _run(server.call_tool(
@@ -588,7 +588,7 @@ class TestDiffUnitySymbolsTool(unittest.TestCase):
         server = create_server()
 
         with patch(
-            "prefab_sentinel.session.Phase1Orchestrator"
+            "prefab_sentinel.session_cache.Phase1Orchestrator"
         ) as mock_cls:
             mock_cls.default.return_value = mock_orch
             _, result = _run(server.call_tool(
@@ -611,7 +611,7 @@ class TestDiffUnitySymbolsTool(unittest.TestCase):
         server = create_server()
 
         with patch(
-            "prefab_sentinel.session.Phase1Orchestrator"
+            "prefab_sentinel.session_cache.Phase1Orchestrator"
         ) as mock_cls:
             mock_cls.default.return_value = mock_orch
             _run(server.call_tool(
@@ -697,7 +697,7 @@ class TestFindUnitySymbolShowOrigin(unittest.TestCase):
             p.write_text(text, encoding="utf-8")
 
             with patch(
-                "prefab_sentinel.session.Phase1Orchestrator"
+                "prefab_sentinel.session_cache.Phase1Orchestrator"
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.prefab_variant.resolve_chain_values_with_origin.return_value = mock_resp
@@ -742,7 +742,7 @@ class TestFindUnitySymbolShowOrigin(unittest.TestCase):
             p.write_text(text, encoding="utf-8")
 
             with patch(
-                "prefab_sentinel.session.Phase1Orchestrator"
+                "prefab_sentinel.session_cache.Phase1Orchestrator"
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.prefab_variant.resolve_chain_values_with_origin.return_value = mock_resp
@@ -785,13 +785,13 @@ class TestFindUnitySymbolShowOrigin(unittest.TestCase):
             p.write_text(text, encoding="utf-8")
 
             with patch(
-                "prefab_sentinel.session.Phase1Orchestrator"
+                "prefab_sentinel.session_cache.Phase1Orchestrator"
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.prefab_variant.resolve_chain_values_with_origin.side_effect = RuntimeError("test")
                 mock_cls.default.return_value = mock_orch
 
-                with self.assertLogs("prefab_sentinel.mcp_server", level="DEBUG") as cm:
+                with self.assertLogs("prefab_sentinel.mcp_tools_symbols", level="DEBUG") as cm:
                     _, result = _run(server.call_tool(
                         "find_unity_symbol",
                         {
@@ -851,7 +851,7 @@ class TestSetPropertyTool(unittest.TestCase):
             p.write_text(text, encoding="utf-8")
 
             with patch(
-                "prefab_sentinel.session.Phase1Orchestrator"
+                "prefab_sentinel.session_cache.Phase1Orchestrator"
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.patch_apply.return_value = mock_resp
@@ -886,7 +886,7 @@ class TestSetPropertyTool(unittest.TestCase):
             p.write_text(text, encoding="utf-8")
 
             with patch(
-                "prefab_sentinel.session.Phase1Orchestrator"
+                "prefab_sentinel.session_cache.Phase1Orchestrator"
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.patch_apply.return_value = mock_resp
@@ -972,7 +972,7 @@ class TestSetPropertyTool(unittest.TestCase):
             p.write_text(text, encoding="utf-8")
 
             with patch(
-                "prefab_sentinel.session.Phase1Orchestrator"
+                "prefab_sentinel.session_cache.Phase1Orchestrator"
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.patch_apply.return_value = mock_resp
@@ -1017,7 +1017,7 @@ class TestSetPropertyTool(unittest.TestCase):
             server_with_root = create_server(project_root=td)
 
             with patch(
-                "prefab_sentinel.session.Phase1Orchestrator"
+                "prefab_sentinel.session_cache.Phase1Orchestrator"
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.patch_apply.return_value = mock_resp
@@ -1074,7 +1074,7 @@ class TestSetPropertyTool(unittest.TestCase):
             p.write_text(text, encoding="utf-8")
 
             with patch(
-                "prefab_sentinel.session.Phase1Orchestrator"
+                "prefab_sentinel.session_cache.Phase1Orchestrator"
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.patch_apply.return_value = mock_resp
@@ -1107,7 +1107,7 @@ class TestSetPropertyTool(unittest.TestCase):
             p.write_text(text, encoding="utf-8")
 
             with patch(
-                "prefab_sentinel.session.Phase1Orchestrator"
+                "prefab_sentinel.session_cache.Phase1Orchestrator"
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.patch_apply.return_value = mock_resp
@@ -1149,7 +1149,7 @@ class TestSetPropertyTool(unittest.TestCase):
             p.write_text(text, encoding="utf-8")
 
             with patch(
-                "prefab_sentinel.session.Phase1Orchestrator"
+                "prefab_sentinel.session_cache.Phase1Orchestrator"
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.patch_apply.return_value = mock_resp
@@ -1197,7 +1197,7 @@ class TestListSerializedFieldsTool(unittest.TestCase):
             },
             diagnostics=[],
         )
-        with patch("prefab_sentinel.session.Phase1Orchestrator") as mock_orch_cls:
+        with patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_orch_cls:
             mock_orch_cls.default.return_value.list_serialized_fields.return_value = mock_resp
             _, result = _run(server.call_tool(
                 "list_serialized_fields",
@@ -1220,7 +1220,7 @@ class TestListSerializedFieldsTool(unittest.TestCase):
             data={"script": "missing.cs"},
             diagnostics=[],
         )
-        with patch("prefab_sentinel.session.Phase1Orchestrator") as mock_orch_cls:
+        with patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_orch_cls:
             mock_orch_cls.default.return_value.list_serialized_fields.return_value = mock_resp
             _, result = _run(server.call_tool(
                 "list_serialized_fields",
@@ -1256,7 +1256,7 @@ class TestValidateFieldRenameTool(unittest.TestCase):
             },
             diagnostics=[],
         )
-        with patch("prefab_sentinel.session.Phase1Orchestrator") as mock_orch_cls:
+        with patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_orch_cls:
             mock_orch_cls.default.return_value.validate_field_rename.return_value = mock_resp
             _, result = _run(server.call_tool(
                 "validate_field_rename",
@@ -1280,7 +1280,7 @@ class TestValidateFieldRenameTool(unittest.TestCase):
             message="ok", data={"affected_count": 0, "read_only": True},
             diagnostics=[],
         )
-        with patch("prefab_sentinel.session.Phase1Orchestrator") as mock_orch_cls:
+        with patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_orch_cls:
             mock_orch = mock_orch_cls.default.return_value
             mock_orch.validate_field_rename.return_value = mock_resp
             _run(server.call_tool(
@@ -1327,7 +1327,7 @@ class TestCheckFieldCoverageTool(unittest.TestCase):
             },
             diagnostics=[],
         )
-        with patch("prefab_sentinel.session.Phase1Orchestrator") as mock_orch_cls:
+        with patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_orch_cls:
             mock_orch_cls.default.return_value.check_field_coverage.return_value = mock_resp
             _, result = _run(server.call_tool(
                 "check_field_coverage",
@@ -1355,8 +1355,8 @@ class TestSessionTools(unittest.TestCase):
         self.assertFalse(data["orchestrator_cached"])
         self.assertFalse(data["script_map_cached"])
 
-    @patch("prefab_sentinel.session.build_script_name_map")
-    @patch("prefab_sentinel.session.Phase1Orchestrator")
+    @patch("prefab_sentinel.session_cache.build_script_name_map")
+    @patch("prefab_sentinel.session_cache.Phase1Orchestrator")
     @patch("prefab_sentinel.session.resolve_scope_path")
     @patch("prefab_sentinel.session.find_project_root")
     def test_activate_project_returns_status(
@@ -1384,8 +1384,8 @@ class TestSessionTools(unittest.TestCase):
         self.assertTrue(data["script_map_cached"])
         self.assertEqual(1, data["script_map_size"])
 
-    @patch("prefab_sentinel.session.build_script_name_map")
-    @patch("prefab_sentinel.session.Phase1Orchestrator")
+    @patch("prefab_sentinel.session_cache.build_script_name_map")
+    @patch("prefab_sentinel.session_cache.Phase1Orchestrator")
     @patch("prefab_sentinel.session.resolve_scope_path")
     @patch("prefab_sentinel.session.find_project_root")
     def test_status_updates_after_activation(
@@ -1413,8 +1413,8 @@ class TestSessionTools(unittest.TestCase):
         self.assertTrue(after["data"]["orchestrator_cached"])
         self.assertTrue(after["data"]["script_map_cached"])
 
-    @patch("prefab_sentinel.session.build_script_name_map")
-    @patch("prefab_sentinel.session.Phase1Orchestrator")
+    @patch("prefab_sentinel.session_cache.build_script_name_map")
+    @patch("prefab_sentinel.session_cache.Phase1Orchestrator")
     @patch("prefab_sentinel.session.resolve_scope_path")
     def test_activate_project_with_explicit_project_root(
         self,
@@ -1450,8 +1450,8 @@ class TestSessionTools(unittest.TestCase):
             self.assertFalse(result["success"])
             self.assertEqual("INVALID_PROJECT_ROOT", result["code"])
 
-    @patch("prefab_sentinel.session.build_script_name_map")
-    @patch("prefab_sentinel.session.Phase1Orchestrator")
+    @patch("prefab_sentinel.session_cache.build_script_name_map")
+    @patch("prefab_sentinel.session_cache.Phase1Orchestrator")
     @patch("prefab_sentinel.session.resolve_scope_path")
     @patch("prefab_sentinel.session.find_project_root")
     def test_activate_project_without_project_root_backward_compat(
@@ -1515,7 +1515,7 @@ class TestAddComponentTool(unittest.TestCase):
             p.write_text(text, encoding="utf-8")
 
             with patch(
-                "prefab_sentinel.session.Phase1Orchestrator"
+                "prefab_sentinel.session_cache.Phase1Orchestrator"
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.patch_apply.return_value = mock_resp
@@ -1551,7 +1551,7 @@ class TestAddComponentTool(unittest.TestCase):
             p.write_text(text, encoding="utf-8")
 
             with patch(
-                "prefab_sentinel.session.Phase1Orchestrator"
+                "prefab_sentinel.session_cache.Phase1Orchestrator"
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.patch_apply.return_value = mock_resp
@@ -1631,7 +1631,7 @@ class TestAddComponentTool(unittest.TestCase):
             p.write_text(text, encoding="utf-8")
 
             with patch(
-                "prefab_sentinel.session.Phase1Orchestrator"
+                "prefab_sentinel.session_cache.Phase1Orchestrator"
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.patch_apply.return_value = mock_resp
@@ -1664,7 +1664,7 @@ class TestAddComponentTool(unittest.TestCase):
             p.write_text(text, encoding="utf-8")
 
             with patch(
-                "prefab_sentinel.session.Phase1Orchestrator"
+                "prefab_sentinel.session_cache.Phase1Orchestrator"
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.patch_apply.return_value = mock_resp
@@ -1721,7 +1721,7 @@ class TestRemoveComponentTool(unittest.TestCase):
             p.write_text(text, encoding="utf-8")
 
             with patch(
-                "prefab_sentinel.session.Phase1Orchestrator"
+                "prefab_sentinel.session_cache.Phase1Orchestrator"
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.patch_apply.return_value = mock_resp
@@ -1755,7 +1755,7 @@ class TestRemoveComponentTool(unittest.TestCase):
             p.write_text(text, encoding="utf-8")
 
             with patch(
-                "prefab_sentinel.session.Phase1Orchestrator"
+                "prefab_sentinel.session_cache.Phase1Orchestrator"
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.patch_apply.return_value = mock_resp
@@ -1832,7 +1832,7 @@ class TestRemoveComponentTool(unittest.TestCase):
             p.write_text(text, encoding="utf-8")
 
             with patch(
-                "prefab_sentinel.session.Phase1Orchestrator"
+                "prefab_sentinel.session_cache.Phase1Orchestrator"
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.patch_apply.return_value = mock_resp
@@ -1860,7 +1860,7 @@ class TestScopeFallback(unittest.TestCase):
         mock_resp = MagicMock()
         mock_resp.to_dict.return_value = {"success": True, "data": {}}
         with (
-            patch("prefab_sentinel.session.Phase1Orchestrator") as mock_cls,
+            patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_cls,
             patch.object(ProjectSession, "resolve_scope", return_value="Assets/Resolved"),
         ):
             mock_orch = mock_cls.default.return_value
@@ -1883,7 +1883,7 @@ class TestScopeFallback(unittest.TestCase):
             diagnostics=[],
         )
         with (
-            patch("prefab_sentinel.session.Phase1Orchestrator") as mock_cls,
+            patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_cls,
             patch.object(ProjectSession, "resolve_scope", return_value="Assets/Fallback"),
         ):
             mock_orch = mock_cls.default.return_value
@@ -1902,7 +1902,7 @@ class TestScopeFallback(unittest.TestCase):
         mock_resp = MagicMock()
         mock_resp.to_dict.return_value = {"success": True, "data": {}}
         with (
-            patch("prefab_sentinel.session.Phase1Orchestrator") as mock_cls,
+            patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_cls,
             patch.object(ProjectSession, "resolve_scope", return_value="Assets/Resolved"),
         ):
             mock_orch = mock_cls.default.return_value
@@ -1922,7 +1922,7 @@ class TestScopeFallback(unittest.TestCase):
         mock_resp = MagicMock()
         mock_resp.to_dict.return_value = {"success": True, "data": {}}
         with (
-            patch("prefab_sentinel.session.Phase1Orchestrator") as mock_cls,
+            patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_cls,
             patch.object(ProjectSession, "resolve_scope", return_value="Assets/Resolved"),
         ):
             mock_orch = mock_cls.default.return_value
@@ -1958,7 +1958,7 @@ class TestFindReferencingAssetsDirectPayload(unittest.TestCase):
             },
             diagnostics=[],
         )
-        with patch("prefab_sentinel.session.Phase1Orchestrator") as mock_cls:
+        with patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_cls:
             mock_orch = mock_cls.default.return_value
             mock_orch.reference_resolver.where_used.return_value = mock_step
             _, result = _run(server.call_tool(
@@ -1994,7 +1994,7 @@ class TestFindReferencingAssetsDirectPayload(unittest.TestCase):
             },
             diagnostics=[],
         )
-        with patch("prefab_sentinel.session.Phase1Orchestrator") as mock_cls:
+        with patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_cls:
             mock_orch = mock_cls.default.return_value
             mock_orch.reference_resolver.where_used.return_value = mock_step
             _, result = _run(server.call_tool(
@@ -2019,7 +2019,7 @@ class TestFindReferencingAssetsDirectPayload(unittest.TestCase):
             data={},
             diagnostics=[],
         )
-        with patch("prefab_sentinel.session.Phase1Orchestrator") as mock_cls:
+        with patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_cls:
             mock_orch = mock_cls.default.return_value
             mock_orch.reference_resolver.where_used.return_value = mock_step
             with self.assertRaises(ToolError) as ctx:
@@ -2036,7 +2036,7 @@ class TestEditorReadOnlyTools(unittest.TestCase):
     def test_editor_screenshot_delegates(self) -> None:
         server = create_server()
         mock_response = {"success": True, "data": {"output_path": "/tmp/shot.png"}}
-        with patch("prefab_sentinel.mcp_server.send_action", return_value=mock_response) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value=mock_response) as mock_send:
             _, result = _run(server.call_tool("editor_screenshot", {"view": "game", "width": 1920}))
         self.assertEqual(mock_response, result)
         # Default refresh=True: refresh + capture = 2 calls
@@ -2044,7 +2044,7 @@ class TestEditorReadOnlyTools(unittest.TestCase):
 
     def test_editor_screenshot_defaults(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_screenshot", {}))
         # Default refresh=True means 2 calls: refresh + capture
         self.assertEqual(mock_send.call_count, 2)
@@ -2052,7 +2052,7 @@ class TestEditorReadOnlyTools(unittest.TestCase):
 
     def test_editor_screenshot_refresh_true_calls_refresh_then_capture(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_screenshot", {"refresh": True}))
         self.assertEqual(mock_send.call_count, 2)
         calls = mock_send.call_args_list
@@ -2061,21 +2061,21 @@ class TestEditorReadOnlyTools(unittest.TestCase):
 
     def test_editor_screenshot_refresh_false_skips_refresh(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_screenshot", {"refresh": False}))
         mock_send.assert_called_once_with(action="capture_screenshot", view="scene", width=0, height=0)
 
     def test_editor_screenshot_refresh_failure_still_captures(self) -> None:
         server = create_server()
         responses = [Exception("refresh failed"), {"success": True, "data": {"output_path": "/shot.png"}}]
-        with patch("prefab_sentinel.mcp_server.send_action", side_effect=responses) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_view.send_action", side_effect=responses) as mock_send:
             _, result = _run(server.call_tool("editor_screenshot", {"refresh": True}))
         self.assertEqual(mock_send.call_count, 2)
         self.assertTrue(result["success"])
 
     def test_editor_select_delegates(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
             _, result = _run(server.call_tool("editor_select", {
                 "hierarchy_path": "/Canvas/Panel",
                 "prefab_asset_path": "Assets/UI.prefab",
@@ -2087,45 +2087,45 @@ class TestEditorReadOnlyTools(unittest.TestCase):
 
     def test_editor_select_omits_empty_prefab_asset_path(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_select", {"hierarchy_path": "/Root/Child"}))
         _, kwargs = mock_send.call_args
         self.assertNotIn("prefab_asset_path", kwargs)
 
     def test_editor_frame_delegates(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_frame", {"zoom": 2.5}))
         mock_send.assert_called_once_with(action="frame_selected", zoom=2.5)
 
     def test_editor_frame_defaults(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_frame", {}))
         mock_send.assert_called_once_with(action="frame_selected", zoom=0.0)
 
     def test_editor_get_camera_delegates(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_get_camera", {}))
         mock_send.assert_called_once_with(action="get_camera")
 
     def test_editor_set_camera_mode_b(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_set_camera", {"yaw": 45.0, "pitch": 15.0, "distance": 3.0}))
         mock_send.assert_called_once_with(action="set_camera", yaw=45.0, pitch=15.0, distance=3.0)
 
     def test_editor_set_camera_defaults(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_set_camera", {}))
         mock_send.assert_called_once_with(action="set_camera")
 
     def test_editor_list_children_delegates(self) -> None:
         server = create_server()
         mock_response = {"success": True, "data": {"children": ["A", "B"]}}
-        with patch("prefab_sentinel.mcp_server.send_action", return_value=mock_response):
+        with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value=mock_response):
             _, result = _run(server.call_tool("editor_list_children", {
                 "hierarchy_path": "/Root", "depth": 2,
             }))
@@ -2133,25 +2133,25 @@ class TestEditorReadOnlyTools(unittest.TestCase):
 
     def test_editor_list_children_default_depth(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_list_children", {"hierarchy_path": "/Root"}))
         mock_send.assert_called_once_with(action="list_children", hierarchy_path="/Root", depth=1)
 
     def test_editor_list_materials_delegates(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_list_materials", {"hierarchy_path": "/Body"}))
         mock_send.assert_called_once_with(action="list_materials", hierarchy_path="/Body")
 
     def test_editor_list_roots_delegates(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_list_roots", {}))
         mock_send.assert_called_once_with(action="list_roots")
 
     def test_editor_get_material_property_delegates(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_get_material_property", {
                 "hierarchy_path": "/Body", "material_index": 0, "property_name": "_Color",
             }))
@@ -2162,7 +2162,7 @@ class TestEditorReadOnlyTools(unittest.TestCase):
 
     def test_editor_get_material_property_default_property_name(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_get_material_property", {
                 "hierarchy_path": "/Body", "material_index": 0,
             }))
@@ -2173,7 +2173,7 @@ class TestEditorReadOnlyTools(unittest.TestCase):
 
     def test_editor_console_delegates(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_console", {
                 "max_entries": 50, "log_type_filter": "error", "since_seconds": 10.0,
             }))
@@ -2184,7 +2184,7 @@ class TestEditorReadOnlyTools(unittest.TestCase):
 
     def test_editor_console_defaults(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_console", {}))
         mock_send.assert_called_once_with(
             action="capture_console_logs",
@@ -2197,26 +2197,26 @@ class TestEditorSideEffectTools(unittest.TestCase):
 
     def test_editor_refresh_delegates(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
             _, result = _run(server.call_tool("editor_refresh", {}))
         mock_send.assert_called_once_with(action="refresh_asset_database")
         self.assertTrue(result["success"])
 
     def test_editor_recompile_delegates(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_recompile", {}))
         mock_send.assert_called_once_with(action="recompile_scripts")
 
     def test_editor_run_tests_delegates(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_run_tests", {}))
         mock_send.assert_called_once_with(action="run_integration_tests", timeout_sec=300)
 
     def test_editor_run_tests_custom_timeout(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_run_tests", {"timeout_sec": 600}))
         mock_send.assert_called_once_with(action="run_integration_tests", timeout_sec=600)
 
@@ -2226,7 +2226,7 @@ class TestEditorWriteTools(unittest.TestCase):
 
     def test_editor_instantiate_delegates(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_write.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_instantiate", {
                 "asset_path": "Assets/Prefabs/Mic.prefab",
                 "hierarchy_path": "/Canvas",
@@ -2241,7 +2241,7 @@ class TestEditorWriteTools(unittest.TestCase):
 
     def test_editor_instantiate_no_position(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_write.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_instantiate", {
                 "asset_path": "Assets/Prefabs/Mic.prefab",
             }))
@@ -2253,7 +2253,7 @@ class TestEditorWriteTools(unittest.TestCase):
 
     def test_editor_instantiate_invalid_position_count(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action"):
+        with patch("prefab_sentinel.mcp_tools_editor_write.send_action"):
             _, result = _run(server.call_tool("editor_instantiate", {
                 "asset_path": "Assets/X.prefab",
                 "position": "1,2",
@@ -2263,7 +2263,7 @@ class TestEditorWriteTools(unittest.TestCase):
 
     def test_editor_instantiate_invalid_position_value(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action"):
+        with patch("prefab_sentinel.mcp_tools_editor_write.send_action"):
             _, result = _run(server.call_tool("editor_instantiate", {
                 "asset_path": "Assets/X.prefab",
                 "position": "a,b,c",
@@ -2273,7 +2273,7 @@ class TestEditorWriteTools(unittest.TestCase):
 
     def test_editor_set_material_delegates(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_write.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_set_material", {
                 "hierarchy_path": "/Body",
                 "material_index": 0,
@@ -2286,7 +2286,7 @@ class TestEditorWriteTools(unittest.TestCase):
 
     def test_editor_set_material_property_delegates(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_set_material_property", {
                 "hierarchy_path": "/Foo",
                 "material_index": 0,
@@ -2303,7 +2303,7 @@ class TestEditorWriteTools(unittest.TestCase):
 
     def test_editor_batch_set_material_property_delegates(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_batch.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_batch_set_material_property", {
                 "hierarchy_path": "/Avatar/Hair",
                 "material_index": 0,
@@ -2325,7 +2325,7 @@ class TestEditorWriteTools(unittest.TestCase):
 
     def test_editor_batch_set_material_property_by_path_delegates(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_batch.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_batch_set_material_property", {
                 "material_path": "Assets/Materials/Hair.mat",
                 "properties": [
@@ -2340,7 +2340,7 @@ class TestEditorWriteTools(unittest.TestCase):
 
     def test_editor_batch_set_material_property_by_guid_delegates(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_batch.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_batch_set_material_property", {
                 "material_guid": "abc123def456abc123def456abc123de",
                 "properties": [
@@ -2356,13 +2356,13 @@ class TestEditorWriteTools(unittest.TestCase):
 
     def test_editor_delete_delegates(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_write.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_delete", {"hierarchy_path": "/OldObject"}))
         mock_send.assert_called_once_with(action="delete_object", hierarchy_path="/OldObject")
 
     def test_editor_remove_component_delegates(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_write.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_remove_component", {
                 "hierarchy_path": "/Player",
                 "component_type": "BoxCollider",
@@ -2375,7 +2375,7 @@ class TestEditorWriteTools(unittest.TestCase):
 
     def test_editor_remove_component_with_index(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_write.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_remove_component", {
                 "hierarchy_path": "/Player",
                 "component_type": "BoxCollider",
@@ -2391,7 +2391,7 @@ class TestEditorWriteTools(unittest.TestCase):
     def test_vrcsdk_upload_delegates(self) -> None:
         """Default platforms=["windows"] is serialized and passed to send_action."""
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True, "data": {}}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_advanced.send_action", return_value={"success": True, "data": {}}) as mock_send:
             _run(server.call_tool("vrcsdk_upload", {
                 "target_type": "avatar",
                 "asset_path": "Assets/Avatars/Test.prefab",
@@ -2414,7 +2414,7 @@ class TestEditorWriteTools(unittest.TestCase):
     def test_vrcsdk_upload_requires_change_reason(self) -> None:
         """confirm=True without change_reason returns error without calling bridge."""
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action") as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_advanced.send_action") as mock_send:
             _, result = _run(server.call_tool("vrcsdk_upload", {
                 "target_type": "avatar",
                 "asset_path": "Assets/Avatars/Test.prefab",
@@ -2429,7 +2429,7 @@ class TestEditorWriteTools(unittest.TestCase):
     def test_vrcsdk_upload_invalid_platforms_empty(self) -> None:
         """Empty platforms list returns validation error."""
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action") as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_advanced.send_action") as mock_send:
             _, result = _run(server.call_tool("vrcsdk_upload", {
                 "target_type": "avatar",
                 "asset_path": "Assets/Avatars/Test.prefab",
@@ -2443,7 +2443,7 @@ class TestEditorWriteTools(unittest.TestCase):
     def test_vrcsdk_upload_invalid_platforms_bad_value(self) -> None:
         """Invalid platform name returns validation error."""
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action") as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_advanced.send_action") as mock_send:
             _, result = _run(server.call_tool("vrcsdk_upload", {
                 "target_type": "avatar",
                 "asset_path": "Assets/Avatars/Test.prefab",
@@ -2457,7 +2457,7 @@ class TestEditorWriteTools(unittest.TestCase):
     def test_vrcsdk_upload_invalid_platforms_duplicate(self) -> None:
         """Duplicate platform returns validation error."""
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action") as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_advanced.send_action") as mock_send:
             _, result = _run(server.call_tool("vrcsdk_upload", {
                 "target_type": "avatar",
                 "asset_path": "Assets/Avatars/Test.prefab",
@@ -2479,7 +2479,7 @@ class TestEditorWriteTools(unittest.TestCase):
                 "original_target_restored": True,
             },
         }
-        with patch("prefab_sentinel.mcp_server.send_action", return_value=bridge_response):
+        with patch("prefab_sentinel.mcp_tools_editor_advanced.send_action", return_value=bridge_response):
             _, result = _run(server.call_tool("vrcsdk_upload", {
                 "target_type": "avatar",
                 "asset_path": "Assets/Avatars/Test.prefab",
@@ -2502,7 +2502,7 @@ class TestEditorWriteTools(unittest.TestCase):
                 "original_target_restored": True,
             },
         }
-        with patch("prefab_sentinel.mcp_server.send_action", return_value=bridge_response):
+        with patch("prefab_sentinel.mcp_tools_editor_advanced.send_action", return_value=bridge_response):
             _, result = _run(server.call_tool("vrcsdk_upload", {
                 "target_type": "avatar",
                 "asset_path": "Assets/Avatars/Test.prefab",
@@ -2522,7 +2522,7 @@ class TestEditorWriteTools(unittest.TestCase):
         """dry-run response includes platforms echo-back from Python."""
         server = create_server()
         bridge_response = {"success": True, "data": {"phase": "validated"}}
-        with patch("prefab_sentinel.mcp_server.send_action", return_value=bridge_response):
+        with patch("prefab_sentinel.mcp_tools_editor_advanced.send_action", return_value=bridge_response):
             _, result = _run(server.call_tool("vrcsdk_upload", {
                 "target_type": "avatar",
                 "asset_path": "Assets/Avatars/Test.prefab",
@@ -2533,7 +2533,7 @@ class TestEditorWriteTools(unittest.TestCase):
 
     def test_editor_get_blend_shapes_delegates(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_write.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_get_blend_shapes", {
                 "hierarchy_path": "/Avatar/Body", "filter": "vrc.v_",
             }))
@@ -2544,7 +2544,7 @@ class TestEditorWriteTools(unittest.TestCase):
 
     def test_editor_get_blend_shapes_default_filter(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_write.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_get_blend_shapes", {
                 "hierarchy_path": "/Avatar/Body",
             }))
@@ -2555,7 +2555,7 @@ class TestEditorWriteTools(unittest.TestCase):
 
     def test_editor_set_blend_shape_delegates(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_write.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_set_blend_shape", {
                 "hierarchy_path": "/Avatar/Body", "name": "vrc.blink", "weight": 75.0,
             }))
@@ -2568,19 +2568,19 @@ class TestEditorWriteTools(unittest.TestCase):
 
     def test_editor_list_menu_items_delegates(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_write.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_list_menu_items", {"prefix": "Tools/"}))
         mock_send.assert_called_once_with(action="list_menu_items", filter="Tools/")
 
     def test_editor_list_menu_items_default_prefix(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_write.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_list_menu_items", {}))
         mock_send.assert_called_once_with(action="list_menu_items", filter="")
 
     def test_editor_execute_menu_item_delegates(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_write.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_execute_menu_item", {
                 "menu_path": "Tools/NDMF/Manual Bake",
             }))
@@ -2592,7 +2592,7 @@ class TestEditorWriteTools(unittest.TestCase):
         """editor_batch_add_component must not mutate caller-supplied operation dicts."""
         operations = [{"hierarchy_path": "/Obj", "component_type": "C", "properties": [{"name": "speed", "value": "10"}]}]
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_batch.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_batch_add_component", {"operations": operations}))
         self.assertIn("properties", operations[0])
         call_kwargs = mock_send.call_args[1]
@@ -2614,7 +2614,7 @@ class TestInspectionTools(unittest.TestCase):
         mock_orch.inspect_materials.return_value = mock_resp
 
         server = create_server()
-        with patch("prefab_sentinel.session.Phase1Orchestrator") as mock_cls:
+        with patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_cls:
             mock_cls.default.return_value = mock_orch
             _, result = _run(server.call_tool("inspect_materials", {
                 "asset_path": "Assets/Avatar.prefab",
@@ -2634,7 +2634,7 @@ class TestInspectionTools(unittest.TestCase):
         mock_orch.inspect_structure.return_value = mock_resp
 
         server = create_server()
-        with patch("prefab_sentinel.session.Phase1Orchestrator") as mock_cls:
+        with patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_cls:
             mock_cls.default.return_value = mock_orch
             _, result = _run(server.call_tool("validate_structure", {
                 "asset_path": "Assets/Scene.unity",
@@ -2657,7 +2657,7 @@ class TestRevertOverridesTool(unittest.TestCase):
         }
         server = create_server()
         with patch(
-            "prefab_sentinel.mcp_server.revert_overrides_impl",
+            "prefab_sentinel.mcp_tools_patch.revert_overrides_impl",
             return_value=mock_resp,
         ) as mock_revert:
             _, result = _run(server.call_tool("revert_overrides", {
@@ -2684,7 +2684,7 @@ class TestRevertOverridesTool(unittest.TestCase):
         }
         server = create_server()
         with patch(
-            "prefab_sentinel.mcp_server.revert_overrides_impl",
+            "prefab_sentinel.mcp_tools_patch.revert_overrides_impl",
             return_value=mock_resp,
         ) as mock_revert:
             _, result = _run(server.call_tool("revert_overrides", {
@@ -2710,7 +2710,7 @@ class TestRevertOverridesTool(unittest.TestCase):
         mock_resp.to_dict.return_value = {"success": True}
         server = create_server()
         with patch(
-            "prefab_sentinel.mcp_server.revert_overrides_impl",
+            "prefab_sentinel.mcp_tools_patch.revert_overrides_impl",
             return_value=mock_resp,
         ) as mock_revert:
             _run(server.call_tool("revert_overrides", {
@@ -2907,9 +2907,9 @@ class TestPatchApplyTool(unittest.TestCase):
 class TestActivateProjectSuggestedReads(unittest.TestCase):
     """activate_project response includes suggested_reads."""
 
-    @patch("prefab_sentinel.session.collect_project_guid_index")
-    @patch("prefab_sentinel.session.build_script_name_map")
-    @patch("prefab_sentinel.session.Phase1Orchestrator")
+    @patch("prefab_sentinel.session_cache.collect_project_guid_index")
+    @patch("prefab_sentinel.session_cache.build_script_name_map")
+    @patch("prefab_sentinel.session_cache.Phase1Orchestrator")
     @patch("prefab_sentinel.session.resolve_scope_path")
     @patch("prefab_sentinel.session.find_project_root")
     def test_response_contains_suggested_reads(
@@ -2932,9 +2932,9 @@ class TestActivateProjectSuggestedReads(unittest.TestCase):
             any("prefab-sentinel" in r for r in result["data"]["suggested_reads"])
         )
 
-    @patch("prefab_sentinel.session.collect_project_guid_index")
-    @patch("prefab_sentinel.session.build_script_name_map")
-    @patch("prefab_sentinel.session.Phase1Orchestrator")
+    @patch("prefab_sentinel.session_cache.collect_project_guid_index")
+    @patch("prefab_sentinel.session_cache.build_script_name_map")
+    @patch("prefab_sentinel.session_cache.Phase1Orchestrator")
     @patch("prefab_sentinel.session.resolve_scope_path")
     @patch("prefab_sentinel.session.find_project_root")
     def test_response_contains_knowledge_hint(
@@ -2952,7 +2952,7 @@ class TestActivateProjectSuggestedReads(unittest.TestCase):
         server = create_server()
         _, result = _run(server.call_tool("activate_project", {"scope": "Assets/MyScope"}))
         self.assertIn("knowledge_hint", result["data"])
-        from prefab_sentinel.mcp_server import _KNOWLEDGE_URI_PREFIX
+        from prefab_sentinel.mcp_helpers import KNOWLEDGE_URI_PREFIX as _KNOWLEDGE_URI_PREFIX
         self.assertIn(_KNOWLEDGE_URI_PREFIX, result["data"]["knowledge_hint"])
 
 
@@ -2974,7 +2974,7 @@ class TestKnowledgeResources(unittest.TestCase):
 
     def test_resource_uri_scheme(self) -> None:
         """All knowledge resources use the expected URI scheme."""
-        from prefab_sentinel.mcp_server import _KNOWLEDGE_URI_PREFIX
+        from prefab_sentinel.mcp_helpers import KNOWLEDGE_URI_PREFIX as _KNOWLEDGE_URI_PREFIX
         server = create_server()
         resources = _run(server.list_resources())
         for r in resources:
@@ -3032,7 +3032,7 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         import shutil
         shutil.rmtree(self._tmp, ignore_errors=True)
 
-    @patch("prefab_sentinel.mcp_server.send_action")
+    @patch("prefab_sentinel.mcp_tools_session.send_action")
     def test_removes_old_files_from_parent(self, _mock: MagicMock) -> None:
         """Old PrefabSentinel.*.cs in parent dir are removed before deploy."""
         parent = self._target.parent
@@ -3053,7 +3053,7 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertFalse(old_cs.exists())
         self.assertFalse(old_meta.exists())
 
-    @patch("prefab_sentinel.mcp_server.send_action")
+    @patch("prefab_sentinel.mcp_tools_session.send_action")
     def test_no_old_files_no_removal(self, _mock: MagicMock) -> None:
         """When parent has no old files, removed_old_files is empty."""
         server = create_server(project_root=str(self._project_root))
@@ -3065,7 +3065,7 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(result["data"]["removed_old_files"], [])
 
-    @patch("prefab_sentinel.mcp_server.send_action")
+    @patch("prefab_sentinel.mcp_tools_session.send_action")
     def test_first_deploy_no_old_files(self, _mock: MagicMock) -> None:
         """First deploy to a new path has no old files to clean up."""
         deep_target = self._project_root / "Assets" / "NewDir" / "SubDir" / "Bridge"
@@ -3078,7 +3078,7 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(result["data"]["removed_old_files"], [])
 
-    @patch("prefab_sentinel.mcp_server.send_action")
+    @patch("prefab_sentinel.mcp_tools_session.send_action")
     def test_upload_handler_always_deployed(self, _mock: MagicMock) -> None:
         """VRCSDKUploadHandler.cs is always copied unconditionally."""
         server = create_server(project_root=str(self._project_root))
@@ -3091,7 +3091,7 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertIn("PrefabSentinel.VRCSDKUploadHandler.cs", result["data"]["copied_files"])
         self.assertTrue((self._target / "PrefabSentinel.VRCSDKUploadHandler.cs").exists())
 
-    @patch("prefab_sentinel.mcp_server.send_action")
+    @patch("prefab_sentinel.mcp_tools_session.send_action")
     def test_asmdef_deployed(self, _mock: MagicMock) -> None:
         """PrefabSentinel.Editor.asmdef is copied alongside C# files."""
         server = create_server(project_root=str(self._project_root))
@@ -3104,7 +3104,7 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertIn("PrefabSentinel.Editor.asmdef", result["data"]["copied_files"])
         self.assertTrue((self._target / "PrefabSentinel.Editor.asmdef").exists())
 
-    @patch("prefab_sentinel.mcp_server.send_action")
+    @patch("prefab_sentinel.mcp_tools_session.send_action")
     def test_no_skipped_files_in_response(self, _mock: MagicMock) -> None:
         """Response data must not contain skipped_files key."""
         server = create_server(project_root=str(self._project_root))
@@ -3116,7 +3116,7 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertNotIn("skipped_files", result["data"])
 
-    @patch("prefab_sentinel.mcp_server.send_action")
+    @patch("prefab_sentinel.mcp_tools_session.send_action")
     def test_diagnostics_warn_on_old_file_removal(self, _mock: MagicMock) -> None:
         """Diagnostics include warning when old files are removed."""
         parent = self._target.parent
@@ -3131,7 +3131,7 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         warnings = [d for d in result["diagnostics"] if d["severity"] == "warning"]
         self.assertTrue(any("old Bridge" in d["message"] for d in warnings))
 
-    @patch("prefab_sentinel.mcp_server.send_action")
+    @patch("prefab_sentinel.mcp_tools_session.send_action")
     def test_clean_redeploy_removes_all_target_files(self, _mock: MagicMock) -> None:
         """All pre-existing files in target_dir are removed before deploy."""
         (self._target / "Dummy.cs").write_text("// dummy", encoding="utf-8")
@@ -3147,7 +3147,7 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertFalse((self._target / "Dummy.cs").exists())
         self.assertFalse((self._target / "Dummy.cs.meta").exists())
 
-    @patch("prefab_sentinel.mcp_server.send_action")
+    @patch("prefab_sentinel.mcp_tools_session.send_action")
     def test_clean_redeploy_preserves_subdirectories(self, _mock: MagicMock) -> None:
         """Subdirectories inside target_dir survive the clean phase."""
         subdir = self._target / "subdir"
@@ -3165,7 +3165,7 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertTrue((subdir / "keep.txt").exists())
         self.assertIsInstance(result["data"]["removed_stale_files"], list)
 
-    @patch("prefab_sentinel.mcp_server.send_action")
+    @patch("prefab_sentinel.mcp_tools_session.send_action")
     def test_removed_stale_files_in_response(self, _mock: MagicMock) -> None:
         """Stale files removed during clean phase appear in response data."""
         (self._target / "OldFile.cs").write_text("// old", encoding="utf-8")
@@ -3179,7 +3179,7 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertIn("OldFile.cs", result["data"]["removed_stale_files"])
 
-    @patch("prefab_sentinel.mcp_server.send_action")
+    @patch("prefab_sentinel.mcp_tools_session.send_action")
     def test_clean_redeploy_diagnostic_message(self, _mock: MagicMock) -> None:
         """Clearing files produces an info diagnostic with 'Cleared' message."""
         (self._target / "Stale.cs").write_text("// stale", encoding="utf-8")
@@ -3193,7 +3193,7 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         infos = [d for d in result["diagnostics"] if d["severity"] == "info"]
         self.assertTrue(any("Cleared" in d["message"] for d in infos))
 
-    @patch("prefab_sentinel.mcp_server.send_action")
+    @patch("prefab_sentinel.mcp_tools_session.send_action")
     def test_first_deploy_empty_removed_stale(self, _mock: MagicMock) -> None:
         """First deploy to empty target_dir has empty removed_stale_files."""
         fresh_target = self._project_root / "Assets" / "Editor" / "FreshDeploy"
@@ -3206,7 +3206,7 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(result["data"]["removed_stale_files"], [])
 
-    @patch("prefab_sentinel.mcp_server.send_action")
+    @patch("prefab_sentinel.mcp_tools_session.send_action")
     def test_uses_bridge_files_dir_when_available(self, _mock: MagicMock) -> None:
         """When _bridge_files/ exists (wheel install), uses it over tools/unity/."""
         # Create _bridge_files in a temp dir and patch __file__ to point there
@@ -3217,9 +3217,9 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         test_cs = bridge_dir / "PrefabSentinel.TestBridge.cs"
         test_cs.write_text("// from _bridge_files", encoding="utf-8")
 
-        import prefab_sentinel.mcp_server as mcp_mod
+        import prefab_sentinel.mcp_tools_session as mcp_mod
         original_file = mcp_mod.__file__
-        mcp_mod.__file__ = str(fake_pkg / "mcp_server.py")
+        mcp_mod.__file__ = str(fake_pkg / "mcp_tools_session.py")
         try:
             server = create_server(project_root=str(self._project_root))
             _, result = _run(server.call_tool(
@@ -3440,7 +3440,7 @@ class TestCopyComponentFieldsTool(unittest.TestCase):
             dst.write_text(dst_text, encoding="utf-8")
 
             with patch(
-                "prefab_sentinel.session.Phase1Orchestrator",
+                "prefab_sentinel.session_cache.Phase1Orchestrator",
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.patch_apply.return_value = mock_resp
@@ -3485,7 +3485,7 @@ class TestCopyComponentFieldsTool(unittest.TestCase):
             dst.write_text(dst_text, encoding="utf-8")
 
             with patch(
-                "prefab_sentinel.session.Phase1Orchestrator",
+                "prefab_sentinel.session_cache.Phase1Orchestrator",
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.patch_apply.return_value = mock_resp
@@ -3521,7 +3521,7 @@ class TestCopyComponentFieldsTool(unittest.TestCase):
             dst.write_text(dst_text, encoding="utf-8")
 
             with patch(
-                "prefab_sentinel.session.Phase1Orchestrator",
+                "prefab_sentinel.session_cache.Phase1Orchestrator",
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.patch_apply.return_value = mock_resp
@@ -3552,7 +3552,7 @@ class TestCopyComponentFieldsTool(unittest.TestCase):
             p.write_text(text, encoding="utf-8")
 
             with patch(
-                "prefab_sentinel.session.Phase1Orchestrator",
+                "prefab_sentinel.session_cache.Phase1Orchestrator",
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.patch_apply.return_value = mock_resp
@@ -3584,7 +3584,7 @@ class TestCopyComponentFieldsTool(unittest.TestCase):
             dst.write_text(dst_text, encoding="utf-8")
 
             with patch(
-                "prefab_sentinel.session.Phase1Orchestrator",
+                "prefab_sentinel.session_cache.Phase1Orchestrator",
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.patch_apply.return_value = mock_resp
@@ -3799,7 +3799,7 @@ class TestCopyComponentFieldsTool(unittest.TestCase):
             )
 
             with patch(
-                "prefab_sentinel.session.Phase1Orchestrator",
+                "prefab_sentinel.session_cache.Phase1Orchestrator",
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.patch_apply.return_value = mock_resp
@@ -3935,7 +3935,7 @@ class TestSetComponentFieldsTool(unittest.TestCase):
             p.write_text(text, encoding="utf-8")
 
             with patch(
-                "prefab_sentinel.session.Phase1Orchestrator",
+                "prefab_sentinel.session_cache.Phase1Orchestrator",
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.patch_apply.return_value = mock_resp
@@ -3975,7 +3975,7 @@ class TestSetComponentFieldsTool(unittest.TestCase):
             p.write_text(text, encoding="utf-8")
 
             with patch(
-                "prefab_sentinel.session.Phase1Orchestrator",
+                "prefab_sentinel.session_cache.Phase1Orchestrator",
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.patch_apply.return_value = mock_resp
@@ -4026,7 +4026,7 @@ class TestSetComponentFieldsTool(unittest.TestCase):
             )
 
             with patch(
-                "prefab_sentinel.session.Phase1Orchestrator",
+                "prefab_sentinel.session_cache.Phase1Orchestrator",
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.patch_apply.return_value = mock_resp
@@ -4059,7 +4059,7 @@ class TestSetComponentFieldsTool(unittest.TestCase):
             p.write_text(text, encoding="utf-8")
 
             with patch(
-                "prefab_sentinel.session.Phase1Orchestrator",
+                "prefab_sentinel.session_cache.Phase1Orchestrator",
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.patch_apply.return_value = mock_resp
@@ -4311,7 +4311,7 @@ class TestSetComponentFieldsTool(unittest.TestCase):
             p.write_text(text, encoding="utf-8")
 
             with patch(
-                "prefab_sentinel.session.Phase1Orchestrator",
+                "prefab_sentinel.session_cache.Phase1Orchestrator",
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.patch_apply.return_value = mock_resp
@@ -4344,7 +4344,7 @@ class TestSetComponentFieldsTool(unittest.TestCase):
             p.write_text(text, encoding="utf-8")
 
             with patch(
-                "prefab_sentinel.session.Phase1Orchestrator",
+                "prefab_sentinel.session_cache.Phase1Orchestrator",
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.patch_apply.return_value = mock_resp
@@ -4378,7 +4378,7 @@ class TestSetComponentFieldsTool(unittest.TestCase):
             p.write_text(text, encoding="utf-8")
 
             with patch(
-                "prefab_sentinel.session.Phase1Orchestrator",
+                "prefab_sentinel.session_cache.Phase1Orchestrator",
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.patch_apply.return_value = mock_resp
@@ -4412,7 +4412,7 @@ class TestSetComponentFieldsTool(unittest.TestCase):
             report_path = Path(td) / "report.json"
 
             with patch(
-                "prefab_sentinel.session.Phase1Orchestrator",
+                "prefab_sentinel.session_cache.Phase1Orchestrator",
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.patch_apply.return_value = mock_resp
@@ -4449,7 +4449,7 @@ class TestSetComponentFieldsTool(unittest.TestCase):
             p.write_text(text, encoding="utf-8")
 
             with patch(
-                "prefab_sentinel.session.Phase1Orchestrator",
+                "prefab_sentinel.session_cache.Phase1Orchestrator",
             ) as mock_cls:
                 mock_orch = MagicMock()
                 mock_orch.patch_apply.return_value = mock_resp
@@ -4518,7 +4518,7 @@ class TestEditorSetComponentFieldsTool(unittest.TestCase):
         """Primitive value fields are delegated to editor_batch_set_property."""
         server = create_server()
         with patch(
-            "prefab_sentinel.mcp_server.send_action",
+            "prefab_sentinel.mcp_tools_editor_ops.send_action",
             return_value={"success": True, "data": {}},
         ) as mock_send:
             _run(server.call_tool(
@@ -4548,7 +4548,7 @@ class TestEditorSetComponentFieldsTool(unittest.TestCase):
         """Object reference fields are delegated with object_reference key."""
         server = create_server()
         with patch(
-            "prefab_sentinel.mcp_server.send_action",
+            "prefab_sentinel.mcp_tools_editor_ops.send_action",
             return_value={"success": True, "data": {}},
         ) as mock_send:
             _run(server.call_tool(
@@ -4570,7 +4570,7 @@ class TestEditorSetComponentFieldsTool(unittest.TestCase):
         """Mix of value and object_reference fields are both mapped correctly."""
         server = create_server()
         with patch(
-            "prefab_sentinel.mcp_server.send_action",
+            "prefab_sentinel.mcp_tools_editor_ops.send_action",
             return_value={"success": True, "data": {}},
         ) as mock_send:
             _run(server.call_tool(
@@ -4595,7 +4595,7 @@ class TestEditorSetComponentFieldsTool(unittest.TestCase):
     def test_empty_fields(self) -> None:
         """EDITOR_SET_COMP_EMPTY_FIELDS returned for empty fields list."""
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action") as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_ops.send_action") as mock_send:
             _, result = _run(server.call_tool(
                 "editor_set_component_fields",
                 {
@@ -4612,7 +4612,7 @@ class TestEditorSetComponentFieldsTool(unittest.TestCase):
     def test_field_missing_name(self) -> None:
         """EDITOR_SET_COMP_INVALID_FIELD when a field dict has no 'name' key."""
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action") as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_ops.send_action") as mock_send:
             _, result = _run(server.call_tool(
                 "editor_set_component_fields",
                 {
@@ -4629,7 +4629,7 @@ class TestEditorSetComponentFieldsTool(unittest.TestCase):
     def test_field_missing_value_and_reference(self) -> None:
         """EDITOR_SET_COMP_INVALID_FIELD when field has name but no value/object_reference."""
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action") as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_ops.send_action") as mock_send:
             _, result = _run(server.call_tool(
                 "editor_set_component_fields",
                 {
@@ -4646,7 +4646,7 @@ class TestEditorSetComponentFieldsTool(unittest.TestCase):
     def test_field_has_both_value_and_object_reference(self) -> None:
         """EDITOR_SET_COMP_INVALID_FIELD when field supplies both value and object_reference."""
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action") as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_ops.send_action") as mock_send:
             _, result = _run(server.call_tool(
                 "editor_set_component_fields",
                 {
@@ -4756,7 +4756,7 @@ class TestEditorBatchCreateComponents(unittest.TestCase):
 
     def test_editor_batch_create_components_serialized(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_batch.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool(
                 "editor_batch_create",
                 {"objects": [{"name": "Box", "components": ["BoxCollider"]}]},

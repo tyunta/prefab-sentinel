@@ -14,6 +14,7 @@ from prefab_sentinel.symbol_tree import (
     SymbolTree,
     build_script_name_map,
 )
+from prefab_sentinel.symbol_tree_builder import build_symbol_tree
 from tests.yaml_helpers import (
     YAML_HEADER,
     make_gameobject,
@@ -25,20 +26,20 @@ from tests.yaml_helpers import (
 
 
 class TestSymbolTreeBuildEmpty(unittest.TestCase):
-    """SymbolTree.build with empty or header-only YAML."""
+    """build_symbol_tree with empty or header-only YAML."""
 
     def test_empty_string(self) -> None:
-        tree = SymbolTree.build("", "test.prefab")
+        tree = build_symbol_tree("", "test.prefab")
         self.assertEqual(tree.roots, [])
         self.assertEqual(tree.asset_path, "test.prefab")
 
     def test_header_only(self) -> None:
-        tree = SymbolTree.build(YAML_HEADER, "test.prefab")
+        tree = build_symbol_tree(YAML_HEADER, "test.prefab")
         self.assertEqual(tree.roots, [])
 
 
 class TestSymbolTreeBuildSingleRoot(unittest.TestCase):
-    """SymbolTree.build with a single root GameObject."""
+    """build_symbol_tree with a single root GameObject."""
 
     def test_single_root_go(self) -> None:
         text = (
@@ -46,7 +47,7 @@ class TestSymbolTreeBuildSingleRoot(unittest.TestCase):
             + make_gameobject("100", "Root", ["200"])
             + make_transform("200", "100")
         )
-        tree = SymbolTree.build(text, "test.prefab")
+        tree = build_symbol_tree(text, "test.prefab")
         self.assertEqual(len(tree.roots), 1)
         root = tree.roots[0]
         self.assertEqual(root.kind, SymbolKind.GAME_OBJECT)
@@ -60,7 +61,7 @@ class TestSymbolTreeBuildSingleRoot(unittest.TestCase):
             + make_gameobject("100", "Root", ["200"])
             + make_transform("200", "100")
         )
-        tree = SymbolTree.build(text, "test.prefab")
+        tree = build_symbol_tree(text, "test.prefab")
         root = tree.roots[0]
         # Should have Transform as a component child
         comp_names = [c.name for c in root.children if c.kind == SymbolKind.COMPONENT]
@@ -73,14 +74,14 @@ class TestSymbolTreeBuildSingleRoot(unittest.TestCase):
             + make_transform("200", "100")
             + make_meshrenderer("300", "100")
         )
-        tree = SymbolTree.build(text, "test.prefab")
+        tree = build_symbol_tree(text, "test.prefab")
         root = tree.roots[0]
         comp_names = [c.name for c in root.children if c.kind == SymbolKind.COMPONENT]
         self.assertIn("MeshRenderer", comp_names)
 
 
 class TestSymbolTreeBuildNestedHierarchy(unittest.TestCase):
-    """SymbolTree.build with nested GameObjects (3+ levels)."""
+    """build_symbol_tree with nested GameObjects (3+ levels)."""
 
     def _build_nested(self) -> SymbolTree:
         text = (
@@ -92,7 +93,7 @@ class TestSymbolTreeBuildNestedHierarchy(unittest.TestCase):
             + make_gameobject("500", "GrandChild", ["600"])
             + make_transform("600", "500", father_file_id="400")
         )
-        return SymbolTree.build(text, "test.prefab")
+        return build_symbol_tree(text, "test.prefab")
 
     def test_three_levels(self) -> None:
         tree = self._build_nested()
@@ -120,7 +121,7 @@ class TestSymbolTreeBuildNestedHierarchy(unittest.TestCase):
 
 
 class TestSymbolTreeBuildMonoBehaviour(unittest.TestCase):
-    """SymbolTree.build with MonoBehaviour and script name resolution."""
+    """build_symbol_tree with MonoBehaviour and script name resolution."""
 
     def test_monobehaviour_with_script_name(self) -> None:
         guid = "aaaa1111bbbb2222cccc3333dddd4444"
@@ -131,7 +132,7 @@ class TestSymbolTreeBuildMonoBehaviour(unittest.TestCase):
             + make_monobehaviour("300", "100", guid=guid)
         )
         script_map = {guid: "PlayerController"}
-        tree = SymbolTree.build(text, "test.prefab", script_map)
+        tree = build_symbol_tree(text, "test.prefab", script_map)
         root = tree.roots[0]
         mb_nodes = [
             c for c in root.children
@@ -150,7 +151,7 @@ class TestSymbolTreeBuildMonoBehaviour(unittest.TestCase):
             + make_transform("200", "100")
             + make_monobehaviour("300", "100", guid=guid)
         )
-        tree = SymbolTree.build(text, "test.prefab")
+        tree = build_symbol_tree(text, "test.prefab")
         root = tree.roots[0]
         mb_nodes = [
             c for c in root.children
@@ -169,7 +170,7 @@ class TestSymbolTreeBuildMonoBehaviour(unittest.TestCase):
             + make_monobehaviour("300", "100", guid=guid)
         )
         script_map = {guid: "PlayerController"}
-        tree = SymbolTree.build(text, "test.prefab", script_map)
+        tree = build_symbol_tree(text, "test.prefab", script_map)
         matches = tree.resolve("Player/MonoBehaviour(PlayerController)")
         self.assertEqual(len(matches), 1)
         self.assertEqual(matches[0].file_id, "300")
@@ -183,14 +184,14 @@ class TestSymbolTreeBuildMonoBehaviour(unittest.TestCase):
             + make_transform("200", "100")
             + make_monobehaviour("300", "100", guid=guid)
         )
-        tree = SymbolTree.build(text, "test.prefab")
+        tree = build_symbol_tree(text, "test.prefab")
         matches = tree.resolve("Player/MonoBehaviour")
         self.assertEqual(len(matches), 1)
         self.assertEqual(matches[0].file_id, "300")
 
 
 class TestSymbolTreeBuildDuplicateNames(unittest.TestCase):
-    """SymbolTree.build with duplicate sibling names."""
+    """build_symbol_tree with duplicate sibling names."""
 
     def _build_with_duplicates(self) -> SymbolTree:
         text = (
@@ -204,7 +205,7 @@ class TestSymbolTreeBuildDuplicateNames(unittest.TestCase):
             + make_gameobject("700", "Cube", ["800"])
             + make_transform("800", "700", father_file_id="200")
         )
-        return SymbolTree.build(text, "test.prefab")
+        return build_symbol_tree(text, "test.prefab")
 
     def test_duplicate_names_all_present(self) -> None:
         tree = self._build_with_duplicates()
@@ -244,7 +245,7 @@ class TestSymbolTreeBuildDuplicateNames(unittest.TestCase):
 
 
 class TestSymbolTreeBuildUnnamed(unittest.TestCase):
-    """SymbolTree.build with unnamed GameObjects."""
+    """build_symbol_tree with unnamed GameObjects."""
 
     def test_unnamed_go(self) -> None:
         text = (
@@ -252,7 +253,7 @@ class TestSymbolTreeBuildUnnamed(unittest.TestCase):
             + make_gameobject("100", "", ["200"])
             + make_transform("200", "100")
         )
-        tree = SymbolTree.build(text, "test.prefab")
+        tree = build_symbol_tree(text, "test.prefab")
         root = tree.roots[0]
         self.assertEqual(root.name, "<unnamed:100>")
 
@@ -267,7 +268,7 @@ class TestSymbolTreeResolve(unittest.TestCase):
             + make_transform("200", "100")
             + make_meshrenderer("300", "100")
         )
-        return SymbolTree.build(text, "test.prefab")
+        return build_symbol_tree(text, "test.prefab")
 
     def test_resolve_not_found(self) -> None:
         tree = self._build_simple()
@@ -311,7 +312,7 @@ class TestSymbolTreeResolve(unittest.TestCase):
             + make_gameobject("500", "Child", ["600"])
             + make_transform("600", "500", father_file_id="200")
         )
-        tree = SymbolTree.build(text, "test.prefab")
+        tree = build_symbol_tree(text, "test.prefab")
         with self.assertRaises(AmbiguousSymbolError):
             tree.resolve_unique("Root/Child")
 
@@ -333,14 +334,14 @@ class TestSymbolTreeResolve(unittest.TestCase):
             + make_transform("200", "100")
             + make_monobehaviour("300", "100", guid=guid)
         )
-        tree = SymbolTree.build(text, "test.prefab")
+        tree = build_symbol_tree(text, "test.prefab")
         matches = tree.resolve("Obj/MonoBehaviour(guid:aaaa1111)")
         self.assertEqual(len(matches), 1)
         self.assertEqual(matches[0].file_id, "300")
 
 
 class TestSymbolTreeProperties(unittest.TestCase):
-    """SymbolTree.build with include_properties=True."""
+    """build_symbol_tree with include_properties=True."""
 
     def test_monobehaviour_fields_as_properties(self) -> None:
         guid = "aaaa1111bbbb2222cccc3333dddd4444"
@@ -353,7 +354,7 @@ class TestSymbolTreeProperties(unittest.TestCase):
                 fields={"moveSpeed": "{fileID: 0}", "target": "{fileID: 400, guid: , type: 0}"},
             )
         )
-        tree = SymbolTree.build(text, "test.prefab", include_properties=True)
+        tree = build_symbol_tree(text, "test.prefab", include_properties=True)
         root = tree.roots[0]
         mb_nodes = [
             c for c in root.children
@@ -378,7 +379,7 @@ class TestSymbolTreeProperties(unittest.TestCase):
                 fields={"moveSpeed": "{fileID: 0}"},
             )
         )
-        tree = SymbolTree.build(text, "test.prefab", include_properties=False)
+        tree = build_symbol_tree(text, "test.prefab", include_properties=False)
         root = tree.roots[0]
         mb_nodes = [
             c for c in root.children
@@ -555,7 +556,7 @@ class TestSymbolTreeToOverviewDetail(unittest.TestCase):
             + make_gameobject("400", "Child", ["500"])
             + make_transform("500", "400", father_file_id="200")
         )
-        return SymbolTree.build(text, "test.prefab", include_properties=True)
+        return build_symbol_tree(text, "test.prefab", include_properties=True)
 
     def test_to_overview_default_depth_none_returns_full_tree(self) -> None:
         tree = self._build_tree_with_props()
@@ -599,7 +600,7 @@ class TestSymbolTreeQueryCleanup(unittest.TestCase):
             + make_gameobject("100", "Root", ["200"])
             + make_transform("200", "100")
         )
-        tree = SymbolTree.build(text, "test.prefab")
+        tree = build_symbol_tree(text, "test.prefab")
         result = tree.query("Root", depth=0)
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["name"], "Root")
@@ -617,7 +618,7 @@ class TestSymbolTreeToOverview(unittest.TestCase):
             + make_gameobject("400", "Child", ["500"])
             + make_transform("500", "400", father_file_id="200")
         )
-        return SymbolTree.build(text, "test.prefab")
+        return build_symbol_tree(text, "test.prefab")
 
     def test_depth_0(self) -> None:
         overview = self._build_tree().to_overview(depth=0)
@@ -660,7 +661,7 @@ class TestSymbolTreeQuery(unittest.TestCase):
             + make_gameobject("100", "Root", ["200"])
             + make_transform("200", "100")
         )
-        tree = SymbolTree.build(text, "test.prefab")
+        tree = build_symbol_tree(text, "test.prefab")
         result = tree.query("", depth=0)
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["name"], "Root")
@@ -672,7 +673,7 @@ class TestSymbolTreeQuery(unittest.TestCase):
             + make_transform("200", "100")
             + make_meshrenderer("300", "100")
         )
-        tree = SymbolTree.build(text, "test.prefab")
+        tree = build_symbol_tree(text, "test.prefab")
         result = tree.query("Root/MeshRenderer", depth=0)
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["name"], "MeshRenderer")
@@ -689,7 +690,7 @@ class TestSymbolTreeMultipleRoots(unittest.TestCase):
             + make_gameobject("300", "Light", ["400"])
             + make_transform("400", "300")
         )
-        tree = SymbolTree.build(text, "test.unity")
+        tree = build_symbol_tree(text, "test.unity")
         self.assertEqual(len(tree.roots), 2)
         names = {r.name for r in tree.roots}
         self.assertEqual(names, {"Camera", "Light"})
@@ -702,7 +703,7 @@ class TestSymbolTreeMultipleRoots(unittest.TestCase):
             + make_gameobject("300", "Light", ["400"])
             + make_transform("400", "300")
         )
-        tree = SymbolTree.build(text, "test.unity")
+        tree = build_symbol_tree(text, "test.unity")
         matches = tree.resolve("Light")
         self.assertEqual(len(matches), 1)
         self.assertEqual(matches[0].file_id, "300")
@@ -717,7 +718,7 @@ class TestSymbolTreeRectTransform(unittest.TestCase):
             + make_gameobject("100", "Canvas", ["200"])
             + make_transform("200", "100", is_rect=True)
         )
-        tree = SymbolTree.build(text, "test.prefab")
+        tree = build_symbol_tree(text, "test.prefab")
         root = tree.roots[0]
         comp_names = [c.name for c in root.children if c.kind == SymbolKind.COMPONENT]
         self.assertIn("RectTransform", comp_names)
@@ -728,13 +729,13 @@ class TestSymbolTreeRectTransform(unittest.TestCase):
             + make_gameobject("100", "Canvas", ["200"])
             + make_transform("200", "100", is_rect=True)
         )
-        tree = SymbolTree.build(text, "test.prefab")
+        tree = build_symbol_tree(text, "test.prefab")
         matches = tree.resolve("Canvas/RectTransform")
         self.assertEqual(len(matches), 1)
 
 
 class TestSymbolTreeNestedExpansion(unittest.TestCase):
-    """SymbolTree.build with expand_nested=True."""
+    """build_symbol_tree with expand_nested=True."""
 
     CHILD_GUID = "aabbccdd11223344aabbccdd11223344"
 
@@ -760,13 +761,13 @@ class TestSymbolTreeNestedExpansion(unittest.TestCase):
 
     def test_expand_nested_false_skips_prefab_instances(self) -> None:
         text = self._parent_text_with_instance()
-        tree = SymbolTree.build(text, "test.prefab", expand_nested=False)
+        tree = build_symbol_tree(text, "test.prefab", expand_nested=False)
         self.assertEqual(len(tree.roots), 1)
         self.assertEqual(tree.roots[0].name, "Avatar")
 
     def test_expand_nested_true_without_guid_map_skips(self) -> None:
         text = self._parent_text_with_instance()
-        tree = SymbolTree.build(text, "test.prefab", expand_nested=True, guid_to_asset_path=None)
+        tree = build_symbol_tree(text, "test.prefab", expand_nested=True, guid_to_asset_path=None)
         self.assertEqual(len(tree.roots), 1)
 
     def test_expand_nested_true_creates_marker_node(self) -> None:
@@ -774,7 +775,7 @@ class TestSymbolTreeNestedExpansion(unittest.TestCase):
             child_path = self._write_child_prefab(Path(tmpdir))
             guid_map = {self.CHILD_GUID: child_path}
             text = self._parent_text_with_instance()
-            tree = SymbolTree.build(text, "test.prefab", expand_nested=True, guid_to_asset_path=guid_map)
+            tree = build_symbol_tree(text, "test.prefab", expand_nested=True, guid_to_asset_path=guid_map)
             avatar = tree.roots[0]
             pi_nodes = [c for c in avatar.children if c.kind == SymbolKind.PREFAB_INSTANCE]
             self.assertEqual(len(pi_nodes), 1)
@@ -787,7 +788,7 @@ class TestSymbolTreeNestedExpansion(unittest.TestCase):
             child_path = self._write_child_prefab(Path(tmpdir))
             guid_map = {self.CHILD_GUID: child_path}
             text = self._parent_text_with_instance()
-            tree = SymbolTree.build(text, "test.prefab", expand_nested=True, guid_to_asset_path=guid_map)
+            tree = build_symbol_tree(text, "test.prefab", expand_nested=True, guid_to_asset_path=guid_map)
             avatar = tree.roots[0]
             pi = [c for c in avatar.children if c.kind == SymbolKind.PREFAB_INSTANCE][0]
             child_gos = [c for c in pi.children if c.kind == SymbolKind.GAME_OBJECT]
@@ -797,7 +798,7 @@ class TestSymbolTreeNestedExpansion(unittest.TestCase):
     def test_unresolvable_guid_creates_unresolved_marker(self) -> None:
         text = self._parent_text_with_instance()
         guid_map: dict[str, Path] = {}
-        tree = SymbolTree.build(text, "test.prefab", expand_nested=True, guid_to_asset_path=guid_map)
+        tree = build_symbol_tree(text, "test.prefab", expand_nested=True, guid_to_asset_path=guid_map)
         avatar = tree.roots[0]
         pi_nodes = [c for c in avatar.children if c.kind == SymbolKind.PREFAB_INSTANCE]
         self.assertEqual(len(pi_nodes), 1)
@@ -807,7 +808,7 @@ class TestSymbolTreeNestedExpansion(unittest.TestCase):
     def test_prefab_instance_marker_in_file_id_index(self) -> None:
         text = self._parent_text_with_instance()
         guid_map: dict[str, Path] = {}
-        tree = SymbolTree.build(text, "test.prefab", expand_nested=True, guid_to_asset_path=guid_map)
+        tree = build_symbol_tree(text, "test.prefab", expand_nested=True, guid_to_asset_path=guid_map)
         node = tree.resolve_file_id("300")
         self.assertIsNotNone(node)
         self.assertEqual(node.kind, SymbolKind.PREFAB_INSTANCE)
@@ -817,7 +818,7 @@ class TestSymbolTreeNestedExpansion(unittest.TestCase):
             child_path = self._write_child_prefab(Path(tmpdir))
             guid_map = {self.CHILD_GUID: child_path}
             text = self._parent_text_with_instance()
-            tree = SymbolTree.build(text, "test.prefab", expand_nested=True, guid_to_asset_path=guid_map)
+            tree = build_symbol_tree(text, "test.prefab", expand_nested=True, guid_to_asset_path=guid_map)
             self.assertIsNone(tree.resolve_file_id("500"))
             self.assertIsNone(tree.resolve_file_id("600"))
 
@@ -826,7 +827,7 @@ class TestSymbolTreeNestedExpansion(unittest.TestCase):
         missing_path = Path("/nonexistent/Bad.prefab")
         guid_map = {self.CHILD_GUID: missing_path}
         text = self._parent_text_with_instance()
-        tree = SymbolTree.build(text, "test.prefab", expand_nested=True, guid_to_asset_path=guid_map)
+        tree = build_symbol_tree(text, "test.prefab", expand_nested=True, guid_to_asset_path=guid_map)
         avatar = tree.roots[0]
         pi_nodes = [c for c in avatar.children if c.kind == SymbolKind.PREFAB_INSTANCE]
         self.assertEqual(len(pi_nodes), 1)
@@ -835,7 +836,7 @@ class TestSymbolTreeNestedExpansion(unittest.TestCase):
     def test_depth_limit_stops_expansion(self) -> None:
         text = self._parent_text_with_instance()
         guid_map: dict[str, Path] = {}
-        tree = SymbolTree.build(text, "test.prefab", expand_nested=True, guid_to_asset_path=guid_map, _depth=10)
+        tree = build_symbol_tree(text, "test.prefab", expand_nested=True, guid_to_asset_path=guid_map, _nested_depth=10)
         avatar = tree.roots[0]
         pi_nodes = [c for c in avatar.children if c.kind == SymbolKind.PREFAB_INSTANCE]
         self.assertEqual(len(pi_nodes), 0)
@@ -845,7 +846,7 @@ class TestSymbolTreeNestedExpansion(unittest.TestCase):
             child_path = self._write_child_prefab(Path(tmpdir))
             guid_map = {self.CHILD_GUID: child_path}
             text = self._parent_text_with_instance()
-            tree = SymbolTree.build(text, "test.prefab", expand_nested=True, guid_to_asset_path=guid_map)
+            tree = build_symbol_tree(text, "test.prefab", expand_nested=True, guid_to_asset_path=guid_map)
             overview = tree.to_overview(depth=3)
             self.assertTrue(len(overview) > 0)
             avatar = overview[0]
@@ -885,7 +886,7 @@ class TestSymbolTreeNestedResolution(unittest.TestCase):
             child_path = self._write_child_prefab(Path(tmpdir))
             guid_map = {self.CHILD_GUID: child_path}
             text = self._parent_text_with_instance()
-            tree = SymbolTree.build(text, "test.prefab", expand_nested=True, guid_to_asset_path=guid_map)
+            tree = build_symbol_tree(text, "test.prefab", expand_nested=True, guid_to_asset_path=guid_map)
             matches = tree.resolve("Avatar")
             self.assertEqual(len(matches), 1)
             # ChildRoot is inside PrefabInstance which is a child of Avatar
@@ -898,7 +899,7 @@ class TestSymbolTreeNestedResolution(unittest.TestCase):
             child_path = self._write_child_prefab(Path(tmpdir))
             guid_map = {self.CHILD_GUID: child_path}
             text = self._parent_text_with_instance()
-            tree = SymbolTree.build(text, "test.prefab", expand_nested=True, guid_to_asset_path=guid_map)
+            tree = build_symbol_tree(text, "test.prefab", expand_nested=True, guid_to_asset_path=guid_map)
             matches = tree.resolve("Avatar/ChildRoot/MeshRenderer")
             self.assertEqual(len(matches), 1)
 
