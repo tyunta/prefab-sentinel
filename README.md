@@ -82,6 +82,7 @@ prefab-sentinel-mcp --transport streamable-http
 | `inspect_variant` | Prefab Variant の override チェーン分析 |
 | `set_property` | シンボルパスでコンポーネントのフィールド値を設定（dry-run/confirm ゲート付き） |
 | `copy_component_fields` | 同一型コンポーネント間でシリアライズフィールド値をコピー（cross-asset/same-asset、dry-run/confirm ゲート付き） |
+| `set_component_fields` | GameObject シンボルパス + コンポーネント型名で複数フィールドを一括設定（dry-run/confirm ゲート付き） |
 | `add_component` | シンボルパスで指定した GameObject にコンポーネントを追加（dry-run/confirm ゲート付き） |
 | `remove_component` | シンボルパスで指定したコンポーネントを削除（dry-run/confirm ゲート付き） |
 | `list_serialized_fields` | C# スクリプトのシリアライズ対象フィールド一覧（パス・クラス名・GUID 指定、`include_inherited` で基底クラス含む） |
@@ -126,6 +127,7 @@ prefab-sentinel-mcp --transport streamable-http
 | `editor_create_primitive` | プリミティブ (Cube/Sphere 等) を1回で作成 (位置・スケール・回転指定) |
 | `editor_batch_create` | 複数オブジェクトを1リクエストで一括生成 (Undo グループ) |
 | `editor_batch_set_property` | 複数プロパティを1リクエストで一括設定 (Undo グループ) |
+| `editor_set_component_fields` | 単一コンポーネントの複数フィールドを1リクエストで一括設定（hierarchy_path + コンポーネント型名、Undo グループ） |
 | `editor_batch_set_material_property` | 同一マテリアルの複数シェーダープロパティを1リクエストで一括設定 (Undo グループ) |
 | `editor_open_scene` | シーンを開く (single/additive) |
 | `editor_save_scene` | シーンを保存 |
@@ -1117,6 +1119,78 @@ before / after diff + validation steps の抜粋:
   }
 }
 ```
+### 17.6.1 `set_component_fields` パラメータ
+
+| パラメータ | 型 | 必須 | デフォルト | 説明 |
+|-----------|-----|------|-----------|------|
+| `asset_path` | string | ✅ | — | アセットファイルパス（.prefab, .unity, .asset） |
+| `symbol_path` | string | ✅ | — | 対象 GameObject の人間可読パス（例: `"Controller"`, `"Body/Head"`） |
+| `component` | string | ✅ | — | GameObject 上のコンポーネント型名（例: `"MeshRenderer"`, `"DualButtonController"`） |
+| `fields` | dict | ✅ | — | プロパティパス → 新しい値のマッピング（`{"propertyPath": value, ...}`） |
+| `dry_run` | bool | — | `false` | `true` で変更を書き込まずプレビューする（`confirm=true` と同時に指定した場合は `dry_run` が優先） |
+| `confirm` | bool | — | `false` | `true` で変更を適用（`change_reason` と `out_report` が必須） |
+| `change_reason` | string | — | `null` | 変更理由（監査証跡用）。`confirm=true` 時は必須 |
+| `out_report` | string | — | `null` | 結果 JSON を書き出すファイルパス。`confirm=true` 時は必須 |
+
+**使用例（dry-run）:**
+
+```json
+{
+  "asset_path": "Assets/Prefabs/Controller.prefab",
+  "symbol_path": "Controller",
+  "component": "DualButtonController",
+  "fields": {
+    "clearDelaySeconds": 60.0,
+    "buttonA": {"guid": "aabbccdd11223344aabbccdd11223344", "fileID": 12345, "type": 2}
+  },
+  "dry_run": true
+}
+```
+
+**使用例（confirm）:**
+
+```json
+{
+  "asset_path": "Assets/Prefabs/Controller.prefab",
+  "symbol_path": "Controller",
+  "component": "DualButtonController",
+  "fields": {"clearDelaySeconds": 60.0},
+  "confirm": true,
+  "change_reason": "タイマー値を 30s から 60s に変更",
+  "out_report": "reports/set_fields_result.json"
+}
+```
+
+### 17.6.2 `editor_set_component_fields` パラメータ
+
+| パラメータ | 型 | 必須 | デフォルト | 説明 |
+|-----------|-----|------|-----------|------|
+| `hierarchy_path` | string | ✅ | — | 対象 GameObject の Hierarchy パス（例: `"/DualButtonController/Controller"`） |
+| `component_type` | string | ✅ | — | コンポーネント型名（例: `"DualButtonController"`） |
+| `fields` | list[dict] | ✅ | — | フィールドディスクリプタのリスト（各要素は `name` + `value` または `name` + `object_reference`） |
+
+**`fields` エントリ形式:**
+
+| 形式 | フィールド | 説明 |
+|------|-----------|------|
+| プリミティブ値 | `{"name": "speed", "value": "60"}` | 数値・文字列・bool を文字列として渡す |
+| オブジェクト参照 | `{"name": "areaCollider", "object_reference": "/DualButtonController/AreaCollider:BoxCollider"}` | Hierarchy パス + オプションコンポーネント型 |
+
+**使用例:**
+
+```json
+{
+  "hierarchy_path": "/DualButtonController/Controller",
+  "component_type": "DualButtonController",
+  "fields": [
+    {"name": "clearDelaySeconds", "value": "60"},
+    {"name": "areaCollider", "object_reference": "/DualButtonController/AreaCollider:BoxCollider"}
+  ]
+}
+```
+
+すべてのフィールド変更は単一 Undo グループにまとめられる。
+
 ### 17.7 Unity bridge / runtime
 
 - `tools/unity_patch_bridge.py` は `UNITYTOOL_UNITY_COMMAND` を使って Unity batchmode コマンドを実行し、JSON リクエスト / レスポンスファイルを介して結果を返す（mutation op の `value` を Unity 側で扱える型情報へ正規化し、prefab create mode の hierarchy / component op、material / ScriptableObject create mode の `create_asset`、scene open/create mode の hierarchy / prefab instantiate / component op、および `save` / `save_scene` を中継する）。
@@ -1159,11 +1233,11 @@ before / after diff + validation steps の抜粋:
 - ノイズ判定に使えるよう、`top_missing_asset_guids` に missing GUID 上位を返す。
 - `ignore_asset_guids` パラメータで missing GUID を一時的に無視でき、集計は `ignored_missing_asset_occurrences` / `top_ignored_missing_asset_guids` で確認できる。
 - `find_referencing_assets` も同じ既定除外を適用し、`Library` など非本番スコープを走査しない。
-- 書き込み操作は `patch_apply`（confirm モード）、`set_property`、`copy_component_fields`、`add_component`、`remove_component`、`revert_overrides` の各 MCP ツールで利用可能。
+- 書き込み操作は `patch_apply`（confirm モード）、`set_property`、`set_component_fields`、`copy_component_fields`、`add_component`、`remove_component`、`revert_overrides` の各 MCP ツールで利用可能。
 
 ### 17.8.1 エラーヒント ("Did you mean...?")
 
-- `SYMBOL_NOT_FOUND` エラー（`set_property`, `copy_component_fields`, `add_component`, `remove_component`）は `data.suggestions` に類似 symbol_path のリスト（最大 3 件）を含む。
+- `SYMBOL_NOT_FOUND` エラー（`set_property`, `set_component_fields`, `copy_component_fields`, `add_component`, `remove_component`）は `data.suggestions` に類似 symbol_path のリスト（最大 3 件）を含む。
 - `MAT_PROP_NOT_FOUND` エラー（`inspect_material_asset` の書き込みモード）は `data.suggestions` に類似プロパティ名のリスト（最大 3 件）を含む。既存の `data.available_properties`（全プロパティ名リスト）も維持される。
 - `EDITOR_CTRL_PROPERTY_NOT_FOUND` エラー（`editor_get_material_property`, `editor_set_material_property`）は `data.suggestions` に類似シェーダープロパティ名のリスト（最大 3 件）を含む。
 - 候補なしの場合は `suggestions` は空配列 `[]`。

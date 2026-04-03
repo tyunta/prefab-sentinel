@@ -264,6 +264,62 @@ def create_server(
 
         return node, component_name, None
 
+    def _resolve_game_object_node(
+        tree: SymbolTree,
+        symbol_path: str,
+        asset_path: str,
+    ) -> tuple[SymbolNode, None] | tuple[None, dict[str, Any]]:
+        """Resolve a symbol path to a unique GameObject node.
+
+        Returns (node, None) on success, (None, error_dict) on failure.
+        """
+        try:
+            node = tree.resolve_unique(symbol_path)
+        except SymbolNotFoundError:
+            suggestions = suggest_similar(
+                symbol_path, _collect_symbol_paths(tree),
+            )
+            return None, {
+                "success": False,
+                "severity": "error",
+                "code": "SYMBOL_NOT_FOUND",
+                "message": f"No game object found at symbol path: {symbol_path!r}",
+                "data": {
+                    "asset_path": asset_path,
+                    "symbol_path": symbol_path,
+                    "suggestions": suggestions,
+                },
+                "diagnostics": [],
+            }
+        except AmbiguousSymbolError as exc:
+            return None, {
+                "success": False,
+                "severity": "error",
+                "code": "SYMBOL_AMBIGUOUS",
+                "message": str(exc),
+                "data": {"asset_path": asset_path, "symbol_path": symbol_path},
+                "diagnostics": [],
+            }
+
+        if node.kind != SymbolKind.GAME_OBJECT:
+            return None, {
+                "success": False,
+                "severity": "error",
+                "code": "SYMBOL_NOT_GAME_OBJECT",
+                "message": (
+                    f"Symbol path {symbol_path!r} resolves to a {node.kind.value}, "
+                    f"not a game_object. Provide a path to a GameObject."
+                ),
+                "data": {
+                    "asset_path": asset_path,
+                    "symbol_path": symbol_path,
+                    "resolved_kind": node.kind.value,
+                },
+                "diagnostics": [],
+            }
+
+        return node, None
+
     def _find_block_by_file_id(text: str, file_id: str) -> str:
         """Find the YAML block text for a given file ID."""
         for block in split_yaml_blocks(text):
@@ -271,6 +327,83 @@ def create_server(
                 return block.text
         msg = f"No YAML block found for fileID={file_id}"
         raise ValueError(msg)
+
+    def _find_component_on_go(
+        go_node: SymbolNode,
+        component: str,
+        asset_path: str,
+    ) -> tuple[SymbolNode, str, None] | tuple[None, None, dict[str, Any]]:
+        """Find a uniquely-named component on a GameObject node.
+
+        Matches built-in components by node name and MonoBehaviours by script name.
+        Returns (node, component_name, None) on success, (None, None, error_dict) on failure.
+        """
+        component_children = [
+            child for child in go_node.children
+            if child.kind == SymbolKind.COMPONENT
+        ]
+        available = [
+            child.script_name if child.script_name else child.name
+            for child in component_children
+        ]
+
+        def _matches_component(child: SymbolNode) -> bool:
+            if child.script_name:
+                return child.script_name == component
+            return child.name == component
+
+        matches = [child for child in component_children if _matches_component(child)]
+
+        if not matches:
+            return None, None, {
+                "success": False,
+                "severity": "error",
+                "code": "COMPONENT_NOT_FOUND",
+                "message": (
+                    f"No component {component!r} found on "
+                    f"GameObject {go_node.name!r}."
+                ),
+                "data": {
+                    "asset_path": asset_path,
+                    "component": component,
+                    "available_components": available,
+                },
+                "diagnostics": [],
+            }
+
+        if len(matches) > 1:
+            return None, None, {
+                "success": False,
+                "severity": "error",
+                "code": "COMPONENT_AMBIGUOUS",
+                "message": (
+                    f"Multiple {component!r} components found on "
+                    f"GameObject {go_node.name!r}. Cannot resolve uniquely."
+                ),
+                "data": {
+                    "asset_path": asset_path,
+                    "component": component,
+                    "available_components": [
+                        child.script_name if child.script_name else child.name
+                        for child in matches
+                    ],
+                },
+                "diagnostics": [],
+            }
+
+        node = matches[0]
+        try:
+            component_name = _resolve_component_name(node)
+        except ValueError as exc:
+            return None, None, {
+                "success": False,
+                "severity": "error",
+                "code": "SYMBOL_UNRESOLVABLE",
+                "message": str(exc),
+                "data": {"asset_path": asset_path, "component": component},
+                "diagnostics": [],
+            }
+        return node, component_name, None
 
     # ------------------------------------------------------------------
     # Session management tools
@@ -405,7 +538,6 @@ def create_server(
 
         diagnostics: list[dict[str, Any]] = []
 
-        # Phase 1: Clean up old Bridge files from parent directory.
         # The glob is non-recursive on parent_dir, so matches are always
         # direct children of parent_dir (never inside target_path).
         removed_old_files: list[str] = []
@@ -430,7 +562,6 @@ def create_server(
 
         old_version = session.detect_bridge_version()
 
-        # Phase 2: Clean target directory for fresh deploy
         removed_stale_files: list[str] = []
         for stale in sorted(target_path.iterdir()):
             if stale.is_file():
@@ -443,7 +574,6 @@ def create_server(
                 "message": f"Cleared {len(removed_stale_files)} file(s) from {target_dir} before redeploy",
             })
 
-        # Phase 3: Copy source files
         copied_files: list[str] = []
 
         for src_file in sorted(
@@ -455,7 +585,6 @@ def create_server(
 
         new_version = session.detect_bridge_version()
 
-        # Trigger asset refresh (best-effort)
         with contextlib.suppress(Exception):
             send_action(action="refresh_asset_database")
 
@@ -608,7 +737,6 @@ def create_server(
             return
         if not resp.success:
             return
-        # Build lookup: (file_id, property_path) -> origin info
         origin_map: dict[tuple[str, str], dict[str, Any]] = {}
         for v in resp.data.get("values", []):
             key = (v["target_file_id"], v["property_path"])
@@ -617,7 +745,6 @@ def create_server(
                     "origin_path": v["origin_path"],
                     "origin_depth": v["origin_depth"],
                 }
-        # Annotate properties on matched nodes
         for match in matches:
             props = match.get("properties")
             file_id = match.get("file_id", "")
@@ -783,7 +910,6 @@ def create_server(
             confirm: Set True to apply changes (False = dry-run only).
             change_reason: Human-readable reason for the change (audit trail).
         """
-        # 1-3. Resolve symbol → component → type name
         text, resolved = _read_asset(asset_path)
         tree = session.get_symbol_tree(resolved, text, include_properties=False)
         node, component_name, err = _resolve_component_with_type(
@@ -793,7 +919,6 @@ def create_server(
             return err
         assert node is not None  # guaranteed by err check
 
-        # 4. Build V2 patch plan
         plan: dict[str, object] = {
             "plan_version": PLAN_VERSION,
             "resources": [{"id": "target", "path": asset_path, "mode": "open"}],
@@ -808,7 +933,6 @@ def create_server(
             ],
         }
 
-        # 5. Execute via orchestrator
         orch = session.get_orchestrator()
         resp = orch.patch_apply(
             plan=plan,
@@ -817,16 +941,10 @@ def create_server(
             change_reason=change_reason or None,
         )
 
-        # 6. Invalidate SymbolTree cache after confirmed write
-        auto_refresh = "skipped"
-        if confirm and resp.success:
-            session.invalidate_symbol_tree(resolved)
-            auto_refresh = orch.maybe_auto_refresh()
-
-        # 7. Enrich response with symbol resolution metadata
         result = resp.to_dict()
         if confirm and resp.success:
-            result["auto_refresh"] = auto_refresh
+            session.invalidate_symbol_tree(resolved)
+            result["auto_refresh"] = orch.maybe_auto_refresh()
         result["symbol_resolution"] = {
             "symbol_path": symbol_path,
             "resolved_component": component_name,
@@ -861,52 +979,11 @@ def create_server(
         """
         text, resolved = _read_asset(asset_path)
         tree = session.get_symbol_tree(resolved, text, include_properties=False)
-        try:
-            node = tree.resolve_unique(symbol_path)
-        except SymbolNotFoundError:
-            suggestions = suggest_similar(
-                symbol_path, _collect_symbol_paths(tree),
-            )
-            return {
-                "success": False,
-                "severity": "error",
-                "code": "SYMBOL_NOT_FOUND",
-                "message": f"No game object found at symbol path: {symbol_path!r}",
-                "data": {
-                    "asset_path": asset_path,
-                    "symbol_path": symbol_path,
-                    "suggestions": suggestions,
-                },
-                "diagnostics": [],
-            }
-        except AmbiguousSymbolError as exc:
-            return {
-                "success": False,
-                "severity": "error",
-                "code": "SYMBOL_AMBIGUOUS",
-                "message": str(exc),
-                "data": {"asset_path": asset_path, "symbol_path": symbol_path},
-                "diagnostics": [],
-            }
+        go_node, err = _resolve_game_object_node(tree, symbol_path, asset_path)
+        if err is not None:
+            return err
+        assert go_node is not None
 
-        if node.kind != SymbolKind.GAME_OBJECT:
-            return {
-                "success": False,
-                "severity": "error",
-                "code": "SYMBOL_NOT_GAME_OBJECT",
-                "message": (
-                    f"Symbol path {symbol_path!r} resolves to a {node.kind.value}, "
-                    f"not a game_object. Provide a path to a GameObject."
-                ),
-                "data": {
-                    "asset_path": asset_path,
-                    "symbol_path": symbol_path,
-                    "resolved_kind": node.kind.value,
-                },
-                "diagnostics": [],
-            }
-
-        # Build hierarchy path: strip root GO name, keep children.
         parts = [p for p in symbol_path.split("/") if p]
         hierarchy_target = "/" + "/".join(parts[1:]) if len(parts) > 1 else "/"
 
@@ -931,19 +1008,15 @@ def create_server(
             change_reason=change_reason or None,
         )
 
-        auto_refresh = "skipped"
-        if confirm and resp.success:
-            session.invalidate_symbol_tree(resolved)
-            auto_refresh = orch.maybe_auto_refresh()
-
         result = resp.to_dict()
         if confirm and resp.success:
-            result["auto_refresh"] = auto_refresh
+            session.invalidate_symbol_tree(resolved)
+            result["auto_refresh"] = orch.maybe_auto_refresh()
         result["symbol_resolution"] = {
             "symbol_path": symbol_path,
             "hierarchy_target": hierarchy_target,
             "component_type": component_type,
-            "file_id": node.file_id,
+            "file_id": go_node.file_id,
         }
         return result
 
@@ -997,14 +1070,10 @@ def create_server(
             change_reason=change_reason or None,
         )
 
-        auto_refresh = "skipped"
-        if confirm and resp.success:
-            session.invalidate_symbol_tree(resolved)
-            auto_refresh = orch.maybe_auto_refresh()
-
         result = resp.to_dict()
         if confirm and resp.success:
-            result["auto_refresh"] = auto_refresh
+            session.invalidate_symbol_tree(resolved)
+            result["auto_refresh"] = orch.maybe_auto_refresh()
         result["symbol_resolution"] = {
             "symbol_path": symbol_path,
             "resolved_component": component_name,
@@ -1113,7 +1182,6 @@ def create_server(
             confirm: Set True to apply (False = dry-run only).
             change_reason: Human-readable reason for the change (audit trail).
         """
-        # 1-6. Read assets and resolve symbol → component → type
         src_text, _src_resolved = _read_asset(src_asset_path)
         dst_text, dst_resolved = _read_asset(dst_asset_path)
 
@@ -1138,7 +1206,6 @@ def create_server(
             return dst_err
         assert dst_node is not None  # guaranteed by err check
 
-        # 7. Type match
         if src_type != dst_type:
             return {
                 "success": False,
@@ -1152,11 +1219,9 @@ def create_server(
                 "diagnostics": [],
             }
 
-        # 8-9. Extract fields from source YAML block
         src_block = _find_block_by_file_id(src_text, src_node.file_id)
         all_fields = extract_block_fields(src_block)
 
-        # 10. Filter fields
         if fields is not None:
             all_field_names = [name for name, _ in all_fields]
             for f in fields:
@@ -1192,7 +1257,6 @@ def create_server(
                 "diagnostics": [],
             }
 
-        # 11-12. Build V2 patch plan
         ops = [
             {
                 "resource": "target",
@@ -1211,7 +1275,6 @@ def create_server(
             "ops": ops,
         }
 
-        # 13. Execute via orchestrator
         orch = session.get_orchestrator()
         resp = orch.patch_apply(
             plan=plan,
@@ -1220,14 +1283,10 @@ def create_server(
             change_reason=change_reason or None,
         )
 
-        auto_refresh = "skipped"
-        if confirm and resp.success:
-            session.invalidate_symbol_tree(dst_resolved)
-            auto_refresh = orch.maybe_auto_refresh()
-
         result = resp.to_dict()
         if confirm and resp.success:
-            result["auto_refresh"] = auto_refresh
+            session.invalidate_symbol_tree(dst_resolved)
+            result["auto_refresh"] = orch.maybe_auto_refresh()
         result["copy_metadata"] = {
             "src_asset_path": src_asset_path,
             "src_symbol_path": src_symbol_path,
@@ -1239,6 +1298,153 @@ def create_server(
             "dst_file_id": dst_node.file_id,
             "fields_copied": [n for n, _ in copy_pairs],
         }
+        return result
+
+    @server.tool()
+    def set_component_fields(
+        asset_path: str,
+        symbol_path: str,
+        component: str,
+        fields: dict[str, Any],
+        dry_run: bool = False,
+        confirm: bool = False,
+        change_reason: str | None = None,
+        out_report: str | None = None,
+    ) -> dict[str, Any]:
+        """Set multiple serialized field values on a component in a single transaction.
+
+        Two-phase workflow:
+        - confirm=False (default): dry-run preview of changes.
+        - confirm=True: applies changes to disk (requires change_reason + out_report).
+        - dry_run=True: explicit preview flag (overrides confirm if both are True).
+
+        Args:
+            asset_path: Asset file path (.prefab, .unity, .asset).
+            symbol_path: Human-readable path to the target GameObject
+                (e.g. "Controller" or "Body/Head").
+            component: Component type name on the GameObject
+                (e.g. "MeshRenderer" or "DualButtonController").
+            fields: Mapping of property paths to new values
+                ({property_path: value, ...}).
+            dry_run: Explicit preview flag; overrides confirm when both are True.
+            confirm: Set True to apply changes (requires change_reason + out_report).
+            change_reason: Human-readable reason for the change (required when confirm=True).
+            out_report: Path to write result JSON report (required when confirm=True).
+        """
+        if not fields:
+            return {
+                "success": False,
+                "severity": "error",
+                "code": "EMPTY_FIELDS",
+                "message": "fields dict must not be empty.",
+                "data": {},
+                "diagnostics": [],
+            }
+
+        effective_dry_run = dry_run or not confirm
+        effective_confirm = confirm and not dry_run
+
+        if effective_confirm and not change_reason:
+            return {
+                "success": False,
+                "severity": "error",
+                "code": "CHANGE_REASON_REQUIRED",
+                "message": "change_reason is required when confirm=True.",
+                "data": {},
+                "diagnostics": [],
+            }
+        if effective_confirm and not out_report:
+            return {
+                "success": False,
+                "severity": "error",
+                "code": "OUT_REPORT_REQUIRED",
+                "message": "out_report is required when confirm=True.",
+                "data": {},
+                "diagnostics": [],
+            }
+
+        if effective_confirm and session.project_root is None:
+            return {
+                "success": False,
+                "severity": "error",
+                "code": "PROJECT_ROOT_REQUIRED",
+                "message": "out_report requires a configured project_root for path containment.",
+                "data": {},
+                "diagnostics": [],
+            }
+
+        report_path = Path(out_report).resolve() if out_report else None
+        if (
+            report_path is not None
+            and session.project_root is not None
+            and not report_path.is_relative_to(Path(session.project_root).resolve())
+        ):
+            return {
+                "success": False,
+                "severity": "error",
+                "code": "OUT_REPORT_OUTSIDE_PROJECT",
+                "message": (
+                    f"out_report must be within the project root: "
+                    f"{Path(session.project_root).resolve()}"
+                ),
+                "data": {},
+                "diagnostics": [],
+            }
+
+        text, resolved = _read_asset(asset_path)
+        tree = session.get_symbol_tree(resolved, text, include_properties=False)
+        go_node, err = _resolve_game_object_node(tree, symbol_path, asset_path)
+        if err is not None:
+            return err
+        assert go_node is not None
+
+        node, component_name, err = _find_component_on_go(go_node, component, asset_path)
+        if err is not None:
+            return err
+        assert node is not None  # guaranteed by err check
+
+        ops = [
+            {
+                "resource": "target",
+                "op": "set",
+                "component": component_name,
+                "path": field_path,
+                "value": field_value,
+            }
+            for field_path, field_value in fields.items()
+        ]
+        plan: dict[str, object] = {
+            "plan_version": PLAN_VERSION,
+            "resources": [{"id": "target", "path": asset_path, "mode": "open"}],
+            "ops": ops,
+        }
+
+        orch = session.get_orchestrator()
+        resp = orch.patch_apply(
+            plan=plan,
+            dry_run=effective_dry_run,
+            confirm=effective_confirm,
+            change_reason=change_reason or None,
+        )
+
+        result = resp.to_dict()
+        if effective_confirm and resp.success:
+            session.invalidate_symbol_tree(resolved)
+            result["auto_refresh"] = orch.maybe_auto_refresh()
+        result["symbol_resolution"] = {
+            "symbol_path": symbol_path,
+            "resolved_component": component_name,
+            "file_id": node.file_id,
+            "class_id": node.class_id,
+            "fields": list(fields.keys()),
+        }
+
+        if report_path is not None and effective_confirm:
+            report_path.write_text(
+                json.dumps(result, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
         return result
 
     # ------------------------------------------------------------------
@@ -1556,7 +1762,6 @@ def create_server(
             confirm=confirm,
         )
 
-        # Post-process: convert C# platform_results_json to structured data
         data = result.setdefault("data", {})
         if isinstance(data, dict):
             prj = data.pop("platform_results_json", "")
@@ -1690,8 +1895,6 @@ def create_server(
             "component_type": component_type,
         }
         if properties:
-            import json
-
             kwargs["properties_json"] = json.dumps(properties, ensure_ascii=False)
         return send_action(action="editor_add_component", **kwargs)
 
@@ -1986,8 +2189,6 @@ def create_server(
         Args:
             objects: List of object specifications.
         """
-        import json
-
         return send_action(
             action="editor_batch_create",
             batch_objects_json=json.dumps(objects, ensure_ascii=False),
@@ -2005,7 +2206,86 @@ def create_server(
         Args:
             operations: List of set-property operations.
         """
-        import json
+        return send_action(
+            action="editor_batch_set_property",
+            batch_operations_json=json.dumps(operations, ensure_ascii=False),
+        )
+
+    @server.tool()
+    def editor_set_component_fields(
+        hierarchy_path: str,
+        component_type: str,
+        fields: list[dict[str, str]],
+    ) -> dict[str, Any]:
+        """Set multiple serialized fields on a live Unity Editor component in a single Undo group.
+
+        Each field must specify a name plus either value (for primitives) or
+        object_reference (for ObjectReference properties).
+
+        Args:
+            hierarchy_path: Hierarchy path to the target GameObject
+                (e.g. "/DualButtonController/Controller").
+            component_type: Component type name (e.g. "DualButtonController").
+            fields: List of field dicts, each with "name" and either "value"
+                or "object_reference".
+        """
+        if not fields:
+            return {
+                "success": False,
+                "severity": "error",
+                "code": "EDITOR_SET_COMP_EMPTY_FIELDS",
+                "message": "fields list must not be empty.",
+                "data": {},
+                "diagnostics": [],
+            }
+
+        operations: list[dict[str, str]] = []
+        for field in fields:
+            if "name" not in field:
+                return {
+                    "success": False,
+                    "severity": "error",
+                    "code": "EDITOR_SET_COMP_INVALID_FIELD",
+                    "message": (
+                        f"Each field must have a 'name' key. Got: {field!r}"
+                    ),
+                    "data": {"field": field},
+                    "diagnostics": [],
+                }
+            if "value" in field and "object_reference" in field:
+                return {
+                    "success": False,
+                    "severity": "error",
+                    "code": "EDITOR_SET_COMP_INVALID_FIELD",
+                    "message": (
+                        f"Field {field['name']!r} must have either "
+                        f"'value' or 'object_reference', not both."
+                    ),
+                    "data": {"field": field},
+                    "diagnostics": [],
+                }
+            if "value" not in field and "object_reference" not in field:
+                return {
+                    "success": False,
+                    "severity": "error",
+                    "code": "EDITOR_SET_COMP_INVALID_FIELD",
+                    "message": (
+                        f"Field {field['name']!r} must have either "
+                        f"'value' or 'object_reference'."
+                    ),
+                    "data": {"field": field},
+                    "diagnostics": [],
+                }
+            op: dict[str, str] = {
+                "hierarchy_path": hierarchy_path,
+                "component_type": component_type,
+                "property_name": field["name"],
+            }
+            if "value" in field:
+                op["value"] = field["value"]
+            else:
+                op["object_reference"] = field["object_reference"]
+            operations.append(op)
 
         return send_action(
             action="editor_batch_set_property",
@@ -2103,18 +2383,17 @@ def create_server(
         Args:
             operations: List of add-component operations.
         """
-        import json
-
-        # Pre-serialize properties lists to properties_json strings
-        # (matches editor_add_component's handling)
+        serialized_ops = []
         for op in operations:
-            props = op.pop("properties", None)
-            if props and "properties_json" not in op:
-                op["properties_json"] = json.dumps(props, ensure_ascii=False)
+            op_copy = dict(op)
+            props = op_copy.pop("properties", None)
+            if props and "properties_json" not in op_copy:
+                op_copy["properties_json"] = json.dumps(props, ensure_ascii=False)
+            serialized_ops.append(op_copy)
 
         return send_action(
             action="editor_batch_add_component",
-            batch_operations_json=json.dumps(operations, ensure_ascii=False),
+            batch_operations_json=json.dumps(serialized_ops, ensure_ascii=False),
         )
 
     @server.tool()
@@ -2465,13 +2744,11 @@ def create_server(
             runtime_allow_warnings: Allow warnings in runtime validation.
             runtime_max_diagnostics: Max diagnostics for runtime validation.
         """
-        import json as _json
-        # Pydantic 2.11+ may pre-parse JSON strings into dicts
         if isinstance(plan, dict):
             plan_dict = plan
         else:
             try:
-                plan_dict = _json.loads(plan)
+                plan_dict = json.loads(plan)
             except (ValueError, TypeError) as exc:
                 return {
                     "success": False, "severity": "error", "code": "INVALID_PLAN_JSON",
