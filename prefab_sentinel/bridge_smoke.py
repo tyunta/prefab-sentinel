@@ -14,6 +14,7 @@ from prefab_sentinel.bridge_constants import (
     UNITY_TIMEOUT_SEC_ENV,
     VALID_SEVERITIES,
 )
+from prefab_sentinel.json_io import dump_json, load_json
 from prefab_sentinel.patch_plan import (
     build_bridge_request as _build_bridge_request_impl,
     count_plan_ops,
@@ -110,7 +111,7 @@ def run_bridge(
 ) -> dict[str, Any]:
     completed = subprocess.run(
         [python_executable, str(bridge_script)],
-        input=json.dumps(request, ensure_ascii=False),
+        input=dump_json(request, indent=None),
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -123,7 +124,7 @@ def run_bridge(
             f"Bridge process exited with {completed.returncode}: {completed.stderr.strip()}"
         )
     try:
-        payload = json.loads(completed.stdout)
+        payload = load_json(completed.stdout)
     except json.JSONDecodeError as exc:
         raise RuntimeError("Bridge stdout is not valid JSON.") from exc
     if not isinstance(payload, dict):

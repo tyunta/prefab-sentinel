@@ -8,6 +8,7 @@ import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
+from prefab_sentinel.json_io import load_json_file
 from prefab_sentinel.wsl_compat import to_wsl_path
 
 UNITY_TEXT_ASSET_SUFFIXES = {
@@ -235,6 +236,9 @@ def resolve_asset_path(path: str, project_root: Path | None) -> Path:
 
     If *path* is relative (e.g. ``Assets/Foo/Bar.prefab``) and doesn't exist
     as-is, tries joining with *project_root*.
+
+    Raises:
+        ValueError: If the resolved path escapes the project root.
     """
     from prefab_sentinel.wsl_compat import to_wsl_path
 
@@ -242,7 +246,20 @@ def resolve_asset_path(path: str, project_root: Path | None) -> Path:
     if not resolved.is_file() and project_root and not resolved.is_absolute():
         joined = (project_root / resolved).resolve()
         if joined.is_file():
-            return joined
+            resolved = joined
+
+    # Path containment guard: resolved must not escape project root.
+    # Uses is_relative_to (Python 3.9+) to avoid prefix-collision bypass.
+    if project_root is not None:
+        resolved_abs = resolved.resolve()
+        root_abs = Path(project_root).resolve()
+        if not resolved_abs.is_relative_to(root_abs):
+            msg = (
+                f"Path escapes project root: {path!r} "
+                f"resolves to {resolved_abs} which is outside {root_abs}"
+            )
+            raise ValueError(msg)
+
     return resolved
 
 
@@ -260,7 +277,7 @@ def relative_to_root(path: Path, root: Path) -> str:
 def _read_json_file(path: Path) -> dict[str, object] | None:
     """Read a JSON file, returning None on failure or non-object content."""
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = load_json_file(path)
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return None
     if not isinstance(data, dict):

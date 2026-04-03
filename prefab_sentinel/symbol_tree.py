@@ -509,23 +509,18 @@ class SymbolTree:
 # ---------------------------------------------------------------------------
 
 
-def build_script_name_map(project_root: Path | str) -> dict[str, str]:
-    """Build a guid -> script_class_name map from .cs.meta files.
+def build_script_name_map(guid_index: dict[str, Path]) -> dict[str, str]:
+    """Build a guid -> script_class_name map from a pre-computed GUID index.
 
-    Scans the project for .cs.meta files and extracts the GUID-to-class-name
-    mapping.  Does not include PackageCache to keep the map focused on
-    project-local scripts.
+    Filters the index for ``.cs`` entries and maps GUIDs to class names (file stems).
 
     Args:
-        project_root: Unity project root directory.
+        guid_index: Pre-computed GUID-to-Path mapping (e.g. from
+            ``collect_project_guid_index``).
 
     Returns:
         Dict mapping lowercase GUID strings to script class names (file stems).
     """
-    from prefab_sentinel.unity_assets import collect_project_guid_index
-
-    root = Path(project_root) if isinstance(project_root, str) else project_root
-    guid_index = collect_project_guid_index(root, include_package_cache=False)
     return {
         guid: asset_path.stem
         for guid, asset_path in guid_index.items()

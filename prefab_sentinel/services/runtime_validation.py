@@ -21,6 +21,7 @@ from prefab_sentinel.bridge_constants import (
     UNITY_TIMEOUT_SEC_ENV,
 )
 from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse, error_response, max_severity, success_response
+from prefab_sentinel.json_io import dump_json, load_json, load_json_file
 from prefab_sentinel.unity_assets import decode_text_file, find_project_root, relative_to_root, resolve_scope_path
 from prefab_sentinel.wsl_compat import needs_windows_paths, split_unity_command, to_windows_path, to_wsl_path
 
@@ -316,7 +317,7 @@ class RuntimeValidationService:
                 "timeout_sec": int(config["timeout_sec"]),
             }
             request_path.write_text(
-                json.dumps(payload, ensure_ascii=False),
+                dump_json(payload, indent=None),
                 encoding="utf-8",
             )
             command = self._build_runtime_command(
@@ -384,7 +385,7 @@ class RuntimeValidationService:
             response_error: str | None = None
             if response_path.exists():
                 try:
-                    response_payload = json.loads(response_path.read_text(encoding="utf-8"))
+                    response_payload = load_json_file(response_path)
                 except (OSError, json.JSONDecodeError) as exc:
                     response_payload = None
                     response_error = str(exc)
@@ -501,7 +502,7 @@ class RuntimeValidationService:
         try:
             watch_dir.mkdir(parents=True, exist_ok=True)
             tmp_file.write_text(
-                json.dumps(payload, ensure_ascii=False),
+                dump_json(payload, indent=None),
                 encoding="utf-8",
             )
             tmp_file.rename(request_file)
@@ -524,7 +525,7 @@ class RuntimeValidationService:
             if response_file.exists():
                 try:
                     raw = response_file.read_text(encoding="utf-8")
-                    response_payload = json.loads(raw)
+                    response_payload = load_json(raw)
                 except (OSError, json.JSONDecodeError) as exc:
                     return error_response(
                         "RUN_EDITOR_BRIDGE_RESPONSE",

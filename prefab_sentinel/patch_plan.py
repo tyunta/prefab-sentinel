@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import json
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
+
+from prefab_sentinel.json_io import load_json_file
 
 PLAN_VERSION = 2
 _DEFAULT_RESOURCE_ID = "target"
@@ -157,7 +158,7 @@ def normalize_patch_plan(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def load_patch_plan(path: Path) -> dict[str, Any]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload = load_json_file(path)
     return normalize_patch_plan(payload)
 
 

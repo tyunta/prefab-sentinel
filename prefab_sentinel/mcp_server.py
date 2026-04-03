@@ -32,6 +32,7 @@ from prefab_sentinel.editor_bridge import (
     send_action,
 )
 from prefab_sentinel.fuzzy_match import suggest_similar
+from prefab_sentinel.json_io import dump_json, load_json
 from prefab_sentinel.patch_plan import PLAN_VERSION
 from prefab_sentinel.patch_revert import revert_overrides as revert_overrides_impl
 from prefab_sentinel.session import InvalidProjectRootError, ProjectSession
@@ -1442,7 +1443,7 @@ def create_server(
 
         if report_path is not None and effective_confirm:
             report_path.write_text(
-                json.dumps(result, ensure_ascii=False, indent=2) + "\n",
+                dump_json(result) + "\n",
                 encoding="utf-8",
             )
 
@@ -1767,7 +1768,7 @@ def create_server(
         if isinstance(data, dict):
             prj = data.pop("platform_results_json", "")
             if prj:
-                data["platform_results"] = json.loads(prj)
+                data["platform_results"] = load_json(prj)
             if not confirm:
                 data["platforms"] = platforms
 
@@ -1896,7 +1897,7 @@ def create_server(
             "component_type": component_type,
         }
         if properties:
-            kwargs["properties_json"] = json.dumps(properties, ensure_ascii=False)
+            kwargs["properties_json"] = dump_json(properties, indent=None)
         return send_action(action="editor_add_component", **kwargs)
 
     @server.tool()
@@ -2141,7 +2142,7 @@ def create_server(
         """
         return send_action(
             action="editor_create_empty",
-            **build_create_empty_kwargs(name=name, parent_path=parent_path, position=position),  # type: ignore[arg-type]
+            **build_create_empty_kwargs(name=name, parent_path=parent_path, position=position),  # type: ignore[arg-type]  # dict[str, str] unpacks safely into **kwargs: Any
         )
 
     @server.tool()
@@ -2191,7 +2192,7 @@ def create_server(
         """
         return send_action(
             action="editor_batch_create",
-            batch_objects_json=json.dumps(objects, ensure_ascii=False),
+            batch_objects_json=dump_json(objects, indent=None),
         )
 
     @server.tool()
@@ -2208,7 +2209,7 @@ def create_server(
         """
         return send_action(
             action="editor_batch_set_property",
-            batch_operations_json=json.dumps(operations, ensure_ascii=False),
+            batch_operations_json=dump_json(operations, indent=None),
         )
 
     @server.tool()
@@ -2289,7 +2290,7 @@ def create_server(
 
         return send_action(
             action="editor_batch_set_property",
-            batch_operations_json=json.dumps(operations, ensure_ascii=False),
+            batch_operations_json=dump_json(operations, indent=None),
         )
 
     @server.tool()
@@ -2320,7 +2321,7 @@ def create_server(
         ]
 
         kwargs: dict[str, Any] = {
-            "batch_operations_json": json.dumps(normalized, ensure_ascii=False),
+            "batch_operations_json": dump_json(normalized, indent=None),
         }
         if hierarchy_path:
             kwargs["hierarchy_path"] = hierarchy_path
@@ -2388,12 +2389,12 @@ def create_server(
             op_copy = dict(op)
             props = op_copy.pop("properties", None)
             if props and "properties_json" not in op_copy:
-                op_copy["properties_json"] = json.dumps(props, ensure_ascii=False)
+                op_copy["properties_json"] = dump_json(props, indent=None)
             serialized_ops.append(op_copy)
 
         return send_action(
             action="editor_batch_add_component",
-            batch_operations_json=json.dumps(serialized_ops, ensure_ascii=False),
+            batch_operations_json=dump_json(serialized_ops, indent=None),
         )
 
     @server.tool()
@@ -2499,7 +2500,7 @@ def create_server(
             raw_json = data.pop("reflect_result_json", "")
             if raw_json:
                 try:
-                    data.update(json.loads(raw_json))
+                    data.update(load_json(raw_json))
                 except json.JSONDecodeError as exc:
                     return _reflect_error(
                         "EDITOR_REFLECT_PARSE",
@@ -2748,7 +2749,7 @@ def create_server(
             plan_dict = plan
         else:
             try:
-                plan_dict = json.loads(plan)
+                plan_dict = load_json(plan)
             except (ValueError, TypeError) as exc:
                 return {
                     "success": False, "severity": "error", "code": "INVALID_PLAN_JSON",

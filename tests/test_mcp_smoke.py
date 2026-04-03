@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import unittest
 from pathlib import Path
@@ -14,7 +15,19 @@ FIXTURES = Path(__file__).parent / "fixtures" / "smoke"
 
 
 def _run(coro: Any) -> Any:
-    return asyncio.run(coro)
+    """Run an async coroutine synchronously.
+
+    When the result is a call_tool response (list[TextContent]), normalises
+    across MCP versions to always return a 2-tuple (content_list, parsed_dict)
+    so tests can use ``_, result = _run(server.call_tool(...))``.
+    """
+    raw = asyncio.run(coro)
+    if isinstance(raw, tuple) and len(raw) == 2 and isinstance(raw[1], dict):
+        return raw
+    if isinstance(raw, list) and raw and hasattr(raw[0], "text"):
+        parsed = json.loads(raw[0].text)
+        return raw, parsed
+    return raw
 
 
 class McpSmokeTests(unittest.TestCase):

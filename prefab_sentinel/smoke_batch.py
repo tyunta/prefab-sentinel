@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from prefab_sentinel.bridge_smoke import load_patch_plan
+from prefab_sentinel.json_io import dump_json, load_json, load_json_file
 from prefab_sentinel.wsl_compat import to_wsl_path
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -263,7 +264,7 @@ def _build_cases(args: argparse.Namespace) -> list[SmokeCase]:
 
 
 def _load_timeout_profile_map(timeout_profile_path: Path) -> dict[str, int]:
-    payload = json.loads(timeout_profile_path.read_text(encoding="utf-8"))
+    payload = load_json_file(timeout_profile_path)
     if not isinstance(payload, dict):
         raise ValueError("timeout profile root must be an object.")
 
@@ -361,7 +362,7 @@ def _parse_case_payload(
     stderr_text: str,
 ) -> dict[str, Any]:
     try:
-        payload = json.loads(stdout_text)
+        payload = load_json(stdout_text)
     except json.JSONDecodeError:
         payload = {
             "success": False,
@@ -630,7 +631,7 @@ def _execute_batch_cases(
                 matched_expectation = False
             if not response_path.exists():
                 response_path.write_text(
-                    json.dumps(case_payload, ensure_ascii=False, indent=2),
+                    dump_json(case_payload),
                     encoding="utf-8",
                 )
             results.append(
@@ -714,7 +715,7 @@ def _build_batch_summary(
     summary_json = Path(args.summary_json) if args.summary_json else out_dir / "summary.json"
     summary_json.parent.mkdir(parents=True, exist_ok=True)
     summary_json.write_text(
-        json.dumps(summary_payload, ensure_ascii=False, indent=2),
+        dump_json(summary_payload),
         encoding="utf-8",
     )
 

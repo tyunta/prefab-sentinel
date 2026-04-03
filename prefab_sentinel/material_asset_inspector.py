@@ -8,6 +8,7 @@ file *itself*.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from dataclasses import dataclass
@@ -15,6 +16,7 @@ from pathlib import Path
 
 from prefab_sentinel.contracts import error_dict as _error_dict, success_dict as _success_dict
 from prefab_sentinel.fuzzy_match import suggest_similar
+from prefab_sentinel.json_io import load_json
 from prefab_sentinel.unity_assets import (
     collect_project_guid_index,
     decode_text_file,
@@ -428,8 +430,6 @@ def _replace_property(
     category: str,
 ) -> str:
     """Replace a property value in the full .mat text."""
-    import json as _json
-
     if category == "float":
         try:
             float(value)
@@ -452,11 +452,11 @@ def _replace_property(
 
     if category == "color":
         try:
-            parts = _json.loads(value)
+            parts = load_json(value)
             if not isinstance(parts, list) or len(parts) != 4:
                 raise ValueError("Color must be [r, g, b, a]")
             r, g, b, a = (float(x) for x in parts)
-        except (ValueError, TypeError, _json.JSONDecodeError) as exc:
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
             raise ValueError(f"Invalid color value '{value}': {exc}") from None
         new_val = f"{{r: {r}, g: {g}, b: {b}, a: {a}}}"
         pattern = re.compile(

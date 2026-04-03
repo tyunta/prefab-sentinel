@@ -167,17 +167,11 @@ class ProjectSession:
         if self._script_name_map is None:
             if self._project_root is None:
                 return {}
-            self._script_name_map = build_script_name_map(self._project_root)
+            self._script_name_map = build_script_name_map(self.guid_index())
         return self._script_name_map
 
     def guid_index(self) -> dict[str, Path]:
-        """Return the cached GUID index, building on first call.
-
-        Known limitation: build_script_name_map() internally calls
-        collect_project_guid_index(), so the first activate_project
-        scans the GUID index twice. Tracked in
-        project_improve_guid_index_cache_unification.md.
-        """
+        """Return the cached GUID index, building on first call."""
         if self._guid_index is None:
             if self._project_root is None:
                 return {}

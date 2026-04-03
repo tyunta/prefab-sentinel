@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import csv
 import io
-import json
 from pathlib import Path
 from typing import Any
+
+from prefab_sentinel.json_io import dump_json
 
 
 def _extract_ref_scan_data(payload_data: dict[str, Any]) -> dict[str, Any]:
@@ -208,7 +209,7 @@ def render_markdown_report(
         [
             "## Data",
             "```json",
-            json.dumps(payload_data, ensure_ascii=False, indent=2),
+            dump_json(payload_data),
             "```",
             "",
             "## Diagnostics",
@@ -284,7 +285,7 @@ def export_report(
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     if fmt == "json":
-        out.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        out.write_text(dump_json(payload) + "\n", encoding="utf-8")
     elif fmt == "md":
         out.write_text(
             render_markdown_report(
