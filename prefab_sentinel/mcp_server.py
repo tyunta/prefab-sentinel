@@ -2141,7 +2141,7 @@ def create_server(
         """
         return send_action(
             action="editor_create_empty",
-            **build_create_empty_kwargs(name=name, parent_path=parent_path, position=position),
+            **build_create_empty_kwargs(name=name, parent_path=parent_path, position=position),  # type: ignore[arg-type]
         )
 
     @server.tool()

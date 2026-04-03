@@ -304,13 +304,13 @@ def build_create_empty_kwargs(
     name: str,
     parent_path: str = "",
     position: str = "",
-) -> dict[str, Any]:
+) -> dict[str, str]:
     """Build send_action kwargs from editor_create_empty parameters.
 
     Omits empty optional fields so the bridge receives only explicitly
     specified values.
     """
-    kwargs: dict[str, Any] = {"new_name": name}
+    kwargs: dict[str, str] = {"new_name": name}
     if parent_path:
         kwargs["hierarchy_path"] = parent_path
     if position:
