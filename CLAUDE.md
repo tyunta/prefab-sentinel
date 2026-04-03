@@ -1,5 +1,7 @@
 # プロジェクト運用ルール
 
+- リポジトリ: https://github.com/tyunta/prefab-sentinel
+
 本ファイルは `prefab-sentinel` リポジトリの運用ルール正本。仕様の正本は `README.md`。
 仕様に関わる変更を行う場合は、実装変更と同時に `README.md` の該当箇所を更新する。
 
