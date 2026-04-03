@@ -4751,5 +4751,21 @@ class TestEditorSetComponentFieldsIntegration(unittest.TestCase):
         self.assertIn("data", result)
 
 
+class TestEditorBatchCreateComponents(unittest.TestCase):
+    """I3: editor_batch_create serializes components list in JSON payload."""
+
+    def test_editor_batch_create_components_serialized(self) -> None:
+        server = create_server()
+        with patch("prefab_sentinel.mcp_server.send_action", return_value={"success": True}) as mock_send:
+            _run(server.call_tool(
+                "editor_batch_create",
+                {"objects": [{"name": "Box", "components": ["BoxCollider"]}]},
+            ))
+        mock_send.assert_called_once()
+        call_kwargs = mock_send.call_args.kwargs
+        parsed = json.loads(call_kwargs["batch_objects_json"])
+        self.assertEqual(parsed, [{"name": "Box", "components": ["BoxCollider"]}])
+
+
 if __name__ == "__main__":
     unittest.main()

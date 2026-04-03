@@ -337,5 +337,43 @@ class TestResolveAssetPath(unittest.TestCase):
         self.assertEqual(resolved, Path("Assets/nonexistent.prefab"))
 
 
+class TestCreateEmptyKwargs(unittest.TestCase):
+    """I4: build_create_empty_kwargs omits empty optional fields."""
+
+    def test_name_only(self) -> None:
+        from prefab_sentinel.editor_bridge import build_create_empty_kwargs
+
+        result = build_create_empty_kwargs(name="Obj")
+        self.assertEqual(result, {"new_name": "Obj"})
+        self.assertNotIn("hierarchy_path", result)
+        self.assertNotIn("property_value", result)
+
+    def test_with_parent(self) -> None:
+        from prefab_sentinel.editor_bridge import build_create_empty_kwargs
+
+        result = build_create_empty_kwargs(name="Obj", parent_path="/Root")
+        self.assertEqual(result, {"new_name": "Obj", "hierarchy_path": "/Root"})
+
+    def test_with_position(self) -> None:
+        from prefab_sentinel.editor_bridge import build_create_empty_kwargs
+
+        result = build_create_empty_kwargs(name="Obj", position="1,2,3")
+        self.assertEqual(result, {"new_name": "Obj", "property_value": "1,2,3"})
+
+    def test_all_specified(self) -> None:
+        from prefab_sentinel.editor_bridge import build_create_empty_kwargs
+
+        result = build_create_empty_kwargs(name="Obj", parent_path="/Root", position="1,2,3")
+        self.assertEqual(result, {"new_name": "Obj", "hierarchy_path": "/Root", "property_value": "1,2,3"})
+
+    def test_empty_strings_omitted(self) -> None:
+        from prefab_sentinel.editor_bridge import build_create_empty_kwargs
+
+        result = build_create_empty_kwargs(name="Obj", parent_path="", position="")
+        self.assertEqual(result, {"new_name": "Obj"})
+        self.assertNotIn("hierarchy_path", result)
+        self.assertNotIn("property_value", result)
+
+
 if __name__ == "__main__":
     unittest.main()

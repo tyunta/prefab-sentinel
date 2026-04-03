@@ -26,6 +26,7 @@ except ImportError as exc:
     ) from exc
 
 from prefab_sentinel.editor_bridge import (
+    build_create_empty_kwargs,
     build_set_camera_kwargs,
     get_last_bridge_version,
     send_action,
@@ -2140,9 +2141,7 @@ def create_server(
         """
         return send_action(
             action="editor_create_empty",
-            new_name=name,
-            hierarchy_path=parent_path,
-            property_value=position,
+            **build_create_empty_kwargs(name=name, parent_path=parent_path, position=position),
         )
 
     @server.tool()
@@ -2179,12 +2178,13 @@ def create_server(
 
     @server.tool()
     def editor_batch_create(
-        objects: list[dict[str, str]],
+        objects: list[dict[str, str | list[str]]],
     ) -> dict[str, Any]:
         """Create multiple GameObjects in a single request (Undo-grouped).
 
-        Each object dict may contain: type, name, parent, position, scale, rotation.
+        Each object dict may contain: type, name, parent, position, scale, rotation, components.
         type can be "Empty", "Cube", "Sphere", "Cylinder", "Capsule", "Plane", "Quad".
+        components is an optional list of component type strings (e.g., ["BoxCollider", "AudioSource"]).
 
         Args:
             objects: List of object specifications.
