@@ -1,24 +1,34 @@
 from __future__ import annotations
 
 import argparse
-import csv
-import glob
-import math
-import sys
-from pathlib import Path
 from typing import Any
-
-from prefab_sentinel.json_io import dump_json, load_json_file
 
 
 def _pass_pct(total: int, failures: int) -> float | None:
-    """Compute pass percentage: ``(total - failures) / total * 100``, rounded to 2 decimals.
-
-    Returns ``None`` when *total* is zero (no data).
-    """
+    """Return (total - failures) / total * 100 rounded to 2 dp; None if total <= 0."""
     if total <= 0:
         return None
     return round(((total - failures) / float(total)) * 100.0, 2)
+
+
+def _to_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    return None
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
@@ -50,10 +60,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         "--min-code-pass-pct",
         type=float,
         default=None,
-        help=(
-            "Fail with exit code 1 if code assertion pass percentage falls below this value "
-            "(0-100)."
-        ),
+        help="Fail with exit code 1 if code assertion pass percentage falls below this value (0-100).",
     )
     parser.add_argument(
         "--max-applied-mismatches",
@@ -65,10 +72,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         "--min-applied-pass-pct",
         type=float,
         default=None,
-        help=(
-            "Fail with exit code 1 if applied assertion pass percentage falls below this value "
-            "(0-100)."
-        ),
+        help="Fail with exit code 1 if applied assertion pass percentage falls below this value (0-100).",
     )
     parser.add_argument(
         "--max-observed-timeout-breaches",
@@ -80,64 +84,43 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         "--min-observed-timeout-coverage-pct",
         type=float,
         default=None,
-        help=(
-            "Fail with exit code 1 if observed timeout coverage percentage falls below this value "
-            "(0-100)."
-        ),
+        help="Fail with exit code 1 if observed timeout coverage percentage falls below this value (0-100).",
     )
     parser.add_argument(
         "--max-observed-timeout-breaches-per-target",
         type=int,
         default=None,
-        help=(
-            "Fail with exit code 1 if any observed duration>timeout target breaches exceed "
-            "this count."
-        ),
+        help="Fail with exit code 1 if any observed duration>timeout target breaches exceed this count.",
     )
     parser.add_argument(
         "--min-observed-timeout-coverage-pct-per-target",
         type=float,
         default=None,
-        help=(
-            "Fail with exit code 1 if any observed timeout target coverage percentage falls "
-            "below this value (0-100)."
-        ),
+        help="Fail with exit code 1 if any observed timeout target coverage percentage falls below this value (0-100).",
     )
     parser.add_argument(
         "--max-profile-timeout-breaches",
         type=int,
         default=None,
-        help=(
-            "Fail with exit code 1 if timeout-profile breaches exceed this count "
-            "for the selected timeout policy."
-        ),
+        help="Fail with exit code 1 if timeout-profile breaches exceed this count for the selected timeout policy.",
     )
     parser.add_argument(
         "--min-profile-timeout-coverage-pct",
         type=float,
         default=None,
-        help=(
-            "Fail with exit code 1 if timeout-profile coverage percentage falls below this "
-            "value (0-100) for the selected timeout policy."
-        ),
+        help="Fail with exit code 1 if timeout-profile coverage percentage falls below this value (0-100) for the selected timeout policy.",
     )
     parser.add_argument(
         "--max-profile-timeout-breaches-per-target",
         type=int,
         default=None,
-        help=(
-            "Fail with exit code 1 if any timeout-profile target breaches exceed this count "
-            "for the selected timeout policy."
-        ),
+        help="Fail with exit code 1 if any timeout-profile target breaches exceed this count for the selected timeout policy.",
     )
     parser.add_argument(
         "--min-profile-timeout-coverage-pct-per-target",
         type=float,
         default=None,
-        help=(
-            "Fail with exit code 1 if any timeout-profile target coverage percentage falls "
-            "below this value (0-100) for the selected timeout policy."
-        ),
+        help="Fail with exit code 1 if any timeout-profile target coverage percentage falls below this value (0-100) for the selected timeout policy.",
     )
     parser.add_argument(
         "--duration-percentile",
@@ -190,6 +173,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         help="Output CSV path.",
     )
 
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="smoke_summary_to_csv",
@@ -197,616 +181,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_arguments(parser)
     return parser
-
-
-def _expand_inputs(patterns: list[str]) -> list[Path]:
-    paths: set[Path] = set()
-    for pattern in patterns:
-        candidate_patterns = [pattern]
-        if "/" in pattern or "\\" in pattern:
-            candidate_patterns.append(pattern.replace("/", "\\"))
-            candidate_patterns.append(pattern.replace("\\", "/"))
-
-        matched: list[str] = []
-        for candidate in candidate_patterns:
-            matched.extend(glob.glob(candidate))
-        matched = sorted(set(matched))
-
-        if matched:
-            for entry in matched:
-                paths.add(Path(entry))
-        else:
-            paths.add(Path(pattern))
-    return sorted(path.resolve() for path in paths if path.exists())
-
-
-def _to_float(value: Any) -> float | None:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _to_int(value: Any) -> int | None:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _to_bool(value: Any) -> bool | None:
-    if isinstance(value, bool):
-        return value
-    return None
-
-
-def _check_pct_threshold(
-    actual: float | None,
-    threshold: float | None,
-    metric_name: str,
-    no_data_msg: str,
-) -> str | None:
-    """Return a violation message if *actual* violates *threshold*, else None."""
-    if threshold is None:
-        return None
-    if actual is None:
-        return f"{metric_name} threshold configured but {no_data_msg}"
-    if actual < threshold:
-        return (
-            f"{metric_name} below threshold: {actual:.2f} < {threshold:.2f}"
-        )
-    return None
-
-
-def _check_by_target_breaches(
-    by_target: dict[str, dict[str, Any]],
-    threshold: int | None,
-    metric_key: str,
-    metric_name: str,
-    no_data_msg: str,
-) -> list[str]:
-    """Return violation messages for per-target breach count checks."""
-    if threshold is None:
-        return []
-    if not by_target:
-        return [
-            f"{metric_name} per-target breach threshold configured but {no_data_msg}"
-        ]
-    violations: list[str] = []
-    for target in sorted(by_target):
-        breaches = _to_int(by_target[target].get(metric_key)) or 0
-        if breaches > threshold:
-            violations.append(
-                f"{metric_name} breach threshold exceeded for target "
-                f"'{target}': {breaches} > {threshold}"
-            )
-    return violations
-
-
-def _check_by_target_pct(
-    by_target: dict[str, dict[str, Any]],
-    threshold: float | None,
-    metric_key: str,
-    metric_name: str,
-    no_targets_msg: str,
-    no_target_data_msg: str,
-) -> list[str]:
-    """Return violation messages for per-target coverage pct checks."""
-    if threshold is None:
-        return []
-    if not by_target:
-        return [no_targets_msg]
-    violations: list[str] = []
-    for target in sorted(by_target):
-        pct = _to_float(by_target[target].get(metric_key))
-        if pct is None:
-            violations.append(
-                f"{metric_name} threshold configured but target "
-                f"'{target}' has no {no_target_data_msg}"
-            )
-        elif pct < threshold:
-            violations.append(
-                f"{metric_name} below threshold for target "
-                f"'{target}': {pct:.2f} < {threshold:.2f}"
-            )
-    return violations
-
-
-def _is_smoke_batch_summary(payload: Any) -> bool:
-    if not isinstance(payload, dict):
-        return False
-    if payload.get("code") not in {"SMOKE_BATCH_OK", "SMOKE_BATCH_FAILED"}:
-        return False
-    data = payload.get("data")
-    if not isinstance(data, dict):
-        return False
-    cases = data.get("cases")
-    if not isinstance(cases, list):
-        return False
-    return True
-
-
-def _case_to_row(source: Path, payload: dict[str, Any], case: dict[str, Any]) -> dict[str, Any]:
-    expected_code_value = case.get("expected_code")
-    actual_code_value = case.get("actual_code")
-    return {
-        "source": str(source),
-        "batch_success": bool(payload.get("success", False)),
-        "batch_severity": str(payload.get("severity", "")),
-        "target": str(case.get("name", "")),
-        "matched_expectation": bool(case.get("matched_expectation", False)),
-        "expected_code": (
-            str(expected_code_value) if isinstance(expected_code_value, str) else ""
-        ),
-        "actual_code": str(actual_code_value) if isinstance(actual_code_value, str) else "",
-        "code_matches": _to_bool(case.get("code_matches")),
-        "expected_applied": _to_int(case.get("expected_applied")),
-        "expected_applied_source": str(case.get("expected_applied_source", "")),
-        "actual_applied": _to_int(case.get("actual_applied")),
-        "applied_matches": _to_bool(case.get("applied_matches")),
-        "attempts": _to_int(case.get("attempts")),
-        "duration_sec": _to_float(case.get("duration_sec")),
-        "unity_timeout_sec": _to_int(case.get("unity_timeout_sec")),
-        "exit_code": _to_int(case.get("exit_code")),
-        "response_code": str(case.get("response_code", "")),
-        "response_severity": str(case.get("response_severity", "")),
-        "response_path": str(case.get("response_path", "")),
-        "unity_log_file": str(case.get("unity_log_file", "")),
-        "plan": str(case.get("plan", "")),
-        "project_path": str(case.get("project_path", "")),
-    }
-
-
-def _percentile(values: list[float], percentile: float) -> float | None:
-    if not values:
-        return None
-    ordered = sorted(values)
-    if len(ordered) == 1:
-        return ordered[0]
-    if percentile <= 0:
-        return ordered[0]
-    if percentile >= 100:
-        return ordered[-1]
-
-    position = (percentile / 100.0) * (len(ordered) - 1)
-    lower_index = int(math.floor(position))
-    upper_index = int(math.ceil(position))
-    lower = ordered[lower_index]
-    upper = ordered[upper_index]
-    if lower_index == upper_index:
-        return lower
-    ratio = position - lower_index
-    return lower + (upper - lower) * ratio
-
-
-def _build_target_stats(
-    rows: list[dict[str, Any]], duration_percentile: float
-) -> list[dict[str, Any]]:
-    grouped: dict[str, list[dict[str, Any]]] = {}
-    for row in rows:
-        target = str(row.get("target", ""))
-        grouped.setdefault(target, []).append(row)
-
-    stats: list[dict[str, Any]] = []
-    for target in sorted(grouped):
-        target_rows = grouped[target]
-        durations = [
-            value
-            for value in (row.get("duration_sec") for row in target_rows)
-            if isinstance(value, float)
-        ]
-        attempts = [
-            value
-            for value in (row.get("attempts") for row in target_rows)
-            if isinstance(value, int)
-        ]
-        timeouts = [
-            value
-            for value in (row.get("unity_timeout_sec") for row in target_rows)
-            if isinstance(value, int)
-        ]
-        observed_timeout_pairs = [
-            (duration, timeout)
-            for duration, timeout in (
-                (row.get("duration_sec"), row.get("unity_timeout_sec")) for row in target_rows
-            )
-            if isinstance(duration, float) and isinstance(timeout, int)
-        ]
-        observed_timeout_sample_count = len(observed_timeout_pairs)
-        observed_timeout_breach_count = len(
-            [pair for pair in observed_timeout_pairs if pair[0] > float(pair[1])]
-        )
-        observed_timeout_coverage_pct = _pass_pct(observed_timeout_sample_count, observed_timeout_breach_count)
-        code_matches_values = [
-            value
-            for value in (row.get("code_matches") for row in target_rows)
-            if isinstance(value, bool)
-        ]
-        applied_matches_values = [
-            value
-            for value in (row.get("applied_matches") for row in target_rows)
-            if isinstance(value, bool)
-        ]
-        failures = [row for row in target_rows if not bool(row.get("matched_expectation", False))]
-        code_assertion_runs = len(code_matches_values)
-        code_assertion_mismatches = len(
-            [value for value in code_matches_values if value is False]
-        )
-        code_assertion_pass_pct = _pass_pct(code_assertion_runs, code_assertion_mismatches)
-        applied_assertion_runs = len(applied_matches_values)
-        applied_assertion_mismatches = len(
-            [value for value in applied_matches_values if value is False]
-        )
-        applied_assertion_pass_pct = _pass_pct(applied_assertion_runs, applied_assertion_mismatches)
-        duration_avg = sum(durations) / len(durations) if durations else None
-        stats.append(
-            {
-                "target": target,
-                "runs": len(target_rows),
-                "failures": len(failures),
-                "code_assertion_runs": code_assertion_runs,
-                "code_assertion_mismatches": code_assertion_mismatches,
-                "code_assertion_pass_pct": code_assertion_pass_pct,
-                "applied_assertion_runs": applied_assertion_runs,
-                "applied_assertion_mismatches": applied_assertion_mismatches,
-                "applied_assertion_pass_pct": applied_assertion_pass_pct,
-                "observed_timeout_sample_count": observed_timeout_sample_count,
-                "observed_timeout_breach_count": observed_timeout_breach_count,
-                "observed_timeout_coverage_pct": observed_timeout_coverage_pct,
-                "attempts_max": max(attempts) if attempts else None,
-                "duration_avg_sec": duration_avg,
-                "duration_p_sec": _percentile(durations, duration_percentile),
-                "duration_max_sec": max(durations) if durations else None,
-                "timeout_max_sec": max(timeouts) if timeouts else None,
-                "duration_values_sec": durations,
-            }
-        )
-    return stats
-
-
-def _round_up_timeout(value_sec: float, step_sec: int) -> int:
-    if step_sec <= 0:
-        raise ValueError("step_sec must be greater than 0")
-    return int(math.ceil(value_sec / step_sec) * step_sec)
-
-
-def _build_timeout_profiles(
-    stats: list[dict[str, Any]],
-    *,
-    duration_percentile: float,
-    timeout_multiplier: float,
-    timeout_slack_sec: int,
-    timeout_min_sec: int,
-    timeout_round_sec: int,
-) -> dict[str, Any]:
-    profiles: list[dict[str, Any]] = []
-    for item in stats:
-        target = str(item.get("target", ""))
-        duration_p = _to_float(item.get("duration_p_sec"))
-        duration_max = _to_float(item.get("duration_max_sec"))
-        observed_timeout_max = _to_int(item.get("timeout_max_sec"))
-        failures = _to_int(item.get("failures")) or 0
-        duration_values_raw = item.get("duration_values_sec", [])
-        duration_values: list[float] = []
-        if isinstance(duration_values_raw, list):
-            for raw in duration_values_raw:
-                value = _to_float(raw)
-                if value is not None:
-                    duration_values.append(value)
-        duration_sample_count = len(duration_values)
-
-        candidates: list[float] = [float(timeout_min_sec)]
-        if duration_p is not None:
-            candidates.append(duration_p * timeout_multiplier)
-        if duration_max is not None:
-            candidates.append(duration_max + float(timeout_slack_sec))
-        if observed_timeout_max is not None:
-            candidates.append(float(observed_timeout_max))
-
-        # Recommendation formula is evidence-based and conservative:
-        # keep at least min timeout, cover percentile/max durations with safety slack,
-        # and never go below the largest observed timeout in history.
-        base_timeout_sec = max(candidates)
-        if failures > 0:
-            base_timeout_sec += float(timeout_slack_sec)
-        recommended_timeout_sec = _round_up_timeout(base_timeout_sec, timeout_round_sec)
-        timeout_breach_count = len(
-            [value for value in duration_values if value > float(recommended_timeout_sec)]
-        )
-        timeout_coverage_pct = _pass_pct(duration_sample_count, timeout_breach_count)
-
-        profiles.append(
-            {
-                "target": target,
-                "recommended_timeout_sec": recommended_timeout_sec,
-                "recommended_cli_arg": f"--{target}-unity-timeout-sec {recommended_timeout_sec}",
-                "evidence": {
-                    "runs": _to_int(item.get("runs")),
-                    "failures": failures,
-                    "duration_p_sec": duration_p,
-                    "duration_max_sec": duration_max,
-                    "observed_timeout_max_sec": observed_timeout_max,
-                    "duration_sample_count": duration_sample_count,
-                    "timeout_breach_count": timeout_breach_count,
-                    "timeout_coverage_pct": timeout_coverage_pct,
-                },
-            }
-        )
-
-    return {
-        "version": 1,
-        "generated_by": "smoke_summary_to_csv",
-        "duration_percentile": duration_percentile,
-        "timeout_policy": {
-            "timeout_multiplier": timeout_multiplier,
-            "timeout_slack_sec": timeout_slack_sec,
-            "timeout_min_sec": timeout_min_sec,
-            "timeout_round_sec": timeout_round_sec,
-            "formula": "round_up(max(min_timeout, duration_p*multiplier, duration_max+slack, observed_timeout_max) + failure_slack, round_sec)",
-        },
-        "profiles": profiles,
-    }
-
-
-def _compute_code_assertion_metrics(
-    rows: list[dict[str, Any]]
-) -> tuple[int, int, float | None]:
-    code_matches_values = [
-        value for value in (row.get("code_matches") for row in rows) if isinstance(value, bool)
-    ]
-    code_assertions = len(code_matches_values)
-    code_mismatches = len([value for value in code_matches_values if value is False])
-    code_pass_pct = _pass_pct(code_assertions, code_mismatches)
-    return code_assertions, code_mismatches, code_pass_pct
-
-
-def _compute_applied_assertion_metrics(
-    rows: list[dict[str, Any]]
-) -> tuple[int, int, float | None]:
-    applied_matches_values = [
-        value for value in (row.get("applied_matches") for row in rows) if isinstance(value, bool)
-    ]
-    applied_assertions = len(applied_matches_values)
-    applied_mismatches = len([value for value in applied_matches_values if value is False])
-    applied_pass_pct = _pass_pct(applied_assertions, applied_mismatches)
-    return applied_assertions, applied_mismatches, applied_pass_pct
-
-
-def _compute_observed_timeout_metrics(
-    stats: list[dict[str, Any]],
-) -> tuple[int, int, float | None]:
-    by_target = _compute_observed_timeout_metrics_by_target(stats)
-    if not by_target:
-        return 0, 0, None
-
-    observed_timeout_samples = sum(
-        [
-            _to_int(item.get("observed_timeout_sample_count")) or 0
-            for item in by_target.values()
-        ]
-    )
-    observed_timeout_breaches = sum(
-        [
-            _to_int(item.get("observed_timeout_breach_count")) or 0
-            for item in by_target.values()
-        ]
-    )
-    observed_timeout_coverage_pct = _pass_pct(observed_timeout_samples, observed_timeout_breaches)
-    return (
-        observed_timeout_samples,
-        observed_timeout_breaches,
-        observed_timeout_coverage_pct,
-    )
-
-
-def _compute_observed_timeout_metrics_by_target(
-    stats: list[dict[str, Any]],
-) -> dict[str, dict[str, float | int | None]]:
-    by_target: dict[str, dict[str, float | int | None]] = {}
-    for item in stats:
-        target = str(item.get("target", ""))
-        observed_timeout_sample_count = (
-            _to_int(item.get("observed_timeout_sample_count")) or 0
-        )
-        observed_timeout_breach_count = (
-            _to_int(item.get("observed_timeout_breach_count")) or 0
-        )
-        observed_timeout_coverage_pct = _pass_pct(observed_timeout_sample_count, observed_timeout_breach_count)
-        by_target[target] = {
-            "observed_timeout_sample_count": observed_timeout_sample_count,
-            "observed_timeout_breach_count": observed_timeout_breach_count,
-            "observed_timeout_coverage_pct": observed_timeout_coverage_pct,
-        }
-    return by_target
-
-
-def _compute_profile_timeout_metrics_by_target(
-    profile_payload: dict[str, Any] | None,
-) -> dict[str, dict[str, float | int | None]]:
-    if not isinstance(profile_payload, dict):
-        return {}
-    profiles_raw = profile_payload.get("profiles", [])
-    if not isinstance(profiles_raw, list):
-        return {}
-
-    by_target: dict[str, dict[str, float | int | None]] = {}
-    for profile in profiles_raw:
-        if not isinstance(profile, dict):
-            continue
-        target = str(profile.get("target", ""))
-        evidence = profile.get("evidence", {})
-        if not isinstance(evidence, dict):
-            continue
-        duration_sample_count = _to_int(evidence.get("duration_sample_count")) or 0
-        timeout_breach_count = _to_int(evidence.get("timeout_breach_count")) or 0
-        timeout_coverage_pct = _pass_pct(duration_sample_count, timeout_breach_count)
-        by_target[target] = {
-            "duration_sample_count": duration_sample_count,
-            "timeout_breach_count": timeout_breach_count,
-            "timeout_coverage_pct": timeout_coverage_pct,
-        }
-    return by_target
-
-
-def _compute_profile_timeout_metrics(
-    profile_payload: dict[str, Any] | None,
-) -> tuple[int, int, float | None]:
-    by_target = _compute_profile_timeout_metrics_by_target(profile_payload)
-    if not by_target:
-        return 0, 0, None
-
-    profile_timeout_samples = sum(
-        [_to_int(item.get("duration_sample_count")) or 0 for item in by_target.values()]
-    )
-    profile_timeout_breaches = sum(
-        [_to_int(item.get("timeout_breach_count")) or 0 for item in by_target.values()]
-    )
-    profile_timeout_coverage_pct = _pass_pct(profile_timeout_samples, profile_timeout_breaches)
-    return (
-        profile_timeout_samples,
-        profile_timeout_breaches,
-        profile_timeout_coverage_pct,
-    )
-
-
-def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(dump_json(payload), encoding="utf-8")
-
-
-def _write_csv(out_path: Path, header: list[str], rows: list[dict[str, Any]]) -> None:
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with out_path.open("w", encoding="utf-8", newline="") as stream:
-        writer = csv.DictWriter(stream, fieldnames=header)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(row)
-
-
-def _render_markdown_summary(
-    rows: list[dict[str, Any]],
-    duration_percentile: float,
-    stats: list[dict[str, Any]] | None = None,
-    profile_payload: dict[str, Any] | None = None,
-) -> str:
-    percentile_label = f"duration_p{int(round(duration_percentile))}_sec"
-    target_stats = stats if stats is not None else _build_target_stats(rows, duration_percentile)
-    (
-        code_assertions,
-        code_mismatches,
-        code_pass_pct_raw,
-    ) = _compute_code_assertion_metrics(rows)
-    code_pass_pct = (
-        round(code_pass_pct_raw, 2)
-        if code_pass_pct_raw is not None
-        else None
-    )
-    (
-        applied_assertions,
-        applied_mismatches,
-        applied_pass_pct_raw,
-    ) = _compute_applied_assertion_metrics(rows)
-    applied_pass_pct = (
-        round(applied_pass_pct_raw, 2)
-        if applied_pass_pct_raw is not None
-        else None
-    )
-    observed_timeout_by_target = _compute_observed_timeout_metrics_by_target(target_stats)
-    (
-        observed_timeout_samples,
-        observed_timeout_breaches,
-        observed_timeout_coverage_pct_raw,
-    ) = _compute_observed_timeout_metrics(target_stats)
-    observed_timeout_coverage_pct = (
-        round(observed_timeout_coverage_pct_raw, 2)
-        if observed_timeout_coverage_pct_raw is not None
-        else None
-    )
-    profile_timeout_by_target = _compute_profile_timeout_metrics_by_target(profile_payload)
-    (
-        profile_timeout_samples,
-        profile_timeout_breaches,
-        profile_timeout_coverage_pct_raw,
-    ) = _compute_profile_timeout_metrics(profile_payload)
-    profile_timeout_coverage_pct = (
-        round(profile_timeout_coverage_pct_raw, 2)
-        if profile_timeout_coverage_pct_raw is not None
-        else None
-    )
-    lines = [
-        "# Bridge Smoke Timeout Decision Table",
-        "",
-        f"- Cases: {len(rows)}",
-        f"- Duration percentile: p{duration_percentile:g}",
-        f"- Code assertion runs: {code_assertions}",
-        f"- Code assertion mismatches: {code_mismatches}",
-        (
-            f"- Code assertion pass pct: {code_pass_pct}"
-            if code_pass_pct is not None
-            else "- Code assertion pass pct: n/a"
-        ),
-        f"- Applied assertion runs: {applied_assertions}",
-        f"- Applied assertion mismatches: {applied_mismatches}",
-        (
-            f"- Applied assertion pass pct: {applied_pass_pct}"
-            if applied_pass_pct is not None
-            else "- Applied assertion pass pct: n/a"
-        ),
-        f"- Observed timeout targets: {len(observed_timeout_by_target)}",
-        f"- Observed timeout samples: {observed_timeout_samples}",
-        f"- Observed timeout breaches: {observed_timeout_breaches}",
-        (
-            f"- Observed timeout coverage pct: {observed_timeout_coverage_pct}"
-            if observed_timeout_coverage_pct is not None
-            else "- Observed timeout coverage pct: n/a"
-        ),
-        f"- Profile timeout targets: {len(profile_timeout_by_target)}",
-        f"- Profile timeout samples: {profile_timeout_samples}",
-        f"- Profile timeout breaches: {profile_timeout_breaches}",
-        (
-            f"- Profile timeout coverage pct: {profile_timeout_coverage_pct}"
-            if profile_timeout_coverage_pct is not None
-            else "- Profile timeout coverage pct: n/a"
-        ),
-        "",
-        f"| target | runs | failures | code_assertions | code_mismatches | code_pass_pct | applied_assertions | applied_mismatches | applied_pass_pct | observed_timeout_samples | observed_timeout_breaches | observed_timeout_coverage_pct | profile_timeout_samples | profile_timeout_breaches | profile_timeout_coverage_pct | attempts_max | duration_avg_sec | {percentile_label} | duration_max_sec | timeout_max_sec |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
-    ]
-    for item in target_stats:
-        profile_item = profile_timeout_by_target.get(str(item.get("target", "")), {})
-        profile_target_samples = _to_int(profile_item.get("duration_sample_count")) or 0
-        profile_target_breaches = _to_int(profile_item.get("timeout_breach_count")) or 0
-        profile_target_coverage_raw = _to_float(profile_item.get("timeout_coverage_pct"))
-        profile_target_coverage = (
-            round(profile_target_coverage_raw, 2)
-            if profile_target_coverage_raw is not None
-            else "n/a"
-        )
-        lines.append(
-            "| {target} | {runs} | {failures} | {code_assertion_runs} | {code_assertion_mismatches} | {code_assertion_pass_pct} | {applied_assertion_runs} | {applied_assertion_mismatches} | {applied_assertion_pass_pct} | {observed_timeout_sample_count} | {observed_timeout_breach_count} | {observed_timeout_coverage_pct} | {profile_timeout_sample_count} | {profile_timeout_breach_count} | {profile_timeout_coverage_pct} | {attempts_max} | {duration_avg_sec} | {duration_p_sec} | {duration_max_sec} | {timeout_max_sec} |".format(
-                target=item.get("target", ""),
-                runs=item.get("runs", 0),
-                failures=item.get("failures", 0),
-                code_assertion_runs=item.get("code_assertion_runs", 0),
-                code_assertion_mismatches=item.get("code_assertion_mismatches", 0),
-                code_assertion_pass_pct=item.get("code_assertion_pass_pct", ""),
-                applied_assertion_runs=item.get("applied_assertion_runs", 0),
-                applied_assertion_mismatches=item.get("applied_assertion_mismatches", 0),
-                applied_assertion_pass_pct=item.get("applied_assertion_pass_pct", ""),
-                observed_timeout_sample_count=item.get("observed_timeout_sample_count", 0),
-                observed_timeout_breach_count=item.get("observed_timeout_breach_count", 0),
-                observed_timeout_coverage_pct=item.get("observed_timeout_coverage_pct", ""),
-                profile_timeout_sample_count=profile_target_samples,
-                profile_timeout_breach_count=profile_target_breaches,
-                profile_timeout_coverage_pct=profile_target_coverage,
-                attempts_max=item.get("attempts_max", ""),
-                duration_avg_sec=item.get("duration_avg_sec", ""),
-                duration_p_sec=item.get("duration_p_sec", ""),
-                duration_max_sec=item.get("duration_max_sec", ""),
-                timeout_max_sec=item.get("timeout_max_sec", ""),
-            )
-        )
-    return "\n".join(lines)
 
 
 def _validate_history_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
@@ -883,280 +257,17 @@ def _validate_history_args(args: argparse.Namespace, parser: argparse.ArgumentPa
         )
 
 
-def _load_history_rows(
-    args: argparse.Namespace, parser: argparse.ArgumentParser
-) -> list[dict[str, Any]]:
-    """Load input files, parse JSON, filter rows. Returns the row list."""
-    input_paths = _expand_inputs(args.inputs)
-    if not input_paths:
-        parser.error("No input JSON files were found.")
-
-    include_targets = {target for target in args.target}
-    rows: list[dict[str, Any]] = []
-    for source in input_paths:
-        payload = load_json_file(source)
-        if not _is_smoke_batch_summary(payload):
-            continue
-        cases = payload.get("data", {}).get("cases", [])
-        if not isinstance(cases, list):
-            continue
-        for case in cases:
-            if not isinstance(case, dict):
-                continue
-            row = _case_to_row(source, payload, case)
-            if include_targets and row["target"] not in include_targets:
-                continue
-            if args.matched_only and not row["matched_expectation"]:
-                continue
-            rows.append(row)
-
-    if not rows:
-        parser.error("No smoke case rows were available after filtering.")
-    return rows
-
-
-def _compute_and_write_outputs(
-    args: argparse.Namespace,
-    parser: argparse.ArgumentParser,
-    rows: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]] | None, dict[str, Any] | None]:
-    """Write CSV, compute stats, write MD/profile outputs.
-
-    Returns ``(stats, profile_payload)`` for use by threshold evaluation.
-    """
-    header = [
-        "source",
-        "batch_success",
-        "batch_severity",
-        "target",
-        "matched_expectation",
-        "expected_code",
-        "actual_code",
-        "code_matches",
-        "expected_applied",
-        "expected_applied_source",
-        "actual_applied",
-        "applied_matches",
-        "attempts",
-        "duration_sec",
-        "unity_timeout_sec",
-        "exit_code",
-        "response_code",
-        "response_severity",
-        "response_path",
-        "unity_log_file",
-        "plan",
-        "project_path",
-    ]
-    out_csv = Path(args.out)
-    _write_csv(out_csv, header, rows)
-    print(out_csv)
-
-    needs_stats = bool(
-        args.out_md
-        or args.out_timeout_profile
-        or args.max_observed_timeout_breaches is not None
-        or args.min_observed_timeout_coverage_pct is not None
-        or args.max_observed_timeout_breaches_per_target is not None
-        or args.min_observed_timeout_coverage_pct_per_target is not None
-        or args.max_profile_timeout_breaches is not None
-        or args.min_profile_timeout_coverage_pct is not None
-        or args.max_profile_timeout_breaches_per_target is not None
-        or args.min_profile_timeout_coverage_pct_per_target is not None
-    )
-    stats: list[dict[str, Any]] | None = (
-        _build_target_stats(rows, args.duration_percentile) if needs_stats else None
-    )
-
-    needs_profile_payload = bool(
-        args.out_md
-        or args.out_timeout_profile
-        or args.max_profile_timeout_breaches is not None
-        or args.min_profile_timeout_coverage_pct is not None
-        or args.max_profile_timeout_breaches_per_target is not None
-        or args.min_profile_timeout_coverage_pct_per_target is not None
-    )
-    profile_payload: dict[str, Any] | None = None
-    if needs_profile_payload:
-        profile_stats = (
-            stats
-            if stats is not None
-            else _build_target_stats(rows, args.duration_percentile)
-        )
-        profile_payload = _build_timeout_profiles(
-            profile_stats,
-            duration_percentile=args.duration_percentile,
-            timeout_multiplier=args.timeout_multiplier,
-            timeout_slack_sec=args.timeout_slack_sec,
-            timeout_min_sec=args.timeout_min_sec,
-            timeout_round_sec=args.timeout_round_sec,
-        )
-
-    if args.out_md:
-        out_md = Path(args.out_md)
-        out_md.parent.mkdir(parents=True, exist_ok=True)
-        out_md.write_text(
-            _render_markdown_summary(
-                rows,
-                args.duration_percentile,
-                stats=stats,
-                profile_payload=profile_payload,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        print(out_md)
-
-    if args.out_timeout_profile:
-        out_timeout_profile = Path(args.out_timeout_profile)
-        if profile_payload is None:
-            parser.error("timeout profile payload was not generated.")
-        _write_json(out_timeout_profile, profile_payload)
-        print(out_timeout_profile)
-
-    return stats, profile_payload
-
-
-def _evaluate_thresholds(
-    args: argparse.Namespace,
-    rows: list[dict[str, Any]],
-    stats: list[dict[str, Any]] | None,
-    profile_payload: dict[str, Any] | None,
-) -> int:
-    """Check threshold violations and return exit code (0 = pass, 1 = fail)."""
-    (
-        _code_assertions,
-        code_mismatches,
-        code_pass_pct,
-    ) = _compute_code_assertion_metrics(rows)
-    (
-        _applied_assertions,
-        applied_mismatches,
-        applied_pass_pct,
-    ) = _compute_applied_assertion_metrics(rows)
-    observed_timeout_breaches = 0
-    observed_timeout_coverage_pct = None
-    observed_timeout_by_target: dict[str, dict[str, float | int | None]] = {}
-    if stats is not None:
-        (
-            _observed_timeout_samples,
-            observed_timeout_breaches,
-            observed_timeout_coverage_pct,
-        ) = _compute_observed_timeout_metrics(stats)
-        observed_timeout_by_target = _compute_observed_timeout_metrics_by_target(stats)
-        observed_timeout_coverage_pct = (
-            round(observed_timeout_coverage_pct, 2)
-            if observed_timeout_coverage_pct is not None
-            else None
-        )
-    (
-        _profile_timeout_samples,
-        profile_timeout_breaches,
-        profile_timeout_coverage_pct,
-    ) = _compute_profile_timeout_metrics(profile_payload)
-    profile_timeout_by_target = _compute_profile_timeout_metrics_by_target(profile_payload)
-    profile_timeout_coverage_pct = (
-        round(profile_timeout_coverage_pct, 2)
-        if profile_timeout_coverage_pct is not None
-        else None
-    )
-
-    violations: list[str] = []
-    if (
-        args.max_code_mismatches is not None
-        and code_mismatches > args.max_code_mismatches
-    ):
-        violations.append(
-            "code mismatch threshold exceeded: "
-            f"{code_mismatches} > {args.max_code_mismatches}"
-        )
-    violation = _check_pct_threshold(
-        code_pass_pct, args.min_code_pass_pct,
-        "code pass percentage", "no code assertion rows exist",
-    )
-    if violation:
-        violations.append(violation)
-    if (
-        args.max_applied_mismatches is not None
-        and applied_mismatches > args.max_applied_mismatches
-    ):
-        violations.append(
-            "applied mismatch threshold exceeded: "
-            f"{applied_mismatches} > {args.max_applied_mismatches}"
-        )
-    violation = _check_pct_threshold(
-        applied_pass_pct, args.min_applied_pass_pct,
-        "applied pass percentage", "no applied assertion rows exist",
-    )
-    if violation:
-        violations.append(violation)
-    if (
-        args.max_observed_timeout_breaches is not None
-        and observed_timeout_breaches > args.max_observed_timeout_breaches
-    ):
-        violations.append(
-            "observed timeout breach threshold exceeded: "
-            f"{observed_timeout_breaches} > {args.max_observed_timeout_breaches}"
-        )
-    violation = _check_pct_threshold(
-        observed_timeout_coverage_pct, args.min_observed_timeout_coverage_pct,
-        "observed timeout coverage", "no duration/timeout rows exist",
-    )
-    if violation:
-        violations.append(violation)
-    violations.extend(_check_by_target_breaches(
-        observed_timeout_by_target,
-        args.max_observed_timeout_breaches_per_target,
-        "observed_timeout_breach_count",
-        "observed timeout",
-        "no duration/timeout target rows exist",
-    ))
-    violations.extend(_check_by_target_pct(
-        observed_timeout_by_target,
-        args.min_observed_timeout_coverage_pct_per_target,
-        "observed_timeout_coverage_pct",
-        "observed timeout coverage",
-        "observed timeout per-target coverage threshold configured"
-        " but no duration/timeout target rows exist",
-        "duration/timeout rows",
-    ))
-    if (
-        args.max_profile_timeout_breaches is not None
-        and profile_timeout_breaches > args.max_profile_timeout_breaches
-    ):
-        violations.append(
-            "profile timeout breach threshold exceeded: "
-            f"{profile_timeout_breaches} > {args.max_profile_timeout_breaches}"
-        )
-    violation = _check_pct_threshold(
-        profile_timeout_coverage_pct, args.min_profile_timeout_coverage_pct,
-        "profile timeout coverage", "no timeout profile duration rows exist",
-    )
-    if violation:
-        violations.append(violation)
-    violations.extend(_check_by_target_breaches(
-        profile_timeout_by_target,
-        args.max_profile_timeout_breaches_per_target,
-        "timeout_breach_count",
-        "profile timeout",
-        "no timeout profile target rows exist",
-    ))
-    violations.extend(_check_by_target_pct(
-        profile_timeout_by_target,
-        args.min_profile_timeout_coverage_pct_per_target,
-        "timeout_coverage_pct",
-        "profile timeout coverage",
-        "profile timeout per-target coverage threshold configured"
-        " but no timeout profile target rows exist",
-        "timeout profile duration rows",
-    ))
-
-    for message in violations:
-        print(f"SMOKE_HISTORY_THRESHOLD_FAILED: {message}", file=sys.stderr)
-    return 0 if not violations else 1
-
-
 def run_from_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    # Local imports to avoid circular dependency:
+    # smoke_history_pipeline/report → smoke_history_stats → smoke_history
+    from prefab_sentinel.smoke_history_pipeline import (  # noqa: PLC0415
+        _evaluate_thresholds,
+        _load_history_rows,
+    )
+    from prefab_sentinel.smoke_history_report import (  # noqa: PLC0415
+        _compute_and_write_outputs,
+    )
+
     _validate_history_args(args, parser)
     rows = _load_history_rows(args, parser)
     stats, profile_payload = _compute_and_write_outputs(args, parser, rows)

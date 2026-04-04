@@ -293,26 +293,26 @@ class TestResolveScopePathWsl(unittest.TestCase):
     def tearDown(self) -> None:
         is_wsl.cache_clear()
 
-    @patch("prefab_sentinel.unity_assets.to_wsl_path")
+    @patch("prefab_sentinel.unity_assets_path.to_wsl_path")
     def test_windows_scope_converted(self, mock_to_wsl: MagicMock) -> None:
         """When scope is a Windows path, to_wsl_path is called before Path()."""
 
 
         with tempfile.TemporaryDirectory() as tmpdir:
             mock_to_wsl.return_value = tmpdir
-            from prefab_sentinel.unity_assets import resolve_scope_path
+            from prefab_sentinel.unity_assets_path import resolve_scope_path
 
             result = resolve_scope_path("D:/VRChatProject/Assets", Path(tmpdir))
             mock_to_wsl.assert_called_once_with("D:/VRChatProject/Assets")
             self.assertEqual(Path(tmpdir).resolve(), result)
 
-    @patch("prefab_sentinel.unity_assets.to_wsl_path", side_effect=lambda p: p)
+    @patch("prefab_sentinel.unity_assets_path.to_wsl_path", side_effect=lambda p: p)
     def test_posix_scope_unchanged(self, mock_to_wsl: MagicMock) -> None:
         """POSIX paths pass through to_wsl_path unchanged."""
 
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            from prefab_sentinel.unity_assets import resolve_scope_path
+            from prefab_sentinel.unity_assets_path import resolve_scope_path
 
             resolve_scope_path(tmpdir, Path(tmpdir))
             mock_to_wsl.assert_called_once_with(tmpdir)
@@ -354,7 +354,7 @@ class TestReadTargetFileWsl(unittest.TestCase):
     def tearDown(self) -> None:
         is_wsl.cache_clear()
 
-    @patch("prefab_sentinel.orchestrator.resolve_scope_path")
+    @patch("prefab_sentinel.orchestrator_variant.resolve_scope_path")
     def test_windows_target_path_converted(self, mock_resolve: MagicMock) -> None:
         """Windows path in _read_target_file gets resolved via resolve_scope_path."""
         mock_resolve.return_value = Path("/nonexistent/file.prefab")

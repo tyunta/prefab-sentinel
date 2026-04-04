@@ -10,8 +10,8 @@ from prefab_sentinel.contracts import error_dict as _error_dict, success_dict as
 from prefab_sentinel.unity_assets import (
     decode_text_file,
     is_unity_text_asset,
-    resolve_asset_path,
 )
+from prefab_sentinel.unity_assets_path import resolve_asset_path
 from prefab_sentinel.wsl_compat import to_wsl_path
 
 _M_NAME_PATTERN = re.compile(r"(  m_Name: ).*")

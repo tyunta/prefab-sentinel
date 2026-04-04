@@ -4,7 +4,8 @@ import csv
 import io
 import unittest
 
-from prefab_sentinel.reporting import render_csv_report, render_markdown_report
+from prefab_sentinel.reporting import render_csv_report
+from prefab_sentinel.reporting_markdown import render_markdown_report
 
 
 class ReportingTests(unittest.TestCase):

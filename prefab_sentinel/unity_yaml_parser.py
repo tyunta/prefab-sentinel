@@ -17,8 +17,8 @@ from prefab_sentinel.unity_assets import (
     SOURCE_PREFAB_PATTERN,
     decode_text_file,
     normalize_guid,
-    relative_to_root,
 )
+from prefab_sentinel.unity_assets_path import relative_to_root
 
 DOCUMENT_HEADER_PATTERN = re.compile(r"^--- !u!(\d+) &(-?\d+)( stripped)?", re.MULTILINE)
 

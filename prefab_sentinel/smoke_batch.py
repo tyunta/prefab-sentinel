@@ -2,19 +2,22 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from prefab_sentinel.bridge_smoke import load_patch_plan
-from prefab_sentinel.json_io import dump_json, load_json, load_json_file
-from prefab_sentinel.wsl_compat import to_wsl_path
+from prefab_sentinel.json_io import dump_json
+from prefab_sentinel.smoke_batch_case import (
+    _build_cases,
+    _default_plan_path,
+    _default_project_path,
+    _load_timeout_profile_map,
+    _wsl_path_exists,
+)
+from prefab_sentinel.smoke_batch_runner import _execute_batch_cases
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_PROJECT_SMOKE_SCRIPT = _PROJECT_ROOT / "scripts" / "unity_bridge_smoke.py"
+_PROJECT_SMOKE_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "unity_bridge_smoke.py"
 UNITY_BRIDGE_SMOKE_SCRIPT = (
     _PROJECT_SMOKE_SCRIPT
     if _PROJECT_SMOKE_SCRIPT.exists()
@@ -22,34 +25,6 @@ UNITY_BRIDGE_SMOKE_SCRIPT = (
 )
 DEFAULT_EXECUTE_METHOD = "PrefabSentinel.UnityPatchBridge.ApplyFromJson"
 DEFAULT_OUT_DIR = Path("reports") / "bridge_smoke"
-_SIBLING_SAMPLE_ROOT_NAME = "UnityTool_sample"
-_DEFAULT_PLAN_BY_TARGET = {
-    "avatar": "avatar_prefab_create.json",
-    "world": "world_material_create.json",
-}
-
-
-def _wsl_path_exists(p: Path) -> bool:
-    """Check if *p* exists, trying WSL path conversion for Windows paths."""
-    if p.exists():
-        return True
-    converted = to_wsl_path(str(p))
-    if converted != str(p):
-        return Path(converted).exists()
-    return False
-
-
-def _default_sample_root() -> Path:
-    return _PROJECT_ROOT.parent / _SIBLING_SAMPLE_ROOT_NAME
-
-
-def _default_plan_path(target: str) -> Path:
-    filename = _DEFAULT_PLAN_BY_TARGET[target]
-    return _PROJECT_ROOT / "config" / "bridge_smoke" / filename
-
-
-def _default_project_path(target: str) -> Path:
-    return _default_sample_root() / target
 
 
 @dataclass(frozen=True)
@@ -216,299 +191,6 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _resolve_targets(raw_targets: list[str]) -> list[str]:
-    expanded: list[str] = []
-    for item in raw_targets:
-        if item == "all":
-            expanded.extend(["avatar", "world"])
-        else:
-            expanded.append(item)
-    unique: list[str] = []
-    seen: set[str] = set()
-    for target in expanded:
-        if target not in seen:
-            seen.add(target)
-            unique.append(target)
-    return unique
-
-
-def _build_cases(args: argparse.Namespace) -> list[SmokeCase]:
-    targets = _resolve_targets(args.targets)
-    cases_map: dict[str, SmokeCase] = {
-        "avatar": SmokeCase(
-            name="avatar",
-            plan=Path(args.avatar_plan),
-            project_path=Path(args.avatar_project_path),
-            expect_failure=bool(args.avatar_expect_failure),
-            expected_code=(
-                str(args.avatar_expected_code).strip()
-                if args.avatar_expected_code is not None
-                else None
-            ),
-            expected_applied=args.avatar_expected_applied,
-        ),
-        "world": SmokeCase(
-            name="world",
-            plan=Path(args.world_plan),
-            project_path=Path(args.world_project_path),
-            expect_failure=bool(args.world_expect_failure),
-            expected_code=(
-                str(args.world_expected_code).strip()
-                if args.world_expected_code is not None
-                else None
-            ),
-            expected_applied=args.world_expected_applied,
-        ),
-    }
-    return [cases_map[target] for target in targets]
-
-
-def _load_timeout_profile_map(timeout_profile_path: Path) -> dict[str, int]:
-    payload = load_json_file(timeout_profile_path)
-    if not isinstance(payload, dict):
-        raise ValueError("timeout profile root must be an object.")
-
-    profiles = payload.get("profiles")
-    if not isinstance(profiles, list):
-        raise ValueError("timeout profile must include profiles list.")
-
-    mapping: dict[str, int] = {}
-    for item in profiles:
-        if not isinstance(item, dict):
-            raise ValueError("timeout profile entry must be an object.")
-        target = item.get("target")
-        if not isinstance(target, str) or target not in {"avatar", "world"}:
-            raise ValueError("timeout profile target must be avatar/world.")
-        recommended_raw = item.get("recommended_timeout_sec")
-        try:
-            recommended = int(recommended_raw)  # type: ignore[arg-type]
-        except (TypeError, ValueError):
-            raise ValueError("recommended_timeout_sec must be an integer.") from None
-        if recommended <= 0:
-            raise ValueError("recommended_timeout_sec must be greater than 0.")
-        mapping[target] = recommended
-    return mapping
-
-
-def _resolve_case_unity_timeout_sec(
-    *,
-    case: SmokeCase,
-    default_timeout_sec: int | None,
-    avatar_timeout_sec: int | None,
-    world_timeout_sec: int | None,
-    timeout_profile_overrides: dict[str, int],
-) -> tuple[int | None, str]:
-    per_target_overrides = {
-        "avatar": avatar_timeout_sec,
-        "world": world_timeout_sec,
-    }
-    case_override = per_target_overrides.get(case.name)
-    if case_override is not None:
-        return case_override, "target_override"
-    if default_timeout_sec is not None:
-        return default_timeout_sec, "default_override"
-    profile_timeout = timeout_profile_overrides.get(case.name)
-    if profile_timeout is not None:
-        return profile_timeout, "profile"
-    return None, "none"
-
-
-def _build_smoke_command(
-    *,
-    smoke_script: Path,
-    python_executable: str,
-    bridge_script: Path,
-    unity_command: str | None,
-    unity_execute_method: str,
-    unity_timeout_sec: int | None,
-    case: SmokeCase,
-    response_out: Path,
-    unity_log_file: Path,
-) -> list[str]:
-    command = [
-        python_executable,
-        str(smoke_script),
-        "--plan",
-        str(case.plan),
-        "--bridge-script",
-        str(bridge_script),
-        "--python",
-        python_executable,
-        "--unity-project-path",
-        str(case.project_path),
-        "--unity-execute-method",
-        unity_execute_method,
-        "--unity-log-file",
-        str(unity_log_file),
-        "--out",
-        str(response_out),
-    ]
-    if unity_command is not None:
-        command.extend(["--unity-command", unity_command])
-    if unity_timeout_sec is not None:
-        command.extend(["--unity-timeout-sec", str(unity_timeout_sec)])
-    if case.expect_failure:
-        command.append("--expect-failure")
-    if case.expected_code is not None:
-        command.extend(["--expected-code", case.expected_code])
-    return command
-
-
-def _parse_case_payload(
-    *,
-    case: SmokeCase,
-    exit_code: int,
-    stdout_text: str,
-    stderr_text: str,
-) -> dict[str, Any]:
-    try:
-        payload = load_json(stdout_text)
-    except json.JSONDecodeError:
-        payload = {
-            "success": False,
-            "severity": "error",
-            "code": "SMOKE_BATCH_STDOUT_JSON",
-            "message": "Child smoke stdout is not valid JSON.",
-            "data": {
-                "target": case.name,
-                "exit_code": exit_code,
-                "stdout": stdout_text,
-                "stderr": stderr_text,
-            },
-            "diagnostics": [],
-        }
-    if not isinstance(payload, dict):
-        return {
-            "success": False,
-            "severity": "error",
-            "code": "SMOKE_BATCH_STDOUT_SCHEMA",
-            "message": "Child smoke stdout root must be an object.",
-            "data": {
-                "target": case.name,
-                "exit_code": exit_code,
-                "stdout": stdout_text,
-                "stderr": stderr_text,
-            },
-            "diagnostics": [],
-        }
-    return payload
-
-
-def _extract_applied_count(payload: dict[str, Any]) -> int | None:
-    data = payload.get("data")
-    if not isinstance(data, dict):
-        return None
-    applied = data.get("applied")
-    return applied if isinstance(applied, int) else None
-
-
-def _resolve_expected_applied(
-    *,
-    case: SmokeCase,
-    expect_applied_from_plan: bool,
-) -> tuple[int | None, str]:
-    if case.expected_applied is not None:
-        return case.expected_applied, "cli"
-    if not expect_applied_from_plan:
-        return None, "none"
-    if case.expect_failure:
-        return None, "skipped_expect_failure"
-    plan = load_patch_plan(case.plan)
-    ops = plan.get("ops", [])
-    return len(ops), "plan_ops"
-
-
-def _render_markdown_summary(payload: dict[str, Any]) -> str:
-    data = payload.get("data", {})
-    cases = data.get("cases", [])
-    timeout_profile_path = data.get("timeout_profile_path")
-    lines = [
-        "# Unity Bridge Smoke Batch",
-        "",
-        f"- Success: {payload.get('success')}",
-        f"- Severity: {payload.get('severity')}",
-        f"- Code: {payload.get('code')}",
-        f"- Message: {payload.get('message')}",
-        f"- Total: {data.get('total_cases', 0)}",
-        f"- Passed: {data.get('passed_cases', 0)}",
-        f"- Failed: {data.get('failed_cases', 0)}",
-        (
-            f"- Timeout Profile: {timeout_profile_path}"
-            if timeout_profile_path
-            else "- Timeout Profile: n/a"
-        ),
-        "",
-        "| case | matched | expected_code | actual_code | code_matches | expected_applied | expected_source | actual_applied | applied_matches | attempts | duration_sec | timeout_sec | timeout_source | exit_code | response_code | response_path | unity_log_file |",
-        "| --- | --- | --- | --- | --- | ---: | --- | ---: | --- | ---: | ---: | ---: | --- | ---: | --- | --- | --- |",
-    ]
-    def _cell(val: Any) -> Any:
-        return "" if val is None else val
-
-    for case in cases:
-        lines.append(
-            "| {name} | {matched} | {expected_code} | {actual_code} | {code_matches} | {expected_applied} | {expected_applied_source} | {actual_applied} | {applied_matches} | {attempts} | {duration_sec} | {timeout_sec} | {timeout_source} | {exit_code} | {response_code} | {response_path} | {unity_log_file} |".format(
-                name=case.get("name", ""),
-                matched=case.get("matched_expectation", False),
-                expected_code=_cell(case.get("expected_code")),
-                actual_code=_cell(case.get("actual_code")),
-                code_matches=_cell(case.get("code_matches")),
-                expected_applied=_cell(case.get("expected_applied")),
-                expected_applied_source=_cell(case.get("expected_applied_source")),
-                actual_applied=_cell(case.get("actual_applied")),
-                applied_matches=_cell(case.get("applied_matches")),
-                attempts=case.get("attempts", 1),
-                duration_sec=_cell(case.get("duration_sec")),
-                timeout_sec=_cell(case.get("unity_timeout_sec")),
-                timeout_source=case.get("timeout_source", ""),
-                exit_code=case.get("exit_code", ""),
-                response_code=case.get("response_code", ""),
-                response_path=case.get("response_path", ""),
-                unity_log_file=case.get("unity_log_file", ""),
-            )
-        )
-    return "\n".join(lines) + "\n"
-
-
-def _run_smoke_with_retries(
-    *,
-    command: list[str],
-    max_retries: int,
-    retry_delay_sec: float,
-    timeout_sec: float | None = None,
-) -> tuple[subprocess.CompletedProcess[str], int, float]:
-    attempts = 0
-    started_at = time.perf_counter()
-    while True:
-        attempts += 1
-        try:
-            completed = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                check=False,
-                timeout=timeout_sec,
-            )
-        except subprocess.TimeoutExpired:
-            elapsed_sec = time.perf_counter() - started_at
-            completed = subprocess.CompletedProcess(
-                args=command,
-                returncode=-1,
-                stdout="",
-                stderr=f"Process timed out after {timeout_sec}s",
-            )
-            return completed, attempts, elapsed_sec
-        if completed.returncode == 0:
-            elapsed_sec = time.perf_counter() - started_at
-            return completed, attempts, elapsed_sec
-        if attempts > max_retries:
-            elapsed_sec = time.perf_counter() - started_at
-            return completed, attempts, elapsed_sec
-        if retry_delay_sec > 0.0:
-            time.sleep(retry_delay_sec)
-
-
 def _validate_batch_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
     """Validate range constraints on all batch CLI arguments."""
     if args.max_retries < 0:
@@ -540,129 +222,56 @@ def _validate_batch_args(args: argparse.Namespace, parser: argparse.ArgumentPars
             parser.error(f"{arg_name} must be non-empty when specified.")
 
 
-def _execute_batch_cases(
-    args: argparse.Namespace,
-    cases: list[SmokeCase],
-    out_dir: Path,
-    *,
-    smoke_script: Path,
-    bridge_script: Path,
-    timeout_profile_overrides: dict[str, int],
-) -> tuple[list[dict[str, Any]], Exception | None]:
-    """Execute each smoke case with retries and response parsing.
+def _render_markdown_summary(payload: dict[str, Any]) -> str:
+    data = payload.get("data", {})
+    cases = data.get("cases", [])
+    timeout_profile_path = data.get("timeout_profile_path")
+    lines = [
+        "# Unity Bridge Smoke Batch",
+        "",
+        f"- Success: {payload.get('success')}",
+        f"- Severity: {payload.get('severity')}",
+        f"- Code: {payload.get('code')}",
+        f"- Message: {payload.get('message')}",
+        f"- Total: {data.get('total_cases', 0)}",
+        f"- Passed: {data.get('passed_cases', 0)}",
+        f"- Failed: {data.get('failed_cases', 0)}",
+        (
+            f"- Timeout Profile: {timeout_profile_path}"
+            if timeout_profile_path
+            else "- Timeout Profile: n/a"
+        ),
+        "",
+        "| case | matched | expected_code | actual_code | code_matches | expected_applied | expected_source | actual_applied | applied_matches | attempts | duration_sec | timeout_sec | timeout_source | exit_code | response_code | response_path | unity_log_file |",
+        "| --- | --- | --- | --- | --- | ---: | --- | ---: | --- | ---: | ---: | ---: | --- | ---: | --- | --- | --- |",
+    ]
 
-    Returns ``(results, partial_error)``.  *partial_error* is non-None when the
-    loop was interrupted by an exception mid-batch.
-    """
-    results: list[dict[str, Any]] = []
-    partial_error: Exception | None = None
+    def _cell(val: Any) -> Any:
+        return "" if val is None else val
+
     for case in cases:
-        try:
-            if not _wsl_path_exists(case.plan):
-                raise FileNotFoundError(f"Plan not found for {case.name}: {case.plan}")
-            if not _wsl_path_exists(case.project_path):
-                raise FileNotFoundError(
-                    f"Project path not found for {case.name}: {case.project_path}"
-                )
-
-            case_timeout_sec, timeout_source = _resolve_case_unity_timeout_sec(
-                case=case,
-                default_timeout_sec=args.unity_timeout_sec,
-                avatar_timeout_sec=args.avatar_unity_timeout_sec,
-                world_timeout_sec=args.world_unity_timeout_sec,
-                timeout_profile_overrides=timeout_profile_overrides,
+        lines.append(
+            "| {name} | {matched} | {expected_code} | {actual_code} | {code_matches} | {expected_applied} | {expected_applied_source} | {actual_applied} | {applied_matches} | {attempts} | {duration_sec} | {timeout_sec} | {timeout_source} | {exit_code} | {response_code} | {response_path} | {unity_log_file} |".format(
+                name=case.get("name", ""),
+                matched=case.get("matched_expectation", False),
+                expected_code=_cell(case.get("expected_code")),
+                actual_code=_cell(case.get("actual_code")),
+                code_matches=_cell(case.get("code_matches")),
+                expected_applied=_cell(case.get("expected_applied")),
+                expected_applied_source=_cell(case.get("expected_applied_source")),
+                actual_applied=_cell(case.get("actual_applied")),
+                applied_matches=_cell(case.get("applied_matches")),
+                attempts=case.get("attempts", 1),
+                duration_sec=_cell(case.get("duration_sec")),
+                timeout_sec=_cell(case.get("unity_timeout_sec")),
+                timeout_source=case.get("timeout_source", ""),
+                exit_code=case.get("exit_code", ""),
+                response_code=case.get("response_code", ""),
+                response_path=case.get("response_path", ""),
+                unity_log_file=case.get("unity_log_file", ""),
             )
-
-            case_dir = out_dir / case.name
-            case_dir.mkdir(parents=True, exist_ok=True)
-            response_path = case_dir / "response.json"
-            unity_log_file = case_dir / "unity.log"
-            command = _build_smoke_command(
-                smoke_script=smoke_script,
-                python_executable=args.python,
-                bridge_script=bridge_script,
-                unity_command=args.unity_command,
-                unity_execute_method=args.unity_execute_method,
-                unity_timeout_sec=case_timeout_sec,
-                case=case,
-                response_out=response_path,
-                unity_log_file=unity_log_file,
-            )
-            # Add 30s buffer over Unity-side timeout so Python outlives the
-            # Unity process and can capture its output on timeout.
-            subprocess_timeout = (
-                case_timeout_sec + 30 if case_timeout_sec is not None else None
-            )
-            completed, attempts, duration_sec = _run_smoke_with_retries(
-                command=command,
-                max_retries=args.max_retries,
-                retry_delay_sec=args.retry_delay_sec,
-                timeout_sec=subprocess_timeout,
-            )
-            case_payload = _parse_case_payload(
-                case=case,
-                exit_code=completed.returncode,
-                stdout_text=completed.stdout,
-                stderr_text=completed.stderr,
-            )
-            try:
-                expected_applied, expected_applied_source = _resolve_expected_applied(
-                    case=case,
-                    expect_applied_from_plan=args.expect_applied_from_plan,
-                )
-            except (OSError, json.JSONDecodeError, ValueError) as exc:
-                raise ValueError(
-                    f"Failed to resolve expected applied count for {case.name}: {exc}"
-                ) from exc
-            actual_applied = _extract_applied_count(case_payload)
-            applied_matches: bool | None = None
-            if expected_applied is not None:
-                applied_matches = actual_applied == expected_applied
-            expected_code = case.expected_code
-            actual_code_raw = case_payload.get("code")
-            actual_code = actual_code_raw if isinstance(actual_code_raw, str) else ""
-            code_matches: bool | None = None
-            if expected_code is not None:
-                code_matches = actual_code == expected_code
-            matched_expectation = completed.returncode == 0
-            if code_matches is False:
-                matched_expectation = False
-            if applied_matches is False:
-                matched_expectation = False
-            if not response_path.exists():
-                response_path.write_text(
-                    dump_json(case_payload),
-                    encoding="utf-8",
-                )
-            results.append(
-                {
-                    "name": case.name,
-                    "plan": str(case.plan),
-                    "project_path": str(case.project_path),
-                    "expect_failure": case.expect_failure,
-                    "expected_code": expected_code,
-                    "actual_code": actual_code,
-                    "code_matches": code_matches,
-                    "expected_applied": expected_applied,
-                    "expected_applied_source": expected_applied_source,
-                    "actual_applied": actual_applied,
-                    "applied_matches": applied_matches,
-                    "matched_expectation": matched_expectation,
-                    "attempts": attempts,
-                    "duration_sec": round(duration_sec, 6),
-                    "unity_timeout_sec": case_timeout_sec,
-                    "timeout_source": timeout_source,
-                    "exit_code": completed.returncode,
-                    "response_code": str(case_payload.get("code", "")),
-                    "response_severity": str(case_payload.get("severity", "")),
-                    "response_path": str(response_path),
-                    "unity_log_file": str(unity_log_file),
-                }
-            )
-        except (FileNotFoundError, ValueError, OSError) as exc:
-            partial_error = exc
-            break
-    return results, partial_error
+        )
+    return "\n".join(lines) + "\n"
 
 
 def _build_batch_summary(
@@ -681,9 +290,7 @@ def _build_batch_summary(
     """
     failed_cases = [item for item in results if not item["matched_expectation"]]
     all_passed = len(failed_cases) == 0 and partial_error is None
-    summary_code = (
-        "SMOKE_BATCH_OK" if all_passed else "SMOKE_BATCH_FAILED"
-    )
+    summary_code = "SMOKE_BATCH_OK" if all_passed else "SMOKE_BATCH_FAILED"
     if partial_error is not None:
         summary_message = (
             f"Batch aborted after {len(results)}/{len(cases)} cases: {partial_error}"

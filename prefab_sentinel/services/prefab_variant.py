@@ -13,9 +13,8 @@ from prefab_sentinel.unity_assets import (
     decode_text_file,
     find_project_root,
     normalize_guid,
-    relative_to_root,
-    resolve_scope_path,
 )
+from prefab_sentinel.unity_assets_path import relative_to_root, resolve_scope_path
 from prefab_sentinel.unity_yaml_parser import split_yaml_blocks
 
 OVERRIDE_TARGET_PATTERN = re.compile(

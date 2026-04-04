@@ -13,7 +13,8 @@ from typing import TYPE_CHECKING, Any
 from prefab_sentinel.bridge_constants import UNITY_PROJECT_PATH_ENV
 from prefab_sentinel.editor_bridge import bridge_status
 from prefab_sentinel.session_cache import SessionCacheManager
-from prefab_sentinel.unity_assets import find_project_root, resolve_scope_path
+from prefab_sentinel.unity_assets import find_project_root
+from prefab_sentinel.unity_assets_path import resolve_scope_path
 from prefab_sentinel.wsl_compat import to_wsl_path
 
 if TYPE_CHECKING:

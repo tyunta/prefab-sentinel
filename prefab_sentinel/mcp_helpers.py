@@ -14,7 +14,8 @@ from prefab_sentinel.symbol_tree import (
     SymbolNotFoundError,
     SymbolTree,
 )
-from prefab_sentinel.unity_assets import decode_text_file, resolve_asset_path
+from prefab_sentinel.unity_assets import decode_text_file
+from prefab_sentinel.unity_assets_path import resolve_asset_path
 from prefab_sentinel.unity_yaml_parser import (
     CLASS_ID_MONOBEHAVIOUR,
     split_yaml_blocks,

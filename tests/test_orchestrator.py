@@ -426,7 +426,7 @@ class InspectWiringTests(unittest.TestCase):
             orch = _make_orchestrator()
             orch.prefab_variant.project_root = Path("/fake")
             with patch(
-                "prefab_sentinel.orchestrator.collect_project_guid_index",
+                "prefab_sentinel.orchestrator_wiring.collect_project_guid_index",
                 return_value={"aabbccdd11223344aabbccdd11223344": Path("/fake/Assets/Scripts/MyScript.cs")},
             ):
                 result = orch.inspect_wiring(f.name)
@@ -1697,7 +1697,7 @@ class TestNestedWiringTraversal(unittest.TestCase):
             orch = _make_orchestrator()
             orch.prefab_variant.project_root = tmp_path
             with patch(
-                "prefab_sentinel.orchestrator.collect_project_guid_index",
+                "prefab_sentinel.orchestrator_wiring.collect_project_guid_index",
                 return_value={_CHILD_WIRING_GUID: assets_dir / "Child.prefab"},
             ):
                 result = orch.inspect_wiring(str(base_path))
@@ -1766,7 +1766,7 @@ class TestNestedWiringTraversal(unittest.TestCase):
             orch = _make_orchestrator()
             orch.prefab_variant.project_root = tmp_path
             with patch(
-                "prefab_sentinel.orchestrator.collect_project_guid_index",
+                "prefab_sentinel.orchestrator_wiring.collect_project_guid_index",
                 return_value={_CHILD_WIRING_GUID: assets_dir / "Child.prefab"},
             ):
                 result = orch.inspect_wiring(str(base_path), udon_only=True)
@@ -1833,7 +1833,7 @@ class TestNestedWiringTraversal(unittest.TestCase):
             orch = _make_orchestrator()
             orch.prefab_variant.project_root = tmp_path
             with patch(
-                "prefab_sentinel.orchestrator.collect_project_guid_index",
+                "prefab_sentinel.orchestrator_wiring.collect_project_guid_index",
                 return_value={_CHILD_WIRING_GUID: assets_dir / "Child.prefab"},
             ):
                 result = orch.inspect_wiring(str(base_path))

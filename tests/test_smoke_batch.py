@@ -9,14 +9,18 @@ from unittest.mock import MagicMock, patch
 
 from prefab_sentinel.smoke_batch import (
     SmokeCase,
-    _build_smoke_command,
-    _extract_applied_count,
-    _load_timeout_profile_map,
-    _parse_case_payload,
     _render_markdown_summary,
+)
+from prefab_sentinel.smoke_batch_case import (
+    _load_timeout_profile_map,
     _resolve_case_unity_timeout_sec,
     _resolve_targets,
     _wsl_path_exists,
+)
+from prefab_sentinel.smoke_batch_runner import (
+    _build_smoke_command,
+    _extract_applied_count,
+    _parse_case_payload,
 )
 from prefab_sentinel.wsl_compat import is_wsl
 
@@ -466,7 +470,7 @@ class WslPathExistsTests(unittest.TestCase):
             # Pass a fake Windows path that won't exist directly
             self.assertTrue(_wsl_path_exists(Path("D:/fake/project/file.txt")))
 
-    @patch("prefab_sentinel.smoke_batch.to_wsl_path", return_value="D:/same/path")
+    @patch("prefab_sentinel.smoke_batch_case.to_wsl_path", return_value="D:/same/path")
     def test_no_conversion_when_path_unchanged(self, _mock_to_wsl) -> None:
         """When to_wsl_path returns the same string, only one existence check."""
         self.assertFalse(_wsl_path_exists(Path("D:/same/path")))

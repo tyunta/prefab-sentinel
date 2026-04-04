@@ -20,8 +20,8 @@ from prefab_sentinel.unity_assets import (
     SOURCE_PREFAB_PATTERN,
     decode_text_file,
     find_project_root,
-    resolve_scope_path,
 )
+from prefab_sentinel.unity_assets_path import resolve_scope_path
 
 _SUPPORTED_OPS = {"set", "insert_array_element", "remove_array_element"}
 _PREFAB_CREATE_OPS = {

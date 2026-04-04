@@ -15,8 +15,8 @@ from prefab_sentinel.services.prefab_variant import OverrideEntry, PrefabVariant
 from prefab_sentinel.unity_assets import (
     decode_text_file,
     find_project_root,
-    resolve_scope_path,
 )
+from prefab_sentinel.unity_assets_path import resolve_scope_path
 
 # Pattern to detect the start of a modification entry (``- target: {...}``)
 _MOD_ENTRY_START = re.compile(r"^\s+-\s*target:\s*\{")
