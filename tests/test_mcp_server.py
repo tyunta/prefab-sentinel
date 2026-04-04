@@ -2534,7 +2534,7 @@ class TestEditorWriteTools(unittest.TestCase):
             }))
             mock_send.assert_not_called()
         self.assertFalse(result["success"])
-        self.assertEqual("VRCSDK_REASON_REQUIRED", result["code"])
+        self.assertEqual("CHANGE_REASON_REQUIRED", result["code"])
 
     def test_vrcsdk_upload_invalid_platforms_empty(self) -> None:
         """Empty platforms list returns validation error."""

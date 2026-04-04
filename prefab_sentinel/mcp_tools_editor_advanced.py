@@ -9,6 +9,7 @@ from mcp.server.fastmcp import FastMCP
 
 from prefab_sentinel.editor_bridge import send_action
 from prefab_sentinel.json_io import load_json
+from prefab_sentinel.mcp_validation import require_change_reason
 
 __all__ = ["register_editor_advanced_tools"]
 
@@ -98,15 +99,9 @@ def register_editor_advanced_tools(server: FastMCP) -> None:
                 "diagnostics": [],
             }
 
-        if confirm and not change_reason:
-            return {
-                "success": False,
-                "severity": "error",
-                "code": "VRCSDK_REASON_REQUIRED",
-                "message": "change_reason is required when confirm=True",
-                "data": {},
-                "diagnostics": [],
-            }
+        err = require_change_reason(confirm, change_reason)
+        if err is not None:
+            return err
 
         result = send_action(
             action="vrcsdk_upload",
