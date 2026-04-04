@@ -24,6 +24,7 @@ except ImportError as exc:
 
 from prefab_sentinel.mcp_helpers import KNOWLEDGE_URI_PREFIX
 from prefab_sentinel.mcp_tools_components import register_component_tools
+from prefab_sentinel.mcp_tools_components_copy import register_copy_component_fields_tool
 from prefab_sentinel.mcp_tools_editor_advanced import register_editor_advanced_tools
 from prefab_sentinel.mcp_tools_editor_batch import register_editor_batch_tools
 from prefab_sentinel.mcp_tools_editor_ops import register_editor_ops_tools
@@ -119,6 +120,7 @@ def create_server(
     register_symbol_tools(server, session)
     register_set_property_tools(server, session)
     register_component_tools(server, session)
+    register_copy_component_fields_tool(server, session)
     register_validation_tools(server, session)
     register_patch_tools(server, session)
     register_editor_view_tools(server)

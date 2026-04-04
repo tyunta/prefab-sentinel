@@ -750,7 +750,7 @@ uv run python -m pytest tests/ -v
   - CIブランチ名は `UNITYTOOL_CI_BRANCH` / `GITHUB_REF_NAME` などから解決する
 - scope は実行時に `--scope` で指定し、固定パスは持たない
 - 完了基準は本READMEの「Definition of Done」に従う
-- patch apply の非dry-run実行（`--confirm`）は `--change-reason` と `--out-report` を必須とする（監査ログのため）
+- 書き込み系ツール（`set_property`, `add_component`, `remove_component`, `copy_component_fields`, `set_component_fields`, `set_material_property`, `copy_asset`, `rename_asset`, `revert_overrides`, `patch_apply`）は `confirm=True` 時に `change_reason` を必須とする（監査ログのため）。`patch_apply` および `set_component_fields` はさらに `out_report` も必須。
 - READMEを単一の運用・仕様の正本とする
 
 ---
