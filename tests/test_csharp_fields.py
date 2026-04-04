@@ -8,10 +8,12 @@ from pathlib import Path
 
 from prefab_sentinel.csharp_fields import (
     CSharpField,
-    build_class_name_index,
     build_field_map,
     parse_class_info,
     parse_serialized_fields,
+)
+from prefab_sentinel.csharp_fields_resolve import (
+    build_class_name_index,
     resolve_inherited_fields,
     resolve_script_fields,
 )

@@ -19,14 +19,13 @@ from prefab_sentinel.unity_assets import (
     extract_local_file_ids,
     extract_meta_guid,
     find_project_root,
-    has_path_doubling,
     is_unity_builtin_guid,
     is_unity_text_asset,
     iter_references,
     looks_like_guid,
     normalize_guid,
-    resolve_scope_path,
 )
+from prefab_sentinel.unity_assets_path import has_path_doubling, resolve_scope_path
 
 
 class GuidPatternTests(unittest.TestCase):
@@ -545,7 +544,7 @@ class ResolveGuidToAssetNameTests(unittest.TestCase):
 
 class CollectPackageGuidNamesTests(unittest.TestCase):
     def test_returns_package_names_from_lock_file(self) -> None:
-        from prefab_sentinel.unity_assets import collect_package_guid_names
+        from prefab_sentinel.unity_assets_path import collect_package_guid_names
 
         with tempfile.TemporaryDirectory() as tmpdir:
             pkg_dir = Path(tmpdir) / "Packages"
@@ -561,7 +560,7 @@ class CollectPackageGuidNamesTests(unittest.TestCase):
         self.assertIn("com.unity.ugui", result)
 
     def test_missing_lock_file_returns_empty(self) -> None:
-        from prefab_sentinel.unity_assets import collect_package_guid_names
+        from prefab_sentinel.unity_assets_path import collect_package_guid_names
 
         with tempfile.TemporaryDirectory() as tmpdir:
             result = collect_package_guid_names(Path(tmpdir))
@@ -572,14 +571,14 @@ class TestRelativeToRoot(unittest.TestCase):
     """Tests for the relative_to_root() free function."""
 
     def test_inside_root(self) -> None:
-        from prefab_sentinel.unity_assets import relative_to_root
+        from prefab_sentinel.unity_assets_path import relative_to_root
 
         root = Path("/project")
         result = relative_to_root(root / "Assets" / "Foo.prefab", root)
         self.assertEqual(result, "Assets/Foo.prefab")
 
     def test_outside_root(self) -> None:
-        from prefab_sentinel.unity_assets import relative_to_root
+        from prefab_sentinel.unity_assets_path import relative_to_root
 
         root = Path("/project")
         other = Path("/other/Bar.prefab")

@@ -4,13 +4,13 @@ from __future__ import annotations
 # used by existing tests and local automation.
 from prefab_sentinel.smoke_batch import (
     SmokeCase,
-    _build_smoke_command,
     _render_markdown_summary,
-    _resolve_targets,
     build_parser,
     main,
     run_from_args,
 )
+from prefab_sentinel.smoke_batch_case import _resolve_targets
+from prefab_sentinel.smoke_batch_runner import _build_smoke_command
 
 __all__ = [
     "SmokeCase",

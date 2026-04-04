@@ -17,7 +17,7 @@ from prefab_sentinel.editor_bridge import (
     check_editor_bridge_env,
     send_action,
 )
-from prefab_sentinel.unity_assets import resolve_asset_path
+from prefab_sentinel.unity_assets_path import resolve_asset_path
 
 
 class TestCheckEditorBridgeEnv(unittest.TestCase):

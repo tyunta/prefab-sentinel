@@ -7,10 +7,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from prefab_sentinel.material_asset_inspector import (
-    inspect_material_asset,
-    write_material_property,
-)
+from prefab_sentinel.material_asset_inspector import inspect_material_asset
+from prefab_sentinel.material_asset_writer import write_material_property
 
 _FIXTURES = Path(__file__).parent / "fixtures" / "mat"
 

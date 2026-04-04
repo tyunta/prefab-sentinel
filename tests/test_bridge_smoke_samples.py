@@ -64,7 +64,7 @@ class BridgeSmokeSamplesTests(unittest.TestCase):
             (sibling_root / "avatar").mkdir(parents=True, exist_ok=True)
             (sibling_root / "world").mkdir(parents=True, exist_ok=True)
 
-            with patch("prefab_sentinel.smoke_batch._PROJECT_ROOT", repo_root):
+            with patch("prefab_sentinel.smoke_batch_case._PROJECT_ROOT", repo_root):
                 parser = build_parser()
                 args = parser.parse_args([])
 

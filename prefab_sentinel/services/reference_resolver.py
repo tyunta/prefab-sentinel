@@ -24,10 +24,9 @@ from prefab_sentinel.unity_assets import (
     iter_references,
     looks_like_guid,
     normalize_guid,
-    relative_to_root,
     resolve_guid_to_asset_name,
-    resolve_scope_path,
 )
+from prefab_sentinel.unity_assets_path import relative_to_root, resolve_scope_path
 
 
 class ReferenceResolverService:

@@ -22,7 +22,8 @@ from prefab_sentinel.bridge_constants import (
 )
 from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse, error_response, max_severity, success_response
 from prefab_sentinel.json_io import dump_json, load_json, load_json_file
-from prefab_sentinel.unity_assets import decode_text_file, find_project_root, relative_to_root, resolve_scope_path
+from prefab_sentinel.unity_assets import decode_text_file, find_project_root
+from prefab_sentinel.unity_assets_path import relative_to_root, resolve_scope_path
 from prefab_sentinel.wsl_compat import needs_windows_paths, split_unity_command, to_windows_path, to_wsl_path
 
 UNITY_RUNTIME_EXECUTE_METHOD_ENV = "UNITYTOOL_RUNTIME_EXECUTE_METHOD"
