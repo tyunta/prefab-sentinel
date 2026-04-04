@@ -14,6 +14,7 @@ from prefab_sentinel.mcp_helpers import (
     resolve_component_with_type,
     resolve_game_object_node,
 )
+from prefab_sentinel.mcp_validation import require_change_reason
 from prefab_sentinel.patch_plan import PLAN_VERSION
 from prefab_sentinel.session import ProjectSession
 
@@ -49,6 +50,9 @@ def register_set_property_tools(server: FastMCP, session: ProjectSession) -> Non
             confirm: Set True to apply changes (False = dry-run only).
             change_reason: Human-readable reason for the change (audit trail).
         """
+        err = require_change_reason(confirm, change_reason)
+        if err is not None:
+            return err
         text, resolved = read_asset(asset_path, session.project_root)
         tree = session.get_symbol_tree(resolved, text, include_properties=False)
         node, component_name, err = resolve_component_with_type(
@@ -137,15 +141,9 @@ def register_set_property_tools(server: FastMCP, session: ProjectSession) -> Non
         effective_dry_run = dry_run or not confirm
         effective_confirm = confirm and not dry_run
 
-        if effective_confirm and not change_reason:
-            return {
-                "success": False,
-                "severity": "error",
-                "code": "CHANGE_REASON_REQUIRED",
-                "message": "change_reason is required when confirm=True.",
-                "data": {},
-                "diagnostics": [],
-            }
+        err = require_change_reason(effective_confirm, change_reason)
+        if err is not None:
+            return err
         if effective_confirm and not out_report:
             return {
                 "success": False,

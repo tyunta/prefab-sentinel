@@ -7,6 +7,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from prefab_sentinel.json_io import load_json
+from prefab_sentinel.mcp_validation import require_change_reason
 from prefab_sentinel.patch_revert import revert_overrides as revert_overrides_impl
 from prefab_sentinel.session import ProjectSession
 
@@ -43,6 +44,9 @@ def register_patch_tools(server: FastMCP, session: ProjectSession) -> None:
             confirm: Set True to apply (False = dry-run only).
             change_reason: Required when confirm=True. Audit log reason.
         """
+        err = require_change_reason(confirm, change_reason)
+        if err is not None:
+            return err
         orch = session.get_orchestrator()
         resp = orch.set_material_property(
             target_path=asset_path,
@@ -72,6 +76,9 @@ def register_patch_tools(server: FastMCP, session: ProjectSession) -> None:
             confirm: Set True to apply (False = dry-run only).
             change_reason: Required when confirm=True. Audit log reason.
         """
+        err = require_change_reason(confirm, change_reason)
+        if err is not None:
+            return err
         orch = session.get_orchestrator()
         resp = orch.copy_asset(
             source_path=source_path,
@@ -100,6 +107,9 @@ def register_patch_tools(server: FastMCP, session: ProjectSession) -> None:
             confirm: Set True to apply (False = dry-run only).
             change_reason: Required when confirm=True. Audit log reason.
         """
+        err = require_change_reason(confirm, change_reason)
+        if err is not None:
+            return err
         orch = session.get_orchestrator()
         resp = orch.rename_asset(
             asset_path=asset_path,
@@ -140,6 +150,9 @@ def register_patch_tools(server: FastMCP, session: ProjectSession) -> None:
             runtime_allow_warnings: Allow warnings in runtime validation.
             runtime_max_diagnostics: Max diagnostics for runtime validation.
         """
+        err = require_change_reason(confirm, change_reason)
+        if err is not None:
+            return err
         if isinstance(plan, dict):
             plan_dict = plan
         else:
@@ -203,6 +216,9 @@ def register_patch_tools(server: FastMCP, session: ProjectSession) -> None:
             confirm: Set True to apply (False = dry-run only).
             change_reason: Required when confirm=True. Audit log reason.
         """
+        err = require_change_reason(confirm, change_reason)
+        if err is not None:
+            return err
         resp = revert_overrides_impl(
             variant_path=asset_path,
             target_file_id=target_file_id,

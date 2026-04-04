@@ -81,6 +81,62 @@ def _make_simple_monobehaviour_prefab(guid: str = "aaaa1111bbbb2222cccc3333dddd4
     ])
 
 
+class TestRequireChangeReason(unittest.TestCase):
+    """Unit tests for the require_change_reason helper."""
+
+    def test_should_reject_when_confirm_true_and_empty_string(self) -> None:
+        from prefab_sentinel.mcp_validation import require_change_reason
+
+        result = require_change_reason(confirm=True, change_reason="")
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertFalse(result["success"])
+        self.assertEqual("error", result["severity"])
+        self.assertEqual("CHANGE_REASON_REQUIRED", result["code"])
+        self.assertEqual("change_reason is required when confirm=True.", result["message"])
+        self.assertEqual({}, result["data"])
+        self.assertEqual([], result["diagnostics"])
+
+    def test_should_reject_when_confirm_true_and_none(self) -> None:
+        from prefab_sentinel.mcp_validation import require_change_reason
+
+        result = require_change_reason(confirm=True, change_reason=None)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertFalse(result["success"])
+        self.assertEqual("CHANGE_REASON_REQUIRED", result["code"])
+
+    def test_should_pass_when_confirm_true_and_valid_reason(self) -> None:
+        from prefab_sentinel.mcp_validation import require_change_reason
+
+        result = require_change_reason(confirm=True, change_reason="fix bug")
+
+        self.assertIsNone(result)
+
+    def test_should_pass_when_confirm_false_and_empty_string(self) -> None:
+        from prefab_sentinel.mcp_validation import require_change_reason
+
+        result = require_change_reason(confirm=False, change_reason="")
+
+        self.assertIsNone(result)
+
+    def test_should_pass_when_confirm_false_and_none(self) -> None:
+        from prefab_sentinel.mcp_validation import require_change_reason
+
+        result = require_change_reason(confirm=False, change_reason=None)
+
+        self.assertIsNone(result)
+
+    def test_should_pass_when_confirm_false_and_valid_reason(self) -> None:
+        from prefab_sentinel.mcp_validation import require_change_reason
+
+        result = require_change_reason(confirm=False, change_reason="reason")
+
+        self.assertIsNone(result)
+
+
 class TestToolRegistration(unittest.TestCase):
     """Verify all expected tools are registered on the server."""
 
@@ -900,6 +956,7 @@ class TestSetPropertyTool(unittest.TestCase):
                         "property_path": "m_Enabled",
                         "value": 1,
                         "confirm": True,
+                        "change_reason": "enable renderer",
                     },
                 ))
 
@@ -1170,6 +1227,24 @@ class TestSetPropertyTool(unittest.TestCase):
         self.assertEqual("MeshRenderer", sr["resolved_component"])
         self.assertEqual("300", sr["file_id"])
         self.assertEqual("m_Enabled", sr["property_path"])
+
+    def test_confirm_requires_change_reason(self) -> None:
+        server = create_server()
+
+        _, result = _run(server.call_tool(
+            "set_property",
+            {
+                "asset_path": "Assets/DoesNotExist.prefab",
+                "symbol_path": "Cube/MeshRenderer",
+                "property_path": "m_Enabled",
+                "value": 0,
+                "confirm": True,
+                "change_reason": "",
+            },
+        ))
+
+        self.assertFalse(result["success"])
+        self.assertEqual("CHANGE_REASON_REQUIRED", result["code"])
 
 
 class TestListSerializedFieldsTool(unittest.TestCase):
@@ -1644,6 +1719,7 @@ class TestAddComponentTool(unittest.TestCase):
                         "symbol_path": "Root",
                         "component_type": "AudioSource",
                         "confirm": True,
+                        "change_reason": "add audio source",
                     },
                 ))
 
@@ -1684,6 +1760,23 @@ class TestAddComponentTool(unittest.TestCase):
         self.assertEqual("/Child", meta["hierarchy_target"])
         self.assertEqual("AudioSource", meta["component_type"])
         self.assertEqual("300", meta["file_id"])
+
+    def test_confirm_requires_change_reason(self) -> None:
+        server = create_server()
+
+        _, result = _run(server.call_tool(
+            "add_component",
+            {
+                "asset_path": "Assets/DoesNotExist.prefab",
+                "symbol_path": "Root",
+                "component_type": "AudioSource",
+                "confirm": True,
+                "change_reason": "",
+            },
+        ))
+
+        self.assertFalse(result["success"])
+        self.assertEqual("CHANGE_REASON_REQUIRED", result["code"])
 
 
 class TestRemoveComponentTool(unittest.TestCase):
@@ -1767,6 +1860,7 @@ class TestRemoveComponentTool(unittest.TestCase):
                         "asset_path": str(p),
                         "symbol_path": "Cube/MeshRenderer",
                         "confirm": True,
+                        "change_reason": "remove mesh renderer",
                     },
                 ))
 
@@ -1850,6 +1944,22 @@ class TestRemoveComponentTool(unittest.TestCase):
         self.assertEqual("Cube/MeshRenderer", meta["symbol_path"])
         self.assertEqual("MeshRenderer", meta["resolved_component"])
         self.assertEqual("300", meta["file_id"])
+
+    def test_confirm_requires_change_reason(self) -> None:
+        server = create_server()
+
+        _, result = _run(server.call_tool(
+            "remove_component",
+            {
+                "asset_path": "Assets/DoesNotExist.prefab",
+                "symbol_path": "Cube/MeshRenderer",
+                "confirm": True,
+                "change_reason": "",
+            },
+        ))
+
+        self.assertFalse(result["success"])
+        self.assertEqual("CHANGE_REASON_REQUIRED", result["code"])
 
 
 class TestScopeFallback(unittest.TestCase):
@@ -2723,6 +2833,23 @@ class TestRevertOverridesTool(unittest.TestCase):
         _, kwargs = mock_revert.call_args
         self.assertIsNone(kwargs["change_reason"])
 
+    def test_confirm_requires_change_reason(self) -> None:
+        server = create_server()
+        with patch(
+            "prefab_sentinel.mcp_tools_patch.revert_overrides_impl",
+        ) as mock_revert:
+            _, result = _run(server.call_tool("revert_overrides", {
+                "asset_path": "Assets/V.prefab",
+                "target_file_id": "12345",
+                "property_path": "m_Color.r",
+                "confirm": True,
+                "change_reason": "",
+            }))
+
+        self.assertFalse(result["success"])
+        self.assertEqual("CHANGE_REASON_REQUIRED", result["code"])
+        mock_revert.assert_not_called()
+
 
 class TestInspectHierarchyTool(unittest.TestCase):
     """Tests for the inspect_hierarchy MCP tool."""
@@ -2897,6 +3024,23 @@ class TestPatchApplyTool(unittest.TestCase):
 
         call_kwargs = mock_orch.patch_apply.call_args[1]
         self.assertIsNone(call_kwargs["change_reason"])
+
+    def test_confirm_requires_change_reason(self) -> None:
+        mock_orch = MagicMock()
+        server = create_server()
+        with patch.object(
+            ProjectSession, "get_orchestrator", return_value=mock_orch,
+        ):
+            _, result = _run(server.call_tool("patch_apply", {
+                "plan": '{"plan_version": "2"}',
+                "confirm": True,
+                "change_reason": "",
+            }))
+
+        self.assertFalse(result["success"])
+        self.assertEqual("CHANGE_REASON_REQUIRED", result["code"])
+        mock_orch.patch_apply.assert_not_called()
+
 
 
 # ---------------------------------------------------------------------------
@@ -3311,6 +3455,23 @@ class TestCopyAssetTool(unittest.TestCase):
             change_reason="duplicate material",
         )
 
+    def test_confirm_requires_change_reason(self) -> None:
+        mock_orch = MagicMock()
+        server = create_server()
+        with patch.object(
+            ProjectSession, "get_orchestrator", return_value=mock_orch,
+        ):
+            _, result = _run(server.call_tool("copy_asset", {
+                "source_path": "Assets/Mat/A.mat",
+                "dest_path": "Assets/Mat/B.mat",
+                "confirm": True,
+                "change_reason": "",
+            }))
+
+        self.assertFalse(result["success"])
+        self.assertEqual("CHANGE_REASON_REQUIRED", result["code"])
+        mock_orch.copy_asset.assert_not_called()
+
 
 class TestRenameAssetTool(unittest.TestCase):
     """Tests for the rename_asset MCP tool."""
@@ -3339,6 +3500,45 @@ class TestRenameAssetTool(unittest.TestCase):
             dry_run=False,
             change_reason="rename for clarity",
         )
+
+    def test_confirm_requires_change_reason(self) -> None:
+        mock_orch = MagicMock()
+        server = create_server()
+        with patch.object(
+            ProjectSession, "get_orchestrator", return_value=mock_orch,
+        ):
+            _, result = _run(server.call_tool("rename_asset", {
+                "asset_path": "Assets/Mat/Old.mat",
+                "new_name": "New.mat",
+                "confirm": True,
+                "change_reason": "",
+            }))
+
+        self.assertFalse(result["success"])
+        self.assertEqual("CHANGE_REASON_REQUIRED", result["code"])
+        mock_orch.rename_asset.assert_not_called()
+
+
+class TestSetMaterialPropertyTool(unittest.TestCase):
+    """Tests for the set_material_property MCP tool."""
+
+    def test_confirm_requires_change_reason(self) -> None:
+        mock_orch = MagicMock()
+        server = create_server()
+        with patch.object(
+            ProjectSession, "get_orchestrator", return_value=mock_orch,
+        ):
+            _, result = _run(server.call_tool("set_material_property", {
+                "asset_path": "Assets/M.mat",
+                "property_name": "_Color",
+                "value": "0.5",
+                "confirm": True,
+                "change_reason": "",
+            }))
+
+        self.assertFalse(result["success"])
+        self.assertEqual("CHANGE_REASON_REQUIRED", result["code"])
+        mock_orch.set_material_property.assert_not_called()
 
 
 class TestCopyComponentFieldsTool(unittest.TestCase):
@@ -3875,6 +4075,24 @@ class TestCopyComponentFieldsTool(unittest.TestCase):
         self.assertEqual("SYMBOL_UNRESOLVABLE", result["code"])
         self.assertIn("asset_path", result["data"])
         self.assertIn("symbol_path", result["data"])
+
+    def test_confirm_requires_change_reason(self) -> None:
+        server = create_server()
+
+        _, result = _run(server.call_tool(
+            "copy_component_fields",
+            {
+                "src_asset_path": "Assets/DoesNotExist.prefab",
+                "src_symbol_path": "Cube/MeshRenderer",
+                "dst_asset_path": "Assets/DoesNotExist2.prefab",
+                "dst_symbol_path": "Cube/MeshRenderer",
+                "confirm": True,
+                "change_reason": "",
+            },
+        ))
+
+        self.assertFalse(result["success"])
+        self.assertEqual("CHANGE_REASON_REQUIRED", result["code"])
 
 
 class TestSetComponentFieldsTool(unittest.TestCase):

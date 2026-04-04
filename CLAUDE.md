@@ -26,7 +26,7 @@
 3. 変更は `dry_run_patch` で差分確認後に `apply_and_save` する。
 4. 適用後に `compile_udonsharp` と `run_clientsim` で実行検証する。
 5. `critical` / `error` が 1 件でもあれば停止し、修正または判断待ちへ回す。
-- `patch apply --confirm` は `--change-reason` と `--out-report` を必須とする（監査ログのため）。
+- 書き込み系ツール（`set_property`, `add_component`, `remove_component`, `copy_component_fields`, `set_component_fields`, `set_material_property`, `copy_asset`, `rename_asset`, `revert_overrides`, `patch_apply`）は `confirm=True` 時に `change_reason` を必須とする（監査ログのため）。`patch_apply` および `set_component_fields` はさらに `out_report` も必須。
 
 ## 意思決定ルール
 - 自動修復可能で根拠があるもののみ `safe_fix` として提案・適用する。
@@ -43,7 +43,7 @@
 - **操作系・検証系ツール**（`set_property`, `validate_refs`, `validate_field_rename`, `check_field_coverage`, `activate_project` 等）: `success / severity / code / message / data / diagnostics` エンベロープを返す。`diagnostics` が意味のあるデータを運ぶため。
 - **参照系ツール**（`get_unity_symbols`, `find_unity_symbol`, `find_referencing_assets`）: ペイロードを直接返す（エンベロープなし）。該当なしは空 `matches` 配列で表現し、エラーとしない。インフラエラー（ファイル不在等）は MCP `ToolError` で伝播。
 - **orchestrator 系ツール**（`inspect_wiring`, `inspect_variant` 等）: `ToolResponse.to_dict()` 経由でエンベロープを返す。
-- 主要コード: `SER001`, `SER002`, `PVR001`, `PVR002`, `PVR003`, `REF001`, `REF002`, `RUN001`, `RUN002`。
+- 主要コード: `SER001`, `SER002`, `PVR001`, `PVR002`, `PVR003`, `REF001`, `REF002`, `RUN001`, `RUN002`, `CHANGE_REASON_REQUIRED`（`confirm=True` 時に `change_reason` が未指定）。
 - `severity` は `info | warning | error | critical` を使用する。
 - MCP レベルの例外（`ToolError`）はインフラエラー（ファイル不在、import 失敗）のみ。
 
