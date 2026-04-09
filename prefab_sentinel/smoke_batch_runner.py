@@ -5,11 +5,14 @@ import json
 import subprocess
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from prefab_sentinel.bridge_smoke import load_patch_plan
 from prefab_sentinel.json_io import dump_json, load_json
 from prefab_sentinel.smoke_batch_case import _resolve_case_unity_timeout_sec, _wsl_path_exists
+
+if TYPE_CHECKING:
+    from prefab_sentinel.smoke_batch import SmokeCase
 
 
 def _build_smoke_command(
@@ -20,7 +23,7 @@ def _build_smoke_command(
     unity_command: str | None,
     unity_execute_method: str,
     unity_timeout_sec: int | None,
-    case: object,  # SmokeCase
+    case: SmokeCase,
     response_out: Path,
     unity_log_file: Path,
 ) -> list[str]:
@@ -56,7 +59,7 @@ def _build_smoke_command(
 
 def _parse_case_payload(
     *,
-    case: object,  # SmokeCase
+    case: SmokeCase,
     exit_code: int,
     stdout_text: str,
     stderr_text: str,
@@ -105,7 +108,7 @@ def _extract_applied_count(payload: dict[str, Any]) -> int | None:
 
 def _resolve_expected_applied(
     *,
-    case: object,  # SmokeCase
+    case: SmokeCase,
     expect_applied_from_plan: bool,
 ) -> tuple[int | None, str]:
     expected_applied = getattr(case, "expected_applied", None)
