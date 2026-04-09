@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from prefab_sentinel.watcher import dispatch_changes
+from prefab_sentinel.watcher import _has_watchfiles, dispatch_changes
 
 
 class TestHasWatchfiles(unittest.TestCase):
@@ -15,14 +15,10 @@ class TestHasWatchfiles(unittest.TestCase):
 
     @patch.dict("sys.modules", {"watchfiles": MagicMock()})
     def test_returns_true_when_installed(self) -> None:
-        from prefab_sentinel.watcher import _has_watchfiles
-
         self.assertTrue(_has_watchfiles())
 
     @patch.dict("sys.modules", {"watchfiles": None})
     def test_returns_false_when_missing(self) -> None:
-        from prefab_sentinel.watcher import _has_watchfiles
-
         self.assertFalse(_has_watchfiles())
 
 

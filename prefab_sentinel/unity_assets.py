@@ -25,6 +25,8 @@ UNITY_TEXT_ASSET_SUFFIXES = {
 # File types that contain GameObject/Transform hierarchy and MonoBehaviour wiring
 GAMEOBJECT_BEARING_SUFFIXES = frozenset({".prefab", ".unity", ".asset"})
 
+MODEL_FILE_SUFFIXES: frozenset[str] = frozenset({".fbx", ".blend", ".gltf", ".glb", ".obj"})
+
 GUID_PATTERN = re.compile(r"\bguid:\s*([0-9a-fA-F]{32})\b")
 LOCAL_FILE_ID_PATTERN = re.compile(r"^--- !u!\d+ &(-?\d+)", re.MULTILINE)
 REFERENCE_PATTERN = re.compile(

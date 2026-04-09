@@ -8,6 +8,7 @@ from pathlib import Path
 
 from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse, error_response, success_response
 from prefab_sentinel.unity_assets import (
+    MODEL_FILE_SUFFIXES,
     SOURCE_PREFAB_PATTERN,
     collect_project_guid_index,
     decode_text_file,
@@ -246,12 +247,23 @@ class PrefabVariantService:
             try:
                 current_text = decode_text_file(target)
             except UnicodeDecodeError:
+                ext = target.suffix.lower()
+                if ext in MODEL_FILE_SUFFIXES:
+                    evidence = (
+                        f"Base asset is a model file ({ext}). "
+                        "Cannot decode as YAML. "
+                        "Use editor_list_children for runtime hierarchy inspection."
+                    )
+                    detail = "model_file_base"
+                else:
+                    evidence = "unable to decode source prefab"
+                    detail = "unreadable_file"
                 diagnostics.append(
                     Diagnostic(
                         path=self._relative(target),
                         location="file",
-                        detail="unreadable_file",
-                        evidence="unable to decode source prefab",
+                        detail=detail,
+                        evidence=evidence,
                     )
                 )
                 break

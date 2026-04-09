@@ -25,6 +25,7 @@ from prefab_sentinel.bridge_constants import (
     UNITY_TIMEOUT_SEC_ENV as BRIDGE_TIMEOUT_ENV,
 )
 from prefab_sentinel.json_io import dump_json, load_json
+from prefab_sentinel.wsl_compat import to_wsl_path
 
 PROTOCOL_VERSION = 1
 # Empirical: sufficient for typical Inspector operations in loaded projects
@@ -125,7 +126,7 @@ def check_editor_bridge_env() -> dict[str, Any] | None:
             message=f"Editor Bridge not connected: {BRIDGE_WATCH_DIR_ENV} is not set.{_BRIDGE_SETUP_HINT}",
             data={"env_var": BRIDGE_WATCH_DIR_ENV},
         )
-    if not Path(watch_dir).is_dir():
+    if not Path(to_wsl_path(watch_dir)).is_dir():
         return _error_response(
             code="EDITOR_BRIDGE_WATCH_DIR_NOT_FOUND",
             message=f"Editor Bridge not connected: watch directory does not exist: {watch_dir}.{_BRIDGE_SETUP_HINT}",
@@ -161,7 +162,7 @@ def send_action(
             message=f"Unknown action: {action}. Supported: {', '.join(sorted(SUPPORTED_ACTIONS))}",
         )
 
-    watch_dir = Path(os.environ[BRIDGE_WATCH_DIR_ENV])
+    watch_dir = Path(to_wsl_path(os.environ[BRIDGE_WATCH_DIR_ENV]))
     if timeout_sec is None:
         timeout_sec = int(os.environ.get(BRIDGE_TIMEOUT_ENV, DEFAULT_TIMEOUT_SEC))
 
@@ -247,7 +248,7 @@ def bridge_status() -> dict[str, Any]:
     """
     mode = os.environ.get(BRIDGE_MODE_ENV, "")
     watch_dir = os.environ.get(BRIDGE_WATCH_DIR_ENV, "")
-    connected = mode == "editor" and bool(watch_dir) and Path(watch_dir).is_dir()
+    connected = mode == "editor" and bool(watch_dir) and Path(to_wsl_path(watch_dir)).is_dir()
     return {
         "connected": connected,
         "mode": mode or None,

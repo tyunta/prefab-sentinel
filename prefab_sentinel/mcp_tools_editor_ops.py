@@ -149,6 +149,7 @@ def register_editor_ops_tools(server: FastMCP) -> None:
     def editor_save_as_prefab(
         hierarchy_path: str,
         asset_path: str,
+        force_original: bool = False,
     ) -> dict[str, Any]:
         """Save a scene GameObject as a Prefab or Prefab Variant asset.
 
@@ -160,12 +161,17 @@ def register_editor_ops_tools(server: FastMCP) -> None:
         Args:
             hierarchy_path: Hierarchy path to the GameObject to save.
             asset_path: Output .prefab path (e.g. "Assets/Prefabs/MyObj.prefab").
+            force_original: If True, break any Prefab Instance connection before
+                saving, forcing the result to be an original Prefab (not a Variant).
+                Warning: this unpacks the scene GameObject (destructive, but Undo-able).
         """
-        return send_action(
-            action="save_as_prefab",
-            hierarchy_path=hierarchy_path,
-            asset_path=asset_path,
-        )
+        kwargs: dict[str, Any] = {
+            "hierarchy_path": hierarchy_path,
+            "asset_path": asset_path,
+        }
+        if force_original:
+            kwargs["force_original"] = True
+        return send_action(action="save_as_prefab", **kwargs)
 
     @server.tool()
     def editor_set_parent(

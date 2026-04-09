@@ -24,8 +24,14 @@ from prefab_sentinel.unity_assets import (
     iter_references,
     looks_like_guid,
     normalize_guid,
+    resolve_guid_to_asset_name,
 )
-from prefab_sentinel.unity_assets_path import has_path_doubling, resolve_scope_path
+from prefab_sentinel.unity_assets_path import (
+    collect_package_guid_names,
+    has_path_doubling,
+    relative_to_root,
+    resolve_scope_path,
+)
 
 
 class GuidPatternTests(unittest.TestCase):
@@ -514,29 +520,21 @@ class HasPathDoublingTests(unittest.TestCase):
 
 class ResolveGuidToAssetNameTests(unittest.TestCase):
     def test_known_guid_returns_relative_path(self) -> None:
-        from prefab_sentinel.unity_assets import resolve_guid_to_asset_name
-
         proj = Path("/project")
         index = {"aabb" * 8: Path("/project/Assets/Scripts/Foo.cs")}
         result = resolve_guid_to_asset_name("aabb" * 8, index, proj)
         self.assertEqual(result, "Assets/Scripts/Foo.cs")
 
     def test_unknown_guid_returns_empty(self) -> None:
-        from prefab_sentinel.unity_assets import resolve_guid_to_asset_name
-
         result = resolve_guid_to_asset_name("dead" * 8, {}, Path("/project"))
         self.assertEqual(result, "")
 
     def test_no_project_root_returns_posix_path(self) -> None:
-        from prefab_sentinel.unity_assets import resolve_guid_to_asset_name
-
         index = {"aabb" * 8: Path("/some/Assets/Foo.cs")}
         result = resolve_guid_to_asset_name("aabb" * 8, index)
         self.assertIn("Foo.cs", result)
 
     def test_normalizes_guid_case(self) -> None:
-        from prefab_sentinel.unity_assets import resolve_guid_to_asset_name
-
         index = {"aabb" * 8: Path("/project/Assets/Bar.cs")}
         result = resolve_guid_to_asset_name("AABB" * 8, index, Path("/project"))
         self.assertEqual(result, "Assets/Bar.cs")
@@ -544,8 +542,6 @@ class ResolveGuidToAssetNameTests(unittest.TestCase):
 
 class CollectPackageGuidNamesTests(unittest.TestCase):
     def test_returns_package_names_from_lock_file(self) -> None:
-        from prefab_sentinel.unity_assets_path import collect_package_guid_names
-
         with tempfile.TemporaryDirectory() as tmpdir:
             pkg_dir = Path(tmpdir) / "Packages"
             pkg_dir.mkdir()
@@ -560,8 +556,6 @@ class CollectPackageGuidNamesTests(unittest.TestCase):
         self.assertIn("com.unity.ugui", result)
 
     def test_missing_lock_file_returns_empty(self) -> None:
-        from prefab_sentinel.unity_assets_path import collect_package_guid_names
-
         with tempfile.TemporaryDirectory() as tmpdir:
             result = collect_package_guid_names(Path(tmpdir))
         self.assertEqual(result, {})
@@ -571,15 +565,11 @@ class TestRelativeToRoot(unittest.TestCase):
     """Tests for the relative_to_root() free function."""
 
     def test_inside_root(self) -> None:
-        from prefab_sentinel.unity_assets_path import relative_to_root
-
         root = Path("/project")
         result = relative_to_root(root / "Assets" / "Foo.prefab", root)
         self.assertEqual(result, "Assets/Foo.prefab")
 
     def test_outside_root(self) -> None:
-        from prefab_sentinel.unity_assets_path import relative_to_root
-
         root = Path("/project")
         other = Path("/other/Bar.prefab")
         result = relative_to_root(other, root)

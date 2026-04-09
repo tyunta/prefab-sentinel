@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
 using UnityEditor;
 using UnityEditor.Compilation;
 using UnityEditor.SceneManagement;
@@ -137,6 +138,7 @@ namespace PrefabSentinel
             public string release_status = string.Empty;  // "public" | "private", empty = no change
             public bool confirm = false;                  // dry-run gate
             public string platforms = string.Empty;  // JSON array: "[\"windows\",\"android\"]"
+            public bool force_original = false;       // break Prefab Instance before saving
 
             // Phase 2: BlendShape
             public string filter = string.Empty;            // name substring filter / menu prefix
@@ -2639,6 +2641,7 @@ namespace PrefabSentinel
                     $"Failed to add component: {request.component_type}");
 
             // Apply initial properties if provided
+            var diagList = new System.Collections.Generic.List<EditorControlDiagnostic>();
             if (!string.IsNullOrEmpty(request.properties_json))
             {
                 try
@@ -2665,7 +2668,63 @@ namespace PrefabSentinel
                         so.ApplyModifiedProperties();
                     }
                 }
-                catch (System.Exception) { /* best-effort; component already added */ }
+                catch (System.Exception ex)
+                {
+                    diagList.Add(new EditorControlDiagnostic
+                    {
+                        detail = $"Failed to apply initial properties: {ex.Message}",
+                        evidence = "properties_json"
+                    });
+                }
+            }
+
+            // Check if the added type is UdonSharpBehaviour without a matching ProgramAsset
+            Type usbType = null;
+            foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                usbType = assembly.GetType("UdonSharp.UdonSharpBehaviour", false);
+                if (usbType != null) break;
+            }
+
+            bool udonProgramAssetMissing = false;
+            if (usbType != null && usbType.IsAssignableFrom(compType))
+            {
+                udonProgramAssetMissing = true;
+                Type programAssetType = null;
+                foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    programAssetType = assembly.GetType("UdonSharp.UdonSharpProgramAsset", false);
+                    if (programAssetType != null) break;
+                }
+
+                if (programAssetType != null)
+                {
+                    MethodInfo getAllPrograms = programAssetType.GetMethod(
+                        "GetAllUdonSharpPrograms",
+                        BindingFlags.Public | BindingFlags.Static
+                    );
+                    if (getAllPrograms != null)
+                    {
+                        Array programs = getAllPrograms.Invoke(null, null) as Array;
+                        if (programs != null)
+                        {
+                            PropertyInfo csScriptProp = programAssetType.GetProperty(
+                                "sourceCsScript",
+                                BindingFlags.Public | BindingFlags.Instance
+                            );
+                            foreach (object program in programs)
+                            {
+                                if (csScriptProp == null) continue;
+                                MonoScript script = csScriptProp.GetValue(program) as MonoScript;
+                                if (script != null && script.GetClass() == compType)
+                                {
+                                    udonProgramAssetMissing = false;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             var resp = BuildSuccess("EDITOR_CTRL_ADD_COMP_OK",
@@ -2677,11 +2736,21 @@ namespace PrefabSentinel
                     executed = true,
                     read_only = false,
                 });
-            resp.diagnostics = new[] { new EditorControlDiagnostic
+            diagList.Add(new EditorControlDiagnostic
             {
                 detail = "Runtime modification — save the scene (File > Save) to persist.",
                 evidence = "Undo.AddComponent"
-            }};
+            });
+            if (udonProgramAssetMissing)
+            {
+                diagList.Add(new EditorControlDiagnostic
+                {
+                    path = request.hierarchy_path,
+                    detail = $"UdonSharpProgramAsset not found for {compType.Name}. The component was added as a regular MonoBehaviour, not UdonBehaviour. Run editor_create_udon_program_asset first, then retry.",
+                    evidence = "UdonSharp.UdonSharpProgramAsset.GetAllUdonSharpPrograms"
+                });
+            }
+            resp.diagnostics = diagList.ToArray();
             return resp;
         }
 
@@ -3048,6 +3117,15 @@ namespace PrefabSentinel
                     basePrefabPath = AssetDatabase.GetAssetPath(baseObj);
             }
 
+            bool wasVariant = isVariant;
+            if (request.force_original && isVariant)
+            {
+                Undo.RegisterFullObjectHierarchyUndo(go, "Unpack prefab for force_original save");
+                PrefabUtility.UnpackPrefabInstance(go, PrefabUnpackMode.Completely, InteractionMode.AutomatedAction);
+                isVariant = false;
+                basePrefabPath = "";
+            }
+
             bool success;
             PrefabUtility.SaveAsPrefabAsset(go, request.asset_path, out success);
             if (!success)
@@ -3076,6 +3154,12 @@ namespace PrefabSentinel
                 {
                     detail = $"Base Prefab: {basePrefabPath}",
                     evidence = "PrefabUtility.GetCorrespondingObjectFromSource"
+                });
+            if (request.force_original && wasVariant)
+                diags.Add(new EditorControlDiagnostic
+                {
+                    detail = "force_original: Prefab Instance was unpacked before saving. Scene GameObject is now unconnected.",
+                    evidence = "PrefabUtility.UnpackPrefabInstance(PrefabUnpackMode.Completely)"
                 });
             resp.diagnostics = diags.ToArray();
             return resp;

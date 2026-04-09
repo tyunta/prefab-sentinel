@@ -11,7 +11,10 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, call, patch
 
+from prefab_sentinel.contracts import Severity, ToolResponse
+from prefab_sentinel.mcp_helpers import KNOWLEDGE_URI_PREFIX
 from prefab_sentinel.mcp_server import create_server
+from prefab_sentinel.mcp_validation import require_change_reason
 from prefab_sentinel.session import ProjectSession
 from prefab_sentinel.symbol_tree_builder import build_symbol_tree
 from tests.yaml_helpers import (
@@ -85,8 +88,6 @@ class TestRequireChangeReason(unittest.TestCase):
     """Unit tests for the require_change_reason helper."""
 
     def test_should_reject_when_confirm_true_and_empty_string(self) -> None:
-        from prefab_sentinel.mcp_validation import require_change_reason
-
         result = require_change_reason(confirm=True, change_reason="")
 
         self.assertIsNotNone(result)
@@ -99,8 +100,6 @@ class TestRequireChangeReason(unittest.TestCase):
         self.assertEqual([], result["diagnostics"])
 
     def test_should_reject_when_confirm_true_and_none(self) -> None:
-        from prefab_sentinel.mcp_validation import require_change_reason
-
         result = require_change_reason(confirm=True, change_reason=None)
 
         self.assertIsNotNone(result)
@@ -109,29 +108,21 @@ class TestRequireChangeReason(unittest.TestCase):
         self.assertEqual("CHANGE_REASON_REQUIRED", result["code"])
 
     def test_should_pass_when_confirm_true_and_valid_reason(self) -> None:
-        from prefab_sentinel.mcp_validation import require_change_reason
-
         result = require_change_reason(confirm=True, change_reason="fix bug")
 
         self.assertIsNone(result)
 
     def test_should_pass_when_confirm_false_and_empty_string(self) -> None:
-        from prefab_sentinel.mcp_validation import require_change_reason
-
         result = require_change_reason(confirm=False, change_reason="")
 
         self.assertIsNone(result)
 
     def test_should_pass_when_confirm_false_and_none(self) -> None:
-        from prefab_sentinel.mcp_validation import require_change_reason
-
         result = require_change_reason(confirm=False, change_reason=None)
 
         self.assertIsNone(result)
 
     def test_should_pass_when_confirm_false_and_valid_reason(self) -> None:
-        from prefab_sentinel.mcp_validation import require_change_reason
-
         result = require_change_reason(confirm=False, change_reason="reason")
 
         self.assertIsNone(result)
@@ -209,8 +200,6 @@ class TestSymbolTools(unittest.TestCase):
         return p
 
     def test_get_unity_symbols_depth0(self) -> None:
-
-
         with tempfile.TemporaryDirectory() as td:
             prefab = self._write_prefab(Path(td))
             _, result = _run(self.server.call_tool(
@@ -228,8 +217,6 @@ class TestSymbolTools(unittest.TestCase):
             self.assertNotIn("severity", result)
 
     def test_get_unity_symbols_depth1(self) -> None:
-
-
         with tempfile.TemporaryDirectory() as td:
             prefab = self._write_prefab(Path(td))
             _, result = _run(self.server.call_tool(
@@ -243,8 +230,6 @@ class TestSymbolTools(unittest.TestCase):
             self.assertIn("MeshRenderer", child_names)
 
     def test_find_unity_symbol_found(self) -> None:
-
-
         with tempfile.TemporaryDirectory() as td:
             prefab = self._write_prefab(Path(td))
             _, result = _run(self.server.call_tool(
@@ -257,8 +242,6 @@ class TestSymbolTools(unittest.TestCase):
             self.assertNotIn("success", result)
 
     def test_find_unity_symbol_not_found(self) -> None:
-
-
         with tempfile.TemporaryDirectory() as td:
             prefab = self._write_prefab(Path(td))
             _, result = _run(self.server.call_tool(
@@ -270,8 +253,6 @@ class TestSymbolTools(unittest.TestCase):
             self.assertNotIn("success", result)
 
     def test_find_unity_symbol_component_path(self) -> None:
-
-
         with tempfile.TemporaryDirectory() as td:
             prefab = self._write_prefab(Path(td))
             _, result = _run(self.server.call_tool(
@@ -464,8 +445,6 @@ class TestSymbolToolsWithMonoBehaviour(unittest.TestCase):
     """Test symbol tools with MonoBehaviour components."""
 
     def test_find_monobehaviour_with_script_name(self) -> None:
-
-
         text = YAML_HEADER + "\n".join([
             make_gameobject("100", "Player", ["200", "300"]),
             make_transform("200", "100"),
@@ -490,8 +469,6 @@ class TestGetUnitySymbolsExpandNested(unittest.TestCase):
     """Test expand_nested parameter wiring in get_unity_symbols."""
 
     def test_expand_nested_passed_to_build(self) -> None:
-
-
         text = YAML_HEADER + make_gameobject("100", "Root", ["200"]) + make_transform("200", "100")
         server = create_server(project_root=None)
 
@@ -573,7 +550,7 @@ class TestOrchestratorTools(unittest.TestCase):
         )
 
     def test_find_referencing_assets_delegates(self) -> None:
-        from prefab_sentinel.contracts import Severity, ToolResponse
+
         mock_step = ToolResponse(
             success=True,
             severity=Severity.INFO,
@@ -686,8 +663,6 @@ class TestFindUnitySymbolShowOrigin(unittest.TestCase):
 
     def test_show_origin_false_returns_flat_properties(self) -> None:
         """Default show_origin=False keeps properties as {name: value}."""
-
-
         text = YAML_HEADER + "\n".join([
             make_gameobject("100", "Player", ["200", "300"]),
             make_transform("200", "100"),
@@ -720,8 +695,6 @@ class TestFindUnitySymbolShowOrigin(unittest.TestCase):
         Uses a MonoBehaviour with a reference field so analyze_wiring()
         populates properties (it only captures fileID/GUID references).
         """
-
-
         # Use a reference field that analyze_wiring will capture
         text = YAML_HEADER + "\n".join([
             make_gameobject("100", "Player", ["200", "300"]),
@@ -777,8 +750,6 @@ class TestFindUnitySymbolShowOrigin(unittest.TestCase):
 
     def test_show_origin_on_non_variant_degrades_gracefully(self) -> None:
         """show_origin=True on a non-variant still returns results (no origin)."""
-
-
         text = YAML_HEADER + "\n".join([
             make_gameobject("100", "Cube", ["200", "300"]),
             make_transform("200", "100"),
@@ -824,8 +795,6 @@ class TestFindUnitySymbolShowOrigin(unittest.TestCase):
 
     def test_annotate_origins_logs_on_exception(self) -> None:
         """When orchestrator raises, _annotate_origins logs debug and returns."""
-
-
         text = YAML_HEADER + "\n".join([
             make_gameobject("100", "Cube", ["200", "300"]),
             make_transform("200", "100"),
@@ -896,8 +865,6 @@ class TestSetPropertyTool(unittest.TestCase):
 
     def test_set_property_dry_run(self) -> None:
         """confirm=False returns dry-run preview."""
-
-
         text = self._prefab_with_meshrenderer()
         server = create_server()
         mock_resp = self._mock_patch_apply_response(dry_run=True)
@@ -931,8 +898,6 @@ class TestSetPropertyTool(unittest.TestCase):
 
     def test_set_property_confirm(self) -> None:
         """confirm=True applies the change."""
-
-
         text = self._prefab_with_meshrenderer()
         server = create_server()
         mock_resp = self._mock_patch_apply_response(dry_run=False)
@@ -967,8 +932,6 @@ class TestSetPropertyTool(unittest.TestCase):
 
     def test_set_property_symbol_not_found(self) -> None:
         """Returns error when symbol path doesn't resolve."""
-
-
         text = self._prefab_with_meshrenderer()
         server = create_server()
 
@@ -993,8 +956,6 @@ class TestSetPropertyTool(unittest.TestCase):
 
     def test_set_property_not_a_component(self) -> None:
         """Returns error when symbol path points to a GameObject."""
-
-
         text = self._prefab_with_meshrenderer()
         server = create_server()
 
@@ -1018,8 +979,6 @@ class TestSetPropertyTool(unittest.TestCase):
 
     def test_set_property_builtin_component_name(self) -> None:
         """Built-in component resolves to its type name in the plan."""
-
-
         text = self._prefab_with_meshrenderer()
         server = create_server()
         mock_resp = self._mock_patch_apply_response()
@@ -1053,8 +1012,6 @@ class TestSetPropertyTool(unittest.TestCase):
 
     def test_set_property_monobehaviour_script_name(self) -> None:
         """MonoBehaviour resolves to its script name for the component field."""
-
-
         text = self._prefab_with_monobehaviour()
         mock_resp = self._mock_patch_apply_response()
 
@@ -1096,8 +1053,6 @@ class TestSetPropertyTool(unittest.TestCase):
 
     def test_set_property_monobehaviour_no_script_name(self) -> None:
         """Returns error when MonoBehaviour has no resolved script name."""
-
-
         text = self._prefab_with_monobehaviour()
         server = create_server()  # no project_root
 
@@ -1120,8 +1075,6 @@ class TestSetPropertyTool(unittest.TestCase):
 
     def test_set_property_passes_change_reason(self) -> None:
         """change_reason is forwarded to the orchestrator."""
-
-
         text = self._prefab_with_meshrenderer()
         server = create_server()
         mock_resp = self._mock_patch_apply_response()
@@ -1153,8 +1106,6 @@ class TestSetPropertyTool(unittest.TestCase):
 
     def test_set_property_plan_structure(self) -> None:
         """Constructed plan follows V2 format."""
-
-
         text = self._prefab_with_meshrenderer()
         server = create_server()
         mock_resp = self._mock_patch_apply_response()
@@ -1195,8 +1146,6 @@ class TestSetPropertyTool(unittest.TestCase):
 
     def test_set_property_symbol_resolution_metadata(self) -> None:
         """Response includes symbol_resolution metadata."""
-
-
         text = self._prefab_with_meshrenderer()
         server = create_server()
         mock_resp = self._mock_patch_apply_response()
@@ -1251,8 +1200,6 @@ class TestListSerializedFieldsTool(unittest.TestCase):
     """Tests for the list_serialized_fields MCP tool."""
 
     def test_delegates_to_orchestrator(self) -> None:
-        from prefab_sentinel.contracts import Severity, ToolResponse
-
         server = create_server()
         mock_resp = ToolResponse(
             success=True,
@@ -1284,8 +1231,6 @@ class TestListSerializedFieldsTool(unittest.TestCase):
         self.assertEqual(2, result["data"]["field_count"])
 
     def test_error_propagated(self) -> None:
-        from prefab_sentinel.contracts import Severity, ToolResponse
-
         server = create_server()
         mock_resp = ToolResponse(
             success=False,
@@ -1310,8 +1255,6 @@ class TestValidateFieldRenameTool(unittest.TestCase):
     """Tests for the validate_field_rename MCP tool."""
 
     def test_delegates_to_orchestrator(self) -> None:
-        from prefab_sentinel.contracts import Severity, ToolResponse
-
         server = create_server()
         mock_resp = ToolResponse(
             success=True,
@@ -1347,8 +1290,6 @@ class TestValidateFieldRenameTool(unittest.TestCase):
         self.assertEqual(3, result["data"]["affected_count"])
 
     def test_with_scope_parameter(self) -> None:
-        from prefab_sentinel.contracts import Severity, ToolResponse
-
         server = create_server()
         mock_resp = ToolResponse(
             success=True, severity=Severity.INFO, code="CSF_RENAME_OK",
@@ -1379,8 +1320,6 @@ class TestCheckFieldCoverageTool(unittest.TestCase):
     """Tests for the check_field_coverage MCP tool."""
 
     def test_delegates_to_orchestrator(self) -> None:
-        from prefab_sentinel.contracts import Severity, ToolResponse
-
         server = create_server()
         mock_resp = ToolResponse(
             success=True,
@@ -1579,8 +1518,6 @@ class TestAddComponentTool(unittest.TestCase):
         return resp
 
     def test_add_component_dry_run_on_root(self) -> None:
-
-
         text = self._prefab_with_child()
         server = create_server()
         mock_resp = self._mock_patch_apply_response(dry_run=True)
@@ -1615,8 +1552,6 @@ class TestAddComponentTool(unittest.TestCase):
         self.assertTrue(call_kwargs["dry_run"])
 
     def test_add_component_on_child(self) -> None:
-
-
         text = self._prefab_with_child()
         server = create_server()
         mock_resp = self._mock_patch_apply_response(dry_run=True)
@@ -1648,8 +1583,6 @@ class TestAddComponentTool(unittest.TestCase):
         self.assertEqual("BoxCollider", op["type"])
 
     def test_add_component_symbol_not_found(self) -> None:
-
-
         text = self._prefab_with_child()
         server = create_server()
 
@@ -1673,8 +1606,6 @@ class TestAddComponentTool(unittest.TestCase):
 
     def test_add_component_rejects_component_path(self) -> None:
         """add_component requires a game_object, not a component."""
-
-
         text = self._prefab_with_child()
         server = create_server()
 
@@ -1695,8 +1626,6 @@ class TestAddComponentTool(unittest.TestCase):
         self.assertEqual("SYMBOL_NOT_GAME_OBJECT", result["code"])
 
     def test_add_component_confirm_invalidates_cache(self) -> None:
-
-
         text = self._prefab_with_child()
         server = create_server()
         mock_resp = self._mock_patch_apply_response(dry_run=False)
@@ -1729,8 +1658,6 @@ class TestAddComponentTool(unittest.TestCase):
         self.assertTrue(call_kwargs["confirm"])
 
     def test_add_component_symbol_resolution_metadata(self) -> None:
-
-
         text = self._prefab_with_child()
         server = create_server()
         mock_resp = self._mock_patch_apply_response(dry_run=True)
@@ -1803,8 +1730,6 @@ class TestRemoveComponentTool(unittest.TestCase):
         return resp
 
     def test_remove_component_dry_run(self) -> None:
-
-
         text = self._prefab_with_meshrenderer()
         server = create_server()
         mock_resp = self._mock_patch_apply_response(dry_run=True)
@@ -1837,8 +1762,6 @@ class TestRemoveComponentTool(unittest.TestCase):
         self.assertTrue(call_kwargs["dry_run"])
 
     def test_remove_component_confirm(self) -> None:
-
-
         text = self._prefab_with_meshrenderer()
         server = create_server()
         mock_resp = self._mock_patch_apply_response(dry_run=False)
@@ -1870,8 +1793,6 @@ class TestRemoveComponentTool(unittest.TestCase):
         self.assertTrue(call_kwargs["confirm"])
 
     def test_remove_component_symbol_not_found(self) -> None:
-
-
         text = self._prefab_with_meshrenderer()
         server = create_server()
 
@@ -1894,8 +1815,6 @@ class TestRemoveComponentTool(unittest.TestCase):
 
     def test_remove_component_rejects_gameobject_path(self) -> None:
         """remove_component requires a component, not a game_object."""
-
-
         text = self._prefab_with_meshrenderer()
         server = create_server()
 
@@ -1915,8 +1834,6 @@ class TestRemoveComponentTool(unittest.TestCase):
         self.assertEqual("SYMBOL_NOT_COMPONENT", result["code"])
 
     def test_remove_component_symbol_resolution_metadata(self) -> None:
-
-
         text = self._prefab_with_meshrenderer()
         server = create_server()
         mock_resp = self._mock_patch_apply_response(dry_run=True)
@@ -1982,7 +1899,7 @@ class TestScopeFallback(unittest.TestCase):
             )
 
     def test_find_referencing_assets_passes_resolved_scope(self) -> None:
-        from prefab_sentinel.contracts import Severity, ToolResponse
+
         server = create_server()
         mock_step = ToolResponse(
             success=True,
@@ -2048,8 +1965,6 @@ class TestFindReferencingAssetsDirectPayload(unittest.TestCase):
     """find_referencing_assets returns direct payload, not envelope."""
 
     def test_returns_matches_array(self) -> None:
-        from prefab_sentinel.contracts import Severity, ToolResponse
-
         server = create_server()
         mock_step = ToolResponse(
             success=True,
@@ -2087,8 +2002,6 @@ class TestFindReferencingAssetsDirectPayload(unittest.TestCase):
         self.assertNotIn("severity", result)
 
     def test_truncated_metadata(self) -> None:
-        from prefab_sentinel.contracts import Severity, ToolResponse
-
         server = create_server()
         mock_step = ToolResponse(
             success=True,
@@ -2118,7 +2031,7 @@ class TestFindReferencingAssetsDirectPayload(unittest.TestCase):
     def test_error_raises_tool_error(self) -> None:
         from mcp.server.fastmcp.exceptions import ToolError
 
-        from prefab_sentinel.contracts import Severity, ToolResponse
+
 
         server = create_server()
         mock_step = ToolResponse(
@@ -3096,8 +3009,8 @@ class TestActivateProjectSuggestedReads(unittest.TestCase):
         server = create_server()
         _, result = _run(server.call_tool("activate_project", {"scope": "Assets/MyScope"}))
         self.assertIn("knowledge_hint", result["data"])
-        from prefab_sentinel.mcp_helpers import KNOWLEDGE_URI_PREFIX as _KNOWLEDGE_URI_PREFIX
-        self.assertIn(_KNOWLEDGE_URI_PREFIX, result["data"]["knowledge_hint"])
+
+        self.assertIn(KNOWLEDGE_URI_PREFIX, result["data"]["knowledge_hint"])
 
 
 # ---------------------------------------------------------------------------
@@ -3118,14 +3031,14 @@ class TestKnowledgeResources(unittest.TestCase):
 
     def test_resource_uri_scheme(self) -> None:
         """All knowledge resources use the expected URI scheme."""
-        from prefab_sentinel.mcp_helpers import KNOWLEDGE_URI_PREFIX as _KNOWLEDGE_URI_PREFIX
+
         server = create_server()
         resources = _run(server.list_resources())
         for r in resources:
             uri_str = str(r.uri)
             if "knowledge/" in uri_str:
                 self.assertTrue(
-                    uri_str.startswith(_KNOWLEDGE_URI_PREFIX),
+                    uri_str.startswith(KNOWLEDGE_URI_PREFIX),
                     f"Unexpected URI: {uri_str}",
                 )
                 self.assertTrue(uri_str.endswith(".md"), f"Not .md: {uri_str}")
@@ -4967,6 +4880,36 @@ class TestEditorSetComponentFieldsIntegration(unittest.TestCase):
 
         self.assertTrue(result["success"])
         self.assertIn("data", result)
+
+
+class TestEditorSaveAsPrefab(unittest.TestCase):
+    """Tests for editor_save_as_prefab force_original parameter."""
+
+    def test_force_original_true_passed_to_send_action(self) -> None:
+        server = create_server()
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_ops.send_action",
+            return_value={"success": True, "data": {}},
+        ) as mock_send:
+            _run(server.call_tool(
+                "editor_save_as_prefab",
+                {"hierarchy_path": "/Obj", "asset_path": "Assets/X.prefab", "force_original": True},
+            ))
+        mock_send.assert_called_once()
+        self.assertTrue(mock_send.call_args.kwargs.get("force_original"))
+
+    def test_force_original_default_omits_key(self) -> None:
+        server = create_server()
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_ops.send_action",
+            return_value={"success": True, "data": {}},
+        ) as mock_send:
+            _run(server.call_tool(
+                "editor_save_as_prefab",
+                {"hierarchy_path": "/Obj", "asset_path": "Assets/X.prefab"},
+            ))
+        mock_send.assert_called_once()
+        self.assertNotIn("force_original", mock_send.call_args.kwargs)
 
 
 class TestEditorBatchCreateComponents(unittest.TestCase):

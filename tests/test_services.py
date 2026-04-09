@@ -10,6 +10,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from prefab_sentinel.contracts import Severity
 from prefab_sentinel.orchestrator import Phase1Orchestrator
 from prefab_sentinel.patch_plan import (
     compute_patch_plan_hmac_sha256,
@@ -524,6 +525,71 @@ PrefabInstance:
             self.assertEqual(["array_size_mismatch"], stale.data["categories"])
 
 
+    def test_fbx_base_returns_model_file_base_diagnostic(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fbx_guid = "ff00ff00ff00ff00ff00ff00ff00ff00"
+            fbx_path = root / "Assets" / "Model.fbx"
+            fbx_path.parent.mkdir(parents=True, exist_ok=True)
+            fbx_path.write_bytes(b"\x81\x00\xff\xfe")
+            write_file(
+                root / "Assets" / "Model.fbx.meta",
+                f"fileFormatVersion: 2\nguid: {fbx_guid}\n",
+            )
+            write_file(
+                root / "Assets" / "ModelVariant.prefab",
+                f"""%YAML 1.1
+--- !u!1001 &100100000
+PrefabInstance:
+  m_SourcePrefab: {{fileID: 100100000, guid: {fbx_guid}, type: 3}}
+""",
+            )
+            write_file(
+                root / "Assets" / "ModelVariant.prefab.meta",
+                f"fileFormatVersion: 2\nguid: {VARIANT_GUID}\n",
+            )
+            svc = PrefabVariantService(project_root=root)
+            chain = svc.resolve_prefab_chain("Assets/ModelVariant.prefab")
+            self.assertTrue(chain.success)
+            self.assertEqual("PVR_CHAIN_WARN", chain.code)
+            diag_details = [d.detail for d in chain.diagnostics]
+            self.assertIn("model_file_base", diag_details)
+            model_diag = next(d for d in chain.diagnostics if d.detail == "model_file_base")
+            self.assertIn("Base asset is a model file (.fbx)", model_diag.evidence)
+            self.assertIn("editor_list_children", model_diag.evidence)
+
+    def test_non_model_binary_returns_unreadable_file_diagnostic(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            bin_guid = "ee00ee00ee00ee00ee00ee00ee00ee00"
+            bin_path = root / "Assets" / "Unknown.bin"
+            bin_path.parent.mkdir(parents=True, exist_ok=True)
+            bin_path.write_bytes(b"\x81\x00\xff\xfe")
+            write_file(
+                root / "Assets" / "Unknown.bin.meta",
+                f"fileFormatVersion: 2\nguid: {bin_guid}\n",
+            )
+            write_file(
+                root / "Assets" / "BinVariant.prefab",
+                f"""%YAML 1.1
+--- !u!1001 &100100000
+PrefabInstance:
+  m_SourcePrefab: {{fileID: 100100000, guid: {bin_guid}, type: 3}}
+""",
+            )
+            write_file(
+                root / "Assets" / "BinVariant.prefab.meta",
+                f"fileFormatVersion: 2\nguid: {VARIANT_GUID}\n",
+            )
+            svc = PrefabVariantService(project_root=root)
+            chain = svc.resolve_prefab_chain("Assets/BinVariant.prefab")
+            self.assertTrue(chain.success)
+            diag_details = [d.detail for d in chain.diagnostics]
+            self.assertIn("unreadable_file", diag_details)
+            unreadable_diag = next(d for d in chain.diagnostics if d.detail == "unreadable_file")
+            self.assertEqual("unable to decode source prefab", unreadable_diag.evidence)
+
+
 class RuntimeValidationServiceTests(unittest.TestCase):
     def test_compile_udonsharp_returns_skip_without_runtime_env(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -812,8 +878,6 @@ class SerializedObjectServiceTests(unittest.TestCase):
         self.assertTrue(response.diagnostics)
 
     def test_dry_run_patch_warns_on_unresolved_before(self) -> None:
-        from prefab_sentinel.contracts import Severity
-
         svc = SerializedObjectService()
         response = svc.dry_run_patch(
             target="Assets/Variant.prefab",
@@ -835,8 +899,6 @@ class SerializedObjectServiceTests(unittest.TestCase):
 
     def test_dry_run_array_op_missing_suffix(self) -> None:
         """insert_array_element with path missing .Array.data should fail."""
-        from prefab_sentinel.contracts import Severity
-
         svc = SerializedObjectService()
         response = svc.dry_run_patch(
             target="Assets/Variant.prefab",
@@ -878,8 +940,6 @@ class SerializedObjectServiceTests(unittest.TestCase):
 
     def test_dry_run_remove_array_missing_suffix(self) -> None:
         """remove_array_element with path missing .Array.data should fail."""
-        from prefab_sentinel.contracts import Severity
-
         svc = SerializedObjectService()
         response = svc.dry_run_patch(
             target="Assets/Variant.prefab",
@@ -901,8 +961,6 @@ class SerializedObjectServiceTests(unittest.TestCase):
 
     def test_dry_run_add_component_in_open_mode(self) -> None:
         """add_component in open-mode patch should give a helpful create-mode message."""
-        from prefab_sentinel.contracts import Severity
-
         svc = SerializedObjectService()
         response = svc.dry_run_patch(
             target="Assets/Variant.prefab",
@@ -922,8 +980,6 @@ class SerializedObjectServiceTests(unittest.TestCase):
 
     def test_dry_run_unknown_op(self) -> None:
         """Truly unknown op should give generic error."""
-        from prefab_sentinel.contracts import Severity
-
         svc = SerializedObjectService()
         response = svc.dry_run_patch(
             target="Assets/Variant.prefab",
@@ -942,8 +998,6 @@ class SerializedObjectServiceTests(unittest.TestCase):
 
     def test_dry_run_handle_in_value(self) -> None:
         """set op with handle-like value should produce WARNING."""
-        from prefab_sentinel.contracts import Severity
-
         svc = SerializedObjectService()
         response = svc.dry_run_patch(
             target="Assets/Variant.prefab",
@@ -965,8 +1019,6 @@ class SerializedObjectServiceTests(unittest.TestCase):
 
     def test_dry_run_handle_prefix_go(self) -> None:
         """set op with go_ prefixed value should produce WARNING."""
-        from prefab_sentinel.contracts import Severity
-
         svc = SerializedObjectService()
         response = svc.dry_run_patch(
             target="Assets/Variant.prefab",

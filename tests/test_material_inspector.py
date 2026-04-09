@@ -15,7 +15,10 @@ from prefab_sentinel.material_inspector import (
     format_materials,
     inspect_materials,
 )
-from prefab_sentinel.material_inspector_variant import _parse_material_overrides
+from prefab_sentinel.material_inspector_variant import (
+    _collect_nested_renderers,
+    _parse_material_overrides,
+)
 from prefab_sentinel.unity_yaml_parser import YamlBlock
 from tests.yaml_helpers import (
     YAML_HEADER,
@@ -966,8 +969,6 @@ class TestNestedRecursiveTraversal(unittest.TestCase):
 
     def test_depth_limit_stops_recursion(self) -> None:
         """A chain of 12 nested prefabs: renderer at depth 10 IS reachable, depth 11 is NOT."""
-        from prefab_sentinel.material_inspector_variant import _collect_nested_renderers
-
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             assets_dir = tmp_path / "Assets"
@@ -1047,8 +1048,6 @@ class TestNestedRecursiveTraversal(unittest.TestCase):
         Currently it only goes 1 level deep. After the fix it should find
         Leaf's renderer through Mid's PrefabInstance.
         """
-        from prefab_sentinel.material_inspector_variant import _collect_nested_renderers
-
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             assets_dir = tmp_path / "Assets"
