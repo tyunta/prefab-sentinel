@@ -2627,6 +2627,62 @@ class TestEditorWriteTools(unittest.TestCase):
         self.assertEqual(json.loads(sent[0]["properties_json"]), [{"name": "speed", "value": "10"}])
 
 
+class TestEditorExecTools(unittest.TestCase):
+    """Test editor bridge execution MCP tools (``mcp_tools_editor_exec``)."""
+
+    def test_editor_run_script_delegates_when_confirm_and_reason(self) -> None:
+        """T-92-A: ``confirm=True`` + non-empty ``change_reason`` reaches
+        ``send_action`` exactly once with the ``run_script`` action."""
+        server = create_server()
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_exec.send_action",
+            return_value={"success": True, "code": "EDITOR_CTRL_RUN_SCRIPT_OK"},
+        ) as mock_send:
+            _, parsed = _run(server.call_tool("editor_run_script", {
+                "code": "public static void Run() {}",
+                "confirm": True,
+                "change_reason": "smoke test",
+            }))
+        mock_send.assert_called_once_with(
+            action="run_script",
+            code="public static void Run() {}",
+            change_reason="smoke test",
+        )
+        self.assertTrue(parsed["success"])
+
+    def test_editor_run_script_rejects_when_confirm_false(self) -> None:
+        """T-92-B: ``confirm=False`` short-circuits to
+        ``CHANGE_REASON_REQUIRED`` without contacting the bridge."""
+        server = create_server()
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_exec.send_action"
+        ) as mock_send:
+            _, parsed = _run(server.call_tool("editor_run_script", {
+                "code": "public static void Run() {}",
+                "confirm": False,
+                "change_reason": "smoke test",
+            }))
+        mock_send.assert_not_called()
+        self.assertFalse(parsed["success"])
+        self.assertEqual("CHANGE_REASON_REQUIRED", parsed["code"])
+
+    def test_editor_run_script_rejects_whitespace_only_reason(self) -> None:
+        """T-92-C: a whitespace-only ``change_reason`` is rejected with
+        ``CHANGE_REASON_REQUIRED`` and the bridge is never invoked."""
+        server = create_server()
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_exec.send_action"
+        ) as mock_send:
+            _, parsed = _run(server.call_tool("editor_run_script", {
+                "code": "public static void Run() {}",
+                "confirm": True,
+                "change_reason": "   ",
+            }))
+        mock_send.assert_not_called()
+        self.assertFalse(parsed["success"])
+        self.assertEqual("CHANGE_REASON_REQUIRED", parsed["code"])
+
+
 class TestInspectionTools(unittest.TestCase):
     """Test inspect_materials and validate_structure MCP tools."""
 

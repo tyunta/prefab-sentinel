@@ -235,6 +235,27 @@ class DecodeTextFileTests(unittest.TestCase):
             with self.assertRaises(UnicodeDecodeError):
                 decode_text_file(Path(f.name))
 
+    def test_arbitrary_non_utf8_bytes_raise(self) -> None:
+        """T-77-A: arbitrary non-UTF-8 byte sequences must raise
+        ``UnicodeDecodeError``; no encoding fallback or content sniffing is
+        performed (fail-fast)."""
+        with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
+            # 0x80–0x83 are continuation bytes with no leading byte: invalid UTF-8.
+            f.write(b"\x80\x81\x82\x83")
+            f.flush()
+            with self.assertRaises(UnicodeDecodeError):
+                decode_text_file(Path(f.name))
+
+    def test_multiline_utf8_with_non_ascii_roundtrip(self) -> None:
+        """T-77-C: a multi-line UTF-8 string containing non-ASCII characters
+        round-trips through ``decode_text_file`` byte-for-byte."""
+        original = "line one\nテスト\n☃ snowman\n"
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
+            f.write(original.encode("utf-8"))
+            f.flush()
+            result = decode_text_file(Path(f.name))
+        self.assertEqual(result, original)
+
 
 class ExtractMetaGuidTests(unittest.TestCase):
     def test_standard_meta(self) -> None:

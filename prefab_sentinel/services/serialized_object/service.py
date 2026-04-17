@@ -17,6 +17,11 @@ from prefab_sentinel.patch_plan import (
 )
 from prefab_sentinel.services.prefab_variant import PrefabVariantService
 from prefab_sentinel.services.property_path import validate_property_path
+from prefab_sentinel.services.serialized_object.prefab_create_dispatch import (
+    _SUPPORTED_OPS,
+    _check_handle_value,
+    validate_prefab_create_ops,
+)
 from prefab_sentinel.unity_assets import (
     SOURCE_PREFAB_PATTERN,
     decode_text_file,
@@ -24,7 +29,6 @@ from prefab_sentinel.unity_assets import (
 )
 from prefab_sentinel.unity_assets_path import resolve_scope_path
 
-_SUPPORTED_OPS = {"set", "insert_array_element", "remove_array_element"}
 _PREFAB_CREATE_OPS = {
     "create_prefab",
     "create_root",
@@ -39,7 +43,6 @@ _PREFAB_CREATE_OPS = {
     "remove_array_element",
     "save",
 }
-_ROOT_HANDLE = "root"
 _ASSET_HANDLE = "asset"
 _SCENE_HANDLE = "scene"
 _UNITY_BRIDGE_PROTOCOL_VERSION = PLAN_VERSION
@@ -87,18 +90,6 @@ class _ResourcePlanContext:
     mode: str
     target_path: Path
     ops: list[dict[str, Any]]
-
-
-@dataclass
-class _PrefabCreateContext:
-    target: str
-    diagnostics: list[Diagnostic]
-    preview: list[dict[str, Any]]
-    known_handles: dict[str, str]
-    ops: list[dict[str, Any]]
-    created: bool = False
-    saved: bool = False
-    root_name: str = ""
 
 
 @dataclass
@@ -300,26 +291,6 @@ class _SceneResourceAdapter(_ResourceAdapter):
             resource_kind=context.kind,
             resource_mode=context.mode,
         )
-
-
-def _check_handle_value(
-    value: object,
-    known_handles: dict[str, str],
-    target: str,
-    index: int,
-) -> Diagnostic | None:
-    """Return a diagnostic if *value* is a ``{"handle": "..."}`` referencing an unknown handle."""
-    if not (isinstance(value, dict) and "handle" in value and len(value) == 1):
-        return None
-    handle_name = str(value["handle"]).lstrip("$").strip()
-    if handle_name in known_handles:
-        return None
-    return Diagnostic(
-        path=target,
-        location=f"ops[{index}].value.handle",
-        detail="schema_error",
-        evidence=f"handle '{handle_name}' is not defined by any prior op in this plan",
-    )
 
 
 class SerializedObjectService:
@@ -850,548 +821,7 @@ class SerializedObjectService:
         target: str,
         ops: list[dict[str, Any]],
     ) -> tuple[list[Diagnostic], list[dict[str, Any]]]:
-        diagnostics: list[Diagnostic] = []
-        preview: list[dict[str, Any]] = []
-        if not target:
-            diagnostics.append(
-                Diagnostic(
-                    path="",
-                    location="resources[].path",
-                    detail="schema_error",
-                    evidence="target path is required for prefab create mode",
-                )
-            )
-            return diagnostics, preview
-        if Path(target).suffix.lower() != ".prefab":
-            diagnostics.append(
-                Diagnostic(
-                    path=target,
-                    location="resources[].path",
-                    detail="schema_error",
-                    evidence="prefab create mode requires a .prefab target path",
-                )
-            )
-            return diagnostics, preview
-        if not ops:
-            diagnostics.append(
-                Diagnostic(
-                    path=target,
-                    location="ops",
-                    detail="schema_error",
-                    evidence="ops must contain at least one operation",
-                )
-            )
-            return diagnostics, preview
-
-        ctx = _PrefabCreateContext(
-            target=target,
-            diagnostics=diagnostics,
-            preview=preview,
-            known_handles={},
-            ops=ops,
-            root_name=Path(target).stem or "PrefabRoot",
-        )
-
-        for index, op in enumerate(ops):
-            if not isinstance(op, dict):
-                ctx.diagnostics.append(
-                    Diagnostic(
-                        path=target,
-                        location=f"ops[{index}]",
-                        detail="schema_error",
-                        evidence="operation must be an object",
-                    )
-                )
-                continue
-
-            op_name = str(op.get("op", "")).strip()
-            if op_name in {"create_prefab", "create_root"}:
-                self._validate_pcreate_root_op(ctx, index, op, op_name)
-            elif op_name == "create_game_object":
-                self._validate_pcreate_game_object_op(ctx, index, op)
-            elif op_name == "rename_object":
-                self._validate_pcreate_rename_object_op(ctx, index, op)
-            elif op_name == "reparent":
-                self._validate_pcreate_reparent_op(ctx, index, op)
-            elif op_name in {"add_component", "find_component"}:
-                self._validate_pcreate_add_component_op(ctx, index, op, op_name)
-            elif op_name == "remove_component":
-                self._validate_pcreate_remove_component_op(ctx, index, op)
-            elif op_name in _SUPPORTED_OPS:
-                self._validate_pcreate_set_op(ctx, index, op, op_name)
-            elif op_name == "save":
-                self._validate_pcreate_save_op(ctx, index, op)
-            else:
-                ctx.diagnostics.append(
-                    Diagnostic(
-                        path=target,
-                        location=f"ops[{index}].op",
-                        detail="schema_error",
-                        evidence=f"unsupported prefab create op '{op_name}'",
-                    )
-                )
-
-        if not ctx.created:
-            ctx.diagnostics.append(
-                Diagnostic(
-                    path=target,
-                    location="ops",
-                    detail="schema_error",
-                    evidence="create mode requires a root creation operation",
-                )
-            )
-        if not ctx.saved:
-            ctx.diagnostics.append(
-                Diagnostic(
-                    path=target,
-                    location="ops",
-                    detail="schema_error",
-                    evidence="create mode requires a save operation",
-                )
-            )
-        return ctx.diagnostics, ctx.preview
-
-    # -- prefab create: per-op-type handlers ----------------------------------
-
-    def _validate_pcreate_root_op(
-        self,
-        ctx: _PrefabCreateContext,
-        index: int,
-        op: dict[str, Any],
-        op_name: str,
-    ) -> None:
-        if ctx.created:
-            ctx.diagnostics.append(
-                Diagnostic(
-                    path=ctx.target,
-                    location=f"ops[{index}].op",
-                    detail="schema_error",
-                    evidence="prefab root may be created only once",
-                )
-            )
-            return
-        ctx.created = True
-        ctx.known_handles[_ROOT_HANDLE] = "game_object"
-        name_value = op.get("name")
-        if op_name == "create_root":
-            if not isinstance(name_value, str) or not name_value.strip():
-                ctx.diagnostics.append(
-                    Diagnostic(
-                        path=ctx.target,
-                        location=f"ops[{index}].name",
-                        detail="schema_error",
-                        evidence="name is required for create_root",
-                    )
-                )
-                return
-            ctx.root_name = name_value.strip()
-        elif name_value is not None:
-            if not isinstance(name_value, str) or not name_value.strip():
-                ctx.diagnostics.append(
-                    Diagnostic(
-                        path=ctx.target,
-                        location=f"ops[{index}].name",
-                        detail="schema_error",
-                        evidence="name must be a non-empty string when provided",
-                    )
-                )
-                return
-            ctx.root_name = name_value.strip()
-        result_handle = self._validate_result_handle(
-            target=ctx.target,
-            index=index,
-            op=op,
-            known_handles=ctx.known_handles,
-            diagnostics=ctx.diagnostics,
-        )
-        if result_handle and result_handle != _ROOT_HANDLE:
-            ctx.known_handles[result_handle] = "game_object"
-        ctx.preview.append(
-            {
-                "op": op_name,
-                "before": "(missing)",
-                "after": {
-                    "path": ctx.target,
-                    "root_name": ctx.root_name,
-                    "handle": result_handle or _ROOT_HANDLE,
-                    "kind": "game_object",
-                },
-            }
-        )
-
-    def _validate_pcreate_game_object_op(
-        self,
-        ctx: _PrefabCreateContext,
-        index: int,
-        op: dict[str, Any],
-    ) -> None:
-        if not ctx.created:
-            ctx.diagnostics.append(
-                Diagnostic(
-                    path=ctx.target,
-                    location=f"ops[{index}].op",
-                    detail="schema_error",
-                    evidence="create_game_object requires a prefab root first",
-                )
-            )
-            return
-        name_value = op.get("name")
-        if not isinstance(name_value, str) or not name_value.strip():
-            ctx.diagnostics.append(
-                Diagnostic(
-                    path=ctx.target,
-                    location=f"ops[{index}].name",
-                    detail="schema_error",
-                    evidence="name is required for create_game_object",
-                )
-            )
-            return
-        parent_handle = self._require_handle_ref(
-            target=ctx.target,
-            index=index,
-            field="parent",
-            op=op,
-            known_handles=ctx.known_handles,
-            diagnostics=ctx.diagnostics,
-            expected_kind="game_object",
-        )
-        result_handle = self._validate_result_handle(
-            target=ctx.target,
-            index=index,
-            op=op,
-            known_handles=ctx.known_handles,
-            diagnostics=ctx.diagnostics,
-        )
-        if parent_handle is None or ("result" in op and result_handle is None):
-            return
-        if result_handle:
-            ctx.known_handles[result_handle] = "game_object"
-        ctx.preview.append(
-            {
-                "op": "create_game_object",
-                "before": "(missing)",
-                "after": {
-                    "name": name_value.strip(),
-                    "parent": parent_handle,
-                    "handle": result_handle or "(anonymous)",
-                    "kind": "game_object",
-                },
-            }
-        )
-
-    def _validate_pcreate_rename_object_op(
-        self,
-        ctx: _PrefabCreateContext,
-        index: int,
-        op: dict[str, Any],
-    ) -> None:
-        object_handle = self._require_handle_ref(
-            target=ctx.target,
-            index=index,
-            field="target",
-            op=op,
-            known_handles=ctx.known_handles,
-            diagnostics=ctx.diagnostics,
-            expected_kind="game_object",
-        )
-        name_value = op.get("name")
-        if object_handle is None:
-            return
-        if not isinstance(name_value, str) or not name_value.strip():
-            ctx.diagnostics.append(
-                Diagnostic(
-                    path=ctx.target,
-                    location=f"ops[{index}].name",
-                    detail="schema_error",
-                    evidence="name is required for rename_object",
-                )
-            )
-            return
-        ctx.preview.append(
-            {
-                "op": "rename_object",
-                "before": {"handle": object_handle},
-                "after": {"handle": object_handle, "name": name_value.strip()},
-            }
-        )
-
-    def _validate_pcreate_reparent_op(
-        self,
-        ctx: _PrefabCreateContext,
-        index: int,
-        op: dict[str, Any],
-    ) -> None:
-        object_handle = self._require_handle_ref(
-            target=ctx.target,
-            index=index,
-            field="target",
-            op=op,
-            known_handles=ctx.known_handles,
-            diagnostics=ctx.diagnostics,
-            expected_kind="game_object",
-        )
-        parent_handle = self._require_handle_ref(
-            target=ctx.target,
-            index=index,
-            field="parent",
-            op=op,
-            known_handles=ctx.known_handles,
-            diagnostics=ctx.diagnostics,
-            expected_kind="game_object",
-        )
-        if object_handle is None or parent_handle is None:
-            return
-        if object_handle == _ROOT_HANDLE:
-            ctx.diagnostics.append(
-                Diagnostic(
-                    path=ctx.target,
-                    location=f"ops[{index}].target",
-                    detail="schema_error",
-                    evidence="root handle cannot be reparented",
-                )
-            )
-            return
-        if object_handle == parent_handle:
-            ctx.diagnostics.append(
-                Diagnostic(
-                    path=ctx.target,
-                    location=f"ops[{index}]",
-                    detail="schema_error",
-                    evidence="target and parent handles must differ",
-                )
-            )
-            return
-        ctx.preview.append(
-            {
-                "op": "reparent",
-                "before": {"handle": object_handle},
-                "after": {"handle": object_handle, "parent": parent_handle},
-            }
-        )
-
-    def _validate_pcreate_add_component_op(
-        self,
-        ctx: _PrefabCreateContext,
-        index: int,
-        op: dict[str, Any],
-        op_name: str,
-    ) -> None:
-        if not ctx.created:
-            ctx.diagnostics.append(
-                Diagnostic(
-                    path=ctx.target,
-                    location=f"ops[{index}].op",
-                    detail="schema_error",
-                    evidence=f"{op_name} requires a prefab root first",
-                )
-            )
-            return
-        object_handle = self._require_handle_ref(
-            target=ctx.target,
-            index=index,
-            field="target",
-            op=op,
-            known_handles=ctx.known_handles,
-            diagnostics=ctx.diagnostics,
-            expected_kind="game_object",
-        )
-        type_name = op.get("type")
-        if object_handle is None:
-            return
-        if not isinstance(type_name, str) or not type_name.strip():
-            ctx.diagnostics.append(
-                Diagnostic(
-                    path=ctx.target,
-                    location=f"ops[{index}].type",
-                    detail="schema_error",
-                    evidence=f"type is required for {op_name}",
-                )
-            )
-            return
-        result_handle = self._validate_result_handle(
-            target=ctx.target,
-            index=index,
-            op=op,
-            known_handles=ctx.known_handles,
-            diagnostics=ctx.diagnostics,
-        )
-        if "result" in op and result_handle is None:
-            return
-        if result_handle:
-            ctx.known_handles[result_handle] = "component"
-        ctx.preview.append(
-            {
-                "op": op_name,
-                "before": "(missing)" if op_name == "add_component" else {"target": object_handle},
-                "after": {
-                    "target": object_handle,
-                    "type": type_name.strip(),
-                    "handle": result_handle or "(anonymous)",
-                    "kind": "component",
-                },
-            }
-        )
-
-    def _validate_pcreate_remove_component_op(
-        self,
-        ctx: _PrefabCreateContext,
-        index: int,
-        op: dict[str, Any],
-    ) -> None:
-        component_handle = self._require_handle_ref(
-            target=ctx.target,
-            index=index,
-            field="target",
-            op=op,
-            known_handles=ctx.known_handles,
-            diagnostics=ctx.diagnostics,
-            expected_kind="component",
-        )
-        if component_handle is None:
-            return
-        ctx.preview.append(
-            {
-                "op": "remove_component",
-                "before": {"handle": component_handle, "kind": "component"},
-                "after": "(removed)",
-            }
-        )
-
-    def _validate_pcreate_set_op(
-        self,
-        ctx: _PrefabCreateContext,
-        index: int,
-        op: dict[str, Any],
-        op_name: str,
-    ) -> None:
-        component_handle = self._require_handle_ref(
-            target=ctx.target,
-            index=index,
-            field="target",
-            op=op,
-            known_handles=ctx.known_handles,
-            diagnostics=ctx.diagnostics,
-            expected_kind="component",
-        )
-        property_path = str(op.get("path", "")).strip()
-        if component_handle is None:
-            return
-        if not property_path:
-            ctx.diagnostics.append(
-                Diagnostic(
-                    path=ctx.target,
-                    location=f"ops[{index}].path",
-                    detail="schema_error",
-                    evidence="path is required",
-                )
-            )
-            return
-        if op_name == "set":
-            if "value" not in op:
-                ctx.diagnostics.append(
-                    Diagnostic(
-                        path=ctx.target,
-                        location=f"ops[{index}].value",
-                        detail="schema_error",
-                        evidence="value is required for set",
-                    )
-                )
-                return
-            value = op.get("value")
-            bad_handle = _check_handle_value(value, ctx.known_handles, ctx.target, index)
-            if bad_handle is not None:
-                ctx.diagnostics.append(bad_handle)
-                return
-            ctx.preview.append(
-                {
-                    "op": op_name,
-                    "before": {"handle": component_handle, "path": property_path},
-                    "after": {
-                        "handle": component_handle,
-                        "path": property_path,
-                        "value": deepcopy(value),
-                    },
-                }
-            )
-            return
-
-        op_index = op.get("index")
-        if isinstance(op_index, bool) or not isinstance(op_index, int):
-            ctx.diagnostics.append(
-                Diagnostic(
-                    path=ctx.target,
-                    location=f"ops[{index}].index",
-                    detail="schema_error",
-                    evidence="index must be an integer",
-                )
-            )
-            return
-        entry = {
-            "op": op_name,
-            "before": {
-                "handle": component_handle,
-                "path": property_path,
-                "index": op_index,
-            },
-            "after": {
-                "handle": component_handle,
-                "path": property_path,
-                "index": op_index,
-            },
-        }
-        if op_name == "insert_array_element" and "value" in op:
-            arr_value = op.get("value")
-            bad_handle = _check_handle_value(arr_value, ctx.known_handles, ctx.target, index)
-            if bad_handle is not None:
-                ctx.diagnostics.append(bad_handle)
-                return
-            entry["after"]["value"] = deepcopy(arr_value)
-        ctx.preview.append(entry)
-
-    def _validate_pcreate_save_op(
-        self,
-        ctx: _PrefabCreateContext,
-        index: int,
-        op: dict[str, Any],
-    ) -> None:
-        if ctx.saved:
-            ctx.diagnostics.append(
-                Diagnostic(
-                    path=ctx.target,
-                    location=f"ops[{index}].op",
-                    detail="schema_error",
-                    evidence="save may appear only once",
-                )
-            )
-            return
-        if not ctx.created:
-            ctx.diagnostics.append(
-                Diagnostic(
-                    path=ctx.target,
-                    location=f"ops[{index}].op",
-                    detail="schema_error",
-                    evidence="save requires a prefab root first",
-                )
-            )
-            return
-        if index != len(ctx.ops) - 1:
-            ctx.diagnostics.append(
-                Diagnostic(
-                    path=ctx.target,
-                    location=f"ops[{index}].op",
-                    detail="schema_error",
-                    evidence="save must be the final operation in create mode",
-                )
-            )
-            return
-        ctx.saved = True
-        ctx.preview.append(
-            {
-                "op": "save",
-                "before": "(unsaved)",
-                "after": {"path": ctx.target},
-            }
-        )
+        return validate_prefab_create_ops(self, target, ops)
 
     def _validate_asset_open_ops(
         self,
@@ -1517,7 +947,7 @@ class SerializedObjectService:
                     )
                 )
                 continue
-            entry = {
+            entry: dict[str, Any] = {
                 "op": op_name,
                 "before": {
                     "handle": asset_handle,
@@ -1825,7 +1255,7 @@ class SerializedObjectService:
                 )
             )
             return
-        entry = {
+        entry: dict[str, Any] = {
             "op": op_name,
             "before": {
                 "handle": asset_handle,
@@ -2402,7 +1832,7 @@ class SerializedObjectService:
                 )
             )
             return
-        entry = {
+        entry: dict[str, Any] = {
             "op": op_name,
             "before": {
                 "handle": component_handle,
@@ -2602,7 +2032,7 @@ class SerializedObjectService:
             )
             return None
         try:
-            item_index = int(op.get("index"))
+            item_index = int(op["index"])
         except (TypeError, ValueError):
             diagnostics.append(
                 Diagnostic(
@@ -2756,8 +2186,8 @@ class SerializedObjectService:
                 if not isinstance(value, list):
                     raise TypeError(f"'{_ARRAY_SIZE_SUFFIX}' target must resolve to an array")
                 try:
-                    new_size = int(op.get("value"))
-                except (TypeError, ValueError) as exc:
+                    new_size = int(op["value"])
+                except (KeyError, TypeError, ValueError) as exc:
                     raise ValueError("array size must be an integer") from exc
                 if new_size < 0:
                     raise ValueError("array size must be >= 0")
@@ -2789,7 +2219,7 @@ class SerializedObjectService:
 
         if op_name == "insert_array_element":
             array_value = self._get_array_at_path(payload, property_path)
-            index = int(op.get("index"))
+            index = int(op["index"])
             if index < 0 or index > len(array_value):
                 raise IndexError("insert index is out of bounds")
             before_size = len(array_value)
@@ -2804,7 +2234,7 @@ class SerializedObjectService:
 
         if op_name == "remove_array_element":
             array_value = self._get_array_at_path(payload, property_path)
-            index = int(op.get("index"))
+            index = int(op["index"])
             if index < 0 or index >= len(array_value):
                 raise IndexError("remove index is out of bounds")
             before_size = len(array_value)
@@ -2967,7 +2397,7 @@ class SerializedObjectService:
                 },
             )
 
-        preview: list[dict[str, Any]] = []
+        preview = []
         for index, op in enumerate(ops):
             if not isinstance(op, dict):
                 diagnostics.append(
