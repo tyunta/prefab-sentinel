@@ -607,7 +607,7 @@ wheels = [
 
 [[package]]
 name = "prefab-sentinel"
-version = "0.5.150"
+version = "0.5.151"
 source = { editable = "." }
 
 [package.optional-dependencies]

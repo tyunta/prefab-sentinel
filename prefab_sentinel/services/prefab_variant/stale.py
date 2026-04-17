@@ -93,10 +93,10 @@ def detect_stale(
             )
 
     for key, max_index in array_max_indexes.items():
-        size = array_sizes.get(key)
-        if size is None:
+        declared_size = array_sizes.get(key)
+        if declared_size is None:
             continue
-        if max_index >= size:
+        if max_index >= declared_size:
             target_key, prefix = key
             diagnostics.append(
                 Diagnostic(
@@ -104,7 +104,7 @@ def detect_stale(
                     location="array_override",
                     detail="array_size_mismatch",
                     evidence=(
-                        f"{target_key} / {prefix}: size={size} but data index {max_index} exists"
+                        f"{target_key} / {prefix}: size={declared_size} but data index {max_index} exists"
                     ),
                 )
             )

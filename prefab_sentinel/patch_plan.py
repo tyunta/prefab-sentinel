@@ -91,23 +91,22 @@ def normalize_patch_plan(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(postconditions, list):
         raise _error("postconditions", "must be an array when provided.")
 
-    normalized = {
-        "plan_version": PLAN_VERSION,
-        "resources": [_normalize_resource(resource, index) for index, resource in enumerate(resources)],
-        "ops": [deepcopy(op) for op in ops],
-        "postconditions": [deepcopy(postcondition) for postcondition in postconditions],
-    }
+    normalized_resources: list[dict[str, Any]] = [
+        _normalize_resource(resource, index) for index, resource in enumerate(resources)
+    ]
+    normalized_ops: list[dict[str, Any]] = [deepcopy(op) for op in ops]
+    normalized_postconditions: list[dict[str, Any]] = [deepcopy(pc) for pc in postconditions]
 
     resource_ids: set[str] = set()
     resource_map: dict[str, dict[str, Any]] = {}
-    for index, resource in enumerate(normalized["resources"]):
+    for index, resource in enumerate(normalized_resources):
         resource_id = resource["id"]
         if resource_id in resource_ids:
             raise _error(f"resources[{index}].id", f"duplicates resource id '{resource_id}'.")
         resource_ids.add(resource_id)
         resource_map[resource_id] = resource
 
-    for index, op in enumerate(normalized["ops"]):
+    for index, op in enumerate(normalized_ops):
         if not isinstance(op, dict):
             raise _error(f"ops[{index}]", "must be an object.")
         resource_id = op.get("resource")
@@ -121,7 +120,7 @@ def normalize_patch_plan(payload: dict[str, Any]) -> dict[str, Any]:
             )
         op["resource"] = resource_id
 
-    for index, postcondition in enumerate(normalized.get("postconditions", [])):
+    for index, postcondition in enumerate(normalized_postconditions):
         if not isinstance(postcondition, dict):
             raise _error(f"postconditions[{index}]", "must be an object.")
         postcondition_type = postcondition.get("type")
@@ -132,7 +131,12 @@ def normalize_patch_plan(payload: dict[str, Any]) -> dict[str, Any]:
             )
         postcondition["type"] = postcondition_type.strip()
 
-    return normalized
+    return {
+        "plan_version": PLAN_VERSION,
+        "resources": normalized_resources,
+        "ops": normalized_ops,
+        "postconditions": normalized_postconditions,
+    }
 
 
 def load_patch_plan(path: Path) -> dict[str, Any]:
