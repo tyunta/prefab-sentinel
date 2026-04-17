@@ -12,14 +12,48 @@ from pathlib import Path
 
 from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse, error_response, success_response
 from prefab_sentinel.services.prefab_variant import OverrideEntry, PrefabVariantService
+from prefab_sentinel.services.prefab_variant.overrides import (
+    find_modification_line_ranges,
+    parse_overrides,
+)
 from prefab_sentinel.unity_assets import (
+    collect_project_guid_index,
     decode_text_file,
     find_project_root,
+    is_unity_builtin_guid,
 )
 from prefab_sentinel.unity_assets_path import resolve_scope_path
 
-# Pattern to detect the start of a modification entry (``- target: {...}``)
-_MOD_ENTRY_START = re.compile(r"^\s+-\s*target:\s*\{")
+# Pattern for the Variant's m_SourcePrefab GUID.
+_SOURCE_PREFAB_GUID_PATTERN = re.compile(
+    r"m_SourcePrefab:\s*\{[^}]*guid:\s*([0-9a-fA-F]{32})"
+)
+
+
+def _collect_referenced_guids(
+    text: str,
+    entries: list[OverrideEntry],
+) -> list[str]:
+    """Return the referenced GUIDs (``m_SourcePrefab`` + each override target) for revert."""
+    seen: list[str] = []
+    seen_set: set[str] = set()
+
+    def _maybe_add(guid: str) -> None:
+        g = (guid or "").strip().lower()
+        if not g or g in seen_set:
+            return
+        seen_set.add(g)
+        seen.append(g)
+
+    source_match = _SOURCE_PREFAB_GUID_PATTERN.search(text)
+    if source_match:
+        _maybe_add(source_match.group(1))
+
+    for entry in entries:
+        if entry.target_guid:
+            _maybe_add(entry.target_guid)
+
+    return seen
 
 
 @dataclass(slots=True)
@@ -32,84 +66,15 @@ class RevertMatch:
     end_line_index: int
 
 
-def _find_modification_line_ranges(
-    lines: list[str],
-    entries: list[OverrideEntry],
-) -> dict[int, tuple[int, int]]:
-    """Map each OverrideEntry (by its 1-based line number) to a 0-based [start, end) range.
-
-    Each modification entry in Unity YAML spans from its ``- target:`` line
-    until the next ``- target:`` line or the end of the ``m_Modifications``
-    block.
-    """
-    # Collect all ``- target:`` start positions (0-based indices)
-    entry_starts: list[int] = []
-    in_modifications = False
-    mod_indent = 0
-
-    for idx, line in enumerate(lines):
-        stripped = line.strip()
-        indent = len(line) - len(line.lstrip(" "))
-
-        if stripped.endswith("m_Modifications:"):
-            in_modifications = True
-            mod_indent = indent
-            continue
-
-        if in_modifications and stripped and indent <= mod_indent and not stripped.startswith("-"):
-            in_modifications = False
-            continue
-
-        if not in_modifications:
-            continue
-
-        if _MOD_ENTRY_START.match(line):
-            entry_starts.append(idx)
-
-    # Build ranges: each entry runs from its start to the next entry start
-    # (or end of the entries list)
-    ranges: dict[int, tuple[int, int]] = {}
-    for i, start_idx in enumerate(entry_starts):
-        if i + 1 < len(entry_starts):
-            end_idx = entry_starts[i + 1]
-        else:
-            # Last entry: find where the block ends
-            end_idx = start_idx + 1
-            for j in range(start_idx + 1, len(lines)):
-                line = lines[j]
-                stripped = line.strip()
-                if not stripped:
-                    end_idx = j + 1
-                    continue
-                # If we hit another ``- target:``, stop before it
-                if _MOD_ENTRY_START.match(line):
-                    end_idx = j
-                    break
-                # Include property continuation lines
-                if stripped.startswith(("propertyPath:", "value:", "objectReference:")):
-                    end_idx = j + 1
-                else:
-                    # We've left the entry
-                    end_idx = j
-                    break
-
-        # Map the 1-based line number to the range
-        line_1based = start_idx + 1
-        ranges[line_1based] = (start_idx, end_idx)
-
-    return ranges
-
-
 def _find_matches(
     text: str,
     target_file_id: str,
     property_path: str,
-    variant_svc: PrefabVariantService,
 ) -> list[RevertMatch]:
     """Find all OverrideEntry instances matching the given target + propertyPath."""
-    entries = variant_svc._parse_overrides(text)
+    entries = parse_overrides(text)
     lines = text.splitlines()
-    line_ranges = _find_modification_line_ranges(lines, entries)
+    line_ranges = find_modification_line_ranges(lines)
 
     matches: list[RevertMatch] = []
     for entry in entries:
@@ -188,7 +153,36 @@ def revert_overrides(
             data={"variant_path": variant_path, "read_only": True},
         )
 
-    matches = _find_matches(text, target_file_id, property_path, variant_svc)
+    # Fail-fast per #83: reject the whole operation when any GUID referenced
+    # by the variant (m_SourcePrefab or any override target) is not present in
+    # the project GUID map. No YAML mutation must occur in that case.
+    parsed_entries = parse_overrides(text)
+    referenced_guids = _collect_referenced_guids(text, parsed_entries)
+    guid_map = collect_project_guid_index(root)
+    missing_guids = [
+        guid
+        for guid in referenced_guids
+        if not is_unity_builtin_guid(guid) and guid not in guid_map
+    ]
+    if missing_guids:
+        return error_response(
+            "REF001",
+            (
+                f"revert.overrides aborted: {len(missing_guids)} referenced GUID(s) "
+                "not present in project (fail-fast per #83)."
+            ),
+            severity=Severity.ERROR,
+            data={
+                "variant_path": variant_path,
+                "target": target_file_id,
+                "property_path": property_path,
+                "missing_guids": missing_guids,
+                "read_only": True,
+                "executed": False,
+            },
+        )
+
+    matches = _find_matches(text, target_file_id, property_path)
 
     if not matches:
         return error_response(

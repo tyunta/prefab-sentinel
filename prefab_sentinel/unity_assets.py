@@ -66,11 +66,15 @@ class ReferenceMatch:
 
 
 def decode_text_file(path: Path) -> str:
-    raw = path.read_bytes()
-    try:
-        return raw.decode("utf-8")
-    except UnicodeDecodeError:
-        return raw.decode("cp932")
+    """Return the UTF-8 decoded contents of a Unity text asset.
+
+    Raises:
+        UnicodeDecodeError: if ``path`` is not valid UTF-8. No fallback
+            encoding, content sniffing, or YAML-header inspection is
+            performed — Unity writes its text assets as UTF-8 and any
+            deviation is the caller's problem to surface.
+    """
+    return path.read_bytes().decode("utf-8")
 
 
 def looks_like_guid(value: str) -> bool:

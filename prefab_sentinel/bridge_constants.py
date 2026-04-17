@@ -16,5 +16,10 @@ UNITY_LOG_FILE_ENV = "UNITYTOOL_UNITY_LOG_FILE"
 BRIDGE_MODE_ENV = "UNITYTOOL_BRIDGE_MODE"
 BRIDGE_WATCH_DIR_ENV = "UNITYTOOL_BRIDGE_WATCH_DIR"
 
+# Bridge wire protocol version — must match ``ProtocolVersion`` in
+# ``tools/unity/PrefabSentinel.UnityEditorControlBridge.cs``.  Drift between
+# the two is surfaced by ``scripts/check_bridge_constants.py``.
+PROTOCOL_VERSION = 1
+
 # Valid severity levels for bridge responses
 VALID_SEVERITIES = frozenset({"info", "warning", "error", "critical"})

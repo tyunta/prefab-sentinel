@@ -82,15 +82,32 @@ def validate_refs(
         exclude_patterns=exclude_patterns,
         ignore_asset_guids=ignore_asset_guids,
     )
+    step_data = step.data if isinstance(step.data, dict) else {}
+    categories = step_data.get("categories", {}) or {}
+    missing_asset_unique = int(categories.get("missing_asset", 0) or 0)
+    if missing_asset_unique > 0:
+        top_code = "REF001"
+        top_success = False
+        top_severity = Severity.ERROR
+        top_message = (
+            f"validate.refs aborted: {missing_asset_unique} missing GUID "
+            "reference(s) detected (fail-fast per #83)."
+        )
+    else:
+        top_code = "VALIDATE_REFS_RESULT"
+        top_success = step.success
+        top_severity = step.severity
+        top_message = "validate.refs pipeline completed (read-only)."
     return ToolResponse(
-        success=step.success,
-        severity=step.severity,
-        code="VALIDATE_REFS_RESULT",
-        message="validate.refs pipeline completed (read-only).",
+        success=top_success,
+        severity=top_severity,
+        code=top_code,
+        message=top_message,
         data={
             "scope": scope,
             "read_only": True,
             "ignore_asset_guids": list(ignore_asset_guids),
+            "missing_asset_unique_count": missing_asset_unique,
             "steps": [
                 {
                     "step": "scan_broken_references",

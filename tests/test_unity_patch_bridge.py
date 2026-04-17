@@ -44,7 +44,15 @@ class UnityPatchBridgeTests(unittest.TestCase):
         result = self._run_bridge(
             {
                 "protocol_version": 2,
-                "target": "Assets/Test.prefab",
+                "plan_version": 2,
+                "resources": [
+                    {
+                        "id": "prefab",
+                        "kind": "prefab",
+                        "path": "Assets/Test.prefab",
+                        "mode": "open",
+                    }
+                ],
                 "ops": [],
             }
         )
@@ -55,7 +63,15 @@ class UnityPatchBridgeTests(unittest.TestCase):
         result = self._run_bridge(
             {
                 "protocol_version": 999,
-                "target": "Assets/Test.prefab",
+                "plan_version": 2,
+                "resources": [
+                    {
+                        "id": "prefab",
+                        "kind": "prefab",
+                        "path": "Assets/Test.prefab",
+                        "mode": "open",
+                    }
+                ],
                 "ops": [],
             }
         )
@@ -66,9 +82,18 @@ class UnityPatchBridgeTests(unittest.TestCase):
         result = self._run_bridge(
             {
                 "protocol_version": 2,
-                "target": "Assets/Test.prefab",
+                "plan_version": 2,
+                "resources": [
+                    {
+                        "id": "prefab",
+                        "kind": "prefab",
+                        "path": "Assets/Test.prefab",
+                        "mode": "open",
+                    }
+                ],
                 "ops": [
                     {
+                        "resource": "prefab",
                         "op": "set",
                         "component": "Example.Component",
                         "path": "enabled",
@@ -84,9 +109,18 @@ class UnityPatchBridgeTests(unittest.TestCase):
         result = self._run_bridge(
             {
                 "protocol_version": 2,
-                "target": "Assets/Test.prefab",
+                "plan_version": 2,
+                "resources": [
+                    {
+                        "id": "prefab",
+                        "kind": "prefab",
+                        "path": "Assets/Test.prefab",
+                        "mode": "open",
+                    }
+                ],
                 "ops": [
                     {
+                        "resource": "prefab",
                         "op": "remove_array_element",
                         "component": "Example.Component",
                         "path": "items.Array.data",
@@ -137,9 +171,18 @@ response_path.write_text(
             result = self._run_bridge(
                 {
                     "protocol_version": 2,
-                    "target": "Assets/Test.prefab",
+                    "plan_version": 2,
+                    "resources": [
+                        {
+                            "id": "prefab",
+                            "kind": "prefab",
+                            "path": "Assets/Test.prefab",
+                            "mode": "open",
+                        }
+                    ],
                     "ops": [
                         {
+                            "resource": "prefab",
                             "op": "set",
                             "component": "Example.Component",
                             "path": "enabled",
@@ -944,7 +987,15 @@ response_path.write_text(
             result = self._run_bridge(
                 {
                     "protocol_version": 2,
-                    "target": "Assets/Test.prefab",
+                    "plan_version": 2,
+                    "resources": [
+                        {
+                            "id": "prefab",
+                            "kind": "prefab",
+                            "path": "Assets/Test.prefab",
+                            "mode": "open",
+                        }
+                    ],
                     "ops": [],
                 },
                 env_overrides={
@@ -994,7 +1045,15 @@ response_path.write_text(
             result = self._run_bridge(
                 {
                     "protocol_version": 2,
-                    "target": "Assets/Test.prefab",
+                    "plan_version": 2,
+                    "resources": [
+                        {
+                            "id": "prefab",
+                            "kind": "prefab",
+                            "path": "Assets/Test.prefab",
+                            "mode": "open",
+                        }
+                    ],
                     "ops": [],
                 },
                 env_overrides={
@@ -1049,15 +1108,25 @@ response_path.write_text(
             result = self._run_bridge(
                 {
                     "protocol_version": 2,
-                    "target": "Assets/Test.prefab",
+                    "plan_version": 2,
+                    "resources": [
+                        {
+                            "id": "prefab",
+                            "kind": "prefab",
+                            "path": "Assets/Test.prefab",
+                            "mode": "open",
+                        }
+                    ],
                     "ops": [
                         {
+                            "resource": "prefab",
                             "op": "set",
                             "component": "Example.Component",
                             "path": "items.Array.size",
                             "value": 2,
                         },
                         {
+                            "resource": "prefab",
                             "op": "insert_array_element",
                             "component": "Example.Component",
                             "path": "items.Array.data",
@@ -1065,30 +1134,35 @@ response_path.write_text(
                             "value": {"name": "x"},
                         },
                         {
+                            "resource": "prefab",
                             "op": "set",
                             "component": "Example.Component",
                             "path": "enabled",
                             "value": True,
                         },
                         {
+                            "resource": "prefab",
                             "op": "set",
                             "component": "Example.Component",
                             "path": "weight",
                             "value": 1.5,
                         },
                         {
+                            "resource": "prefab",
                             "op": "set",
                             "component": "Example.Component",
                             "path": "label",
                             "value": "hello",
                         },
                         {
+                            "resource": "prefab",
                             "op": "set",
                             "component": "Example.Component",
                             "path": "optionalRef",
                             "value": None,
                         },
                         {
+                            "resource": "prefab",
                             "op": "insert_array_element",
                             "component": "Example.Component",
                             "path": "items.Array.data",
@@ -1096,6 +1170,7 @@ response_path.write_text(
                             "value": [1, 2],
                         },
                         {
+                            "resource": "prefab",
                             "op": "set",
                             "component": "Example.Component",
                             "path": "optionalRef",
@@ -1105,6 +1180,7 @@ response_path.write_text(
                             },
                         },
                         {
+                            "resource": "prefab",
                             "op": "set",
                             "component": "Example.Component",
                             "path": "clipRect",
@@ -1116,6 +1192,7 @@ response_path.write_text(
                             },
                         },
                         {
+                            "resource": "prefab",
                             "op": "set",
                             "component": "Example.Component",
                             "path": "bounds",
@@ -1125,6 +1202,7 @@ response_path.write_text(
                             },
                         },
                         {
+                            "resource": "prefab",
                             "op": "set",
                             "component": "Example.Component",
                             "path": "clipRectInt",
@@ -1136,6 +1214,7 @@ response_path.write_text(
                             },
                         },
                         {
+                            "resource": "prefab",
                             "op": "set",
                             "component": "Example.Component",
                             "path": "boundsInt",
@@ -1145,6 +1224,7 @@ response_path.write_text(
                             },
                         },
                         {
+                            "resource": "prefab",
                             "op": "set",
                             "component": "Example.Component",
                             "path": "managedState",
@@ -1155,6 +1235,7 @@ response_path.write_text(
                             },
                         },
                         {
+                            "resource": "prefab",
                             "op": "set",
                             "component": "Example.Component",
                             "path": "curve",
@@ -1172,6 +1253,7 @@ response_path.write_text(
                             },
                         },
                         {
+                            "resource": "prefab",
                             "op": "set",
                             "component": "Example.Component",
                             "path": "gradient",
@@ -1192,6 +1274,7 @@ response_path.write_text(
                             },
                         },
                         {
+                            "resource": "prefab",
                             "op": "remove_array_element",
                             "component": "Example.Component",
                             "path": "items.Array.data",
@@ -1393,7 +1476,15 @@ raise SystemExit(9)
             result = self._run_bridge(
                 {
                     "protocol_version": 2,
-                    "target": "Assets/Test.prefab",
+                    "plan_version": 2,
+                    "resources": [
+                        {
+                            "id": "prefab",
+                            "kind": "prefab",
+                            "path": "Assets/Test.prefab",
+                            "mode": "open",
+                        }
+                    ],
                     "ops": [],
                 },
                 env_overrides={
@@ -1510,7 +1601,15 @@ class EditorBridgeModeTests(unittest.TestCase):
         result = self._run_bridge(
             {
                 "protocol_version": 2,
-                "target": "Assets/Test.prefab",
+                "plan_version": 2,
+                "resources": [
+                    {
+                        "id": "prefab",
+                        "kind": "prefab",
+                        "path": "Assets/Test.prefab",
+                        "mode": "open",
+                    }
+                ],
                 "ops": [],
             },
             env_overrides={
@@ -1525,7 +1624,15 @@ class EditorBridgeModeTests(unittest.TestCase):
             result = self._run_bridge(
                 {
                     "protocol_version": 2,
-                    "target": "Assets/Test.prefab",
+                    "plan_version": 2,
+                    "resources": [
+                        {
+                            "id": "prefab",
+                            "kind": "prefab",
+                            "path": "Assets/Test.prefab",
+                            "mode": "open",
+                        }
+                    ],
                     "ops": [],
                 },
                 env_overrides={
@@ -1585,9 +1692,18 @@ class EditorBridgeModeTests(unittest.TestCase):
             result = self._run_bridge(
                 {
                     "protocol_version": 2,
-                    "target": "Assets/Test.prefab",
+                    "plan_version": 2,
+                    "resources": [
+                        {
+                            "id": "prefab",
+                            "kind": "prefab",
+                            "path": "Assets/Test.prefab",
+                            "mode": "open",
+                        }
+                    ],
                     "ops": [
                         {
+                            "resource": "prefab",
                             "op": "set",
                             "component": "Example.Component",
                             "path": "enabled",
@@ -1614,7 +1730,15 @@ class EditorBridgeModeTests(unittest.TestCase):
         result = self._run_bridge(
             {
                 "protocol_version": 2,
-                "target": "Assets/Test.prefab",
+                "plan_version": 2,
+                "resources": [
+                    {
+                        "id": "prefab",
+                        "kind": "prefab",
+                        "path": "Assets/Test.prefab",
+                        "mode": "open",
+                    }
+                ],
                 "ops": [],
             },
         )
@@ -1697,7 +1821,15 @@ class EditorBridgeModeTests(unittest.TestCase):
             result = self._run_bridge(
                 {
                     "protocol_version": 2,
-                    "target": "Assets/Test.prefab",
+                    "plan_version": 2,
+                    "resources": [
+                        {
+                            "id": "prefab",
+                            "kind": "prefab",
+                            "path": "Assets/Test.prefab",
+                            "mode": "open",
+                        }
+                    ],
                     "ops": [],
                 },
                 env_overrides={
@@ -1809,7 +1941,15 @@ class EditorBridgeModeTests(unittest.TestCase):
         result = self._run_bridge(
             {
                 "protocol_version": 2,
-                "target": "Assets/Test.prefab",
+                "plan_version": 2,
+                "resources": [
+                    {
+                        "id": "prefab",
+                        "kind": "prefab",
+                        "path": "Assets/Test.prefab",
+                        "mode": "open",
+                    }
+                ],
                 "ops": [],
             },
             env_overrides={
@@ -1818,6 +1958,26 @@ class EditorBridgeModeTests(unittest.TestCase):
         )
         self.assertFalse(result["success"])
         self.assertEqual("BRIDGE_UNITY_COMMAND_MISSING", result["code"])
+
+    def test_legacy_shape_returns_dedicated_code(self) -> None:
+        """T37 (#88): a bridge request carrying a top-level ``target`` key
+        is rejected with ``BRIDGE_LEGACY_SCHEMA_REJECTED`` before any
+        normalisation runs.  ``data.received_keys`` must enumerate the
+        incoming top-level keys to help the caller diagnose the legacy shape."""
+        result = self._run_bridge(
+            {
+                "protocol_version": 2,
+                "target": "Assets/Legacy.prefab",
+                "ops": [],
+            }
+        )
+        self.assertFalse(result["success"])
+        self.assertEqual("error", result["severity"])
+        self.assertEqual("BRIDGE_LEGACY_SCHEMA_REJECTED", result["code"])
+        received_keys = result["data"]["received_keys"]
+        self.assertIn("target", received_keys)
+        self.assertIn("ops", received_keys)
+        self.assertIn("protocol_version", received_keys)
 
 
 if __name__ == "__main__":

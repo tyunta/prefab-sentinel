@@ -1,0 +1,49 @@
+name: unity-live-nightly
+
+# Nightly harness skeleton for issue #87.  Runs the ``unity_live``-marked
+# test suite against a live Unity Editor.  The workflow is a skeleton:
+# scheduling and the ``UNITYTOOL_UNITY_COMMAND`` wiring are here, but the
+# harness test body (tests/test_unity_live_harness.py) currently skips
+# unconditionally — replace the skip-through with a real batchmode run
+# once a Unity self-hosted runner is provisioned.
+
+on:
+  schedule:
+    # 18:00 UTC nightly (03:00 JST) so the run finishes before JP business hours.
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+    inputs:
+      unity_command:
+        description: "Path to the Unity.exe used for batchmode."
+        required: true
+        type: string
+
+jobs:
+  unity-live:
+    # Self-hosted Windows runner is required because Unity batchmode is
+    # not available on GitHub-hosted runners without a license setup.
+    runs-on:
+      - self-hosted
+      - windows
+    env:
+      UNITYTOOL_UNITY_COMMAND: ${{ inputs.unity_command }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install Package + Test Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[test]"
+          python -m pip install pytest
+
+      - name: Run unity_live Marked Tests
+        # Only tests explicitly marked @pytest.mark.unity_live execute here;
+        # everything else is filtered out by the -m selector.
+        run: |
+          python -m pytest -m unity_live -v

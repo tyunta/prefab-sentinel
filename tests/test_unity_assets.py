@@ -223,13 +223,17 @@ class DecodeTextFileTests(unittest.TestCase):
             result = decode_text_file(Path(f.name))
         self.assertEqual(result, "hello world")
 
-    def test_cp932_fallback(self) -> None:
+    def test_cp932_bytes_raise(self) -> None:
+        """T5: CP932-encoded bytes that are invalid UTF-8 must raise
+        ``UnicodeDecodeError``. No fallback encoding is applied — Unity
+        writes its text assets as UTF-8 and any deviation is the caller's
+        responsibility to surface (fail-fast)."""
         with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
-            # CP932-specific character that is invalid UTF-8
+            # CP932-specific character that is invalid UTF-8.
             f.write("テスト".encode("cp932"))
             f.flush()
-            result = decode_text_file(Path(f.name))
-        self.assertEqual(result, "テスト")
+            with self.assertRaises(UnicodeDecodeError):
+                decode_text_file(Path(f.name))
 
 
 class ExtractMetaGuidTests(unittest.TestCase):

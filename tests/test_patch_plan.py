@@ -10,7 +10,6 @@ from prefab_sentinel.patch_plan import (
     PLAN_VERSION,
     _infer_resource_kind,
     _normalize_resource,
-    _normalize_v1_plan,
     build_bridge_request,
     compute_patch_plan_hmac_sha256,
     compute_patch_plan_sha256,
@@ -138,44 +137,6 @@ class NormalizeResourceTests(unittest.TestCase):
         self.assertEqual(resource["extra"]["nested"], 1)
 
 
-class NormalizeV1PlanTests(unittest.TestCase):
-    def test_basic_v1_conversion(self) -> None:
-        v1 = {
-            "target": "Assets/a.prefab",
-            "ops": [{"op": "set", "property_path": "key", "value": "val"}],
-        }
-        result = _normalize_v1_plan(v1)
-        self.assertEqual(result["plan_version"], PLAN_VERSION)
-        self.assertEqual(len(result["resources"]), 1)
-        self.assertEqual(result["resources"][0]["id"], "target")
-        self.assertEqual(result["resources"][0]["kind"], "prefab")
-        self.assertEqual(result["resources"][0]["path"], "Assets/a.prefab")
-        self.assertEqual(len(result["ops"]), 1)
-        self.assertEqual(result["ops"][0]["resource"], "target")
-        self.assertIn("op", result["ops"][0])
-        self.assertEqual(result["postconditions"], [])
-
-    def test_missing_target_raises(self) -> None:
-        with self.assertRaises(ValueError):
-            _normalize_v1_plan({"ops": []})
-
-    def test_empty_target_raises(self) -> None:
-        with self.assertRaises(ValueError):
-            _normalize_v1_plan({"target": "  ", "ops": []})
-
-    def test_missing_ops_raises(self) -> None:
-        with self.assertRaises(ValueError):
-            _normalize_v1_plan({"target": "Assets/a.prefab"})
-
-    def test_non_list_ops_raises(self) -> None:
-        with self.assertRaises(ValueError):
-            _normalize_v1_plan({"target": "Assets/a.prefab", "ops": "notlist"})
-
-    def test_strips_target_whitespace(self) -> None:
-        result = _normalize_v1_plan({"target": "  Assets/a.prefab  ", "ops": []})
-        self.assertEqual(result["resources"][0]["path"], "Assets/a.prefab")
-
-
 class NormalizePatchPlanTests(unittest.TestCase):
     def test_v2_plan(self) -> None:
         plan = _v2_plan()
@@ -184,14 +145,21 @@ class NormalizePatchPlanTests(unittest.TestCase):
         self.assertEqual(len(result["resources"]), 1)
         self.assertEqual(len(result["ops"]), 1)
 
-    def test_v1_plan_auto_converts(self) -> None:
-        v1 = {
+    def test_legacy_target_shape_raises(self) -> None:
+        """T36 (#88): legacy ``{target, ops}`` shape must raise ``ValueError``
+        whose message names ``plan_version``."""
+        legacy = {
             "target": "Assets/a.prefab",
             "ops": [{"op": "set", "property_path": "key", "value": "val"}],
         }
-        result = normalize_patch_plan(v1)
-        self.assertEqual(result["plan_version"], PLAN_VERSION)
-        self.assertEqual(result["resources"][0]["id"], "target")
+        with self.assertRaises(ValueError) as ctx:
+            normalize_patch_plan(legacy)
+        self.assertIn("plan_version", str(ctx.exception))
+
+    def test_missing_plan_version_raises_naming_field(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            normalize_patch_plan({"resources": [], "ops": []})
+        self.assertIn("plan_version", str(ctx.exception))
 
     def test_wrong_version_raises(self) -> None:
         with self.assertRaises(ValueError):
@@ -443,14 +411,19 @@ class IterResourceBatchesTests(unittest.TestCase):
 
 
 class BuildBridgeRequestTests(unittest.TestCase):
-    def test_single_resource_adds_target(self) -> None:
+    def test_single_resource_has_no_legacy_target(self) -> None:
+        """The canonical v2 bridge request never emits the legacy top-level
+        ``target``/``kind``/``mode`` keys, even for single-resource plans —
+        those fields live under ``resources[0]`` only (#88)."""
         plan = normalize_patch_plan(_v2_plan())
         request = build_bridge_request(plan)
         self.assertEqual(request["protocol_version"], PLAN_VERSION)
         self.assertEqual(request["plan_version"], PLAN_VERSION)
-        self.assertEqual(request["target"], "test.prefab")
-        self.assertEqual(request["kind"], "prefab")
-        self.assertEqual(request["mode"], "open")
+        self.assertNotIn("target", request)
+        self.assertNotIn("kind", request)
+        self.assertNotIn("mode", request)
+        self.assertEqual(len(request["resources"]), 1)
+        self.assertEqual(request["resources"][0]["path"], "test.prefab")
 
     def test_multi_resource_no_target(self) -> None:
         plan = normalize_patch_plan(_v2_plan(

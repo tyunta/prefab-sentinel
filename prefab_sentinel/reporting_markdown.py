@@ -95,9 +95,9 @@ def render_markdown_report(
     classification = runtime.get("classification", {})
     assertion = runtime.get("assertion", {})
     if classification or assertion:
-        categories = classification.get("categories", {})
-        if not isinstance(categories, dict):
-            categories = {}
+        count_by_category = classification.get("count_by_category", {})
+        if not isinstance(count_by_category, dict):
+            count_by_category = {}
         categories_by_severity = classification.get("categories_by_severity", {})
         if not isinstance(categories_by_severity, dict):
             categories_by_severity = {}
@@ -107,7 +107,7 @@ def render_markdown_report(
                 f"- Compile Step: {runtime.get('compile_udonsharp', {}).get('code', 'n/a')}",
                 f"- ClientSim Step: {runtime.get('run_clientsim', {}).get('code', 'n/a')}",
                 f"- Log Collect Step: {runtime.get('collect_unity_console', {}).get('code', 'n/a')}",
-                f"- Matched Issues: {classification.get('matched_issue_count', 0)}",
+                f"- Matched Issues: {classification.get('count_total', 0)}",
                 f"- Log Line Count: {classification.get('line_count', 0)}",
                 (
                     "- Severity Counts: "
@@ -122,7 +122,7 @@ def render_markdown_report(
                 ),
             ]
         )
-        if categories:
+        if count_by_category:
             lines.extend(
                 [
                     "",
@@ -131,7 +131,7 @@ def render_markdown_report(
                 ]
             )
             for category, count in sorted(
-                categories.items(),
+                count_by_category.items(),
                 key=lambda item: (-int(item[1]), str(item[0])),
             ):
                 lines.append(f"| {category} | {count} |")

@@ -18,7 +18,7 @@ namespace PrefabSentinel
     public static class UnityEditorControlBridge
     {
         public const int ProtocolVersion = 1;
-        public const string BridgeVersion = "0.5.150";
+        public const string BridgeVersion = "0.5.151";
 
         /// <summary>Actions that write their response file asynchronously (not on return).</summary>
         public static readonly System.Collections.Generic.HashSet<string> AsyncActions =
@@ -73,6 +73,8 @@ namespace PrefabSentinel
             "editor_create_scene",
             // Phase 8: Reflection
             "editor_reflect",
+            // Phase 9: Editor script exec (#74)
+            "run_script",
         };
 
         // ── Request / Response DTOs ──
@@ -171,6 +173,14 @@ namespace PrefabSentinel
             public string scope = "all";
             public string class_name = string.Empty;
             public string member_name = string.Empty;
+
+            // Phase 9: Editor script exec (#74)
+            // `code` is the full C# snippet (must define `public static class PrefabSentinelTempScript`
+            // with `public static void Run()`). `change_reason` is audited on the Python side;
+            // we accept it here only so JsonUtility doesn't fail on the extra field.
+            public string code = string.Empty;
+            public string change_reason = string.Empty;
+            public string temp_id = string.Empty;  // optional; handler generates one when empty
         }
 
         [Serializable]
@@ -301,6 +311,12 @@ namespace PrefabSentinel
 
             // Phase 8: Reflection
             public string reflect_result_json = string.Empty;
+
+            // Phase 9: Editor script exec (#74) — populated by run_script handler.
+            public string stdout = string.Empty;
+            public string exception = string.Empty;
+            public string[] errors = Array.Empty<string>();
+            public string temp_id = string.Empty;
         }
 
         [Serializable]
@@ -469,6 +485,9 @@ namespace PrefabSentinel
                     break;
                 case "editor_reflect":
                     response = EditorReflectHandler.Handle(request);
+                    break;
+                case "run_script":
+                    response = HandleRunScript(request);
                     break;
                 default:
                     response = BuildError(
@@ -3419,6 +3438,213 @@ namespace PrefabSentinel
 
         [Serializable]
         private sealed class BatchAddComponentArray { public BatchAddComponentOp[] items; }
+
+        // ── Phase 9: Editor Script Exec (#74) ──
+        //
+        // Compiles and runs an arbitrary caller-supplied C# snippet inside a
+        // fixed temp directory, through the fixed entry point
+        // ``PrefabSentinelTempScript.Run()`` (``public static void``).
+        // Temp files are always removed before the response is emitted.
+        //
+        // Domain-reload note: ``AssetDatabase.Refresh`` triggers script
+        // compilation which in turn triggers a domain reload.  We request
+        // a synchronous import and then look up the type through reflection;
+        // if the freshly-compiled assembly has not yet been loaded by the
+        // time we reach the invocation (i.e. domain reload is still pending),
+        // we report ``EDITOR_CTRL_RUN_SCRIPT_COMPILE`` with a hint message
+        // so the caller can retry.  This matches the spec's contract: the
+        // handler never silently waits past a response deadline.
+
+        private const string RunScriptTempDir = "Assets/Editor/_PrefabSentinelTemp";
+        private const string RunScriptTypeName = "PrefabSentinelTempScript";
+        private const string RunScriptEntryPoint = "Run";
+
+        private static EditorControlResponse HandleRunScript(EditorControlRequest request)
+        {
+            if (string.IsNullOrEmpty(request.code))
+            {
+                return BuildError("EDITOR_CTRL_RUN_SCRIPT_COMPILE",
+                    "run_script requires a non-empty `code` field.");
+            }
+
+            string tempId = string.IsNullOrEmpty(request.temp_id)
+                ? Guid.NewGuid().ToString("N")
+                : request.temp_id;
+
+            if (!IsSafeTempId(tempId))
+            {
+                return BuildError("EDITOR_CTRL_RUN_SCRIPT_BAD_ID",
+                    $"temp_id '{tempId}' is not safe (must be alphanumeric + '-_', no path separators or whitespace).");
+            }
+
+            string tempDirAbs = Path.Combine(
+                Directory.GetCurrentDirectory(),
+                RunScriptTempDir.Replace('/', Path.DirectorySeparatorChar));
+            string scriptAbs = Path.Combine(tempDirAbs, tempId + ".cs");
+            string metaAbs = scriptAbs + ".meta";
+
+            try
+            {
+                if (!Directory.Exists(tempDirAbs))
+                    Directory.CreateDirectory(tempDirAbs);
+
+                File.WriteAllText(scriptAbs, request.code);
+                // New files must be introduced via Refresh — ImportAsset only works
+                // on paths Unity already tracks.
+                AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+
+                // If Unity is still compiling after the synchronous import, the
+                // freshly-added type is not loadable yet — report COMPILE.
+                if (EditorApplication.isCompiling)
+                {
+                    return BuildError("EDITOR_CTRL_RUN_SCRIPT_COMPILE",
+                        "Script compilation is still in progress after AssetDatabase.Refresh; " +
+                        "a domain reload is pending. Retry after Unity finishes compiling.",
+                        new EditorControlData { temp_id = tempId, executed = false });
+                }
+
+                Type scriptType = FindTempScriptType();
+                if (scriptType == null)
+                {
+                    // Compilation failed or produced no type — surface the
+                    // compile errors if Unity's LogEntries carried any.
+                    return BuildError("EDITOR_CTRL_RUN_SCRIPT_COMPILE",
+                        $"Type '{RunScriptTypeName}' was not found after compile. " +
+                        "Verify the snippet defines `public static class PrefabSentinelTempScript` with `public static void Run()`.",
+                        new EditorControlData { temp_id = tempId, executed = false });
+                }
+
+                MethodInfo runMethod = scriptType.GetMethod(
+                    RunScriptEntryPoint,
+                    BindingFlags.Public | BindingFlags.Static);
+                if (runMethod == null)
+                {
+                    return BuildError("EDITOR_CTRL_RUN_SCRIPT_COMPILE",
+                        $"Entry point '{RunScriptTypeName}.{RunScriptEntryPoint}()' not found " +
+                        "(must be `public static void Run()`).",
+                        new EditorControlData { temp_id = tempId, executed = false });
+                }
+
+                System.IO.TextWriter originalOut = Console.Out;
+                var buffer = new System.IO.StringWriter();
+                Console.SetOut(buffer);
+                try
+                {
+                    runMethod.Invoke(null, null);
+                }
+                catch (TargetInvocationException tie)
+                {
+                    Console.SetOut(originalOut);
+                    Exception inner = tie.InnerException ?? tie;
+                    return BuildError("EDITOR_CTRL_RUN_SCRIPT_RUNTIME",
+                        $"Run() threw {inner.GetType().Name}: {inner.Message}",
+                        new EditorControlData
+                        {
+                            temp_id = tempId,
+                            executed = true,
+                            exception = inner.ToString(),
+                            stdout = buffer.ToString(),
+                        });
+                }
+                catch (Exception ex)
+                {
+                    Console.SetOut(originalOut);
+                    return BuildError("EDITOR_CTRL_RUN_SCRIPT_RUNTIME",
+                        $"Run() threw {ex.GetType().Name}: {ex.Message}",
+                        new EditorControlData
+                        {
+                            temp_id = tempId,
+                            executed = true,
+                            exception = ex.ToString(),
+                            stdout = buffer.ToString(),
+                        });
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+
+                return BuildSuccess("EDITOR_CTRL_RUN_SCRIPT_OK",
+                    $"PrefabSentinelTempScript.Run() completed (temp_id={tempId}).",
+                    new EditorControlData
+                    {
+                        temp_id = tempId,
+                        executed = true,
+                        stdout = buffer.ToString(),
+                    });
+            }
+            finally
+            {
+                // Always clean up — success or failure.
+                TryDeleteFile(scriptAbs);
+                TryDeleteFile(metaAbs);
+                // Best-effort Refresh so Unity forgets the deleted asset.
+                try { AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport); }
+                catch { /* best effort */ }
+            }
+        }
+
+        private static bool IsSafeTempId(string id)
+        {
+            if (string.IsNullOrEmpty(id))
+                return false;
+            foreach (char c in id)
+            {
+                bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+                          || (c >= '0' && c <= '9') || c == '-' || c == '_';
+                if (!ok)
+                    return false;
+            }
+            return true;
+        }
+
+        private static Type FindTempScriptType()
+        {
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                Type t = asm.GetType(RunScriptTypeName, throwOnError: false, ignoreCase: false);
+                if (t != null)
+                    return t;
+            }
+            return null;
+        }
+
+        private static void TryDeleteFile(string path)
+        {
+            try { if (File.Exists(path)) File.Delete(path); }
+            catch { /* best effort */ }
+        }
+
+        /// <summary>
+        /// Editor-startup cleanup: removes any ``.cs`` / ``.cs.meta`` leftovers
+        /// from crashed ``run_script`` invocations in the temp directory.
+        /// Non-recursive; only the fixed file extensions are touched.
+        /// </summary>
+        [InitializeOnLoad]
+        internal static class RunScriptStartupCleanup
+        {
+            static RunScriptStartupCleanup()
+            {
+                EditorApplication.delayCall += Cleanup;
+            }
+
+            private static void Cleanup()
+            {
+                try
+                {
+                    string dir = Path.Combine(
+                        Directory.GetCurrentDirectory(),
+                        RunScriptTempDir.Replace('/', Path.DirectorySeparatorChar));
+                    if (!Directory.Exists(dir))
+                        return;
+                    foreach (string path in Directory.GetFiles(dir, "*.cs"))
+                        TryDeleteFile(path);
+                    foreach (string path in Directory.GetFiles(dir, "*.cs.meta"))
+                        TryDeleteFile(path);
+                }
+                catch { /* best effort */ }
+            }
+        }
 
         // ── Response Builders ──
 

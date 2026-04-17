@@ -4,7 +4,7 @@ import csv
 import io
 import unittest
 
-from prefab_sentinel.reporting import render_csv_report
+from prefab_sentinel.reporting import _extract_runtime_validation_data, render_csv_report
 from prefab_sentinel.reporting_markdown import render_markdown_report
 
 
@@ -129,8 +129,8 @@ class ReportingTests(unittest.TestCase):
                             "code": "RUN001",
                             "data": {
                                 "line_count": 12,
-                                "matched_issue_count": 3,
-                                "categories": {"UDON_NULLREF": 2, "BROKEN_PPTR": 1},
+                                "count_total": 3,
+                                "count_by_category": {"UDON_NULLREF": 2, "BROKEN_PPTR": 1},
                                 "categories_by_severity": {
                                     "critical": 2,
                                     "error": 1,
@@ -305,6 +305,52 @@ class CsvReportTests(unittest.TestCase):
         # Only the header row
         self.assertEqual(rows[0], ["path", "location", "detail", "evidence"])
         self.assertEqual(len([r for r in rows if r]), 1)
+
+
+class ReportingRuntimeValidationTests(unittest.TestCase):
+    """T64: ``_extract_runtime_validation_data`` must surface the renamed
+    ``count_total`` / ``count_by_category`` keys (issue #89).
+    """
+
+    def test_emits_new_keys(self) -> None:
+        payload_data = {
+            "steps": [
+                {
+                    "step": "classify_errors",
+                    "result": {
+                        "code": "RUN001",
+                        "success": False,
+                        "severity": "critical",
+                        "data": {
+                            "line_count": 42,
+                            "count_total": 5,
+                            "count_by_category": {
+                                "UDON_NULLREF": 3,
+                                "BROKEN_PPTR": 2,
+                            },
+                            "categories_by_severity": {
+                                "critical": 3,
+                                "error": 2,
+                                "warning": 0,
+                            },
+                        },
+                    },
+                },
+            ],
+        }
+
+        runtime = _extract_runtime_validation_data(payload_data)
+        classification = runtime.get("classification", {})
+
+        self.assertIn("count_total", classification)
+        self.assertIn("count_by_category", classification)
+        self.assertNotIn("matched_issue_count", classification)
+        self.assertNotIn("categories", classification)
+        self.assertEqual(5, classification["count_total"])
+        self.assertEqual(
+            {"UDON_NULLREF": 3, "BROKEN_PPTR": 2},
+            classification["count_by_category"],
+        )
 
 
 if __name__ == "__main__":

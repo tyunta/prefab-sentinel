@@ -712,9 +712,18 @@ class RuntimeValidationService:
             max_diagnostics: Maximum number of diagnostic entries to return.
 
         Returns:
-            ``ToolResponse`` with ``data.categories`` counts and
-            ``data.categories_by_severity`` breakdown. Diagnostics contain
-            the matched line text and category.
+            ``ToolResponse`` with:
+
+            - ``data.count_total``: number of log lines that matched a
+              known category (issue #89 — renamed from ``matched_issue_count``).
+            - ``data.count_by_category``: mapping ``category -> count``
+              (issue #89 — renamed from ``categories``).
+            - ``data.categories_by_severity``: mapping severity name ->
+              total hits at that severity.
+
+            Diagnostics carry the matched line text and category name.
+            A matched ``UDON_NULLREF`` line is surfaced at
+            ``severity=critical`` (see ``_LOG_PATTERNS``).
         """
         diagnostics: list[Diagnostic] = []
         counts = Counter[str]()
@@ -762,10 +771,10 @@ class RuntimeValidationService:
             message=message,
             data={
                 "line_count": len(log_lines),
-                "matched_issue_count": total_hits,
+                "count_total": total_hits,
                 "returned_diagnostics": len(diagnostics),
                 "truncated_diagnostics": truncated,
-                "categories": dict(counts),
+                "count_by_category": dict(counts),
                 "categories_by_severity": {
                     "critical": sum(
                         counts.get(category, 0)

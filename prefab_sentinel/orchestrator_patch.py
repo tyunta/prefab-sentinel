@@ -58,10 +58,20 @@ def patch_apply(
     def _step_name(base: str, resource_id: str) -> str:
         return base if resource_count == 1 else f"{base}:{resource_id}"
 
-    def _finalize(message: str, fail_fast: bool) -> ToolResponse:
+    def _finalize(
+        message: str,
+        fail_fast: bool,
+        code: str = "PATCH_APPLY_RESULT",
+        severity_override: Severity | None = None,
+        success_override: bool | None = None,
+    ) -> ToolResponse:
         severities = [step.severity for _, step in steps]
-        severity = max_severity(severities)
-        success = all(step.success for _, step in steps)
+        severity = severity_override if severity_override is not None else max_severity(severities)
+        success = (
+            success_override
+            if success_override is not None
+            else all(step.success for _, step in steps)
+        )
         diagnostics = [
             diagnostic
             for _, step in steps
@@ -74,7 +84,7 @@ def patch_apply(
         return ToolResponse(
             success=success,
             severity=severity,
-            code="PATCH_APPLY_RESULT",
+            code=code,
             message=message,
             data={
                 "plan_version": normalized_plan.get("plan_version"),
@@ -172,6 +182,24 @@ def patch_apply(
         )
         steps.append(("scan_broken_references_preflight", preflight_refs))
         if preflight_refs.severity in (Severity.ERROR, Severity.CRITICAL):
+            preflight_data = (
+                preflight_refs.data if isinstance(preflight_refs.data, dict) else {}
+            )
+            preflight_categories = preflight_data.get("categories", {}) or {}
+            missing_asset_unique = int(
+                preflight_categories.get("missing_asset", 0) or 0
+            )
+            if missing_asset_unique > 0:
+                return _finalize(
+                    (
+                        f"patch.apply aborted: {missing_asset_unique} missing GUID "
+                        "reference(s) detected in scope (fail-fast per #83)."
+                    ),
+                    fail_fast=True,
+                    code="REF001",
+                    severity_override=Severity.ERROR,
+                    success_override=False,
+                )
             return _finalize(
                 "patch.apply stopped by fail-fast policy due to preflight reference errors.",
                 fail_fast=True,

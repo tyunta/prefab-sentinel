@@ -681,9 +681,9 @@ GameObject:
 
         self.assertFalse(response.success)
         self.assertEqual("RUN001", response.code)
-        self.assertEqual(1, response.data["categories"]["BROKEN_PPTR"])
-        self.assertEqual(1, response.data["categories"]["UDON_NULLREF"])
-        self.assertEqual(1, response.data["categories"]["DUPLICATE_EVENTSYSTEM"])
+        self.assertEqual(1, response.data["count_by_category"]["BROKEN_PPTR"])
+        self.assertEqual(1, response.data["count_by_category"]["UDON_NULLREF"])
+        self.assertEqual(1, response.data["count_by_category"]["DUPLICATE_EVENTSYSTEM"])
 
     def test_orchestrator_validate_runtime_pipeline(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -865,6 +865,28 @@ class SerializedObjectServiceTests(unittest.TestCase):
         self.assertEqual("SER_DRY_RUN_OK", response.code)
         self.assertEqual(2, response.data["op_count"])
         self.assertEqual(2, len(response.data["diff"]))
+
+    def test_set_property_rejects_ser002_path(self) -> None:
+        """T21: a set op with a negative-index propertyPath must produce
+        ``code=SER002`` from the service layer, with no YAML mutation.
+        The pre-validator short-circuits before any op-specific logic
+        runs, so we can assert directly on the dry_run envelope."""
+        svc = SerializedObjectService()
+        response = svc.dry_run_patch(
+            target="Assets/Variant.prefab",
+            ops=[
+                {
+                    "op": "set",
+                    "component": "Example.Component",
+                    "path": "m_Foo.Array.data[-1]",
+                    "value": 2,
+                },
+            ],
+        )
+
+        self.assertFalse(response.success)
+        self.assertEqual("SER002", response.code)
+        self.assertEqual(Severity.ERROR, response.severity)
 
     def test_dry_run_patch_returns_schema_error(self) -> None:
         svc = SerializedObjectService()
@@ -2340,9 +2362,18 @@ print(
         orchestrator = Phase1Orchestrator.default()
         response = orchestrator.patch_apply(
             plan={
-                "target": "Assets/Variant.prefab",
+                "plan_version": 2,
+                "resources": [
+                    {
+                        "id": "variant",
+                        "kind": "prefab",
+                        "path": "Assets/Variant.prefab",
+                        "mode": "open",
+                    }
+                ],
                 "ops": [
                     {
+                        "resource": "variant",
                         "op": "set",
                         "component": "Example.Component",
                         "path": "items.Array.size",
@@ -2371,9 +2402,18 @@ print(
             orchestrator = Phase1Orchestrator.default(project_root=root)
             response = orchestrator.patch_apply(
                 plan={
-                    "target": str(target),
+                    "plan_version": 2,
+                    "resources": [
+                        {
+                            "id": "state",
+                            "kind": "json",
+                            "path": str(target),
+                            "mode": "open",
+                        }
+                    ],
                     "ops": [
                         {
+                            "resource": "state",
                             "op": "set",
                             "component": "Example.Component",
                             "path": "nested.value",
@@ -2493,9 +2533,18 @@ print(
             orchestrator = Phase1Orchestrator.default(project_root=root)
             response = orchestrator.patch_apply(
                 plan={
-                    "target": str(target),
+                    "plan_version": 2,
+                    "resources": [
+                        {
+                            "id": "state",
+                            "kind": "json",
+                            "path": str(target),
+                            "mode": "open",
+                        }
+                    ],
                     "ops": [
                         {
+                            "resource": "state",
                             "op": "set",
                             "component": "Example.Component",
                             "path": "nested.value",
@@ -2530,9 +2579,18 @@ print(
             orchestrator = Phase1Orchestrator.default(project_root=root)
             response = orchestrator.patch_apply(
                 plan={
-                    "target": str(target),
+                    "plan_version": 2,
+                    "resources": [
+                        {
+                            "id": "state",
+                            "kind": "json",
+                            "path": str(target),
+                            "mode": "open",
+                        }
+                    ],
                     "ops": [
                         {
+                            "resource": "state",
                             "op": "set",
                             "component": "Example.Component",
                             "path": "nested.value",

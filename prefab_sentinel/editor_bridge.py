@@ -22,12 +22,16 @@ from typing import Any
 from prefab_sentinel.bridge_constants import (
     BRIDGE_MODE_ENV,
     BRIDGE_WATCH_DIR_ENV,
+    PROTOCOL_VERSION,
     UNITY_TIMEOUT_SEC_ENV as BRIDGE_TIMEOUT_ENV,
 )
 from prefab_sentinel.json_io import dump_json, load_json
 from prefab_sentinel.wsl_compat import to_wsl_path
 
-PROTOCOL_VERSION = 1
+# ``PROTOCOL_VERSION`` is re-exported from ``bridge_constants`` so existing
+# call sites (``from prefab_sentinel.editor_bridge import PROTOCOL_VERSION``)
+# keep working while the drift checker now treats ``bridge_constants`` as the
+# single source of truth.
 # Empirical: sufficient for typical Inspector operations in loaded projects
 DEFAULT_TIMEOUT_SEC = 30
 # Cached bridge version from last successful response
@@ -83,6 +87,8 @@ SUPPORTED_ACTIONS = frozenset(
         "editor_create_scene",
         # Phase 8: Reflection
         "editor_reflect",
+        # Phase 9: Editor script exec (#74)
+        "run_script",
     }
 )
 

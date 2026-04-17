@@ -177,13 +177,15 @@ class TestToolRegistration(unittest.TestCase):
             "copy_component_fields",
             "set_component_fields",
             "editor_set_component_fields",
+            # Editor exec tool (#74)
+            "editor_run_script",
         }
         self.assertEqual(expected, tool_names)
 
     def test_tool_count(self) -> None:
         server = create_server()
         tools = _run(server.list_tools())
-        self.assertEqual(70, len(tools))
+        self.assertEqual(71, len(tools))
 
 
 class TestSymbolTools(unittest.TestCase):

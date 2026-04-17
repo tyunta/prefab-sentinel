@@ -53,8 +53,8 @@ def _extract_runtime_validation_data(payload_data: dict[str, Any]) -> dict[str, 
                 "success": result.get("success"),
                 "severity": result.get("severity"),
                 "line_count": data.get("line_count", 0),
-                "matched_issue_count": data.get("matched_issue_count", 0),
-                "categories": data.get("categories", {}),
+                "count_total": data.get("count_total", 0),
+                "count_by_category": data.get("count_by_category", {}),
                 "categories_by_severity": data.get("categories_by_severity", {}),
             }
         elif step_name == "assert_no_critical_errors":

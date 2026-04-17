@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "prefab-sentinel"
-version = "0.5.150"
+version = "0.5.151"
 description = "Prefab Sentinel — Unity Prefab/Scene inspection and editing toolkit."
 requires-python = ">=3.11"
 readme = "README.md"
@@ -18,6 +18,14 @@ lint = ["ruff>=0.8", "mypy>=1.13", "bump-my-version>=0.31"]
 
 [project.scripts]
 prefab-sentinel-mcp = "prefab_sentinel.mcp_server:main"
+
+[tool.pytest.ini_options]
+# Custom markers are registered here so pytest does not emit
+# ``PytestUnknownMarkWarning`` for them.  See issue #87 for the
+# ``unity_live`` harness motivation.
+markers = [
+    "unity_live: test requires a live Unity Editor invocation (UNITYTOOL_UNITY_COMMAND must be set); skipped by default.",
+]
 
 [tool.ruff]
 target-version = "py311"
@@ -53,7 +61,7 @@ packages = ["prefab_sentinel"]
 "tools/unity" = "prefab_sentinel/_bridge_files"
 
 [tool.bumpversion]
-current_version = "0.5.150"
+current_version = "0.5.151"
 commit = false
 tag = false
 allow_dirty = true
@@ -72,3 +80,8 @@ replace = '"version": "{new_version}"'
 filename = "tools/unity/PrefabSentinel.UnityEditorControlBridge.cs"
 search = 'BridgeVersion = "{current_version}"'
 replace = 'BridgeVersion = "{new_version}"'
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
