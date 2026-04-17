@@ -12,8 +12,9 @@ to a caller-supplied list; the walk never silently skips a level.  The
 consumers see one schema regardless of entry point.
 
 The ``read_unity_text`` name is a local alias for
-``prefab_sentinel.unity_assets.decode_text_file``; tests monkeypatch
-this name to simulate decode failures.
+``prefab_sentinel.unity_assets.decode_text_file``; tests create actual
+binary files on disk that trigger ``UnicodeDecodeError`` via the live
+code path.
 """
 
 from __future__ import annotations

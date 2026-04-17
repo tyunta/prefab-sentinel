@@ -525,69 +525,91 @@ PrefabInstance:
             self.assertEqual(["array_size_mismatch"], stale.data["categories"])
 
 
-    def test_fbx_base_returns_model_file_base_diagnostic(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            fbx_guid = "ff00ff00ff00ff00ff00ff00ff00ff00"
-            fbx_path = root / "Assets" / "Model.fbx"
-            fbx_path.parent.mkdir(parents=True, exist_ok=True)
-            fbx_path.write_bytes(b"\x81\x00\xff\xfe")
-            write_file(
-                root / "Assets" / "Model.fbx.meta",
-                f"fileFormatVersion: 2\nguid: {fbx_guid}\n",
-            )
-            write_file(
-                root / "Assets" / "ModelVariant.prefab",
-                f"""%YAML 1.1
+class ModelFileSuffixDiagnosticTests(unittest.TestCase):
+    """Regression coverage for issues #76 and #78.
+
+    ``walk_chain_levels`` must emit a ``model_file_base`` diagnostic for every
+    suffix in ``MODEL_FILE_SUFFIXES`` (issue #78) and an ``unreadable_file``
+    diagnostic for non-model binaries that fail UTF-8 decode (issue #76).
+    """
+
+    # One entry per ``MODEL_FILE_SUFFIXES`` element. The list is fixed here on
+    # purpose: enumerating from the constant would let a regression that drops
+    # a suffix go undetected.
+    MODEL_SUFFIX_CASES: tuple[tuple[str, str], ...] = (
+        (".fbx", "ff00ff00ff00ff00ff00ff00ff00ff00"),
+        (".blend", "bb00bb00bb00bb00bb00bb00bb00bb00"),
+        (".gltf", "a100a100a100a100a100a100a100a100"),
+        (".glb", "a200a200a200a200a200a200a200a200"),
+        (".obj", "ab00ab00ab00ab00ab00ab00ab00ab00"),
+    )
+
+    def _build_variant_referencing(
+        self, root: Path, base_filename: str, base_guid: str
+    ) -> None:
+        base_path = root / "Assets" / base_filename
+        base_path.parent.mkdir(parents=True, exist_ok=True)
+        base_path.write_bytes(b"\x81\x00\xff\xfe")
+        write_file(
+            root / "Assets" / f"{base_filename}.meta",
+            f"fileFormatVersion: 2\nguid: {base_guid}\n",
+        )
+        variant_stem = f"{Path(base_filename).stem}Variant"
+        write_file(
+            root / "Assets" / f"{variant_stem}.prefab",
+            f"""%YAML 1.1
 --- !u!1001 &100100000
 PrefabInstance:
-  m_SourcePrefab: {{fileID: 100100000, guid: {fbx_guid}, type: 3}}
+  m_SourcePrefab: {{fileID: 100100000, guid: {base_guid}, type: 3}}
 """,
-            )
-            write_file(
-                root / "Assets" / "ModelVariant.prefab.meta",
-                f"fileFormatVersion: 2\nguid: {VARIANT_GUID}\n",
-            )
-            svc = PrefabVariantService(project_root=root)
-            chain = svc.resolve_prefab_chain("Assets/ModelVariant.prefab")
-            self.assertTrue(chain.success)
-            self.assertEqual("PVR_CHAIN_WARN", chain.code)
-            diag_details = [d.detail for d in chain.diagnostics]
-            self.assertIn("model_file_base", diag_details)
-            model_diag = next(d for d in chain.diagnostics if d.detail == "model_file_base")
-            self.assertIn("Base asset is a model file (.fbx)", model_diag.evidence)
-            self.assertIn("editor_list_children", model_diag.evidence)
+        )
+        write_file(
+            root / "Assets" / f"{variant_stem}.prefab.meta",
+            f"fileFormatVersion: 2\nguid: {VARIANT_GUID}\n",
+        )
 
-    def test_non_model_binary_returns_unreadable_file_diagnostic(self) -> None:
+    def test_model_suffix_emits_model_file_base_diagnostic(self) -> None:
+        """T-76/78-A: parametrized over every ``MODEL_FILE_SUFFIXES`` entry."""
+        for suffix, base_guid in self.MODEL_SUFFIX_CASES:
+            with self.subTest(suffix=suffix):
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    root = Path(temp_dir)
+                    base_filename = f"Model{suffix}"
+                    self._build_variant_referencing(root, base_filename, base_guid)
+                    variant_stem = f"{Path(base_filename).stem}Variant"
+                    svc = PrefabVariantService(project_root=root)
+                    chain = svc.resolve_prefab_chain(f"Assets/{variant_stem}.prefab")
+                    self.assertTrue(chain.success)
+                    self.assertEqual("PVR_CHAIN_WARN", chain.code)
+                    model_diags = [
+                        d for d in chain.diagnostics if d.detail == "model_file_base"
+                    ]
+                    self.assertEqual(1, len(model_diags))
+                    self.assertEqual(
+                        f"Base asset is a model file ({suffix}). "
+                        "Cannot decode as YAML. "
+                        "Use editor_list_children for runtime hierarchy inspection.",
+                        model_diags[0].evidence,
+                    )
+
+    def test_non_model_binary_emits_unreadable_file_diagnostic(self) -> None:
+        """T-76-B: a non-model binary produces ``unreadable_file``, not
+        ``model_file_base``."""
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             bin_guid = "ee00ee00ee00ee00ee00ee00ee00ee00"
-            bin_path = root / "Assets" / "Unknown.bin"
-            bin_path.parent.mkdir(parents=True, exist_ok=True)
-            bin_path.write_bytes(b"\x81\x00\xff\xfe")
-            write_file(
-                root / "Assets" / "Unknown.bin.meta",
-                f"fileFormatVersion: 2\nguid: {bin_guid}\n",
-            )
-            write_file(
-                root / "Assets" / "BinVariant.prefab",
-                f"""%YAML 1.1
---- !u!1001 &100100000
-PrefabInstance:
-  m_SourcePrefab: {{fileID: 100100000, guid: {bin_guid}, type: 3}}
-""",
-            )
-            write_file(
-                root / "Assets" / "BinVariant.prefab.meta",
-                f"fileFormatVersion: 2\nguid: {VARIANT_GUID}\n",
-            )
+            self._build_variant_referencing(root, "Unknown.bin", bin_guid)
             svc = PrefabVariantService(project_root=root)
-            chain = svc.resolve_prefab_chain("Assets/BinVariant.prefab")
+            chain = svc.resolve_prefab_chain("Assets/UnknownVariant.prefab")
             self.assertTrue(chain.success)
-            diag_details = [d.detail for d in chain.diagnostics]
-            self.assertIn("unreadable_file", diag_details)
-            unreadable_diag = next(d for d in chain.diagnostics if d.detail == "unreadable_file")
-            self.assertEqual("unable to decode source prefab", unreadable_diag.evidence)
+            unreadable = [
+                d for d in chain.diagnostics if d.detail == "unreadable_file"
+            ]
+            self.assertEqual(1, len(unreadable))
+            self.assertEqual("unable to decode source prefab", unreadable[0].evidence)
+            self.assertFalse(
+                any(d.detail == "model_file_base" for d in chain.diagnostics)
+            )
 
 
 class RuntimeValidationServiceTests(unittest.TestCase):
