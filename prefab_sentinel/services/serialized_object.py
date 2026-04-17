@@ -16,6 +16,7 @@ from prefab_sentinel.patch_plan import (
     build_bridge_request,
 )
 from prefab_sentinel.services.prefab_variant import PrefabVariantService
+from prefab_sentinel.services.property_path import validate_property_path
 from prefab_sentinel.unity_assets import (
     SOURCE_PREFAB_PATTERN,
     decode_text_file,
@@ -2818,6 +2819,52 @@ class SerializedObjectService:
 
         raise ValueError(f"unsupported op '{op_name}'")
 
+    def _prevalidate_property_paths(
+        self,
+        target: str,
+        ops: list[dict[str, Any]],
+    ) -> ToolResponse | None:
+        """Validate every op's ``path`` field syntactically (issue #82).
+
+        Returns a ``SER001`` / ``SER002`` envelope on the first invalid
+        path encountered, before any array/scalar op logic runs.  Ops
+        that do not carry a ``path`` (schema-invalid inputs caught by
+        downstream validators) are skipped here.  Missing / empty paths
+        are left for the existing per-op schema validators, which emit a
+        structured ``schema_error`` diagnostic rather than a SER-series
+        envelope.
+        """
+        for index, op in enumerate(ops):
+            if not isinstance(op, dict):
+                continue
+            raw_path = op.get("path")
+            if not isinstance(raw_path, str):
+                continue
+            property_path = raw_path.strip()
+            if not property_path:
+                # Existing schema validators handle the empty-path case
+                # with ``schema_error`` diagnostics — do not convert that
+                # into SER001 here.
+                continue
+            result = validate_property_path(property_path)
+            if not result.success:
+                data = dict(result.data)
+                data.update(
+                    {
+                        "target": target,
+                        "op_index": index,
+                        "op_count": len(ops),
+                        "read_only": True,
+                    }
+                )
+                return error_response(
+                    result.code,
+                    result.message,
+                    severity=result.severity,
+                    data=data,
+                )
+        return None
+
     def dry_run_patch(self, target: str, ops: list[dict[str, Any]]) -> ToolResponse:
         """Validate a patch plan and generate a diff preview without writing.
 
@@ -2830,6 +2877,9 @@ class SerializedObjectService:
             preview for each op, or diagnostics on schema validation failure.
         """
         self._clear_before_cache()
+        prevalidation = self._prevalidate_property_paths(target, ops)
+        if prevalidation is not None:
+            return prevalidation
         diagnostics: list[Diagnostic] = []
         if not str(target).strip():
             diagnostics.append(
@@ -3041,6 +3091,22 @@ class SerializedObjectService:
         """
         dry_run = self.dry_run_patch(target=target, ops=ops)
         if not dry_run.success:
+            # Propagate SER001 / SER002 propertyPath validation codes
+            # directly so the caller sees the actionable code rather than
+            # a generic ``SER_PLAN_INVALID`` wrapper.  Other failures keep
+            # the existing wrapper so the envelope always carries the
+            # ``applied`` / ``executed`` fields that apply_and_save
+            # callers depend on.
+            if dry_run.code in {"SER001", "SER002"}:
+                data = dict(dry_run.data)
+                data.update({"applied": 0, "read_only": False, "executed": False})
+                return error_response(
+                    dry_run.code,
+                    dry_run.message,
+                    severity=dry_run.severity,
+                    data=data,
+                    diagnostics=dry_run.diagnostics,
+                )
             return error_response(
                 "SER_PLAN_INVALID",
                 "Patch plan schema validation failed.",
@@ -3084,7 +3150,7 @@ class SerializedObjectService:
 
         try:
             loaded = load_json(decode_text_file(target_path))
-        except OSError as exc:
+        except (OSError, UnicodeDecodeError) as exc:
             return error_response(
                 "SER_IO_ERROR",
                 "Failed to read patch target file.",

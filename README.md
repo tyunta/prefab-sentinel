@@ -180,6 +180,17 @@ prefab-sentinel-mcp --transport streamable-http
 
 設定は `pyproject.toml` の `[tool.bumpversion]` セクションを参照。
 
+#### pre-commit hook テンプレートの導入
+
+pre-commit hook のテンプレートは `tools/git-hooks/pre-commit` に追跡されている。新規クローン直後、または hook を再インストールする場合は下記でコピーする。
+
+```bash
+cp tools/git-hooks/pre-commit .git/hooks/pre-commit
+chmod +x .git/hooks/pre-commit
+```
+
+このテンプレートは lint → パッチバンプ → `uv lock` に加え、`scripts/check_bridge_constants.py` によるクロス言語定数（バージョン文字列 / プロトコルバージョン / severity 語彙）の drift チェックを実行する。drift を検出した場合はコミットを中断する。drift チェックは `tests/test_bridge_constants_sync.py` でも並列に実行されるため、hook を導入していないユーザーも CI では捕捉される。
+
 ### 開発用セットアップ
 
 ```bash
@@ -570,15 +581,44 @@ Udonログを根拠に修正候補を最短で絞る。
 ```
 
 ### 7.2 エラーコード規約
-- `SER001`: Serialized path not found
-- `SER002`: Type mismatch
+- `SER001`: Serialized path not found — `propertyPath` の構文不正（空文字列、空セグメント `a..b`、閉じ括弧欠落 `a.Array.data[0` 等）または対象のプロパティが存在しない。
+- `SER002`: Type mismatch — `propertyPath` の添字が不正（負のインデックス `Array.data[-1]`、非整数インデックス `Array.data[abc]`、`Array.size[0]` のような禁止された組み合わせ）または型の不一致。Python 的な負インデックス意味論は採用しない。
 - `PVR001`: Stale override — empty propertyPath (single category) or mixed categories
 - `PVR002`: Stale override — duplicate propertyPath (later entries shadow earlier)
 - `PVR003`: Stale override — array size/index mismatch
-- `REF001`: Missing asset guid
+- `REF001`: Missing asset guid — `patch_apply` / `revert_overrides` / `validate_refs` は、参照されたアセットの GUID が 1 件でもプロジェクト内に見つからない場合、**fail-fast** で全体を中断し `success=False`, `severity="error"`, `code="REF001"` を返す。部分適用や書き込みは一切行わない。
 - `REF002`: Missing local fileID
 - `RUN001`: Udon runtime exception
 - `RUN002`: ClientSim startup failure
+- `CHANGE_REASON_REQUIRED`: `confirm=True` で呼ばれた書き込み系ツールが `change_reason` を欠いた場合。`editor_run_script` は `confirm=False` や空文字の `change_reason` も同コードで拒否する（監査トレイル強制）。
+- `BRIDGE_LEGACY_SCHEMA_REJECTED`: `unity_patch_bridge` がレガシー形状（トップレベル `target` キー）のリクエストを受け取った場合。v2 スキーマ（`{plan_version, resources, ops}`）のみを受け入れる。互換レイヤは存在しない。
+- `EDITOR_CTRL_RUN_SCRIPT_OK` / `EDITOR_CTRL_RUN_SCRIPT_COMPILE` / `EDITOR_CTRL_RUN_SCRIPT_RUNTIME` / `EDITOR_CTRL_RUN_SCRIPT_BAD_ID`: `editor_run_script` の成功 / コンパイル失敗 / 実行例外 / 不正 temp id。
+
+#### severity 境界: `critical` と `error` の使い分け
+
+- `critical`: 後続処理の継続が不可能な停止級エラー。実行時に検出された致命的な状態（例: `UDON_NULLREF` マッチ、ClientSim が起動不能）。呼び出し元は即座に停止し、ユーザー判断を仰ぐ。
+- `error`: 契約違反や入力の不備だが、呼び出し元の文脈では実行自体は続行しうる（例: `SER001`/`SER002`/`REF001`/`BRIDGE_LEGACY_SCHEMA_REJECTED`/`CHANGE_REASON_REQUIRED`）。該当操作は拒否されるが、後続の無関係な操作は継続可能。
+- `warning` / `info`: 情報系。診断のみ、動作への影響なし。
+
+### 7.3 Runtime Validation レスポンス (`classify_errors`)
+
+`validate_runtime` / `RuntimeValidationService.classify_errors` の `data` ペイロードは下記 2 キーで件数を返す（旧 `matched_issue_count` / `categories` は削除済み・互換なし）。
+
+| キー | 型 | 説明 |
+|---|---|---|
+| `count_total` | `int` | マッチしたログ行の総数 |
+| `count_by_category` | `dict[str, int]` | カテゴリ別のヒット件数（例: `{"UDON_NULLREF": 3}`） |
+
+`UDON_NULLREF` がマッチした場合、`severity="critical"` を返す。それ以外は最大ランク（`info < warning < error < critical`）の severity を返す。
+
+### 7.4 `editor_run_script` (MCP ツール / Editor Bridge アクション)
+
+`editor_run_script` は Unity Editor 内で C# スニペットを 1 ステップでコンパイル・実行する MCP ツール（Issue #74）。
+
+- 入力: `code: str`, `confirm: bool`, `change_reason: str`
+- `confirm=True` **かつ** 非空の `change_reason` が常に必須。どちらかを欠く呼び出しは Bridge に到達する前に `CHANGE_REASON_REQUIRED` で拒否される。dry-run モードは未サポート。
+- Bridge 側では `Assets/Editor/_PrefabSentinelTemp/<temp_id>.cs` にソースを書き出し、`AssetDatabase.Refresh()` でコンパイル後 `PrefabSentinelTempScript.Run()`（`public static void`、固定のクラス/メソッド名）を呼び出す。成功・失敗を問わず temp の `.cs` / `.cs.meta` は応答前に削除する。Editor 起動時にも前回クラッシュの残骸を掃除する。
+- エラーコード: `EDITOR_CTRL_RUN_SCRIPT_OK` / `..._COMPILE` / `..._RUNTIME` / `..._BAD_ID`。
 
 ---
 
@@ -864,7 +904,7 @@ python scripts/bridge_smoke_samples.py --targets all --unity-command "C:/Program
 
 ### 17.5.1 `patch_apply` 入力スキーマ（annotated examples）
 
-`patch_apply` の `plan` パラメータに渡す JSON のスキーマ。`plan_version: 2` が現行。
+`patch_apply` の `plan` パラメータに渡す JSON のスキーマ。`plan_version: 2` が唯一受け入れられる形状。`plan_version` を欠くペイロード（旧 `{"target": ..., "ops": [...]}` 形状を含む）は `normalize_patch_plan` が `ValueError` を送出して即時拒否する。外部 `unity_patch_bridge` は、トップレベルに `target` キーを含むリクエストを `BRIDGE_LEGACY_SCHEMA_REJECTED`（`severity="error"`, exit code `1`）で拒否する。互換レイヤや `target` → `resources[0].path` の自動補正は存在しない。
 
 #### スキーマ概要
 

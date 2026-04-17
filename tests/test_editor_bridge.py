@@ -259,6 +259,8 @@ class TestSupportedActions(unittest.TestCase):
             "editor_batch_add_component",
             "editor_create_scene",
             "editor_reflect",
+            # Phase: one-step C# exec (#74)
+            "run_script",
         }
         self.assertEqual(expected, SUPPORTED_ACTIONS)
 

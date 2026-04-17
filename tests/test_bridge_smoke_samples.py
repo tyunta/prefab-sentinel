@@ -352,10 +352,18 @@ raise SystemExit(0)
             plan.write_text(
                 json.dumps(
                     {
-                        "target": "Assets/Test.prefab",
+                        "plan_version": 2,
+                        "resources": [
+                            {
+                                "id": "target",
+                                "kind": "prefab",
+                                "path": "Assets/Test.prefab",
+                                "mode": "open",
+                            }
+                        ],
                         "ops": [
-                            {"op": "set", "component": "Example.Component", "path": "items.Array.size", "value": 2},
-                            {"op": "remove_array_element", "component": "Example.Component", "path": "items.Array.data", "index": 0},
+                            {"resource": "target", "op": "set", "component": "Example.Component", "path": "items.Array.size", "value": 2},
+                            {"resource": "target", "op": "remove_array_element", "component": "Example.Component", "path": "items.Array.data", "index": 0},
                         ],
                     }
                 ),

@@ -26,6 +26,30 @@ from scripts.unity_bridge_smoke import (
     main,
 )
 
+_DEFAULT_PLAN_TARGET = "Assets/Test.prefab"
+
+
+def _v2_plan(ops: list[dict], *, path: str = _DEFAULT_PLAN_TARGET) -> dict:
+    """Build a canonical v2 patch plan targeting a single prefab resource.
+
+    Each incoming op is attached to the implicit ``"target"`` resource id
+    when it does not already carry a ``resource`` key.  Used by the smoke
+    tests to produce plans the #88 normalizer accepts.
+    """
+    normalized_ops: list[dict] = []
+    for op in ops:
+        if "resource" in op:
+            normalized_ops.append(dict(op))
+        else:
+            normalized_ops.append({"resource": "target", **op})
+    return {
+        "plan_version": 2,
+        "resources": [
+            {"id": "target", "kind": "prefab", "path": path, "mode": "open"}
+        ],
+        "ops": normalized_ops,
+    }
+
 
 class UnityBridgeSmokeTests(unittest.TestCase):
     def test_load_patch_plan_validates_schema(self) -> None:
@@ -34,7 +58,15 @@ class UnityBridgeSmokeTests(unittest.TestCase):
             path.write_text(
                 json.dumps(
                     {
-                        "target": "Assets/Test.prefab",
+                        "plan_version": 2,
+                        "resources": [
+                            {
+                                "id": "target",
+                                "kind": "prefab",
+                                "path": "Assets/Test.prefab",
+                                "mode": "open",
+                            }
+                        ],
                         "ops": [],
                     }
                 ),
@@ -58,9 +90,10 @@ class UnityBridgeSmokeTests(unittest.TestCase):
         )
         self.assertEqual(2, request["protocol_version"])
         self.assertEqual(2, request["plan_version"])
-        self.assertEqual("Assets/Test.prefab", request["target"])
-        self.assertEqual("prefab", request["kind"])
-        self.assertEqual("open", request["mode"])
+        # #88: no legacy top-level ``target``/``kind``/``mode`` in the request.
+        self.assertNotIn("target", request)
+        self.assertNotIn("kind", request)
+        self.assertNotIn("mode", request)
         self.assertEqual(
             [{"id": "variant", "kind": "prefab", "path": "Assets/Test.prefab", "mode": "open"}],
             request["resources"],
@@ -250,7 +283,7 @@ sys.stdout.write(json.dumps({"success": True, "severity": "notice", "code": "OK"
             plan = root / "plan.json"
             bridge = root / "fake_bridge.py"
             plan.write_text(
-                json.dumps({"target": "Assets/Test.prefab", "ops": []}),
+                json.dumps(_v2_plan([])),
                 encoding="utf-8",
             )
             bridge.write_text(
@@ -282,7 +315,7 @@ sys.stdout.write(json.dumps({"success": True, "severity": "info", "code": "OK", 
             plan = root / "plan.json"
             bridge = root / "fake_bridge.py"
             plan.write_text(
-                json.dumps({"target": "Assets/Test.prefab", "ops": []}),
+                json.dumps(_v2_plan([])),
                 encoding="utf-8",
             )
             bridge.write_text(
@@ -322,7 +355,7 @@ sys.stdout.write(json.dumps({"success": True, "severity": "info", "code": "OK", 
             plan = root / "plan.json"
             bridge = root / "fake_bridge.py"
             plan.write_text(
-                json.dumps({"target": "Assets/Test.prefab", "ops": []}),
+                json.dumps(_v2_plan([])),
                 encoding="utf-8",
             )
             bridge.write_text(
@@ -360,12 +393,7 @@ sys.stdout.write(json.dumps({"success": True, "severity": "info", "code": "BRIDG
             plan = root / "plan.json"
             bridge = root / "fake_bridge.py"
             plan.write_text(
-                json.dumps(
-                    {
-                        "target": "Assets/Test.prefab",
-                        "ops": [{"op": "set"}, {"op": "set"}],
-                    }
-                ),
+                json.dumps(_v2_plan([{"op": "set"}, {"op": "set"}])),
                 encoding="utf-8",
             )
             bridge.write_text(
@@ -403,12 +431,7 @@ sys.stdout.write(json.dumps({"success": True, "severity": "info", "code": "OK", 
             plan = root / "plan.json"
             bridge = root / "fake_bridge.py"
             plan.write_text(
-                json.dumps(
-                    {
-                        "target": "Assets/Test.prefab",
-                        "ops": [{"op": "set"}, {"op": "set"}],
-                    }
-                ),
+                json.dumps(_v2_plan([{"op": "set"}, {"op": "set"}])),
                 encoding="utf-8",
             )
             bridge.write_text(
@@ -448,7 +471,7 @@ sys.stdout.write(json.dumps({"success": False, "severity": "error", "code": "FAI
             plan = root / "plan.json"
             bridge = root / "fake_bridge.py"
             plan.write_text(
-                json.dumps({"target": "Assets/Test.prefab", "ops": []}),
+                json.dumps(_v2_plan([])),
                 encoding="utf-8",
             )
             bridge.write_text(

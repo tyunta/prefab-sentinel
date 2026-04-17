@@ -19,6 +19,14 @@ lint = ["ruff>=0.8", "mypy>=1.13", "bump-my-version>=0.31"]
 [project.scripts]
 prefab-sentinel-mcp = "prefab_sentinel.mcp_server:main"
 
+[tool.pytest.ini_options]
+# Custom markers are registered here so pytest does not emit
+# ``PytestUnknownMarkWarning`` for them.  See issue #87 for the
+# ``unity_live`` harness motivation.
+markers = [
+    "unity_live: test requires a live Unity Editor invocation (UNITYTOOL_UNITY_COMMAND must be set); skipped by default.",
+]
+
 [tool.ruff]
 target-version = "py311"
 line-length = 120
@@ -72,3 +80,8 @@ replace = '"version": "{new_version}"'
 filename = "tools/unity/PrefabSentinel.UnityEditorControlBridge.cs"
 search = 'BridgeVersion = "{current_version}"'
 replace = 'BridgeVersion = "{new_version}"'
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]

@@ -828,6 +828,23 @@ def main() -> int:
             )
         )
 
+    # #88: the legacy ``{target, ops}`` shape is no longer accepted.  Detect
+    # and reject it before any normalization so the caller sees a dedicated
+    # error code instead of a generic schema message.
+    if "target" in request:
+        received_keys = sorted(request.keys())
+        return _emit(
+            _error_response(
+                code="BRIDGE_LEGACY_SCHEMA_REJECTED",
+                message=(
+                    "Bridge request uses the legacy ``target`` shape; send the "
+                    "canonical v2 payload with ``plan_version`` and "
+                    "``resources`` instead."
+                ),
+                data={"received_keys": received_keys},
+            )
+        )
+
     protocol_raw = request.get("protocol_version")
     try:
         protocol_version = int(protocol_raw)

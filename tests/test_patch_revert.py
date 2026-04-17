@@ -363,5 +363,99 @@ guid: {VARIANT_GUID}
             self.assertIn("other.path", new_text)
 
 
+class MissingGuidContractTests(unittest.TestCase):
+    """T23: ``revert_overrides`` must fail-fast with ``REF001`` when any referenced
+    GUID is not present in the project (issue #83 contract)."""
+
+    MISSING_GUID = "ffffffffffffffffffffffffffffffff"
+
+    def _create_project_with_missing_source(self, root: Path) -> Path:
+        """Create a variant whose m_SourcePrefab GUID is not in the project.
+
+        Returns the absolute path to the variant file.
+        """
+        # Base prefab exists in the project but the variant refers to a
+        # completely different GUID for m_SourcePrefab that has no meta.
+        write_file(
+            root / "Assets" / "Base.prefab",
+            """%YAML 1.1
+--- !u!1 &100100000
+GameObject:
+  m_Name: Base
+""",
+        )
+        write_file(
+            root / "Assets" / "Base.prefab.meta",
+            f"""fileFormatVersion: 2
+guid: {BASE_GUID}
+""",
+        )
+        write_file(
+            root / "Assets" / "OrphanVariant.prefab",
+            f"""%YAML 1.1
+--- !u!1001 &100100000
+PrefabInstance:
+  m_SourcePrefab: {{fileID: 100100000, guid: {self.MISSING_GUID}, type: 3}}
+  m_Modification:
+    m_Modifications:
+    - target: {{fileID: 100100000, guid: {self.MISSING_GUID}, type: 3}}
+      propertyPath: m_Name
+      value: Renamed
+      objectReference: {{fileID: 0}}
+""",
+        )
+        write_file(
+            root / "Assets" / "OrphanVariant.prefab.meta",
+            f"""fileFormatVersion: 2
+guid: {VARIANT_GUID}
+""",
+        )
+        return root / "Assets" / "OrphanVariant.prefab"
+
+    def test_revert_overrides_aborts_on_missing_guid(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            variant_path = self._create_project_with_missing_source(root)
+            original_text = variant_path.read_text(encoding="utf-8")
+            original_mtime = variant_path.stat().st_mtime_ns
+
+            response = revert_overrides(
+                variant_path="Assets/OrphanVariant.prefab",
+                target_file_id="100100000",
+                property_path="m_Name",
+                dry_run=False,
+                confirm=True,
+                change_reason="Attempt to revert on orphan variant",
+                project_root=root,
+            )
+
+            self.assertFalse(response.success)
+            self.assertEqual("REF001", response.code)
+            self.assertEqual("error", response.severity.value)
+            self.assertIn(self.MISSING_GUID, response.data["missing_guids"])
+            # No YAML mutation on the variant.
+            self.assertEqual(original_text, variant_path.read_text(encoding="utf-8"))
+            self.assertEqual(original_mtime, variant_path.stat().st_mtime_ns)
+
+    def test_dry_run_also_aborts_on_missing_guid(self) -> None:
+        """Dry-run must also reject when any referenced GUID is missing."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            self._create_project_with_missing_source(root)
+
+            response = revert_overrides(
+                variant_path="Assets/OrphanVariant.prefab",
+                target_file_id="100100000",
+                property_path="m_Name",
+                dry_run=True,
+                confirm=False,
+                change_reason=None,
+                project_root=root,
+            )
+
+            self.assertFalse(response.success)
+            self.assertEqual("REF001", response.code)
+
+
 if __name__ == "__main__":
     unittest.main()

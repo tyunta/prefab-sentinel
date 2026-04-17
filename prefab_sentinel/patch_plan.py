@@ -9,7 +9,6 @@ from typing import Any
 from prefab_sentinel.json_io import load_json_file
 
 PLAN_VERSION = 2
-_DEFAULT_RESOURCE_ID = "target"
 _RESOURCE_KIND_BY_SUFFIX = {
     ".json": "json",
     ".prefab": "prefab",
@@ -61,64 +60,43 @@ def _normalize_resource(resource: object, index: int) -> dict[str, Any]:
     return normalized
 
 
-def _normalize_v1_plan(payload: dict[str, Any]) -> dict[str, Any]:
-    target = payload.get("target")
-    if not isinstance(target, str) or not target.strip():
-        raise _error("target", "must be a non-empty string.")
-
-    ops = payload.get("ops")
-    if not isinstance(ops, list):
-        raise _error("ops", "must be an array.")
-
-    resource_id = _DEFAULT_RESOURCE_ID
-    return {
-        "plan_version": PLAN_VERSION,
-        "resources": [
-            {
-                "id": resource_id,
-                "kind": _infer_resource_kind(target),
-                "path": target.strip(),
-                "mode": "open",
-            }
-        ],
-        "ops": [{**deepcopy(op), "resource": resource_id} for op in ops],
-        "postconditions": [],
-    }
-
-
 def normalize_patch_plan(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("Patch plan root must be an object.")
 
     raw_version = payload.get("plan_version", payload.get("version"))
     if raw_version is None:
-        normalized = _normalize_v1_plan(payload)
-    else:
-        try:
-            plan_version = int(raw_version)
-        except (TypeError, ValueError) as exc:
-            raise _error("plan_version", f"must be an integer, got {raw_version!r}.") from exc
-        if plan_version != PLAN_VERSION:
-            raise _error("plan_version", f"must equal {PLAN_VERSION}, got {plan_version}.")
+        # Legacy ``{target, ops}`` shape is no longer accepted (#88).  Callers
+        # must send the canonical v2 schema with an explicit ``plan_version``.
+        raise _error(
+            "plan_version",
+            "is required; the legacy {target, ops} shape is no longer accepted.",
+        )
+    try:
+        plan_version = int(raw_version)
+    except (TypeError, ValueError) as exc:
+        raise _error("plan_version", f"must be an integer, got {raw_version!r}.") from exc
+    if plan_version != PLAN_VERSION:
+        raise _error("plan_version", f"must equal {PLAN_VERSION}, got {plan_version}.")
 
-        resources = payload.get("resources")
-        if not isinstance(resources, list) or not resources:
-            raise _error("resources", "must be a non-empty array.")
+    resources = payload.get("resources")
+    if not isinstance(resources, list) or not resources:
+        raise _error("resources", "must be a non-empty array.")
 
-        ops = payload.get("ops")
-        if not isinstance(ops, list):
-            raise _error("ops", "must be an array.")
+    ops = payload.get("ops")
+    if not isinstance(ops, list):
+        raise _error("ops", "must be an array.")
 
-        postconditions = payload.get("postconditions", [])
-        if not isinstance(postconditions, list):
-            raise _error("postconditions", "must be an array when provided.")
+    postconditions = payload.get("postconditions", [])
+    if not isinstance(postconditions, list):
+        raise _error("postconditions", "must be an array when provided.")
 
-        normalized = {
-            "plan_version": PLAN_VERSION,
-            "resources": [_normalize_resource(resource, index) for index, resource in enumerate(resources)],
-            "ops": [deepcopy(op) for op in ops],
-            "postconditions": [deepcopy(postcondition) for postcondition in postconditions],
-        }
+    normalized = {
+        "plan_version": PLAN_VERSION,
+        "resources": [_normalize_resource(resource, index) for index, resource in enumerate(resources)],
+        "ops": [deepcopy(op) for op in ops],
+        "postconditions": [deepcopy(postcondition) for postcondition in postconditions],
+    }
 
     resource_ids: set[str] = set()
     resource_map: dict[str, dict[str, Any]] = {}
@@ -198,16 +176,16 @@ def iter_resource_batches(plan: dict[str, Any]) -> list[tuple[dict[str, Any], li
 
 
 def build_bridge_request(plan: dict[str, Any]) -> dict[str, Any]:
-    request = {
+    """Build the stdin request for ``unity_patch_bridge.main``.
+
+    Emits only the canonical v2 shape (``protocol_version``, ``plan_version``,
+    ``resources``, ``ops``).  The bridge rejects any request carrying a
+    top-level ``target`` key with ``BRIDGE_LEGACY_SCHEMA_REJECTED`` (#88), so
+    this function must not populate that key even for single-resource plans.
+    """
+    return {
         "protocol_version": PLAN_VERSION,
         "plan_version": PLAN_VERSION,
         "resources": deepcopy(plan.get("resources", [])),
         "ops": deepcopy(plan.get("ops", [])),
     }
-    resources = request["resources"]
-    if len(resources) == 1 and isinstance(resources[0], dict):
-        r = resources[0]
-        request["target"] = r.get("path", "")
-        request["kind"] = r.get("kind", "")
-        request["mode"] = r.get("mode", "open")
-    return request

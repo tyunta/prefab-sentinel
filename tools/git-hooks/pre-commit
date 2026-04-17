@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Tracked pre-commit hook template for prefab-sentinel.
+#
+# Install with:
+#   install -m 0755 tools/git-hooks/pre-commit .git/hooks/pre-commit
+#
+# Workflow (all steps must succeed for the commit to proceed):
+#   1. ruff check          — lint fail aborts the commit.
+#   2. check_bridge_constants — cross-language drift (issue #84) aborts the commit.
+#   3. bump-my-version bump patch — auto-bump so the three version sites stay aligned.
+#   4. uv lock             — keep the lock file in sync with pyproject.toml.
+#   5. git add             — stage the files touched by steps 3/4.
+#
+# Rationale for the hook order:
+#   * ruff check before any mutation so a lint error never leaves a stale
+#     version/lockfile behind.
+#   * Drift check must run before the patch bump.  If the three version
+#     sites are already out of sync, an unattended patch bump would
+#     silently paper over one of them.
+#
+# Set SKIP_BUMP=1 to skip the patch-bump step (CLAUDE.md discourages this
+# — only use it for merges / release commits that have already bumped).
+
+set -euo pipefail
+
+echo "[pre-commit] ruff check…"
+uv run ruff check prefab_sentinel/ tests/ scripts/ tools/
+
+echo "[pre-commit] check_bridge_constants…"
+uv run python scripts/check_bridge_constants.py
+
+if [[ "${SKIP_BUMP:-0}" == "1" ]]; then
+    echo "[pre-commit] SKIP_BUMP=1 — skipping patch bump and uv lock."
+    exit 0
+fi
+
+echo "[pre-commit] bump-my-version bump patch…"
+uv run bump-my-version bump patch
+
+echo "[pre-commit] uv lock…"
+uv lock
+
+echo "[pre-commit] git add bumped files…"
+git add pyproject.toml .claude-plugin/plugin.json tools/unity/PrefabSentinel.UnityEditorControlBridge.cs uv.lock
