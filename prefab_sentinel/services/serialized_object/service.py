@@ -947,7 +947,7 @@ class SerializedObjectService:
                     )
                 )
                 continue
-            entry = {
+            entry: dict[str, Any] = {
                 "op": op_name,
                 "before": {
                     "handle": asset_handle,
@@ -1255,7 +1255,7 @@ class SerializedObjectService:
                 )
             )
             return
-        entry = {
+        entry: dict[str, Any] = {
             "op": op_name,
             "before": {
                 "handle": asset_handle,
@@ -1832,7 +1832,7 @@ class SerializedObjectService:
                 )
             )
             return
-        entry = {
+        entry: dict[str, Any] = {
             "op": op_name,
             "before": {
                 "handle": component_handle,
@@ -2032,7 +2032,7 @@ class SerializedObjectService:
             )
             return None
         try:
-            item_index = int(op.get("index"))
+            item_index = int(op["index"])
         except (TypeError, ValueError):
             diagnostics.append(
                 Diagnostic(
@@ -2186,8 +2186,8 @@ class SerializedObjectService:
                 if not isinstance(value, list):
                     raise TypeError(f"'{_ARRAY_SIZE_SUFFIX}' target must resolve to an array")
                 try:
-                    new_size = int(op.get("value"))
-                except (TypeError, ValueError) as exc:
+                    new_size = int(op["value"])
+                except (KeyError, TypeError, ValueError) as exc:
                     raise ValueError("array size must be an integer") from exc
                 if new_size < 0:
                     raise ValueError("array size must be >= 0")
@@ -2219,7 +2219,7 @@ class SerializedObjectService:
 
         if op_name == "insert_array_element":
             array_value = self._get_array_at_path(payload, property_path)
-            index = int(op.get("index"))
+            index = int(op["index"])
             if index < 0 or index > len(array_value):
                 raise IndexError("insert index is out of bounds")
             before_size = len(array_value)
@@ -2234,7 +2234,7 @@ class SerializedObjectService:
 
         if op_name == "remove_array_element":
             array_value = self._get_array_at_path(payload, property_path)
-            index = int(op.get("index"))
+            index = int(op["index"])
             if index < 0 or index >= len(array_value):
                 raise IndexError("remove index is out of bounds")
             before_size = len(array_value)
@@ -2397,7 +2397,7 @@ class SerializedObjectService:
                 },
             )
 
-        preview: list[dict[str, Any]] = []
+        preview = []
         for index, op in enumerate(ops):
             if not isinstance(op, dict):
                 diagnostics.append(

@@ -92,7 +92,7 @@ def validate_pcreate_set_op(
             )
         )
         return
-    entry = {
+    entry: dict[str, Any] = {
         "op": op_name,
         "before": {
             "handle": component_handle,
