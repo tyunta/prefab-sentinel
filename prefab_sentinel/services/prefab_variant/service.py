@@ -245,14 +245,24 @@ class PrefabVariantService:
         entries = parse_overrides(text)
         return detect_stale(entries, path, self._relative)
 
-    def resolve_chain_values(self, variant_path: str) -> dict[str, str]:
-        """Walk the full Variant chain and return effective override values."""
+    def resolve_chain_values(
+        self,
+        variant_path: str,
+        diagnostics: list[Diagnostic] | None = None,
+    ) -> dict[str, str]:
+        """Walk the full Variant chain and return effective override values.
+
+        When ``diagnostics`` is supplied, an initial-variant decode
+        failure and any walk-level diagnostics are appended to the sink;
+        otherwise the historical silent-swallow contract is preserved.
+        """
         return _resolve_chain_values(
             variant_path,
             self.project_root,
             resolve_scope_path,
             self._guid_map(),
             self._relative,
+            diagnostics,
         )
 
     def resolve_chain_values_with_origin(self, variant_path: str) -> ToolResponse:

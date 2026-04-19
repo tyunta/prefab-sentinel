@@ -199,8 +199,14 @@ def revert_overrides(
             },
         )
 
-    # Resolve chain values to show what the parent value is
-    chain_values = variant_svc.resolve_chain_values(variant_path)
+    # Resolve chain values to show what the parent value is. Diagnostics
+    # from the walk (issue #94: unreadable parent variants, missing GUIDs,
+    # etc.) ride on the outgoing response envelope so callers can distinguish
+    # "empty chain" from "chain contained unreadable files".
+    chain_diagnostics: list[Diagnostic] = []
+    chain_values = variant_svc.resolve_chain_values(
+        variant_path, diagnostics=chain_diagnostics
+    )
     parent_key = f"{target_file_id}:{property_path}"
     parent_value = chain_values.get(parent_key)
 
@@ -234,6 +240,7 @@ def revert_overrides(
                 "parent_value": parent_value,
                 "read_only": True,
             },
+            diagnostics=chain_diagnostics,
         )
 
     if not confirm:
@@ -252,11 +259,27 @@ def revert_overrides(
             },
         )
 
+    # change_reason is required for any confirmed write-mode invocation
+    # (audit log contract shared with all write-mode tools; see
+    # CLAUDE.md "API / エラー規約").
+    if not (change_reason or "").strip():
+        return error_response(
+            "CHANGE_REASON_REQUIRED",
+            "change_reason is required when confirm=True.",
+            severity=Severity.ERROR,
+            data={
+                "variant_path": variant_path,
+                "target": target_file_id,
+                "property_path": property_path,
+                "read_only": True,
+                "executed": False,
+            },
+        )
+
     # Confirm mode: remove the matching lines and write back
     ranges_to_remove = [(m.start_line_index, m.end_line_index) for m in matches]
     new_text = _remove_lines(text, ranges_to_remove)
 
-    diagnostics: list[Diagnostic] = []
     try:
         resolved_path.write_text(new_text, encoding="utf-8")
     except OSError as exc:
@@ -288,5 +311,5 @@ def revert_overrides(
             "read_only": False,
             "executed": True,
         },
-        diagnostics=diagnostics,
+        diagnostics=chain_diagnostics,
     )

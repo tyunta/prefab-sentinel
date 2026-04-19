@@ -21,6 +21,7 @@ from prefab_sentinel.services.prefab_variant import PrefabVariantService
 from prefab_sentinel.services.reference_resolver import ReferenceResolverService
 from prefab_sentinel.services.runtime_validation import RuntimeValidationService
 from prefab_sentinel.services.serialized_object import SerializedObjectService
+from prefab_sentinel.services.serialized_object.patch_validator import validate_op
 from tests.bridge_test_helpers import write_fake_runtime_runner, write_file
 
 BASE_GUID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -2807,7 +2808,8 @@ class TestNumericComponentWarning(unittest.TestCase):
 
             svc = SerializedObjectService(project_root=project_root)
             diagnostics: list = []
-            result = svc._validate_op(
+            result = validate_op(
+                svc,
                 "Assets/Test.prefab", 0,
                 {"op": "set", "component": "-42", "path": "m_IsActive", "value": 1},
                 diagnostics,
@@ -2826,7 +2828,8 @@ class TestNumericComponentWarning(unittest.TestCase):
 
             svc = SerializedObjectService(project_root=project_root)
             diagnostics: list = []
-            result = svc._validate_op(
+            result = validate_op(
+                svc,
                 "Assets/Test.prefab", 0,
                 {"op": "set", "component": "SkinnedMeshRenderer", "path": "m_IsActive", "value": 1},
                 diagnostics,
@@ -2837,7 +2840,7 @@ class TestNumericComponentWarning(unittest.TestCase):
 
 
 class TestBeforeValueResolution(unittest.TestCase):
-    """P1: _validate_op resolves before values from Variant overrides."""
+    """P1: validate_op resolves before values from Variant overrides."""
 
     _VARIANT_YAML = (
         "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n"
@@ -2868,7 +2871,8 @@ class TestBeforeValueResolution(unittest.TestCase):
             svc = SerializedObjectService(project_root=project_root, prefab_variant=pv)
 
             diagnostics: list = []
-            result = svc._validate_op(
+            result = validate_op(
+                svc,
                 "Assets/Variant.prefab",
                 0,
                 {"op": "set", "component": "42", "path": "m_Materials.Array.data[0]", "value": "new_mat"},
@@ -2888,7 +2892,8 @@ class TestBeforeValueResolution(unittest.TestCase):
             svc = SerializedObjectService(project_root=project_root, prefab_variant=pv)
 
             diagnostics: list = []
-            result = svc._validate_op(
+            result = validate_op(
+                svc,
                 "Assets/Variant.prefab",
                 0,
                 {"op": "set", "component": "42", "path": "m_IsActive", "value": 1},
@@ -2903,7 +2908,8 @@ class TestBeforeValueResolution(unittest.TestCase):
             svc = SerializedObjectService(project_root=project_root)
 
             diagnostics: list = []
-            result = svc._validate_op(
+            result = validate_op(
+                svc,
                 "Assets/Variant.prefab",
                 0,
                 {"op": "set", "component": "42", "path": "m_Materials.Array.data[0]", "value": "new_mat"},
@@ -2924,7 +2930,8 @@ class TestBeforeValueResolution(unittest.TestCase):
             svc = SerializedObjectService(project_root=project_root, prefab_variant=pv)
 
             diagnostics: list = []
-            result = svc._validate_op(
+            result = validate_op(
+                svc,
                 "Assets/Base.prefab",
                 0,
                 {"op": "set", "component": "1", "path": "m_Name", "value": "NewRoot"},
@@ -3024,7 +3031,8 @@ class TestChainBeforeValueResolution(unittest.TestCase):
             svc = SerializedObjectService(project_root=project_root, prefab_variant=pv)
 
             diagnostics: list = []
-            result = svc._validate_op(
+            result = validate_op(
+                svc,
                 "Assets/Leaf.prefab",
                 0,
                 {"op": "set", "component": "42", "path": "m_Materials.Array.data[0]", "value": "x"},
@@ -3042,7 +3050,8 @@ class TestChainBeforeValueResolution(unittest.TestCase):
             svc = SerializedObjectService(project_root=project_root, prefab_variant=pv)
 
             diagnostics: list = []
-            result = svc._validate_op(
+            result = validate_op(
+                svc,
                 "Assets/Leaf.prefab",
                 0,
                 {"op": "set", "component": "42", "path": "m_Materials.Array.data[1]", "value": "x"},
@@ -3060,7 +3069,8 @@ class TestChainBeforeValueResolution(unittest.TestCase):
             svc = SerializedObjectService(project_root=project_root, prefab_variant=pv)
 
             diagnostics: list = []
-            result = svc._validate_op(
+            result = validate_op(
+                svc,
                 "Assets/Leaf.prefab",
                 0,
                 {"op": "set", "component": "42", "path": "m_IsActive", "value": 0},
@@ -3086,7 +3096,8 @@ class TestChainBeforeValueResolution(unittest.TestCase):
             svc = SerializedObjectService(project_root=project_root, prefab_variant=pv)
 
             diagnostics: list = []
-            result = svc._validate_op(
+            result = validate_op(
+                svc,
                 "Assets/Orphan.prefab",
                 0,
                 {"op": "set", "component": "42", "path": "m_IsActive", "value": 0},

@@ -9,18 +9,17 @@ ops (``set``, ``save``) live in ``prefab_create_values``.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from prefab_sentinel.contracts import Diagnostic
+from prefab_sentinel.services.serialized_object.handles import (
+    ROOT_HANDLE,
+    require_handle_ref,
+    validate_result_handle,
+)
 from prefab_sentinel.services.serialized_object.prefab_create_dispatch import (
-    _ROOT_HANDLE,
     _PrefabCreateContext,
 )
-
-if TYPE_CHECKING:
-    from prefab_sentinel.services.serialized_object.service import (
-        SerializedObjectService,
-    )
 
 
 def _schema_error(ctx: _PrefabCreateContext, location: str, evidence: str) -> None:
@@ -36,7 +35,6 @@ def _schema_error(ctx: _PrefabCreateContext, location: str, evidence: str) -> No
 
 
 def validate_pcreate_root_op(
-    service: SerializedObjectService,
     ctx: _PrefabCreateContext,
     index: int,
     op: dict[str, Any],
@@ -46,7 +44,7 @@ def validate_pcreate_root_op(
         _schema_error(ctx, f"ops[{index}].op", "prefab root may be created only once")
         return
     ctx.created = True
-    ctx.known_handles[_ROOT_HANDLE] = "game_object"
+    ctx.known_handles[ROOT_HANDLE] = "game_object"
     name_value = op.get("name")
     if op_name == "create_root":
         if not isinstance(name_value, str) or not name_value.strip():
@@ -62,14 +60,14 @@ def validate_pcreate_root_op(
             )
             return
         ctx.root_name = name_value.strip()
-    result_handle = service._validate_result_handle(
+    result_handle = validate_result_handle(
         target=ctx.target,
         index=index,
         op=op,
         known_handles=ctx.known_handles,
         diagnostics=ctx.diagnostics,
     )
-    if result_handle and result_handle != _ROOT_HANDLE:
+    if result_handle and result_handle != ROOT_HANDLE:
         ctx.known_handles[result_handle] = "game_object"
     ctx.preview.append(
         {
@@ -78,7 +76,7 @@ def validate_pcreate_root_op(
             "after": {
                 "path": ctx.target,
                 "root_name": ctx.root_name,
-                "handle": result_handle or _ROOT_HANDLE,
+                "handle": result_handle or ROOT_HANDLE,
                 "kind": "game_object",
             },
         }
@@ -86,7 +84,6 @@ def validate_pcreate_root_op(
 
 
 def validate_pcreate_game_object_op(
-    service: SerializedObjectService,
     ctx: _PrefabCreateContext,
     index: int,
     op: dict[str, Any],
@@ -100,7 +97,7 @@ def validate_pcreate_game_object_op(
     if not isinstance(name_value, str) or not name_value.strip():
         _schema_error(ctx, f"ops[{index}].name", "name is required for create_game_object")
         return
-    parent_handle = service._require_handle_ref(
+    parent_handle = require_handle_ref(
         target=ctx.target,
         index=index,
         field="parent",
@@ -109,7 +106,7 @@ def validate_pcreate_game_object_op(
         diagnostics=ctx.diagnostics,
         expected_kind="game_object",
     )
-    result_handle = service._validate_result_handle(
+    result_handle = validate_result_handle(
         target=ctx.target,
         index=index,
         op=op,
@@ -135,12 +132,11 @@ def validate_pcreate_game_object_op(
 
 
 def validate_pcreate_rename_object_op(
-    service: SerializedObjectService,
     ctx: _PrefabCreateContext,
     index: int,
     op: dict[str, Any],
 ) -> None:
-    object_handle = service._require_handle_ref(
+    object_handle = require_handle_ref(
         target=ctx.target,
         index=index,
         field="target",
@@ -165,12 +161,11 @@ def validate_pcreate_rename_object_op(
 
 
 def validate_pcreate_reparent_op(
-    service: SerializedObjectService,
     ctx: _PrefabCreateContext,
     index: int,
     op: dict[str, Any],
 ) -> None:
-    object_handle = service._require_handle_ref(
+    object_handle = require_handle_ref(
         target=ctx.target,
         index=index,
         field="target",
@@ -179,7 +174,7 @@ def validate_pcreate_reparent_op(
         diagnostics=ctx.diagnostics,
         expected_kind="game_object",
     )
-    parent_handle = service._require_handle_ref(
+    parent_handle = require_handle_ref(
         target=ctx.target,
         index=index,
         field="parent",
@@ -190,7 +185,7 @@ def validate_pcreate_reparent_op(
     )
     if object_handle is None or parent_handle is None:
         return
-    if object_handle == _ROOT_HANDLE:
+    if object_handle == ROOT_HANDLE:
         _schema_error(ctx, f"ops[{index}].target", "root handle cannot be reparented")
         return
     if object_handle == parent_handle:
@@ -206,7 +201,6 @@ def validate_pcreate_reparent_op(
 
 
 def validate_pcreate_add_component_op(
-    service: SerializedObjectService,
     ctx: _PrefabCreateContext,
     index: int,
     op: dict[str, Any],
@@ -215,7 +209,7 @@ def validate_pcreate_add_component_op(
     if not ctx.created:
         _schema_error(ctx, f"ops[{index}].op", f"{op_name} requires a prefab root first")
         return
-    object_handle = service._require_handle_ref(
+    object_handle = require_handle_ref(
         target=ctx.target,
         index=index,
         field="target",
@@ -230,7 +224,7 @@ def validate_pcreate_add_component_op(
     if not isinstance(type_name, str) or not type_name.strip():
         _schema_error(ctx, f"ops[{index}].type", f"type is required for {op_name}")
         return
-    result_handle = service._validate_result_handle(
+    result_handle = validate_result_handle(
         target=ctx.target,
         index=index,
         op=op,
@@ -256,12 +250,11 @@ def validate_pcreate_add_component_op(
 
 
 def validate_pcreate_remove_component_op(
-    service: SerializedObjectService,
     ctx: _PrefabCreateContext,
     index: int,
     op: dict[str, Any],
 ) -> None:
-    component_handle = service._require_handle_ref(
+    component_handle = require_handle_ref(
         target=ctx.target,
         index=index,
         field="target",

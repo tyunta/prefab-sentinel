@@ -21,7 +21,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from prefab_sentinel.contracts import Severity
+from prefab_sentinel.contracts import Diagnostic, Severity
 from prefab_sentinel.services.prefab_variant import PrefabVariantService
 from tests.bridge_test_helpers import write_file
 
@@ -188,6 +188,56 @@ class ModelSuffixTests(unittest.TestCase):
 
     def test_obj_treated_as_model(self) -> None:
         self._assert_model_suffix_diagnostic(".obj")
+
+
+class ResolveChainValuesDiagnosticTests(unittest.TestCase):
+    """T-94-A / T-94-B: ``resolve_chain_values`` surfaces an initial-variant
+    decode failure through the optional ``diagnostics`` sink and
+    preserves the silent-swallow contract when the sink is omitted."""
+
+    @staticmethod
+    def _write_unreadable_variant(root: Path, variant_name: str = "TestVariant") -> Path:
+        """Write a non-UTF-8 binary file with ``.prefab`` suffix plus a meta."""
+        variant_path = root / "Assets" / f"{variant_name}.prefab"
+        variant_path.parent.mkdir(parents=True, exist_ok=True)
+        variant_path.write_bytes(b"\x81\x00\xff\xfe not utf-8")
+        write_file(
+            root / "Assets" / f"{variant_name}.prefab.meta",
+            f"fileFormatVersion: 2\nguid: {VARIANT_GUID}\n",
+        )
+        return variant_path
+
+    def test_initial_decode_failure_appends_diagnostic(self) -> None:
+        """T-94-A: with a sink, an unreadable variant yields one
+        ``unreadable_file`` diagnostic and an empty dict."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            self._write_unreadable_variant(root)
+
+            svc = PrefabVariantService(project_root=root)
+            sink: list[Diagnostic] = []
+            result = svc.resolve_chain_values(
+                "Assets/TestVariant.prefab", diagnostics=sink
+            )
+
+            self.assertEqual({}, result)
+            self.assertEqual(1, len(sink))
+            diag = sink[0]
+            self.assertEqual("unreadable_file", diag.detail)
+            self.assertEqual("file", diag.location)
+            self.assertEqual("unable to decode variant prefab", diag.evidence)
+            self.assertEqual("Assets/TestVariant.prefab", diag.path)
+
+    def test_initial_decode_failure_without_sink_does_not_raise(self) -> None:
+        """T-94-B: without a sink the contract remains ``return {}``."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            self._write_unreadable_variant(root)
+
+            svc = PrefabVariantService(project_root=root)
+            result = svc.resolve_chain_values("Assets/TestVariant.prefab")
+
+            self.assertEqual({}, result)
 
 
 if __name__ == "__main__":

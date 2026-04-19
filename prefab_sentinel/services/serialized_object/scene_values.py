@@ -1,9 +1,7 @@
-"""Value-level validators for prefab-create plans.
+"""Field-value validators for scene plans.
 
-Each function validates one ``op_name`` from the prefab-create vocabulary
-that mutates Component fields (``set``, ``insert_array_element``,
-``remove_array_element``) or terminates the plan (``save``).  Object /
-hierarchy ops live in ``prefab_create_structure``.
+Covers the value-mutating ops (``set``, ``insert_array_element``,
+``remove_array_element``) and the terminator ``save_scene``.
 """
 
 from __future__ import annotations
@@ -15,12 +13,12 @@ from prefab_sentinel.contracts import Diagnostic
 from prefab_sentinel.services.serialized_object.handles import require_handle_ref
 from prefab_sentinel.services.serialized_object.prefab_create_dispatch import (
     _check_handle_value,
-    _PrefabCreateContext,
 )
+from prefab_sentinel.services.serialized_object.scene_dispatch import _SceneContext
 
 
-def validate_pcreate_set_op(
-    ctx: _PrefabCreateContext,
+def validate_scene_set_op(
+    ctx: _SceneContext,
     index: int,
     op: dict[str, Any],
     op_name: str,
@@ -110,28 +108,28 @@ def validate_pcreate_set_op(
     ctx.preview.append(entry)
 
 
-def validate_pcreate_save_op(
-    ctx: _PrefabCreateContext,
+def validate_scene_save_op(
+    ctx: _SceneContext,
     index: int,
     op: dict[str, Any],
 ) -> None:
+    if not ctx.scene_initialized:
+        ctx.diagnostics.append(
+            Diagnostic(
+                path=ctx.target,
+                location=f"ops[{index}].op",
+                detail="schema_error",
+                evidence="save_scene requires an opened scene first",
+            )
+        )
+        return
     if ctx.saved:
         ctx.diagnostics.append(
             Diagnostic(
                 path=ctx.target,
                 location=f"ops[{index}].op",
                 detail="schema_error",
-                evidence="save may appear only once",
-            )
-        )
-        return
-    if not ctx.created:
-        ctx.diagnostics.append(
-            Diagnostic(
-                path=ctx.target,
-                location=f"ops[{index}].op",
-                detail="schema_error",
-                evidence="save requires a prefab root first",
+                evidence="save_scene may appear only once",
             )
         )
         return
@@ -141,15 +139,21 @@ def validate_pcreate_save_op(
                 path=ctx.target,
                 location=f"ops[{index}].op",
                 detail="schema_error",
-                evidence="save must be the final operation in create mode",
+                evidence="save_scene must be the final operation in scene mode",
             )
         )
         return
     ctx.saved = True
     ctx.preview.append(
         {
-            "op": "save",
+            "op": "save_scene",
             "before": "(unsaved)",
             "after": {"path": ctx.target},
         }
     )
+
+
+__all__ = [
+    "validate_scene_set_op",
+    "validate_scene_save_op",
+]
