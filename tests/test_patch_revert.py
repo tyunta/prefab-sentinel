@@ -457,5 +457,47 @@ guid: {VARIANT_GUID}
             self.assertEqual("REF001", response.code)
 
 
+class TestRevertChangeReasonRequired(unittest.TestCase):
+    """confirm=True without change_reason must be rejected (audit-log contract)."""
+
+    def test_confirm_without_change_reason_returns_change_reason_required(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_variant_project(root)
+
+            response = revert_overrides(
+                variant_path="Assets/Variant.prefab",
+                target_file_id="3430728864525902586",
+                property_path="m_Materials.Array.data[0]",
+                dry_run=False,
+                confirm=True,
+                change_reason=None,
+                project_root=root,
+            )
+
+            self.assertFalse(response.success)
+            self.assertEqual("CHANGE_REASON_REQUIRED", response.code)
+            self.assertEqual(False, response.data["executed"])
+            self.assertEqual(True, response.data["read_only"])
+
+    def test_confirm_with_blank_change_reason_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_variant_project(root)
+
+            response = revert_overrides(
+                variant_path="Assets/Variant.prefab",
+                target_file_id="3430728864525902586",
+                property_path="m_Materials.Array.data[0]",
+                dry_run=False,
+                confirm=True,
+                change_reason="   ",
+                project_root=root,
+            )
+
+            self.assertFalse(response.success)
+            self.assertEqual("CHANGE_REASON_REQUIRED", response.code)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -29,13 +29,22 @@ def resolve_chain_values(
     resolve_path: Callable[[str, Path], Path],
     guid_map: dict[str, Path],
     relative_fn: Callable[[Path], str],
+    diagnostics: list[Diagnostic] | None = None,
 ) -> dict[str, str]:
     """Walk the full Variant chain and return effective override values.
 
     Returns a dict keyed by ``"{target_file_id}:{property_path}"`` with
     the effective value (last-write-wins from the *top* of the chain —
-    the variant itself wins, consistent with override semantics).  Any
-    diagnostic produced by the walk is discarded.
+    the variant itself wins, consistent with override semantics).
+
+    Args:
+        diagnostics: Optional sink for diagnostics produced by the walk.
+            When supplied, an initial-variant decode failure appends a
+            single ``detail="unreadable_file"`` diagnostic and the
+            chain walker's diagnostics are also appended to it. When
+            ``None``, the returned dict remains ``{}`` on failure with
+            no side effects, preserving the historical silent-swallow
+            contract for callers that opted out of the sink channel.
     """
     path = resolve_path(variant_path, project_root)
     if not path.exists():
@@ -44,13 +53,22 @@ def resolve_chain_values(
     try:
         text = decode_text_file(path)
     except (OSError, UnicodeDecodeError):
+        if diagnostics is not None:
+            diagnostics.append(
+                Diagnostic(
+                    path=relative_fn(path),
+                    location="file",
+                    detail="unreadable_file",
+                    evidence="unable to decode variant prefab",
+                )
+            )
         return {}
 
     if SOURCE_PREFAB_PATTERN.search(text) is None:
         return {}
 
     result: dict[str, str] = {}
-    sink: list[Diagnostic] = []
+    sink: list[Diagnostic] = diagnostics if diagnostics is not None else []
     for level in walk_chain_levels(text, path, guid_map, relative_fn, sink):
         _accumulate_level_values(level, result)
 

@@ -152,11 +152,29 @@ class RuntimeValidationService:
             ``ToolResponse`` with ``data.log_lines`` and ``data.line_count``.
         """
         runtime_root = default_runtime_root(self.project_root)
-        log_path = (
-            resolve_scope_path(log_file, runtime_root)
-            if log_file
-            else runtime_root / "Logs" / "Editor.log"
-        )
+        # Issue #96: when the caller supplies an explicit log_file, require
+        # the resolved real path to be contained within the resolved
+        # runtime_root. Fail-closed before any filesystem read so symlinks,
+        # absolute paths, and `..` traversal cannot escape the root.
+        if log_file is not None:
+            resolved_root = Path(runtime_root).resolve()
+            resolved_log = resolve_scope_path(log_file, runtime_root).resolve()
+            if not resolved_log.is_relative_to(resolved_root):
+                return error_response(
+                    "RUN_CONFIG_ERROR",
+                    "log_file resolves outside runtime_root.",
+                    severity=Severity.ERROR,
+                    data={
+                        "log_file": log_file,
+                        "runtime_root": str(resolved_root),
+                        "read_only": True,
+                        "executed": False,
+                    },
+                )
+            log_path = resolved_log
+        else:
+            log_path = runtime_root / "Logs" / "Editor.log"
+
         if not log_path.exists():
             return success_response(
                 "RUN_LOG_MISSING",
@@ -171,7 +189,24 @@ class RuntimeValidationService:
                 },
             )
 
-        lines = decode_text_file(log_path).splitlines()
+        # Issue #95: a garbled Unity log must not propagate as an exception.
+        # Surface it as a warning-severity success with empty log lines.
+        try:
+            text = decode_text_file(log_path)
+        except UnicodeDecodeError:
+            return success_response(
+                "RUN_LOG_DECODE_WARN",
+                "Unity log file could not be decoded as UTF-8; returning empty log lines.",
+                severity=Severity.WARNING,
+                data={
+                    "log_path": self._relative(log_path),
+                    "line_count": 0,
+                    "log_lines": [],
+                    "since_timestamp": since_timestamp,
+                    "read_only": True,
+                },
+            )
+        lines = text.splitlines()
         if max_lines > 0 and len(lines) > max_lines:
             lines = lines[-max_lines:]
         return success_response(

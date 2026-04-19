@@ -6,27 +6,19 @@ matching structural / value validator (in
 asserts the create-mode invariants (single root op, single trailing
 ``save``).
 
-Shared types and helpers used by the validators (``_PrefabCreateContext``,
-``_ROOT_HANDLE``, ``_SUPPORTED_OPS``, ``_check_handle_value``) live here
-because both the structure and value modules import them; service-level
-asset / scene validators also import them.
+Shared types and helpers used by the validators
+(``_PrefabCreateContext``, ``_check_handle_value``) live here because
+both the structure and value modules import them.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from prefab_sentinel.contracts import Diagnostic
-
-if TYPE_CHECKING:
-    from prefab_sentinel.services.serialized_object.service import (
-        SerializedObjectService,
-    )
-
-_SUPPORTED_OPS = {"set", "insert_array_element", "remove_array_element"}
-_ROOT_HANDLE = "root"
+from prefab_sentinel.services.serialized_object.handles import VALUE_OPS
 
 
 @dataclass
@@ -62,16 +54,14 @@ def _check_handle_value(
 
 
 def validate_prefab_create_ops(
-    service: SerializedObjectService,
     target: str,
     ops: list[dict[str, Any]],
 ) -> tuple[list[Diagnostic], list[dict[str, Any]]]:
     """Validate a prefab-create plan and return ``(diagnostics, preview)``.
 
-    Mirrors the original ``SerializedObjectService._validate_prefab_create_ops``
-    contract: schema errors are appended to ``diagnostics``; per-op preview
-    rows are appended to ``preview``; the final two diagnostics enforce
-    the "must create root" / "must save" invariants for create mode.
+    Schema errors are appended to ``diagnostics``; per-op preview rows
+    are appended to ``preview``; the final two diagnostics enforce the
+    "must create root" / "must save" invariants for create mode.
     """
     from prefab_sentinel.services.serialized_object.prefab_create_structure import (
         validate_pcreate_add_component_op,
@@ -142,19 +132,19 @@ def validate_prefab_create_ops(
 
         op_name = str(op.get("op", "")).strip()
         if op_name in {"create_prefab", "create_root"}:
-            validate_pcreate_root_op(service, ctx, index, op, op_name)
+            validate_pcreate_root_op(ctx, index, op, op_name)
         elif op_name == "create_game_object":
-            validate_pcreate_game_object_op(service, ctx, index, op)
+            validate_pcreate_game_object_op(ctx, index, op)
         elif op_name == "rename_object":
-            validate_pcreate_rename_object_op(service, ctx, index, op)
+            validate_pcreate_rename_object_op(ctx, index, op)
         elif op_name == "reparent":
-            validate_pcreate_reparent_op(service, ctx, index, op)
+            validate_pcreate_reparent_op(ctx, index, op)
         elif op_name in {"add_component", "find_component"}:
-            validate_pcreate_add_component_op(service, ctx, index, op, op_name)
+            validate_pcreate_add_component_op(ctx, index, op, op_name)
         elif op_name == "remove_component":
-            validate_pcreate_remove_component_op(service, ctx, index, op)
-        elif op_name in _SUPPORTED_OPS:
-            validate_pcreate_set_op(service, ctx, index, op, op_name)
+            validate_pcreate_remove_component_op(ctx, index, op)
+        elif op_name in VALUE_OPS:
+            validate_pcreate_set_op(ctx, index, op, op_name)
         elif op_name == "save":
             validate_pcreate_save_op(ctx, index, op)
         else:
@@ -186,3 +176,8 @@ def validate_prefab_create_ops(
             )
         )
     return ctx.diagnostics, ctx.preview
+
+
+__all__ = [
+    "validate_prefab_create_ops",
+]
