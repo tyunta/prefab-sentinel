@@ -50,11 +50,16 @@ class SerializedObjectService:
         self.project_root = find_project_root(project_root or Path.cwd())
         self._prefab_variant = prefab_variant
         self._before_cache: dict[str, str] | None = None
+        # File id → Unity component type name companion map for the same
+        # variant target as ``_before_cache``. Lifecycle-bound to it: any
+        # cache invalidation clears both.
+        self._before_class_map: dict[str, str] | None = None
         self._resource_adapters: tuple[_ResourceAdapter, ...] = build_default_adapters()
 
     def invalidate_before_cache(self) -> None:
         """Reset the before-value cache used by JSON-target dry-run previews."""
         self._before_cache = None
+        self._before_class_map = None
 
     def _resolve_target_path(self, target: str) -> Path:
         """Resolve *target* against the service project root."""

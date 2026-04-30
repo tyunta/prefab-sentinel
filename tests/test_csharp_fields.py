@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from prefab_sentinel.contracts import Diagnostic
 from prefab_sentinel.csharp_fields import (
     CSharpField,
     build_field_map,
@@ -14,6 +15,7 @@ from prefab_sentinel.csharp_fields import (
 )
 from prefab_sentinel.csharp_fields_resolve import (
     build_class_name_index,
+    find_derived_guids,
     resolve_inherited_fields,
     resolve_script_fields,
 )
@@ -723,6 +725,149 @@ class TestResolveInheritedFields(unittest.TestCase):
                 _class_index=class_index,
             )
         self.assertEqual(4, len(fields))
+
+
+def _write_undecodable_cs(root: Path, rel_path: str, guid: str) -> Path:
+    """Place a binary `.cs` file at ``rel_path`` with a `.meta` carrying ``guid``."""
+    cs_path = root / rel_path
+    cs_path.parent.mkdir(parents=True, exist_ok=True)
+    # Bytes that fail UTF-8 decode (truncated UTF-16 surrogate, lone 0xFF marker).
+    cs_path.write_bytes(b"\xff\xfe\x00\x00\xc3\x28\x80\x80")
+    meta_path = Path(str(cs_path) + ".meta")
+    meta_path.write_text(
+        f"fileFormatVersion: 2\nguid: {guid}\n",
+        encoding="utf-8",
+    )
+    return cs_path
+
+
+class TestBuildFieldMapDiagnostics(unittest.TestCase):
+    """Diagnostic-sink behavior for ``build_field_map``."""
+
+    _GOOD_GUID = "11110000000000000000000000000001"
+    _BAD_GUID = "22220000000000000000000000000002"
+
+    def _make_mixed_project(self, root: Path) -> None:
+        _make_cs_project(root, {
+            "Assets/Scripts/Good.cs": (
+                self._GOOD_GUID,
+                "public class Good : MonoBehaviour {\n    public int health;\n}\n",
+            ),
+        })
+        _write_undecodable_cs(root, "Assets/Scripts/Bad.cs", self._BAD_GUID)
+
+    def test_undecodable_file_records_one_diagnostic(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._make_mixed_project(root)
+            sink: list[Diagnostic] = []
+            field_map = build_field_map(root, diagnostics=sink)
+
+        self.assertIn(self._GOOD_GUID, field_map)
+        self.assertNotIn(self._BAD_GUID, field_map)
+        self.assertEqual(1, len(sink))
+        diag = sink[0]
+        self.assertEqual("unreadable_file", diag.detail)
+        self.assertIn("Bad.cs", diag.path)
+
+    def test_no_sink_silent_skip(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._make_mixed_project(root)
+            # No `diagnostics=` argument — silent-skip branch.
+            field_map = build_field_map(root)
+
+        self.assertIn(self._GOOD_GUID, field_map)
+        self.assertNotIn(self._BAD_GUID, field_map)
+
+
+class TestBuildClassNameIndexDiagnostics(unittest.TestCase):
+    """Diagnostic-sink behavior for ``build_class_name_index``."""
+
+    def test_undecodable_file_records_one_diagnostic(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _make_cs_project(root, {
+                "Assets/Scripts/Good.cs": (
+                    "33330000000000000000000000000003",
+                    "public class GoodCls : MonoBehaviour {\n    public int x;\n}\n",
+                ),
+            })
+            _write_undecodable_cs(
+                root, "Assets/Scripts/Bad.cs", "44440000000000000000000000000004"
+            )
+            sink: list[Diagnostic] = []
+            index = build_class_name_index(root, diagnostics=sink)
+
+        self.assertIn("GoodCls", index)
+        self.assertEqual(1, len(sink))
+        self.assertEqual("unreadable_file", sink[0].detail)
+
+
+class TestResolveInheritedFieldsDiagnostics(unittest.TestCase):
+    """Diagnostic-sink behavior for ``resolve_inherited_fields``."""
+
+    def test_undecodable_parent_records_one_diagnostic(self) -> None:
+        # Set up: derived inherits from a class whose source is binary.
+        # The class index sees only Good (since Bad fails decode), so
+        # derived's base class lookup will not even reach Bad — the
+        # diagnostic must be emitted by the index-building phase.
+        derived_guid = "55550000000000000000000000000005"
+        bad_guid = "66660000000000000000000000000006"
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _make_cs_project(root, {
+                "Assets/Scripts/DerivedThing.cs": (
+                    derived_guid,
+                    "public class DerivedThing : BadBase {\n"
+                    "    public int n;\n"
+                    "}\n",
+                ),
+            })
+            _write_undecodable_cs(
+                root, "Assets/Scripts/BadBase.cs", bad_guid
+            )
+            sink: list[Diagnostic] = []
+            fields = resolve_inherited_fields(
+                derived_guid, root, diagnostics=sink
+            )
+
+        names = {f.name for f in fields}
+        self.assertEqual({"n"}, names)
+        self.assertGreaterEqual(len(sink), 1)
+        self.assertTrue(
+            any(d.detail == "unreadable_file" for d in sink),
+            f"sink={sink}",
+        )
+
+
+class TestFindDerivedGuidsDiagnostics(unittest.TestCase):
+    """Diagnostic-sink behavior for ``find_derived_guids``."""
+
+    def test_undecodable_file_records_one_diagnostic(self) -> None:
+        good_guid = "77770000000000000000000000000007"
+        bad_guid = "88880000000000000000000000000008"
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _make_cs_project(root, {
+                "Assets/Scripts/Child.cs": (
+                    good_guid,
+                    "public class Child : Parent {\n    public int x;\n}\n",
+                ),
+            })
+            _write_undecodable_cs(
+                root, "Assets/Scripts/Bad.cs", bad_guid
+            )
+            sink: list[Diagnostic] = []
+            find_derived_guids("Parent", root, diagnostics=sink)
+
+        # The undecodable file failure surfaces from either the class-index
+        # build phase or the per-file source-read phase inside find_derived_guids.
+        self.assertGreaterEqual(len(sink), 1)
+        self.assertTrue(
+            any(d.detail == "unreadable_file" for d in sink),
+            f"sink={sink}",
+        )
 
 
 if __name__ == "__main__":

@@ -3148,6 +3148,113 @@ class TestChainBeforeValueResolution(unittest.TestCase):
             # Top overrides data[0] -> should shadow Mid's override
             self.assertIn("55555555555555555555555555555555", values["42:m_Materials.Array.data[0]"])
 
+    # ----- Type-name lookup paths (component addressed by Unity type name) -----
+
+    def test_chain_resolves_by_type_name(self) -> None:
+        """`component="MeshRenderer"` resolves to the same value as `component="42"`."""
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = self._make_chain(tmp)
+            pv = PrefabVariantService(project_root=project_root)
+            svc_by_id = SerializedObjectService(
+                project_root=project_root, prefab_variant=pv
+            )
+            svc_by_name = SerializedObjectService(
+                project_root=project_root, prefab_variant=pv
+            )
+
+            by_id = validate_op(
+                svc_by_id,
+                "Assets/Leaf.prefab",
+                0,
+                {"op": "set", "component": "42",
+                 "path": "m_Materials.Array.data[0]", "value": "x"},
+                [],
+            )
+            by_name = validate_op(
+                svc_by_name,
+                "Assets/Leaf.prefab",
+                0,
+                {"op": "set", "component": "MeshRenderer",
+                 "path": "m_Materials.Array.data[0]", "value": "x"},
+                [],
+            )
+
+        self.assertIsNotNone(by_id)
+        self.assertIsNotNone(by_name)
+        self.assertEqual(by_id["before"], by_name["before"])
+
+    def test_chain_ambiguous_type_name(self) -> None:
+        """Two MeshRenderers in the same chain → ambiguous-type sentinel."""
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            assets = project_root / "Assets"
+            assets.mkdir(parents=True)
+
+            # Base prefab with two MeshRenderers (file ids 42 and 43).
+            base_yaml = (
+                "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n"
+                "--- !u!23 &42\nMeshRenderer:\n  m_IsActive: 1\n"
+                "--- !u!23 &43\nMeshRenderer:\n  m_IsActive: 0\n"
+            )
+            base = assets / "Base.prefab"
+            base.write_text(base_yaml)
+            (assets / "Base.prefab.meta").write_text(
+                "guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaa0000\n"
+            )
+
+            # A Variant referencing the base so the chain has a top.
+            leaf_yaml = (
+                "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n"
+                "--- !u!1001 &100100000\n"
+                "PrefabInstance:\n"
+                "  m_SourcePrefab: {fileID: 100100000, "
+                "guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaa0000, type: 3}\n"
+                "  m_Modifications: []\n"
+            )
+            leaf = assets / "Leaf.prefab"
+            leaf.write_text(leaf_yaml)
+            (assets / "Leaf.prefab.meta").write_text(
+                "guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaa1111\n"
+            )
+
+            pv = PrefabVariantService(project_root=project_root)
+            svc = SerializedObjectService(project_root=project_root, prefab_variant=pv)
+
+            result = validate_op(
+                svc,
+                "Assets/Leaf.prefab",
+                0,
+                {"op": "set", "component": "MeshRenderer",
+                 "path": "m_IsActive", "value": "0"},
+                [],
+            )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(
+            "(unresolved: ambiguous component type)", result["before"]
+        )
+
+    def test_chain_type_name_not_in_chain(self) -> None:
+        """Type name absent from the chain → not-found sentinel."""
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = self._make_chain(tmp)
+            pv = PrefabVariantService(project_root=project_root)
+            svc = SerializedObjectService(project_root=project_root, prefab_variant=pv)
+
+            result = validate_op(
+                svc,
+                "Assets/Leaf.prefab",
+                0,
+                {"op": "set", "component": "Camera",
+                 "path": "m_IsActive", "value": "0"},
+                [],
+            )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(
+            "(unresolved: type not found in chain)", result["before"]
+        )
+
 
 class TestResolveChainValuesWithOrigin(unittest.TestCase):
     """Tests for resolve_chain_values_with_origin() origin tracking."""

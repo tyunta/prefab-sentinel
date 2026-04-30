@@ -2231,7 +2231,7 @@ class TestEditorSideEffectTools(unittest.TestCase):
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_recompile", {}))
-        mock_send.assert_called_once_with(action="recompile_scripts")
+        mock_send.assert_called_once_with(action="recompile_scripts", force_reimport=False)
 
     def test_editor_run_tests_delegates(self) -> None:
         server = create_server()

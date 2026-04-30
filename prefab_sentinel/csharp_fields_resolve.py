@@ -10,11 +10,13 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from prefab_sentinel.contracts import Diagnostic
 from prefab_sentinel.csharp_fields import (
     CSharpField,
     build_field_map,
     parse_class_info,
     parse_serialized_fields,
+    record_unreadable,
 )
 
 __all__ = [
@@ -128,6 +130,8 @@ def _strip_namespace(name: str) -> str:
 def build_class_name_index(
     project_root: Path,
     _guid_index: dict[str, Path] | None = None,
+    *,
+    diagnostics: list[Diagnostic] | None = None,
 ) -> dict[str, tuple[str, Path]]:
     """Build a mapping from class name to ``(guid, cs_path)``.
 
@@ -137,6 +141,10 @@ def build_class_name_index(
     Args:
         project_root: Unity project root directory.
         _guid_index: Pre-built GUID index to avoid redundant rebuilds.
+        diagnostics: Optional sink for per-file decode-failure diagnostics.
+            When supplied, each unreadable file appends one
+            ``Diagnostic(detail="unreadable_file", ...)``; when omitted, the
+            decode failure is silently skipped and the scan proceeds.
 
     Returns:
         Dict mapping class name to ``(guid, cs_path)`` tuple.
@@ -153,6 +161,7 @@ def build_class_name_index(
         try:
             source = asset_path.read_text(encoding="utf-8-sig")
         except (OSError, UnicodeDecodeError):
+            record_unreadable(diagnostics, asset_path, project_root)
             continue
         info = parse_class_info(source, hint_name=asset_path.stem)
         if info is not None:
@@ -166,6 +175,7 @@ def resolve_inherited_fields(
     *,
     _field_map: dict[str, list[CSharpField]] | None = None,
     _class_index: dict[str, tuple[str, Path]] | None = None,
+    diagnostics: list[Diagnostic] | None = None,
 ) -> list[CSharpField]:
     """Resolve all serialized fields including inherited ones.
 
@@ -182,14 +192,15 @@ def resolve_inherited_fields(
         project_root: Unity project root directory.
         _field_map: Pre-built field map (for caching).
         _class_index: Pre-built class name index (for caching).
+        diagnostics: Optional sink for per-file decode-failure diagnostics.
 
     Returns:
         List of serialized fields (base class fields first, then derived).
     """
     if _field_map is None:
-        _field_map = build_field_map(project_root)
+        _field_map = build_field_map(project_root, diagnostics=diagnostics)
     if _class_index is None:
-        _class_index = build_class_name_index(project_root)
+        _class_index = build_class_name_index(project_root, diagnostics=diagnostics)
 
     # Build guid → (class_name, path) reverse lookup for O(1) access
     guid_to_class: dict[str, tuple[str, Path]] = {
@@ -218,6 +229,7 @@ def resolve_inherited_fields(
         try:
             source = cs_path.read_text(encoding="utf-8-sig")
         except (OSError, UnicodeDecodeError):
+            record_unreadable(diagnostics, cs_path, project_root)
             break
         info = parse_class_info(source, hint_name=cs_path.stem)
         if info is None:
@@ -261,6 +273,7 @@ def find_derived_guids(
     project_root: Path,
     *,
     _class_index: dict[str, tuple[str, Path]] | None = None,
+    diagnostics: list[Diagnostic] | None = None,
 ) -> set[str]:
     """Find GUIDs of all classes that inherit from *class_name* (transitively).
 
@@ -268,12 +281,13 @@ def find_derived_guids(
         class_name: Name of the base class.
         project_root: Unity project root directory.
         _class_index: Pre-built class name index (for caching).
+        diagnostics: Optional sink for per-file decode-failure diagnostics.
 
     Returns:
         Set of lowercase GUIDs for all derived classes.
     """
     if _class_index is None:
-        _class_index = build_class_name_index(project_root)
+        _class_index = build_class_name_index(project_root, diagnostics=diagnostics)
 
     # Build reverse map: base_name → [child_class_name]
     reverse: dict[str, list[str]] = {}
@@ -281,6 +295,7 @@ def find_derived_guids(
         try:
             source = cs_path.read_text(encoding="utf-8-sig")
         except (OSError, UnicodeDecodeError):
+            record_unreadable(diagnostics, cs_path, project_root)
             continue
         info = parse_class_info(source, hint_name=cs_path.stem)
         if info and info.base_class:

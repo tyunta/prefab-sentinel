@@ -14,7 +14,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from prefab_sentinel import mcp_tools_editor_exec
+from prefab_sentinel import mcp_tools_editor_exec, mcp_tools_editor_view
 
 
 class EditorRunScriptTests(unittest.TestCase):
@@ -164,6 +164,35 @@ class EditorRunScriptTests(unittest.TestCase):
         self.assertEqual(bridge_envelope, resp)
         self.assertFalse(resp["success"])
         self.assertEqual("error", resp["severity"])
+
+
+class TestEditorRecompileForceReimport(unittest.TestCase):
+    """Task 12: Python recompile wrapper forwards ``force_reimport`` to bridge."""
+
+    _BRIDGE_OK = {
+        "success": True,
+        "severity": "info",
+        "code": "EDITOR_CTRL_RECOMPILE_OK",
+        "message": "ok",
+        "data": {"executed": True},
+        "diagnostics": [],
+    }
+
+    def test_default_forwards_false(self) -> None:
+        with patch.object(mcp_tools_editor_view, "send_action") as send:
+            send.return_value = self._BRIDGE_OK
+            mcp_tools_editor_view.editor_recompile()
+        send.assert_called_once_with(
+            action="recompile_scripts", force_reimport=False
+        )
+
+    def test_explicit_true_forwards_true(self) -> None:
+        with patch.object(mcp_tools_editor_view, "send_action") as send:
+            send.return_value = self._BRIDGE_OK
+            mcp_tools_editor_view.editor_recompile(force_reimport=True)
+        send.assert_called_once_with(
+            action="recompile_scripts", force_reimport=True
+        )
 
 
 if __name__ == "__main__":

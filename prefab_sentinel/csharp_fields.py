@@ -18,12 +18,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from prefab_sentinel.contracts import Diagnostic
+
 __all__ = [
     "CSharpClassInfo",
     "CSharpField",
     "build_field_map",
     "parse_class_info",
     "parse_serialized_fields",
+    "record_unreadable",
 ]
 
 # ---------------------------------------------------------------------------
@@ -281,6 +284,8 @@ def parse_class_info(
 def build_field_map(
     project_root: Path,
     _guid_index: dict[str, Path] | None = None,
+    *,
+    diagnostics: list[Diagnostic] | None = None,
 ) -> dict[str, list[CSharpField]]:
     """Build a mapping from script GUID to serialized fields.
 
@@ -290,6 +295,10 @@ def build_field_map(
     Args:
         project_root: Unity project root directory.
         _guid_index: Pre-built GUID index to avoid redundant rebuilds.
+        diagnostics: Optional sink for per-file decode-failure diagnostics.
+            When supplied, each unreadable file appends one
+            ``Diagnostic(detail="unreadable_file", ...)``; when omitted, the
+            decode failure is silently skipped and the scan proceeds.
 
     Returns:
         Dict mapping lowercase GUID strings to lists of ``CSharpField``.
@@ -306,11 +315,38 @@ def build_field_map(
         try:
             source = asset_path.read_text(encoding="utf-8-sig")
         except (OSError, UnicodeDecodeError):
+            record_unreadable(diagnostics, asset_path, project_root)
             continue
         fields = parse_serialized_fields(source)
         serialized = [f for f in fields if f.is_serialized]
         if serialized:
             result[guid] = serialized
     return result
+
+
+def record_unreadable(
+    sink: list[Diagnostic] | None,
+    asset_path: Path,
+    project_root: Path,
+) -> None:
+    """Append one ``unreadable_file`` diagnostic to *sink* when supplied.
+
+    The path stored on the diagnostic is project-root-relative when the
+    asset lives under the project; otherwise the absolute path is used.
+    """
+    if sink is None:
+        return
+    try:
+        rel = str(asset_path.relative_to(project_root))
+    except ValueError:
+        rel = str(asset_path)
+    sink.append(
+        Diagnostic(
+            path=rel,
+            location="file",
+            detail="unreadable_file",
+            evidence="unable to decode C# source as UTF-8",
+        )
+    )
 
 

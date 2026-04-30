@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from prefab_sentinel.contracts import (
+    Diagnostic,
     ToolResponse,
     error_response,
     success_response,
@@ -119,17 +120,28 @@ def validate_field_rename(
         if f.name == old_name
     )
 
+    diagnostics: list[Diagnostic] = []
     scan_guids: set[str] = set()
     if guid:
         scan_guids.add(guid)
         try:
             source = cs_path.read_text(encoding="utf-8-sig")
+        except (OSError, UnicodeDecodeError):
+            diagnostics.append(
+                Diagnostic(
+                    path=_relative_path(cs_path, project_root),
+                    location="file",
+                    detail="unreadable_file",
+                    evidence="unable to decode C# source as UTF-8",
+                )
+            )
+        else:
             info = parse_class_info(source, hint_name=cs_path.stem)
             if info:
-                derived = find_derived_guids(info.name, project_root)
+                derived = find_derived_guids(
+                    info.name, project_root, diagnostics=diagnostics
+                )
                 scan_guids.update(derived)
-        except (OSError, UnicodeDecodeError):
-            pass
 
     scope_path = (
         resolve_scope_path(scope, project_root) if scope else project_root
@@ -187,6 +199,7 @@ def validate_field_rename(
             "derived_guids_scanned": len(scan_guids) - (1 if guid else 0),
             "read_only": True,
         },
+        diagnostics=diagnostics or None,
     )
 
 
@@ -210,8 +223,13 @@ def check_field_coverage(
         g: p for g, p in guid_index.items() if p.suffix == ".cs"
     }
 
-    _field_map = build_field_map(project_root, _guid_index=guid_index)
-    _class_index = build_class_name_index(project_root, _guid_index=guid_index)
+    diagnostics: list[Diagnostic] = []
+    _field_map = build_field_map(
+        project_root, _guid_index=guid_index, diagnostics=diagnostics
+    )
+    _class_index = build_class_name_index(
+        project_root, _guid_index=guid_index, diagnostics=diagnostics
+    )
 
     field_cache: dict[str, set[str]] = {}
     unused_fields: list[dict[str, Any]] = []
@@ -252,6 +270,7 @@ def check_field_coverage(
                     project_root,
                     _field_map=_field_map,
                     _class_index=_class_index,
+                    diagnostics=diagnostics,
                 )
                 field_cache[script_guid] = {f.name for f in resolved}
                 scripts_checked.add(script_guid)
@@ -295,4 +314,5 @@ def check_field_coverage(
             "orphaned_paths": orphaned_paths,
             "read_only": True,
         },
+        diagnostics=diagnostics or None,
     )
