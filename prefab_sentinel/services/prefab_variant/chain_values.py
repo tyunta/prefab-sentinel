@@ -18,9 +18,65 @@ from collections.abc import Callable
 from pathlib import Path
 
 from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse, error_response, success_response
+from prefab_sentinel.hierarchy import CLASS_NAMES
 from prefab_sentinel.services.prefab_variant.chain import ChainValue, _ChainLevel, walk_chain_levels
 from prefab_sentinel.services.prefab_variant.overrides import effective_value, iter_base_property_values
 from prefab_sentinel.unity_assets import SOURCE_PREFAB_PATTERN, decode_text_file
+from prefab_sentinel.unity_yaml_parser import (
+    CLASS_ID_MONOBEHAVIOUR,
+    CLASS_ID_PREFAB_INSTANCE,
+    parse_components,
+    split_yaml_blocks,
+)
+
+
+def resolve_chain_class_map(
+    variant_path: str,
+    project_root: Path,
+    resolve_path: Callable[[str, Path], Path],
+    guid_map: dict[str, Path],
+    relative_fn: Callable[[Path], str],
+) -> dict[str, str]:
+    """Walk the full Variant chain and map file id → component type name.
+
+    For every component block discovered while walking the chain, the
+    resulting map associates the component's stringified file id with its
+    Unity component type name:
+
+    - Built-in Unity types use their native class name (e.g. ``MeshRenderer``)
+      drawn from :data:`prefab_sentinel.hierarchy.CLASS_NAMES`.
+    - ``MonoBehaviour`` blocks (class id ``114``) use the project script's
+      class name resolved from the script GUID (the file stem of the
+      ``.cs`` asset) when available; otherwise the fallback ``MonoBehaviour``
+      is used.
+
+    Returns an empty mapping when the variant cannot be read or is not a
+    variant; never raises.
+    """
+    path = resolve_path(variant_path, project_root)
+    if not path.exists():
+        return {}
+
+    try:
+        text = decode_text_file(path)
+    except (OSError, UnicodeDecodeError):
+        return {}
+
+    if SOURCE_PREFAB_PATTERN.search(text) is None:
+        return {}
+
+    script_name_by_guid: dict[str, str] = {
+        guid: asset_path.stem
+        for guid, asset_path in guid_map.items()
+        if asset_path.suffix == ".cs"
+    }
+
+    result: dict[str, str] = {}
+    sink: list[Diagnostic] = []
+    for level in walk_chain_levels(text, path, guid_map, relative_fn, sink):
+        _accumulate_level_class_names(level, script_name_by_guid, result)
+
+    return result
 
 
 def resolve_chain_values(
@@ -165,6 +221,34 @@ def resolve_chain_values_with_origin(
             "read_only": True,
         },
     )
+
+
+def _accumulate_level_class_names(
+    level: _ChainLevel,
+    script_name_by_guid: dict[str, str],
+    result: dict[str, str],
+) -> None:
+    """Populate ``result`` with file id → component type name from one level.
+
+    Earlier-set entries win (chain walks variant → base, so the variant's
+    direct components are recorded before deeper levels). PrefabInstance
+    blocks are excluded — they identify nested instances rather than
+    components addressable by type name.
+    """
+    blocks = split_yaml_blocks(level.text)
+    components = parse_components(blocks)
+    for fid, comp in components.items():
+        if comp.class_id == CLASS_ID_PREFAB_INSTANCE:
+            continue
+        if fid in result:
+            continue
+        if comp.class_id == CLASS_ID_MONOBEHAVIOUR:
+            name = script_name_by_guid.get(comp.script_guid, "MonoBehaviour")
+        else:
+            name = CLASS_NAMES.get(
+                comp.class_id, f"Component({comp.class_id})"
+            )
+        result[fid] = name
 
 
 def _accumulate_level_values(level: _ChainLevel, result: dict[str, str]) -> None:

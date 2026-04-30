@@ -12,6 +12,7 @@ from pathlib import Path
 from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse, error_response, success_response
 from prefab_sentinel.services.prefab_variant.chain import walk_chain_levels
 from prefab_sentinel.services.prefab_variant.chain_values import (
+    resolve_chain_class_map as _resolve_chain_class_map,
     resolve_chain_values as _resolve_chain_values,
     resolve_chain_values_with_origin as _resolve_chain_values_with_origin,
 )
@@ -263,6 +264,16 @@ class PrefabVariantService:
             self._guid_map(),
             self._relative,
             diagnostics,
+        )
+
+    def resolve_chain_class_map(self, variant_path: str) -> dict[str, str]:
+        """Walk the full Variant chain and map file id → component type name."""
+        return _resolve_chain_class_map(
+            variant_path,
+            self.project_root,
+            resolve_scope_path,
+            self._guid_map(),
+            self._relative,
         )
 
     def resolve_chain_values_with_origin(self, variant_path: str) -> ToolResponse:

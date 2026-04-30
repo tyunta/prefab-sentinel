@@ -2,7 +2,7 @@
     "name": "PrefabSentinel.Editor",
     "rootNamespace": "PrefabSentinel",
     "references": [
-        "GUID:2c2b93cf8b0d85c49b23c9b1feab0e8f"
+        "VRC.SDKBase.Editor"
     ],
     "includePlatforms": [
         "Editor"

@@ -18,7 +18,7 @@ namespace PrefabSentinel
     public static class UnityEditorControlBridge
     {
         public const int ProtocolVersion = 1;
-        public const string BridgeVersion = "0.5.152";
+        public const string BridgeVersion = "0.5.154";
 
         /// <summary>Actions that write their response file asynchronously (not on return).</summary>
         public static readonly System.Collections.Generic.HashSet<string> AsyncActions =
@@ -181,6 +181,19 @@ namespace PrefabSentinel
             public string code = string.Empty;
             public string change_reason = string.Empty;
             public string temp_id = string.Empty;  // optional; handler generates one when empty
+
+            // Phase 10: Force re-import on recompile (#106)
+            // When set, HandleRecompileScripts runs ImportAsset with
+            // ForceUpdate | ForceSynchronousImport on each editor script
+            // before scheduling compilation, so externally edited files
+            // under Assets/Editor are picked up reliably.
+            public bool force_reimport = false;
+
+            // Phase 10: Caller-supplied compile-poll budget (#102)
+            // When > 0, HandleRunScript uses this as the bounded compile
+            // poll budget (milliseconds) instead of RunScriptCompileTimeoutMs.
+            // 0 (default) means "use the bridge default".
+            public int compile_timeout = 0;
         }
 
         [Serializable]
@@ -384,7 +397,7 @@ namespace PrefabSentinel
                     response = HandleRefreshAssetDatabase();
                     break;
                 case "recompile_scripts":
-                    response = HandleRecompileScripts();
+                    response = HandleRecompileScripts(request);
                     break;
                 case "set_material":
                     response = HandleSetMaterial(request);
@@ -810,9 +823,53 @@ namespace PrefabSentinel
                 data: new EditorControlData { executed = true });
         }
 
-        private static EditorControlResponse HandleRecompileScripts()
+        private static EditorControlResponse HandleRecompileScripts(EditorControlRequest request)
         {
-            // Refresh first so Unity sees newly copied/modified C# files
+            var diagnostics = new System.Collections.Generic.List<EditorControlDiagnostic>();
+
+            // When force_reimport is requested, synchronously re-import every
+            // C# file under Assets/Editor with ForceUpdate so externally
+            // edited scripts are guaranteed to round-trip through Unity's
+            // import pipeline before compilation is scheduled.
+            if (request.force_reimport)
+            {
+                string editorRoot = "Assets/Editor";
+                string editorRootAbs = Path.Combine(
+                    Directory.GetCurrentDirectory(),
+                    editorRoot.Replace('/', Path.DirectorySeparatorChar));
+                if (Directory.Exists(editorRootAbs))
+                {
+                    foreach (string csAbs in Directory.GetFiles(
+                        editorRootAbs, "*.cs", SearchOption.AllDirectories))
+                    {
+                        string rel = csAbs
+                            .Substring(Directory.GetCurrentDirectory().Length)
+                            .TrimStart(Path.DirectorySeparatorChar, '/')
+                            .Replace(Path.DirectorySeparatorChar, '/');
+                        try
+                        {
+                            AssetDatabase.ImportAsset(
+                                rel,
+                                ImportAssetOptions.ForceUpdate
+                                | ImportAssetOptions.ForceSynchronousImport);
+                        }
+                        catch (Exception ex)
+                        {
+                            // Per-path failure: emit a warning diagnostic and
+                            // continue across remaining paths.
+                            diagnostics.Add(new EditorControlDiagnostic
+                            {
+                                path = rel,
+                                location = "force_reimport",
+                                detail = "warning",
+                                evidence = ex.Message,
+                            });
+                        }
+                    }
+                }
+            }
+
+            // Refresh so Unity sees newly copied/modified C# files
             AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
             // Schedule compilation on next frame so that the response JSON
             // is written to disk before domain reload destroys this context.
@@ -820,9 +877,16 @@ namespace PrefabSentinel
             {
                 CompilationPipeline.RequestScriptCompilation();
             };
-            return BuildSuccess("EDITOR_CTRL_RECOMPILE_OK",
-                "AssetDatabase.Refresh completed; script recompilation scheduled (domain reload will follow)",
+            var response = BuildSuccess("EDITOR_CTRL_RECOMPILE_OK",
+                request.force_reimport
+                    ? "Force re-import of editor scripts completed; AssetDatabase.Refresh completed; script recompilation scheduled (domain reload will follow)"
+                    : "AssetDatabase.Refresh completed; script recompilation scheduled (domain reload will follow)",
                 data: new EditorControlData { executed = true });
+            if (diagnostics.Count > 0)
+            {
+                response.diagnostics = diagnostics.ToArray();
+            }
+            return response;
         }
 
         private static EditorControlResponse HandleRunIntegrationTests()
@@ -2699,7 +2763,7 @@ namespace PrefabSentinel
 
             // Check if the added type is UdonSharpBehaviour without a matching ProgramAsset
             Type usbType = null;
-            foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+            foreach (System.Reflection.Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
             {
                 usbType = assembly.GetType("UdonSharp.UdonSharpBehaviour", false);
                 if (usbType != null) break;
@@ -2710,7 +2774,7 @@ namespace PrefabSentinel
             {
                 udonProgramAssetMissing = true;
                 Type programAssetType = null;
-                foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+                foreach (System.Reflection.Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
                 {
                     programAssetType = assembly.GetType("UdonSharp.UdonSharpProgramAsset", false);
                     if (programAssetType != null) break;
@@ -2960,22 +3024,75 @@ namespace PrefabSentinel
                 return BuildError("EDITOR_CTRL_SET_PROP_NOT_FOUND",
                     $"GameObject not found: {request.hierarchy_path}");
 
-            System.Type compType = ResolveComponentType(request.component_type);
-            if (compType == null)
-                return BuildError("EDITOR_CTRL_SET_PROP_COMP_NOT_FOUND",
-                    $"Component type not found: {request.component_type}");
+            // GameObject-as-target branch: when the caller addresses the
+            // GameObject itself (not a component on it), the SerializedObject
+            // is constructed directly from the GameObject and writes are
+            // restricted to the small allowlist of GameObject-level fields.
+            bool gameObjectTarget =
+                string.Equals(request.component_type, "GameObject", StringComparison.Ordinal);
 
-            var component = go.GetComponent(compType);
-            if (component == null)
-                return BuildError("EDITOR_CTRL_SET_PROP_COMP_NOT_FOUND",
-                    $"Component {request.component_type} not found on {request.hierarchy_path}");
+            // GameObject-level serialized properties accepted by the
+            // GameObject-as-target branch. Writes to anything outside this
+            // allowlist return EDITOR_CTRL_SET_PROP_GAMEOBJECT_PROP_NOT_ALLOWED.
+            string[] gameObjectAllowedProperties =
+                new[] { "m_IsActive", "m_Layer", "m_Name", "m_TagString" };
+
+            SerializedObject so;
+            if (gameObjectTarget)
+            {
+                if (Array.IndexOf(gameObjectAllowedProperties, request.property_name) < 0)
+                {
+                    string allowed = string.Join(", ", gameObjectAllowedProperties);
+                    return BuildError("EDITOR_CTRL_SET_PROP_GAMEOBJECT_PROP_NOT_ALLOWED",
+                        $"GameObject-level property '{request.property_name}' is not allowed. " +
+                        $"Allowed: {allowed}.");
+                }
+                so = new SerializedObject(go);
+            }
+            else
+            {
+                System.Type compType = ResolveComponentType(request.component_type);
+                if (compType == null)
+                    return BuildError("EDITOR_CTRL_SET_PROP_COMP_NOT_FOUND",
+                        $"Component type not found: {request.component_type}");
+
+                var component = go.GetComponent(compType);
+                if (component == null)
+                    return BuildError("EDITOR_CTRL_SET_PROP_COMP_NOT_FOUND",
+                        $"Component {request.component_type} not found on {request.hierarchy_path}");
+
+                so = new SerializedObject(component);
+            }
 
             // ── Find property ──
-            var so = new SerializedObject(component);
             var prop = so.FindProperty(request.property_name);
             if (prop == null)
-                return BuildError("EDITOR_CTRL_SET_PROP_FIELD_NOT_FOUND",
-                    $"Property not found: {request.property_name} on {request.component_type}");
+            {
+                // Walk the SerializedObject to collect candidate property paths,
+                // then suggest up to five closest matches to the request name.
+                var candidates = new List<string>();
+                var iter = so.GetIterator();
+                if (iter.NextVisible(true))
+                {
+                    do
+                    {
+                        candidates.Add(iter.propertyPath);
+                    } while (iter.NextVisible(false));
+                }
+                string[] suggestions = SuggestSimilar(
+                    request.property_name, candidates, maxResults: 5);
+                var data = new EditorControlData();
+                data.suggestions = suggestions.Length > 0
+                    ? suggestions
+                    : Array.Empty<string>();
+                string baseMessage = gameObjectTarget
+                    ? $"Property not found: {request.property_name} on GameObject"
+                    : $"Property not found: {request.property_name} on {request.component_type}";
+                string message = data.suggestions.Length > 0
+                    ? $"{baseMessage}. Did you mean: {string.Join(", ", data.suggestions)}?"
+                    : baseMessage;
+                return BuildError("EDITOR_CTRL_SET_PROP_FIELD_NOT_FOUND", message, data);
+            }
 
             // ── Set value by type ──
             string v = request.property_value;
@@ -3458,6 +3575,16 @@ namespace PrefabSentinel
         private const string RunScriptTempDir = "Assets/Editor/_PrefabSentinelTemp";
         private const string RunScriptTypeName = "PrefabSentinelTempScript";
         private const string RunScriptEntryPoint = "Run";
+        // Bounded compile-state poll budget: a brief flip of isCompiling
+        // immediately after Refresh is normal; we wait up to this many
+        // milliseconds for it to settle before reporting COMPILE.
+        private const int RunScriptCompileTimeoutMs = 8000;
+        // Bounded entry-type retry budget: once compilation settles the
+        // newly built assembly may take a moment to load into the AppDomain;
+        // we retry FindTempScriptType for up to this many milliseconds before
+        // reporting COMPILE.
+        private const int RunScriptEntryTypeTimeoutMs = 4000;
+        private const int RunScriptPollIntervalMs = 50;
 
         private static EditorControlResponse HandleRunScript(EditorControlRequest request)
         {
@@ -3493,24 +3620,53 @@ namespace PrefabSentinel
                 // on paths Unity already tracks.
                 AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
 
-                // If Unity is still compiling after the synchronous import, the
-                // freshly-added type is not loadable yet — report COMPILE.
+                // ── Bounded compile-state poll ──
+                // A brief flip of isCompiling right after Refresh is normal.
+                // Wait up to the caller-supplied budget (or the bridge
+                // default when the request omitted it) for it to settle.
+                int compilePollMs = request.compile_timeout > 0
+                    ? request.compile_timeout
+                    : RunScriptCompileTimeoutMs;
+                var compileWatch = System.Diagnostics.Stopwatch.StartNew();
+                while (EditorApplication.isCompiling
+                       && compileWatch.ElapsedMilliseconds < compilePollMs)
+                {
+                    System.Threading.Thread.Sleep(RunScriptPollIntervalMs);
+                }
                 if (EditorApplication.isCompiling)
                 {
                     return BuildError("EDITOR_CTRL_RUN_SCRIPT_COMPILE",
-                        "Script compilation is still in progress after AssetDatabase.Refresh; " +
-                        "a domain reload is pending. Retry after Unity finishes compiling.",
+                        "Script compilation is still in progress after the bounded poll; " +
+                        "a domain reload is pending. Retry after Unity finishes compiling." +
+                        " If the freshly compiled type still cannot be located, run the snippet " +
+                        "through `editor_execute_menu_item` against a persistent editor helper " +
+                        "script committed under `Assets/Editor/`.",
                         new EditorControlData { temp_id = tempId, executed = false });
                 }
 
+                // ── Bounded entry-type lookup retry ──
+                // Once compilation settles, the new assembly may take a moment
+                // to load into the AppDomain. Retry FindTempScriptType at a
+                // fixed sub-second cadence within a bounded total wait.
                 Type scriptType = FindTempScriptType();
+                var typeWatch = System.Diagnostics.Stopwatch.StartNew();
+                while (scriptType == null
+                       && typeWatch.ElapsedMilliseconds < RunScriptEntryTypeTimeoutMs)
+                {
+                    System.Threading.Thread.Sleep(RunScriptPollIntervalMs);
+                    scriptType = FindTempScriptType();
+                }
                 if (scriptType == null)
                 {
-                    // Compilation failed or produced no type — surface the
-                    // compile errors if Unity's LogEntries carried any.
+                    // Compilation failed or the new assembly never loaded —
+                    // surface the compile-pending failure with the persistent
+                    // helper hint in the message.
                     return BuildError("EDITOR_CTRL_RUN_SCRIPT_COMPILE",
                         $"Type '{RunScriptTypeName}' was not found after compile. " +
-                        "Verify the snippet defines `public static class PrefabSentinelTempScript` with `public static void Run()`.",
+                        "Verify the snippet defines `public static class PrefabSentinelTempScript` with `public static void Run()`." +
+                        " If the freshly compiled type still cannot be located, run the snippet " +
+                        "through `editor_execute_menu_item` against a persistent editor helper " +
+                        "script committed under `Assets/Editor/`.",
                         new EditorControlData { temp_id = tempId, executed = false });
                 }
 

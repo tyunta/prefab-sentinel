@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from prefab_sentinel.contracts import Diagnostic
 from prefab_sentinel.hierarchy import CLASS_NAMES
 from prefab_sentinel.symbol_tree import SymbolKind, SymbolNode, SymbolTree
 from prefab_sentinel.udon_wiring import analyze_wiring
@@ -43,6 +44,7 @@ def build_symbol_tree(
     expand_nested: bool = False,
     guid_to_asset_path: dict[str, Path] | None = None,
     _nested_depth: int = 0,
+    diagnostics: list[Diagnostic] | None = None,
 ) -> SymbolTree:
     """Build a symbol tree from Unity YAML text.
 
@@ -58,6 +60,11 @@ def build_symbol_tree(
         guid_to_asset_path: GUID -> Path map for resolving nested Prefabs.
             Required when expand_nested=True.
         _nested_depth: Internal recursion depth counter (do not set externally).
+        diagnostics: Optional sink for per-instance decode-failure diagnostics.
+            When supplied, each undecodable nested prefab contributes one
+            ``Diagnostic(detail="unreadable_file", ...)``; the affected
+            instance is skipped while remaining instances continue to
+            expand.
     """
     script_map = script_map or {}
 
@@ -211,6 +218,15 @@ def build_symbol_tree(
                     resolved = True
                 except (OSError, UnicodeDecodeError):
                     resolved = False
+                    if diagnostics is not None:
+                        diagnostics.append(
+                            Diagnostic(
+                                path=child_path.as_posix(),
+                                location="nested_prefab_instance",
+                                detail="unreadable_file",
+                                evidence="unable to decode nested prefab as YAML",
+                            )
+                        )
 
             if resolved:
                 rel_path = child_path.as_posix()  # type: ignore[union-attr]
@@ -222,6 +238,7 @@ def build_symbol_tree(
                     expand_nested=True,
                     guid_to_asset_path=guid_to_asset_path,
                     _nested_depth=_nested_depth + 1,
+                    diagnostics=diagnostics,
                 )
                 marker = SymbolNode(
                     kind=SymbolKind.PREFAB_INSTANCE,

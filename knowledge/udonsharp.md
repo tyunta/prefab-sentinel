@@ -177,6 +177,18 @@ bool inside = Vector3.Distance(pos, areaCollider.ClosestPoint(pos)) < 0.01f;
 7. `editor_save_as_prefab` で Prefab 化
 8. `inspect_wiring` + `validate_refs` で検証
 
+### フォールバック: 手動 wiring パターン (2026-04-30)
+
+ステップ 5 で `UdonSharpProgramAsset not found` が出て MonoBehaviour として attach されてしまう症状が発生したら、UdonSharp 内部キャッシュ未更新の可能性。以下の 5 ステップで明示的に構築:
+
+1. `editor_add_component` で `VRC.Udon.UdonBehaviour` を追加
+2. `editor_set_property programSource = .asset` (asset path 指定) で UdonBehaviour に program asset を割り当て
+3. `editor_add_component` で UdonSharp class (proxy MonoBehaviour として追加される、警告は無視してよい)
+4. `editor_set_property _udonSharpBackingUdonBehaviour = /Path:UdonBehaviour` で proxy → UB を link
+5. `editor_set_property` で各 public field を配線
+
+注意: ステップ 3 で同じ UdonSharp class を re-add すると proxy MonoBehaviour と UdonBehaviour が duplicate しやすい。最終 inspect で 2 セット残ったら Inspector 手動削除 or Editor menu helper で clean up する。
+
 ## 実運用で学んだこと
 
 ### DualButtonSwitcher パターン (2026-03-27)
@@ -204,6 +216,39 @@ bool inside = Vector3.Distance(pos, areaCollider.ClosestPoint(pos)) < 0.01f;
   - VRCSDK3.dll `661092b4961be7145bfbe56e1e62337b` — VRCWorld の SceneDescriptor で確認
 - backing UdonBehaviour が Controller に正しく追加されている（`guid:45115577` のコンポーネントとして確認）
 - `4ecd63eff847044b68db9453ce219299` — PipelineManager（VRCWorld に付随）
+
+### DoneruWorldDisplay ワールドギミック構築 (2026-04-08)
+
+- 3 コンポーネント構成（Poller → EventStore → Display）の投げ銭表示ギミック
+- 全 12 GameObject、16 コンポーネント、16 フィールド配線を Editor Bridge のみで完遂
+- **ProgramAsset タイミング問題を実体験**: .cs 作成 → `editor_add_component` → ProgramAsset 作成の順だと、コンポーネントが通常 MonoBehaviour としてアタッチされる。正しい順序:
+  1. `.cs` 作成
+  2. `editor_recompile`
+  3. `editor_create_udon_program_asset`（全 .cs に対して）
+  4. `editor_add_component`（ここで初めて UdonBehaviour になる）
+- **配列フィールドの設定パターン**: `editor_set_component_fields` では配列要素を個別設定できない。`editor_set_property` で `historyTexts.Array.size` → `historyTexts.Array.data[N]` の順に設定する
+- **object_reference の `::ComponentType` 記法**: `editor_set_component_fields` では UdonSharp コンポーネントに対して `::DoneruEventStore` サフィックスが解決できない。パスのみ（`/Path/To/Object`）で解決する
+- **`editor_batch_add_component`**: 同種コンポーネント（Text x5）を一括追加可能。個別呼び出しの 5 倍速い
+- **`inspect_wiring` の `is_udon_sharp` フラグ**: コンポーネント再作成後に `true` を確認し、UdonBehaviour として正しく認識されていることを検証できた
+- **Prefab Variant 問題**: 同一パスに再度 `editor_save_as_prefab` すると Variant として保存される。初回保存で生成された Prefab がベースになるため
+- **Legacy Text → TMPro 移行**: フィールド型を `Text` → `TextMeshProUGUI` に変更後、Prefab 上の旧コンポーネント削除 → TMPro 追加 → DoneruDisplay 再作成 → 再配線が必要。コンポーネント型が変わるとフィールド参照が切れるため、コンポーネントごと再作成になる
+- **UI レイアウト**: RectTransform の `m_SizeDelta`, `m_AnchoredPosition`, `m_LocalScale` を `editor_batch_set_property` で一括設定可能。World Space Canvas は `m_LocalScale` = 0.001 が実用的（Canvas 座標 800x500 → 世界座標 0.8m x 0.5m）
+
+### NadeVision マルチユーザ同期 構築 (2026-04-30)
+
+NadeVision 動画プレイヤーパッケージにマルチユーザ同期機能を追加。3 つの新規 UdonSharp + 1 既存改修 + World Space Canvas 新規構築 + 全 Bridge 配線を MCP 経由で完遂。
+
+- **UdonSharp Program Asset 検出キャッシュの問題**: `editor_create_udon_program_asset` で .asset を生成しても、UdonSharp 内部の `GetAllUdonSharpPrograms()` キャッシュが更新されず `editor_add_component` が `UdonSharpProgramAsset not found` で MonoBehaviour として attach する症状が発生。`Refresh All UdonSharp Assets` メニューでも `Last: 84, This: 84 — Completed 0 refresh cycles` と出て更新されない。
+- **回避策: 手動 wiring パターン** — UdonSharp の `AddUdonSharpComponent` を諦め、以下の 5 ステップで明示構築:
+  1. `editor_add_component` で `VRC.Udon.UdonBehaviour` を追加
+  2. `editor_set_property programSource = .asset` で UdonBehaviour に program asset を割り当て
+  3. `editor_add_component` で UdonSharp class (proxy MonoBehaviour として追加される、警告は無視)
+  4. `editor_set_property _udonSharpBackingUdonBehaviour = /Path:UdonBehaviour` で proxy → UB を link
+  5. `editor_set_property` で各 public field を配線
+- **副作用: proxy duplicate**: 上記パターンで UdonSharp class を re-add すると proxy MonoBehaviour と UdonBehaviour が duplicate しがち。最終 inspect で 2 セット残る場合あり。Inspector で手動削除 or Editor menu helper の cleanup ロジックで対処。
+- **stripped prefab instance 内コンポーネント解決**: VVMW Variant prefab のような nested prefab に含まれる UdonSharp class (例: `Core` script) を `:ComponentType` サフィックスで参照する場合、scene 上の **実際のパス** (`/NadeVision/VVMW (On-Screen Controls):Core`) を使う。Prefab inspect_hierarchy が示す `/NadeVision/Core` のような nominal path とは別。
+- **Core_Timing API 非公開フィールド**: VVMW `Core` の `defaultUrl` / `autoPlayDelay` は `[SerializeField]` private で外部 UdonSharp から読み取り不可。Bridge 設計時は public な `Core.Url` / `Core.AltUrl` を bootstrap 時に snapshot する方式に切替が必要。同様に `Core.Time` setter は `private set` のため、seek には `Core.Progress = target / Duration` を使う (Progress setter が内部で Time = Duration*value を呼ぶ)。
+- **UdonSharp の nested type 制約 (再発)**: enum 等を class 内に nest すると `Nested type declarations are not currently supported by U#` で compile error。class 外に出して top-level で定義する。
 
 ### v0.5.85 フルワークフロー検証 (2026-03-27)
 - `editor_set_property` で UdonSharp フィールド (`targetObject`) への ObjectReference 配線に成功

@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from prefab_sentinel.contracts import Diagnostic
 from prefab_sentinel.symbol_tree import (
     AmbiguousSymbolError,
     SymbolKind,
@@ -978,6 +979,75 @@ class TestBuildScriptNameMap(unittest.TestCase):
             "def": Path("Bar.mat"),
         })
         self.assertEqual(result, {"abc": "Foo"})
+
+
+class TestBuildSymbolTreeDiagnostics(unittest.TestCase):
+    """Diagnostic-sink behavior for nested-prefab expansion.
+
+    A YAML asset containing two nested PrefabInstance blocks: one points at
+    a binary file that fails UTF-8 decode, the other at a valid prefab.
+    With a sink supplied, the unreadable instance contributes one diagnostic
+    while the valid instance still expands.
+    """
+
+    BAD_GUID = "11112222333344445555666677778888"
+    GOOD_GUID = "aaaabbbbccccddddeeeeffff00001111"
+
+    def _write_good_prefab(self, tmpdir: Path) -> Path:
+        good = tmpdir / "Assets" / "Good.prefab"
+        good.parent.mkdir(parents=True, exist_ok=True)
+        good.write_text(
+            YAML_HEADER
+            + make_gameobject("700", "GoodRoot", ["800"])
+            + make_transform("800", "700"),
+            encoding="utf-8",
+        )
+        return good
+
+    def _write_bad_prefab(self, tmpdir: Path) -> Path:
+        bad = tmpdir / "Assets" / "Bad.prefab"
+        bad.parent.mkdir(parents=True, exist_ok=True)
+        # Bytes that fail UTF-8 decode (lone 0xFF / mid-codepoint).
+        bad.write_bytes(b"\xff\xfe\xc3\x28\x80\x80\x90")
+        return bad
+
+    def _parent_text_with_two_instances(self) -> str:
+        return (
+            YAML_HEADER
+            + make_gameobject("100", "Avatar", ["200"])
+            + make_transform("200", "100")
+            + make_prefab_instance("300", self.BAD_GUID, transform_parent="200")
+            + make_prefab_instance("400", self.GOOD_GUID, transform_parent="200")
+        )
+
+    def test_undecodable_nested_prefab_records_one_diagnostic(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            good_path = self._write_good_prefab(root)
+            bad_path = self._write_bad_prefab(root)
+            guid_map = {self.BAD_GUID: bad_path, self.GOOD_GUID: good_path}
+            text = self._parent_text_with_two_instances()
+
+            sink: list[Diagnostic] = []
+            tree = build_symbol_tree(
+                text,
+                "test.prefab",
+                expand_nested=True,
+                guid_to_asset_path=guid_map,
+                diagnostics=sink,
+            )
+
+        # The good instance still expanded.
+        avatar = tree.roots[0]
+        pi_nodes = [c for c in avatar.children if c.kind == SymbolKind.PREFAB_INSTANCE]
+        self.assertEqual(len(pi_nodes), 2)
+        good_pis = [n for n in pi_nodes if "Good.prefab" in (n.source_prefab or "")]
+        self.assertEqual(len(good_pis), 1)
+        self.assertEqual(len(good_pis[0].children), 1)
+
+        # Exactly one diagnostic for the bad nested prefab.
+        self.assertEqual(1, len(sink))
+        self.assertEqual("unreadable_file", sink[0].detail)
 
 
 if __name__ == "__main__":

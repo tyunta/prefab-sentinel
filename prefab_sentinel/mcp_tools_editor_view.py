@@ -11,9 +11,26 @@ from prefab_sentinel.editor_bridge import send_action
 from prefab_sentinel.editor_bridge_builders import build_set_camera_kwargs
 from prefab_sentinel.mcp_helpers import normalize_material_value
 
-__all__ = ["register_editor_view_tools"]
+__all__ = ["editor_recompile", "register_editor_view_tools"]
 
 logger = logging.getLogger(__name__)
+
+
+def editor_recompile(force_reimport: bool = False) -> dict[str, Any]:
+    """Trigger C# script recompilation in the running Unity Editor.
+
+    When ``force_reimport`` is ``True``, the bridge synchronously re-imports
+    every C# file under ``Assets/Editor/`` with ``ForceUpdate`` before
+    scheduling compilation, so externally edited files are picked up
+    reliably. Default is the legacy ``Refresh + RequestScriptCompilation``
+    path.
+
+    Returns the Editor Bridge response envelope unmodified.
+    """
+    return send_action(
+        action="recompile_scripts",
+        force_reimport=force_reimport,
+    )
 
 
 def register_editor_view_tools(server: FastMCP) -> None:
@@ -219,10 +236,17 @@ def register_editor_view_tools(server: FastMCP) -> None:
         """Trigger AssetDatabase.Refresh() in the running Unity Editor."""
         return send_action(action="refresh_asset_database")
 
-    @server.tool()
-    def editor_recompile() -> dict[str, Any]:
-        """Trigger C# script recompilation in the running Unity Editor."""
-        return send_action(action="recompile_scripts")
+    @server.tool(name="editor_recompile")
+    def _editor_recompile(force_reimport: bool = False) -> dict[str, Any]:
+        """Trigger C# script recompilation in the running Unity Editor.
+
+        Args:
+            force_reimport: When ``True``, synchronously re-import every
+                ``.cs`` under ``Assets/Editor/`` with ``ForceUpdate`` before
+                scheduling compilation. Use when externally edited editor
+                scripts are not picked up by the default refresh.
+        """
+        return editor_recompile(force_reimport=force_reimport)
 
     @server.tool()
     def editor_run_tests(
