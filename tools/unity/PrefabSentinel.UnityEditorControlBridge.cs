@@ -18,7 +18,7 @@ namespace PrefabSentinel
     public static class UnityEditorControlBridge
     {
         public const int ProtocolVersion = 1;
-        public const string BridgeVersion = "0.5.152";
+        public const string BridgeVersion = "0.5.153";
 
         /// <summary>Actions that write their response file asynchronously (not on return).</summary>
         public static readonly System.Collections.Generic.HashSet<string> AsyncActions =
