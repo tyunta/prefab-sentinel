@@ -155,6 +155,48 @@ bool inside = Vector3.Distance(pos, areaCollider.ClosestPoint(pos)) < 0.01f;
 ### `[FieldChangeCallback]`
 同期変数の変更時にプロパティエミュレーション（フィールド＋メソッドペア）を発火。標準 C# プロパティ構文 `{ get; set; }` ではなく UdonSharp 独自の命名規約で動作する。`Update()` でのポーリング不要。
 
+#### ⚠ 落とし穴: 複数 synced field の deserialization race (2026-05-02 検証済み)
+
+**症状**: `[UdonSynced] _syncedPcUrl` (VRCUrl) と `[UdonSynced, FieldChangeCallback(...)] _baselineServerTimeMs` (long) を **同じ SubmitUrl 内で両方更新** → owner で `RequestSerialization` → remote で deserialize 中、`_baselineServerTimeMs` の callback が **`_syncedPcUrl` 未到着のタイミング** で fire し、callback 内で `pcUrl.Get()` を読むと `''` が返る。NadeVision で「audience 側 Sat PC が `branch=BackgroundLoad` に正しく入るが `pc=''` で abort する」症状の根本原因。
+
+**Why**: `[FieldChangeCallback]` は「特定 field の値変化」を捕まえる API で、「synced 群全体の整合した状態」を保証しない。U# / Udon の deserialize は field 単位で順次進むので、callback は全 field 整合前の中間状態で fire し得る。VRChat 公式 docs ([Networking Tips & Tricks](https://udonsharp.docs.vrchat.com/networking-tips-&-tricks/)) に明示:
+
+> "if you have multiple networked variables, other networked variables may not be updated yet when a [FieldChangeCallback] happens."
+
+**正しいパターン**: `OnDeserialization` (全 synced field deserialize 完了後に fire) で待ち合わせる + owner 用に明示呼び出しを足す:
+
+```csharp
+using VRC.Udon.Common;
+
+[UdonSynced] public VRCUrl _syncedPcUrl;
+[UdonSynced] public long _baselineServerTimeMs;
+private long _lastSeenBaselineServerTimeMs;
+
+public override void OnDeserialization(DeserializationResult result)
+{
+    if (_baselineServerTimeMs == _lastSeenBaselineServerTimeMs) return;
+    _lastSeenBaselineServerTimeMs = _baselineServerTimeMs;
+    OnSyncedSubmitInternal();  // ← _syncedPcUrl は確実に最新
+}
+
+public void SubmitUrl(VRCUrl pcUrl, ...)
+{
+    if (!Networking.IsOwner(gameObject)) Networking.SetOwner(...);
+    _syncedPcUrl = pcUrl;
+    _baselineServerTimeMs = Networking.GetServerTimeInMilliseconds();
+    _lastSeenBaselineServerTimeMs = _baselineServerTimeMs;  // owner は OnDeserialization 来ないので track
+    RequestSerialization();
+    OnSyncedSubmitInternal();  // owner 自身の明示発火
+}
+```
+
+**判断基準**:
+- 「単一 field の値変化のみで処理が完結する」→ `[FieldChangeCallback]` 使ってよい (owner 自分自身の処理は明示呼び出しを足す)
+- 「複数 synced field の整合した状態」が必要 → `OnDeserialization` で待ち合わせ
+- ハンドラは **idempotent** に書く (重複呼出で副作用が出ないように)
+
+参考実装: `Packages/idv.jlchntoz.vvmw/Runtime/VVMW/Core.cs:704` (`OnDeserialization(DeserializationResult result)` で全 sync 整合後の処理を集約)。
+
 ### 帯域制限
 - 合計 ~11 KB/秒
 - Manual: 最大 ~280KB/回
