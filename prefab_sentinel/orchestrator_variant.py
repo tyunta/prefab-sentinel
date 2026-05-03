@@ -19,8 +19,8 @@ from prefab_sentinel.contracts import (
 )
 from prefab_sentinel.services.prefab_variant import PrefabVariantService
 from prefab_sentinel.unity_assets import (
-    SOURCE_PREFAB_PATTERN,
     decode_text_file,
+    is_variant_prefab,
 )
 from prefab_sentinel.unity_assets_path import resolve_scope_path
 
@@ -62,7 +62,7 @@ def _resolve_variant_base(
 
     Returns ``(text, is_variant, base_prefab_path, chain_diagnostics)``.
     """
-    if SOURCE_PREFAB_PATTERN.search(text) is None:
+    if not is_variant_prefab(text):
         return text, False, None, []
 
     chain_response = prefab_variant.resolve_prefab_chain(target_path)

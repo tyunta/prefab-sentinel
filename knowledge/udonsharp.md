@@ -1,7 +1,7 @@
 ---
 tool: udonsharp
 version_tested: "VRC SDK 3.7+ / UdonSharp 1.x"
-last_updated: 2026-03-29
+last_updated: 2026-05-03
 confidence: high
 ---
 
@@ -232,6 +232,16 @@ public void SubmitUrl(VRCUrl pcUrl, ...)
 注意: ステップ 3 で同じ UdonSharp class を re-add すると proxy MonoBehaviour と UdonBehaviour が duplicate しやすい。最終 inspect で 2 セット残ったら Inspector 手動削除 or Editor menu helper で clean up する。
 
 ## 実運用で学んだこと
+
+### `OnBeforeSerialize` ArgumentNullException は非致命扱い (2026-05-03)
+
+- 症状: `editor_save_as_prefab` 実行中に `ArgumentNullException` が console に出る。stack trace の先頭に `UdonSharpBehaviour.OnBeforeSerialize`（または `UdonSharp.UdonSharpBehaviour.OnBeforeSerialize` を含む派生型）が現れる。
+- 原因: UdonSharp 1.x が proxy MonoBehaviour を Unity の serialization callback に晒しており、未リンクのフィールドや stripped instance に対して NRE を投げる。SaveAsPrefabAsset 自体は成功するため、結果アセットには影響しない。
+- 分類: PrefabSentinel の Editor Bridge は label `udonsharp_obs_nre` でこのパターンを **non-fatal** として登録（issue #117、`tools/unity/PrefabSentinel.UnityEditorControlBridge.cs` の `NonFatalExceptionClassifier`）。
+- 観測:
+  - `editor_save_as_prefab` / `editor_instantiate_to_scene` は `success=true` のまま `data.warnings.udonsharp_obs_nre_count` と `data.warnings.nonfatal_patterns` に件数とラベルを返す。
+  - `editor_console` の `classification_filter="non_fatal"` でこのエントリだけを抽出可能。`fatal` で除外可能。
+- 推奨フロー: 保存自体は止めない。ノイズが多い場合のみ proxy を一旦 unparent して保存し戻す、または当該 UdonBehaviour 側の `OnBeforeSerialize` を空実装で override する。
 
 ### DualButtonSwitcher パターン (2026-03-27)
 - 2ボタン + 3状態（None/A/B）のグローバル切り替えシステム

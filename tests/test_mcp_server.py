@@ -21,6 +21,7 @@ from tests.yaml_helpers import (
     YAML_HEADER,
     make_gameobject,
     make_meshrenderer,
+    make_meshrenderer_with_materials,
     make_monobehaviour,
     make_transform,
 )
@@ -2205,6 +2206,7 @@ class TestEditorReadOnlyTools(unittest.TestCase):
         mock_send.assert_called_once_with(
             action="capture_console_logs",
             max_entries=50, log_type_filter="error", since_seconds=10.0,
+            classification_filter="all",
         )
 
     def test_editor_console_defaults(self) -> None:
@@ -2214,6 +2216,7 @@ class TestEditorReadOnlyTools(unittest.TestCase):
         mock_send.assert_called_once_with(
             action="capture_console_logs",
             max_entries=200, log_type_filter="all", since_seconds=0.0,
+            classification_filter="all",
         )
 
 
@@ -2647,6 +2650,7 @@ class TestEditorExecTools(unittest.TestCase):
             action="run_script",
             code="public static void Run() {}",
             change_reason="smoke test",
+            compile_timeout=15000,
         )
         self.assertTrue(parsed["success"])
 
@@ -4237,8 +4241,20 @@ class TestSetComponentFieldsTool(unittest.TestCase):
         self.assertEqual("PlayerScript", sr["resolved_component"])
 
     def test_reference_value_in_fields(self) -> None:
-        """Reference dict values are passed through unchanged to the patch plan."""
-        text = self._meshrenderer_prefab()
+        """Reference dict values are passed through unchanged to the patch plan.
+
+        Targets the array container ``m_Materials`` so the test also locks
+        the property-existence guard's array-field handling: only the
+        per-element path (``m_Materials.Array.data[0]``) appears in the
+        prefab YAML, but ``_collect_known_property_paths`` must surface the
+        container name so the whole-array assignment is not a false SER003
+        (issue #109 follow-up).
+        """
+        text = YAML_HEADER + "\n".join([
+            make_gameobject("100", "Cube", ["200", "300"]),
+            make_transform("200", "100"),
+            make_meshrenderer_with_materials("300", "100", ["aaa"]),
+        ])
         server = create_server()
         mock_resp = self._mock_patch_apply_response(dry_run=True)
         ref_value = {"fileID": 2100000, "guid": "aabbccdd11223344aabbccdd11223344", "type": 2}
@@ -4267,6 +4283,7 @@ class TestSetComponentFieldsTool(unittest.TestCase):
         self.assertTrue(result["success"])
         plan = mock_orch.patch_apply.call_args[1]["plan"]
         self.assertEqual(ref_value, plan["ops"][0]["value"])
+        self.assertEqual("m_Materials", plan["ops"][0]["path"])
 
     def test_symbol_not_found(self) -> None:
         """SYMBOL_NOT_FOUND when symbol_path does not exist in the asset."""
@@ -4336,7 +4353,7 @@ class TestSetComponentFieldsTool(unittest.TestCase):
         self.assertEqual("SYMBOL_NOT_GAME_OBJECT", result["code"])
 
     def test_component_not_found(self) -> None:
-        """COMPONENT_NOT_FOUND when named component is absent from the GameObject."""
+        """SER003 (component_not_found) when the named component is absent."""
         text = self._meshrenderer_prefab()
         server = create_server()
 
@@ -4355,8 +4372,12 @@ class TestSetComponentFieldsTool(unittest.TestCase):
             ))
 
         self.assertFalse(result["success"])
-        self.assertEqual("COMPONENT_NOT_FOUND", result["code"])
-        self.assertIn("available_components", result["data"])
+        self.assertEqual("SER003", result["code"])
+        self.assertEqual("error", result["severity"])
+        diagnostics = result["diagnostics"]
+        self.assertEqual(1, len(diagnostics))
+        self.assertEqual("component_not_found", diagnostics[0]["detail"])
+        self.assertIn("suggestions", result["data"])
 
     def test_component_ambiguous(self) -> None:
         """COMPONENT_AMBIGUOUS when multiple components of same type exist on the GO."""
@@ -4651,11 +4672,15 @@ class TestSetComponentFieldsTool(unittest.TestCase):
                         "asset_path": str(p),
                         "symbol_path": "Cube",
                         "component": "MeshRenderer",
+                        # All four field paths exist on the synthetic fixture
+                        # so the property-existence guard does not fire; the
+                        # test asserts that each value reaches the plan op
+                        # unchanged regardless of its Python type.
                         "fields": {
-                            "int_field": 0,
-                            "float_field": 3.14,
-                            "str_field": "hello",
-                            "ref_field": ref_value,
+                            "m_Enabled": 0,
+                            "m_CastShadows": 3.14,
+                            "m_ObjectHideFlags": "hello",
+                            "m_GameObject": ref_value,
                         },
                     },
                 ))
@@ -4663,10 +4688,10 @@ class TestSetComponentFieldsTool(unittest.TestCase):
         self.assertTrue(result["success"])
         plan = mock_orch.patch_apply.call_args[1]["plan"]
         ops_by_path = {op["path"]: op["value"] for op in plan["ops"]}
-        self.assertEqual(0, ops_by_path["int_field"])
-        self.assertAlmostEqual(3.14, ops_by_path["float_field"])
-        self.assertEqual("hello", ops_by_path["str_field"])
-        self.assertEqual(ref_value, ops_by_path["ref_field"])
+        self.assertEqual(0, ops_by_path["m_Enabled"])
+        self.assertAlmostEqual(3.14, ops_by_path["m_CastShadows"])
+        self.assertEqual("hello", ops_by_path["m_ObjectHideFlags"])
+        self.assertEqual(ref_value, ops_by_path["m_GameObject"])
 
     def test_component_unresolvable_no_project_root(self) -> None:
         """SYMBOL_UNRESOLVABLE when MonoBehaviour matches by node name but has no script name.
@@ -4921,11 +4946,19 @@ class TestEditorSetComponentFieldsIntegration(unittest.TestCase):
     """Integration tests for editor_set_component_fields with live Editor bridge."""
 
     @unittest.skipUnless(
-        os.environ.get("UNITYTOOL_BRIDGE_MODE") == "editor",
-        "requires editor bridge (UNITYTOOL_BRIDGE_MODE=editor must be set)",
+        os.environ.get("UNITYTOOL_BRIDGE_MODE") == "editor"
+        and os.environ.get("UNITYTOOL_BRIDGE_E2E_LIVE") == "1",
+        "requires live editor bridge "
+        "(UNITYTOOL_BRIDGE_MODE=editor and UNITYTOOL_BRIDGE_E2E_LIVE=1 must be set)",
     )
     def test_e2e_editor_bridge(self) -> None:
-        """E2E with live Editor bridge: sets fields and returns success envelope."""
+        """E2E with live Editor bridge: sets fields and returns success envelope.
+
+        Gated on a dedicated opt-in (``UNITYTOOL_BRIDGE_E2E_LIVE=1``) so the
+        unittest-parallel suite stays green on developer shells that already
+        export ``UNITYTOOL_BRIDGE_MODE=editor`` but do not have a live Unity
+        Editor with the fixture scene loaded (issue #88 / #89 follow-up).
+        """
         server = create_server()
         _, result = _run(server.call_tool(
             "editor_set_component_fields",

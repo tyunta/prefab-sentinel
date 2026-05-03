@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 
@@ -25,6 +26,12 @@ class UnityPatchBridgeTests(unittest.TestCase):
         env.pop("UNITYTOOL_UNITY_EXECUTE_METHOD", None)
         env.pop("UNITYTOOL_UNITY_TIMEOUT_SEC", None)
         env.pop("UNITYTOOL_UNITY_LOG_FILE", None)
+        # Bridge dispatch env vars must not leak from the host shell into
+        # the spawned subprocess: the test suite asserts batchmode-path
+        # behaviour and a host-set ``UNITYTOOL_BRIDGE_MODE=editor`` would
+        # otherwise route every test through the editor file-watcher path.
+        env.pop("UNITYTOOL_BRIDGE_MODE", None)
+        env.pop("UNITYTOOL_BRIDGE_WATCH_DIR", None)
         if env_overrides:
             env.update(env_overrides)
         completed = subprocess.run(
@@ -39,6 +46,75 @@ class UnityPatchBridgeTests(unittest.TestCase):
         )
         self.assertEqual(0, completed.returncode, msg=completed.stderr)
         return json.loads(completed.stdout)
+
+    def test_reference_bridge_keeps_subprocess_env_clean(self) -> None:
+        """Even when the host shell exports the two bridge env vars, the
+        subprocess fixture must strip them so the patch bridge takes the
+        batchmode dispatch path with the supplied ``UNITYTOOL_UNITY_COMMAND``.
+        """
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            unity_runner = root / "fake_unity_clean.py"
+            unity_runner.write_text(
+                """
+import json
+import sys
+from pathlib import Path
+
+def _arg(flag: str) -> str:
+    args = sys.argv[1:]
+    idx = args.index(flag)
+    return args[idx + 1]
+
+response_path = Path(_arg("-sentinelPatchResponse"))
+response_path.write_text(
+    json.dumps(
+        {
+            "protocol_version": 2,
+            "success": True,
+            "severity": "info",
+            "code": "SER_APPLY_OK",
+            "message": "Applied by fake Unity runner.",
+            "data": {"applied": 0},
+            "diagnostics": [],
+        }
+    ),
+    encoding="utf-8",
+)
+""".strip(),
+                encoding="utf-8",
+            )
+
+            with unittest.mock.patch.dict(
+                os.environ,
+                {
+                    "UNITYTOOL_BRIDGE_MODE": "editor",
+                    "UNITYTOOL_BRIDGE_WATCH_DIR": str(root),
+                },
+                clear=False,
+            ):
+                result = self._run_bridge(
+                    {
+                        "protocol_version": 2,
+                        "plan_version": 2,
+                        "resources": [
+                            {
+                                "id": "prefab",
+                                "kind": "prefab",
+                                "path": "Assets/Test.prefab",
+                                "mode": "open",
+                            }
+                        ],
+                        "ops": [],
+                    },
+                    env_overrides={
+                        "UNITYTOOL_UNITY_COMMAND": f'"{sys.executable}" "{unity_runner}"',
+                        "UNITYTOOL_UNITY_PROJECT_PATH": str(root),
+                    },
+                )
+
+        self.assertTrue(result["success"], msg=result)
+        self.assertEqual("SER_APPLY_OK", result["code"])
 
     def test_reference_bridge_requires_unity_command(self) -> None:
         result = self._run_bridge(

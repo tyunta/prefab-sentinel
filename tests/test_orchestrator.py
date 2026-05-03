@@ -1851,6 +1851,61 @@ class TestNestedWiringTraversal(unittest.TestCase):
             self.assertEqual(len(nested_comps), 1, "Expected 1 nested component")
 
 
+class InspectHierarchyVariantClassificationTests(unittest.TestCase):
+    """Regression tests for issue #114.
+
+    A regular base prefab that nests a PrefabInstance carries an
+    ``m_SourcePrefab`` reference, but the prefab itself is not a Variant
+    — variant routing must consult own-GameObject presence as well.
+    """
+
+    def _copy_fixtures_into_assets(self, root: Path) -> None:
+        fixtures = (
+            Path(__file__).parent / "fixtures" / "variant_misclassification"
+        )
+        assets = root / "Assets"
+        assets.mkdir(parents=True, exist_ok=True)
+        for child in fixtures.iterdir():
+            (assets / child.name).write_bytes(child.read_bytes())
+
+    def test_inspect_hierarchy_normal_prefab_with_nested_instance_is_not_variant(
+        self,
+    ) -> None:
+        from prefab_sentinel.orchestrator_inspect import inspect_hierarchy
+        from prefab_sentinel.services.prefab_variant import PrefabVariantService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._copy_fixtures_into_assets(root)
+            svc = PrefabVariantService(project_root=root)
+
+            response = inspect_hierarchy(svc, "Assets/OuterWithNested.prefab")
+
+        self.assertTrue(response.success, msg=response.message)
+        self.assertNotIn("is_variant", response.data)
+        self.assertNotIn("base_prefab_path", response.data)
+        roots = response.data["roots"]
+        self.assertEqual(1, len(roots))
+        self.assertEqual("Outer", roots[0]["name"])
+
+    def test_inspect_hierarchy_actual_variant_still_resolves_base(self) -> None:
+        from prefab_sentinel.orchestrator_inspect import inspect_hierarchy
+        from prefab_sentinel.services.prefab_variant import PrefabVariantService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._copy_fixtures_into_assets(root)
+            svc = PrefabVariantService(project_root=root)
+
+            response = inspect_hierarchy(svc, "Assets/ChairVariant.prefab")
+
+        self.assertTrue(response.success, msg=response.message)
+        self.assertEqual(True, response.data.get("is_variant"))
+        self.assertEqual(
+            "Assets/Chair.prefab", response.data.get("base_prefab_path"),
+        )
+
+
 class InspectMaterialsRelativePathTests(unittest.TestCase):
     """Regression tests for GitHub Issue #14: relative paths must resolve via project_root."""
 

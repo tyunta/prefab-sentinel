@@ -285,22 +285,29 @@ class TestCompileTimeoutRequestField(unittest.TestCase):
 
 
 class TestAsmdefAssemblyDisambiguation(unittest.TestCase):
-    """Bridge: the two iteration sites that scan AppDomain assemblies must use
-    a fully qualified `System.Reflection.Assembly` so the file compiles
-    regardless of which other namespaces are imported."""
+    """Bridge: every iteration site that scans AppDomain assemblies must use
+    a fully qualified ``System.Reflection.Assembly`` so the file compiles
+    regardless of which other namespaces are imported.
 
-    def test_two_iteration_sites_use_fully_qualified_assembly(self) -> None:
+    ``HandleEditorAddComponent`` originally had two such iteration sites; the
+    duplicate that re-resolved ``UdonSharpBehaviour`` was removed (DRY — the
+    type is already cached as ``usbTypeForGuard`` via
+    ``ResolveUdonSharpBehaviourType``). The remaining site (the
+    ``UdonSharpProgramAsset`` lookup) must still be fully qualified.
+    """
+
+    def test_remaining_iteration_site_uses_fully_qualified_assembly(self) -> None:
         source = _read(BRIDGE)
-        # Both sites are inside HandleEditorAddComponent.
         body = _extract_method(source, "HandleEditorAddComponent")
         occurrences = body.count("System.Reflection.Assembly")
         self.assertGreaterEqual(
             occurrences,
-            2,
+            1,
             (
-                "Expected the two AppDomain.GetAssemblies iteration sites in "
-                "HandleEditorAddComponent to use the fully qualified "
-                f"System.Reflection.Assembly, found {occurrences} occurrence(s)"
+                "Expected at least one fully qualified "
+                "``System.Reflection.Assembly`` in HandleEditorAddComponent "
+                "(UdonSharpProgramAsset lookup), "
+                f"found {occurrences} occurrence(s)"
             ),
         )
 

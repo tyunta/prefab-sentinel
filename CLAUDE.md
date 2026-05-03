@@ -43,7 +43,7 @@
 - **操作系・検証系ツール**（`set_property`, `validate_refs`, `validate_field_rename`, `check_field_coverage`, `activate_project` 等）: `success / severity / code / message / data / diagnostics` エンベロープを返す。`diagnostics` が意味のあるデータを運ぶため。
 - **参照系ツール**（`get_unity_symbols`, `find_unity_symbol`, `find_referencing_assets`）: ペイロードを直接返す（エンベロープなし）。該当なしは空 `matches` 配列で表現し、エラーとしない。インフラエラー（ファイル不在等）は MCP `ToolError` で伝播。
 - **orchestrator 系ツール**（`inspect_wiring`, `inspect_variant` 等）: `ToolResponse.to_dict()` 経由でエンベロープを返す。
-- 主要コード: `SER001`, `SER002`, `PVR001`, `PVR002`, `PVR003`, `REF001`, `REF002`, `RUN001`, `RUN002`, `CHANGE_REASON_REQUIRED`（`confirm=True` 時に `change_reason` が未指定）。
+- 主要コード: `SER001`, `SER002`, `SER003`（`set_component_fields` が dry-run 段階で component / property path を解決できない場合）、`PVR001`, `PVR002`, `PVR003`, `REF001`, `REF002`, `RUN001`, `RUN002`, `CHANGE_REASON_REQUIRED`（`confirm=True` 時に `change_reason` が未指定）。
 - `severity` は `info | warning | error | critical` を使用する。
 - MCP レベルの例外（`ToolError`）はインフラエラー（ファイル不在、import 失敗）のみ。
 
@@ -73,6 +73,7 @@
 - スクショで見えた情報は `inspect wiring` / `validate refs` で裏取りする。
 - Inspector の表示名と SerializedProperty の `propertyPath` は異なるため、目視だけで patch plan を書かない。
 - Editor 操作は Editor Bridge 常駐が前提。`UNITYTOOL_BRIDGE_MODE=editor` が未設定の場合はエラーで停止する。
+- ユニットテストは Editor Bridge ディスパッチ環境変数（`UNITYTOOL_BRIDGE_MODE` / `UNITYTOOL_BRIDGE_WATCH_DIR`）をホストシェルから継承しないように `setUp` / サブプロセス起動時に pop する。ホストが `editor` モードを export していてもテストは batchmode 経路で動く必要がある（issue #88, #89）。
 
 ## VRChat エコシステムナレッジの自動適用
 - 作業中に VRChat エコシステムツール（ModularAvatar、liltoon、VRCFury、AvatarOptimizer 等）に関する判断が必要になったら、対応する `knowledge/*.md` を Read してから判断する。

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import tempfile
@@ -338,6 +339,67 @@ class TestSetCameraParams(unittest.TestCase):
     def test_orthographic_passed(self) -> None:
         kwargs = build_set_camera_kwargs(orthographic=1)
         self.assertEqual(kwargs["camera_orthographic"], 1)
+
+    def test_reset_to_defaults_passed(self) -> None:
+        """Issue #112: ``reset_to_defaults=True`` is forwarded to the bridge."""
+        kwargs = build_set_camera_kwargs(reset_to_defaults=True)
+        self.assertEqual({"reset_to_defaults": True}, kwargs)
+
+    def test_reset_to_defaults_default_false_omitted(self) -> None:
+        kwargs = build_set_camera_kwargs(yaw=0.0)
+        self.assertNotIn("reset_to_defaults", kwargs)
+
+
+class TestEditorSetCameraForwardsResetToDefaults(unittest.TestCase):
+    """Issue #112: the MCP wrapper forwards the flag through ``send_action``."""
+
+    def test_editor_set_camera_forwards_reset_to_defaults(self) -> None:
+        from prefab_sentinel import mcp_tools_editor_view  # noqa: PLC0415
+        from prefab_sentinel.mcp_server import create_server  # noqa: PLC0415
+
+        with patch.object(mcp_tools_editor_view, "send_action") as send:
+            send.return_value = {
+                "success": True,
+                "severity": "info",
+                "code": "EDITOR_CTRL_SET_CAMERA_OK",
+                "message": "ok",
+                "data": {},
+                "diagnostics": [],
+            }
+            server = create_server()
+            asyncio.run(server.call_tool(
+                "editor_set_camera",
+                {"reset_to_defaults": True},
+            ))
+        kwargs = send.call_args.kwargs
+        self.assertEqual("set_camera", kwargs["action"])
+        self.assertTrue(kwargs.get("reset_to_defaults"))
+
+
+class TestEditorConsoleForwardsClassificationFilter(unittest.TestCase):
+    """Issue #117: the MCP wrapper forwards ``classification_filter``."""
+
+    def test_editor_console_classification_filter_forwarded(self) -> None:
+        from prefab_sentinel import mcp_tools_editor_view  # noqa: PLC0415
+        from prefab_sentinel.mcp_server import create_server  # noqa: PLC0415
+
+        with patch.object(mcp_tools_editor_view, "send_action") as send:
+            send.return_value = {
+                "success": True,
+                "severity": "info",
+                "code": "EDITOR_CTRL_CONSOLE_OK",
+                "message": "ok",
+                "data": {"entries": []},
+                "diagnostics": [],
+            }
+            server = create_server()
+            asyncio.run(server.call_tool(
+                "editor_console",
+                {"classification_filter": "non_fatal"},
+            ))
+        kwargs = send.call_args.kwargs
+        self.assertEqual("capture_console_logs", kwargs["action"])
+        self.assertEqual("non_fatal", kwargs["classification_filter"])
 
 
 class TestCreateEmptyKwargs(unittest.TestCase):
