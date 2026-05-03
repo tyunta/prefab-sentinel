@@ -224,25 +224,46 @@ def register_editor_view_tools(server: FastMCP) -> None:
     def editor_console(
         max_entries: int = 200,
         log_type_filter: str = "all",
-        since_seconds: float = 0.0,
+        since_seconds: float = 60.0,
         classification_filter: str = "all",
+        order: str = "newest_first",
+        cursor: str = "",
     ) -> dict[str, Any]:
         """Capture Unity Console log entries as structured data.
+
+        Issue #113 (breaking change): the default ordering is
+        ``newest_first`` and the default time window is 60.0 seconds so
+        the typical interactive debugging request returns the most
+        recent log entries first within a recent window. Pagination is
+        opaque: the bridge response carries a ``next_cursor`` field
+        whenever more matching entries remain, and the next call should
+        forward that token verbatim through ``cursor`` to continue.
 
         Args:
             max_entries: Maximum number of log entries to retrieve (default: 200).
             log_type_filter: Filter by log type: "all", "error", "warning", "exception".
             since_seconds: Only entries from the last N seconds (0 = no time filter).
+                Default is 60.0 — recent-window capture for typical
+                interactive debugging.
             classification_filter: Filter by non-fatal classification:
                 ``"all"`` (default), ``"non_fatal"`` (only entries matching the
                 bridge-side non-fatal pattern table), or ``"fatal"`` (only
                 entries that do not match it).
+            order: Ordering keyword. Accepted set: ``"newest_first"`` (default)
+                or ``"oldest_first"``. Forwarded verbatim; the bridge
+                rejects any other value.
+            cursor: Opaque continuation token from a previous call's
+                ``next_cursor`` response field. Empty (default) starts a
+                fresh page from the most recent (or oldest, depending on
+                ordering) matching entry.
         """
         return send_action(
             action="capture_console_logs",
             max_entries=max_entries, log_type_filter=log_type_filter,
             since_seconds=since_seconds,
             classification_filter=classification_filter,
+            order=order,
+            cursor=cursor,
         )
 
     @server.tool()

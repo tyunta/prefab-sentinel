@@ -49,6 +49,38 @@ def _change_reason_required_envelope() -> dict[str, Any]:
 # documented in the run-script handler contract (issue #116).
 DEFAULT_COMPILE_TIMEOUT_MS = 15000
 
+# Inclusive bounds enforced at the public surface (issue #127). The upper
+# bound caps the worst-case time a single MCP call can keep the Editor
+# Bridge poll loop alive; arbitrarily large values would let a caller
+# pin the bridge for minutes per request. The lower bound rejects 0 and
+# negative values that would short-circuit the poll into a busy loop or
+# an immediate error.
+COMPILE_TIMEOUT_MIN_MS = 1
+COMPILE_TIMEOUT_MAX_MS = 120000
+
+
+def _compile_timeout_out_of_range_envelope(value: int) -> dict[str, Any]:
+    """Return the canonical COMPILE_TIMEOUT_OUT_OF_RANGE envelope.
+
+    The message names the supplied value and both inclusive bounds so
+    the caller can fix the request without consulting external docs.
+    """
+    return {
+        "success": False,
+        "severity": "error",
+        "code": "COMPILE_TIMEOUT_OUT_OF_RANGE",
+        "message": (
+            f"compile_timeout_ms={value} is outside the inclusive range "
+            f"[{COMPILE_TIMEOUT_MIN_MS}, {COMPILE_TIMEOUT_MAX_MS}] (milliseconds)."
+        ),
+        "data": {
+            "supplied": value,
+            "min_ms": COMPILE_TIMEOUT_MIN_MS,
+            "max_ms": COMPILE_TIMEOUT_MAX_MS,
+        },
+        "diagnostics": [],
+    }
+
 
 def editor_run_script(
     code: str,
@@ -73,6 +105,10 @@ def editor_run_script(
     compile_timeout_ms:
         Bounded compile-pending budget in milliseconds; forwarded to the
         bridge as ``compile_timeout``. Defaults to fifteen seconds.
+        Values outside the inclusive
+        ``[COMPILE_TIMEOUT_MIN_MS, COMPILE_TIMEOUT_MAX_MS]`` range
+        return ``COMPILE_TIMEOUT_OUT_OF_RANGE`` without contacting the
+        bridge (issue #127).
 
     Returns
     -------
@@ -82,6 +118,12 @@ def editor_run_script(
     normalized_reason = change_reason.strip() if isinstance(change_reason, str) else ""
     if not confirm or not normalized_reason:
         return _change_reason_required_envelope()
+
+    if (
+        compile_timeout_ms < COMPILE_TIMEOUT_MIN_MS
+        or compile_timeout_ms > COMPILE_TIMEOUT_MAX_MS
+    ):
+        return _compile_timeout_out_of_range_envelope(compile_timeout_ms)
 
     return send_action(
         action="run_script",

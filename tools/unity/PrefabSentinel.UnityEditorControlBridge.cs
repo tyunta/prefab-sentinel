@@ -19,7 +19,7 @@ namespace PrefabSentinel
     public static class UnityEditorControlBridge
     {
         public const int ProtocolVersion = 1;
-        public const string BridgeVersion = "0.5.155";
+        public const string BridgeVersion = "0.5.156";
 
         /// <summary>Actions that write their response file asynchronously (not on return).</summary>
         public static readonly System.Collections.Generic.HashSet<string> AsyncActions =
@@ -111,6 +111,12 @@ namespace PrefabSentinel
             public int max_entries = 200;
             public string log_type_filter = "all"; // "all" | "error" | "warning" | "exception"
             public float since_seconds = 0f;       // 0 = no time filter
+            // Issue #113: ordering keyword and opaque continuation token.
+            // Empty ``order`` defaults to "newest_first" inside the
+            // handler. Empty ``cursor`` starts a fresh page from the
+            // most recent (or oldest, depending on ordering) entry.
+            public string order = string.Empty;
+            public string cursor = string.Empty;
 
             // list_children
             public int depth = 1;
@@ -226,6 +232,11 @@ namespace PrefabSentinel
             public string stack_trace = string.Empty;
             public string log_type = string.Empty;
             public string timestamp = string.Empty;
+            // Issue #113: monotonic ingestion sequence assigned under the
+            // capture lock; the cursor token names a sequence position so
+            // pagination is stable across calls even when the ring buffer
+            // wraps.
+            public long sequence_id = 0;
         }
 
         [Serializable]
@@ -359,6 +370,11 @@ namespace PrefabSentinel
             // is broken out as a typed field for callers; the labels of all
             // matched patterns appear in ``nonfatal_patterns``.
             public EditorControlWarnings warnings = new EditorControlWarnings();
+
+            // Issue #113: opaque continuation token. Non-empty whenever
+            // additional matching entries remain past the returned page;
+            // empty when the page exhausted the matching set.
+            public string next_cursor = string.Empty;
         }
 
         [Serializable]
@@ -1888,12 +1904,17 @@ namespace PrefabSentinel
                 public string stackTrace;
                 public LogType logType;
                 public double timestamp; // EditorApplication.timeSinceStartup
+                // Issue #113: monotonic ingestion sequence assigned by
+                // OnLogMessage under the capture lock. Stable across ring
+                // buffer wraparounds so cursor tokens remain meaningful.
+                public long sequenceId;
             }
 
             private static RawEntry[] _buffer;
             private static int _head;
             private static int _count;
             private static bool _capturing;
+            private static long _nextSequenceId;
             private static readonly object _lock = new object();
 
             public static void StartCapture()
@@ -1904,6 +1925,7 @@ namespace PrefabSentinel
                     _buffer = new RawEntry[DefaultCapacity];
                     _head = 0;
                     _count = 0;
+                    _nextSequenceId = 0;
                     _capturing = true;
                 }
                 Application.logMessageReceived += OnLogMessage;
@@ -1932,6 +1954,7 @@ namespace PrefabSentinel
                         stackTrace = stackTrace,
                         logType = type,
                         timestamp = EditorApplication.timeSinceStartup,
+                        sequenceId = _nextSequenceId++,
                     };
                     _head = (_head + 1) % _buffer.Length;
                     if (_count < _buffer.Length) _count++;
@@ -1939,28 +1962,59 @@ namespace PrefabSentinel
             }
 
             /// <summary>
-            /// Snapshot the buffer, applying filters. Returns entries oldest-first.
+            /// Snapshot the buffer, applying filters and ordering.
             /// ``classificationFilter`` selects between ``all`` (default),
-            /// ``non_fatal`` (only entries whose classification label is
-            /// non-null), and ``fatal`` (only entries whose label is null).
+            /// ``non_fatal``, and ``fatal``. ``newestFirst`` walks the
+            /// buffer in reverse ingestion order. ``cursorAfterSequence``
+            /// is exclusive: only entries strictly past that ingestion
+            /// position (in the requested direction) are considered;
+            /// ``long.MinValue`` (oldest_first) or ``long.MaxValue``
+            /// (newest_first) means "no cursor".
+            ///
+            /// Returns the page entries (in the requested direction) and
+            /// a flag indicating whether at least one matching entry
+            /// remains past the page; the caller turns that into the
+            /// opaque continuation token.
             /// </summary>
-            public static List<ConsoleLogEntry> GetEntries(
+            public static (List<ConsoleLogEntry> entries, bool hasMore) GetEntries(
                 int maxEntries,
                 string logTypeFilter,
                 float sinceSeconds,
-                string classificationFilter = "all")
+                string classificationFilter,
+                bool newestFirst,
+                long cursorAfterSequence)
             {
                 var result = new List<ConsoleLogEntry>();
+                bool hasMore = false;
                 lock (_lock)
                 {
-                    if (_buffer == null || _count == 0) return result;
+                    if (_buffer == null || _count == 0) return (result, hasMore);
 
                     double now = EditorApplication.timeSinceStartup;
                     int start = (_head - _count + _buffer.Length) % _buffer.Length;
 
                     for (int i = 0; i < _count; i++)
                     {
-                        var entry = _buffer[(start + i) % _buffer.Length];
+                        // Walk index in the requested direction so the
+                        // first matching entry returned is the one the
+                        // caller asked for (newest or oldest), and the
+                        // page can stop early.
+                        int physicalIndex = newestFirst
+                            ? (start + _count - 1 - i) % _buffer.Length
+                            : (start + i) % _buffer.Length;
+                        var entry = _buffer[physicalIndex];
+
+                        // Exclusive cursor: skip up to and including the
+                        // supplied sequence position so the next page
+                        // starts strictly past it.
+                        if (newestFirst)
+                        {
+                            if (entry.sequenceId >= cursorAfterSequence) continue;
+                        }
+                        else
+                        {
+                            if (entry.sequenceId <= cursorAfterSequence) continue;
+                        }
 
                         if (sinceSeconds > 0f && (now - entry.timestamp) > sinceSeconds)
                             continue;
@@ -1971,18 +2025,36 @@ namespace PrefabSentinel
                                 classificationFilter))
                             continue;
 
+                        if (result.Count >= maxEntries)
+                        {
+                            // Found one more matching entry past the
+                            // requested page size — flag continuation.
+                            hasMore = true;
+                            break;
+                        }
+
                         result.Add(new ConsoleLogEntry
                         {
                             message = entry.message ?? string.Empty,
                             stack_trace = entry.stackTrace ?? string.Empty,
                             log_type = entry.logType.ToString(),
                             timestamp = TimeSpan.FromSeconds(entry.timestamp).ToString(@"hh\:mm\:ss"),
+                            sequence_id = entry.sequenceId,
                         });
-
-                        if (result.Count >= maxEntries) break;
                     }
                 }
-                return result;
+                return (result, hasMore);
+            }
+
+            /// <summary>
+            /// Returns the highest sequence id ever ingested, even after the
+            /// ring buffer has wrapped. Used by ``HandleCaptureConsoleLogs``
+            /// to validate cursor tokens against the realistic range of
+            /// past ingestion positions.
+            /// </summary>
+            public static long PeekHighestIngestedSequenceId()
+            {
+                lock (_lock) { return _nextSequenceId - 1; }
             }
 
             /// <summary>
@@ -2056,6 +2128,14 @@ namespace PrefabSentinel
             }
         }
 
+        // Issue #113: opaque cursor token. Encoded as ``seq:<long>`` so
+        // the bridge owns the format and callers cannot construct a
+        // valid token by inspection. Range checked against the highest
+        // sequence id that has ever been ingested so out-of-range
+        // tokens are rejected even when the underlying buffer wraps.
+        private const string ConsoleCursorPrefix = "seq:";
+        private static readonly string[] ConsoleSupportedOrders = { "newest_first", "oldest_first" };
+
         private static EditorControlResponse HandleCaptureConsoleLogs(EditorControlRequest request)
         {
             if (!ConsoleLogBuffer.IsCapturing)
@@ -2074,10 +2154,63 @@ namespace PrefabSentinel
                     "classification_filter must be one of: "
                     + string.Join(", ", ConsoleLogBuffer.SupportedClassificationFilters));
 
+            // Issue #113: ordering keyword (default "newest_first") and
+            // opaque continuation token. Both are validated up front so
+            // an invalid request short-circuits before the buffer walk.
+            string order = string.IsNullOrEmpty(request.order)
+                ? "newest_first"
+                : request.order;
+            if (Array.IndexOf(ConsoleSupportedOrders, order) < 0)
+                return BuildError(
+                    "EDITOR_CTRL_INVALID_ORDER",
+                    "order must be one of: " + string.Join(", ", ConsoleSupportedOrders));
+            bool newestFirst = order == "newest_first";
+
+            // Empty cursor = fresh page. Sentinels match the half-open
+            // bounds GetEntries uses: long.MaxValue means "anything below"
+            // for newest_first; long.MinValue means "anything above" for
+            // oldest_first.
+            long cursorAfter = newestFirst ? long.MaxValue : long.MinValue;
+            string cursor = request.cursor ?? string.Empty;
+            if (cursor.Length > 0)
+            {
+                if (!cursor.StartsWith(ConsoleCursorPrefix, StringComparison.Ordinal))
+                    return BuildError(
+                        "EDITOR_CTRL_INVALID_CURSOR",
+                        $"cursor token must start with '{ConsoleCursorPrefix}' (opaque continuation token from a previous response).");
+                string body = cursor.Substring(ConsoleCursorPrefix.Length);
+                if (!long.TryParse(body, System.Globalization.NumberStyles.Integer,
+                        System.Globalization.CultureInfo.InvariantCulture, out long parsed))
+                    return BuildError(
+                        "EDITOR_CTRL_INVALID_CURSOR",
+                        $"cursor token '{cursor}' could not be parsed as an ingestion position.");
+                long highest = ConsoleLogBuffer.PeekHighestIngestedSequenceId();
+                // Empty buffer ⇒ highest = -1; reporting "[0, -1]" would be
+                // misleading, so emit a dedicated message before the range
+                // comparison runs.
+                if (highest < 0)
+                    return BuildError(
+                        "EDITOR_CTRL_INVALID_CURSOR",
+                        $"cursor token '{cursor}' cannot be resolved: no entries have been ingested yet.");
+                if (parsed < 0 || parsed > highest)
+                    return BuildError(
+                        "EDITOR_CTRL_INVALID_CURSOR",
+                        $"cursor token '{cursor}' references an ingestion position outside the captured range [0, {highest}].");
+                cursorAfter = parsed;
+            }
+
             int maxEntries = request.max_entries > 0 ? request.max_entries : 200;
-            var entries = ConsoleLogBuffer.GetEntries(
+            var (entries, hasMore) = ConsoleLogBuffer.GetEntries(
                 maxEntries, request.log_type_filter, request.since_seconds,
-                classificationFilter);
+                classificationFilter, newestFirst, cursorAfter);
+
+            string nextCursor = string.Empty;
+            if (hasMore && entries.Count > 0)
+            {
+                long lastSeq = entries[entries.Count - 1].sequence_id;
+                nextCursor = ConsoleCursorPrefix + lastSeq.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture);
+            }
 
             return BuildSuccess("EDITOR_CTRL_CONSOLE_OK",
                 $"Captured {entries.Count} log entries",
@@ -2087,6 +2220,7 @@ namespace PrefabSentinel
                     entries = entries.ToArray(),
                     read_only = true,
                     executed = true,
+                    next_cursor = nextCursor,
                 });
         }
 
@@ -3571,6 +3705,35 @@ namespace PrefabSentinel
                             float.Parse(parts[1].Trim(), System.Globalization.CultureInfo.InvariantCulture),
                             float.Parse(parts[2].Trim(), System.Globalization.CultureInfo.InvariantCulture),
                             float.Parse(parts[3].Trim(), System.Globalization.CultureInfo.InvariantCulture));
+                        break;
+                    }
+                    case SerializedPropertyType.Quaternion:
+                    {
+                        // Issue #111: accept only the four-component xyzw form.
+                        // Euler input is intentionally not supported here — the
+                        // dedicated euler-hint property already covers that
+                        // shape, and mixing two value shapes inside one type
+                        // case obscures the contract.
+                        var parts = v.Split(',');
+                        if (parts.Length != 4)
+                            return BuildError("EDITOR_CTRL_SET_PROP_TYPE_MISMATCH",
+                                "Quaternion requires exactly 4 comma-separated floats (x,y,z,w).");
+                        float qx = float.Parse(parts[0].Trim(), System.Globalization.CultureInfo.InvariantCulture);
+                        float qy = float.Parse(parts[1].Trim(), System.Globalization.CultureInfo.InvariantCulture);
+                        float qz = float.Parse(parts[2].Trim(), System.Globalization.CultureInfo.InvariantCulture);
+                        float qw = float.Parse(parts[3].Trim(), System.Globalization.CultureInfo.InvariantCulture);
+                        // Norm tolerance 1e-4 — matches the precision we
+                        // expect from float32 quaternion encodings emitted
+                        // by Unity's Transform.localRotation. Tighter than
+                        // Mathf.Approximately but still loose enough that
+                        // round-tripping a serialized quaternion does not
+                        // get rejected.
+                        float norm = Mathf.Sqrt(qx * qx + qy * qy + qz * qz + qw * qw);
+                        if (Mathf.Abs(norm - 1f) > 1e-4f)
+                            return BuildError("EDITOR_CTRL_SET_PROP_QUATERNION_NOT_NORMALIZED",
+                                $"Quaternion value (x={qx}, y={qy}, z={qz}, w={qw}) has norm {norm}; "
+                                + "unit norm (1.0 ± 1e-4) is required. Normalize the input on the caller side.");
+                        prop.quaternionValue = new Quaternion(qx, qy, qz, qw);
                         break;
                     }
                     case SerializedPropertyType.ArraySize:

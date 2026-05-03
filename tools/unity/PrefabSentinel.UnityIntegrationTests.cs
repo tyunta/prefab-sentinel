@@ -127,6 +127,9 @@ namespace PrefabSentinel
             public string stack_trace = string.Empty;
             public string log_type = string.Empty;
             public string timestamp = string.Empty;
+            // Issue #113: monotonic ingestion sequence assigned by the
+            // bridge under the capture lock.
+            public long sequence_id = 0;
         }
 
         [Serializable]
@@ -160,6 +163,11 @@ namespace PrefabSentinel
 
             // Save / instantiate non-fatal warnings (issue #117)
             public EditorControlWarningsReadback warnings = new EditorControlWarningsReadback();
+
+            // Issue #113: opaque continuation token returned by the
+            // capture_console_logs handler when more matching entries
+            // remain past the requested page.
+            public string next_cursor = string.Empty;
         }
 
         // ----------------------------------------------------------------
@@ -359,6 +367,22 @@ namespace PrefabSentinel
                         Test_EditorCtrl_CaptureConsoleLogs_FiltersByClassification),
                     ("EditorCtrl_CaptureConsoleLogs_RejectsUnsupportedClassification",
                         Test_EditorCtrl_CaptureConsoleLogs_RejectsUnsupportedClassification),
+                    // Phase 1 issue #113 — ordering + opaque cursor pagination
+                    ("EditorCtrl_CaptureConsoleLogs_DefaultOrderIsNewestFirst",
+                        Test_EditorCtrl_CaptureConsoleLogs_DefaultOrderIsNewestFirst),
+                    ("EditorCtrl_CaptureConsoleLogs_PaginationWalksFullSet",
+                        Test_EditorCtrl_CaptureConsoleLogs_PaginationWalksFullSet),
+                    ("EditorCtrl_CaptureConsoleLogs_RejectsUnsupportedOrder",
+                        Test_EditorCtrl_CaptureConsoleLogs_RejectsUnsupportedOrder),
+                    ("EditorCtrl_CaptureConsoleLogs_RejectsMalformedCursor",
+                        Test_EditorCtrl_CaptureConsoleLogs_RejectsMalformedCursor),
+                    // Phase 1 issue #111 — quaternion property type
+                    ("EditorCtrl_SetProperty_Quaternion_HappyPath",
+                        Test_EditorCtrl_SetProperty_Quaternion_HappyPath),
+                    ("EditorCtrl_SetProperty_Quaternion_NonUnitRejected",
+                        Test_EditorCtrl_SetProperty_Quaternion_NonUnitRejected),
+                    ("EditorCtrl_SetProperty_Quaternion_WrongComponentCountRejected",
+                        Test_EditorCtrl_SetProperty_Quaternion_WrongComponentCountRejected),
                 };
 
                 var results = new List<TestCaseResult>();
@@ -503,7 +527,17 @@ namespace PrefabSentinel
             }
             finally
             {
-                try { Directory.Delete(tempDir, true); } catch { /* best effort */ }
+                // Best-effort cleanup of the per-call temp dir. Narrowed to the
+                // documented Directory.Delete failure modes (#126): the dir may
+                // already be gone (DirectoryNotFoundException), an antivirus or
+                // process may still hold a handle (IOException), or the
+                // filesystem may refuse the call (UnauthorizedAccessException).
+                // Anything else (NullReferenceException, OutOfMemoryException)
+                // would be a real bug — let it propagate.
+                try { Directory.Delete(tempDir, true); }
+                catch (DirectoryNotFoundException) { /* already gone */ }
+                catch (IOException) { /* file in use; best-effort cleanup */ }
+                catch (UnauthorizedAccessException) { /* fs refused; best-effort cleanup */ }
             }
         }
 
@@ -666,7 +700,15 @@ namespace PrefabSentinel
             }
             finally
             {
-                try { Directory.Delete(tempDir, true); } catch { /* best effort */ }
+                // Best-effort cleanup of the per-call temp dir. Same narrowing
+                // as the bridge-request helper above (#126): only the
+                // documented Directory.Delete failure modes are absorbed; any
+                // other exception is left to propagate so the test fails
+                // loudly instead of hiding a real bug.
+                try { Directory.Delete(tempDir, true); }
+                catch (DirectoryNotFoundException) { /* already gone */ }
+                catch (IOException) { /* file in use; best-effort cleanup */ }
+                catch (UnauthorizedAccessException) { /* fs refused; best-effort cleanup */ }
             }
         }
 
@@ -1823,16 +1865,29 @@ namespace PrefabSentinel
         {
             const string name = "UdonSharpBacking_CreateMode";
 
-            // Locate UdonSharpBehaviour type via reflection
+            // Locate UdonSharpBehaviour type via reflection. Narrowed catches
+            // (#126): Assembly.GetType swallows the dependency-resolution
+            // exceptions so the loop can move on to the next assembly. Any
+            // other failure (e.g. ArgumentException for a malformed name)
+            // would be a programming bug — let it propagate.
             Type usbType = null;
             foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
             {
-                try { usbType = asm.GetType("UdonSharp.UdonSharpBehaviour"); } catch { }
+                try { usbType = asm.GetType("UdonSharp.UdonSharpBehaviour"); }
+                catch (TypeLoadException) { /* assembly cannot resolve referenced types */ }
+                catch (FileNotFoundException) { /* dependency assembly missing */ }
+                catch (FileLoadException) { /* dependency assembly load failure */ }
+                catch (BadImageFormatException) { /* dependency assembly malformed */ }
                 if (usbType != null) break;
             }
             if (usbType == null) return Pass(name, "Skipped — UdonSharp not installed.");
 
-            // Find a concrete subclass
+            // Find a concrete subclass. Narrowed catch (#126):
+            // Assembly.GetTypes throws ReflectionTypeLoadException when one
+            // or more types in the assembly fail to load — that is a
+            // documented and expected condition while walking every loaded
+            // assembly in the AppDomain. Any other failure would be a real
+            // bug and is left to propagate.
             Type concreteType = null;
             foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
             {
@@ -1847,7 +1902,7 @@ namespace PrefabSentinel
                         }
                     }
                 }
-                catch { }
+                catch (System.Reflection.ReflectionTypeLoadException) { /* partial-load assembly; skip */ }
                 if (concreteType != null) break;
             }
             if (concreteType == null) return Pass(name, "Skipped — no concrete UdonSharpBehaviour found.");
@@ -1869,10 +1924,18 @@ namespace PrefabSentinel
             var go = AssetDatabase.LoadAssetAtPath<GameObject>(target);
             if (go == null) return Fail(name, "Prefab not found after save.");
 
+            // Locate UdonBehaviour type via reflection. Same narrowing as
+            // the UdonSharpBehaviour lookup above (#126): only the
+            // documented Assembly.GetType dependency-resolution exceptions
+            // are absorbed; any other exception propagates.
             Type udonBehaviourType = null;
             foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
             {
-                try { udonBehaviourType = asm.GetType("VRC.Udon.UdonBehaviour"); } catch { }
+                try { udonBehaviourType = asm.GetType("VRC.Udon.UdonBehaviour"); }
+                catch (TypeLoadException) { /* assembly cannot resolve referenced types */ }
+                catch (FileNotFoundException) { /* dependency assembly missing */ }
+                catch (FileLoadException) { /* dependency assembly load failure */ }
+                catch (BadImageFormatException) { /* dependency assembly malformed */ }
                 if (udonBehaviourType != null) break;
             }
             if (udonBehaviourType == null) return Fail(name, "VRC.Udon.UdonBehaviour type not found despite UdonSharp being present.");
@@ -2920,6 +2983,244 @@ namespace PrefabSentinel
                 "capture_console_logs", "\"classification_filter\":\"bogus\""));
             return AssertEditorControlFailure(name, resp,
                 "EDITOR_CTRL_INVALID_CLASSIFICATION_FILTER") ?? Pass(name);
+        }
+
+        // ----------------------------------------------------------------
+        // Phase 1 issue #113 — ordering + opaque cursor pagination
+        // ----------------------------------------------------------------
+
+        // StopCapture()+StartCapture() resets the ring buffer and the
+        // monotonic sequence id back to 0 so the test starts from a known
+        // state independent of prior cases that left entries in the
+        // buffer. Debug.LogWarning fires Application.logMessageReceived
+        // synchronously on the main thread, so the entries land in the
+        // buffer before the next bridge call.
+        private static void RestartConsoleCaptureForTest()
+        {
+            UnityEditorControlBridge.ConsoleLogBuffer.StopCapture();
+            UnityEditorControlBridge.ConsoleLogBuffer.StartCapture();
+        }
+
+        private static TestCaseResult Test_EditorCtrl_CaptureConsoleLogs_DefaultOrderIsNewestFirst(
+            string prefabPath, string materialPath)
+        {
+            const string name = "EditorCtrl_CaptureConsoleLogs_DefaultOrderIsNewestFirst";
+
+            RestartConsoleCaptureForTest();
+            Debug.LogWarning("DefaultOrderTest entry 0");
+            Debug.LogWarning("DefaultOrderTest entry 1");
+            Debug.LogWarning("DefaultOrderTest entry 2");
+
+            // Default order = newest_first, default cursor = empty.
+            var resp = RunEditorControlBridge(BuildEditorControlRequest(
+                "capture_console_logs", "\"log_type_filter\":\"warning\""));
+            if (resp == null)
+                return Pass(name, "Skipped: console capture not active in this Editor.");
+            if (!resp.success)
+                return Fail(name, $"Capture failed: code={resp.code}, message={resp.message}");
+            if (resp.data.entries == null || resp.data.entries.Length < 3)
+                return Fail(name, $"Expected at least 3 entries, got {(resp.data.entries == null ? 0 : resp.data.entries.Length)}.");
+
+            // newest_first ⇒ sequence_id strictly decreases across the page.
+            for (int i = 1; i < resp.data.entries.Length; i++)
+            {
+                long prev = resp.data.entries[i - 1].sequence_id;
+                long curr = resp.data.entries[i].sequence_id;
+                if (prev <= curr)
+                    return Fail(name,
+                        $"Expected descending sequence_ids (newest_first); got {prev} then {curr} at index {i}.");
+            }
+            return Pass(name);
+        }
+
+        private static TestCaseResult Test_EditorCtrl_CaptureConsoleLogs_PaginationWalksFullSet(
+            string prefabPath, string materialPath)
+        {
+            const string name = "EditorCtrl_CaptureConsoleLogs_PaginationWalksFullSet";
+
+            RestartConsoleCaptureForTest();
+            const int total = 5;
+            var injected = new List<string>(total);
+            for (int i = 0; i < total; i++)
+            {
+                string m = $"PaginationTest entry {i}";
+                Debug.LogWarning(m);
+                injected.Add(m);
+            }
+
+            // Page 1 — newest two entries, continuation token expected.
+            var page1 = RunEditorControlBridge(BuildEditorControlRequest(
+                "capture_console_logs",
+                "\"log_type_filter\":\"warning\",\"max_entries\":2"));
+            if (page1 == null)
+                return Pass(name, "Skipped: console capture not active in this Editor.");
+            if (!page1.success)
+                return Fail(name, $"Page 1 failed: code={page1.code}, message={page1.message}");
+            if (page1.data.entries == null || page1.data.entries.Length != 2)
+                return Fail(name, $"Page 1 expected 2 entries, got {(page1.data.entries == null ? 0 : page1.data.entries.Length)}.");
+            if (string.IsNullOrEmpty(page1.data.next_cursor))
+                return Fail(name, "Page 1 next_cursor must be non-empty when more entries remain.");
+
+            // Page 2 — next two entries with the page-1 cursor.
+            string extra2 = "\"log_type_filter\":\"warning\",\"max_entries\":2,\"cursor\":\""
+                + EscapeJsonString(page1.data.next_cursor) + "\"";
+            var page2 = RunEditorControlBridge(BuildEditorControlRequest(
+                "capture_console_logs", extra2));
+            if (page2 == null || !page2.success)
+                return Fail(name, $"Page 2 failed: code={(page2 == null ? "null" : page2.code)}.");
+            if (page2.data.entries == null || page2.data.entries.Length != 2)
+                return Fail(name, $"Page 2 expected 2 entries, got {(page2.data.entries == null ? 0 : page2.data.entries.Length)}.");
+            if (string.IsNullOrEmpty(page2.data.next_cursor))
+                return Fail(name, "Page 2 next_cursor must be non-empty (one entry remains).");
+
+            // Page 3 — final entry, empty continuation token.
+            string extra3 = "\"log_type_filter\":\"warning\",\"max_entries\":2,\"cursor\":\""
+                + EscapeJsonString(page2.data.next_cursor) + "\"";
+            var page3 = RunEditorControlBridge(BuildEditorControlRequest(
+                "capture_console_logs", extra3));
+            if (page3 == null || !page3.success)
+                return Fail(name, $"Page 3 failed: code={(page3 == null ? "null" : page3.code)}.");
+            if (page3.data.entries == null || page3.data.entries.Length != 1)
+                return Fail(name, $"Page 3 expected 1 entry, got {(page3.data.entries == null ? 0 : page3.data.entries.Length)}.");
+            if (!string.IsNullOrEmpty(page3.data.next_cursor))
+                return Fail(name, $"Page 3 next_cursor must be empty (no more entries), got '{page3.data.next_cursor}'.");
+
+            // Union of all pages must cover every injected message exactly.
+            var seen = new HashSet<string>();
+            foreach (var p in new[] { page1, page2, page3 })
+            {
+                foreach (var e in p.data.entries)
+                {
+                    if (e != null && !string.IsNullOrEmpty(e.message))
+                        seen.Add(e.message);
+                }
+            }
+            foreach (var m in injected)
+            {
+                if (!seen.Contains(m))
+                    return Fail(name, $"Pagination missed entry '{m}'.");
+            }
+            return Pass(name);
+        }
+
+        private static TestCaseResult Test_EditorCtrl_CaptureConsoleLogs_RejectsUnsupportedOrder(
+            string prefabPath, string materialPath)
+        {
+            const string name = "EditorCtrl_CaptureConsoleLogs_RejectsUnsupportedOrder";
+            UnityEditorControlBridge.ConsoleLogBuffer.StartCapture();
+            var resp = RunEditorControlBridge(BuildEditorControlRequest(
+                "capture_console_logs", "\"order\":\"random\""));
+            return AssertEditorControlFailure(name, resp, "EDITOR_CTRL_INVALID_ORDER") ?? Pass(name);
+        }
+
+        private static TestCaseResult Test_EditorCtrl_CaptureConsoleLogs_RejectsMalformedCursor(
+            string prefabPath, string materialPath)
+        {
+            const string name = "EditorCtrl_CaptureConsoleLogs_RejectsMalformedCursor";
+            UnityEditorControlBridge.ConsoleLogBuffer.StartCapture();
+            // No "seq:" prefix → the prefix gate rejects before any range
+            // check, regardless of the buffer state.
+            var resp = RunEditorControlBridge(BuildEditorControlRequest(
+                "capture_console_logs", "\"cursor\":\"not-a-seq-token\""));
+            return AssertEditorControlFailure(name, resp, "EDITOR_CTRL_INVALID_CURSOR") ?? Pass(name);
+        }
+
+        // ----------------------------------------------------------------
+        // Phase 1 issue #111 — quaternion property type
+        // ----------------------------------------------------------------
+
+        private static TestCaseResult Test_EditorCtrl_SetProperty_Quaternion_HappyPath(
+            string prefabPath, string materialPath)
+        {
+            const string name = "EditorCtrl_SetProperty_Quaternion_HappyPath";
+
+            // Normalized 90° rotation around Y. The norm is exactly 1.0 to
+            // float precision, well inside the 1.0 ± 1e-4 tolerance.
+            const string quatValue = "0,0.7071068,0,0.7071068";
+            var go = new GameObject("QuatHappyPathTarget");
+            try
+            {
+                string goPath = "/" + go.name;
+                string extra = "\"hierarchy_path\":\"" + EscapeJsonString(goPath) + "\","
+                             + "\"component_type\":\"Transform\","
+                             + "\"property_name\":\"m_LocalRotation\","
+                             + "\"property_value\":\"" + quatValue + "\"";
+                var resp = RunEditorControlBridge(BuildEditorControlRequest(
+                    "editor_set_property", extra));
+                var err = AssertEditorControlSuccess(name, resp);
+                if (err != null) return err;
+
+                // SerializedObject.ApplyModifiedProperties propagates the
+                // assignment to the underlying Transform synchronously, so
+                // the live transform reflects the requested rotation.
+                var q = go.transform.localRotation;
+                if (Mathf.Abs(q.x) > 1e-3f
+                    || Mathf.Abs(q.y - 0.7071068f) > 1e-3f
+                    || Mathf.Abs(q.z) > 1e-3f
+                    || Mathf.Abs(q.w - 0.7071068f) > 1e-3f)
+                    return Fail(name,
+                        $"Readback mismatch: expected (0, 0.7071, 0, 0.7071) got ({q.x}, {q.y}, {q.z}, {q.w}).");
+                return Pass(name);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(go);
+            }
+        }
+
+        private static TestCaseResult Test_EditorCtrl_SetProperty_Quaternion_NonUnitRejected(
+            string prefabPath, string materialPath)
+        {
+            const string name = "EditorCtrl_SetProperty_Quaternion_NonUnitRejected";
+
+            // norm = sqrt(0² + 1² + 0² + 1²) = sqrt(2) ≈ 1.414, well outside
+            // the 1.0 ± 1e-4 tolerance.
+            const string quatValue = "0,1,0,1";
+            var go = new GameObject("QuatNonUnitTarget");
+            try
+            {
+                string goPath = "/" + go.name;
+                string extra = "\"hierarchy_path\":\"" + EscapeJsonString(goPath) + "\","
+                             + "\"component_type\":\"Transform\","
+                             + "\"property_name\":\"m_LocalRotation\","
+                             + "\"property_value\":\"" + quatValue + "\"";
+                var resp = RunEditorControlBridge(BuildEditorControlRequest(
+                    "editor_set_property", extra));
+                return AssertEditorControlFailure(name, resp,
+                    "EDITOR_CTRL_SET_PROP_QUATERNION_NOT_NORMALIZED") ?? Pass(name);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(go);
+            }
+        }
+
+        private static TestCaseResult Test_EditorCtrl_SetProperty_Quaternion_WrongComponentCountRejected(
+            string prefabPath, string materialPath)
+        {
+            const string name = "EditorCtrl_SetProperty_Quaternion_WrongComponentCountRejected";
+
+            // Three components — the quaternion case requires exactly four
+            // (xyzw); any other count returns the setter's type-mismatch
+            // envelope before the norm check runs.
+            const string quatValue = "0,1,0";
+            var go = new GameObject("QuatWrongCountTarget");
+            try
+            {
+                string goPath = "/" + go.name;
+                string extra = "\"hierarchy_path\":\"" + EscapeJsonString(goPath) + "\","
+                             + "\"component_type\":\"Transform\","
+                             + "\"property_name\":\"m_LocalRotation\","
+                             + "\"property_value\":\"" + quatValue + "\"";
+                var resp = RunEditorControlBridge(BuildEditorControlRequest(
+                    "editor_set_property", extra));
+                return AssertEditorControlFailure(name, resp,
+                    "EDITOR_CTRL_SET_PROP_TYPE_MISMATCH") ?? Pass(name);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(go);
+            }
         }
 
         // ----------------------------------------------------------------

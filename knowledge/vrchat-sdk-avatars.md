@@ -542,6 +542,9 @@ DLL ベースのコンポーネントは `{fileID: <class_hash>, guid: <dll_guid
 | `StopOnExit` | bool | ステート退出時に停止 |
 | `PlayOnExit` | bool | ステート退出時に再生 |
 
+**ビルドバリデーション要件 (SDK 3.10.2)**:
+- VRCAnimatorPlayAudio の `Clips` で参照される AudioClip は、`Load In Background` を有効にする必要がある（`Decompress On Load` タイプの場合）。無効だとビルド時に `Avatar validation failed` エラーで拒否される。AudioClip の .meta ファイルで `loadInBackground: 1` を設定すること。
+
 ### PipelineManager フィールド
 
 | propertyPath | 型 | 説明 |

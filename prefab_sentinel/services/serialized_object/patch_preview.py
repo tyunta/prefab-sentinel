@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from prefab_sentinel.contracts import Diagnostic, ToolResponse, error_response, success_response
+from prefab_sentinel.services.serialized_object.before_cache import UnresolvedReason
 
 
 def plan_invalid(target: str, diagnostics: list[Diagnostic], op_count: int) -> ToolResponse:
@@ -44,12 +45,18 @@ def soft_warnings_for_preview(target: str, preview: list[dict[str, Any]]) -> lis
     The preview rows are mutated in place to pop the ``_warning`` marker
     that ``validate_op`` attaches; callers rely on this so the warning
     does not leak into the final envelope payload.
+
+    Issue #124: ``unresolved_before_value`` detection is driven by
+    isinstance membership in :class:`UnresolvedReason`, not by string
+    prefix. The diagnostic evidence carries the specific reason via the
+    member's own string value so callers see why the chain walk could
+    not produce a value.
     """
     warnings: list[Diagnostic] = []
     for entry in preview:
         loc = f"{entry.get('component', '')}:{entry.get('path', '')}"
         before_val = entry.get("before", "")
-        if isinstance(before_val, str) and before_val.startswith("(unresolved"):
+        if isinstance(before_val, UnresolvedReason):
             component = entry.get("component", "")
             prop_path = entry.get("path", "")
             warnings.append(
@@ -59,7 +66,7 @@ def soft_warnings_for_preview(target: str, preview: list[dict[str, Any]]) -> lis
                     detail="unresolved_before_value",
                     evidence=(
                         f"Before value unresolved for '{component}:{prop_path}': "
-                        f"{before_val}. "
+                        f"{before_val.value}. "
                         f"The component type or property path may not exist on "
                         f"the target. This operation will likely fail on apply. "
                         f"Verify with 'inspect wiring --path {target}' or "

@@ -155,6 +155,20 @@ bool inside = Vector3.Distance(pos, areaCollider.ClosestPoint(pos)) < 0.01f;
 ### `[FieldChangeCallback]`
 同期変数の変更時にプロパティエミュレーション（フィールド＋メソッドペア）を発火。標準 C# プロパティ構文 `{ get; set; }` ではなく UdonSharp 独自の命名規約で動作する。`Update()` でのポーリング不要。
 
+#### 単一 vs. 複数 synced field 比較表 (issue #122)
+
+`[FieldChangeCallback]` は「個別 field の値変化」を捕まえる API なので、複数 synced field の整合した状態が要件のときは `OnDeserialization` 待ち合わせが必須。判断基準を一覧化したもの:
+
+| 観点 | 単一 synced field のみ | 複数 synced field の整合が必要 |
+|------|----------------------|-------------------------------|
+| 採用するフック | `[FieldChangeCallback]` | `OnDeserialization(DeserializationResult)` |
+| Fire タイミング | 当該 field が deserialize された瞬間 | 全 synced field の deserialize が終わったあと |
+| 他 field の値 | 未到着の可能性あり（読むと初期値） | 全部最新値が入っている |
+| Owner 側の処理 | 自分は callback 来ない → 明示呼び出しを足す | 同上 → SubmitUrl 直後に明示呼び出し |
+| Idempotency | 連続 fire しうるので idempotent 必須 | 同 baseline で再 fire しないよう track 必要 |
+| 典型的な失敗 | 該当なし | callback 内で他 synced field を読み、未到着の値で誤動作 |
+| 代表ユースケース | 単一 enum / int の状態同期 | URL + baseline timestamp / 複合状態の同期再生 |
+
 #### ⚠ 落とし穴: 複数 synced field の deserialization race (2026-05-02 検証済み)
 
 **症状**: `[UdonSynced] _syncedPcUrl` (VRCUrl) と `[UdonSynced, FieldChangeCallback(...)] _baselineServerTimeMs` (long) を **同じ SubmitUrl 内で両方更新** → owner で `RequestSerialization` → remote で deserialize 中、`_baselineServerTimeMs` の callback が **`_syncedPcUrl` 未到着のタイミング** で fire し、callback 内で `pcUrl.Get()` を読むと `''` が返る。NadeVision で「audience 側 Sat PC が `branch=BackgroundLoad` に正しく入るが `pc=''` で abort する」症状の根本原因。

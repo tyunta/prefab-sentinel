@@ -208,6 +208,95 @@ class EditorRunScriptDefaultsTests(unittest.TestCase):
         self.assertEqual(30000, kwargs["compile_timeout"])
 
 
+class EditorRunScriptCompileTimeoutRangeTests(unittest.TestCase):
+    """Issue #127 — the script-runner public surface refuses any
+    ``compile_timeout_ms`` outside the inclusive 1..120000 ms range,
+    returns a dedicated severity-error envelope, and never contacts
+    the bridge in that case.
+    """
+
+    _SNIPPET = (
+        "public static class PrefabSentinelTempScript {"
+        "  public static void Run() { }"
+        "}"
+    )
+
+    _BRIDGE_OK = {
+        "success": True,
+        "severity": "info",
+        "code": "EDITOR_CTRL_RUN_SCRIPT_OK",
+        "message": "ran",
+        "data": {"executed": True},
+        "diagnostics": [],
+    }
+
+    def test_inclusive_maximum_forwards_to_bridge(self) -> None:
+        """120000 ms is accepted and forwarded with the value present."""
+        with patch.object(mcp_tools_editor_exec, "send_action") as send:
+            send.return_value = self._BRIDGE_OK
+            mcp_tools_editor_exec.editor_run_script(
+                code=self._SNIPPET,
+                confirm=True,
+                change_reason="boundary check",
+                compile_timeout_ms=120000,
+            )
+        send.assert_called_once()
+        self.assertEqual(120000, send.call_args.kwargs["compile_timeout"])
+
+    def test_one_above_maximum_rejected(self) -> None:
+        """120001 ms is rejected with the dedicated out-of-range code."""
+        with patch.object(mcp_tools_editor_exec, "send_action") as send:
+            resp = mcp_tools_editor_exec.editor_run_script(
+                code=self._SNIPPET,
+                confirm=True,
+                change_reason="boundary check",
+                compile_timeout_ms=120001,
+            )
+        self.assertFalse(resp["success"])
+        self.assertEqual("error", resp["severity"])
+        self.assertEqual("COMPILE_TIMEOUT_OUT_OF_RANGE", resp["code"])
+        # Message must name the supplied value and both bounds.
+        self.assertIn("120001", resp["message"])
+        self.assertIn("1", resp["message"])
+        self.assertIn("120000", resp["message"])
+        send.assert_not_called()
+
+    def test_zero_rejected(self) -> None:
+        with patch.object(mcp_tools_editor_exec, "send_action") as send:
+            resp = mcp_tools_editor_exec.editor_run_script(
+                code=self._SNIPPET,
+                confirm=True,
+                change_reason="boundary check",
+                compile_timeout_ms=0,
+            )
+        self.assertEqual("COMPILE_TIMEOUT_OUT_OF_RANGE", resp["code"])
+        send.assert_not_called()
+
+    def test_negative_rejected(self) -> None:
+        with patch.object(mcp_tools_editor_exec, "send_action") as send:
+            resp = mcp_tools_editor_exec.editor_run_script(
+                code=self._SNIPPET,
+                confirm=True,
+                change_reason="boundary check",
+                compile_timeout_ms=-1,
+            )
+        self.assertEqual("COMPILE_TIMEOUT_OUT_OF_RANGE", resp["code"])
+        send.assert_not_called()
+
+    def test_inclusive_minimum_forwards_to_bridge(self) -> None:
+        """1 ms is accepted and forwarded with the value present."""
+        with patch.object(mcp_tools_editor_exec, "send_action") as send:
+            send.return_value = self._BRIDGE_OK
+            mcp_tools_editor_exec.editor_run_script(
+                code=self._SNIPPET,
+                confirm=True,
+                change_reason="boundary check",
+                compile_timeout_ms=1,
+            )
+        send.assert_called_once()
+        self.assertEqual(1, send.call_args.kwargs["compile_timeout"])
+
+
 class TestEditorRecompileForceReimport(unittest.TestCase):
     """Task 12: Python recompile wrapper forwards ``force_reimport`` to bridge."""
 
