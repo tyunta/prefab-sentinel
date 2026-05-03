@@ -24,6 +24,13 @@ from pathlib import Path
 from prefab_sentinel.contracts import Diagnostic, Severity
 from prefab_sentinel.services.prefab_variant import PrefabVariantService
 from tests.bridge_test_helpers import write_file
+from tests.yaml_helpers import (
+    YAML_HEADER,
+    make_gameobject,
+    make_prefab_instance,
+    make_prefab_variant,
+    make_transform,
+)
 
 VARIANT_GUID = "cccccccccccccccccccccccccccccccc"
 
@@ -238,6 +245,151 @@ class ResolveChainValuesDiagnosticTests(unittest.TestCase):
             result = svc.resolve_chain_values("Assets/TestVariant.prefab")
 
             self.assertEqual({}, result)
+
+
+class ChainValuesVariantDecisionTests(unittest.TestCase):
+    """Issue #136 — chain-value resolvers reach the canonical
+    ``is_variant_prefab`` predicate before walking. A base prefab that
+    nests a PrefabInstance is classified as not a Variant and therefore
+    flows through the documented "not a Variant" return paths; a pure
+    Variant walks the chain.
+    """
+
+    _BASE_GUID = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    _NESTED_GUID = "dddddddddddddddddddddddddddddddd"
+
+    @staticmethod
+    def _write_meta(asset_path: Path, guid: str) -> None:
+        write_file(
+            asset_path.with_suffix(asset_path.suffix + ".meta"),
+            f"fileFormatVersion: 2\nguid: {guid}\n",
+        )
+
+    def _write_base_with_nested_instance(self, root: Path) -> Path:
+        """Base prefab carrying its own GameObject + Transform plus a
+        nested PrefabInstance referencing some external source GUID.
+        """
+        assets = root / "Assets"
+        assets.mkdir(parents=True, exist_ok=True)
+
+        base_path = assets / "BaseWithNested.prefab"
+        base_text = (
+            YAML_HEADER
+            + make_gameobject(file_id="100", name="Root", component_file_ids=["200"])
+            + make_transform(file_id="200", go_file_id="100")
+            + make_prefab_instance(file_id="999", source_guid=self._NESTED_GUID)
+        )
+        write_file(base_path, base_text)
+        self._write_meta(base_path, self._BASE_GUID)
+        return base_path
+
+    def _write_pure_variant_chain(self, root: Path) -> tuple[Path, Path]:
+        """Pure base + pure Variant pointing at it."""
+        assets = root / "Assets"
+        assets.mkdir(parents=True, exist_ok=True)
+
+        base_path = assets / "PureBase.prefab"
+        base_text = (
+            YAML_HEADER
+            + make_gameobject(file_id="100", name="Root", component_file_ids=["200"])
+            + make_transform(file_id="200", go_file_id="100")
+        )
+        write_file(base_path, base_text)
+        self._write_meta(base_path, self._BASE_GUID)
+
+        variant_path = assets / "PureVariant.prefab"
+        variant_text = (
+            YAML_HEADER
+            + make_prefab_variant(source_guid=self._BASE_GUID, modifications=[])
+        )
+        write_file(variant_path, variant_text)
+        self._write_meta(variant_path, VARIANT_GUID)
+        return base_path, variant_path
+
+    def test_chain_values_on_base_with_nested_instance_returns_empty(self) -> None:
+        """Chain effective-values resolver: base + nested PrefabInstance
+        is not a Variant, returns ``{}`` and emits no diagnostics."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            base_path = self._write_base_with_nested_instance(root)
+
+            svc = PrefabVariantService(project_root=root)
+            sink: list[Diagnostic] = []
+            result = svc.resolve_chain_values(
+                str(base_path.relative_to(root)).replace("\\", "/"),
+                diagnostics=sink,
+            )
+
+            self.assertEqual({}, result)
+            self.assertEqual([], sink)
+
+    def test_chain_values_on_pure_variant_returns_base_values(self) -> None:
+        """Chain effective-values resolver on a pure Variant walks the
+        chain and returns a non-empty mapping that contains the base's
+        effective transform values (positive path)."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _, variant_path = self._write_pure_variant_chain(root)
+
+            svc = PrefabVariantService(project_root=root)
+            result = svc.resolve_chain_values(
+                str(variant_path.relative_to(root)).replace("\\", "/"),
+            )
+
+            self.assertNotEqual({}, result)
+            # The base's Transform (file id 200) carries the unit-scale
+            # block, so the walk must yield the base's m_LocalScale.
+            self.assertIn("200:m_LocalScale", result)
+            self.assertEqual("{x: 1, y: 1, z: 1}", result["200:m_LocalScale"])
+
+    def test_chain_class_map_on_base_with_nested_instance_returns_empty(self) -> None:
+        """Chain class-map resolver: base + nested PrefabInstance is not
+        a Variant, returns ``{}``."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            base_path = self._write_base_with_nested_instance(root)
+
+            svc = PrefabVariantService(project_root=root)
+            result = svc.resolve_chain_class_map(
+                str(base_path.relative_to(root)).replace("\\", "/"),
+            )
+
+            self.assertEqual({}, result)
+
+    def test_chain_values_with_origin_on_base_with_nested_returns_pvr_not_variant(
+        self,
+    ) -> None:
+        """``resolve_chain_values_with_origin``: base + nested
+        PrefabInstance returns ``PVR_NOT_VARIANT`` with empty chain and
+        empty values."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            base_path = self._write_base_with_nested_instance(root)
+
+            svc = PrefabVariantService(project_root=root)
+            resp = svc.resolve_chain_values_with_origin(
+                str(base_path.relative_to(root)).replace("\\", "/"),
+            )
+
+            self.assertTrue(resp.success)
+            self.assertEqual("PVR_NOT_VARIANT", resp.code)
+            self.assertEqual([], resp.data["chain"])
+            self.assertEqual([], resp.data["values"])
+            self.assertEqual(0, resp.data["value_count"])
+
+
+class ChainValuesSourcePrefabImportTests(unittest.TestCase):
+    """Issue #136 — the chain-values module no longer imports the
+    legacy regex-based ``SOURCE_PREFAB_PATTERN`` symbol; the canonical
+    ``is_variant_prefab`` predicate is the sole Variant-decision entry
+    point.
+    """
+
+    def test_module_does_not_import_source_prefab_pattern(self) -> None:
+        from prefab_sentinel.services.prefab_variant import chain_values as cv_mod  # noqa: PLC0415
+
+        text = Path(cv_mod.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("SOURCE_PREFAB_PATTERN", text)
 
 
 if __name__ == "__main__":

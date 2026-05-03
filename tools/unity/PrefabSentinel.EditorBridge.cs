@@ -155,8 +155,9 @@ namespace PrefabSentinel
             {
                 header = JsonUtility.FromJson<BridgeRequestHeader>(requestJson);
             }
-            catch
+            catch (Exception ex)
             {
+                Debug.LogWarning($"[PrefabSentinel] ProcessRequest: {ex.GetType().Name}: {ex.Message}");
                 header = new BridgeRequestHeader();
             }
 
@@ -225,8 +226,9 @@ namespace PrefabSentinel
                 if (File.Exists(path)) File.Delete(path);
                 File.Move(tmpPath, path);
             }
-            catch
+            catch (Exception ex)
             {
+                Debug.LogWarning($"[PrefabSentinel] WriteAtomic: {ex.GetType().Name}: {ex.Message}");
                 try { File.WriteAllText(path, content); }
                 catch { /* best effort */ }
             }
@@ -235,7 +237,10 @@ namespace PrefabSentinel
         private static void TryDelete(string path)
         {
             try { if (File.Exists(path)) File.Delete(path); }
-            catch { /* best-effort cleanup */ }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[PrefabSentinel] TryDelete: {ex.GetType().Name}: {ex.Message}");
+            }
         }
 
         [Serializable]

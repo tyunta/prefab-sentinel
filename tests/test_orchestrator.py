@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from prefab_sentinel.contracts import Severity, ToolResponse
+from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse
 from prefab_sentinel.orchestrator import Phase1Orchestrator
 from prefab_sentinel.services.reference_resolver import ReferenceResolverService
 
@@ -814,6 +814,120 @@ class ValidateRuntimeTests(unittest.TestCase):
         self.assertIn(
             steps[0]["result"]["severity"], {"info", "warning"},
         )
+
+    @staticmethod
+    def _canvas_diagnostic() -> Diagnostic:
+        return Diagnostic(
+            path="Assets/Scenes/Test.unity",
+            location="123:1",
+            detail="WORLD_CANVAS_LOCAL_SCALE",
+            evidence="Canvas with non-unit local scale violates the WorldSpace setup.",
+        )
+
+    @staticmethod
+    def _classify_diagnostic() -> Diagnostic:
+        return Diagnostic(
+            path="Assets/Scenes/Test.unity",
+            location="",
+            detail="LOG_CLASSIFY_WARNING",
+            evidence="A console line was classified.",
+        )
+
+    @staticmethod
+    def _canvas_step_response(diagnostics: list[Diagnostic]) -> ToolResponse:
+        return ToolResponse(
+            success=True,
+            severity=(Severity.WARNING if diagnostics else Severity.INFO),
+            code="WORLD_CANVAS_INSPECT_OK",
+            message="canvas inspection",
+            data={"scene_path": "Assets/Scenes/Test.unity", "read_only": True},
+            diagnostics=diagnostics,
+        )
+
+    @staticmethod
+    def _classify_step_response(diagnostics: list[Diagnostic]) -> ToolResponse:
+        return ToolResponse(
+            success=True,
+            severity=Severity.INFO,
+            code="OK",
+            message="classify",
+            data={},
+            diagnostics=diagnostics,
+        )
+
+    def test_success_path_promotes_canvas_diagnostic_to_top_level(self) -> None:
+        """Issue #133: when the canvas step emits a diagnostic and the
+        runtime pipeline succeeds, the response's top-level diagnostics
+        list consists of canvas diagnostics followed by classification
+        diagnostics."""
+        canvas_diag = self._canvas_diagnostic()
+        classify_diag = self._classify_diagnostic()
+        orch = _make_orchestrator()
+        orch.runtime_validation.compile_udonsharp.return_value = _ok_response()
+        orch.runtime_validation.run_clientsim.return_value = _ok_response()
+        orch.runtime_validation.collect_unity_console.return_value = _ok_response(
+            data={"log_lines": []}
+        )
+        orch.runtime_validation.classify_errors.return_value = self._classify_step_response(
+            [classify_diag]
+        )
+        orch.runtime_validation.assert_no_critical_errors.return_value = _ok_response()
+
+        with patch(
+            "prefab_sentinel.orchestrator_validation._inspect_world_canvas_step",
+            return_value=self._canvas_step_response([canvas_diag]),
+        ):
+            result = orch.validate_runtime("Assets/Scenes/Test.unity")
+
+        self.assertEqual(2, len(result.diagnostics))
+        self.assertEqual(canvas_diag.detail, result.diagnostics[0].detail)
+        self.assertEqual(classify_diag.detail, result.diagnostics[1].detail)
+
+    def test_fail_fast_path_promotes_canvas_diagnostic_to_top_level(self) -> None:
+        """Issue #133: when the canvas step emits a diagnostic and
+        run-clientsim fails fast, the top-level diagnostics list still
+        carries the canvas diagnostic."""
+        canvas_diag = self._canvas_diagnostic()
+        orch = _make_orchestrator()
+        orch.runtime_validation.compile_udonsharp.return_value = _ok_response()
+        orch.runtime_validation.run_clientsim.return_value = _error_response()
+
+        with patch(
+            "prefab_sentinel.orchestrator_validation._inspect_world_canvas_step",
+            return_value=self._canvas_step_response([canvas_diag]),
+        ):
+            result = orch.validate_runtime("Assets/Scenes/Test.unity")
+
+        self.assertFalse(result.success)
+        self.assertEqual("VALIDATE_RUNTIME_RESULT", result.code)
+        self.assertTrue(result.data["fail_fast_triggered"])
+        self.assertEqual(1, len(result.diagnostics))
+        self.assertEqual(canvas_diag.detail, result.diagnostics[0].detail)
+
+    def test_success_path_canvas_empty_top_level_equals_classify(self) -> None:
+        """Issue #133: when the canvas step emits no diagnostics, the
+        top-level diagnostics list equals the classification
+        diagnostics."""
+        classify_diag = self._classify_diagnostic()
+        orch = _make_orchestrator()
+        orch.runtime_validation.compile_udonsharp.return_value = _ok_response()
+        orch.runtime_validation.run_clientsim.return_value = _ok_response()
+        orch.runtime_validation.collect_unity_console.return_value = _ok_response(
+            data={"log_lines": []}
+        )
+        orch.runtime_validation.classify_errors.return_value = self._classify_step_response(
+            [classify_diag]
+        )
+        orch.runtime_validation.assert_no_critical_errors.return_value = _ok_response()
+
+        with patch(
+            "prefab_sentinel.orchestrator_validation._inspect_world_canvas_step",
+            return_value=self._canvas_step_response([]),
+        ):
+            result = orch.validate_runtime("Assets/Scenes/Test.unity")
+
+        self.assertEqual(1, len(result.diagnostics))
+        self.assertEqual(classify_diag.detail, result.diagnostics[0].detail)
 
 
 class PostconditionSchemaTests(unittest.TestCase):
