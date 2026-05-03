@@ -193,10 +193,6 @@ def validate_runtime(
     canvas_step = _inspect_world_canvas_step(scene_path)
     compile_step = runtime_validation.compile_udonsharp()
     run_step = runtime_validation.run_clientsim(scene_path, profile)
-    runtime_read_only = all(
-        bool(step.data.get("read_only", True))
-        for step in (compile_step, run_step)
-    )
 
     steps = [
         ("inspect_world_canvas", canvas_step),
@@ -213,12 +209,20 @@ def validate_runtime(
             data={
                 "scene_path": scene_path,
                 "profile": profile,
-                "read_only": runtime_read_only,
+                "read_only": all(
+                    bool(step.data.get("read_only", True)) for _, step in steps
+                ),
                 "fail_fast_triggered": True,
                 "steps": [
                     {"step": name, "result": step.to_dict()} for name, step in steps
                 ],
             },
+            # Issue #133: surface the canvas-step diagnostics at the top
+            # level even on the fail-fast return so callers iterating
+            # ``response.diagnostics`` observe canvas findings without
+            # descending into nested steps. Mirrors the convention used
+            # by ``inspect_structure`` and ``validate_refs``.
+            diagnostics=list(canvas_step.diagnostics),
         )
 
     collect_step = runtime_validation.collect_unity_console(
@@ -244,7 +248,11 @@ def validate_runtime(
     severities = [step.severity for _, step in steps]
     severity = max_severity(severities)
     success = all(step.success for _, step in steps)
-    diagnostics = classify_step.diagnostics
+    # Issue #133: promote the canvas-step diagnostics to the top level so
+    # callers iterating ``response.diagnostics`` observe canvas findings
+    # alongside classification findings. Canvas precedes classification
+    # because the canvas step runs first in the pipeline.
+    diagnostics = list(canvas_step.diagnostics) + list(classify_step.diagnostics)
 
     return ToolResponse(
         success=success,

@@ -3782,8 +3782,9 @@ namespace PrefabSentinel
                         fixedBufferSize = 0;
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
+                    Debug.LogWarning($"[PrefabSentinel] TryIsFixedBufferProperty: {ex.GetType().Name}: {ex.Message}");
                 }
             }
             if (SerializedPropertyFixedBufferSizeProperty != null)
@@ -3797,8 +3798,9 @@ namespace PrefabSentinel
                         return true;
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
+                    Debug.LogWarning($"[PrefabSentinel] TryIsFixedBufferProperty: {ex.GetType().Name}: {ex.Message}");
                 }
             }
             return fixedBufferSize == 0;
@@ -4977,8 +4979,9 @@ namespace PrefabSentinel
                         modeProperty.SetValue(gradient, modeValue, null);
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
+                    Debug.LogWarning($"[PrefabSentinel] TryReadGradientValue: {ex.GetType().Name}: {ex.Message}");
                 }
             }
 
@@ -5412,8 +5415,9 @@ namespace PrefabSentinel
                 typeName = payload.__type.Trim();
                 return true;
             }
-            catch
+            catch (Exception ex)
             {
+                Debug.LogWarning($"[PrefabSentinel] TryReadManagedReferenceTypeHint: {ex.GetType().Name}: {ex.Message}");
                 return false;
             }
         }
@@ -5716,7 +5720,10 @@ namespace PrefabSentinel
                 Debug.LogError($"[PrefabSentinel] Failed to write bridge response: {ex}");
                 // Fallback: direct write if atomic rename failed.
                 try { File.WriteAllText(responsePath, JsonUtility.ToJson(response)); }
-                catch { /* best effort */ }
+                catch (Exception fallbackEx)
+                {
+                    Debug.LogWarning($"[PrefabSentinel] WriteResponseSafe: {fallbackEx.GetType().Name}: {fallbackEx.Message}");
+                }
                 return;
             }
 

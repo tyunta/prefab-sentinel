@@ -600,12 +600,38 @@ class TestBridgePartialLayout(unittest.TestCase):
     """
 
     _EXPECTED_PARTIAL_NAMES = (
+        # Canonical core (load-bearing constants live here; see CLAUDE.md
+        # version-management section).
         "PrefabSentinel.UnityEditorControlBridge.cs",
+        # Pre-existing partials (issue #123).
         "PrefabSentinel.UnityEditorControlBridge.CameraView.cs",
-        "PrefabSentinel.UnityEditorControlBridge.HierarchyComponents.cs",
         "PrefabSentinel.UnityEditorControlBridge.SaveInstantiate.cs",
         "PrefabSentinel.UnityEditorControlBridge.RunScriptCompile.cs",
         "PrefabSentinel.UnityEditorControlBridge.ConsoleCapture.cs",
+        # Partials introduced by the issue #138 split of the legacy
+        # HierarchyComponents.cs partial.
+        "PrefabSentinel.UnityEditorControlBridge.MaterialQuery.cs",
+        "PrefabSentinel.UnityEditorControlBridge.MaterialWrite.cs",
+        "PrefabSentinel.UnityEditorControlBridge.MaterialBatch.cs",
+        "PrefabSentinel.UnityEditorControlBridge.BlendShape.cs",
+        "PrefabSentinel.UnityEditorControlBridge.Hierarchy.cs",
+        "PrefabSentinel.UnityEditorControlBridge.Components.cs",
+        "PrefabSentinel.UnityEditorControlBridge.Properties.cs",
+        "PrefabSentinel.UnityEditorControlBridge.Menu.cs",
+        "PrefabSentinel.UnityEditorControlBridge.Helpers.cs",
+        # Partials introduced by the issue #138 split of the legacy
+        # UdonSharp.cs partial.
+        "PrefabSentinel.UnityEditorControlBridge.UdonSharpAddComponent.cs",
+        "PrefabSentinel.UnityEditorControlBridge.UdonSharpInvocation.cs",
+        "PrefabSentinel.UnityEditorControlBridge.UdonSharpFieldWrite.cs",
+        "PrefabSentinel.UnityEditorControlBridge.UdonSharpListenerWiring.cs",
+    )
+
+    # Names of partials that the issue #138 split removed.  These must
+    # be absent from disk so the CLAUDE.md inventory and the actual file
+    # set agree.
+    _DELETED_PARTIAL_NAMES = (
+        "PrefabSentinel.UnityEditorControlBridge.HierarchyComponents.cs",
         "PrefabSentinel.UnityEditorControlBridge.UdonSharp.cs",
     )
 
@@ -642,6 +668,146 @@ class TestBridgePartialLayout(unittest.TestCase):
                     text,
                     r"public\s+static\s+class\s+UnityEditorControlBridge\b",
                     f"{name}: must use partial class, not plain class",
+                )
+
+    def test_deleted_partials_are_absent(self) -> None:
+        """Issue #138 — the legacy oversized partials must be gone from
+        disk so the CLAUDE.md inventory and the live file set match.
+        """
+        for name in self._DELETED_PARTIAL_NAMES:
+            with self.subTest(name=name):
+                self.assertFalse(
+                    (TOOLS_DIR / name).exists(),
+                    f"unexpected leftover partial: {name}",
+                )
+
+
+class TestBridgePartialSizing(unittest.TestCase):
+    """Issue #138 — every issue-introduced partial fits inside the
+    project's per-partial size guideline (≤400 lines absolute), and any
+    partial below 200 lines carries a leading single-line comment that
+    names the cohesive concern justifying the smaller size.
+
+    The legacy partials introduced by other issues (CameraView,
+    SaveInstantiate, RunScriptCompile) are out of scope for this issue
+    and therefore not constrained here.
+    """
+
+    # Files tracked by issue #138; the canonical core ``...Bridge.cs``
+    # plus the eight partials that came out of the HierarchyComponents
+    # split and the four partials that came out of the UdonSharp split.
+    _ISSUE_138_PARTIALS = (
+        "PrefabSentinel.UnityEditorControlBridge.MaterialQuery.cs",
+        "PrefabSentinel.UnityEditorControlBridge.MaterialWrite.cs",
+        "PrefabSentinel.UnityEditorControlBridge.MaterialBatch.cs",
+        "PrefabSentinel.UnityEditorControlBridge.BlendShape.cs",
+        "PrefabSentinel.UnityEditorControlBridge.Hierarchy.cs",
+        "PrefabSentinel.UnityEditorControlBridge.Components.cs",
+        "PrefabSentinel.UnityEditorControlBridge.Properties.cs",
+        "PrefabSentinel.UnityEditorControlBridge.Menu.cs",
+        "PrefabSentinel.UnityEditorControlBridge.Helpers.cs",
+        "PrefabSentinel.UnityEditorControlBridge.UdonSharpAddComponent.cs",
+        "PrefabSentinel.UnityEditorControlBridge.UdonSharpInvocation.cs",
+        "PrefabSentinel.UnityEditorControlBridge.UdonSharpFieldWrite.cs",
+        "PrefabSentinel.UnityEditorControlBridge.UdonSharpListenerWiring.cs",
+    )
+
+    _MAX_LINES = 400
+    _SMALL_THRESHOLD = 200
+
+    def test_every_issue_138_partial_is_within_size_bound(self) -> None:
+        for name in self._ISSUE_138_PARTIALS:
+            with self.subTest(name=name):
+                path = TOOLS_DIR / name
+                self.assertTrue(path.is_file(), f"missing partial: {name}")
+                line_count = sum(1 for _ in path.read_text(encoding="utf-8").splitlines())
+                self.assertLessEqual(
+                    line_count,
+                    self._MAX_LINES,
+                    f"{name}: {line_count} lines exceeds the {self._MAX_LINES}-line cap",
+                )
+
+    def test_small_partials_carry_concern_comment(self) -> None:
+        """Each partial below 200 lines must have a leading single-line
+        ``//`` comment somewhere before the namespace block that names
+        the cohesive concern justifying the smaller size.
+        """
+        for name in self._ISSUE_138_PARTIALS:
+            with self.subTest(name=name):
+                path = TOOLS_DIR / name
+                text = path.read_text(encoding="utf-8")
+                line_count = sum(1 for _ in text.splitlines())
+                if line_count >= self._SMALL_THRESHOLD:
+                    continue
+                # Capture every line up to (but excluding) the first
+                # ``namespace`` declaration.  The concern comment must
+                # appear in that header band.
+                header_lines: list[str] = []
+                for line in text.splitlines():
+                    if line.lstrip().startswith("namespace "):
+                        break
+                    header_lines.append(line)
+                concern_comments = [
+                    line for line in header_lines
+                    if re.match(r"\s*//\s*\S", line)
+                ]
+                self.assertTrue(
+                    concern_comments,
+                    f"{name}: small partial ({line_count} lines) must "
+                    "carry a leading single-line concern comment.",
+                )
+
+
+class TestOperationalRulesPartialInventory(unittest.TestCase):
+    """Issue #138 — the project's operational rules file (``CLAUDE.md``)
+    must list every present per-concern partial and list no absent
+    partial in its partial-inventory line. The inventory line is the
+    single source of truth on disk for the partial layout.
+    """
+
+    _PROJECT_ROOT = Path(__file__).resolve().parent.parent
+    _CLAUDE_MD = _PROJECT_ROOT / "CLAUDE.md"
+    _PARTIAL_GLOB = "PrefabSentinel.UnityEditorControlBridge*.cs"
+
+    def _disk_partial_concerns(self) -> set[str]:
+        """Return the per-concern token (e.g. ``MaterialQuery``) for
+        every per-concern partial currently on disk. Excludes the
+        canonical core file (``PrefabSentinel.UnityEditorControlBridge.cs``)
+        whose name has no concern segment.
+        """
+        concerns: set[str] = set()
+        for path in TOOLS_DIR.glob(self._PARTIAL_GLOB):
+            stem = path.stem  # e.g. PrefabSentinel.UnityEditorControlBridge.MaterialQuery
+            head = "PrefabSentinel.UnityEditorControlBridge"
+            if stem == head:
+                continue
+            assert stem.startswith(head + "."), stem
+            concerns.add(stem[len(head) + 1:])
+        return concerns
+
+    def test_inventory_line_lists_every_present_partial(self) -> None:
+        text = self._CLAUDE_MD.read_text(encoding="utf-8")
+        for concern in sorted(self._disk_partial_concerns()):
+            with self.subTest(concern=concern):
+                self.assertIn(
+                    concern,
+                    text,
+                    f"CLAUDE.md inventory line is missing concern '{concern}'.",
+                )
+
+    def test_inventory_line_lists_no_absent_partial(self) -> None:
+        """The legacy partial concern names that issue #138 removed must
+        not appear in CLAUDE.md, otherwise the inventory advertises files
+        that no longer exist on disk."""
+        text = self._CLAUDE_MD.read_text(encoding="utf-8")
+        for absent in ("HierarchyComponents", "UdonSharp.cs"):
+            with self.subTest(absent=absent):
+                # ``UdonSharp`` alone is a substring of UdonSharp* names,
+                # so we anchor on the trailing ``.cs`` for that one.
+                self.assertNotIn(
+                    absent,
+                    text,
+                    f"CLAUDE.md still references the deleted partial '{absent}'.",
                 )
 
 
@@ -877,6 +1043,105 @@ class TestUdonSharpRequestFields(unittest.TestCase):
         source = _read(BRIDGE)
         body = _extract_editor_control_request_body(source)
         self.assertIn("fields_json", body)
+
+
+class TestBestEffortCatchWarnings(unittest.TestCase):
+    """Issue #137 — every best-effort catch site listed below binds the
+    exception via a typed parameter and emits exactly one warning whose
+    text is ``[PrefabSentinel] {EnclosingMethod}: {ExceptionTypeName}:
+    {ExceptionMessage}``. Control flow inside the catch is the
+    documented fallback path of the enclosing method.
+
+    The audit is structural (regex on the source text) because the
+    catch sites span Editor / Patch / Runtime bridges that the unit-test
+    process cannot exercise without a Unity Editor. The assertion
+    therefore verifies that the typed-catch line and the warning
+    template both occur, and that the untyped empty/comment-only catch
+    block at that site is gone.
+    """
+
+    # (relative path, enclosing method name, minimum typed-catch count).
+    # The minimum count locks two-site method bodies (e.g.
+    # ``HandleUdonSharpAddComponentIdempotent`` and
+    # ``TryIsFixedBufferProperty``) to require both catches typed; a
+    # half-fixed regression therefore fails the audit. After issue
+    # #138's split of the legacy HierarchyComponents.cs partial,
+    # ``HandleUdonSharpAddComponentIdempotent`` lives in the
+    # ``Components.cs`` partial.
+    _SITES = (
+        ("PrefabSentinel.UnityEditorControlBridge.Components.cs",
+         "HandleUdonSharpAddComponentIdempotent", 2),
+        ("PrefabSentinel.EditorBridge.cs", "ProcessRequest", 1),
+        ("PrefabSentinel.EditorBridge.cs", "WriteAtomic", 1),
+        ("PrefabSentinel.EditorBridge.cs", "TryDelete", 1),
+        ("PrefabSentinel.UnityRuntimeValidationBridge.cs", "WriteResponse", 1),
+        ("PrefabSentinel.UnityPatchBridge.cs", "TryIsFixedBufferProperty", 2),
+        ("PrefabSentinel.UnityPatchBridge.cs", "TryReadGradientValue", 1),
+        ("PrefabSentinel.UnityPatchBridge.cs", "TryReadManagedReferenceTypeHint", 1),
+        ("PrefabSentinel.UnityPatchBridge.cs", "WriteResponseSafe", 1),
+    )
+
+    @staticmethod
+    def _read_method_body(source: str, method_name: str) -> str:
+        return _extract_method(source, method_name)
+
+    def test_every_site_emits_typed_catch_with_mandated_warning(self) -> None:
+        for file_name, method_name, min_typed in self._SITES:
+            with self.subTest(file=file_name, method=method_name):
+                text = (TOOLS_DIR / file_name).read_text(encoding="utf-8")
+                body = self._read_method_body(text, method_name)
+                # The mandated warning string anchors on the enclosing
+                # method name plus ``ex.GetType().Name`` and
+                # ``ex.Message`` interpolation.
+                self.assertRegex(
+                    body,
+                    rf"\[PrefabSentinel\]\s+{re.escape(method_name)}:\s*\{{[a-zA-Z_]+\.GetType\(\)\.Name\}}",
+                    f"{file_name}::{method_name}: missing mandated warning template",
+                )
+                self.assertRegex(
+                    body,
+                    r"Debug\.LogWarning\(\s*\$\"\[PrefabSentinel\]",
+                    f"{file_name}::{method_name}: missing Debug.LogWarning emission",
+                )
+                # Permit best-effort *nested* untyped catches that are
+                # not in the enumerated 11 (e.g. WriteAtomic's inner
+                # File.WriteAllText fallback at line 231 in
+                # EditorBridge.cs).  The audit asserts that every
+                # documented catch site at this method name is typed:
+                # for two-site methods (``HandleUdonSharpAddComponentIdempotent``
+                # and ``TryIsFixedBufferProperty``) ``min_typed`` is 2,
+                # so a half-fixed regression where one of two catches
+                # reverts to untyped is caught.
+                typed_catches = re.findall(
+                    r"catch\s*\(\s*[A-Za-z_][A-Za-z0-9_.]*\s+[A-Za-z_][A-Za-z0-9_]*\s*\)",
+                    body,
+                )
+                self.assertGreaterEqual(
+                    len(typed_catches),
+                    min_typed,
+                    f"{file_name}::{method_name}: expected at least "
+                    f"{min_typed} typed catch (...) blocks; found "
+                    f"{len(typed_catches)}",
+                )
+
+    def test_udonsharp_idempotent_sites_carry_intentional_comment(self) -> None:
+        """The two HandleUdonSharpAddComponentIdempotent sites carry an
+        inline comment marking the failure as intentional best-effort
+        (per Method Contracts; one comment per site)."""
+        path = TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Components.cs"
+        text = path.read_text(encoding="utf-8")
+        body = _extract_method(text, "HandleUdonSharpAddComponentIdempotent")
+        # The two catch sites surround reflective Invoke calls
+        # (``GetBackingUdonBehaviour`` and ``CreateBehaviourForProxy``).
+        intentional_comments = re.findall(
+            r"intentional best-effort", body, flags=re.IGNORECASE
+        )
+        self.assertGreaterEqual(
+            len(intentional_comments),
+            2,
+            "Expected two 'intentional best-effort' comments at the "
+            "UdonSharp idempotent-reuse catch sites.",
+        )
 
 
 if __name__ == "__main__":

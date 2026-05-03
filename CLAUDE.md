@@ -10,7 +10,7 @@
 - 根拠優先: 前提・不変条件・判断理由を明文化する。
 - 検証可能性: 設定値と結果の対応を説明できる実装のみ採用する。
 - 必須参照の欠落は補完せず `error` で停止する（fail-fast）。
-- ファイルサイズ目安（200〜400 行）は **partial 単位**で評価する。`tools/unity/PrefabSentinel.UnityEditorControlBridge*.cs` は 1 つの CLR クラスを核 + 機能別 partial（CameraView / HierarchyComponents / SaveInstantiate / RunScriptCompile / ConsoleCapture / UdonSharp）の 7 ファイルへ分割しており、合計行数ではなく partial ごとの責務単位で行数を判定する（issue #123）。
+- ファイルサイズ目安（200〜400 行）は **partial 単位**で評価する。`tools/unity/PrefabSentinel.UnityEditorControlBridge*.cs` は 1 つの CLR クラスを核 + 機能別 partial（CameraView / SaveInstantiate / RunScriptCompile / ConsoleCapture / MaterialQuery / MaterialWrite / MaterialBatch / BlendShape / Hierarchy / Components / Properties / Menu / Helpers / UdonSharpAddComponent / UdonSharpInvocation / UdonSharpFieldWrite / UdonSharpListenerWiring）の 18 ファイルへ分割しており、合計行数ではなく partial ごとの責務単位で行数を判定する（issue #123, issue #138）。
 
 ## 責務境界（Services / Skills / MCP）
 - `serialized-object`: 何を書き換えるか（操作実行）。
@@ -68,6 +68,7 @@
 - minor/major バンプは手動: `uv run bump-my-version bump minor|major`。
 - パッチバンプはフィーチャーブランチを含む全コミットで走らせる（`SKIP_BUMP=1` は原則使わない）。
 - バージョン記述箇所は `pyproject.toml`、`.claude-plugin/plugin.json`、`tools/unity/PrefabSentinel.UnityEditorControlBridge.cs` の 3 箇所（`[tool.bumpversion]` で一括管理）。
+- 正本パスへの依存（issue #139）: `scripts/check_bridge_constants.py`（バージョン文字列・プロトコルバージョン・severity 語彙のドリフト検査）と `pyproject.toml [tool.bumpversion]`（`search` パターンのアンカー）はいずれも正本パートとして `tools/unity/PrefabSentinel.UnityEditorControlBridge.cs` に置かれた 3 つの load-bearing 定数 — `BridgeVersion`、`ProtocolVersion`、`ConsoleLogBuffer.DefaultCapacity` — に依存する。これらの定数を別 partial に移動する場合は、ドリフトチェッカーと bumpversion 設定の双方を同時に更新する必要がある（片方だけの更新では検査が静かに無効化される）。
 
 ## Editor リモート操作の行動規約
 - スクショ（`editor screenshot`）はトリアージの起点として使い、データソースにしない。

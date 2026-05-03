@@ -213,7 +213,10 @@ namespace PrefabSentinel
                 Debug.LogError($"Failed to write runtime validation response: {ex}");
                 // Fallback: direct write if atomic rename failed.
                 try { File.WriteAllText(responsePath, JsonUtility.ToJson(response)); }
-                catch { /* best effort */ }
+                catch (Exception fallbackEx)
+                {
+                    Debug.LogWarning($"[PrefabSentinel] WriteResponse: {fallbackEx.GetType().Name}: {fallbackEx.Message}");
+                }
             }
         }
 

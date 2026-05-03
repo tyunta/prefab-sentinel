@@ -21,7 +21,7 @@ from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse, error_
 from prefab_sentinel.hierarchy import CLASS_NAMES
 from prefab_sentinel.services.prefab_variant.chain import ChainValue, _ChainLevel, walk_chain_levels
 from prefab_sentinel.services.prefab_variant.overrides import effective_value, iter_base_property_values
-from prefab_sentinel.unity_assets import SOURCE_PREFAB_PATTERN, decode_text_file
+from prefab_sentinel.unity_assets import decode_text_file, is_variant_prefab
 from prefab_sentinel.unity_yaml_parser import (
     CLASS_ID_MONOBEHAVIOUR,
     CLASS_ID_PREFAB_INSTANCE,
@@ -62,7 +62,7 @@ def resolve_chain_class_map(
     except (OSError, UnicodeDecodeError):
         return {}
 
-    if SOURCE_PREFAB_PATTERN.search(text) is None:
+    if not is_variant_prefab(text):
         return {}
 
     script_name_by_guid: dict[str, str] = {
@@ -120,7 +120,7 @@ def resolve_chain_values(
             )
         return {}
 
-    if SOURCE_PREFAB_PATTERN.search(text) is None:
+    if not is_variant_prefab(text):
         return {}
 
     result: dict[str, str] = {}
@@ -162,7 +162,7 @@ def resolve_chain_values_with_origin(
             data={"variant_path": variant_path, "read_only": True},
         )
 
-    if SOURCE_PREFAB_PATTERN.search(text) is None:
+    if not is_variant_prefab(text):
         return success_response(
             "PVR_NOT_VARIANT",
             "File is not a Variant; no chain to resolve.",

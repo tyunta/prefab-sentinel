@@ -13,6 +13,26 @@ bridge side:
    ``prefab_sentinel.bridge_constants.VALID_SEVERITIES`` vs every string
    literal assigned to a ``severity`` field on the C# side.
 
+Canonical-path dependency (issue #139)
+--------------------------------------
+
+This script reads the canonical core partial at the fixed path
+``tools/unity/PrefabSentinel.UnityEditorControlBridge.cs``.  Three
+load-bearing constants live in that file and are inspected here:
+
+- ``BridgeVersion`` (string, version sync)
+- ``ProtocolVersion`` (int, protocol version sync)
+- ``ConsoleLogBuffer.DefaultCapacity`` (int, console-log buffer cap)
+
+The bumpversion configuration in ``pyproject.toml [tool.bumpversion]``
+also anchors its search/replace patterns on the same canonical core
+partial path.  If any of these three constants are ever moved out of
+``PrefabSentinel.UnityEditorControlBridge.cs`` into one of the per-concern
+partials, this script's path constant **and** the bumpversion
+configuration's anchor pattern must be updated simultaneously — a
+single-sided update silently disables drift detection or version-sync
+on the other side.
+
 Exit codes
 ----------
 
