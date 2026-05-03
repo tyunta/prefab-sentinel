@@ -7,13 +7,65 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+from prefab_sentinel.bridge_constants import CONSOLE_LOG_BUFFER_MAX_ENTRIES
 from prefab_sentinel.editor_bridge import send_action
 from prefab_sentinel.editor_bridge_builders import build_set_camera_kwargs
 from prefab_sentinel.mcp_helpers import normalize_material_value
 
-__all__ = ["editor_recompile", "register_editor_view_tools"]
+__all__ = [
+    "editor_console",
+    "editor_recompile",
+    "editor_recompile_and_wait",
+    "register_editor_view_tools",
+    "CONSOLE_MAX_ENTRIES_MIN",
+    "CONSOLE_MAX_ENTRIES_MAX",
+]
 
 logger = logging.getLogger(__name__)
+
+# Issue #131: inclusive size bounds shared by the editor-console MCP tool
+# and the C# bridge handler.  The upper bound mirrors the published
+# ``ConsoleLogBuffer.DefaultCapacity`` because the bridge can never return
+# more entries than the ring buffer has retained; the lower bound rejects
+# 0 / negative values that would degenerate into a no-op or an error.
+CONSOLE_MAX_ENTRIES_MIN = 1
+CONSOLE_MAX_ENTRIES_MAX = CONSOLE_LOG_BUFFER_MAX_ENTRIES
+
+# Default forwarded to the bridge when the caller omits ``max_entries``.
+# The bridge's own default is the same (200) — see the
+# ``capture_console_logs`` handler — but stating it here keeps the
+# Python-side contract self-describing.
+CONSOLE_MAX_ENTRIES_DEFAULT = 200
+
+# Issue #118: default budget for the synchronous recompile-and-wait MCP
+# tool, expressed in seconds.  Sized so a cold compile-and-reload of a
+# typical project finishes within the budget on commodity workstations
+# without blocking the caller indefinitely.
+RECOMPILE_AND_WAIT_DEFAULT_TIMEOUT_SEC = 60.0
+
+
+def _max_entries_out_of_range_envelope(value: int) -> dict[str, Any]:
+    """Return the canonical MAX_ENTRIES_OUT_OF_RANGE envelope.
+
+    The message names the supplied value and both inclusive bounds so the
+    caller can fix the request without consulting external docs.
+    """
+    return {
+        "success": False,
+        "severity": "error",
+        "code": "MAX_ENTRIES_OUT_OF_RANGE",
+        "message": (
+            f"max_entries={value} is outside the inclusive range "
+            f"[{CONSOLE_MAX_ENTRIES_MIN}, {CONSOLE_MAX_ENTRIES_MAX}] "
+            "(buffered console entries)."
+        ),
+        "data": {
+            "supplied": value,
+            "min": CONSOLE_MAX_ENTRIES_MIN,
+            "max": CONSOLE_MAX_ENTRIES_MAX,
+        },
+        "diagnostics": [],
+    }
 
 
 def editor_recompile(force_reimport: bool = False) -> dict[str, Any]:
@@ -30,6 +82,61 @@ def editor_recompile(force_reimport: bool = False) -> dict[str, Any]:
     return send_action(
         action="recompile_scripts",
         force_reimport=force_reimport,
+    )
+
+
+def editor_recompile_and_wait(
+    timeout_sec: float = RECOMPILE_AND_WAIT_DEFAULT_TIMEOUT_SEC,
+) -> dict[str, Any]:
+    """Recompile scripts synchronously and wait for the Editor to finish.
+
+    Returns only when the Editor reports compilation finished, the
+    compiled-assembly modification time is later than the request's
+    call-time observation, and the post-reload signal has fired since the
+    request was issued.  Forwards the caller-supplied wait budget to the
+    bridge as the request payload's ``timeout_sec`` field.
+    """
+    # The transport poll budget must outlive the bridge's own wait so the
+    # response file is observed before the Python side gives up; we add a
+    # 5 s dispatch margin on top of the caller-supplied budget.
+    transport_poll_sec = int(timeout_sec) + 5
+    return send_action(
+        action="editor_recompile_and_wait",
+        timeout_sec=transport_poll_sec,
+        request_extras={"timeout_sec": float(timeout_sec)},
+    )
+
+
+def editor_console(
+    max_entries: int = CONSOLE_MAX_ENTRIES_DEFAULT,
+    log_type_filter: str = "all",
+    since_seconds: float = 60.0,
+    classification_filter: str = "all",
+    order: str = "newest_first",
+    cursor: str = "",
+) -> dict[str, Any]:
+    """Capture Unity Console log entries as structured data.
+
+    Validates ``max_entries`` against the inclusive
+    ``[CONSOLE_MAX_ENTRIES_MIN, CONSOLE_MAX_ENTRIES_MAX]`` range before
+    contacting the bridge; out-of-range requests return the
+    ``MAX_ENTRIES_OUT_OF_RANGE`` envelope.  In-range requests are
+    forwarded to the bridge unchanged.
+    """
+    if (
+        max_entries < CONSOLE_MAX_ENTRIES_MIN
+        or max_entries > CONSOLE_MAX_ENTRIES_MAX
+    ):
+        return _max_entries_out_of_range_envelope(max_entries)
+
+    return send_action(
+        action="capture_console_logs",
+        max_entries=max_entries,
+        log_type_filter=log_type_filter,
+        since_seconds=since_seconds,
+        classification_filter=classification_filter,
+        order=order,
+        cursor=cursor,
     )
 
 
@@ -220,9 +327,9 @@ def register_editor_view_tools(server: FastMCP) -> None:
             property_value=normalize_material_value(value),
         )
 
-    @server.tool()
-    def editor_console(
-        max_entries: int = 200,
+    @server.tool(name="editor_console")
+    def _editor_console(
+        max_entries: int = CONSOLE_MAX_ENTRIES_DEFAULT,
         log_type_filter: str = "all",
         since_seconds: float = 60.0,
         classification_filter: str = "all",
@@ -239,8 +346,15 @@ def register_editor_view_tools(server: FastMCP) -> None:
         whenever more matching entries remain, and the next call should
         forward that token verbatim through ``cursor`` to continue.
 
+        Issue #131: ``max_entries`` must satisfy
+        ``CONSOLE_MAX_ENTRIES_MIN <= max_entries <= CONSOLE_MAX_ENTRIES_MAX``.
+        Out-of-range requests return the ``MAX_ENTRIES_OUT_OF_RANGE``
+        envelope without contacting the bridge.
+
         Args:
-            max_entries: Maximum number of log entries to retrieve (default: 200).
+            max_entries: Maximum number of log entries to retrieve
+                (default: 200; inclusive upper bound is the buffered
+                ring-buffer capacity, lower bound is 1).
             log_type_filter: Filter by log type: "all", "error", "warning", "exception".
             since_seconds: Only entries from the last N seconds (0 = no time filter).
                 Default is 60.0 — recent-window capture for typical
@@ -257,9 +371,9 @@ def register_editor_view_tools(server: FastMCP) -> None:
                 fresh page from the most recent (or oldest, depending on
                 ordering) matching entry.
         """
-        return send_action(
-            action="capture_console_logs",
-            max_entries=max_entries, log_type_filter=log_type_filter,
+        return editor_console(
+            max_entries=max_entries,
+            log_type_filter=log_type_filter,
             since_seconds=since_seconds,
             classification_filter=classification_filter,
             order=order,
@@ -282,6 +396,23 @@ def register_editor_view_tools(server: FastMCP) -> None:
                 scripts are not picked up by the default refresh.
         """
         return editor_recompile(force_reimport=force_reimport)
+
+    @server.tool(name="editor_recompile_and_wait")
+    def _editor_recompile_and_wait(
+        timeout_sec: float = RECOMPILE_AND_WAIT_DEFAULT_TIMEOUT_SEC,
+    ) -> dict[str, Any]:
+        """Recompile scripts and synchronously wait for completion.
+
+        Returns only after the Editor reports compilation finished, the
+        compiled-assembly file's modification time has advanced past the
+        request's call-time observation, and the post-reload signal has
+        fired since the request was issued.
+
+        Args:
+            timeout_sec: Maximum wait, in seconds, before the bridge
+                gives up and returns the recompile-timeout envelope.
+        """
+        return editor_recompile_and_wait(timeout_sec=timeout_sec)
 
     @server.tool()
     def editor_run_tests(

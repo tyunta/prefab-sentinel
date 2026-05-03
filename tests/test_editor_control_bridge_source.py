@@ -208,40 +208,38 @@ class TestBatchObjectSpecComponents(unittest.TestCase):
 
 
 class TestRunScriptShortPoll(unittest.TestCase):
-    """Task 8: HandleRunScript bounded compile poll + entry-type retry."""
+    """Issue #108: the per-frame ``RunScriptPollFrame`` observes the
+    documented completion conditions (``EditorApplication.isCompiling``,
+    assembly mtime advance, deadline) and locates the freshly compiled
+    type, returning to wait for the next frame whenever the conditions
+    have not yet settled.  The compile-pending response surfaced when the
+    deadline elapses still hints at the persistent helper alternative.
+    """
 
     def test_compile_poll_uses_iscompiling_with_timeout(self) -> None:
         source = _read(BRIDGE)
-        body = _extract_method(source, "HandleRunScript")
+        body = _extract_method(source, "RunScriptPollFrame")
         self.assertIn("EditorApplication.isCompiling", body)
-        # Bounded compile poll has a timeout symbol referenced.
-        self.assertTrue(
-            re.search(r"compile.*timeout", body, re.IGNORECASE)
-            or re.search(r"DateTime\.UtcNow|Stopwatch", body),
-            "HandleRunScript must poll within a bounded compile timeout window",
-        )
+        # The deadline derives from the per-request compile timeout; the
+        # poller compares the current Unix-ms timestamp against it.
+        self.assertIn("deadlineUnixMs", body)
 
-    def test_entry_type_lookup_has_second_bounded_loop(self) -> None:
+    def test_entry_type_lookup_polls_each_frame(self) -> None:
         source = _read(BRIDGE)
-        body = _extract_method(source, "HandleRunScript")
-        # FindTempScriptType is called more than once after the compile poll
-        # (initial call + bounded retry loop body).
-        find_calls = body.count("FindTempScriptType()")
-        self.assertGreaterEqual(
-            find_calls,
-            2,
-            (
-                "HandleRunScript must invoke FindTempScriptType from a bounded "
-                "retry loop after the compile poll settles "
-                f"(found {find_calls} call(s))"
-            ),
+        body = _extract_method(source, "RunScriptPollFrame")
+        # Each frame attempts ``FindTempScriptType``; a ``null`` result
+        # returns control to the editor so the next frame retries.
+        self.assertIn("FindTempScriptType()", body)
+        self.assertRegex(
+            body,
+            r"scriptType\s*==\s*null\s*\)\s*return",
         )
 
     def test_compile_pending_message_hints_persistent_helper(self) -> None:
         source = _read(BRIDGE)
-        body = _extract_method(source, "HandleRunScript")
+        body = _extract_method(source, "RunScriptPollFrame")
         # Compile-pending response must point users at the persistent helper
-        # alternative.
+        # alternative when the deadline elapses without compile settling.
         self.assertIn("editor_execute_menu_item", body)
 
 
@@ -354,9 +352,10 @@ class TestCompileTimeoutRequestField(unittest.TestCase):
         # The handler must reference the request's compile_timeout field
         # and select between it and the bridge default for its compile poll.
         self.assertIn("request.compile_timeout", body)
-        # The bounded poll's loop condition must use the resolved budget,
-        # not the constant directly, so a caller-supplied value takes effect.
-        self.assertRegex(body, r"compileWatch\.ElapsedMilliseconds\s*<\s*compilePollMs")
+        # The async-runner registry's deadline must derive from the
+        # resolved budget so a caller-supplied value takes effect across
+        # the frame-poll lifetime.
+        self.assertRegex(body, r"deadlineMs\s*=\s*callTimeMs\s*\+\s*compilePollMs")
 
 
 class TestAsmdefAssemblyDisambiguation(unittest.TestCase):
@@ -385,6 +384,153 @@ class TestAsmdefAssemblyDisambiguation(unittest.TestCase):
                 f"found {occurrences} occurrence(s)"
             ),
         )
+
+
+class TestConsoleLogBufferCapacityVisibility(unittest.TestCase):
+    """Issue #131: ``ConsoleLogBuffer.DefaultCapacity`` must be ``public
+    const int`` so the request validator and the Python mirror share a
+    single named value.  The Python mirror lives in ``bridge_constants``.
+    """
+
+    def test_capacity_declaration_is_public_const(self) -> None:
+        source = _read(BRIDGE)
+        self.assertRegex(
+            source,
+            r"public\s+const\s+int\s+DefaultCapacity\s*=\s*\d+",
+        )
+
+
+class TestHandleCaptureConsoleLogsBoundCheck(unittest.TestCase):
+    """Issue #131: the console-capture handler rejects ``max_entries``
+    outside the inclusive ``[1, ConsoleLogBuffer.DefaultCapacity]`` range
+    with the dedicated bridge-side out-of-range error code, before
+    consulting the buffer.
+    """
+
+    def test_handler_references_published_capacity_and_error_code(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleCaptureConsoleLogs")
+        self.assertIn("ConsoleLogBuffer.DefaultCapacity", body)
+        self.assertIn("EDITOR_CTRL_MAX_ENTRIES_OUT_OF_RANGE", body)
+
+
+class TestRecompileAndWaitDispatch(unittest.TestCase):
+    """Issue #118: the synchronous recompile-and-wait action is wired
+    into both the supported-action set and the asynchronous-action set.
+    The handler must reference the documented completion signals (the
+    compiled-assembly file and the post-reload signal) and the timeout
+    error code.
+    """
+
+    def test_supported_action_lists_recompile_and_wait(self) -> None:
+        source = _read(BRIDGE)
+        # The supported-action set is the literal hashset initialiser.
+        match = re.search(
+            r"SupportedActions\s*=\s*new\s+HashSet<string>\s*\{[^}]*\}",
+            source,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(match)
+        self.assertIn('"editor_recompile_and_wait"', match.group(0))
+
+    def test_async_action_lists_recompile_and_wait(self) -> None:
+        source = _read(BRIDGE)
+        match = re.search(
+            r"AsyncActions\s*=\s*new\s+System\.Collections\.Generic\."
+            r"HashSet<string>\s*\{[^}]*\}",
+            source,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(match)
+        self.assertIn('"editor_recompile_and_wait"', match.group(0))
+
+    def test_async_action_lists_run_script(self) -> None:
+        """Issue #108: the script-runner action completes asynchronously
+        through the run-script registry; source must reflect that."""
+        source = _read(BRIDGE)
+        match = re.search(
+            r"AsyncActions\s*=\s*new\s+System\.Collections\.Generic\."
+            r"HashSet<string>\s*\{[^}]*\}",
+            source,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(match)
+        self.assertIn('"run_script"', match.group(0))
+
+    def test_recompile_and_wait_handler_references_completion_signals(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleRecompileAndWait")
+        # The handler must reference both completion signals: the
+        # compiled-assembly file (via the published rel-path constant
+        # whose value is ``Library/ScriptAssemblies/Assembly-CSharp.dll``)
+        # and the post-reload signal (``afterAssemblyReload``).
+        self.assertIn("CompiledAssemblyRelPath", body)
+        self.assertIn("afterAssemblyReload", body)
+        # The constant itself must resolve to the canonical path.
+        self.assertRegex(
+            source,
+            r'CompiledAssemblyRelPath\s*=\s*\n?\s*"Library/ScriptAssemblies/Assembly-CSharp\.dll"',
+        )
+
+    def test_recompile_and_wait_handler_references_timeout_envelope(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleRecompileAndWait")
+        self.assertIn("EDITOR_CTRL_RECOMPILE_TIMEOUT", body)
+
+
+class TestRunScriptNoSleep(unittest.TestCase):
+    """Issue #108: ``HandleRunScript`` must not block the main thread on
+    a ``Thread.Sleep`` busy-wait.  Replaced with an
+    ``EditorApplication.update`` polling registry so the Editor stays
+    responsive during the compile-and-reload window.
+    """
+
+    def test_run_script_handler_has_no_thread_sleep(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleRunScript")
+        self.assertNotIn("Thread.Sleep", body)
+
+
+class TestRecompileAndWaitDomainReloadResume(unittest.TestCase):
+    """Issue #118: after a domain reload, the in-flight
+    ``editor_recompile_and_wait`` request must be resumed by
+    ``ResumePendingAsyncRunners`` so completion drainage continues from
+    the new AppDomain.  The completion-signal logic is centralised in
+    ``BuildRecompileAndWaitPoll`` (DRY); the resume branch dispatches
+    on the persisted action string and re-installs the shared poll.
+    """
+
+    def test_resume_wires_recompile_and_wait_action(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "ResumePendingAsyncRunners")
+        # Resume branch must dispatch on the persisted action string.
+        self.assertIn('"editor_recompile_and_wait"', body)
+
+    def test_resume_delegates_to_shared_poll_builder(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "ResumePendingAsyncRunners")
+        # Shared helper avoids duplicating the completion-signal checks
+        # between first-dispatch and post-reload paths.
+        self.assertIn("BuildRecompileAndWaitPoll", body)
+        # The rehydrated entry must be reattached to the in-flight
+        # registry so ``Complete`` can later drain it.
+        self.assertIn("RehydrateEntry", body)
+
+    def test_shared_poll_observes_documented_completion_signals(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "BuildRecompileAndWaitPoll")
+        # Three completion signals: compile finished, assembly mtime
+        # advanced beyond the call-time snapshot, and the post-reload
+        # counter ticked past the threshold supplied by the call site.
+        self.assertIn("EditorApplication.isCompiling", body)
+        self.assertIn("ReadAssemblyMtimeUnixMs", body)
+        self.assertIn("AssemblyReloadCount", body)
+
+    def test_shared_poll_emits_success_and_timeout_envelopes(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "BuildRecompileAndWaitPoll")
+        self.assertIn("EDITOR_CTRL_RECOMPILE_AND_WAIT_OK", body)
+        self.assertIn("EDITOR_CTRL_RECOMPILE_TIMEOUT", body)
 
 
 if __name__ == "__main__":

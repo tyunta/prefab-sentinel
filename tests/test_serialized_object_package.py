@@ -334,6 +334,34 @@ class UnresolvedReasonResolverTests(unittest.TestCase):
             )
         self.assertIs(result, UnresolvedReason.NOT_A_VARIANT)
 
+    def test_not_a_variant_repeats_on_same_service_instance(self) -> None:
+        """Issue #130: calling twice on the same service instance against a
+        base-prefab target must return ``NOT_A_VARIANT`` both times.  The
+        previous implementation cached an empty dict for the non-Variant
+        branch, which the early "cache empty" guard mis-routed into
+        ``EMPTY_CHAIN`` on the second call.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            assets = project_root / "Assets"
+            assets.mkdir()
+            base = assets / "Base.prefab"
+            base.write_text(
+                "%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Root\n"
+            )
+            pv = PrefabVariantService(project_root=project_root)
+            svc = SerializedObjectService(
+                project_root=project_root, prefab_variant=pv,
+            )
+            first = resolve_before_value(
+                svc, "Assets/Base.prefab", "1", "m_Name",
+            )
+            second = resolve_before_value(
+                svc, "Assets/Base.prefab", "1", "m_Name",
+            )
+        self.assertIs(first, UnresolvedReason.NOT_A_VARIANT)
+        self.assertIs(second, UnresolvedReason.NOT_A_VARIANT)
+
     def test_empty_chain_when_chain_resolves_to_empty(self) -> None:
         """Chain resolves but the value map is empty → ``EMPTY_CHAIN``."""
         with tempfile.TemporaryDirectory() as tmp:

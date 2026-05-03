@@ -24,6 +24,7 @@ from prefab_sentinel.services.serialized_object import (
     resource_bridge,
     resource_plan,
 )
+from prefab_sentinel.services.serialized_object.before_cache import UnresolvedReason
 from prefab_sentinel.services.serialized_object.resource_adapters import (
     _ResourceAdapter,
     build_default_adapters,
@@ -49,7 +50,11 @@ class SerializedObjectService:
         )
         self.project_root = find_project_root(project_root or Path.cwd())
         self._prefab_variant = prefab_variant
-        self._before_cache: dict[str, str] | None = None
+        # Issue #130: the cache slot accepts the resolved-value map, the
+        # typed unresolved-verdict sentinel (only for ``NOT_A_VARIANT``),
+        # or ``None`` (not yet resolved).  The I/O-error branch leaves
+        # this field as ``None`` so subsequent calls retry the read.
+        self._before_cache: dict[str, str] | UnresolvedReason | None = None
         # File id → Unity component type name companion map for the same
         # variant target as ``_before_cache``. Lifecycle-bound to it: any
         # cache invalidation clears both.

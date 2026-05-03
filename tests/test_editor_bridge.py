@@ -262,6 +262,8 @@ class TestSupportedActions(unittest.TestCase):
             "editor_reflect",
             # Phase: one-step C# exec (#74)
             "run_script",
+            # Issue #118: synchronous recompile-and-wait surface
+            "editor_recompile_and_wait",
         }
         self.assertEqual(expected, SUPPORTED_ACTIONS)
 

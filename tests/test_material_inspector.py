@@ -1140,5 +1140,92 @@ class TestNestedRecursiveTraversal(unittest.TestCase):
             )
 
 
+class MaterialInspectorVariantDecisionTests(unittest.TestCase):
+    """Issue #125 — material inspection's variant verdict comes from the
+    canonical ``is_variant_prefab`` predicate.  A base prefab that nests
+    a PrefabInstance is treated as a base; a pure Variant is treated as
+    a Variant.  The legacy ``SOURCE_PREFAB_PATTERN`` symbol must not be
+    imported by ``material_inspector``.
+    """
+
+    _BASE_GUID = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+    def _write_meta(self, path: Path, guid: str) -> None:
+        path.with_suffix(path.suffix + ".meta").write_text(
+            f"fileFormatVersion: 2\nguid: {guid}\n",
+            encoding="utf-8",
+        )
+
+    def test_base_prefab_with_nested_instance_is_treated_as_base(self) -> None:
+        """A base prefab carrying a nested PrefabInstance plus its own
+        GameObject(s) must be classified as a base, not a Variant.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            assets = tmp_path / "Assets"
+            assets.mkdir()
+
+            base_path = assets / "Base.prefab"
+            base_text = (
+                YAML_HEADER
+                + make_gameobject(
+                    file_id="100", name="Root", component_file_ids=["200"],
+                )
+                + make_transform(file_id="200", go_file_id="100")
+                + make_prefab_instance(
+                    file_id="999",
+                    source_guid=self._BASE_GUID,
+                )
+            )
+            base_path.write_text(base_text, encoding="utf-8")
+            self._write_meta(base_path, "1" * 32)
+
+            result = inspect_materials(str(base_path), project_root=tmp_path)
+            self.assertFalse(result.is_variant)
+
+    def test_pure_variant_is_treated_as_variant(self) -> None:
+        """A YAML carrying a source-prefab reference and no GameObject
+        blocks must be classified as a Variant.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            assets = tmp_path / "Assets"
+            assets.mkdir()
+
+            base_path = assets / "Base.prefab"
+            base_text = (
+                YAML_HEADER
+                + make_gameobject(
+                    file_id="100", name="Root", component_file_ids=["200"],
+                )
+                + make_transform(file_id="200", go_file_id="100")
+            )
+            base_path.write_text(base_text, encoding="utf-8")
+            self._write_meta(base_path, self._BASE_GUID)
+
+            variant_path = assets / "Variant.prefab"
+            variant_text = (
+                YAML_HEADER
+                + make_prefab_variant(
+                    source_guid=self._BASE_GUID, modifications=[],
+                )
+            )
+            variant_path.write_text(variant_text, encoding="utf-8")
+            self._write_meta(variant_path, "2" * 32)
+
+            result = inspect_materials(str(variant_path), project_root=tmp_path)
+            self.assertTrue(result.is_variant)
+
+    def test_module_does_not_import_source_prefab_pattern(self) -> None:
+        """Source-grep: the legacy ``SOURCE_PREFAB_PATTERN`` import line
+        must be absent from ``material_inspector.py`` after the
+        unification.  No backward-compatibility shim is preserved.
+        """
+        from prefab_sentinel import material_inspector as mi_mod  # noqa: PLC0415
+
+        text = Path(mi_mod.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("SOURCE_PREFAB_PATTERN", text)
+
+
 if __name__ == "__main__":
     unittest.main()

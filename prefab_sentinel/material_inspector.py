@@ -13,11 +13,11 @@ from pathlib import Path
 
 from prefab_sentinel.unity_assets import (
     REFERENCE_PATTERN,
-    SOURCE_PREFAB_PATTERN,
     collect_project_guid_index,
     decode_text_file,
     find_project_root,
     is_unity_builtin_guid,
+    is_variant_prefab,
     normalize_guid,
 )
 from prefab_sentinel.unity_assets_path import resolve_scope_path
@@ -162,12 +162,13 @@ def inspect_materials(
     text = decode_text_file(path)
     guid_index = collect_project_guid_index(proj_root, include_package_cache=False)
 
-    # A Variant has m_SourcePrefab but no real (non-stripped) GameObjects;
-    # a base prefab with nested PrefabInstances also contains m_SourcePrefab
-    # blocks, so checking the full text is insufficient.
-    has_source_prefab = SOURCE_PREFAB_PATTERN.search(text) is not None
-    has_real_game_objects = bool(parse_game_objects(split_yaml_blocks(text)))
-    is_variant = has_source_prefab and not has_real_game_objects
+    # Issue #125: ``is_variant_prefab`` is the single source of truth for
+    # the variant-versus-base decision (it already encodes the
+    # "m_SourcePrefab AND no real GameObject" rule).  Calling it here
+    # keeps material inspection aligned with ``orchestrator_variant``
+    # and the before-cache resolver instead of maintaining a parallel
+    # heuristic.
+    is_variant = is_variant_prefab(text)
 
     # For variants, we need to:
     # 1. Load the base prefab to get renderer blocks with materials

@@ -24,7 +24,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
-from prefab_sentinel.unity_assets import SOURCE_PREFAB_PATTERN, decode_text_file
+from prefab_sentinel.unity_assets import decode_text_file, is_variant_prefab
 from prefab_sentinel.unity_assets_path import resolve_scope_path
 
 if TYPE_CHECKING:
@@ -77,6 +77,13 @@ def resolve_before_value(
     if service._prefab_variant is None:
         return UnresolvedReason.NO_VARIANT_RESOLVER
 
+    # Issue #130: when a previous call already determined the target is a
+    # base prefab, the cache slot holds the typed sentinel.  The empty-map
+    # ``{}`` cache shape is reserved for "chain walked, no overrides
+    # found"; using the sentinel keeps those two verdicts distinct.
+    if isinstance(service._before_cache, UnresolvedReason):
+        return service._before_cache
+
     if service._before_cache is None:
         try:
             target_path = resolve_scope_path(target, service.project_root)
@@ -87,8 +94,16 @@ def resolve_before_value(
             # rather than poisoning the cache as ``EMPTY_CHAIN``.
             return UnresolvedReason.FILE_UNREADABLE
 
-        if SOURCE_PREFAB_PATTERN.search(text) is None:
-            service._before_cache = {}
+        # Issue #125: the canonical Variant predicate is the single source
+        # of truth for the variant-versus-base decision; previously this
+        # branch used a regex-only heuristic that disagreed with
+        # ``is_variant_prefab`` on base prefabs that nest a PrefabInstance.
+        if not is_variant_prefab(text):
+            # Issue #130: cache the typed sentinel so the next call on the
+            # same service instance returns ``NOT_A_VARIANT`` again — the
+            # legacy ``{}`` shape would route the second call into the
+            # ``EMPTY_CHAIN`` branch by way of the empty-cache guard below.
+            service._before_cache = UnresolvedReason.NOT_A_VARIANT
             service._before_class_map = {}
             return UnresolvedReason.NOT_A_VARIANT
 

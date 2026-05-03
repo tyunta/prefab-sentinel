@@ -110,7 +110,8 @@ prefab-sentinel-mcp --transport streamable-http
 | `editor_set_material_property` | ランタイムでシェーダープロパティを設定（型はシェーダー定義から自動判定、Undo 対応） |
 | `editor_console` | Unity Console のログエントリを構造化データとして取得（`classification_filter` で non-fatal/fatal 分類フィルタ可。詳細は §7.7） |
 | `editor_refresh` | AssetDatabase.Refresh() のトリガー |
-| `editor_recompile` | C# スクリプト再コンパイルのトリガー |
+| `editor_recompile` | C# スクリプト再コンパイルのトリガー（fire-and-return） |
+| `editor_recompile_and_wait` | C# スクリプト再コンパイルを発行し、コンパイル完了 + `Library/ScriptAssemblies/Assembly-CSharp.dll` の mtime 更新 + `afterAssemblyReload` を確認するまで同期で待機（issue #118、既定 60 秒、`timeout_sec` で上書き可） |
 | `editor_run_tests` | Editor Bridge 経由で Unity 統合テストを実行 |
 | `vrcsdk_upload` | VRC SDK 経由でアバター/ワールドをビルド＋アップロード（dry-run/confirm ゲート付き、既存アセット更新のみ） |
 | `editor_instantiate` | Prefab を現在の Scene にインスタンス化 |
@@ -602,6 +603,8 @@ Udonログを根拠に修正候補を最短で絞る。
 - `EDITOR_CTRL_INVALID_CURSOR`: `editor_console` の `cursor` が現在の取り込み済み範囲外、もしくは Bridge のフォーマット (`seq:<long>`) に合致しない場合（issue #113）。`severity="error"`、メッセージで原因を明示。
 - `EDITOR_CTRL_SET_PROP_QUATERNION_NOT_NORMALIZED`: `editor_set_property` で `SerializedPropertyType.Quaternion` に与えた xyzw 4 要素のノルムが `1.0 ± 1e-4` の許容範囲外だった場合（issue #111）。`severity="error"`、メッセージに供給値とノルムを明示。Bridge 側では自動 normalize しない。Component 数が 4 でない（例えば 3 要素の euler を渡した）場合は既存の `EDITOR_CTRL_SET_PROP_TYPE_MISMATCH` で 4 要素必須を案内。
 - `COMPILE_TIMEOUT_OUT_OF_RANGE`: `editor_run_script` の `compile_timeout_ms` が許容範囲 `[1, 120000]`（ミリ秒、両端含む）の外だった場合（issue #127）。`severity="error"`、Bridge へは送信せず Python の入口で拒否。メッセージに供給値・両端境界値を含める（CLAMP しない）。
+- `MAX_ENTRIES_OUT_OF_RANGE` / `EDITOR_CTRL_MAX_ENTRIES_OUT_OF_RANGE`: `editor_console` の `max_entries` が許容範囲 `[1, ConsoleLogBuffer.DefaultCapacity]`（既定 1000、両端含む）の外だった場合（issue #131）。`severity="error"`。Python 側 (`MAX_ENTRIES_OUT_OF_RANGE`) は Bridge に送る前に拒否し、C# Bridge 側 (`EDITOR_CTRL_MAX_ENTRIES_OUT_OF_RANGE`) は buffer を見る前に拒否する。上限の根拠は「Bridge は ring buffer に保持している件数以上は返せない」という不変条件で、C# `ConsoleLogBuffer.DefaultCapacity` と Python `bridge_constants.CONSOLE_LOG_BUFFER_MAX_ENTRIES` は `scripts/check_bridge_constants.py` の drift detector で同期する。
+- `EDITOR_CTRL_RECOMPILE_TIMEOUT`: `editor_recompile_and_wait` が `timeout_sec`（既定 60 秒）以内にコンパイル完了 + assembly mtime 進行 + `afterAssemblyReload` の 3 条件を観測できなかった場合（issue #118）。`severity="error"`。Bridge 内の async runner は SessionState ミラーで domain reload を跨いで継続し、deadline 超過時のみ timeout envelope を返す。
 
 #### severity 境界: `critical` と `error` の使い分け
 
@@ -1360,7 +1363,7 @@ before / after diff + validation steps の抜粋:
 - 配列操作パスの診断は `.Array.data` 形式を厳密検証し、`.Array.size` / index 付き誤指定時はヒント付きで停止する。
 - fixed buffer 配列に対する `insert_array_element` / `remove_array_element` は未対応として明示的に fail-fast 停止し、要素更新は `set` で個別要素パスを指定する方針とする。
 - patch plan v2 は任意の `postconditions` 配列を受け付け、`patch apply` 完了前に検証する。現状の対応型は `asset_exists`（`resource` または `path`）と `broken_refs`（`scope`, `expected_count`, `exclude_patterns`, `ignore_asset_guids`）で、不一致時は fail-fast で停止する。
-- `validate_runtime` MCP ツールは `compile_udonsharp` / `run_clientsim` / `collect_unity_console` / `classify_errors` / `assert_no_critical_errors` を順に実行する。Unity batchmode 実行が設定されていれば UdonSharp compile と ClientSim を実行し、未設定環境では skip 応答を返したうえで log 分類へ進む。
+- `validate_runtime` MCP ツールは `inspect_world_canvas` / `compile_udonsharp` / `run_clientsim` / `collect_unity_console` / `classify_errors` / `assert_no_critical_errors` を順に実行する。`inspect_world_canvas` は scene YAML を直接読む静的 leading step（issue #121）で、WorldSpace Canvas + `VRC_UiShape` の `localScale` 不整合を `WORLD_CANVAS_LOCAL_SCALE`（warning）、BoxCollider 欠落を `WORLD_CANVAS_MISSING_BOX_COLLIDER`（info）として surface する。step の severity は warning に capping されており、後続の Unity batchmode steps は必ず実行する。Unity batchmode 実行が設定されていれば UdonSharp compile と ClientSim を実行し、未設定環境では skip 応答を返したうえで log 分類へ進む。VRChat persistent listener の許可リストや UI イベント配線パターンは `knowledge/vrchat-event-binding.md`、WorldSpace Canvas のハードルールは `knowledge/vrchat-sdk-worlds.md` を参照（issue #120 / #121）。
 - `collect_unity_console(runtime_root, log_file, ...)` は `log_file` を `runtime_root` 配下に封じ込める（どちらも symlink 解決後の絶対パスに正規化し、`runtime_root` 外を指す入力は `RUN_CONFIG_ERROR` で fail-fast）。ログファイルの読み取りは `UnicodeDecodeError` を吸収せず、復号失敗時は `RUN_LOG_DECODE_WARN`（warning severity の success 応答、`log_lines=[]`）を返し、後段の分類器で empty classification 扱いとする。
 - `PrefabVariantService.resolve_chain_values(variant_path, diagnostics=None)` および下層の `resolve_chain_values` module 関数は、復号失敗（`OSError` / `UnicodeDecodeError`）を沈黙で `{}` に丸めない。呼び出し側が `diagnostics: list[Diagnostic]` を渡した場合、該当ファイルについて `detail="unreadable_file"` の診断を末尾に追記する（診断 sink 未指定時も従来どおり `{}` を返すが、`revert_overrides` は sink を渡して応答の `diagnostics[]` に伝搬する）。
 

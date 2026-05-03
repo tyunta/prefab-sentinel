@@ -22,8 +22,18 @@ namespace PrefabSentinel
         public const string BridgeVersion = "0.5.156";
 
         /// <summary>Actions that write their response file asynchronously (not on return).</summary>
+        // Issues #108 / #118: ``run_script`` and ``editor_recompile_and_wait``
+        // both observe the compile-and-reload cycle through an
+        // ``EditorApplication.update`` registry instead of blocking the
+        // main thread on ``Thread.Sleep``; the dispatcher must therefore
+        // skip the synchronous "no response written" guard for them.
         public static readonly System.Collections.Generic.HashSet<string> AsyncActions =
-            new System.Collections.Generic.HashSet<string> { "vrcsdk_upload" };
+            new System.Collections.Generic.HashSet<string>
+            {
+                "vrcsdk_upload",
+                "run_script",
+                "editor_recompile_and_wait",
+            };
 
         /// <summary>All action strings handled by this bridge.</summary>
         public static readonly HashSet<string> SupportedActions = new HashSet<string>
@@ -76,6 +86,8 @@ namespace PrefabSentinel
             "editor_reflect",
             // Phase 9: Editor script exec (#74)
             "run_script",
+            // Issue #118: synchronous recompile-and-wait surface
+            "editor_recompile_and_wait",
         };
 
         // ── Request / Response DTOs ──
@@ -214,6 +226,11 @@ namespace PrefabSentinel
             // entries that do not match it). Validated by the handler so an
             // unsupported value yields ``EDITOR_CTRL_INVALID_CLASSIFICATION_FILTER``.
             public string classification_filter = "all";
+
+            // Issue #118: synchronous recompile-and-wait budget, in seconds.
+            // Consumed by ``HandleRecompileAndWait``; ignored by every
+            // other handler.  ``0`` means "use the bridge default".
+            public float timeout_sec = 0f;
         }
 
         [Serializable]
@@ -552,7 +569,10 @@ namespace PrefabSentinel
                     response = EditorReflectHandler.Handle(request);
                     break;
                 case "run_script":
-                    response = HandleRunScript(request);
+                    response = HandleRunScript(request, responsePath);
+                    break;
+                case "editor_recompile_and_wait":
+                    response = HandleRecompileAndWait(request, responsePath);
                     break;
                 default:
                     response = BuildError(
@@ -1896,7 +1916,12 @@ namespace PrefabSentinel
         /// </summary>
         public static class ConsoleLogBuffer
         {
-            private const int DefaultCapacity = 1000;
+            // Issue #131: ring-buffer capacity must be public so the
+            // ``capture_console_logs`` request validator and the Python-side
+            // mirror constant can reference the same single value. The
+            // request bound mirrors this capacity — callers cannot ask for
+            // more entries than the buffer has ever held.
+            public const int DefaultCapacity = 1000;
 
             private struct RawEntry
             {
@@ -2199,7 +2224,18 @@ namespace PrefabSentinel
                 cursorAfter = parsed;
             }
 
-            int maxEntries = request.max_entries > 0 ? request.max_entries : 200;
+            // Issue #131: reject ``max_entries`` outside the inclusive
+            // [1, ConsoleLogBuffer.DefaultCapacity] range before we touch
+            // the buffer.  The upper bound mirrors the published capacity
+            // because the ring buffer can never return more entries than
+            // it has retained; the lower bound rejects 0 / negative
+            // values that would degenerate into a no-op or an error.
+            int maxEntries = request.max_entries;
+            if (maxEntries < 1 || maxEntries > ConsoleLogBuffer.DefaultCapacity)
+                return BuildError(
+                    "EDITOR_CTRL_MAX_ENTRIES_OUT_OF_RANGE",
+                    $"max_entries={maxEntries} is outside the inclusive range "
+                    + $"[1, {ConsoleLogBuffer.DefaultCapacity}] (buffered console entries).");
             var (entries, hasMore) = ConsoleLogBuffer.GetEntries(
                 maxEntries, request.log_type_filter, request.since_seconds,
                 classificationFilter, newestFirst, cursorAfter);
@@ -4175,8 +4211,279 @@ namespace PrefabSentinel
         // constructors run on every domain reload.
         private static DateTime LastDomainReloadUtc = DateTime.UtcNow;
 
-        private static EditorControlResponse HandleRunScript(EditorControlRequest request)
+        // Issues #108 / #118: ``PendingAsyncRunner`` is the single async
+        // completion registry shared by ``HandleRunScript`` and
+        // ``HandleRecompileAndWait``.  Each entry registers an
+        // ``EditorApplication.update`` callback that polls the editor's
+        // compile-state and the compiled-assembly mtime; the response
+        // file is written only after the documented completion signals
+        // are observed or the supplied budget is exceeded.  In-flight
+        // requests are mirrored to ``SessionState`` so a domain reload
+        // (triggered by the recompile itself) does not lose the entry.
+        // The post-reload resumer (an ``[InitializeOnLoad]`` hook) walks
+        // ``SessionState`` and re-registers each entry on the new
+        // AppDomain so completion drainage continues from the same place.
+        internal static class PendingAsyncRunner
         {
+            private const string SessionStateKey =
+                "PrefabSentinel_PendingAsyncRunner_v1";
+            // Path to the compiled assembly observed by both completion
+            // signals.  The bridge tracks its mtime as the second
+            // completion signal; the post-reload event provides the third.
+            internal const string CompiledAssemblyRelPath =
+                "Library/ScriptAssemblies/Assembly-CSharp.dll";
+
+            [Serializable]
+            internal sealed class PersistedEntry
+            {
+                public string action = string.Empty;
+                public string responsePath = string.Empty;
+                public string requestJson = string.Empty;
+                public long callTimeUnixMs;
+                public long deadlineUnixMs;
+                public long callTimeAssemblyMtimeUnixMs;
+                public string tempId = string.Empty;
+                public string stuckKey = string.Empty;
+                public string tempDirAbs = string.Empty;
+            }
+
+            [Serializable]
+            internal sealed class PersistedEntryList
+            {
+                public List<PersistedEntry> items = new List<PersistedEntry>();
+            }
+
+            // Active entries on the *current* AppDomain. Survives domain
+            // reload via the SessionState mirror.
+            private static readonly Dictionary<string, PersistedEntry> ActiveEntries
+                = new Dictionary<string, PersistedEntry>();
+
+            // Each entry's poll delegate. Populated lazily by the handler
+            // that owns the entry.  Lost across domain reload; the
+            // post-reload resumer re-installs them.
+            private static readonly Dictionary<string, EditorApplication.CallbackFunction>
+                ActiveCallbacks =
+                    new Dictionary<string, EditorApplication.CallbackFunction>();
+
+            // ``afterAssemblyReload`` fires on the new AppDomain after a
+            // reload completes; we tick this counter so the
+            // ``HandleRecompileAndWait`` poller can detect "the reload we
+            // were waiting on has fired" without misfiring on a reload
+            // that started before the request.
+            internal static int AssemblyReloadCount { get; private set; }
+
+            static PendingAsyncRunner()
+            {
+                AssemblyReloadEvents.afterAssemblyReload -= OnAfterAssemblyReload;
+                AssemblyReloadEvents.afterAssemblyReload += OnAfterAssemblyReload;
+            }
+
+            private static void OnAfterAssemblyReload()
+            {
+                AssemblyReloadCount++;
+            }
+
+            internal static void Register(
+                PersistedEntry entry,
+                EditorApplication.CallbackFunction poll)
+            {
+                ActiveEntries[entry.responsePath] = entry;
+                ActiveCallbacks[entry.responsePath] = poll;
+                EditorApplication.update -= poll;
+                EditorApplication.update += poll;
+                Persist();
+            }
+
+            internal static void Complete(string responsePath)
+            {
+                if (ActiveCallbacks.TryGetValue(responsePath, out var poll))
+                {
+                    EditorApplication.update -= poll;
+                    ActiveCallbacks.Remove(responsePath);
+                }
+                ActiveEntries.Remove(responsePath);
+                Persist();
+            }
+
+            internal static long ReadAssemblyMtimeUnixMs()
+            {
+                try
+                {
+                    string abs = Path.Combine(
+                        Directory.GetCurrentDirectory(),
+                        CompiledAssemblyRelPath.Replace('/', Path.DirectorySeparatorChar));
+                    if (!File.Exists(abs)) return 0L;
+                    DateTime mtime = File.GetLastWriteTimeUtc(abs);
+                    return new DateTimeOffset(mtime).ToUnixTimeMilliseconds();
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning(
+                        $"[PrefabSentinel] PendingAsyncRunner: assembly mtime read failed: {ex.Message}");
+                    return 0L;
+                }
+            }
+
+            private static void Persist()
+            {
+                try
+                {
+                    var list = new PersistedEntryList();
+                    foreach (var e in ActiveEntries.Values) list.items.Add(e);
+                    string json = JsonUtility.ToJson(list);
+                    SessionState.SetString(SessionStateKey, json);
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning(
+                        $"[PrefabSentinel] PendingAsyncRunner.Persist failed: {ex.Message}");
+                }
+            }
+
+            internal static List<PersistedEntry> ReadPersisted()
+            {
+                try
+                {
+                    string json = SessionState.GetString(SessionStateKey, "");
+                    if (string.IsNullOrEmpty(json))
+                        return new List<PersistedEntry>();
+                    var list = JsonUtility.FromJson<PersistedEntryList>(json);
+                    return list?.items ?? new List<PersistedEntry>();
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning(
+                        $"[PrefabSentinel] PendingAsyncRunner.ReadPersisted failed: {ex.Message}");
+                    return new List<PersistedEntry>();
+                }
+            }
+
+            internal static void RehydrateEntry(
+                PersistedEntry entry,
+                EditorApplication.CallbackFunction poll)
+            {
+                ActiveEntries[entry.responsePath] = entry;
+                ActiveCallbacks[entry.responsePath] = poll;
+                EditorApplication.update -= poll;
+                EditorApplication.update += poll;
+            }
+        }
+
+        /// <summary>
+        /// Synchronous recompile-and-wait handler (issue #118).  Schedules a
+        /// script recompilation, registers an editor-frame observer, and
+        /// writes the response only after compilation has finished, the
+        /// compiled-assembly modification time is later than the call-time
+        /// observation, and the post-reload signal has fired.  The handler
+        /// signals asynchronous completion to the dispatcher.  Writes the
+        /// recompile-timeout envelope when the budget is exceeded before
+        /// completion conditions are observed.
+        /// </summary>
+        private const float RecompileAndWaitDefaultTimeoutSec = 60.0f;
+
+        /// <summary>
+        /// Builds the per-frame poller used by ``editor_recompile_and_wait``
+        /// — both at first dispatch (``HandleRecompileAndWait``) and after a
+        /// domain-reload resume (``ResumePendingAsyncRunners``).  Centralised
+        /// so the three completion signals (deadline, ``isCompiling``,
+        /// assembly mtime advance, reload-count advance) and the success /
+        /// timeout envelopes stay in one place.  The two call sites differ
+        /// only in their reload-count threshold (call-time snapshot vs. 0
+        /// after the reloaded AppDomain reset the counter) and in the
+        /// timeout message body.
+        /// </summary>
+        private static EditorApplication.CallbackFunction BuildRecompileAndWaitPoll(
+            string responsePath,
+            long deadlineMs,
+            long callTimeAssemblyMtime,
+            int reloadCountThreshold,
+            string timeoutDetail)
+        {
+            EditorApplication.CallbackFunction poll = null;
+            poll = () =>
+            {
+                long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                if (nowMs > deadlineMs)
+                {
+                    PendingAsyncRunner.Complete(responsePath);
+                    WriteResponse(responsePath, BuildError(
+                        "EDITOR_CTRL_RECOMPILE_TIMEOUT",
+                        timeoutDetail));
+                    return;
+                }
+                if (EditorApplication.isCompiling) return;
+                long currentMtime = PendingAsyncRunner.ReadAssemblyMtimeUnixMs();
+                if (currentMtime <= callTimeAssemblyMtime) return;
+                if (PendingAsyncRunner.AssemblyReloadCount <= reloadCountThreshold) return;
+
+                PendingAsyncRunner.Complete(responsePath);
+                WriteResponse(responsePath, BuildSuccess(
+                    "EDITOR_CTRL_RECOMPILE_AND_WAIT_OK",
+                    "editor_recompile_and_wait: compilation completed and assembly reloaded.",
+                    new EditorControlData { executed = true }));
+            };
+            return poll;
+        }
+
+        private static EditorControlResponse HandleRecompileAndWait(
+            EditorControlRequest request, string responsePath)
+        {
+            float budgetSec = request.timeout_sec > 0f
+                ? request.timeout_sec
+                : RecompileAndWaitDefaultTimeoutSec;
+            long callTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            long deadlineMs = callTimeMs + (long)(budgetSec * 1000f);
+            long callTimeAssemblyMtime =
+                PendingAsyncRunner.ReadAssemblyMtimeUnixMs();
+            int callTimeReloadCount = PendingAsyncRunner.AssemblyReloadCount;
+
+            var entry = new PendingAsyncRunner.PersistedEntry
+            {
+                action = "editor_recompile_and_wait",
+                responsePath = responsePath,
+                requestJson = JsonUtility.ToJson(request),
+                callTimeUnixMs = callTimeMs,
+                deadlineUnixMs = deadlineMs,
+                callTimeAssemblyMtimeUnixMs = callTimeAssemblyMtime,
+            };
+
+            EditorApplication.CallbackFunction poll = BuildRecompileAndWaitPoll(
+                responsePath,
+                deadlineMs,
+                callTimeAssemblyMtime,
+                callTimeReloadCount,
+                $"editor_recompile_and_wait: timed out after {budgetSec:F1}s. " +
+                "Editor still reports compilation in progress, the compiled " +
+                $"{PendingAsyncRunner.CompiledAssemblyRelPath} mtime has not " +
+                "advanced, or the afterAssemblyReload signal has not fired.");
+
+            try
+            {
+                UnityEditor.Compilation.CompilationPipeline.RequestScriptCompilation();
+            }
+            catch (Exception ex)
+            {
+                return BuildError(
+                    "EDITOR_CTRL_RECOMPILE_TIMEOUT",
+                    $"editor_recompile_and_wait: failed to schedule compilation: {ex.Message}");
+            }
+
+            PendingAsyncRunner.Register(entry, poll);
+            return null;
+        }
+
+        private static EditorControlResponse HandleRunScript(
+            EditorControlRequest request, string responsePath)
+        {
+            // Issue #108: this handler is now async / frame-driven. It
+            // stages the temp .cs file, kicks off a synchronous Refresh,
+            // and registers an ``EditorApplication.update`` poller via
+            // ``PendingAsyncRunner`` instead of blocking the main thread
+            // on a busy-sleep loop.  The poller observes the same
+            // completion conditions (compile finished + assembly mtime
+            // advanced + afterAssemblyReload fired) used by the
+            // ``editor_recompile_and_wait`` surface, then invokes the
+            // entry point and writes the response.
             if (string.IsNullOrEmpty(request.code))
             {
                 return BuildError("EDITOR_CTRL_RUN_SCRIPT_COMPILE",
@@ -4208,119 +4515,137 @@ namespace PrefabSentinel
             string scriptAbs = Path.Combine(tempDirAbs, tempId + ".cs");
             string metaAbs = scriptAbs + ".meta";
 
+            int compilePollMs = request.compile_timeout > 0
+                ? request.compile_timeout
+                : RunScriptCompileTimeoutMs;
+
             try
             {
                 if (!Directory.Exists(tempDirAbs))
                     Directory.CreateDirectory(tempDirAbs);
-
                 File.WriteAllText(scriptAbs, request.code);
-                // New files must be introduced via Refresh — ImportAsset only works
-                // on paths Unity already tracks.
+            }
+            catch (Exception stagingEx)
+            {
+                return BuildError("EDITOR_CTRL_RUN_SCRIPT_COMPILE",
+                    $"run_script: failed to stage temp script '{scriptAbs}': {stagingEx.Message}",
+                    new EditorControlData { temp_id = tempId, executed = false });
+            }
+
+            long callTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            long deadlineMs = callTimeMs + compilePollMs + RunScriptEntryTypeTimeoutMs;
+            long callTimeAssemblyMtime =
+                PendingAsyncRunner.ReadAssemblyMtimeUnixMs();
+
+            var entry = new PendingAsyncRunner.PersistedEntry
+            {
+                action = "run_script",
+                responsePath = responsePath,
+                requestJson = JsonUtility.ToJson(request),
+                callTimeUnixMs = callTimeMs,
+                deadlineUnixMs = deadlineMs,
+                callTimeAssemblyMtimeUnixMs = callTimeAssemblyMtime,
+                tempId = tempId,
+                stuckKey = stuckKey,
+                tempDirAbs = tempDirAbs,
+            };
+
+            EditorApplication.CallbackFunction poll = null;
+            poll = () => RunScriptPollFrame(
+                entry, scriptAbs, metaAbs);
+            PendingAsyncRunner.Register(entry, poll);
+
+            // Trigger the synchronous Refresh after the poller is
+            // registered — Refresh may itself cause a domain reload, and
+            // we want the SessionState mirror to reflect the in-flight
+            // entry before that happens so the post-reload resumer
+            // re-installs the poller on the new AppDomain.
+            try
+            {
                 AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+            }
+            catch (Exception refreshEx)
+            {
+                PendingAsyncRunner.Complete(responsePath);
+                TryDeleteFile(scriptAbs);
+                TryDeleteFile(metaAbs);
+                return BuildError("EDITOR_CTRL_RUN_SCRIPT_COMPILE",
+                    $"run_script: AssetDatabase.Refresh failed: {refreshEx.Message}",
+                    new EditorControlData { temp_id = tempId, executed = false });
+            }
 
-                // ── Bounded compile-state poll ──
-                // A brief flip of isCompiling right after Refresh is normal.
-                // Wait up to the caller-supplied budget (or the bridge
-                // default when the request omitted it) for it to settle.
-                int compilePollMs = request.compile_timeout > 0
-                    ? request.compile_timeout
-                    : RunScriptCompileTimeoutMs;
-                var compileWatch = System.Diagnostics.Stopwatch.StartNew();
-                while (EditorApplication.isCompiling
-                       && compileWatch.ElapsedMilliseconds < compilePollMs)
-                {
-                    System.Threading.Thread.Sleep(RunScriptPollIntervalMs);
-                }
-                if (EditorApplication.isCompiling)
-                {
-                    return RunScriptCompilePendingResponse(
-                        stuckKey, tempId, tempDirAbs,
-                        "Script compilation is still in progress after the bounded poll; " +
-                        "a domain reload is pending. Retry after Unity finishes compiling." +
-                        " If the freshly compiled type still cannot be located, run the snippet " +
-                        "through `editor_execute_menu_item` against a persistent editor helper " +
-                        "script committed under `Assets/Editor/`.");
-                }
+            return null;
+        }
 
-                // ── Bounded entry-type lookup retry ──
-                // Once compilation settles, the new assembly may take a moment
-                // to load into the AppDomain. Retry FindTempScriptType at a
-                // fixed sub-second cadence within a bounded total wait.
-                Type scriptType = FindTempScriptType();
-                var typeWatch = System.Diagnostics.Stopwatch.StartNew();
-                while (scriptType == null
-                       && typeWatch.ElapsedMilliseconds < RunScriptEntryTypeTimeoutMs)
-                {
-                    System.Threading.Thread.Sleep(RunScriptPollIntervalMs);
-                    scriptType = FindTempScriptType();
-                }
-                if (scriptType == null)
-                {
-                    return RunScriptCompilePendingResponse(
-                        stuckKey, tempId, tempDirAbs,
-                        $"Type '{RunScriptTypeName}' was not found after compile. " +
-                        "Verify the snippet defines `public static class PrefabSentinelTempScript` with `public static void Run()`." +
-                        " If the freshly compiled type still cannot be located, run the snippet " +
-                        "through `editor_execute_menu_item` against a persistent editor helper " +
-                        "script committed under `Assets/Editor/`.");
-                }
+        /// <summary>
+        /// Frame poller for an in-flight ``run_script`` request.  Runs each
+        /// editor frame until the documented completion conditions are
+        /// observed, then invokes the entry point and writes the response.
+        /// Cleans up the temp .cs / .cs.meta files on every termination
+        /// path (success, runtime exception, compile timeout, recovery).
+        /// </summary>
+        private static void RunScriptPollFrame(
+            PendingAsyncRunner.PersistedEntry entry,
+            string scriptAbs,
+            string metaAbs)
+        {
+            long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            string tempId = entry.tempId;
+            string stuckKey = entry.stuckKey;
+            string tempDirAbs = entry.tempDirAbs;
+            string responsePath = entry.responsePath;
 
-                MethodInfo runMethod = scriptType.GetMethod(
-                    RunScriptEntryPoint,
-                    BindingFlags.Public | BindingFlags.Static);
-                if (runMethod == null)
-                {
-                    return BuildError("EDITOR_CTRL_RUN_SCRIPT_COMPILE",
-                        $"Entry point '{RunScriptTypeName}.{RunScriptEntryPoint}()' not found " +
-                        "(must be `public static void Run()`).",
-                        new EditorControlData { temp_id = tempId, executed = false });
-                }
+            // ── Compile-pending timeout ──
+            if (nowMs > entry.deadlineUnixMs)
+            {
+                PendingAsyncRunner.Complete(responsePath);
+                CleanupRunScriptTempFiles(scriptAbs, metaAbs);
+                EditorControlResponse pending = RunScriptCompilePendingResponse(
+                    stuckKey, tempId, tempDirAbs,
+                    "Script compilation did not complete within the bounded poll; " +
+                    "a domain reload may still be pending or the freshly compiled type " +
+                    "could not be located. Retry after Unity finishes compiling. " +
+                    "If the freshly compiled type still cannot be located, run the snippet " +
+                    "through `editor_execute_menu_item` against a persistent editor helper " +
+                    "script committed under `Assets/Editor/`.");
+                WriteResponse(responsePath, pending);
+                return;
+            }
 
-                System.IO.TextWriter originalOut = Console.Out;
-                var buffer = new System.IO.StringWriter();
-                Console.SetOut(buffer);
-                try
-                {
-                    runMethod.Invoke(null, null);
-                }
-                catch (TargetInvocationException tie)
-                {
-                    Console.SetOut(originalOut);
-                    Exception inner = tie.InnerException ?? tie;
-                    return BuildError("EDITOR_CTRL_RUN_SCRIPT_RUNTIME",
-                        $"Run() threw {inner.GetType().Name}: {inner.Message}",
-                        new EditorControlData
-                        {
-                            temp_id = tempId,
-                            executed = true,
-                            exception = inner.ToString(),
-                            stdout = buffer.ToString(),
-                        });
-                }
-                catch (Exception ex)
-                {
-                    Console.SetOut(originalOut);
-                    return BuildError("EDITOR_CTRL_RUN_SCRIPT_RUNTIME",
-                        $"Run() threw {ex.GetType().Name}: {ex.Message}",
-                        new EditorControlData
-                        {
-                            temp_id = tempId,
-                            executed = true,
-                            exception = ex.ToString(),
-                            stdout = buffer.ToString(),
-                        });
-                }
-                finally
-                {
-                    Console.SetOut(originalOut);
-                }
+            // ── Wait for compile to settle and assembly to reload ──
+            if (EditorApplication.isCompiling) return;
+            long currentMtime = PendingAsyncRunner.ReadAssemblyMtimeUnixMs();
+            if (currentMtime <= entry.callTimeAssemblyMtimeUnixMs) return;
 
-                // Successful run clears the stuck-detection counter so the
-                // next call starts fresh — independent of whether this was
-                // the recovery turn or a genuinely first-attempt success.
+            // ── Find the freshly compiled entry type ──
+            Type scriptType = FindTempScriptType();
+            if (scriptType == null) return;
+
+            MethodInfo runMethod = scriptType.GetMethod(
+                RunScriptEntryPoint,
+                BindingFlags.Public | BindingFlags.Static);
+            if (runMethod == null)
+            {
+                PendingAsyncRunner.Complete(responsePath);
+                CleanupRunScriptTempFiles(scriptAbs, metaAbs);
+                WriteResponse(responsePath, BuildError(
+                    "EDITOR_CTRL_RUN_SCRIPT_COMPILE",
+                    $"Entry point '{RunScriptTypeName}.{RunScriptEntryPoint}()' not found " +
+                    "(must be `public static void Run()`).",
+                    new EditorControlData { temp_id = tempId, executed = false }));
+                return;
+            }
+
+            // ── Invoke the snippet ──
+            System.IO.TextWriter originalOut = Console.Out;
+            var buffer = new System.IO.StringWriter();
+            Console.SetOut(buffer);
+            EditorControlResponse response;
+            try
+            {
+                runMethod.Invoke(null, null);
                 RunScriptConsecutiveCompilePending.Remove(stuckKey);
-
-                return BuildSuccess("EDITOR_CTRL_RUN_SCRIPT_OK",
+                response = BuildSuccess("EDITOR_CTRL_RUN_SCRIPT_OK",
                     $"PrefabSentinelTempScript.Run() completed (temp_id={tempId}).",
                     new EditorControlData
                     {
@@ -4329,18 +4654,50 @@ namespace PrefabSentinel
                         stdout = buffer.ToString(),
                     });
             }
+            catch (TargetInvocationException tie)
+            {
+                Exception inner = tie.InnerException ?? tie;
+                response = BuildError("EDITOR_CTRL_RUN_SCRIPT_RUNTIME",
+                    $"Run() threw {inner.GetType().Name}: {inner.Message}",
+                    new EditorControlData
+                    {
+                        temp_id = tempId,
+                        executed = true,
+                        exception = inner.ToString(),
+                        stdout = buffer.ToString(),
+                    });
+            }
+            catch (Exception ex)
+            {
+                response = BuildError("EDITOR_CTRL_RUN_SCRIPT_RUNTIME",
+                    $"Run() threw {ex.GetType().Name}: {ex.Message}",
+                    new EditorControlData
+                    {
+                        temp_id = tempId,
+                        executed = true,
+                        exception = ex.ToString(),
+                        stdout = buffer.ToString(),
+                    });
+            }
             finally
             {
-                // Always clean up — success or failure.
-                TryDeleteFile(scriptAbs);
-                TryDeleteFile(metaAbs);
-                // Best-effort Refresh so Unity forgets the deleted asset.
-                try { AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport); }
-                catch (Exception refreshEx)
-                {
-                    Debug.LogWarning(
-                        $"[PrefabSentinel] HandleRunScript: post-run AssetDatabase.Refresh failed: {refreshEx.Message}");
-                }
+                Console.SetOut(originalOut);
+            }
+
+            PendingAsyncRunner.Complete(responsePath);
+            CleanupRunScriptTempFiles(scriptAbs, metaAbs);
+            WriteResponse(responsePath, response);
+        }
+
+        private static void CleanupRunScriptTempFiles(string scriptAbs, string metaAbs)
+        {
+            TryDeleteFile(scriptAbs);
+            TryDeleteFile(metaAbs);
+            try { AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport); }
+            catch (Exception refreshEx)
+            {
+                Debug.LogWarning(
+                    $"[PrefabSentinel] HandleRunScript: post-run AssetDatabase.Refresh failed: {refreshEx.Message}");
             }
         }
 
@@ -4523,6 +4880,10 @@ namespace PrefabSentinel
                 // domain reload, which is exactly the signal we want.
                 LastDomainReloadUtc = DateTime.UtcNow;
                 EditorApplication.delayCall += Cleanup;
+                // Issues #108 / #118: resume any in-flight async runner
+                // entries that were pending across this domain reload so
+                // their pollers continue draining on the new AppDomain.
+                EditorApplication.delayCall += ResumePendingAsyncRunners;
             }
 
             private static void Cleanup()
@@ -4534,15 +4895,65 @@ namespace PrefabSentinel
                         RunScriptTempDir.Replace('/', Path.DirectorySeparatorChar));
                     if (!Directory.Exists(dir))
                         return;
+                    // Only sweep .cs / .cs.meta files that are NOT linked to
+                    // a still-pending async runner entry (whose poller is
+                    // about to be re-registered on this AppDomain).
+                    HashSet<string> pendingTempIds = new HashSet<string>();
+                    foreach (var entry in PendingAsyncRunner.ReadPersisted())
+                    {
+                        if (entry.action == "run_script"
+                            && !string.IsNullOrEmpty(entry.tempId))
+                            pendingTempIds.Add(entry.tempId);
+                    }
                     foreach (string path in Directory.GetFiles(dir, "*.cs"))
+                    {
+                        string id = Path.GetFileNameWithoutExtension(path);
+                        if (pendingTempIds.Contains(id)) continue;
                         TryDeleteFile(path);
+                    }
                     foreach (string path in Directory.GetFiles(dir, "*.cs.meta"))
+                    {
+                        string id = Path.GetFileNameWithoutExtension(
+                            Path.GetFileNameWithoutExtension(path));
+                        if (pendingTempIds.Contains(id)) continue;
                         TryDeleteFile(path);
+                    }
                 }
                 catch (Exception ex)
                 {
                     Debug.LogWarning(
                         $"[PrefabSentinel] RunScriptStartupCleanup: failed during temp-dir sweep: {ex.Message}");
+                }
+            }
+
+            private static void ResumePendingAsyncRunners()
+            {
+                foreach (var entry in PendingAsyncRunner.ReadPersisted())
+                {
+                    if (entry.action == "run_script")
+                    {
+                        string scriptAbs = Path.Combine(
+                            entry.tempDirAbs, entry.tempId + ".cs");
+                        string metaAbs = scriptAbs + ".meta";
+                        EditorApplication.CallbackFunction poll = null;
+                        poll = () => RunScriptPollFrame(entry, scriptAbs, metaAbs);
+                        PendingAsyncRunner.RehydrateEntry(entry, poll);
+                    }
+                    else if (entry.action == "editor_recompile_and_wait")
+                    {
+                        // After a reload, the AssemblyReloadCount snapshot
+                        // captured at registration time is gone; the post-
+                        // reload counter on this AppDomain starts at 0,
+                        // so any positive count satisfies the "reload has
+                        // fired since the request" condition.
+                        EditorApplication.CallbackFunction poll = BuildRecompileAndWaitPoll(
+                            entry.responsePath,
+                            entry.deadlineUnixMs,
+                            entry.callTimeAssemblyMtimeUnixMs,
+                            0,
+                            "editor_recompile_and_wait: timed out after domain reload.");
+                        PendingAsyncRunner.RehydrateEntry(entry, poll);
+                    }
                 }
             }
         }

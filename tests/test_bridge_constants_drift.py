@@ -17,6 +17,7 @@ def _fake_cs(
     bridge_version: str = "0.5.150",
     protocol_version: int = 1,
     severities: frozenset[str] | None = None,
+    console_capacity: int = 1000,
 ) -> dict[str, object]:
     return {
         "bridge_version": bridge_version,
@@ -26,7 +27,26 @@ def _fake_cs(
             "warning",
             "error",
         },
+        "console_capacity": console_capacity,
     }
+
+
+class BridgeConstantsConsoleCapacityDriftTests(unittest.TestCase):
+    """Issue #131: drift detection for the console ring-buffer capacity
+    invariant.  The C# ``ConsoleLogBuffer.DefaultCapacity`` literal must
+    equal the Python ``CONSOLE_LOG_BUFFER_MAX_ENTRIES`` mirror.
+    """
+
+    def test_capacity_mismatch_reported(self) -> None:
+        with patch.object(checker, "_load_pyproject_version", return_value="0.5.150"), \
+             patch.object(checker, "_load_plugin_version", return_value="0.5.150"), \
+             patch.object(
+                 checker,
+                 "_load_csharp_constants",
+                 return_value=_fake_cs(console_capacity=999),
+             ):
+            exit_code = checker.main()
+        self.assertEqual(1, exit_code)
 
 
 class BridgeConstantsDriftTests(unittest.TestCase):
