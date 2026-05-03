@@ -90,6 +90,81 @@ class TestApplyPropertyValueTypes(unittest.TestCase):
         self.assertIn("SerializedPropertyType.ObjectReference", body)
 
 
+class TestHandleEditorSetPropertyQuaternion(unittest.TestCase):
+    """Issue #111 — HandleEditorSetProperty must accept the Quaternion
+    type, require xyzw four-component input, enforce a unit-norm
+    tolerance, and reject non-normalized values with a dedicated code.
+    """
+
+    def test_handle_editor_set_property_handles_quaternion(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleEditorSetProperty")
+        self.assertIn("SerializedPropertyType.Quaternion", body)
+
+    def test_handle_editor_set_property_quaternion_requires_four_components(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleEditorSetProperty")
+        # The wrong-component-count branch must reuse the existing
+        # type-mismatch envelope and name the four-component requirement.
+        self.assertIn("EDITOR_CTRL_SET_PROP_TYPE_MISMATCH", body)
+        self.assertRegex(body, r"Quaternion[^\n]*4")
+
+    def test_handle_editor_set_property_quaternion_unit_norm_code(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleEditorSetProperty")
+        # Non-unit norm rejection must use a dedicated severity-error code
+        # (issue #111). The code lives next to the other SET_PROP codes.
+        self.assertIn("EDITOR_CTRL_SET_PROP_QUATERNION_NOT_NORMALIZED", body)
+
+    def test_handle_editor_set_property_quaternion_tolerance_constant(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleEditorSetProperty")
+        # Tolerance literal used in the norm check (1e-4). The choice is
+        # documented in the issue spec; a regression must keep that value.
+        self.assertIn("1e-4", body)
+
+
+class TestHandleCaptureConsoleLogsContract(unittest.TestCase):
+    """Issue #113 — capture handler must accept ordering + opaque cursor,
+    reject unknown ordering / malformed cursor with dedicated codes,
+    and emit a continuation token whenever more matches remain.
+    """
+
+    def test_request_struct_carries_order_field(self) -> None:
+        source = _read(BRIDGE)
+        # Request struct holds the ordering keyword forwarded by the wrapper.
+        self.assertIn("public string order", source)
+
+    def test_request_struct_carries_cursor_field(self) -> None:
+        source = _read(BRIDGE)
+        # Request struct holds the opaque continuation token.
+        self.assertIn("public string cursor", source)
+
+    def test_response_data_carries_next_cursor_field(self) -> None:
+        source = _read(BRIDGE)
+        # Response payload field for the opaque continuation token.
+        self.assertIn("public string next_cursor", source)
+
+    def test_console_log_entry_carries_sequence_id(self) -> None:
+        source = _read(BRIDGE)
+        # Per-entry monotonic sequence identifier so the cursor token can
+        # name an ingestion position unambiguously.
+        self.assertRegex(source, r"public\s+long\s+sequence_id")
+
+    def test_handler_rejects_unknown_ordering(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleCaptureConsoleLogs")
+        self.assertIn("EDITOR_CTRL_INVALID_ORDER", body)
+        # Message lists both accepted keywords.
+        self.assertIn("newest_first", body)
+        self.assertIn("oldest_first", body)
+
+    def test_handler_rejects_malformed_cursor(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleCaptureConsoleLogs")
+        self.assertIn("EDITOR_CTRL_INVALID_CURSOR", body)
+
+
 class TestBatchCreateParentWarning(unittest.TestCase):
     """I2: HandleEditorBatchCreate must emit a warning when parent not found."""
 

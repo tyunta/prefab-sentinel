@@ -2130,6 +2130,38 @@ class TestEditorReadOnlyTools(unittest.TestCase):
             _run(server.call_tool("editor_frame", {}))
         mock_send.assert_called_once_with(action="frame_selected", zoom=0.0)
 
+    def test_editor_frame_preserves_bounds_payload(self) -> None:
+        """Issue #115 — Python continuous-integration coverage for the
+        framing-bounds regression. The wrapper must surface the bridge's
+        ``bounds_center`` and ``bounds_extents`` fields unchanged so the
+        ``SynchronizeBoundsSourcesForFrame`` regression is observable
+        from the MCP layer.
+        """
+        server = create_server()
+        bridge_response = {
+            "success": True,
+            "severity": "info",
+            "code": "EDITOR_CTRL_FRAME_OK",
+            "message": "Framed selection",
+            "data": {
+                "selected_object": "Avatar",
+                "bounds_center": [0.0, 1.5, 0.0],
+                "bounds_extents": [0.5, 1.0, 0.5],
+                "executed": True,
+                "read_only": False,
+            },
+            "diagnostics": [],
+        }
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_view.send_action",
+            return_value=bridge_response,
+        ):
+            _, result = _run(server.call_tool("editor_frame", {"zoom": 1.0}))
+        # Wrapper must preserve the bounds payload byte-for-byte.
+        self.assertEqual(bridge_response, result)
+        self.assertEqual([0.0, 1.5, 0.0], result["data"]["bounds_center"])
+        self.assertEqual([0.5, 1.0, 0.5], result["data"]["bounds_extents"])
+
     def test_editor_get_camera_delegates(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
@@ -2207,16 +2239,47 @@ class TestEditorReadOnlyTools(unittest.TestCase):
             action="capture_console_logs",
             max_entries=50, log_type_filter="error", since_seconds=10.0,
             classification_filter="all",
+            order="newest_first",
+            cursor="",
         )
 
     def test_editor_console_defaults(self) -> None:
+        """Issue #113: defaults are newest-first + 60-second window + empty cursor."""
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_console", {}))
         mock_send.assert_called_once_with(
             action="capture_console_logs",
-            max_entries=200, log_type_filter="all", since_seconds=0.0,
+            max_entries=200, log_type_filter="all", since_seconds=60.0,
             classification_filter="all",
+            order="newest_first",
+            cursor="",
+        )
+
+    def test_editor_console_cursor_passthrough(self) -> None:
+        """Issue #113: explicit cursor token forwards verbatim."""
+        server = create_server()
+        with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
+            _run(server.call_tool("editor_console", {"cursor": "opaque-token-42"}))
+        mock_send.assert_called_once_with(
+            action="capture_console_logs",
+            max_entries=200, log_type_filter="all", since_seconds=60.0,
+            classification_filter="all",
+            order="newest_first",
+            cursor="opaque-token-42",
+        )
+
+    def test_editor_console_order_passthrough(self) -> None:
+        """Issue #113: explicit ordering keyword forwards verbatim."""
+        server = create_server()
+        with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
+            _run(server.call_tool("editor_console", {"order": "oldest_first"}))
+        mock_send.assert_called_once_with(
+            action="capture_console_logs",
+            max_entries=200, log_type_filter="all", since_seconds=60.0,
+            classification_filter="all",
+            order="oldest_first",
+            cursor="",
         )
 
 
@@ -2387,6 +2450,73 @@ class TestEditorWriteTools(unittest.TestCase):
         with patch("prefab_sentinel.mcp_tools_editor_write.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_delete", {"hierarchy_path": "/OldObject"}))
         mock_send.assert_called_once_with(action="delete_object", hierarchy_path="/OldObject")
+
+    def test_editor_add_component_preserves_reused_envelope(self) -> None:
+        """Issue #103 — Python continuous-integration coverage for the
+        UdonSharp duplicate-guard reuse path. The wrapper must surface
+        the bridge's ``EDITOR_CTRL_ADD_COMPONENT_REUSED`` envelope and
+        accompanying data unchanged so the
+        ``HandleUdonSharpAddComponentIdempotent`` reuse branch is
+        observable from the MCP layer.
+        """
+        server = create_server()
+        bridge_response = {
+            "success": True,
+            "severity": "info",
+            "code": "EDITOR_CTRL_ADD_COMPONENT_REUSED",
+            "message": "Existing UdonSharp pair reused for AvatarSync",
+            "data": {
+                "selected_object": "Player",
+                "asset_path": "VRC.Avatar.AvatarSync",
+                "executed": False,
+                "read_only": False,
+            },
+            "diagnostics": [],
+        }
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_write.send_action",
+            return_value=bridge_response,
+        ):
+            _, result = _run(server.call_tool("editor_add_component", {
+                "hierarchy_path": "/Player",
+                "component_type": "AvatarSync",
+            }))
+        self.assertEqual(bridge_response, result)
+        self.assertEqual("EDITOR_CTRL_ADD_COMPONENT_REUSED", result["code"])
+        self.assertFalse(result["data"]["executed"])
+
+    def test_editor_add_component_preserves_relinked_envelope(self) -> None:
+        """Issue #103 — Python continuous-integration coverage for the
+        UdonSharp duplicate-guard relink path. The wrapper must surface
+        the bridge's ``EDITOR_CTRL_ADD_COMPONENT_RELINKED`` envelope and
+        accompanying data unchanged so the stranded-proxy relink branch
+        is observable from the MCP layer.
+        """
+        server = create_server()
+        bridge_response = {
+            "success": True,
+            "severity": "info",
+            "code": "EDITOR_CTRL_ADD_COMPONENT_RELINKED",
+            "message": "Existing proxy re-linked to new UdonBehaviour for AvatarSync",
+            "data": {
+                "selected_object": "Player",
+                "asset_path": "VRC.Avatar.AvatarSync",
+                "executed": True,
+                "read_only": False,
+            },
+            "diagnostics": [],
+        }
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_write.send_action",
+            return_value=bridge_response,
+        ):
+            _, result = _run(server.call_tool("editor_add_component", {
+                "hierarchy_path": "/Player",
+                "component_type": "AvatarSync",
+            }))
+        self.assertEqual(bridge_response, result)
+        self.assertEqual("EDITOR_CTRL_ADD_COMPONENT_RELINKED", result["code"])
+        self.assertTrue(result["data"]["executed"])
 
     def test_editor_remove_component_delegates(self) -> None:
         server = create_server()

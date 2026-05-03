@@ -21,6 +21,9 @@ from prefab_sentinel.services.prefab_variant import PrefabVariantService
 from prefab_sentinel.services.reference_resolver import ReferenceResolverService
 from prefab_sentinel.services.runtime_validation import RuntimeValidationService
 from prefab_sentinel.services.serialized_object import SerializedObjectService
+from prefab_sentinel.services.serialized_object.before_cache import (
+    UnresolvedReason,
+)
 from prefab_sentinel.services.serialized_object.patch_validator import validate_op
 from tests.bridge_test_helpers import write_fake_runtime_runner, write_file
 
@@ -2936,8 +2939,7 @@ class TestBeforeValueResolution(unittest.TestCase):
             )
             self.assertIsNotNone(result)
             # The before value should be the objectReference from the override
-            self.assertNotEqual("(unknown)", result["before"])
-            self.assertNotEqual("(unresolved)", result["before"])
+            self.assertNotIsInstance(result["before"], UnresolvedReason)
             # Should contain the GUID reference
             self.assertIn("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", result["before"])
 
@@ -2956,7 +2958,7 @@ class TestBeforeValueResolution(unittest.TestCase):
                 diagnostics,
             )
             self.assertIsNotNone(result)
-            self.assertEqual("(unresolved: not found in chain)", result["before"])
+            self.assertIs(UnresolvedReason.PATH_NOT_FOUND, result["before"])
 
     def test_before_unresolved_without_prefab_variant(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2972,7 +2974,7 @@ class TestBeforeValueResolution(unittest.TestCase):
                 diagnostics,
             )
             self.assertIsNotNone(result)
-            self.assertEqual("(unresolved)", result["before"])
+            self.assertIs(UnresolvedReason.NO_VARIANT_RESOLVER, result["before"])
 
     def test_before_unresolved_for_non_variant(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2994,7 +2996,7 @@ class TestBeforeValueResolution(unittest.TestCase):
                 diagnostics,
             )
             self.assertIsNotNone(result)
-            self.assertEqual("(unresolved: not a variant)", result["before"])
+            self.assertIs(UnresolvedReason.NOT_A_VARIANT, result["before"])
 
     def test_cache_cleared_at_dry_run_start(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3161,7 +3163,7 @@ class TestChainBeforeValueResolution(unittest.TestCase):
             )
             self.assertIsNotNone(result)
             # Parent is missing, m_IsActive not overridden in leaf
-            self.assertIn("unresolved", result["before"])
+            self.assertIsInstance(result["before"], UnresolvedReason)
 
     def test_resolve_chain_values_returns_all_effective(self) -> None:
         """resolve_chain_values returns the merged effective map."""
@@ -3286,9 +3288,7 @@ class TestChainBeforeValueResolution(unittest.TestCase):
             )
 
         self.assertIsNotNone(result)
-        self.assertEqual(
-            "(unresolved: ambiguous component type)", result["before"]
-        )
+        self.assertIs(UnresolvedReason.AMBIGUOUS_TYPE, result["before"])
 
     def test_chain_type_name_not_in_chain(self) -> None:
         """Type name absent from the chain → not-found sentinel."""
@@ -3307,9 +3307,7 @@ class TestChainBeforeValueResolution(unittest.TestCase):
             )
 
         self.assertIsNotNone(result)
-        self.assertEqual(
-            "(unresolved: type not found in chain)", result["before"]
-        )
+        self.assertIs(UnresolvedReason.TYPE_NOT_FOUND, result["before"])
 
 
 class TestResolveChainValuesWithOrigin(unittest.TestCase):

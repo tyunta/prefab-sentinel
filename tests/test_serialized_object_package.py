@@ -12,6 +12,11 @@ Also covers the SER003 envelope contract added by issue #109 — when
 ``set_component_fields`` references a component or property that cannot be
 resolved on the chain, the response is a ``SER003`` error envelope with
 did-you-mean suggestions and a typed diagnostic.
+
+Issue #124: the unresolved-before-value resolver returns members of the
+typed ``UnresolvedReason`` StrEnum, and the preview-warning extractor
+recognizes those members by isinstance check rather than by string
+prefix.
 """
 
 from __future__ import annotations
@@ -22,9 +27,19 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import prefab_sentinel.services.serialized_object as serialized_object_pkg
+from prefab_sentinel.contracts import Diagnostic
+from prefab_sentinel.services.prefab_variant import PrefabVariantService
 from prefab_sentinel.services.serialized_object import SerializedObjectService
+from prefab_sentinel.services.serialized_object.before_cache import (
+    UnresolvedReason,
+    resolve_before_value,
+)
+from prefab_sentinel.services.serialized_object.patch_preview import (
+    soft_warnings_for_preview,
+)
 from prefab_sentinel.services.serialized_object.service import (
     SerializedObjectService as _ServiceSerializedObjectService,
 )
@@ -235,6 +250,214 @@ class SetComponentFieldsSER003Tests(unittest.TestCase):
         for diagnostic in result["diagnostics"]:
             self.assertNotEqual("property_not_found", diagnostic["detail"])
             self.assertNotEqual("component_not_found", diagnostic["detail"])
+
+
+_VARIANT_YAML = (
+    "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n"
+    "--- !u!1001 &100100000\n"
+    "PrefabInstance:\n"
+    "  m_SourcePrefab: {fileID: 100100000, "
+    "guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n"
+    "  m_Modifications:\n"
+    "  - target: {fileID: 42, "
+    "guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}\n"
+    "    propertyPath: m_Materials.Array.data[0]\n"
+    "    value: \n"
+    "    objectReference: {fileID: 2100000, "
+    "guid: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, type: 2}\n"
+)
+
+
+def _make_variant_project(tmp: str) -> Path:
+    """Variant prefab fixture for the unresolved-reason resolver tests."""
+    project_root = Path(tmp)
+    assets = project_root / "Assets"
+    assets.mkdir(parents=True)
+    (assets / "Variant.prefab").write_text(_VARIANT_YAML)
+    (assets / "Variant.prefab.meta").write_text(
+        "guid: cccccccccccccccccccccccccccccccc\n"
+    )
+    return project_root
+
+
+class UnresolvedReasonResolverTests(unittest.TestCase):
+    """Issue #124 — resolver returns ``UnresolvedReason`` enum members.
+
+    Each unresolved branch of ``resolve_before_value`` returns a typed
+    member rather than a free-form string, so the preview-warning
+    extractor can distinguish the unresolved vocabulary from a resolved
+    string by isinstance check.
+    """
+
+    def test_no_variant_resolver_when_prefab_variant_unbound(self) -> None:
+        """No PrefabVariantService bound → ``NO_VARIANT_RESOLVER`` member."""
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = _make_variant_project(tmp)
+            svc = SerializedObjectService(project_root=project_root)
+            result = resolve_before_value(
+                svc, "Assets/Variant.prefab", "42",
+                "m_Materials.Array.data[0]",
+            )
+        self.assertIs(result, UnresolvedReason.NO_VARIANT_RESOLVER)
+
+    def test_file_unreadable_when_target_path_missing(self) -> None:
+        """Target file deleted between resolution attempts → ``FILE_UNREADABLE``."""
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = _make_variant_project(tmp)
+            pv = PrefabVariantService(project_root=project_root)
+            svc = SerializedObjectService(
+                project_root=project_root, prefab_variant=pv,
+            )
+            (project_root / "Assets" / "Variant.prefab").unlink()
+            result = resolve_before_value(
+                svc, "Assets/Variant.prefab", "42",
+                "m_Materials.Array.data[0]",
+            )
+        self.assertIs(result, UnresolvedReason.FILE_UNREADABLE)
+
+    def test_not_a_variant_when_target_is_base_prefab(self) -> None:
+        """Target whose contents are a base prefab → ``NOT_A_VARIANT``."""
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            assets = project_root / "Assets"
+            assets.mkdir()
+            base = assets / "Base.prefab"
+            base.write_text(
+                "%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Root\n"
+            )
+            pv = PrefabVariantService(project_root=project_root)
+            svc = SerializedObjectService(
+                project_root=project_root, prefab_variant=pv,
+            )
+            result = resolve_before_value(
+                svc, "Assets/Base.prefab", "1", "m_Name",
+            )
+        self.assertIs(result, UnresolvedReason.NOT_A_VARIANT)
+
+    def test_empty_chain_when_chain_resolves_to_empty(self) -> None:
+        """Chain resolves but the value map is empty → ``EMPTY_CHAIN``."""
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = _make_variant_project(tmp)
+            pv = PrefabVariantService(project_root=project_root)
+            svc = SerializedObjectService(
+                project_root=project_root, prefab_variant=pv,
+            )
+            with patch.object(
+                pv, "resolve_chain_values", return_value={},
+            ), patch.object(
+                pv, "resolve_chain_class_map", return_value={},
+            ):
+                result = resolve_before_value(
+                    svc, "Assets/Variant.prefab", "42",
+                    "m_Materials.Array.data[0]",
+                )
+        self.assertIs(result, UnresolvedReason.EMPTY_CHAIN)
+
+    def test_type_not_found_when_component_name_absent(self) -> None:
+        """Component name absent from the chain class map → ``TYPE_NOT_FOUND``."""
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = _make_variant_project(tmp)
+            pv = PrefabVariantService(project_root=project_root)
+            svc = SerializedObjectService(
+                project_root=project_root, prefab_variant=pv,
+            )
+            with patch.object(
+                pv, "resolve_chain_values",
+                return_value={"42:m_IsActive": "1"},
+            ), patch.object(
+                pv, "resolve_chain_class_map",
+                return_value={"42": "MeshRenderer"},
+            ):
+                result = resolve_before_value(
+                    svc, "Assets/Variant.prefab", "Camera", "m_IsActive",
+                )
+        self.assertIs(result, UnresolvedReason.TYPE_NOT_FOUND)
+
+    def test_ambiguous_type_when_component_name_repeats(self) -> None:
+        """Component name occurs more than once in the chain → ``AMBIGUOUS_TYPE``."""
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = _make_variant_project(tmp)
+            pv = PrefabVariantService(project_root=project_root)
+            svc = SerializedObjectService(
+                project_root=project_root, prefab_variant=pv,
+            )
+            with patch.object(
+                pv, "resolve_chain_values",
+                return_value={"42:m_IsActive": "1", "43:m_IsActive": "0"},
+            ), patch.object(
+                pv, "resolve_chain_class_map",
+                return_value={"42": "MeshRenderer", "43": "MeshRenderer"},
+            ):
+                result = resolve_before_value(
+                    svc, "Assets/Variant.prefab", "MeshRenderer", "m_IsActive",
+                )
+        self.assertIs(result, UnresolvedReason.AMBIGUOUS_TYPE)
+
+    def test_path_not_found_when_property_path_absent(self) -> None:
+        """Property path absent from the resolved chain values → ``PATH_NOT_FOUND``."""
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = _make_variant_project(tmp)
+            pv = PrefabVariantService(project_root=project_root)
+            svc = SerializedObjectService(
+                project_root=project_root, prefab_variant=pv,
+            )
+            result = resolve_before_value(
+                svc, "Assets/Variant.prefab", "42", "m_NoSuchProperty",
+            )
+        self.assertIs(result, UnresolvedReason.PATH_NOT_FOUND)
+
+    def test_resolved_value_is_returned_as_plain_string(self) -> None:
+        """Resolved branch returns a plain ``str``, not an enum member."""
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = _make_variant_project(tmp)
+            pv = PrefabVariantService(project_root=project_root)
+            svc = SerializedObjectService(
+                project_root=project_root, prefab_variant=pv,
+            )
+            result = resolve_before_value(
+                svc, "Assets/Variant.prefab", "42",
+                "m_Materials.Array.data[0]",
+            )
+        self.assertIsInstance(result, str)
+        self.assertNotIsInstance(result, UnresolvedReason)
+        self.assertIn("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", result)
+
+
+class PreviewWarningTypedDetectionTests(unittest.TestCase):
+    """Issue #124 — ``soft_warnings_for_preview`` recognizes the typed
+    vocabulary by isinstance and ignores arbitrary strings."""
+
+    def test_recognizes_typed_unresolved_reason(self) -> None:
+        """A preview row whose ``before`` is an enum member emits a diagnostic
+        whose evidence names the specific reason."""
+        preview = [
+            {
+                "op": "set",
+                "component": "MeshRenderer",
+                "path": "m_IsActive",
+                "before": UnresolvedReason.TYPE_NOT_FOUND,
+                "after": "0",
+            },
+        ]
+        warnings = soft_warnings_for_preview("Assets/X.prefab", preview)
+        self.assertEqual(1, len(warnings))
+        self.assertIsInstance(warnings[0], Diagnostic)
+        self.assertEqual("unresolved_before_value", warnings[0].detail)
+        self.assertIn(UnresolvedReason.TYPE_NOT_FOUND.value, warnings[0].evidence)
+
+    def test_ignores_arbitrary_string_before_value(self) -> None:
+        """Arbitrary strings (resolved values) do not emit warnings."""
+        preview = [
+            {
+                "op": "set",
+                "component": "MeshRenderer",
+                "path": "m_IsActive",
+                "before": "1",
+                "after": "0",
+            },
+        ]
+        warnings = soft_warnings_for_preview("Assets/X.prefab", preview)
+        self.assertEqual(0, len(warnings))
 
 
 if __name__ == "__main__":
