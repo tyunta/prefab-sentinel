@@ -346,6 +346,80 @@ class EditorRecompileAndWaitTests(unittest.TestCase):
         self.assertEqual({"timeout_sec": 42.0}, kwargs["request_extras"])
 
 
+class EditorRecompileAndWaitTimeoutRangeTests(unittest.TestCase):
+    """Issue #134 — the recompile-and-wait public surface refuses any
+    ``timeout_sec`` outside the inclusive published acceptance range,
+    returns the ``COMPILE_TIMEOUT_OUT_OF_RANGE`` envelope, and never
+    contacts the bridge in that case.  In-range values forward to the
+    bridge unchanged; both boundaries (smallest positive, upper bound)
+    are accepted.
+    """
+
+    _BRIDGE_OK = {
+        "success": True,
+        "severity": "info",
+        "code": "EDITOR_CTRL_RECOMPILE_AND_WAIT_OK",
+        "message": "ok",
+        "data": {"executed": True},
+        "diagnostics": [],
+    }
+
+    def setUp(self) -> None:
+        _drop_bridge_env()
+
+    def test_zero_rejected(self) -> None:
+        with patch.object(mcp_tools_editor_view, "send_action") as send:
+            resp = mcp_tools_editor_view.editor_recompile_and_wait(timeout_sec=0.0)
+        self.assertFalse(resp["success"])
+        self.assertEqual("error", resp["severity"])
+        self.assertEqual("COMPILE_TIMEOUT_OUT_OF_RANGE", resp["code"])
+        send.assert_not_called()
+
+    def test_negative_rejected(self) -> None:
+        with patch.object(mcp_tools_editor_view, "send_action") as send:
+            resp = mcp_tools_editor_view.editor_recompile_and_wait(timeout_sec=-1.0)
+        self.assertEqual("COMPILE_TIMEOUT_OUT_OF_RANGE", resp["code"])
+        send.assert_not_called()
+
+    def test_above_maximum_rejected(self) -> None:
+        far_out = 1801.0
+        with patch.object(mcp_tools_editor_view, "send_action") as send:
+            resp = mcp_tools_editor_view.editor_recompile_and_wait(timeout_sec=far_out)
+        self.assertFalse(resp["success"])
+        self.assertEqual("error", resp["severity"])
+        self.assertEqual("COMPILE_TIMEOUT_OUT_OF_RANGE", resp["code"])
+        # Message must name the supplied value and the upper bound.
+        self.assertIn("1801", resp["message"])
+        self.assertIn("1800", resp["message"])
+        send.assert_not_called()
+
+    def test_far_above_maximum_rejected(self) -> None:
+        with patch.object(mcp_tools_editor_view, "send_action") as send:
+            resp = mcp_tools_editor_view.editor_recompile_and_wait(timeout_sec=99999.0)
+        self.assertEqual("COMPILE_TIMEOUT_OUT_OF_RANGE", resp["code"])
+        send.assert_not_called()
+
+    def test_accepts_smallest_positive_in_range(self) -> None:
+        """The lower bound is exclusive at zero; any positive float forwards."""
+        with patch.object(mcp_tools_editor_view, "send_action") as send:
+            send.return_value = self._BRIDGE_OK
+            mcp_tools_editor_view.editor_recompile_and_wait(timeout_sec=1.0)
+        send.assert_called_once()
+        self.assertEqual({"timeout_sec": 1.0}, send.call_args.kwargs["request_extras"])
+
+    def test_accepts_upper_boundary(self) -> None:
+        with patch.object(mcp_tools_editor_view, "send_action") as send:
+            send.return_value = self._BRIDGE_OK
+            mcp_tools_editor_view.editor_recompile_and_wait(
+                timeout_sec=mcp_tools_editor_view.RECOMPILE_AND_WAIT_TIMEOUT_MAX_SEC,
+            )
+        send.assert_called_once()
+        self.assertEqual(
+            {"timeout_sec": mcp_tools_editor_view.RECOMPILE_AND_WAIT_TIMEOUT_MAX_SEC},
+            send.call_args.kwargs["request_extras"],
+        )
+
+
 class EditorConsoleMaxEntriesValidationTests(unittest.TestCase):
     """Issue #131 — the editor_console MCP tool rejects ``max_entries``
     outside the inclusive ``[1, CONSOLE_MAX_ENTRIES_MAX]`` range with

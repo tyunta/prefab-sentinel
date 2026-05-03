@@ -155,9 +155,21 @@ UI prefab 構築では menu を3段階に分割すると変更影響範囲が局
 2. **Build** — visual 階層 (Image / TMP / Slider / Toggle / Button) を組んで
    `Foo.prefab` に保存。**U# component 追加はしない。**
 3. **Wire** — `NadeVision.prefab` を `LoadPrefabContents` で開いて、
-   `Foo.prefab` を `InstantiatePrefab` で nest、Button.onClick / Slider.onValueChanged 等の
-   persistent listener を `UnityEventTools.AddStringPersistentListener` で配線、
-   既存 U# component の field を `SerializedObject` + `CopyProxyToUdon` で埋める。
+   `Foo.prefab` を `InstantiatePrefab` で nest し、以下の 3 ツールで配線する
+   （issue #119 で MCP に追加済み。生 C# を `editor_run_script` に書く必要はない）:
+
+   - `editor_add_udonsharp_component` — U# behaviour を upsert で配置（追加 or 既存再利用）。
+     `UdonSharpUndo.AddComponent`（内部で `Undo.AddComponent` + `RunBehaviourSetupWithUndo`）
+     → 初期 `fields_json` 適用 → `CopyProxyToUdon` を 1 トランザクションで実行。
+     `was_existing` / `applied_fields` / `udon_program_asset_path` が応答に乗るので
+     再実行による進捗管理が容易。
+   - `editor_set_udonsharp_field` — 既存 U# component の単一フィールドを `SerializedObject` 経由で
+     書き込み、同じトランザクションで `CopyProxyToUdon` を回す。`VRCUrl` フィールドは
+     内側の `url` 文字列を直接書き込む（呼び側で wrapper を構築する必要はない）。
+   - `editor_wire_persistent_listener` — `Button.onClick` / `Slider.onValueChanged` 等から
+     `UdonBehaviour.SendCustomEvent("On…")` への persistent listener を string モードで追加。
+     `UnityEventTools.AddStringPersistentListener` を裏で叩く。target / method / mode / arg が
+     一致する既存 listener があるとノーオプ（idempotent）。
 
 各段階は独立 menu にする。途中で挙動疑問があったら該当段階だけ再実行できる。
 

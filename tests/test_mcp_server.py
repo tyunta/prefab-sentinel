@@ -181,13 +181,17 @@ class TestToolRegistration(unittest.TestCase):
             "editor_set_component_fields",
             # Editor exec tool (#74)
             "editor_run_script",
+            # Issue #119: high-level UdonSharp authoring tools.
+            "editor_add_udonsharp_component",
+            "editor_set_udonsharp_field",
+            "editor_wire_persistent_listener",
         }
         self.assertEqual(expected, tool_names)
 
     def test_tool_count(self) -> None:
         server = create_server()
         tools = _run(server.list_tools())
-        self.assertEqual(72, len(tools))
+        self.assertEqual(75, len(tools))
 
 
 class TestSymbolTools(unittest.TestCase):

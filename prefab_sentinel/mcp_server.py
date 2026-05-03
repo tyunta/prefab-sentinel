@@ -29,6 +29,9 @@ from prefab_sentinel.mcp_tools_editor_advanced import register_editor_advanced_t
 from prefab_sentinel.mcp_tools_editor_batch import register_editor_batch_tools
 from prefab_sentinel.mcp_tools_editor_exec import register_editor_exec_tools
 from prefab_sentinel.mcp_tools_editor_ops import register_editor_ops_tools
+from prefab_sentinel.mcp_tools_editor_udonsharp import (
+    register_editor_udonsharp_tools,
+)
 from prefab_sentinel.mcp_tools_editor_view import register_editor_view_tools
 from prefab_sentinel.mcp_tools_editor_write import register_editor_write_tools
 from prefab_sentinel.mcp_tools_patch import register_patch_tools
@@ -130,6 +133,7 @@ def create_server(
     register_editor_ops_tools(server)
     register_editor_advanced_tools(server)
     register_editor_exec_tools(server)
+    register_editor_udonsharp_tools(server)
 
     return server
 

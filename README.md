@@ -111,7 +111,10 @@ prefab-sentinel-mcp --transport streamable-http
 | `editor_console` | Unity Console のログエントリを構造化データとして取得（`classification_filter` で non-fatal/fatal 分類フィルタ可。詳細は §7.7） |
 | `editor_refresh` | AssetDatabase.Refresh() のトリガー |
 | `editor_recompile` | C# スクリプト再コンパイルのトリガー（fire-and-return） |
-| `editor_recompile_and_wait` | C# スクリプト再コンパイルを発行し、コンパイル完了 + `Library/ScriptAssemblies/Assembly-CSharp.dll` の mtime 更新 + `afterAssemblyReload` を確認するまで同期で待機（issue #118、既定 60 秒、`timeout_sec` で上書き可） |
+| `editor_recompile_and_wait` | C# スクリプト再コンパイルを発行し、コンパイル完了 + `Library/ScriptAssemblies/Assembly-CSharp.dll` の mtime 更新 + `afterAssemblyReload` を確認するまで同期で待機（issue #118、既定 60 秒、`timeout_sec` で上書き可。issue #134 で受理範囲は `(0, 1800]` 秒に制限。範囲外は `COMPILE_TIMEOUT_OUT_OF_RANGE` を返してブリッジに送らない） |
+| `editor_add_udonsharp_component` | `UdonSharpBehaviour` 派生コンポーネントを upsert（追加 or 既存再利用）し、`UdonSharpEditor.UdonSharpUndo.AddComponent`（内部で `Undo.AddComponent` + `RunBehaviourSetupWithUndo` を実行）→ 初期フィールド適用 → `CopyProxyToUdon` を 1 トランザクションで実行（issue #119、既存時は `was_existing=true`、応答 `data` には `applied_fields` / `component_handle` / `udon_program_asset_path` が乗る。コンポーネント追加失敗は `EDITOR_CTRL_UDON_ADD_COMPONENT_FAILED`、フィールド適用失敗は `EDITOR_CTRL_UDON_ADD_FIELD_FAILED`） |
+| `editor_set_udonsharp_field` | 一意の `UdonSharpBehaviour` の指定フィールドを `SerializedObject.FindProperty` で解決して書き込み、`CopyProxyToUdon` で backing と同期（`public` / `[SerializeField] private` の双方対応、`VRCUrl` は内側 `url` 文字列を直接書き込む。`value` と `object_reference` は相互排他、両方未指定は `EDITOR_CTRL_UDON_SET_FIELD_NO_VALUE`） |
+| `editor_wire_persistent_listener` | `UnityEventTools.AddStringPersistentListener` の高水準ラッパー（issue #119）。源コンポーネントの `event_path` フィールド → 対象 GameObject の `void method(string)` メソッドへ string モードでパーシステントリスナを追加、対象/メソッド/モード/引数が一致する既存リスナがある場合はノーオプ |
 | `editor_run_tests` | Editor Bridge 経由で Unity 統合テストを実行 |
 | `vrcsdk_upload` | VRC SDK 経由でアバター/ワールドをビルド＋アップロード（dry-run/confirm ゲート付き、既存アセット更新のみ） |
 | `editor_instantiate` | Prefab を現在の Scene にインスタンス化 |
