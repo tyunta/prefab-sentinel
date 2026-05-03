@@ -77,6 +77,32 @@ def decode_text_file(path: Path) -> str:
     return path.read_bytes().decode("utf-8")
 
 
+def is_variant_prefab(text: str) -> bool:
+    """Return ``True`` when *text* describes a Prefab Variant.
+
+    A Prefab Variant carries an ``m_SourcePrefab`` reference and contains
+    no GameObject blocks of its own; a regular base Prefab that nests a
+    PrefabInstance also carries ``m_SourcePrefab`` blocks but additionally
+    owns its own GameObject(s), so a source-prefab reference alone is
+    insufficient to decide variant-ness.
+
+    Pure function, no IO. Invalid input returns ``False``.
+    """
+    if not isinstance(text, str) or not text:
+        return False
+    if SOURCE_PREFAB_PATTERN.search(text) is None:
+        return False
+    # Local import: ``unity_yaml_parser`` depends on this module for shared
+    # constants, so we import lazily to avoid an import cycle at module load.
+    from prefab_sentinel.unity_yaml_parser import (  # noqa: PLC0415
+        parse_game_objects,
+        split_yaml_blocks,
+    )
+
+    blocks = split_yaml_blocks(text)
+    return not parse_game_objects(blocks)
+
+
 def looks_like_guid(value: str) -> bool:
     return bool(re.fullmatch(r"[0-9a-fA-F]{32}", value))
 

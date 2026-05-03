@@ -16,9 +16,55 @@ from prefab_sentinel.mcp_helpers import (
 )
 from prefab_sentinel.mcp_validation import require_change_reason
 from prefab_sentinel.patch_plan import PLAN_VERSION
+from prefab_sentinel.services.prefab_variant.overrides import (
+    iter_base_property_values,
+)
+from prefab_sentinel.services.serialized_object.property_diagnostics import (
+    resolve_component_not_found,
+    resolve_property_not_found,
+)
 from prefab_sentinel.session import ProjectSession
 
 __all__ = ["register_set_property_tools"]
+
+
+# Suffix produced by ``iter_base_property_values`` for the first array
+# element of any container field. Splitting on this lets us recover the
+# container name (``m_Materials``) from element paths
+# (``m_Materials.Array.data[0]``); the container itself is a valid
+# ``set_component_fields`` target.
+_ARRAY_ELEMENT_SUFFIX = ".Array.data["
+
+
+def _collect_known_property_paths(text: str, file_id: str) -> list[str]:
+    """Return property paths set on the component identified by *file_id*.
+
+    Reads the prefab text directly via ``iter_base_property_values`` so the
+    check works for both base prefabs and Variant prefabs without requiring
+    a chain walk. Both element paths (``m_Materials.Array.data[0]``) and the
+    matching container name (``m_Materials``) are emitted so callers can
+    target either form. Order of first appearance is preserved.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for fid, prop_path, _value in iter_base_property_values(text):
+        if fid != file_id:
+            continue
+        if prop_path not in seen:
+            seen.add(prop_path)
+            out.append(prop_path)
+        # Surface the container name so ``set_component_fields`` calls
+        # that target the whole array (e.g. ``{"m_Materials": [...]}``)
+        # are not rejected with a false ``SER003`` (issue #109 follow-up).
+        suffix_index = prop_path.find(_ARRAY_ELEMENT_SUFFIX)
+        if suffix_index <= 0:
+            continue
+        container = prop_path[:suffix_index]
+        if container in seen:
+            continue
+        seen.add(container)
+        out.append(container)
+    return out
 
 
 def register_set_property_tools(server: FastMCP, session: ProjectSession) -> None:
@@ -191,8 +237,31 @@ def register_set_property_tools(server: FastMCP, session: ProjectSession) -> Non
 
         node, component_name, err = find_component_on_go(go_node, component, asset_path)
         if err is not None:
+            if err.get("code") == "COMPONENT_NOT_FOUND":
+                # ``find_component_on_go`` already enumerated the component
+                # types on the GameObject under ``data.available_components``;
+                # reuse the list rather than walking ``go_node.children``
+                # again (DRY).
+                err_data = err.get("data", {})
+                candidates = err_data.get("available_components", [])
+                return resolve_component_not_found(
+                    asset_path,
+                    component,
+                    candidates,
+                ).to_dict()
             return err
         assert node is not None
+        assert component_name is not None
+
+        known_paths = _collect_known_property_paths(text, node.file_id)
+        for field_path in fields:
+            if field_path not in known_paths:
+                return resolve_property_not_found(
+                    asset_path,
+                    component_name,
+                    field_path,
+                    known_paths,
+                ).to_dict()
 
         ops = [
             {

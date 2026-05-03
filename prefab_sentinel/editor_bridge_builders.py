@@ -20,6 +20,7 @@ def build_set_camera_kwargs(
     orthographic: int = -1,
     position: str = "",
     look_at: str = "",
+    reset_to_defaults: bool = False,
 ) -> dict[str, Any]:
     """Build send_action kwargs from set_camera parameters."""
     kwargs: dict[str, Any] = {}
@@ -40,6 +41,8 @@ def build_set_camera_kwargs(
         kwargs["distance"] = distance
     if orthographic >= 0:
         kwargs["camera_orthographic"] = orthographic
+    if reset_to_defaults:
+        kwargs["reset_to_defaults"] = True
     return kwargs
 
 

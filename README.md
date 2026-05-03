@@ -102,13 +102,13 @@ prefab-sentinel-mcp --transport streamable-http
 | `editor_select` | Hierarchy 内の GameObject を選択（Prefab Stage 対応） |
 | `editor_frame` | 選択オブジェクトを Scene ビューでフレーミング |
 | `editor_get_camera` | Scene ビューのカメラ状態取得（position, rotation, pivot, size, orthographic） |
-| `editor_set_camera` | Scene ビューのカメラ設定（Mode A: 絶対座標 / Mode B: pivot 周回。yaw=0 が正面） |
+| `editor_set_camera` | Scene ビューのカメラ設定（pivot orbit / position / reset_to_defaults の 3 モード相互排他、yaw=0 は +Z 正面。詳細は §7.5） |
 | `editor_list_children` | GameObject の子オブジェクト一覧（各エントリに `active`/`tag` を含む） |
 | `editor_list_materials` | ランタイムのレンダラーのマテリアルスロット一覧 |
 | `editor_list_roots` | 現在の Scene / Prefab Stage のルートオブジェクト一覧（各エントリに `active`/`tag` を含む） |
 | `editor_get_material_property` | ランタイムのシェーダープロパティ値を読み取り |
 | `editor_set_material_property` | ランタイムでシェーダープロパティを設定（型はシェーダー定義から自動判定、Undo 対応） |
-| `editor_console` | Unity Console のログエントリを構造化データとして取得 |
+| `editor_console` | Unity Console のログエントリを構造化データとして取得（`classification_filter` で non-fatal/fatal 分類フィルタ可。詳細は §7.7） |
 | `editor_refresh` | AssetDatabase.Refresh() のトリガー |
 | `editor_recompile` | C# スクリプト再コンパイルのトリガー |
 | `editor_run_tests` | Editor Bridge 経由で Unity 統合テストを実行 |
@@ -591,8 +591,13 @@ Udonログを根拠に修正候補を最短で絞る。
 - `RUN001`: Udon runtime exception
 - `RUN002`: ClientSim startup failure
 - `CHANGE_REASON_REQUIRED`: `confirm=True` で呼ばれた書き込み系ツールが `change_reason` を欠いた場合。`editor_run_script` は `confirm=False` や空文字の `change_reason` も同コードで拒否する（監査トレイル強制）。
+- `SER003`: `set_component_fields` が dry-run 段階でチェーン上に解決できない component 型または property path を検出した場合（issue #109）。`severity="error"`、`data.suggestions` に近似候補（最大 5 件）、`diagnostics[].detail` に `component_not_found` または `property_not_found` を載せる。
 - `BRIDGE_LEGACY_SCHEMA_REJECTED`: `unity_patch_bridge` がレガシー形状（トップレベル `target` キー）のリクエストを受け取った場合。v2 スキーマ（`{plan_version, resources, ops}`）のみを受け入れる。互換レイヤは存在しない。
 - `EDITOR_CTRL_RUN_SCRIPT_OK` / `EDITOR_CTRL_RUN_SCRIPT_COMPILE` / `EDITOR_CTRL_RUN_SCRIPT_RUNTIME` / `EDITOR_CTRL_RUN_SCRIPT_BAD_ID`: `editor_run_script` の成功 / コンパイル失敗 / 実行例外 / 不正 temp id。
+- `EDITOR_CTRL_RUN_SCRIPT_RECOVERY`: 同一スニペットが 2 回連続で `..._COMPILE` 拒否された場合に発火する `severity="warning"` 応答（issue #116）。Bridge は temp ディレクトリを掃除し、`AssetDatabase.Refresh` で再コンパイルを要求した上で、診断ペイロード（`diagnostic_compiling` / `diagnostic_temp_files` / `diagnostic_last_domain_reload`）を返す。次回呼び出しはクリーンな状態で再試行できる。
+- `EDITOR_CTRL_ADD_COMPONENT_REUSED` / `EDITOR_CTRL_ADD_COMPONENT_RELINKED`: `editor_add_component` が UdonSharp 派生型に対して呼ばれ、既存ペアが見つかった（reuse）または孤立 proxy に新規 UdonBehaviour を再リンクした（relinked）場合の `severity="info"` 成功応答（issue #103）。
+- `EDITOR_CTRL_CAMERA_CONFLICT`: `editor_set_camera` が `position` と `pivot` を同時指定、または `look_at` を `position` 抜きで指定した場合（issue #112）。
+- `EDITOR_CTRL_INVALID_CLASSIFICATION_FILTER`: `editor_console` の `classification_filter` が `all` / `non_fatal` / `fatal` 以外の場合（issue #117）。
 
 #### severity 境界: `critical` と `error` の使い分け
 
@@ -615,10 +620,54 @@ Udonログを根拠に修正候補を最短で絞る。
 
 `editor_run_script` は Unity Editor 内で C# スニペットを 1 ステップでコンパイル・実行する MCP ツール（Issue #74）。
 
-- 入力: `code: str`, `confirm: bool`, `change_reason: str`
+- 入力: `code: str`, `confirm: bool`, `change_reason: str`, `compile_timeout_ms: int = 15000`
 - `confirm=True` **かつ** 非空の `change_reason` が常に必須。どちらかを欠く呼び出しは Bridge に到達する前に `CHANGE_REASON_REQUIRED` で拒否される。dry-run モードは未サポート。
 - Bridge 側では `Assets/Editor/_PrefabSentinelTemp/<temp_id>.cs` にソースを書き出し、`AssetDatabase.Refresh()` でコンパイル後 `PrefabSentinelTempScript.Run()`（`public static void`、固定のクラス/メソッド名）を呼び出す。成功・失敗を問わず temp の `.cs` / `.cs.meta` は応答前に削除する。Editor 起動時にも前回クラッシュの残骸を掃除する。
-- エラーコード: `EDITOR_CTRL_RUN_SCRIPT_OK` / `..._COMPILE` / `..._RUNTIME` / `..._BAD_ID`。
+- 既定のコンパイル待ち budget は 15000 ms（issue #116）。コールド起動でも大きめのスニペットが 1 度で確定するように調整した値。
+- スタック検出: 同一スニペット（`temp_id`、もしくは省略時はコード本文の安定ハッシュ）が連続して `..._COMPILE` 拒否となった場合、2 回目で Bridge が temp ディレクトリを再掃除して `AssetDatabase.Refresh` を要求し、`EDITOR_CTRL_RUN_SCRIPT_RECOVERY`（severity=warning）を返す。次回呼び出しでは Bridge を再起動せずに復帰できる。
+- すべての `..._COMPILE` / `..._RECOVERY` 応答に診断 (`diagnostic_compiling`, `diagnostic_temp_files`, `diagnostic_last_domain_reload`) が添付される。
+- エラーコード: `EDITOR_CTRL_RUN_SCRIPT_OK` / `..._COMPILE` / `..._RUNTIME` / `..._BAD_ID` / `..._RECOVERY`。
+
+### 7.5 Editor camera modes (`editor_set_camera`)
+
+`editor_set_camera` は SceneView を Unity 公開 API `SceneView.LookAt(point, rotation, size, ortho, instant: true)` 経由で同期的に駆動する。3 つのモードは相互排他（issue #112）。
+
+| モード | 入力 | 効果 |
+|--------|------|------|
+| Pivot orbit | `pivot` (+ `yaw` / `pitch` / `distance`) | pivot を中心に yaw/pitch/distance で周回。pivot 省略時は現在値を維持。 |
+| Position | `position` (+ `look_at` または `yaw`/`pitch`) | カメラ世界座標を直接指定。`look_at` で注視点モード、`yaw`/`pitch` でオイラーモード。`position` と `pivot` の同時指定は `EDITOR_CTRL_CAMERA_CONFLICT`。 |
+| Reset | `reset_to_defaults=True` | pivot=`(0,0,0)`, rotation=`Euler(30, -45, 0)`, size=10、perspective に戻す。他のパラメータは無視。 |
+
+**Yaw=0 の参照軸は +Z**。`yaw=0, pitch=0` のときカメラは +Z 方向を見る。Unity 内部の Euler とは反転しているため、Bridge 側で `internalYaw = (yaw + 180) mod 360` を適用してから `Quaternion.Euler` に渡す。
+
+応答の `data.camera_position` は `LookAt(instant=true)` 完了後の世界座標スナップショット。前回値は `data.previous_camera_*` として返る。
+
+### 7.6 Variant 判定ルール
+
+YAML が Prefab Variant かどうかは「**`m_SourcePrefab` 参照が存在し**、かつ **自身に GameObject ブロックを持たない**」を同時に満たすことを要件とする。`m_SourcePrefab` 参照のみを根拠にすると、ネストされた `PrefabInstance` を含む通常の base prefab を誤って Variant 扱いする（issue #114）。
+
+判定は `prefab_sentinel.unity_assets.is_variant_prefab(text)` に集約しており、`orchestrator_variant._resolve_variant_base` および `inspect_hierarchy` がこのヘルパー経由で判定する。
+
+### 7.7 非致命例外の分類 (`editor_save_as_prefab` / `editor_console`)
+
+Bridge は内部に「non-fatal exception pattern table」を持ち、ログ分類に利用する（issue #117）。現行登録パターン:
+
+| label | 条件 |
+|-------|------|
+| `udonsharp_obs_nre` | `LogType.Exception` で message に `ArgumentNullException`、stack trace に `OnBeforeSerialize` を含むエントリ |
+
+挙動:
+
+- `editor_save_as_prefab` / `editor_instantiate_to_scene` は操作中に発生したログを当該テーブルで分類し、件数とラベル一覧を `data.warnings.udonsharp_obs_nre_count` / `data.warnings.nonfatal_patterns` に積む。`SaveAsPrefabAsset` が成功している限り、ノイズが出ても応答は `success=true`。
+- `editor_console` は `classification_filter` パラメータを受け取り、`all`（既定）/ `non_fatal`（テーブルにマッチしたものだけ）/ `fatal`（テーブルにマッチしないものだけ）を返す。値が不正なら `EDITOR_CTRL_INVALID_CLASSIFICATION_FILTER`。
+
+### 7.8 テスト環境変数の取り扱い
+
+ユニットテストは Editor Bridge のディスパッチ環境変数（`UNITYTOOL_BRIDGE_MODE` / `UNITYTOOL_BRIDGE_WATCH_DIR`）が **ホストシェルから漏れていない状態** を前提に動作する（issue #88, #89）。
+
+- `tests/test_unity_patch_bridge.py::UnityPatchBridgeTests._run_bridge` はサブプロセス起動時に上記 2 変数を pop し、テスト中の他環境からは隔離する。
+- `tests/test_services.py::RuntimeValidationServiceTests` および `SerializedObjectServiceTests` は `setUp` で同 2 変数を pop し、`addCleanup` で復元する。
+- 開発者シェルが `UNITYTOOL_BRIDGE_MODE=editor` を export した状態でも、`scripts/run_unit_tests.py` は green を維持する。
 
 ---
 
@@ -1171,6 +1220,8 @@ before / after diff + validation steps の抜粋:
 | `confirm` | bool | — | `false` | `true` で変更を適用（`change_reason` と `out_report` が必須） |
 | `change_reason` | string | — | `null` | 変更理由（監査証跡用）。`confirm=true` 時は必須 |
 | `out_report` | string | — | `null` | 結果 JSON を書き出すファイルパス。`confirm=true` 時は必須 |
+
+**未解決時の挙動**: dry-run 段階でチェーン上に `component` 型または `fields` 内の property path が見つからない場合、Bridge / Python は `SER003`（severity=`error`）の error envelope を返す。`data.suggestions` に近似候補（最大 5 件）、`diagnostics[].detail` に `component_not_found` / `property_not_found` を載せる（issue #109）。
 
 **使用例（dry-run）:**
 

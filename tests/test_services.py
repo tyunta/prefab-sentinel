@@ -30,6 +30,26 @@ VARIANT_GUID = "cccccccccccccccccccccccccccccccc"
 CROSS_PROJECT_GUID = "dddddddddddddddddddddddddddddddd"
 
 
+_BRIDGE_DISPATCH_ENV_VARS: tuple[str, ...] = (
+    "UNITYTOOL_BRIDGE_MODE",
+    "UNITYTOOL_BRIDGE_WATCH_DIR",
+)
+
+
+def _isolate_bridge_dispatch_env(test: unittest.TestCase) -> None:
+    """Pop the two bridge dispatch env vars for the test; restore on cleanup.
+
+    A host shell that exports ``UNITYTOOL_BRIDGE_MODE=editor`` (and the
+    paired watch directory) would otherwise route the runtime-validation
+    and serialized-object service calls through the editor file-watcher
+    path, which has no responder during unit tests and times out.
+    """
+    for var in _BRIDGE_DISPATCH_ENV_VARS:
+        original = os.environ.pop(var, None)
+        if original is not None:
+            test.addCleanup(os.environ.__setitem__, var, original)
+
+
 def _create_sample_project(root: Path) -> None:
     write_file(
         root / "Assets" / "Base.prefab",
@@ -614,6 +634,39 @@ PrefabInstance:
 
 
 class RuntimeValidationServiceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        _isolate_bridge_dispatch_env(self)
+
+    def test_runtime_validation_setup_clears_bridge_env(self) -> None:
+        """The class setUp must pop the two bridge dispatch env vars even
+        when they are exported by the parent process; the matching cleanup
+        must restore them after the test method finishes.
+        """
+        # The class setUp ran before this body, so the vars should already
+        # be cleared in this test's process state.
+        self.assertNotIn("UNITYTOOL_BRIDGE_MODE", os.environ)
+        self.assertNotIn("UNITYTOOL_BRIDGE_WATCH_DIR", os.environ)
+
+        # Exercise the setUp/cleanup lifecycle on a fresh instance with
+        # the two vars deliberately exported in the parent state.
+        os.environ["UNITYTOOL_BRIDGE_MODE"] = "editor"
+        os.environ["UNITYTOOL_BRIDGE_WATCH_DIR"] = "/tmp/__sentinel_watch__"
+        try:
+            fresh = type(self)("test_compile_udonsharp_returns_skip_without_runtime_env")
+            fresh.setUp()
+            try:
+                self.assertNotIn("UNITYTOOL_BRIDGE_MODE", os.environ)
+                self.assertNotIn("UNITYTOOL_BRIDGE_WATCH_DIR", os.environ)
+            finally:
+                fresh.doCleanups()
+            self.assertEqual("editor", os.environ["UNITYTOOL_BRIDGE_MODE"])
+            self.assertEqual(
+                "/tmp/__sentinel_watch__", os.environ["UNITYTOOL_BRIDGE_WATCH_DIR"]
+            )
+        finally:
+            os.environ.pop("UNITYTOOL_BRIDGE_MODE", None)
+            os.environ.pop("UNITYTOOL_BRIDGE_WATCH_DIR", None)
+
     def test_compile_udonsharp_returns_skip_without_runtime_env(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -783,6 +836,9 @@ GameObject:
 
 
 class SerializedObjectServiceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        _isolate_bridge_dispatch_env(self)
+
     def test_load_patch_plan_normalizes_v2_resources(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "patch.json"

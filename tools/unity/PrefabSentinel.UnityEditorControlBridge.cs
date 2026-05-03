@@ -7,6 +7,7 @@ using UnityEditor.Compilation;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using UnityEngine.UI;
 
 namespace PrefabSentinel
 {
@@ -18,7 +19,7 @@ namespace PrefabSentinel
     public static class UnityEditorControlBridge
     {
         public const int ProtocolVersion = 1;
-        public const string BridgeVersion = "0.5.154";
+        public const string BridgeVersion = "0.5.155";
 
         /// <summary>Actions that write their response file asynchronously (not on return).</summary>
         public static readonly System.Collections.Generic.HashSet<string> AsyncActions =
@@ -194,6 +195,19 @@ namespace PrefabSentinel
             // poll budget (milliseconds) instead of RunScriptCompileTimeoutMs.
             // 0 (default) means "use the bridge default".
             public int compile_timeout = 0;
+
+            // Phase 11: Camera reset mode (#112).
+            // When true, HandleSetCamera ignores the other camera fields and
+            // restores the active SceneView to the documented default pivot,
+            // rotation, size, and orthographic flag.
+            public bool reset_to_defaults = false;
+
+            // Phase 11: Console capture classification filter (#117).
+            // ``all`` (default), ``non_fatal`` (only entries matching the
+            // bridge-side non-fatal pattern table), or ``fatal`` (only
+            // entries that do not match it). Validated by the handler so an
+            // unsupported value yields ``EDITOR_CTRL_INVALID_CLASSIFICATION_FILTER``.
+            public string classification_filter = "all";
         }
 
         [Serializable]
@@ -330,6 +344,28 @@ namespace PrefabSentinel
             public string exception = string.Empty;
             public string[] errors = Array.Empty<string>();
             public string temp_id = string.Empty;
+
+            // Phase 11: run-script stuck-detection diagnostics (issue #116).
+            // Attached to every compile-pending response so the caller can
+            // tell why the bridge rejected the snippet without rerunning.
+            public bool diagnostic_compiling = false;
+            public string[] diagnostic_temp_files = Array.Empty<string>();
+            public string diagnostic_last_domain_reload = string.Empty;
+
+            // Phase 11: non-fatal classification (issue #117).
+            // Save / instantiate handlers populate this section with counts
+            // of console entries that matched the bridge-side non-fatal
+            // pattern table during the operation. ``udonsharp_obs_nre_count``
+            // is broken out as a typed field for callers; the labels of all
+            // matched patterns appear in ``nonfatal_patterns``.
+            public EditorControlWarnings warnings = new EditorControlWarnings();
+        }
+
+        [Serializable]
+        public sealed class EditorControlWarnings
+        {
+            public int udonsharp_obs_nre_count = 0;
+            public string[] nonfatal_patterns = Array.Empty<string>();
         }
 
         [Serializable]
@@ -709,6 +745,36 @@ namespace PrefabSentinel
                 });
         }
 
+        /// <summary>
+        /// Bring UGUI canvas state, RectTransform layout, and physics
+        /// transforms up to date for the supplied subtree (issue #115).
+        /// Without this, ``editor_frame`` can read stale bounds when a
+        /// caller sets a RectTransform property and immediately frames it.
+        /// </summary>
+        private static void SynchronizeBoundsSourcesForFrame(GameObject root)
+        {
+            if (root == null) return;
+
+            // Force any pending UGUI canvas update so RectTransform
+            // ``rect``/world-corners reflect just-applied property edits.
+            Canvas.ForceUpdateCanvases();
+
+            // Force layout rebuild on every RectTransform under the subtree.
+            var rectTransforms = root.GetComponentsInChildren<RectTransform>(true);
+            foreach (var rt in rectTransforms)
+            {
+                LayoutRebuilder.ForceRebuildLayoutImmediate(rt);
+            }
+
+            // Sync physics transforms only when there is at least one
+            // collider in the subtree — calling SyncTransforms is cheap but
+            // the per-collider walk filters out scenes that never use it.
+            if (root.GetComponentInChildren<Collider>(true) != null)
+            {
+                Physics.SyncTransforms();
+            }
+        }
+
         private static EditorControlResponse HandleFrameSelected(EditorControlRequest request)
         {
             GameObject selectedGo = Selection.activeGameObject;
@@ -721,6 +787,11 @@ namespace PrefabSentinel
 
             string objectName = selectedGo.name;
 
+            // Pre-bounds synchronization (issue #115): bring UGUI canvas
+            // state, RectTransform layout, and physics transforms up to
+            // date before reading bounds so post-edit framing is accurate.
+            SynchronizeBoundsSourcesForFrame(selectedGo);
+
             // Collect bounds info
             float[] boundsCenter = null;
             float[] boundsExtents = null;
@@ -730,6 +801,27 @@ namespace PrefabSentinel
                 Bounds b = renderer.bounds;
                 boundsCenter = new[] { b.center.x, b.center.y, b.center.z };
                 boundsExtents = new[] { b.extents.x, b.extents.y, b.extents.z };
+            }
+            else
+            {
+                // RectTransform fallback: report the world-space AABB of the
+                // selected RectTransform when no Renderer is in the subtree.
+                var rect = selectedGo.GetComponent<RectTransform>();
+                if (rect != null)
+                {
+                    var corners = new Vector3[4];
+                    rect.GetWorldCorners(corners);
+                    Vector3 min = corners[0], max = corners[0];
+                    for (int i = 1; i < 4; i++)
+                    {
+                        min = Vector3.Min(min, corners[i]);
+                        max = Vector3.Max(max, corners[i]);
+                    }
+                    Vector3 center = (min + max) * 0.5f;
+                    Vector3 extents = (max - min) * 0.5f;
+                    boundsCenter = new[] { center.x, center.y, center.z };
+                    boundsExtents = new[] { extents.x, extents.y, extents.z };
+                }
             }
 
             // Frame synchronously so we can capture post-frame camera state
@@ -759,6 +851,11 @@ namespace PrefabSentinel
                 return BuildError("EDITOR_CTRL_ASSET_NOT_FOUND",
                     $"Prefab not found at: {request.asset_path}");
 
+            // Issue #117: snapshot before-instantiate timestamp so the
+            // non-fatal pattern table can classify any exceptions emitted
+            // during the operation without losing them as fatal errors.
+            double instantiateSnapshotTime = EditorApplication.timeSinceStartup;
+
             GameObject instance = (GameObject)PrefabUtility.InstantiatePrefab(prefab);
             if (instance == null)
                 return BuildError("EDITOR_CTRL_INSTANTIATE_FAILED",
@@ -787,6 +884,9 @@ namespace PrefabSentinel
             Selection.activeGameObject = instance;
             Undo.RegisterCreatedObjectUndo(instance, $"PrefabSentinel: Instantiate {prefab.name}");
 
+            var (instObsCount, instLabels) = ConsoleLogBuffer
+                .CollectNonFatalCountsSince(instantiateSnapshotTime);
+
             return BuildSuccess("EDITOR_CTRL_INSTANTIATE_OK",
                 $"Instantiated {prefab.name} as {instance.name}",
                 data: new EditorControlData
@@ -794,7 +894,12 @@ namespace PrefabSentinel
                     instantiated_object = instance.name,
                     selected_object = instance.name,
                     read_only = false,
-                    executed = true
+                    executed = true,
+                    warnings = new EditorControlWarnings
+                    {
+                        udonsharp_obs_nre_count = instObsCount,
+                        nonfatal_patterns = instLabels.ToArray(),
+                    },
                 });
         }
 
@@ -1173,6 +1278,15 @@ namespace PrefabSentinel
                 data: BuildCameraData(snap));
         }
 
+        // Documented Scene-view defaults restored by ``reset_to_defaults``.
+        // See README "Editor camera modes" — kept here so the contract is
+        // legible alongside the reset path.
+        private static readonly Vector3 DefaultScenePivot = Vector3.zero;
+        private static readonly Quaternion DefaultSceneRotation =
+            Quaternion.Euler(30f, -45f, 0f);
+        private const float DefaultSceneSize = 10f;
+        private const bool DefaultSceneOrthographic = false;
+
         private static EditorControlResponse HandleSetCamera(EditorControlRequest request)
         {
             SceneView sceneView = SceneView.lastActiveSceneView;
@@ -1189,10 +1303,31 @@ namespace PrefabSentinel
             bool hasPitch = !float.IsNaN(request.pitch);
             bool hasDistance = request.distance >= 0f;
 
+            // Reset mode (issue #112): restore the SceneView to documented
+            // defaults via the public synchronous LookAt entry point and
+            // ignore the other camera fields entirely. The reset response
+            // still reports the previous state for diff-style auditing.
+            if (request.reset_to_defaults)
+            {
+                sceneView.LookAt(
+                    DefaultScenePivot,
+                    DefaultSceneRotation,
+                    DefaultSceneSize,
+                    DefaultSceneOrthographic,
+                    instant: true);
+                sceneView.orthographic = DefaultSceneOrthographic;
+                ForceRenderAndRepaint(sceneView);
+                CameraSnapshot resetState = CaptureCameraState(sceneView);
+                return BuildSuccess(
+                    "EDITOR_CTRL_CAMERA_SET_OK",
+                    "Camera reset to defaults",
+                    data: BuildCameraData(resetState, previous));
+            }
+
             // Conflict checks
             if (hasPosition && hasPivot)
                 return BuildError("EDITOR_CTRL_CAMERA_CONFLICT",
-                    "Cannot specify both 'position' (camera world coords) and 'pivot' (orbit center). Use one.");
+                    "Cannot specify both 'position' and 'pivot'; specify one.");
             if (hasLookAt && !hasPosition)
                 return BuildError("EDITOR_CTRL_CAMERA_CONFLICT",
                     "'look_at' requires 'position' to be set.");
@@ -1209,27 +1344,29 @@ namespace PrefabSentinel
 
                 if (hasLookAt)
                 {
-                    // Position + look_at mode
+                    // Position + look_at mode (issue #112): drive the SceneView
+                    // through LookAt(instant=true) so the achieved camera
+                    // position is observable in the response without waiting
+                    // for an asynchronous transform refresh.
                     Vector3 lookAt = new Vector3(
                         request.camera_look_at[0],
                         request.camera_look_at[1],
                         request.camera_look_at[2]);
                     Vector3 direction = (lookAt - cameraPos).normalized;
                     float dist = Vector3.Distance(cameraPos, lookAt);
-
-                    sceneView.pivot = lookAt;
-                    sceneView.rotation = Quaternion.LookRotation(direction);
-                    if (sceneView.orthographic)
-                        sceneView.size = dist * 0.5f;
-                    else
-                        sceneView.size = dist * Mathf.Tan(fov * 0.5f * Mathf.Deg2Rad);
+                    Quaternion rot = Quaternion.LookRotation(direction);
+                    float newSize = sceneView.orthographic
+                        ? dist * 0.5f
+                        : dist * Mathf.Tan(fov * 0.5f * Mathf.Deg2Rad);
+                    sceneView.LookAt(
+                        lookAt, rot, newSize, sceneView.orthographic,
+                        instant: true);
                 }
                 else
                 {
-                    // Position + yaw/pitch mode: reverse-calculate pivot
-                    if (hasDistance)
-                        sceneView.size = request.distance;
-
+                    // Position + yaw/pitch mode: derive pivot from rotation
+                    // and current size, then commit synchronously.
+                    float newSize = hasDistance ? request.distance : sceneView.size;
                     Vector3 currentEuler = sceneView.rotation.eulerAngles;
                     float curYaw = (currentEuler.y + 180f) % 360f;
                     float curPitch = currentEuler.x > 180f ? currentEuler.x - 360f : currentEuler.x;
@@ -1237,26 +1374,27 @@ namespace PrefabSentinel
                     float newPitch = hasPitch ? request.pitch : curPitch;
                     float internalYaw = (newYaw + 180f) % 360f;
                     Quaternion rot = Quaternion.Euler(newPitch, internalYaw, 0f);
-                    sceneView.rotation = rot;
 
-                    float cameraDistance;
-                    if (sceneView.orthographic)
-                        cameraDistance = sceneView.size * 2f;
-                    else
-                        cameraDistance = sceneView.size / Mathf.Tan(fov * 0.5f * Mathf.Deg2Rad);
-                    sceneView.pivot = cameraPos + rot * new Vector3(0, 0, cameraDistance);
+                    float cameraDistance = sceneView.orthographic
+                        ? newSize * 2f
+                        : newSize / Mathf.Tan(fov * 0.5f * Mathf.Deg2Rad);
+                    Vector3 newPivot = cameraPos + rot * new Vector3(0, 0, cameraDistance);
+                    sceneView.LookAt(
+                        newPivot, rot, newSize, sceneView.orthographic,
+                        instant: true);
                 }
             }
             else
             {
-                // Pivot orbit mode (unified from old Mode A/B)
-                if (hasPivot)
-                {
-                    sceneView.pivot = new Vector3(
+                // Pivot orbit mode.
+                Vector3 newPivot = hasPivot
+                    ? new Vector3(
                         request.camera_pivot[0],
                         request.camera_pivot[1],
-                        request.camera_pivot[2]);
-                }
+                        request.camera_pivot[2])
+                    : sceneView.pivot;
+
+                Quaternion newRot = sceneView.rotation;
                 if (hasYaw || hasPitch)
                 {
                     Vector3 currentEuler = sceneView.rotation.eulerAngles;
@@ -1265,10 +1403,13 @@ namespace PrefabSentinel
                     float newYaw = hasYaw ? request.yaw : curYaw;
                     float newPitch = hasPitch ? request.pitch : curPitch;
                     float internalYaw = (newYaw + 180f) % 360f;
-                    sceneView.rotation = Quaternion.Euler(newPitch, internalYaw, 0f);
+                    newRot = Quaternion.Euler(newPitch, internalYaw, 0f);
                 }
-                if (hasDistance)
-                    sceneView.size = request.distance;
+
+                float newSize = hasDistance ? request.distance : sceneView.size;
+                sceneView.LookAt(
+                    newPivot, newRot, newSize, sceneView.orthographic,
+                    instant: true);
             }
 
             if (request.camera_orthographic >= 0)
@@ -1681,6 +1822,56 @@ namespace PrefabSentinel
             return "/" + path;
         }
 
+        // ── Non-fatal exception classifier (issue #117) ──
+
+        /// <summary>
+        /// Pattern table that decides whether a console entry is a known
+        /// non-fatal exception. Save and instantiate handlers consult this
+        /// to count benign noise without losing signal; the console capture
+        /// handler honours a classification filter against the same table.
+        ///
+        /// Adding a new pattern is a contract change — every consumer of
+        /// the resulting label must be aware of it. Document new entries
+        /// in ``knowledge/udonsharp.md`` and the README's non-fatal
+        /// classification section.
+        /// </summary>
+        internal static class NonFatalExceptionClassifier
+        {
+            private static readonly (string Label,
+                Func<string, string, LogType, bool> Match)[] Patterns =
+            {
+                (
+                    "udonsharp_obs_nre",
+                    (msg, stack, type) =>
+                        type == LogType.Exception
+                        && !string.IsNullOrEmpty(msg)
+                        && msg.IndexOf(
+                               "ArgumentNullException", StringComparison.Ordinal) >= 0
+                        && !string.IsNullOrEmpty(stack)
+                        && stack.IndexOf(
+                               "OnBeforeSerialize", StringComparison.Ordinal) >= 0
+                ),
+            };
+
+            /// <summary>
+            /// Returns the matching pattern label, or ``null`` when the
+            /// entry does not match any known non-fatal pattern.
+            /// </summary>
+            public static string Classify(string message, string stackTrace, LogType type)
+            {
+                string m = message ?? string.Empty;
+                string s = stackTrace ?? string.Empty;
+                foreach (var p in Patterns)
+                {
+                    if (p.Match(m, s, type)) return p.Label;
+                }
+                return null;
+            }
+
+            public static bool IsNonFatal(string message, string stackTrace, LogType type)
+                => Classify(message, stackTrace, type) != null;
+        }
+
         // ── Console Log Buffer ──
 
         /// <summary>
@@ -1749,8 +1940,15 @@ namespace PrefabSentinel
 
             /// <summary>
             /// Snapshot the buffer, applying filters. Returns entries oldest-first.
+            /// ``classificationFilter`` selects between ``all`` (default),
+            /// ``non_fatal`` (only entries whose classification label is
+            /// non-null), and ``fatal`` (only entries whose label is null).
             /// </summary>
-            public static List<ConsoleLogEntry> GetEntries(int maxEntries, string logTypeFilter, float sinceSeconds)
+            public static List<ConsoleLogEntry> GetEntries(
+                int maxEntries,
+                string logTypeFilter,
+                float sinceSeconds,
+                string classificationFilter = "all")
             {
                 var result = new List<ConsoleLogEntry>();
                 lock (_lock)
@@ -1764,12 +1962,13 @@ namespace PrefabSentinel
                     {
                         var entry = _buffer[(start + i) % _buffer.Length];
 
-                        // Time filter
                         if (sinceSeconds > 0f && (now - entry.timestamp) > sinceSeconds)
                             continue;
-
-                        // Type filter
                         if (!MatchesTypeFilter(entry.logType, logTypeFilter))
+                            continue;
+                        if (!MatchesClassificationFilter(
+                                entry.message, entry.stackTrace, entry.logType,
+                                classificationFilter))
                             continue;
 
                         result.Add(new ConsoleLogEntry
@@ -1786,6 +1985,35 @@ namespace PrefabSentinel
                 return result;
             }
 
+            /// <summary>
+            /// Walk the buffer for entries whose timestamp is greater than
+            /// or equal to ``sinceTimestamp`` and tally non-fatal pattern
+            /// matches. Used by save/instantiate handlers to surface known
+            /// noise as warnings without losing console signal.
+            /// </summary>
+            public static (int udonsharpObsNreCount, List<string> labels)
+                CollectNonFatalCountsSince(double sinceTimestamp)
+            {
+                int obsNre = 0;
+                var labels = new List<string>();
+                lock (_lock)
+                {
+                    if (_buffer == null || _count == 0) return (0, labels);
+                    int start = (_head - _count + _buffer.Length) % _buffer.Length;
+                    for (int i = 0; i < _count; i++)
+                    {
+                        var entry = _buffer[(start + i) % _buffer.Length];
+                        if (entry.timestamp < sinceTimestamp) continue;
+                        string label = NonFatalExceptionClassifier.Classify(
+                            entry.message, entry.stackTrace, entry.logType);
+                        if (label == null) continue;
+                        if (!labels.Contains(label)) labels.Add(label);
+                        if (label == "udonsharp_obs_nre") obsNre++;
+                    }
+                }
+                return (obsNre, labels);
+            }
+
             private static bool MatchesTypeFilter(LogType type, string filter)
             {
                 if (string.IsNullOrEmpty(filter) || filter == "all") return true;
@@ -1797,6 +2025,35 @@ namespace PrefabSentinel
                     default:          return true;
                 }
             }
+
+            private static bool MatchesClassificationFilter(
+                string message, string stackTrace, LogType type, string filter)
+            {
+                if (string.IsNullOrEmpty(filter) || filter == "all") return true;
+                bool isNonFatal = NonFatalExceptionClassifier.IsNonFatal(
+                    message, stackTrace, type);
+                switch (filter)
+                {
+                    case "non_fatal": return isNonFatal;
+                    case "fatal":     return !isNonFatal;
+                    default:          return true;
+                }
+            }
+
+            // Supported classification filter values; used by the handler
+            // for both gating and the error message body.
+            internal static readonly string[] SupportedClassificationFilters =
+                { "all", "non_fatal", "fatal" };
+
+            internal static bool IsSupportedClassificationFilter(string value)
+            {
+                if (string.IsNullOrEmpty(value)) return true;
+                foreach (var v in SupportedClassificationFilters)
+                {
+                    if (v == value) return true;
+                }
+                return false;
+            }
         }
 
         private static EditorControlResponse HandleCaptureConsoleLogs(EditorControlRequest request)
@@ -1805,8 +2062,22 @@ namespace PrefabSentinel
                 return BuildError("EDITOR_CTRL_CONSOLE_NOT_ACTIVE",
                     "Console log capture is not active. Enable Editor Bridge to start capturing.");
 
+            // Issue #117: reject unsupported classification filter values
+            // before we touch the buffer, so callers learn the contract
+            // through a typed error instead of silent default behaviour.
+            string classificationFilter = string.IsNullOrEmpty(request.classification_filter)
+                ? "all"
+                : request.classification_filter;
+            if (!ConsoleLogBuffer.IsSupportedClassificationFilter(classificationFilter))
+                return BuildError(
+                    "EDITOR_CTRL_INVALID_CLASSIFICATION_FILTER",
+                    "classification_filter must be one of: "
+                    + string.Join(", ", ConsoleLogBuffer.SupportedClassificationFilters));
+
             int maxEntries = request.max_entries > 0 ? request.max_entries : 200;
-            var entries = ConsoleLogBuffer.GetEntries(maxEntries, request.log_type_filter, request.since_seconds);
+            var entries = ConsoleLogBuffer.GetEntries(
+                maxEntries, request.log_type_filter, request.since_seconds,
+                classificationFilter);
 
             return BuildSuccess("EDITOR_CTRL_CONSOLE_OK",
                 $"Captured {entries.Count} log entries",
@@ -2686,18 +2957,129 @@ namespace PrefabSentinel
             //    First match wins; use fully qualified name to disambiguate.
             foreach (var asm in System.AppDomain.CurrentDomain.GetAssemblies())
             {
+                System.Type[] exported;
                 try
                 {
-                    foreach (var type in asm.GetExportedTypes())
-                    {
-                        if (type.Name == typeName && typeof(Component).IsAssignableFrom(type))
-                            return type;
-                    }
+                    exported = asm.GetExportedTypes();
                 }
-                catch (System.Reflection.ReflectionTypeLoadException) { }
+                catch (System.Reflection.ReflectionTypeLoadException ex)
+                {
+                    exported = System.Array.FindAll(ex.Types, t => t != null);
+                }
+
+                foreach (var type in exported)
+                {
+                    if (type.Name == typeName && typeof(Component).IsAssignableFrom(type))
+                        return type;
+                }
             }
 
             return null;
+        }
+
+        // ── UdonSharp idempotency helpers (issue #103) ──
+
+        /// <summary>
+        /// Resolve the UdonSharp.UdonSharpBehaviour type via reflection,
+        /// returning null when UdonSharp is not present in the project.
+        /// </summary>
+        private static Type ResolveUdonSharpBehaviourType()
+        {
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                Type t = assembly.GetType("UdonSharp.UdonSharpBehaviour", false);
+                if (t != null) return t;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Resolve UdonSharpEditor.UdonSharpEditorUtility via reflection.
+        /// </summary>
+        private static Type ResolveUdonSharpEditorUtilityType()
+        {
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                Type t = assembly.GetType("UdonSharpEditor.UdonSharpEditorUtility", false);
+                if (t != null) return t;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Short-circuit ``editor_add_component`` for UdonSharp behaviours.
+        ///
+        /// Returns a reuse response when the GameObject already carries the
+        /// proxy + matching UdonBehaviour pair. Returns a relink response
+        /// when only a stranded proxy is present and a fresh UdonBehaviour
+        /// has been linked. Returns null in every other case so the caller
+        /// can fall through to the regular ``Undo.AddComponent`` path.
+        /// </summary>
+        private static EditorControlResponse HandleUdonSharpAddComponentIdempotent(
+            GameObject go, Type compType, string hierarchyPath)
+        {
+            var proxy = go.GetComponent(compType);
+            if (proxy == null) return null;
+
+            Type editorUtilType = ResolveUdonSharpEditorUtilityType();
+            if (editorUtilType == null) return null;
+
+            MethodInfo getBacking = editorUtilType.GetMethod(
+                "GetBackingUdonBehaviour",
+                BindingFlags.Public | BindingFlags.Static
+            );
+            if (getBacking == null) return null;
+
+            object backing;
+            try
+            {
+                backing = getBacking.Invoke(null, new object[] { proxy });
+            }
+            catch
+            {
+                return null;
+            }
+
+            if (backing != null)
+            {
+                return BuildSuccess(
+                    "EDITOR_CTRL_ADD_COMPONENT_REUSED",
+                    $"Existing UdonSharp pair reused for {compType.Name}",
+                    new EditorControlData
+                    {
+                        selected_object = go.name,
+                        asset_path = compType.FullName,
+                        executed = false,
+                        read_only = false,
+                    });
+            }
+
+            // Stranded proxy: link a freshly created UdonBehaviour to it.
+            MethodInfo createForProxy = editorUtilType.GetMethod(
+                "CreateBehaviourForProxy",
+                BindingFlags.Public | BindingFlags.Static
+            );
+            if (createForProxy == null) return null;
+
+            try
+            {
+                createForProxy.Invoke(null, new object[] { proxy });
+            }
+            catch
+            {
+                return null;
+            }
+
+            return BuildSuccess(
+                "EDITOR_CTRL_ADD_COMPONENT_RELINKED",
+                $"Existing proxy re-linked to new UdonBehaviour for {compType.Name}",
+                new EditorControlData
+                {
+                    selected_object = go.name,
+                    asset_path = compType.FullName,
+                    executed = true,
+                    read_only = false,
+                });
         }
 
         private static EditorControlResponse HandleEditorAddComponent(EditorControlRequest request)
@@ -2717,6 +3099,20 @@ namespace PrefabSentinel
                 return BuildError("EDITOR_CTRL_ADD_COMP_TYPE_NOT_FOUND",
                     $"Component type not found: {request.component_type}. " +
                     "Short names (e.g. 'BoxCollider') and fully qualified names both work.");
+
+            // Idempotency guard for UdonSharpBehaviour subclasses (issue #103).
+            // Adding the same UdonSharp class twice via the public AddComponent
+            // path otherwise produces a second proxy MonoBehaviour without a
+            // matching UdonBehaviour, leaving the GameObject with mismatched
+            // pairs. Short-circuit to a reuse / relink response when an
+            // existing proxy is detected.
+            Type usbTypeForGuard = ResolveUdonSharpBehaviourType();
+            if (usbTypeForGuard != null && usbTypeForGuard.IsAssignableFrom(compType))
+            {
+                EditorControlResponse idempotent =
+                    HandleUdonSharpAddComponentIdempotent(go, compType, request.hierarchy_path);
+                if (idempotent != null) return idempotent;
+            }
 
             var added = Undo.AddComponent(go, compType);
             if (added == null)
@@ -2761,13 +3157,10 @@ namespace PrefabSentinel
                 }
             }
 
-            // Check if the added type is UdonSharpBehaviour without a matching ProgramAsset
-            Type usbType = null;
-            foreach (System.Reflection.Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
-            {
-                usbType = assembly.GetType("UdonSharp.UdonSharpBehaviour", false);
-                if (usbType != null) break;
-            }
+            // Check if the added type is UdonSharpBehaviour without a matching ProgramAsset.
+            // ``usbTypeForGuard`` was already resolved above via ``ResolveUdonSharpBehaviourType``;
+            // reuse it instead of walking ``AppDomain.CurrentDomain.GetAssemblies()`` a second time.
+            Type usbType = usbTypeForGuard;
 
             bool udonProgramAssetMissing = false;
             if (usbType != null && usbType.IsAssignableFrom(compType))
@@ -3262,11 +3655,21 @@ namespace PrefabSentinel
                 basePrefabPath = "";
             }
 
+            // Issue #117: snapshot the console buffer time so that any
+            // exceptions logged during ``SaveAsPrefabAsset`` can be matched
+            // against the non-fatal pattern table afterwards. The snapshot
+            // is taken before the operation so first-frame OnBeforeSerialize
+            // noise is captured.
+            double saveSnapshotTime = EditorApplication.timeSinceStartup;
+
             bool success;
             PrefabUtility.SaveAsPrefabAsset(go, request.asset_path, out success);
             if (!success)
                 return BuildError("EDITOR_CTRL_SAVE_PREFAB_FAILED",
                     $"SaveAsPrefabAsset failed for: {request.asset_path}");
+
+            var (saveObsCount, saveLabels) = ConsoleLogBuffer
+                .CollectNonFatalCountsSince(saveSnapshotTime);
 
             string kind = isVariant ? "Prefab Variant" : "Prefab";
             var resp = BuildSuccess("EDITOR_CTRL_SAVE_PREFAB_OK",
@@ -3277,6 +3680,11 @@ namespace PrefabSentinel
                     asset_path = basePrefabPath,
                     executed = true,
                     read_only = false,
+                    warnings = new EditorControlWarnings
+                    {
+                        udonsharp_obs_nre_count = saveObsCount,
+                        nonfatal_patterns = saveLabels.ToArray(),
+                    },
                 });
 
             var diags = new System.Collections.Generic.List<EditorControlDiagnostic>();
@@ -3577,14 +3985,32 @@ namespace PrefabSentinel
         private const string RunScriptEntryPoint = "Run";
         // Bounded compile-state poll budget: a brief flip of isCompiling
         // immediately after Refresh is normal; we wait up to this many
-        // milliseconds for it to settle before reporting COMPILE.
-        private const int RunScriptCompileTimeoutMs = 8000;
+        // milliseconds for it to settle before reporting COMPILE. Raised
+        // from the previous 8000 ms in 0.5.152 so large snippets do not
+        // bounce on every cold compile (issue #116).
+        private const int RunScriptCompileTimeoutMs = 15000;
         // Bounded entry-type retry budget: once compilation settles the
         // newly built assembly may take a moment to load into the AppDomain;
         // we retry FindTempScriptType for up to this many milliseconds before
         // reporting COMPILE.
         private const int RunScriptEntryTypeTimeoutMs = 4000;
         private const int RunScriptPollIntervalMs = 50;
+
+        // Issue #116 stuck detection: when the same snippet is rejected as
+        // compile-pending twice in a row we trigger the temp-area recovery
+        // path. The map is keyed by ``temp_id`` (or by snippet hash when
+        // the caller did not supply one) and is cleared on a successful
+        // compile / run, so a fresh snippet starts at zero.
+        private static readonly System.Collections.Generic.Dictionary<string, int>
+            RunScriptConsecutiveCompilePending =
+                new System.Collections.Generic.Dictionary<string, int>();
+        private const int RunScriptStuckThreshold = 2;
+
+        // Track the time of the most recent domain reload so the diagnostics
+        // payload can show how long ago Unity last reloaded scripts. Set in
+        // ``RunScriptStartupCleanup`` since [InitializeOnLoad] static
+        // constructors run on every domain reload.
+        private static DateTime LastDomainReloadUtc = DateTime.UtcNow;
 
         private static EditorControlResponse HandleRunScript(EditorControlRequest request)
         {
@@ -3603,6 +4029,15 @@ namespace PrefabSentinel
                 return BuildError("EDITOR_CTRL_RUN_SCRIPT_BAD_ID",
                     $"temp_id '{tempId}' is not safe (must be alphanumeric + '-_', no path separators or whitespace).");
             }
+
+            // Issue #116: stuck-detection key. Hash the snippet code so the
+            // counter survives auto-generated temp_id values (which differ
+            // every call) but still distinguishes one stuck snippet from a
+            // different one. When the caller supplied an explicit temp_id
+            // we honour it as the key.
+            string stuckKey = string.IsNullOrEmpty(request.temp_id)
+                ? "code:" + ComputeStableHash(request.code)
+                : "id:" + request.temp_id;
 
             string tempDirAbs = Path.Combine(
                 Directory.GetCurrentDirectory(),
@@ -3635,13 +4070,13 @@ namespace PrefabSentinel
                 }
                 if (EditorApplication.isCompiling)
                 {
-                    return BuildError("EDITOR_CTRL_RUN_SCRIPT_COMPILE",
+                    return RunScriptCompilePendingResponse(
+                        stuckKey, tempId, tempDirAbs,
                         "Script compilation is still in progress after the bounded poll; " +
                         "a domain reload is pending. Retry after Unity finishes compiling." +
                         " If the freshly compiled type still cannot be located, run the snippet " +
                         "through `editor_execute_menu_item` against a persistent editor helper " +
-                        "script committed under `Assets/Editor/`.",
-                        new EditorControlData { temp_id = tempId, executed = false });
+                        "script committed under `Assets/Editor/`.");
                 }
 
                 // ── Bounded entry-type lookup retry ──
@@ -3658,16 +4093,13 @@ namespace PrefabSentinel
                 }
                 if (scriptType == null)
                 {
-                    // Compilation failed or the new assembly never loaded —
-                    // surface the compile-pending failure with the persistent
-                    // helper hint in the message.
-                    return BuildError("EDITOR_CTRL_RUN_SCRIPT_COMPILE",
+                    return RunScriptCompilePendingResponse(
+                        stuckKey, tempId, tempDirAbs,
                         $"Type '{RunScriptTypeName}' was not found after compile. " +
                         "Verify the snippet defines `public static class PrefabSentinelTempScript` with `public static void Run()`." +
                         " If the freshly compiled type still cannot be located, run the snippet " +
                         "through `editor_execute_menu_item` against a persistent editor helper " +
-                        "script committed under `Assets/Editor/`.",
-                        new EditorControlData { temp_id = tempId, executed = false });
+                        "script committed under `Assets/Editor/`.");
                 }
 
                 MethodInfo runMethod = scriptType.GetMethod(
@@ -3720,6 +4152,11 @@ namespace PrefabSentinel
                     Console.SetOut(originalOut);
                 }
 
+                // Successful run clears the stuck-detection counter so the
+                // next call starts fresh — independent of whether this was
+                // the recovery turn or a genuinely first-attempt success.
+                RunScriptConsecutiveCompilePending.Remove(stuckKey);
+
                 return BuildSuccess("EDITOR_CTRL_RUN_SCRIPT_OK",
                     $"PrefabSentinelTempScript.Run() completed (temp_id={tempId}).",
                     new EditorControlData
@@ -3736,7 +4173,139 @@ namespace PrefabSentinel
                 TryDeleteFile(metaAbs);
                 // Best-effort Refresh so Unity forgets the deleted asset.
                 try { AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport); }
-                catch { /* best effort */ }
+                catch (Exception refreshEx)
+                {
+                    Debug.LogWarning(
+                        $"[PrefabSentinel] HandleRunScript: post-run AssetDatabase.Refresh failed: {refreshEx.Message}");
+                }
+            }
+        }
+
+        // ── Run-script stuck detection helpers (issue #116) ──
+
+        /// <summary>
+        /// Build the compile-pending response (or the recovery response on
+        /// the second consecutive stuck rejection of the same snippet).
+        /// Always attaches the diagnostics payload (compilation flag,
+        /// temp-folder file list, last domain-reload timestamp) so the
+        /// caller can act without rerunning the snippet.
+        /// </summary>
+        private static EditorControlResponse RunScriptCompilePendingResponse(
+            string stuckKey, string tempId, string tempDirAbs, string baseMessage)
+        {
+            int prior;
+            RunScriptConsecutiveCompilePending.TryGetValue(stuckKey, out prior);
+            int next = prior + 1;
+            RunScriptConsecutiveCompilePending[stuckKey] = next;
+
+            EditorControlData data = BuildRunScriptDiagnosticsData(tempId, tempDirAbs);
+
+            if (next >= RunScriptStuckThreshold)
+            {
+                // Recovery: clear the temp area, request a fresh compile,
+                // reset the counter, and surface a warning-severity
+                // response so the caller can retry on the next turn.
+                RunScriptRecoverTempArea(tempDirAbs);
+                RunScriptConsecutiveCompilePending.Remove(stuckKey);
+                EditorControlData recovered = BuildRunScriptDiagnosticsData(tempId, tempDirAbs);
+                return new EditorControlResponse
+                {
+                    protocol_version = ProtocolVersion,
+                    success = false,
+                    severity = "warning",
+                    code = "EDITOR_CTRL_RUN_SCRIPT_RECOVERY",
+                    message = "Script compile appeared stuck; ran recovery cleanup. Retry the script.",
+                    data = recovered,
+                };
+            }
+
+            return BuildError("EDITOR_CTRL_RUN_SCRIPT_COMPILE", baseMessage, data);
+        }
+
+        /// <summary>
+        /// Snapshot the diagnostics facts surfaced on every compile-pending
+        /// response: ``EditorApplication.isCompiling``, the current temp
+        /// directory contents, and the last recorded domain-reload time.
+        /// </summary>
+        private static EditorControlData BuildRunScriptDiagnosticsData(
+            string tempId, string tempDirAbs)
+        {
+            string[] tempFiles = Array.Empty<string>();
+            try
+            {
+                if (Directory.Exists(tempDirAbs))
+                    tempFiles = Directory.GetFiles(tempDirAbs);
+            }
+            catch (Exception ex)
+            {
+                // Best-effort diagnostics: never throw out of this helper, but
+                // surface the failure in the Unity console so partial misses
+                // are not silent.
+                Debug.LogWarning(
+                    $"[PrefabSentinel] BuildRunScriptDiagnosticsData: failed to list temp dir '{tempDirAbs}': {ex.Message}");
+            }
+
+            return new EditorControlData
+            {
+                temp_id = tempId,
+                executed = false,
+                diagnostic_compiling = EditorApplication.isCompiling,
+                diagnostic_temp_files = tempFiles,
+                diagnostic_last_domain_reload =
+                    LastDomainReloadUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture),
+            };
+        }
+
+        /// <summary>
+        /// Recovery: delete every ``.cs`` / ``.cs.meta`` in the temp dir and
+        /// request a fresh synchronous import so Unity drops the stale
+        /// references. Used by the stuck-detection path; the next call can
+        /// re-create its temp script from a clean slate.
+        /// </summary>
+        private static void RunScriptRecoverTempArea(string tempDirAbs)
+        {
+            try
+            {
+                if (!Directory.Exists(tempDirAbs)) return;
+                foreach (string path in Directory.GetFiles(tempDirAbs, "*.cs"))
+                    TryDeleteFile(path);
+                foreach (string path in Directory.GetFiles(tempDirAbs, "*.cs.meta"))
+                    TryDeleteFile(path);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning(
+                    $"[PrefabSentinel] RunScriptRecoverTempArea: failed to enumerate temp dir '{tempDirAbs}': {ex.Message}");
+            }
+            try
+            {
+                AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning(
+                    $"[PrefabSentinel] RunScriptRecoverTempArea: AssetDatabase.Refresh failed: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Stable, deterministic hash of the snippet contents — used as the
+        /// stuck-detection key when the caller did not pin a ``temp_id``.
+        /// FNV-1a 64-bit; we only need collision resistance across the few
+        /// snippets a single editor session might produce.
+        /// </summary>
+        private static string ComputeStableHash(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return "0";
+            unchecked
+            {
+                ulong hash = 0xcbf29ce484222325UL;
+                foreach (char c in text)
+                {
+                    hash ^= c;
+                    hash *= 0x100000001b3UL;
+                }
+                return hash.ToString("x16");
             }
         }
 
@@ -3768,7 +4337,11 @@ namespace PrefabSentinel
         private static void TryDeleteFile(string path)
         {
             try { if (File.Exists(path)) File.Delete(path); }
-            catch { /* best effort */ }
+            catch (Exception ex)
+            {
+                Debug.LogWarning(
+                    $"[PrefabSentinel] TryDeleteFile: failed to delete '{path}': {ex.Message}");
+            }
         }
 
         /// <summary>
@@ -3781,6 +4354,11 @@ namespace PrefabSentinel
         {
             static RunScriptStartupCleanup()
             {
+                // Record the time of this domain-reload event for the
+                // ``editor_run_script`` compile-pending diagnostics payload
+                // (issue #116). The static constructor runs once per
+                // domain reload, which is exactly the signal we want.
+                LastDomainReloadUtc = DateTime.UtcNow;
                 EditorApplication.delayCall += Cleanup;
             }
 
@@ -3798,7 +4376,11 @@ namespace PrefabSentinel
                     foreach (string path in Directory.GetFiles(dir, "*.cs.meta"))
                         TryDeleteFile(path);
                 }
-                catch { /* best effort */ }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning(
+                        $"[PrefabSentinel] RunScriptStartupCleanup: failed during temp-dir sweep: {ex.Message}");
+                }
             }
         }
 
@@ -3940,10 +4522,16 @@ namespace PrefabSentinel
                 if (File.Exists(responsePath)) File.Delete(responsePath);
                 File.Move(tmpPath, responsePath);
             }
-            catch
+            catch (Exception atomicEx)
             {
+                Debug.LogWarning(
+                    $"[PrefabSentinel] WriteResponse: atomic move failed for '{responsePath}': {atomicEx.Message}; falling back to direct write.");
                 try { File.WriteAllText(responsePath, JsonUtility.ToJson(response, true)); }
-                catch { /* best effort */ }
+                catch (Exception directEx)
+                {
+                    Debug.LogWarning(
+                        $"[PrefabSentinel] WriteResponse: direct write also failed for '{responsePath}': {directEx.Message}");
+                }
             }
         }
     }

@@ -44,10 +44,17 @@ def _change_reason_required_envelope() -> dict[str, Any]:
     }
 
 
+# Default compile-pending budget for the bridge handler. Raised from the
+# previous 5s value so large snippets do not bounce on every cold compile;
+# documented in the run-script handler contract (issue #116).
+DEFAULT_COMPILE_TIMEOUT_MS = 15000
+
+
 def editor_run_script(
     code: str,
     confirm: bool,
     change_reason: str | None,
+    compile_timeout_ms: int = DEFAULT_COMPILE_TIMEOUT_MS,
 ) -> dict[str, Any]:
     """Compile and execute a C# snippet inside the Unity Editor.
 
@@ -63,6 +70,9 @@ def editor_run_script(
     change_reason:
         Required, non-empty.  Empty / whitespace / ``None`` returns
         ``CHANGE_REASON_REQUIRED``.
+    compile_timeout_ms:
+        Bounded compile-pending budget in milliseconds; forwarded to the
+        bridge as ``compile_timeout``. Defaults to fifteen seconds.
 
     Returns
     -------
@@ -77,6 +87,7 @@ def editor_run_script(
         action="run_script",
         code=code,
         change_reason=normalized_reason,
+        compile_timeout=compile_timeout_ms,
     )
 
 
@@ -88,6 +99,7 @@ def register_editor_exec_tools(server: FastMCP) -> None:
         code: str,
         confirm: bool = False,
         change_reason: str = "",
+        compile_timeout_ms: int = DEFAULT_COMPILE_TIMEOUT_MS,
     ) -> dict[str, Any]:
         """Run an arbitrary C# snippet inside the Unity Editor.
 
@@ -103,9 +115,16 @@ def register_editor_exec_tools(server: FastMCP) -> None:
 
         Returns the Editor Bridge envelope unchanged.  Dry-run is not
         supported per the issue spec.
+
+        Args:
+            compile_timeout_ms: Bounded compile-pending budget in
+                milliseconds. Defaults to fifteen seconds; the bridge uses
+                this to decide when to attach diagnostics or trigger
+                stuck-detection recovery.
         """
         return editor_run_script(
             code=code,
             confirm=confirm,
             change_reason=change_reason or None,
+            compile_timeout_ms=compile_timeout_ms,
         )

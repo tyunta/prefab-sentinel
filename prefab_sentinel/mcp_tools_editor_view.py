@@ -108,14 +108,19 @@ def register_editor_view_tools(server: FastMCP) -> None:
         orthographic: int = -1,
         position: str = "",
         look_at: str = "",
+        reset_to_defaults: bool = False,
     ) -> dict[str, Any]:
         """Set Scene view camera.
 
-        Pivot orbit mode: pivot, yaw, pitch, distance
-        Position mode: position + look_at, or position + yaw/pitch
+        Three modes (mutually exclusive):
 
-        Cannot mix position and pivot. Euler convention: yaw=0 = front (+Z).
-        Omitted params keep their current value.
+        * Pivot orbit — ``pivot`` + ``yaw`` / ``pitch`` / ``distance``.
+        * Position — ``position`` + (``look_at`` or ``yaw`` / ``pitch``).
+        * Reset — ``reset_to_defaults=True`` returns the SceneView to its
+          documented default pivot, rotation, size, and orthographic flag.
+
+        Cannot mix ``position`` and ``pivot``. ``look_at`` requires
+        ``position``. Euler convention: ``yaw=0`` faces +Z.
 
         Returns previous and current camera state.
 
@@ -127,10 +132,13 @@ def register_editor_view_tools(server: FastMCP) -> None:
             orthographic: -1=keep, 0=perspective, 1=orthographic.
             position: JSON '{"x":0,"y":1,"z":-5}' — camera world position.
             look_at: JSON '{"x":0,"y":1,"z":0}' — look-at target (requires position).
+            reset_to_defaults: When ``True``, ignore the other parameters and
+                restore the SceneView to its documented defaults.
         """
         kwargs = build_set_camera_kwargs(
             pivot=pivot, yaw=yaw, pitch=pitch, distance=distance,
             orthographic=orthographic, position=position, look_at=look_at,
+            reset_to_defaults=reset_to_defaults,
         )
         return send_action(action="set_camera", **kwargs)
 
@@ -217,6 +225,7 @@ def register_editor_view_tools(server: FastMCP) -> None:
         max_entries: int = 200,
         log_type_filter: str = "all",
         since_seconds: float = 0.0,
+        classification_filter: str = "all",
     ) -> dict[str, Any]:
         """Capture Unity Console log entries as structured data.
 
@@ -224,11 +233,16 @@ def register_editor_view_tools(server: FastMCP) -> None:
             max_entries: Maximum number of log entries to retrieve (default: 200).
             log_type_filter: Filter by log type: "all", "error", "warning", "exception".
             since_seconds: Only entries from the last N seconds (0 = no time filter).
+            classification_filter: Filter by non-fatal classification:
+                ``"all"`` (default), ``"non_fatal"`` (only entries matching the
+                bridge-side non-fatal pattern table), or ``"fatal"`` (only
+                entries that do not match it).
         """
         return send_action(
             action="capture_console_logs",
             max_entries=max_entries, log_type_filter=log_type_filter,
             since_seconds=since_seconds,
+            classification_filter=classification_filter,
         )
 
     @server.tool()

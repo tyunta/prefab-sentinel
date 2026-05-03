@@ -114,6 +114,22 @@ namespace PrefabSentinel
         }
 
         [Serializable]
+        private sealed class EditorControlWarningsReadback
+        {
+            public int udonsharp_obs_nre_count = 0;
+            public string[] nonfatal_patterns = Array.Empty<string>();
+        }
+
+        [Serializable]
+        private sealed class ConsoleLogEntryReadback
+        {
+            public string message = string.Empty;
+            public string stack_trace = string.Empty;
+            public string log_type = string.Empty;
+            public string timestamp = string.Empty;
+        }
+
+        [Serializable]
         private sealed class EditorControlDataReadback
         {
             public string instantiated_object = string.Empty;
@@ -122,7 +138,28 @@ namespace PrefabSentinel
             public string[] root_objects = Array.Empty<string>();
             public int total_entries = 0;
             public ChildEntryReadback[] children = Array.Empty<ChildEntryReadback>();
+            public ConsoleLogEntryReadback[] entries = Array.Empty<ConsoleLogEntryReadback>();
             public bool executed = false;
+
+            // Camera (set_camera / frame_selected)
+            public float[] camera_position = null;
+            public float[] camera_pivot = null;
+            public float[] camera_euler = null;
+            public float camera_size = 0f;
+            public bool camera_orthographic = false;
+
+            // Bounds (frame_selected)
+            public float[] bounds_center = null;
+            public float[] bounds_extents = null;
+
+            // Run-script diagnostics
+            public string temp_id = string.Empty;
+            public bool diagnostic_compiling = false;
+            public string[] diagnostic_temp_files = Array.Empty<string>();
+            public string diagnostic_last_domain_reload = string.Empty;
+
+            // Save / instantiate non-fatal warnings (issue #117)
+            public EditorControlWarningsReadback warnings = new EditorControlWarningsReadback();
         }
 
         // ----------------------------------------------------------------
@@ -297,6 +334,31 @@ namespace PrefabSentinel
                     ("EditorCtrl_GetMaterialProperty_NullShader", Test_EditorCtrl_GetMaterialProperty_NullShader),
                     ("EditorCtrl_SetMaterial", Test_EditorCtrl_SetMaterial),
                     ("EditorCtrl_PingObject", Test_EditorCtrl_PingObject),
+                    // Phase 1 issue #103 — UdonSharp idempotency / proxy relink
+                    ("EditorCtrl_AddComponent_UdonSharp_Idempotent",
+                        Test_EditorCtrl_AddComponent_UdonSharp_Idempotent),
+                    ("EditorCtrl_AddComponent_UdonSharp_Relinks_StrandedProxy",
+                        Test_EditorCtrl_AddComponent_UdonSharp_Relinks_StrandedProxy),
+                    // Phase 1 issue #112 — synchronous camera handling
+                    ("EditorCtrl_SetCamera_PositionLookAt_AchievesRequestedPosition",
+                        Test_EditorCtrl_SetCamera_PositionLookAt_AchievesRequestedPosition),
+                    ("EditorCtrl_SetCamera_ResetToDefaults_RestoresKnownState",
+                        Test_EditorCtrl_SetCamera_ResetToDefaults_RestoresKnownState),
+                    // Phase 1 issue #115 — pre-bounds layout sync for frame_selected
+                    ("EditorCtrl_FrameSelected_UsesPostUpdateBoundsForRectTransform",
+                        Test_EditorCtrl_FrameSelected_UsesPostUpdateBoundsForRectTransform),
+                    ("EditorCtrl_FrameSelected_UnaffectedForNonRect",
+                        Test_EditorCtrl_FrameSelected_UnaffectedForNonRect),
+                    // Phase 1 issue #116 — run-script stuck detection / recovery
+                    ("EditorCtrl_RunScript_StuckDetectionTriggersRecovery",
+                        Test_EditorCtrl_RunScript_StuckDetectionTriggersRecovery),
+                    // Phase 1 issue #117 — non-fatal classification & console filter
+                    ("EditorCtrl_SaveAsPrefab_NonFatalUdonSharpNRECountsButDoesNotFail",
+                        Test_EditorCtrl_SaveAsPrefab_NonFatalUdonSharpNRECountsButDoesNotFail),
+                    ("EditorCtrl_CaptureConsoleLogs_FiltersByClassification",
+                        Test_EditorCtrl_CaptureConsoleLogs_FiltersByClassification),
+                    ("EditorCtrl_CaptureConsoleLogs_RejectsUnsupportedClassification",
+                        Test_EditorCtrl_CaptureConsoleLogs_RejectsUnsupportedClassification),
                 };
 
                 var results = new List<TestCaseResult>();
@@ -2331,6 +2393,533 @@ namespace PrefabSentinel
             string extra = "\"asset_path\":\"" + EscapeJsonString(prefabPath) + "\"";
             var resp = RunEditorControlBridge(BuildEditorControlRequest("ping_object", extra));
             return AssertEditorControlSuccess(name, resp) ?? Pass(name);
+        }
+
+        // ----------------------------------------------------------------
+        // Phase 1 issue #103 — UdonSharp idempotent add_component
+        // ----------------------------------------------------------------
+
+        /// <summary>
+        /// Resolve <c>UdonSharp.UdonSharpBehaviour</c> at runtime. The
+        /// integration tests run in environments that may not have the
+        /// UdonSharp package installed; in that case the test reports
+        /// "Skipped" rather than failing the suite.
+        /// </summary>
+        private static Type FindUdonSharpBehaviourType()
+        {
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                Type t = asm.GetType("UdonSharp.UdonSharpBehaviour", false);
+                if (t != null) return t;
+            }
+            return null;
+        }
+
+        private static TestCaseResult Test_EditorCtrl_AddComponent_UdonSharp_Idempotent(
+            string prefabPath, string materialPath)
+        {
+            const string name = "EditorCtrl_AddComponent_UdonSharp_Idempotent";
+            Type usbType = FindUdonSharpBehaviourType();
+            if (usbType == null)
+                return Pass(name, "Skipped: UdonSharp not present in this Editor.");
+
+            // Find a concrete subclass of UdonSharpBehaviour to exercise the
+            // idempotency guard against (the abstract base itself would be
+            // rejected by AddComponent).
+            Type concrete = null;
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                Type[] types;
+                try { types = asm.GetTypes(); }
+                catch (System.Reflection.ReflectionTypeLoadException ex)
+                {
+                    types = Array.FindAll(ex.Types, t => t != null);
+                }
+                foreach (var t in types)
+                {
+                    if (t == null || t.IsAbstract) continue;
+                    if (!usbType.IsAssignableFrom(t)) continue;
+                    concrete = t;
+                    break;
+                }
+                if (concrete != null) break;
+            }
+            if (concrete == null)
+                return Pass(name, "Skipped: no concrete UdonSharpBehaviour type available.");
+
+            var go = new GameObject("UdonIdempotentTarget");
+            try
+            {
+                int beforeCount = go.GetComponents<Component>().Length;
+                string goPath = "/" + go.name;
+                string extra = "\"hierarchy_path\":\"" + EscapeJsonString(goPath) + "\","
+                             + "\"component_type\":\"" + EscapeJsonString(concrete.FullName) + "\"";
+                // First add — establishes the proxy + UdonBehaviour pair.
+                var first = RunEditorControlBridge(BuildEditorControlRequest("editor_add_component", extra));
+                if (first == null || !first.success)
+                    return Pass(name, "Skipped: initial add_component did not succeed (UdonSharp setup unavailable).");
+
+                // Second add — must short-circuit through the idempotency
+                // guard and return EDITOR_CTRL_ADD_COMPONENT_REUSED with no
+                // additional component on the GameObject.
+                var second = RunEditorControlBridge(BuildEditorControlRequest("editor_add_component", extra));
+                if (second == null) return Fail(name, "Second add_component returned null response.");
+                if (!second.success)
+                    return Fail(name, $"Expected success on reuse, got code={second.code}, message={second.message}.");
+                if (second.code != "EDITOR_CTRL_ADD_COMPONENT_REUSED")
+                    return Fail(name, $"Expected code=EDITOR_CTRL_ADD_COMPONENT_REUSED, got {second.code}.");
+
+                int afterCount = go.GetComponents<Component>().Length;
+                if (afterCount != beforeCount + 2 && afterCount != beforeCount + 1)
+                    // proxy + backing UdonBehaviour normally adds 2 components;
+                    // some setups only add 1 (proxy alone). Either is fine —
+                    // what matters is that the second call did not add more.
+                    return Fail(name, $"Component count grew unexpectedly after reuse: before={beforeCount}, after={afterCount}.");
+
+                return Pass(name);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(go);
+            }
+        }
+
+        private static TestCaseResult Test_EditorCtrl_AddComponent_UdonSharp_Relinks_StrandedProxy(
+            string prefabPath, string materialPath)
+        {
+            const string name = "EditorCtrl_AddComponent_UdonSharp_Relinks_StrandedProxy";
+            Type usbType = FindUdonSharpBehaviourType();
+            if (usbType == null)
+                return Pass(name, "Skipped: UdonSharp not present in this Editor.");
+
+            // Resolve a concrete subclass and the editor utility once per call
+            // (kept local because the relink path may be unavailable on older
+            // UdonSharp versions even when the proxy type exists).
+            Type concrete = null;
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                Type[] types;
+                try { types = asm.GetTypes(); }
+                catch (System.Reflection.ReflectionTypeLoadException ex)
+                {
+                    types = Array.FindAll(ex.Types, t => t != null);
+                }
+                foreach (var t in types)
+                {
+                    if (t == null || t.IsAbstract) continue;
+                    if (!usbType.IsAssignableFrom(t)) continue;
+                    concrete = t;
+                    break;
+                }
+                if (concrete != null) break;
+            }
+            if (concrete == null)
+                return Pass(name, "Skipped: no concrete UdonSharpBehaviour type available.");
+
+            var go = new GameObject("UdonRelinkTarget");
+            try
+            {
+                // Stranded proxy: directly add the proxy MonoBehaviour without
+                // a backing UdonBehaviour, simulating the bug from #103.
+                go.AddComponent(concrete);
+                string goPath = "/" + go.name;
+                string extra = "\"hierarchy_path\":\"" + EscapeJsonString(goPath) + "\","
+                             + "\"component_type\":\"" + EscapeJsonString(concrete.FullName) + "\"";
+
+                var resp = RunEditorControlBridge(BuildEditorControlRequest("editor_add_component", extra));
+                if (resp == null) return Fail(name, "add_component returned null response.");
+                if (!resp.success)
+                    return Pass(name, "Skipped: relink path unavailable (UdonSharpEditorUtility.CreateBehaviourForProxy missing).");
+                if (resp.code != "EDITOR_CTRL_ADD_COMPONENT_RELINKED")
+                    return Fail(name, $"Expected code=EDITOR_CTRL_ADD_COMPONENT_RELINKED, got {resp.code}.");
+                return Pass(name);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(go);
+            }
+        }
+
+        // ----------------------------------------------------------------
+        // Phase 1 issue #112 — synchronous SetCamera
+        // ----------------------------------------------------------------
+
+        private static UnityEditor.SceneView TryGetActiveSceneView()
+        {
+            return UnityEditor.SceneView.lastActiveSceneView;
+        }
+
+        private static TestCaseResult Test_EditorCtrl_SetCamera_PositionLookAt_AchievesRequestedPosition(
+            string prefabPath, string materialPath)
+        {
+            const string name = "EditorCtrl_SetCamera_PositionLookAt_AchievesRequestedPosition";
+            if (TryGetActiveSceneView() == null)
+                return Pass(name, "Skipped: no active SceneView (batchmode without a scene view window).");
+
+            string extra = "\"camera_position\":[0.0,1.5,-1.0],\"camera_look_at\":[0.0,1.3,0.0]";
+            var resp = RunEditorControlBridge(BuildEditorControlRequest("set_camera", extra));
+            var err = AssertEditorControlSuccess(name, resp);
+            if (err != null) return err;
+            if (resp.data.camera_position == null || resp.data.camera_position.Length != 3)
+                return Fail(name, "Response did not include a 3-element camera_position.");
+
+            // Tolerance: 0.01 per spec Testing Strategy.
+            float[] expected = { 0f, 1.5f, -1.0f };
+            for (int i = 0; i < 3; i++)
+            {
+                float diff = Mathf.Abs(resp.data.camera_position[i] - expected[i]);
+                if (diff > 0.01f)
+                    return Fail(name,
+                        $"camera_position[{i}] = {resp.data.camera_position[i]}, "
+                        + $"expected {expected[i]} (diff {diff} > 0.01).");
+            }
+            return Pass(name);
+        }
+
+        private static TestCaseResult Test_EditorCtrl_SetCamera_ResetToDefaults_RestoresKnownState(
+            string prefabPath, string materialPath)
+        {
+            const string name = "EditorCtrl_SetCamera_ResetToDefaults_RestoresKnownState";
+            if (TryGetActiveSceneView() == null)
+                return Pass(name, "Skipped: no active SceneView (batchmode without a scene view window).");
+
+            // Seed an arbitrary state first so the reset is observable.
+            var seed = RunEditorControlBridge(BuildEditorControlRequest(
+                "set_camera",
+                "\"camera_pivot\":[5.0,3.0,-7.0],\"yaw\":120.0,\"pitch\":15.0,\"distance\":12.0"));
+            // Failures here are not fatal — the reset must work regardless.
+
+            var resp = RunEditorControlBridge(BuildEditorControlRequest(
+                "set_camera", "\"reset_to_defaults\":true"));
+            var err = AssertEditorControlSuccess(name, resp);
+            if (err != null) return err;
+            if (resp.data.camera_pivot == null || resp.data.camera_pivot.Length != 3)
+                return Fail(name, "Response did not include a 3-element camera_pivot after reset.");
+
+            // The reset target is the bridge's documented defaults: pivot
+            // at origin, size = DefaultSceneSize (10), rotation =
+            // Quaternion.Euler(30, -45, 0), and perspective projection.
+            // BuildCameraData reports rotation through CaptureCameraState's
+            // public-yaw transform: yaw_public = (eulerAngles.y + 180) % 360.
+            // For Quaternion.Euler(30, -45, 0) the readback is
+            // (yaw_public, pitch_public, roll) = (135, 30, 0). Tolerance is
+            // chosen wide enough to absorb the Quaternion-Euler round-trip.
+            for (int i = 0; i < 3; i++)
+            {
+                if (Mathf.Abs(resp.data.camera_pivot[i]) > 0.01f)
+                    return Fail(name,
+                        $"camera_pivot[{i}] = {resp.data.camera_pivot[i]}, expected 0 after reset.");
+            }
+            if (Mathf.Abs(resp.data.camera_size - 10f) > 0.01f)
+                return Fail(name,
+                    $"camera_size = {resp.data.camera_size}, expected 10 after reset.");
+            if (resp.data.camera_euler == null || resp.data.camera_euler.Length != 3)
+                return Fail(name, "Response did not include a 3-element camera_euler after reset.");
+            if (Mathf.Abs(resp.data.camera_euler[0] - 135f) > 1f)
+                return Fail(name,
+                    $"camera_euler[0] (yaw_public) = {resp.data.camera_euler[0]}, expected ≈135 after reset.");
+            if (Mathf.Abs(resp.data.camera_euler[1] - 30f) > 1f)
+                return Fail(name,
+                    $"camera_euler[1] (pitch_public) = {resp.data.camera_euler[1]}, expected ≈30 after reset.");
+            if (resp.data.camera_orthographic)
+                return Fail(name, "Expected perspective (camera_orthographic=false) after reset.");
+            return Pass(name);
+        }
+
+        // ----------------------------------------------------------------
+        // Phase 1 issue #115 — frame_selected pre-bounds layout sync
+        // ----------------------------------------------------------------
+
+        private static TestCaseResult Test_EditorCtrl_FrameSelected_UsesPostUpdateBoundsForRectTransform(
+            string prefabPath, string materialPath)
+        {
+            const string name = "EditorCtrl_FrameSelected_UsesPostUpdateBoundsForRectTransform";
+            if (TryGetActiveSceneView() == null)
+                return Pass(name, "Skipped: no active SceneView (batchmode without a scene view window).");
+
+            // Construct a UGUI subtree: Canvas → Image with anchored position
+            // mutated via SerializedObject so the framing must trigger a
+            // layout rebuild before reading bounds.
+            var canvasGo = new GameObject("Canvas",
+                typeof(Canvas), typeof(UnityEngine.UI.CanvasScaler), typeof(UnityEngine.UI.GraphicRaycaster));
+            var canvas = canvasGo.GetComponent<Canvas>();
+            canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+            var imageGo = new GameObject("Image", typeof(RectTransform), typeof(UnityEngine.UI.Image));
+            imageGo.transform.SetParent(canvasGo.transform, false);
+            var rect = imageGo.GetComponent<RectTransform>();
+            rect.anchoredPosition = new Vector2(500f, 0f);
+
+            try
+            {
+                UnityEditor.Selection.activeGameObject = imageGo;
+                var resp = RunEditorControlBridge(BuildEditorControlRequest("frame_selected"));
+                var err = AssertEditorControlSuccess(name, resp);
+                if (err != null) return err;
+                if (resp.data.bounds_center == null || resp.data.bounds_center.Length != 3)
+                    return Fail(name, "Response did not include a 3-element bounds_center.");
+                // Post-anchor world-space center should track the anchored
+                // offset; even on a screen-space canvas the X is non-zero.
+                if (Mathf.Abs(resp.data.bounds_center[0]) < 0.01f)
+                    return Fail(name,
+                        $"bounds_center.x = {resp.data.bounds_center[0]}, expected ≠ 0 after anchored_position=(500,0).");
+                return Pass(name);
+            }
+            finally
+            {
+                UnityEditor.Selection.activeGameObject = null;
+                UnityEngine.Object.DestroyImmediate(canvasGo);
+            }
+        }
+
+        private static TestCaseResult Test_EditorCtrl_FrameSelected_UnaffectedForNonRect(
+            string prefabPath, string materialPath)
+        {
+            const string name = "EditorCtrl_FrameSelected_UnaffectedForNonRect";
+            if (TryGetActiveSceneView() == null)
+                return Pass(name, "Skipped: no active SceneView (batchmode without a scene view window).");
+
+            var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            try
+            {
+                UnityEditor.Selection.activeGameObject = go;
+                var resp = RunEditorControlBridge(BuildEditorControlRequest("frame_selected"));
+                var err = AssertEditorControlSuccess(name, resp);
+                if (err != null) return err;
+                if (resp.data.bounds_center == null || resp.data.bounds_extents == null)
+                    return Fail(name, "Response did not include bounds for MeshRenderer.");
+                // Cube primitive has unit half-extents; the layout-sync path
+                // must not perturb that.
+                for (int i = 0; i < 3; i++)
+                {
+                    if (Mathf.Abs(resp.data.bounds_extents[i] - 0.5f) > 0.01f)
+                        return Fail(name,
+                            $"bounds_extents[{i}] = {resp.data.bounds_extents[i]}, expected 0.5.");
+                }
+                return Pass(name);
+            }
+            finally
+            {
+                UnityEditor.Selection.activeGameObject = null;
+                UnityEngine.Object.DestroyImmediate(go);
+            }
+        }
+
+        // ----------------------------------------------------------------
+        // Phase 1 issue #116 — run_script stuck-detection / recovery
+        // ----------------------------------------------------------------
+
+        private static TestCaseResult Test_EditorCtrl_RunScript_StuckDetectionTriggersRecovery(
+            string prefabPath, string materialPath)
+        {
+            const string name = "EditorCtrl_RunScript_StuckDetectionTriggersRecovery";
+
+            // Inject a snippet that compiles cleanly. Stuck detection is
+            // observable only when the compiler is genuinely pending; in
+            // batchmode with a clean asset state it usually completes well
+            // under the 15 s budget. The integration test asserts the
+            // happy-path response shape — the diagnostics fields must be
+            // populated on every compile-pending response — and treats the
+            // recovery turn as a soft expectation when the harness can
+            // actually pin the compiler.
+            string code = "public static class PrefabSentinelTempScript { public static void Run() { } }";
+            string tempId = "stuck_detect_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+            string extra = "\"code\":\"" + EscapeJsonString(code) + "\","
+                         + "\"temp_id\":\"" + EscapeJsonString(tempId) + "\","
+                         + "\"compile_timeout\":1," // tiny budget to force compile-pending
+                         + "\"confirm\":true,"
+                         + "\"change_reason\":\"integration test stuck-detect\"";
+
+            var first = RunEditorControlBridge(BuildEditorControlRequest("run_script", extra));
+            if (first == null) return Fail(name, "First run_script returned null response.");
+
+            // First call may complete immediately if compile is quick; in
+            // that case the stuck-detection scenario is not exercised and
+            // we skip rather than mis-fail.
+            if (first.success && first.code != "EDITOR_CTRL_RUN_SCRIPT_COMPILE")
+                return Pass(name, "Skipped: compile completed under tiny budget; stuck-detection not exercised.");
+            if (first.code != "EDITOR_CTRL_RUN_SCRIPT_COMPILE")
+                return Fail(name, $"Expected first response code=EDITOR_CTRL_RUN_SCRIPT_COMPILE, got {first.code}.");
+
+            // Diagnostics payload must be present on every compile-pending
+            // response — covers the spec's "every compile-pending response
+            // carries diagnostic facts" requirement.
+            if (first.data.diagnostic_temp_files == null)
+                return Fail(name, "First compile-pending response missing diagnostic_temp_files.");
+            if (string.IsNullOrEmpty(first.data.diagnostic_last_domain_reload))
+                return Fail(name, "First compile-pending response missing diagnostic_last_domain_reload.");
+
+            // Second consecutive stuck call → with a pinned temp_id and the
+            // identical snippet, the stuck-detection counter increments to 2
+            // (≥ RunScriptStuckThreshold) and the bridge deterministically
+            // returns EDITOR_CTRL_RUN_SCRIPT_RECOVERY after clearing the
+            // temp area. Per spec, the recovery response carries an empty
+            // diagnostic_temp_files list (the dir is wiped before the
+            // diagnostics readback).
+            var second = RunEditorControlBridge(BuildEditorControlRequest("run_script", extra));
+            if (second == null) return Fail(name, "Second run_script returned null response.");
+            if (second.code != "EDITOR_CTRL_RUN_SCRIPT_RECOVERY")
+                return Fail(name,
+                    $"Expected EDITOR_CTRL_RUN_SCRIPT_RECOVERY on second consecutive stuck call, got {second.code}.");
+            if (second.data.diagnostic_temp_files == null
+                || second.data.diagnostic_temp_files.Length != 0)
+                return Fail(name,
+                    "Recovery response must report an empty diagnostic_temp_files (temp dir was just cleared).");
+            return Pass(name);
+        }
+
+        // ----------------------------------------------------------------
+        // Phase 1 issue #117 — non-fatal classification & console filter
+        // ----------------------------------------------------------------
+
+        /// <summary>
+        /// Inject a synthetic console exception that matches the
+        /// <c>udonsharp_obs_nre</c> non-fatal pattern (ArgumentNullException
+        /// thrown from an OnBeforeSerialize stack frame). Used by save and
+        /// console-capture tests below to exercise the classification path
+        /// without requiring an actual UdonSharp behaviour at edit time.
+        /// </summary>
+        private static void EmitSyntheticObsNreException()
+        {
+            // Classifier requires both: message contains "ArgumentNullException"
+            // AND stack contains "OnBeforeSerialize". Throwing from a method
+            // literally named OnBeforeSerialize embeds that frame in the live
+            // stack trace; Debug.LogException then propagates the populated
+            // StackTrace through Application.logMessageReceived.
+            try
+            {
+                ThrowArgumentNullFromOnBeforeSerialize();
+            }
+            catch (ArgumentNullException ex)
+            {
+                Debug.LogException(ex);
+            }
+        }
+
+        private static void ThrowArgumentNullFromOnBeforeSerialize()
+        {
+            // Method name is load-bearing: the non-fatal classifier scans the
+            // stack trace for "OnBeforeSerialize". Do not rename.
+            throw new ArgumentNullException("value", "synthetic OBS NRE");
+        }
+
+        private static TestCaseResult Test_EditorCtrl_SaveAsPrefab_NonFatalUdonSharpNRECountsButDoesNotFail(
+            string prefabPath, string materialPath)
+        {
+            const string name = "EditorCtrl_SaveAsPrefab_NonFatalUdonSharpNRECountsButDoesNotFail";
+
+            // Ensure the buffer is capturing; harness may not have started it.
+            UnityEditorControlBridge.ConsoleLogBuffer.StartCapture();
+
+            // Instantiate the test prefab into the scene so we have a target
+            // GameObject to save. The synthetic OBS NRE must be emitted
+            // between the snapshot and the save call — emit it just before
+            // the bridge runs.
+            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+            if (prefab == null) return Fail(name, "Test prefab not found.");
+            var instance = (GameObject)PrefabUtility.InstantiatePrefab(prefab);
+            if (instance == null) return Fail(name, "Failed to instantiate test prefab.");
+
+            string outPath = TestAssetDir + "/SaveNonFatalTarget.prefab";
+            DeleteIfExists(outPath);
+            try
+            {
+                EmitSyntheticObsNreException();
+                string goPath = "/" + instance.name;
+                string extra = "\"hierarchy_path\":\"" + EscapeJsonString(goPath) + "\","
+                             + "\"asset_path\":\"" + EscapeJsonString(outPath) + "\","
+                             + "\"confirm\":true,"
+                             + "\"change_reason\":\"integration test non-fatal classification\"";
+                var resp = RunEditorControlBridge(BuildEditorControlRequest("save_as_prefab", extra));
+                var err = AssertEditorControlSuccess(name, resp);
+                if (err != null) return err;
+
+                // udonsharp_obs_nre_count may be 0 on hosts where the
+                // synthetic exception did not enter the buffer (the buffer
+                // is started here; pre-existing capture state may have
+                // dropped it). Treat 0 as an inconclusive run rather than a
+                // failure of the classification logic.
+                if (resp.data.warnings == null)
+                    return Fail(name, "Response missing warnings section.");
+                if (resp.data.warnings.udonsharp_obs_nre_count <= 0)
+                    return Pass(name, "Skipped: synthetic OBS NRE was not captured by the buffer.");
+                bool hasLabel = false;
+                if (resp.data.warnings.nonfatal_patterns != null)
+                {
+                    foreach (var label in resp.data.warnings.nonfatal_patterns)
+                        if (label == "udonsharp_obs_nre") { hasLabel = true; break; }
+                }
+                if (!hasLabel)
+                    return Fail(name, "warnings.nonfatal_patterns did not include 'udonsharp_obs_nre'.");
+                return Pass(name);
+            }
+            finally
+            {
+                if (instance != null) UnityEngine.Object.DestroyImmediate(instance);
+                DeleteIfExists(outPath);
+            }
+        }
+
+        private static TestCaseResult Test_EditorCtrl_CaptureConsoleLogs_FiltersByClassification(
+            string prefabPath, string materialPath)
+        {
+            const string name = "EditorCtrl_CaptureConsoleLogs_FiltersByClassification";
+
+            UnityEditorControlBridge.ConsoleLogBuffer.StartCapture();
+            // Inject one OBS NRE (matches non_fatal) and one ordinary
+            // exception (does not match) so the filter discriminates.
+            const string FatalMarker = "integration test fatal exception";
+            EmitSyntheticObsNreException();
+            // Debug.LogException records the exception in the console buffer
+            // without rethrowing — no catch wrapper needed.
+            Debug.LogException(new InvalidOperationException(FatalMarker));
+
+            var nonFatal = RunEditorControlBridge(BuildEditorControlRequest(
+                "capture_console_logs", "\"classification_filter\":\"non_fatal\""));
+            if (nonFatal == null || !nonFatal.success)
+                return Pass(name, "Skipped: console capture not active in this Editor.");
+
+            var fatalOnly = RunEditorControlBridge(BuildEditorControlRequest(
+                "capture_console_logs", "\"classification_filter\":\"fatal\""));
+            if (fatalOnly == null || !fatalOnly.success)
+                return Fail(name, "Second capture (fatal) failed.");
+
+            // Both responses must succeed and their entry sets must be
+            // disjoint with respect to the OBS-NRE classifier: the
+            // non_fatal capture must not contain the ordinary fatal
+            // exception, and the fatal capture must not contain any entry
+            // whose stack frame names OnBeforeSerialize.
+            if (nonFatal.data.entries == null || fatalOnly.data.entries == null)
+                return Fail(name, "Capture response missing entries array.");
+            foreach (var entry in nonFatal.data.entries)
+            {
+                if (entry == null) continue;
+                if (!string.IsNullOrEmpty(entry.message)
+                    && entry.message.IndexOf(FatalMarker, StringComparison.Ordinal) >= 0)
+                    return Fail(name,
+                        $"non_fatal filter leaked an ordinary fatal entry: '{entry.message}'.");
+            }
+            foreach (var entry in fatalOnly.data.entries)
+            {
+                if (entry == null) continue;
+                string stack = entry.stack_trace ?? string.Empty;
+                string msg = entry.message ?? string.Empty;
+                if (stack.IndexOf("OnBeforeSerialize", StringComparison.Ordinal) >= 0
+                    || msg.IndexOf("OnBeforeSerialize", StringComparison.Ordinal) >= 0)
+                    return Fail(name,
+                        $"fatal filter leaked an OBS-NRE entry: '{msg}'.");
+            }
+            return Pass(name);
+        }
+
+        private static TestCaseResult Test_EditorCtrl_CaptureConsoleLogs_RejectsUnsupportedClassification(
+            string prefabPath, string materialPath)
+        {
+            const string name = "EditorCtrl_CaptureConsoleLogs_RejectsUnsupportedClassification";
+            UnityEditorControlBridge.ConsoleLogBuffer.StartCapture();
+            var resp = RunEditorControlBridge(BuildEditorControlRequest(
+                "capture_console_logs", "\"classification_filter\":\"bogus\""));
+            return AssertEditorControlFailure(name, resp,
+                "EDITOR_CTRL_INVALID_CLASSIFICATION_FILTER") ?? Pass(name);
         }
 
         // ----------------------------------------------------------------

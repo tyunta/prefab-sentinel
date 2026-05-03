@@ -166,6 +166,48 @@ class EditorRunScriptTests(unittest.TestCase):
         self.assertEqual("error", resp["severity"])
 
 
+class EditorRunScriptDefaultsTests(unittest.TestCase):
+    """Issue #116 — the wrapper forwards a 15s default ``compile_timeout``."""
+
+    _SNIPPET = (
+        "public static class PrefabSentinelTempScript {"
+        "  public static void Run() { }"
+        "}"
+    )
+
+    _BRIDGE_OK = {
+        "success": True,
+        "severity": "info",
+        "code": "EDITOR_CTRL_RUN_SCRIPT_OK",
+        "message": "ran",
+        "data": {"executed": True},
+        "diagnostics": [],
+    }
+
+    def test_editor_run_script_default_timeout_is_15s(self) -> None:
+        with patch.object(mcp_tools_editor_exec, "send_action") as send:
+            send.return_value = self._BRIDGE_OK
+            mcp_tools_editor_exec.editor_run_script(
+                code=self._SNIPPET,
+                confirm=True,
+                change_reason="default-timeout check",
+            )
+        kwargs = send.call_args.kwargs
+        self.assertEqual(15000, kwargs["compile_timeout"])
+
+    def test_editor_run_script_forwards_explicit_timeout(self) -> None:
+        with patch.object(mcp_tools_editor_exec, "send_action") as send:
+            send.return_value = self._BRIDGE_OK
+            mcp_tools_editor_exec.editor_run_script(
+                code=self._SNIPPET,
+                confirm=True,
+                change_reason="explicit-timeout check",
+                compile_timeout_ms=30000,
+            )
+        kwargs = send.call_args.kwargs
+        self.assertEqual(30000, kwargs["compile_timeout"])
+
+
 class TestEditorRecompileForceReimport(unittest.TestCase):
     """Task 12: Python recompile wrapper forwards ``force_reimport`` to bridge."""
 
