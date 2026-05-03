@@ -13,10 +13,31 @@ import unittest
 from pathlib import Path
 
 TOOLS_DIR = Path(__file__).resolve().parent.parent / "tools" / "unity"
+# Issue #123 — the editor-control bridge is split into a canonical core
+# source plus per-functional partial sources.  Source-level invariants
+# now apply across the whole class, so the loader concatenates every
+# bridge source file as one text and the regex-based extractors operate
+# on that concatenation.  The canonical core file retains the name
+# ``PrefabSentinel.UnityEditorControlBridge.cs`` so that the
+# version-detection rglob and the bump-my-version search/replace anchor
+# keep working unchanged.
 BRIDGE: Path = TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.cs"
+_BRIDGE_GLOB = "PrefabSentinel.UnityEditorControlBridge*.cs"
 
 
 def _read(path: Path) -> str:
+    """Read the bridge source.
+
+    When ``path`` resolves to the canonical bridge file, return every
+    bridge partial concatenated so the regex-based extractors see the
+    full class body.  Other paths are returned verbatim so unrelated
+    callers (tests for VRC-SDK / patch-bridge / etc.) keep working.
+    """
+    if path == BRIDGE:
+        parts: list[str] = []
+        for cs_file in sorted(TOOLS_DIR.glob(_BRIDGE_GLOB)):
+            parts.append(cs_file.read_text(encoding="utf-8"))
+        return "\n".join(parts)
     return path.read_text(encoding="utf-8")
 
 
@@ -478,6 +499,44 @@ class TestRecompileAndWaitDispatch(unittest.TestCase):
         self.assertIn("EDITOR_CTRL_RECOMPILE_TIMEOUT", body)
 
 
+class TestRecompileAndWaitTimeoutBoundCheck(unittest.TestCase):
+    """Issue #134 — the bridge handler must reject non-default
+    out-of-range ``timeout_sec`` values with the dedicated error code
+    before scheduling compilation, mirroring the client-side range.
+    """
+
+    def test_handler_references_upper_bound_constant_and_error_code(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleRecompileAndWait")
+        self.assertIn("RecompileAndWaitTimeoutMaxSec", body)
+        self.assertIn("EDITOR_CTRL_COMPILE_TIMEOUT_OUT_OF_RANGE", body)
+
+    def test_upper_bound_constant_value(self) -> None:
+        source = _read(BRIDGE)
+        # The upper-bound literal must equal the Python mirror value
+        # (1800 seconds); drift between the two would let an oversized
+        # budget slip past one side and trip the other.
+        self.assertRegex(
+            source,
+            r"RecompileAndWaitTimeoutMaxSec\s*=\s*1800",
+        )
+
+    def test_handler_rejects_negative_budget_accepts_zero_as_default(self) -> None:
+        """A *negative* budget must be rejected with the out-of-range
+        code, while a literal ``0`` (the JsonUtility default for an
+        omitted ``timeout_sec``) maps to the published default.  The
+        bridge guard is therefore ``< 0f``, not ``<= 0f`` — zero is the
+        documented "use the default" sentinel.
+        """
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleRecompileAndWait")
+        # The handler dispatches the out-of-range branch when the
+        # request's timeout_sec is not the default sentinel and falls
+        # outside the published range.
+        self.assertIn("request.timeout_sec", body)
+        self.assertIn("EDITOR_CTRL_COMPILE_TIMEOUT_OUT_OF_RANGE", body)
+
+
 class TestRunScriptNoSleep(unittest.TestCase):
     """Issue #108: ``HandleRunScript`` must not block the main thread on
     a ``Thread.Sleep`` busy-wait.  Replaced with an
@@ -531,6 +590,293 @@ class TestRecompileAndWaitDomainReloadResume(unittest.TestCase):
         body = _extract_method(source, "BuildRecompileAndWaitPoll")
         self.assertIn("EDITOR_CTRL_RECOMPILE_AND_WAIT_OK", body)
         self.assertIn("EDITOR_CTRL_RECOMPILE_TIMEOUT", body)
+
+
+class TestBridgePartialLayout(unittest.TestCase):
+    """Issue #123 — every named bridge partial source must exist and
+    declare the same partial class.  The canonical core source name is
+    fixed because both the drift checker and the bump-my-version anchor
+    rglob it.
+    """
+
+    _EXPECTED_PARTIAL_NAMES = (
+        "PrefabSentinel.UnityEditorControlBridge.cs",
+        "PrefabSentinel.UnityEditorControlBridge.CameraView.cs",
+        "PrefabSentinel.UnityEditorControlBridge.HierarchyComponents.cs",
+        "PrefabSentinel.UnityEditorControlBridge.SaveInstantiate.cs",
+        "PrefabSentinel.UnityEditorControlBridge.RunScriptCompile.cs",
+        "PrefabSentinel.UnityEditorControlBridge.ConsoleCapture.cs",
+        "PrefabSentinel.UnityEditorControlBridge.UdonSharp.cs",
+    )
+
+    def test_every_named_partial_file_exists(self) -> None:
+        for name in self._EXPECTED_PARTIAL_NAMES:
+            with self.subTest(name=name):
+                self.assertTrue((TOOLS_DIR / name).is_file(), f"missing partial: {name}")
+
+    def test_every_partial_declares_same_partial_class(self) -> None:
+        # Every partial source must declare exactly one
+        # ``public static partial class UnityEditorControlBridge`` so the
+        # CLR sees the bridge as a single class spread across files.
+        for name in self._EXPECTED_PARTIAL_NAMES:
+            with self.subTest(name=name):
+                text = (TOOLS_DIR / name).read_text(encoding="utf-8")
+                hits = re.findall(
+                    r"public\s+static\s+partial\s+class\s+UnityEditorControlBridge\b",
+                    text,
+                )
+                self.assertEqual(
+                    1,
+                    len(hits),
+                    f"{name}: expected exactly 1 partial-class declaration, got {len(hits)}",
+                )
+
+    def test_no_non_partial_class_declaration(self) -> None:
+        # If any source declares the class without ``partial``, the C#
+        # compiler reports a duplicate-class error; this test catches
+        # that drift before the editor recompile does.
+        for name in self._EXPECTED_PARTIAL_NAMES:
+            with self.subTest(name=name):
+                text = (TOOLS_DIR / name).read_text(encoding="utf-8")
+                self.assertNotRegex(
+                    text,
+                    r"public\s+static\s+class\s+UnityEditorControlBridge\b",
+                    f"{name}: must use partial class, not plain class",
+                )
+
+
+class TestUdonSharpActionWiring(unittest.TestCase):
+    """Issue #119 — the three new UdonSharp action names must be present
+    in the bridge supported-actions set, the dispatcher must route each
+    to its dedicated handler, and the async-action set must be unchanged.
+    """
+
+    _NEW_ACTIONS = (
+        "editor_add_udonsharp_component",
+        "editor_set_udonsharp_field",
+        "editor_wire_persistent_listener",
+    )
+
+    def test_supported_actions_lists_new_udonsharp_actions(self) -> None:
+        source = _read(BRIDGE)
+        # Locate the SupportedActions HashSet literal block.
+        start = source.find("SupportedActions = new HashSet<string>")
+        self.assertNotEqual(-1, start, "SupportedActions block not found")
+        block_close = source.find("};", start)
+        self.assertNotEqual(-1, block_close, "SupportedActions terminator not found")
+        block = source[start:block_close]
+        for action in self._NEW_ACTIONS:
+            with self.subTest(action=action):
+                self.assertIn(f'"{action}"', block)
+
+    def test_async_actions_unchanged_for_udonsharp(self) -> None:
+        # The new authoring handlers complete synchronously; if any of
+        # them slip into AsyncActions the dispatcher's "no response
+        # written" guard would never fire for them.
+        source = _read(BRIDGE)
+        start = source.find("AsyncActions =")
+        self.assertNotEqual(-1, start, "AsyncActions block not found")
+        block_close = source.find("};", start)
+        block = source[start:block_close]
+        for action in self._NEW_ACTIONS:
+            with self.subTest(action=action):
+                self.assertNotIn(f'"{action}"', block)
+
+    def test_dispatcher_routes_each_new_action(self) -> None:
+        # ``RunFromPaths`` switches on ``request.action`` and assigns
+        # ``response = HandleX(...)``.  Each new action must route to
+        # its named handler.
+        source = _read(BRIDGE)
+        body = _extract_method(source, "RunFromPaths")
+        for action, handler in (
+            ("editor_add_udonsharp_component", "HandleAddUdonSharpComponent"),
+            ("editor_set_udonsharp_field", "HandleSetUdonSharpField"),
+            ("editor_wire_persistent_listener", "HandleWirePersistentListener"),
+        ):
+            with self.subTest(action=action):
+                self.assertIn(f'"{action}"', body)
+                self.assertIn(handler, body)
+
+
+class TestAddUdonSharpComponentHandler(unittest.TestCase):
+    """Issue #119 — ``HandleAddUdonSharpComponent`` must perform an
+    upsert with prior validation, reuse the existing UdonSharp setup
+    and proxy-to-backing synchronisation touchpoints, and return the
+    documented response shape.
+    """
+
+    def test_handler_present(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleAddUdonSharpComponent")
+        self.assertTrue(len(body) > 0)
+
+    def test_handler_references_setup_and_synchronisation(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleAddUdonSharpComponent")
+        # The handler delegates component creation to
+        # ``InvokeUdonSharpUndoAddComponent`` (a wrapper around the public
+        # ``UdonSharpUndo.AddComponent`` entry point, which internally
+        # chains ``Undo.AddComponent`` + ``RunBehaviourSetupWithUndo``);
+        # ``InvokeUdonSharpCopyProxyToUdon`` performs the proxy-to-backing
+        # sync.  Asserting the helper-call names makes the contract resilient
+        # to comment edits.
+        self.assertIn("InvokeUdonSharpUndoAddComponent", body)
+        self.assertIn("InvokeUdonSharpCopyProxyToUdon", body)
+
+    def test_handler_returns_upsert_flag_and_handle(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleAddUdonSharpComponent")
+        # Documented payload fields: was_existing flag, applied_fields
+        # list, component handle, and program-asset path.
+        self.assertIn("was_existing", body)
+        self.assertIn("applied_fields", body)
+        self.assertIn("udon_program_asset_path", body)
+        # The bridge's existing component-handle struct field name is
+        # ``component_handle`` per the existing add-component contract.
+        self.assertIn("component_handle", body)
+
+    def test_handler_emits_documented_error_codes(self) -> None:
+        # Method-contract error codes for type / kind / payload / runtime.
+        # The component-creation surface is split from the field-write
+        # surface so callers can distinguish "AddComponent failed" from
+        # "field write failed mid-application".  Field-failure codes
+        # are emitted by helpers that the handler delegates to
+        # (``ApplyUdonSharpInitialFields`` for per-field failures,
+        # ``InvokeUdonSharpCopyProxyToUdon`` for the sync step), so the
+        # test concatenates the handler body with both helpers' bodies
+        # to keep the contract assertion intact across refactors.
+        source = _read(BRIDGE)
+        scope = "\n".join(
+            _extract_method(source, name)
+            for name in (
+                "HandleAddUdonSharpComponent",
+                "ApplyUdonSharpInitialFields",
+                "InvokeUdonSharpCopyProxyToUdon",
+            )
+        )
+        for code in (
+            "EDITOR_CTRL_UDON_ADD_TYPE_NOT_FOUND",
+            "EDITOR_CTRL_UDON_ADD_NOT_USHARP",
+            "EDITOR_CTRL_UDON_ADD_BAD_FIELDS_JSON",
+            "EDITOR_CTRL_UDON_ADD_COMPONENT_FAILED",
+            "EDITOR_CTRL_UDON_ADD_FIELD_FAILED",
+        ):
+            with self.subTest(code=code):
+                self.assertIn(code, scope)
+
+
+class TestSetUdonSharpFieldHandler(unittest.TestCase):
+    """Issue #119 — ``HandleSetUdonSharpField`` must locate the field
+    via the SerializedObject surface, route VRChat URL fields, and
+    synchronise the backing UdonBehaviour with the proxy as one
+    transaction.
+    """
+
+    def test_handler_present(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleSetUdonSharpField")
+        self.assertTrue(len(body) > 0)
+
+    def test_handler_uses_serialized_object_surface(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleSetUdonSharpField")
+        self.assertIn("FindProperty", body)
+        # Synchronises the backing UdonBehaviour with the proxy.
+        self.assertIn("CopyProxyToUdon", body)
+
+    def test_handler_routes_vrchat_url_fields(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleSetUdonSharpField")
+        # SerializedProperty for VRCUrl is a Generic property whose
+        # nested ``url`` string carries the value.
+        self.assertIn("VRCUrl", body)
+        self.assertIn('"url"', body)
+
+    def test_handler_emits_documented_error_codes(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleSetUdonSharpField")
+        for code in (
+            "EDITOR_CTRL_UDON_SET_FIELD_NOT_FOUND",
+            "EDITOR_CTRL_UDON_SET_FIELD_AMBIGUOUS",
+            "EDITOR_CTRL_UDON_SET_FIELD_FIELD_NOT_FOUND",
+        ):
+            with self.subTest(code=code):
+                self.assertIn(code, body)
+
+
+class TestWirePersistentListenerHandler(unittest.TestCase):
+    """Issue #119 — ``HandleWirePersistentListener`` must use the
+    published string-mode entry point, walk the existing persistent-call
+    array to short-circuit on a match, and mark the source dirty.
+    """
+
+    def test_handler_present(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleWirePersistentListener")
+        self.assertTrue(len(body) > 0)
+
+    def test_handler_uses_published_entry_point(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleWirePersistentListener")
+        # ``UnityEventTools.AddStringPersistentListener`` is the only
+        # public string-mode entry point published by Unity.
+        self.assertIn("UnityEventTools", body)
+        self.assertIn("AddStringPersistentListener", body)
+
+    def test_handler_walks_existing_listeners(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleWirePersistentListener")
+        # ``GetPersistentEventCount`` / ``GetPersistentMethodName`` /
+        # ``GetPersistentTarget`` walk the persistent-call array.
+        self.assertIn("GetPersistentEventCount", body)
+        self.assertIn("GetPersistentMethodName", body)
+        self.assertIn("GetPersistentTarget", body)
+
+    def test_handler_marks_source_dirty(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleWirePersistentListener")
+        # The source component must be marked dirty so the listener
+        # persists; ``EditorUtility.SetDirty`` is the documented call.
+        self.assertIn("SetDirty", body)
+
+    def test_handler_emits_documented_error_codes(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleWirePersistentListener")
+        for code in (
+            "EDITOR_CTRL_UDON_WIRE_EVENT_NOT_FOUND",
+            "EDITOR_CTRL_UDON_WIRE_METHOD_NOT_FOUND",
+            "EDITOR_CTRL_UDON_WIRE_TARGET_NOT_FOUND",
+        ):
+            with self.subTest(code=code):
+                self.assertIn(code, body)
+
+
+class TestUdonSharpRequestFields(unittest.TestCase):
+    """Issue #119 — ``EditorControlRequest`` must carry the new payload
+    fields used by the wire-listener handler so the JsonUtility-based
+    deserialiser exposes them.  ``editor_set_udonsharp_field`` reuses
+    the existing ``field_name`` / ``property_value`` / ``object_reference``
+    fields from the property-set surface.
+    """
+
+    def test_request_carries_field_name_field(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_editor_control_request_body(source)
+        self.assertIn("field_name", body)
+
+    def test_request_carries_wire_listener_fields(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_editor_control_request_body(source)
+        # Source/target identity, method name, and the string argument.
+        self.assertIn("event_path", body)
+        self.assertIn("target_path", body)
+        self.assertIn("method", body)
+        self.assertIn("arg", body)
+
+    def test_request_carries_fields_json_for_add_udonsharp(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_editor_control_request_body(source)
+        self.assertIn("fields_json", body)
 
 
 if __name__ == "__main__":

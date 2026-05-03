@@ -264,6 +264,10 @@ class TestSupportedActions(unittest.TestCase):
             "run_script",
             # Issue #118: synchronous recompile-and-wait surface
             "editor_recompile_and_wait",
+            # Issue #119: high-level UdonSharp authoring surface.
+            "editor_add_udonsharp_component",
+            "editor_set_udonsharp_field",
+            "editor_wire_persistent_listener",
         }
         self.assertEqual(expected, SUPPORTED_ACTIONS)
 

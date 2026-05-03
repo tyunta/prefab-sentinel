@@ -19,6 +19,7 @@ __all__ = [
     "register_editor_view_tools",
     "CONSOLE_MAX_ENTRIES_MIN",
     "CONSOLE_MAX_ENTRIES_MAX",
+    "RECOMPILE_AND_WAIT_TIMEOUT_MAX_SEC",
 ]
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,17 @@ CONSOLE_MAX_ENTRIES_DEFAULT = 200
 # without blocking the caller indefinitely.
 RECOMPILE_AND_WAIT_DEFAULT_TIMEOUT_SEC = 60.0
 
+# Issue #134: published acceptance range for the synchronous
+# recompile-and-wait wait budget.  The lower bound is exclusive at zero —
+# 0 / negative budgets degenerate into an immediate timeout that pins the
+# poll loop on the bridge.  The upper bound caps the worst-case time a
+# single MCP call can keep the Editor Bridge poll loop alive; arbitrarily
+# large values would let a caller block the bridge for half an hour or
+# more per request.  Drift between this Python constant and the C# bridge
+# constant ``RecompileAndWaitTimeoutMaxSec`` would let an oversized budget
+# slip past the client check, so both sides validate identically.
+RECOMPILE_AND_WAIT_TIMEOUT_MAX_SEC = 1800.0
+
 
 def _max_entries_out_of_range_envelope(value: int) -> dict[str, Any]:
     """Return the canonical MAX_ENTRIES_OUT_OF_RANGE envelope.
@@ -63,6 +75,31 @@ def _max_entries_out_of_range_envelope(value: int) -> dict[str, Any]:
             "supplied": value,
             "min": CONSOLE_MAX_ENTRIES_MIN,
             "max": CONSOLE_MAX_ENTRIES_MAX,
+        },
+        "diagnostics": [],
+    }
+
+
+def _recompile_timeout_out_of_range_envelope(value: float) -> dict[str, Any]:
+    """Return the canonical COMPILE_TIMEOUT_OUT_OF_RANGE envelope for the
+    recompile-and-wait surface.
+
+    The message names the supplied value and both bounds so the caller
+    can fix the request without consulting external docs.  The lower
+    bound is exclusive at zero; the upper bound is inclusive.
+    """
+    return {
+        "success": False,
+        "severity": "error",
+        "code": "COMPILE_TIMEOUT_OUT_OF_RANGE",
+        "message": (
+            f"timeout_sec={value} is outside the accepted range "
+            f"(0, {RECOMPILE_AND_WAIT_TIMEOUT_MAX_SEC}] (seconds)."
+        ),
+        "data": {
+            "supplied": value,
+            "min_exclusive": 0.0,
+            "max": RECOMPILE_AND_WAIT_TIMEOUT_MAX_SEC,
         },
         "diagnostics": [],
     }
@@ -95,7 +132,15 @@ def editor_recompile_and_wait(
     call-time observation, and the post-reload signal has fired since the
     request was issued.  Forwards the caller-supplied wait budget to the
     bridge as the request payload's ``timeout_sec`` field.
+
+    Issue #134: ``timeout_sec`` must satisfy
+    ``0 < timeout_sec <= RECOMPILE_AND_WAIT_TIMEOUT_MAX_SEC``.  Out-of-range
+    requests return the ``COMPILE_TIMEOUT_OUT_OF_RANGE`` envelope without
+    contacting the bridge.
     """
+    if timeout_sec <= 0.0 or timeout_sec > RECOMPILE_AND_WAIT_TIMEOUT_MAX_SEC:
+        return _recompile_timeout_out_of_range_envelope(timeout_sec)
+
     # The transport poll budget must outlive the bridge's own wait so the
     # response file is observed before the Python side gives up; we add a
     # 5 s dispatch margin on top of the caller-supplied budget.

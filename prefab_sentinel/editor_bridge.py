@@ -94,6 +94,16 @@ SUPPORTED_ACTIONS = frozenset(
         # assembly's mtime has advanced, and the post-reload signal has
         # fired.  ``editor_recompile`` retains its fire-and-return contract.
         "editor_recompile_and_wait",
+        # Issue #119: high-level UdonSharp authoring surface — three
+        # synchronous handlers (Add / SetField / WireListener) that wrap
+        # the AddComponent → RunBehaviourSetup → CopyProxyToUdon chain,
+        # the SerializedObject field-write surface, and the published
+        # UnityEventTools persistent-listener entry point.  Mirrors the
+        # bridge-side SupportedActions set so an out-of-sync action name
+        # cannot silently fall through to ``EDITOR_BRIDGE_UNKNOWN_ACTION``.
+        "editor_add_udonsharp_component",
+        "editor_set_udonsharp_field",
+        "editor_wire_persistent_listener",
     }
 )
 
