@@ -147,7 +147,8 @@ class TestToolRegistration(unittest.TestCase):
             # Editor bridge tools
             "editor_screenshot", "editor_select", "editor_frame",
             "editor_get_camera", "editor_set_camera",
-            "editor_refresh", "editor_recompile", "editor_instantiate",
+            "editor_refresh", "editor_recompile", "editor_recompile_and_wait",
+            "editor_instantiate",
             "editor_set_material", "editor_delete",
             "editor_get_blend_shapes", "editor_set_blend_shape",
             "editor_list_menu_items", "editor_execute_menu_item",
@@ -186,7 +187,7 @@ class TestToolRegistration(unittest.TestCase):
     def test_tool_count(self) -> None:
         server = create_server()
         tools = _run(server.list_tools())
-        self.assertEqual(71, len(tools))
+        self.assertEqual(72, len(tools))
 
 
 class TestSymbolTools(unittest.TestCase):

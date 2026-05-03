@@ -16,6 +16,7 @@ from prefab_sentinel.services.reference_resolver import ReferenceResolverService
 from prefab_sentinel.services.runtime_validation import RuntimeValidationService
 from prefab_sentinel.structure_validator import validate_structure
 from prefab_sentinel.unity_assets import GAMEOBJECT_BEARING_SUFFIXES
+from prefab_sentinel.world_canvas_inspector import inspect_world_canvas_setup
 
 
 def inspect_structure(
@@ -125,6 +126,59 @@ def validate_refs(
     )
 
 
+def _inspect_world_canvas_step(scene_path: str) -> ToolResponse:
+    """Issue #121: leading static WorldSpace-Canvas inspection step.
+
+    Reads the scene YAML (best-effort) and runs the pure-function
+    canvas linter.  The step's severity is intentionally capped at
+    ``WARNING`` so a flagged Canvas does not abort the rest of the
+    runtime-validation pipeline — the documented BoxCollider Z trap
+    is a structural mistake worth surfacing but not a build blocker.
+    A missing or unreadable scene file becomes a single ``info``
+    diagnostic so the pipeline still proceeds to the runtime steps.
+    """
+    diagnostics: list[Diagnostic] = []
+    severity = Severity.INFO
+    try:
+        text = Path(scene_path).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        diagnostics.append(
+            Diagnostic(
+                path=scene_path,
+                location="",
+                detail="WORLD_CANVAS_SCENE_UNREADABLE",
+                evidence=(
+                    f"Scene file could not be read for static WorldSpace-Canvas "
+                    f"inspection: {exc}"
+                ),
+            )
+        )
+        return ToolResponse(
+            success=True,
+            severity=Severity.INFO,
+            code="WORLD_CANVAS_INSPECT_OK",
+            message="World canvas inspection skipped (scene file unreadable).",
+            data={"scene_path": scene_path, "read_only": True},
+            diagnostics=diagnostics,
+        )
+
+    diagnostics = inspect_world_canvas_setup(text, scene_path)
+    if any(d.detail == "WORLD_CANVAS_LOCAL_SCALE" for d in diagnostics):
+        severity = Severity.WARNING
+    return ToolResponse(
+        success=True,
+        severity=severity,
+        code="WORLD_CANVAS_INSPECT_OK",
+        message="World canvas inspection completed (read-only).",
+        data={
+            "scene_path": scene_path,
+            "read_only": True,
+            "diagnostic_count": len(diagnostics),
+        },
+        diagnostics=diagnostics,
+    )
+
+
 def validate_runtime(
     runtime_validation: RuntimeValidationService,
     scene_path: str,
@@ -134,6 +188,9 @@ def validate_runtime(
     allow_warnings: bool = False,
     max_diagnostics: int = 200,
 ) -> ToolResponse:
+    # Issue #121: leading static WorldSpace-Canvas + VRC_UiShape check.
+    # Severity is capped at warning so this never aborts the pipeline.
+    canvas_step = _inspect_world_canvas_step(scene_path)
     compile_step = runtime_validation.compile_udonsharp()
     run_step = runtime_validation.run_clientsim(scene_path, profile)
     runtime_read_only = all(
@@ -142,6 +199,7 @@ def validate_runtime(
     )
 
     steps = [
+        ("inspect_world_canvas", canvas_step),
         ("compile_udonsharp", compile_step),
         ("run_clientsim", run_step),
     ]

@@ -11,10 +11,24 @@ real Editor Bridge is required.
 
 from __future__ import annotations
 
+import os
 import unittest
 from unittest.mock import patch
 
 from prefab_sentinel import mcp_tools_editor_exec, mcp_tools_editor_view
+
+_BRIDGE_ENV_VARS = ("UNITYTOOL_BRIDGE_MODE", "UNITYTOOL_BRIDGE_WATCH_DIR")
+
+
+def _drop_bridge_env() -> None:
+    """Pop bridge dispatch env vars so unit tests do not leak host bridge state.
+
+    The host workstation may export ``UNITYTOOL_BRIDGE_MODE=editor`` which
+    would route requests to a live Editor Bridge mid-test; we always run
+    these contract tests in batchmode-equivalent isolation (issue #88, #89).
+    """
+    for var in _BRIDGE_ENV_VARS:
+        os.environ.pop(var, None)
 
 
 class EditorRunScriptTests(unittest.TestCase):
@@ -295,6 +309,111 @@ class EditorRunScriptCompileTimeoutRangeTests(unittest.TestCase):
             )
         send.assert_called_once()
         self.assertEqual(1, send.call_args.kwargs["compile_timeout"])
+
+
+class EditorRecompileAndWaitTests(unittest.TestCase):
+    """Issue #118 — synchronous recompile-and-wait MCP tool delegates to
+    the editor-bridge transport and forwards the caller-supplied wait
+    budget to the bridge as the request payload's ``timeout_sec`` field.
+    """
+
+    _BRIDGE_OK = {
+        "success": True,
+        "severity": "info",
+        "code": "EDITOR_CTRL_RECOMPILE_AND_WAIT_OK",
+        "message": "ok",
+        "data": {"executed": True},
+        "diagnostics": [],
+    }
+
+    def setUp(self) -> None:
+        _drop_bridge_env()
+
+    def test_default_timeout_forwards_60s(self) -> None:
+        with patch.object(mcp_tools_editor_view, "send_action") as send:
+            send.return_value = self._BRIDGE_OK
+            mcp_tools_editor_view.editor_recompile_and_wait()
+        send.assert_called_once()
+        kwargs = send.call_args.kwargs
+        self.assertEqual("editor_recompile_and_wait", kwargs["action"])
+        self.assertEqual({"timeout_sec": 60.0}, kwargs["request_extras"])
+
+    def test_explicit_timeout_forwards(self) -> None:
+        with patch.object(mcp_tools_editor_view, "send_action") as send:
+            send.return_value = self._BRIDGE_OK
+            mcp_tools_editor_view.editor_recompile_and_wait(timeout_sec=42.0)
+        kwargs = send.call_args.kwargs
+        self.assertEqual({"timeout_sec": 42.0}, kwargs["request_extras"])
+
+
+class EditorConsoleMaxEntriesValidationTests(unittest.TestCase):
+    """Issue #131 — the editor_console MCP tool rejects ``max_entries``
+    outside the inclusive ``[1, CONSOLE_MAX_ENTRIES_MAX]`` range with
+    the canonical ``MAX_ENTRIES_OUT_OF_RANGE`` envelope and never
+    contacts the bridge in that case.  In-range values forward to the
+    bridge unchanged; the boundary values (1 and the upper bound) are
+    accepted.
+    """
+
+    _BRIDGE_OK = {
+        "success": True,
+        "severity": "info",
+        "code": "EDITOR_CTRL_CONSOLE_OK",
+        "message": "ok",
+        "data": {"entries": [], "executed": True},
+        "diagnostics": [],
+    }
+
+    def setUp(self) -> None:
+        _drop_bridge_env()
+
+    def test_rejects_above_upper_bound(self) -> None:
+        with patch.object(mcp_tools_editor_view, "send_action") as send:
+            resp = mcp_tools_editor_view.editor_console(max_entries=1001)
+        self.assertFalse(resp["success"])
+        self.assertEqual("error", resp["severity"])
+        self.assertEqual("MAX_ENTRIES_OUT_OF_RANGE", resp["code"])
+        self.assertIn("1001", resp["message"])
+        self.assertIn("1000", resp["message"])
+        send.assert_not_called()
+
+    def test_rejects_zero(self) -> None:
+        with patch.object(mcp_tools_editor_view, "send_action") as send:
+            resp = mcp_tools_editor_view.editor_console(max_entries=0)
+        self.assertEqual("MAX_ENTRIES_OUT_OF_RANGE", resp["code"])
+        send.assert_not_called()
+
+    def test_rejects_negative(self) -> None:
+        with patch.object(mcp_tools_editor_view, "send_action") as send:
+            resp = mcp_tools_editor_view.editor_console(max_entries=-1)
+        self.assertEqual("MAX_ENTRIES_OUT_OF_RANGE", resp["code"])
+        send.assert_not_called()
+
+    def test_accepts_lower_boundary(self) -> None:
+        with patch.object(mcp_tools_editor_view, "send_action") as send:
+            send.return_value = self._BRIDGE_OK
+            mcp_tools_editor_view.editor_console(max_entries=1)
+        send.assert_called_once()
+        self.assertEqual(1, send.call_args.kwargs["max_entries"])
+
+    def test_accepts_upper_boundary(self) -> None:
+        with patch.object(mcp_tools_editor_view, "send_action") as send:
+            send.return_value = self._BRIDGE_OK
+            mcp_tools_editor_view.editor_console(
+                max_entries=mcp_tools_editor_view.CONSOLE_MAX_ENTRIES_MAX,
+            )
+        send.assert_called_once()
+        self.assertEqual(
+            mcp_tools_editor_view.CONSOLE_MAX_ENTRIES_MAX,
+            send.call_args.kwargs["max_entries"],
+        )
+
+    def test_accepts_normal_value(self) -> None:
+        with patch.object(mcp_tools_editor_view, "send_action") as send:
+            send.return_value = self._BRIDGE_OK
+            mcp_tools_editor_view.editor_console(max_entries=200)
+        send.assert_called_once()
+        self.assertEqual(200, send.call_args.kwargs["max_entries"])
 
 
 class TestEditorRecompileForceReimport(unittest.TestCase):

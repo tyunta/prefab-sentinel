@@ -89,6 +89,11 @@ SUPPORTED_ACTIONS = frozenset(
         "editor_reflect",
         # Phase 9: Editor script exec (#74)
         "run_script",
+        # Issue #118: synchronous recompile-and-wait surface that returns
+        # only after the Editor has finished compiling, the compiled
+        # assembly's mtime has advanced, and the post-reload signal has
+        # fired.  ``editor_recompile`` retains its fire-and-return contract.
+        "editor_recompile_and_wait",
     }
 )
 
@@ -145,6 +150,7 @@ def send_action(
     *,
     action: str,
     timeout_sec: int | None = None,
+    request_extras: dict[str, Any] | None = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
     """Send an editor-control action and wait for the response.
@@ -154,7 +160,12 @@ def send_action(
     action:
         One of SUPPORTED_ACTIONS.
     timeout_sec:
-        Override timeout (default: env or 30s).
+        Override transport-level poll timeout (default: env or 30s).
+    request_extras:
+        Optional mapping merged into the request JSON after ``kwargs``.
+        Used when a request payload field collides with one of this
+        function's named parameters (notably ``timeout_sec``, which the
+        synchronous recompile-and-wait action requires as a payload field).
     **kwargs:
         Additional fields merged into the request JSON.
     """
@@ -177,11 +188,13 @@ def send_action(
     response_file = watch_dir / f"{request_id}.response.json"
     tmp_file = Path(str(request_file) + ".tmp")
 
-    request_payload = {
+    request_payload: dict[str, Any] = {
         "protocol_version": PROTOCOL_VERSION,
         "action": action,
         **kwargs,
     }
+    if request_extras:
+        request_payload.update(request_extras)
 
     # Atomic write: .tmp → rename to avoid partial reads by the watcher.
     try:

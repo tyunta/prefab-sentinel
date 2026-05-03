@@ -49,6 +49,12 @@ _DEFAULT_CSHARP = _REPO_ROOT / "tools" / "unity" / "PrefabSentinel.UnityEditorCo
 _RE_CSHARP_BRIDGE_VERSION = re.compile(r'BridgeVersion\s*=\s*"([^"]+)"')
 _RE_CSHARP_PROTOCOL_VERSION = re.compile(r"ProtocolVersion\s*=\s*(\d+)")
 _RE_CSHARP_SEVERITY = re.compile(r'severity\s*=\s*"([A-Za-z]+)"')
+# Issue #131: ``ConsoleLogBuffer.DefaultCapacity`` is the single source of
+# truth for the ``capture_console_logs`` upper-bound check; the Python
+# mirror (``CONSOLE_LOG_BUFFER_MAX_ENTRIES``) must equal the C# literal.
+_RE_CSHARP_CONSOLE_CAPACITY = re.compile(
+    r"public\s+const\s+int\s+DefaultCapacity\s*=\s*(\d+)"
+)
 
 
 # ---------- Loader helpers (all return str/int/list or raise ``_LoadError``)
@@ -103,10 +109,16 @@ def _load_csharp_constants(path: Path = _DEFAULT_CSHARP) -> dict[str, object]:
     severities = {m.group(1) for m in _RE_CSHARP_SEVERITY.finditer(text)}
     if not severities:
         raise _LoadError("C# bridge source: no severity string literals found")
+    capacity_match = _RE_CSHARP_CONSOLE_CAPACITY.search(text)
+    if not capacity_match:
+        raise _LoadError(
+            "C# bridge source: ConsoleLogBuffer.DefaultCapacity literal not found"
+        )
     return {
         "bridge_version": bridge_match.group(1),
         "protocol_version": int(proto_match.group(1)),
         "severities": severities,
+        "console_capacity": int(capacity_match.group(1)),
     }
 
 
@@ -134,6 +146,16 @@ def _check_protocol(py_protocol: int, cs_protocol: int) -> list[str]:
     return [
         f"protocol drift: Python PROTOCOL_VERSION={py_protocol} vs "
         f"C# ProtocolVersion={cs_protocol}"
+    ]
+
+
+def _check_console_capacity(py_capacity: int, cs_capacity: int) -> list[str]:
+    """Return a list of drift messages naming 'console capacity' (empty when aligned)."""
+    if py_capacity == cs_capacity:
+        return []
+    return [
+        f"console capacity drift: Python CONSOLE_LOG_BUFFER_MAX_ENTRIES="
+        f"{py_capacity} vs C# ConsoleLogBuffer.DefaultCapacity={cs_capacity}"
     ]
 
 
@@ -169,6 +191,7 @@ def main(argv: list[str] | None = None) -> int:
     # Python-side constants (import lazily so _LoadError isn't mingled with
     # ImportError — a failed import here is a bug in the repo, not drift).
     from prefab_sentinel.bridge_constants import (
+        CONSOLE_LOG_BUFFER_MAX_ENTRIES as PY_CONSOLE_CAPACITY,
         PROTOCOL_VERSION as PY_PROTOCOL_VERSION,
         VALID_SEVERITIES as PY_VALID_SEVERITIES,
     )
@@ -185,6 +208,9 @@ def main(argv: list[str] | None = None) -> int:
     drifts.extend(_check_versions(py_version, plugin_version, str(cs["bridge_version"])))
     drifts.extend(_check_protocol(int(PY_PROTOCOL_VERSION), int(cs["protocol_version"])))
     drifts.extend(_check_severities(set(PY_VALID_SEVERITIES), set(cs["severities"])))  # type: ignore[arg-type]
+    drifts.extend(_check_console_capacity(
+        int(PY_CONSOLE_CAPACITY), int(cs["console_capacity"]),  # type: ignore[arg-type]
+    ))
 
     if drifts:
         print("check_bridge_constants: drift detected", file=sys.stderr)

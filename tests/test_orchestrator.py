@@ -774,7 +774,9 @@ class ValidateRuntimeTests(unittest.TestCase):
         self.assertTrue(result.success)
         self.assertEqual("VALIDATE_RUNTIME_RESULT", result.code)
         self.assertFalse(result.data["fail_fast_triggered"])
-        self.assertEqual(5, len(result.data["steps"]))
+        # Issue #121: an additional leading WorldSpace-Canvas step joins
+        # the pipeline (now 6 steps; was 5).
+        self.assertEqual(6, len(result.data["steps"]))
 
     def test_fail_fast_on_run_clientsim_error(self) -> None:
         orch = _make_orchestrator()
@@ -784,9 +786,34 @@ class ValidateRuntimeTests(unittest.TestCase):
         result = orch.validate_runtime("Assets/Scenes/Test.unity")
         self.assertFalse(result.success)
         self.assertTrue(result.data["fail_fast_triggered"])
-        self.assertEqual(2, len(result.data["steps"]))
+        # Issue #121: WorldSpace-Canvas inspection is the leading step,
+        # so the fail-fast slice now contains 3 entries (was 2).
+        self.assertEqual(3, len(result.data["steps"]))
         # collect/classify/assert should not be called
         orch.runtime_validation.collect_unity_console.assert_not_called()
+
+    def test_world_canvas_step_is_first_and_caps_severity(self) -> None:
+        """Issue #121: the leading WorldSpace-Canvas step is named
+        ``inspect_world_canvas`` and its severity is capped at warning so
+        the pipeline continues even when the linter flags a deviation.
+        """
+        orch = _make_orchestrator()
+        orch.runtime_validation.compile_udonsharp.return_value = _ok_response()
+        orch.runtime_validation.run_clientsim.return_value = _ok_response()
+        orch.runtime_validation.collect_unity_console.return_value = _ok_response(
+            data={"log_lines": []}
+        )
+        orch.runtime_validation.classify_errors.return_value = _ok_response()
+        orch.runtime_validation.assert_no_critical_errors.return_value = _ok_response()
+
+        result = orch.validate_runtime("Assets/Scenes/Test.unity")
+        steps = result.data["steps"]
+        self.assertEqual("inspect_world_canvas", steps[0]["step"])
+        # Severity must not exceed warning even when the scene path is
+        # missing — the leading step never aborts the pipeline.
+        self.assertIn(
+            steps[0]["result"]["severity"], {"info", "warning"},
+        )
 
 
 class PostconditionSchemaTests(unittest.TestCase):
