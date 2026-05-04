@@ -115,3 +115,4 @@
   - `prefab_sentinel.orchestrator_validation`
 - survived は critical / trivial / equivalent の三分類で記録する。trivial は `[tool.mutmut].do_not_mutate` に追加し、critical はテストでキルする。
 - 新規テストは `tests._assertion_helpers.assert_error_envelope` で code / severity / field / message を値で固定する。例外発生のみのアサートは禁止。
+- 新規のリポジトリ同期テスト（`tools/unity/` や `knowledge/` の un-mutated tree を読むだけで `prefab_sentinel/` のミューテーションを観測できないテスト）は、`@pytest.mark.source_text_invariant` をモジュールスコープで宣言する。これが mutmut のテスト選択（`-m "not source_text_invariant"` 単一フィルタ）からの除外メカニズム。

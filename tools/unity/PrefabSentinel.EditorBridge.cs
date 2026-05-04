@@ -230,7 +230,10 @@ namespace PrefabSentinel
             {
                 Debug.LogWarning($"[PrefabSentinel] WriteAtomic: {ex.GetType().Name}: {ex.Message}");
                 try { File.WriteAllText(path, content); }
-                catch { /* best effort */ }
+                catch (Exception fallbackEx)
+                {
+                    Debug.LogWarning($"[PrefabSentinel] WriteAtomic: {fallbackEx.GetType().Name}: {fallbackEx.Message}");
+                }
             }
         }
 

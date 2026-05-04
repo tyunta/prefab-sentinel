@@ -24,6 +24,15 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
+import pytest
+
+# Issue #167: this module reads ``CLAUDE.md`` and the drift-checker
+# script directly from the un-mutated source tree, so its assertions
+# cannot observe mutations applied to ``prefab_sentinel/``.  The marker
+# is the inclusion mechanism for repository-synchrony tests; mutmut's
+# pytest selection excludes it via a single ``-m`` filter.
+pytestmark = pytest.mark.source_text_invariant
+
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _CLAUDE_MD = _PROJECT_ROOT / "CLAUDE.md"
 _DRIFT_CHECKER = _PROJECT_ROOT / "scripts" / "check_bridge_constants.py"

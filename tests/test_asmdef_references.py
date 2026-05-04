@@ -11,6 +11,16 @@ import json
 import unittest
 from pathlib import Path
 
+import pytest
+
+# Issue #167: this module reads the original (un-mutated) source tree
+# (the ``tools/unity`` checked-in asmdef), so its assertions are
+# insensitive to mutations applied to ``prefab_sentinel/`` and would
+# only contribute noise to mutmut runs.  The marker is the inclusion
+# mechanism for repository-synchrony tests; mutmut's pytest selection
+# excludes this marker via a single ``-m`` filter.
+pytestmark = pytest.mark.source_text_invariant
+
 ASMDEF: Path = (
     Path(__file__).resolve().parent.parent
     / "tools"

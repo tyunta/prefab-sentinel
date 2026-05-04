@@ -3,6 +3,33 @@
 Pure functions over ``log_lines: list[str]``; no I/O, no Unity invocation.
 Severity rollup follows the contract pinned by issue #89:
 ``UDON_NULLREF`` matches surface at ``Severity.CRITICAL``.
+
+Severity bands and the unmatched-input rollup
+---------------------------------------------
+
+Each entry in ``_LOG_PATTERNS`` declares the severity band of one log
+category (``warning`` / ``error`` / ``critical``).  The
+``info`` band has **no associated log pattern** by design: there is no
+log signal that classifies as informational, so unmatched input — i.e.
+log lines that no pattern's ``re.search`` accepts — does not roll up to
+any pattern.
+
+Concretely, when ``classify_errors`` is called with input that produces
+zero pattern hits (``count_total == 0``):
+
+* ``severity`` is ``Severity.INFO`` because ``max_severity`` returns
+  ``Severity.INFO`` for the empty severity-hits list (issue #160).
+* ``code`` is ``"RUN_CLASSIFY_OK"`` and ``success`` is ``True``.
+* ``count_by_category`` is the empty dict (no category was incremented).
+* ``categories_by_severity`` carries ``critical=0``, ``error=0``,
+  ``warning=0`` — the published quality-gate counters all read zero,
+  with no informational counter present (the ``info`` band has no
+  category to count).
+
+Adding a new log category therefore must declare one of the three
+non-info severity bands; placing it under ``Severity.INFO`` would
+silently fold informational hits into the unmatched-input rollup and
+make the ``count_total == 0`` invariant ambiguous.
 """
 
 from __future__ import annotations

@@ -10,3 +10,11 @@ sample/
 # Generated reports/artifacts
 reports/
 report-*.md
+
+# Mutation-testing artifact directory (issue #166): mutmut copies the
+# audited tree into this directory at run start; it must never appear in
+# version-control status output.
+mutants/
+
+# coverage.py SQLite artifact — local-run only, never committed.
+.coverage

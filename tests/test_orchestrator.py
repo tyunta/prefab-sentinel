@@ -1066,6 +1066,266 @@ class PostconditionSchemaTests(unittest.TestCase):
         self.assertIn("not supported", result.message)
 
 
+class PostconditionSchemaValidationTests(unittest.TestCase):
+    """Issue #146 — pin every postcondition schema-validation outcome
+    by code, severity, type identity, related field identity, and
+    message-shape via the structured-envelope helper.
+    """
+
+    def _validate(self, postcondition: object, resource_ids: set[str] | None = None):
+        from prefab_sentinel.orchestrator_postcondition import (  # noqa: PLC0415
+            _validate_postcondition_schema,
+        )
+
+        return _validate_postcondition_schema(
+            postcondition, resource_ids=resource_ids or set()
+        )
+
+    def test_non_object_emits_post_schema_error(self) -> None:
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        result = self._validate("not_a_dict")
+        assert_error_envelope(
+            result,
+            code="POST_SCHEMA_ERROR",
+            severity="error",
+            message_match=r"must be an object",
+        )
+
+    def test_missing_type_emits_post_schema_error(self) -> None:
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        result = self._validate({})
+        assert_error_envelope(
+            result,
+            code="POST_SCHEMA_ERROR",
+            severity="error",
+            message_match=r"type is required",
+        )
+
+    def test_asset_exists_mutually_exclusive_emits_post_schema_error(self) -> None:
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        result = self._validate(
+            {"type": "asset_exists", "resource": "r", "path": "P"},
+            resource_ids={"r"},
+        )
+        assert_error_envelope(
+            result,
+            code="POST_SCHEMA_ERROR",
+            severity="error",
+            message_match=r"exactly one",
+        )
+        self.assertEqual("asset_exists", result.data["type"])
+
+    def test_asset_exists_unknown_resource_emits_post_schema_error(self) -> None:
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        result = self._validate(
+            {"type": "asset_exists", "resource": "unknown"},
+            resource_ids={"r"},
+        )
+        assert_error_envelope(
+            result,
+            code="POST_SCHEMA_ERROR",
+            severity="error",
+            message_match=r"unknown resource",
+        )
+        self.assertEqual("asset_exists", result.data["type"])
+        self.assertEqual("unknown", result.data["resource"])
+
+    def test_broken_refs_missing_scope_emits_post_schema_error(self) -> None:
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        result = self._validate({"type": "broken_refs", "scope": ""})
+        assert_error_envelope(
+            result,
+            code="POST_SCHEMA_ERROR",
+            severity="error",
+            message_match=r"non-empty 'scope'",
+        )
+        self.assertEqual("broken_refs", result.data["type"])
+
+    def test_broken_refs_negative_count_emits_post_schema_error(self) -> None:
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        result = self._validate(
+            {"type": "broken_refs", "scope": "Assets/", "expected_count": -1}
+        )
+        assert_error_envelope(
+            result,
+            code="POST_SCHEMA_ERROR",
+            severity="error",
+            message_match=r"expected_count",
+        )
+        self.assertEqual("broken_refs", result.data["type"])
+        self.assertEqual("Assets/", result.data["scope"])
+
+    def test_broken_refs_non_string_array_field_emits_post_schema_error(self) -> None:
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        result = self._validate(
+            {
+                "type": "broken_refs",
+                "scope": "Assets/",
+                "expected_count": 0,
+                "exclude_patterns": [123],
+            }
+        )
+        assert_error_envelope(
+            result,
+            code="POST_SCHEMA_ERROR",
+            severity="error",
+            message_match=r"exclude_patterns.*array of strings",
+        )
+
+    def test_broken_refs_negative_diagnostics_cap_emits_post_schema_error(self) -> None:
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        result = self._validate(
+            {
+                "type": "broken_refs",
+                "scope": "Assets/",
+                "expected_count": 0,
+                "max_diagnostics": -1,
+            }
+        )
+        assert_error_envelope(
+            result,
+            code="POST_SCHEMA_ERROR",
+            severity="error",
+            message_match=r"max_diagnostics",
+        )
+
+    def test_unsupported_type_emits_post_schema_error(self) -> None:
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        result = self._validate({"type": "made_up_type"})
+        assert_error_envelope(
+            result,
+            code="POST_SCHEMA_ERROR",
+            severity="error",
+            message_match=r"not supported",
+        )
+        self.assertEqual("made_up_type", result.data["type"])
+
+    def test_asset_exists_resource_accept_emits_post_schema_ok(self) -> None:
+        result = self._validate(
+            {"type": "asset_exists", "resource": "r"},
+            resource_ids={"r"},
+        )
+        self.assertTrue(result.success)
+        self.assertEqual("POST_SCHEMA_OK", result.code)
+        self.assertEqual(Severity.INFO, result.severity)
+        self.assertEqual("asset_exists", result.data["type"])
+
+    def test_broken_refs_accept_emits_post_schema_ok(self) -> None:
+        result = self._validate(
+            {"type": "broken_refs", "scope": "Assets/", "expected_count": 0}
+        )
+        self.assertTrue(result.success)
+        self.assertEqual("POST_SCHEMA_OK", result.code)
+        self.assertEqual(Severity.INFO, result.severity)
+        self.assertEqual("broken_refs", result.data["type"])
+        self.assertEqual("Assets/", result.data["scope"])
+
+
+class PostconditionEvaluatorTests(unittest.TestCase):
+    """Issue #146 — pin every postcondition-evaluation outcome by
+    code, target identity, presence/expected/actual counts, and the
+    underlying scan code."""
+
+    def _evaluate(
+        self,
+        postcondition: dict,
+        resource_map: dict | None = None,
+        scan_response: ToolResponse | None = None,
+        target_path: str = "/tmp/target.json",
+        target_exists: bool = True,
+    ):
+        from prefab_sentinel.orchestrator_postcondition import (  # noqa: PLC0415
+            _evaluate_postcondition,
+        )
+
+        serialized_object = MagicMock()
+        serialized_object._resolve_target_path.return_value = Path(target_path)
+        reference_resolver = MagicMock()
+        if scan_response is not None:
+            reference_resolver.scan_broken_references.return_value = scan_response
+        with patch.object(Path, "exists", return_value=target_exists):
+            return _evaluate_postcondition(
+                serialized_object,
+                reference_resolver,
+                postcondition,
+                resource_map=resource_map or {},
+            )
+
+    def test_asset_exists_present_emits_post_asset_exists_ok(self) -> None:
+        result = self._evaluate(
+            {"type": "asset_exists", "path": "Assets/x.json"},
+            target_path="/tmp/x.json",
+            target_exists=True,
+        )
+        self.assertTrue(result.success)
+        self.assertEqual("POST_ASSET_EXISTS_OK", result.code)
+        self.assertEqual("/tmp/x.json", result.data["path"])
+        self.assertTrue(result.data["exists"])
+
+    def test_asset_exists_absent_emits_post_asset_exists_failed(self) -> None:
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        result = self._evaluate(
+            {"type": "asset_exists", "path": "Assets/x.json"},
+            target_path="/tmp/x.json",
+            target_exists=False,
+        )
+        assert_error_envelope(result, code="POST_ASSET_EXISTS_FAILED", severity="error")
+        self.assertEqual("/tmp/x.json", result.data["path"])
+        self.assertFalse(result.data["exists"])
+
+    def test_broken_refs_scan_failed_emits_post_broken_refs_error(self) -> None:
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        scan = _error_response("REF404", data={"scope": "Assets/", "read_only": True})
+        result = self._evaluate(
+            {"type": "broken_refs", "scope": "Assets/", "expected_count": 0},
+            scan_response=scan,
+        )
+        assert_error_envelope(result, code="POST_BROKEN_REFS_ERROR", severity="error")
+        self.assertEqual("REF404", result.data["scan_code"])
+        self.assertEqual("Assets/", result.data["scope"])
+        self.assertEqual(0, result.data["expected_count"])
+
+    def test_broken_refs_count_mismatch_emits_post_broken_refs_failed(self) -> None:
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        scan = _ok_response(
+            "REF_SCAN_BROKEN", data={"broken_count": 7, "read_only": True}
+        )
+        result = self._evaluate(
+            {"type": "broken_refs", "scope": "Assets/", "expected_count": 0},
+            scan_response=scan,
+        )
+        assert_error_envelope(result, code="POST_BROKEN_REFS_FAILED", severity="error")
+        self.assertEqual(0, result.data["expected_count"])
+        self.assertEqual(7, result.data["actual_count"])
+        self.assertEqual("REF_SCAN_BROKEN", result.data["scan_code"])
+
+    def test_broken_refs_count_match_emits_post_broken_refs_ok(self) -> None:
+        scan = _ok_response(
+            "REF_SCAN_OK", data={"broken_count": 0, "read_only": True}
+        )
+        result = self._evaluate(
+            {"type": "broken_refs", "scope": "Assets/", "expected_count": 0},
+            scan_response=scan,
+        )
+        self.assertTrue(result.success)
+        self.assertEqual("POST_BROKEN_REFS_OK", result.code)
+        self.assertEqual(0, result.data["expected_count"])
+        self.assertEqual(0, result.data["actual_count"])
+        self.assertEqual("REF_SCAN_OK", result.data["scan_code"])
+
+
 class PatchApplyTests(unittest.TestCase):
     def _minimal_plan(self, mode: str = "open", kind: str = "json", path: str = "test.json") -> dict:
         return {

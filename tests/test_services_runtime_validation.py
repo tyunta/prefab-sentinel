@@ -136,12 +136,154 @@ class RuntimeClassificationSeverityBandTests(unittest.TestCase):
         )
 
     def test_info_band_pins_severity_and_zero_total_for_unmatched_input(self) -> None:
+        """Issue #160 documents this row: unmatched input rolls up to
+        the informational band with ``count_total == 0`` because the
+        info band has no associated log pattern."""
         svc = RuntimeValidationService()
         resp = svc.classify_errors(["unrelated runtime log line"])
-        # No pattern matches → severity rolls up to INFO and count_total = 0.
+        # No pattern matches; severity rolls up to INFO and count_total = 0.
         self.assertEqual(Severity.INFO, resp.severity)
         self.assertEqual(0, resp.data["count_total"])
         self.assertEqual({}, resp.data["count_by_category"])
+        # No category was incremented in any band.
+        self.assertEqual(0, resp.data["categories_by_severity"]["critical"])
+        self.assertEqual(0, resp.data["categories_by_severity"]["error"])
+        self.assertEqual(0, resp.data["categories_by_severity"]["warning"])
+
+    def test_mixed_band_rolls_up_to_maximum_severity(self) -> None:
+        """Issue #145 mixed-band row: when a single log buffer contains
+        warning + error + critical hits, the rollup severity equals the
+        maximum (``critical``); the per-band counter exposes each band's
+        contribution by exact value, and ``count_total`` equals the
+        sum of all hits across bands."""
+        svc = RuntimeValidationService()
+        resp = svc.classify_errors(
+            [
+                "There can be only one active EventSystem in the scene",
+                "Broken PPtr in file Foo",
+                "Broken PPtr in file Bar",
+                "NullReferenceException in UdonBehaviour.Baz",
+            ],
+        )
+        self.assertEqual(Severity.CRITICAL, resp.severity)
+        self.assertEqual(4, resp.data["count_total"])
+        self.assertEqual(1, resp.data["categories_by_severity"]["critical"])
+        self.assertEqual(2, resp.data["categories_by_severity"]["error"])
+        self.assertEqual(1, resp.data["categories_by_severity"]["warning"])
+        # ``count_by_category`` carries each pattern's hits.
+        self.assertEqual(2, resp.data["count_by_category"]["BROKEN_PPTR"])
+        self.assertEqual(1, resp.data["count_by_category"]["UDON_NULLREF"])
+        self.assertEqual(1, resp.data["count_by_category"]["DUPLICATE_EVENTSYSTEM"])
+
+    def test_truncation_caps_diagnostics_and_records_overflow(self) -> None:
+        """Issue #145 truncation row: when the total hit count exceeds
+        ``max_diagnostics``, the diagnostics list is capped at that
+        value, ``returned_diagnostics`` equals the cap,
+        ``truncated_diagnostics`` equals the overflow, and
+        ``count_total`` still equals every hit (no diagnostic loss in
+        the counter)."""
+        svc = RuntimeValidationService()
+        log_lines = [f"Broken PPtr in file {n}" for n in range(7)]
+        resp = svc.classify_errors(log_lines, max_diagnostics=3)
+        self.assertEqual(7, resp.data["count_total"])
+        self.assertEqual(3, len(resp.diagnostics))
+        self.assertEqual(3, resp.data["returned_diagnostics"])
+        self.assertEqual(4, resp.data["truncated_diagnostics"])
+
+
+class RuntimeAssertNoCriticalErrorsTests(unittest.TestCase):
+    """Issue #145 — pin every outcome of
+    ``assert_no_critical_errors`` by code, severity, and exact
+    per-band counts."""
+
+    def _classify(
+        self,
+        log_lines: list[str],
+    ) -> object:
+        svc = RuntimeValidationService()
+        return svc.classify_errors(log_lines)
+
+    def test_clean_classification_returns_run_assert_ok(self) -> None:
+        """No hits returns ``RUN_ASSERT_OK`` with all bands at zero."""
+        from prefab_sentinel.services.runtime_validation.classification import (  # noqa: PLC0415
+            assert_no_critical_errors,
+        )
+
+        classification = self._classify([])
+        outcome = assert_no_critical_errors(classification)
+        self.assertTrue(outcome.success)
+        self.assertEqual("RUN_ASSERT_OK", outcome.code)
+        self.assertEqual(0, outcome.data["critical_count"])
+        self.assertEqual(0, outcome.data["error_count"])
+        self.assertEqual(0, outcome.data["warning_count"])
+
+    def test_warnings_not_allowed_returns_run_warnings(self) -> None:
+        """A warning hit with ``allow_warnings=False`` returns
+        ``RUN_WARNINGS`` at ``severity=warning`` and the warning
+        counter at one."""
+        from prefab_sentinel.services.runtime_validation.classification import (  # noqa: PLC0415
+            assert_no_critical_errors,
+        )
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        classification = self._classify(
+            ["There can be only one active EventSystem in the scene"]
+        )
+        outcome = assert_no_critical_errors(classification, allow_warnings=False)
+        assert_error_envelope(outcome, code="RUN_WARNINGS", severity="warning")
+        self.assertEqual(0, outcome.data["critical_count"])
+        self.assertEqual(0, outcome.data["error_count"])
+        self.assertEqual(1, outcome.data["warning_count"])
+        self.assertFalse(outcome.data["allow_warnings"])
+
+    def test_warnings_allowed_returns_run_assert_ok(self) -> None:
+        """A warning hit with ``allow_warnings=True`` returns
+        ``RUN_ASSERT_OK`` and the warning counter still at one (the
+        assertion bypass does not silence the count)."""
+        from prefab_sentinel.services.runtime_validation.classification import (  # noqa: PLC0415
+            assert_no_critical_errors,
+        )
+
+        classification = self._classify(
+            ["There can be only one active EventSystem in the scene"]
+        )
+        outcome = assert_no_critical_errors(classification, allow_warnings=True)
+        self.assertTrue(outcome.success)
+        self.assertEqual("RUN_ASSERT_OK", outcome.code)
+        self.assertEqual(1, outcome.data["warning_count"])
+        self.assertTrue(outcome.data["allow_warnings"])
+
+    def test_error_band_returns_run001_at_severity_error(self) -> None:
+        """An error hit (no critical) returns ``RUN001`` at
+        ``severity=error`` with the error counter at one."""
+        from prefab_sentinel.services.runtime_validation.classification import (  # noqa: PLC0415
+            assert_no_critical_errors,
+        )
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        classification = self._classify(["Broken PPtr in file Foo"])
+        outcome = assert_no_critical_errors(classification)
+        assert_error_envelope(outcome, code="RUN001", severity="error")
+        self.assertEqual(0, outcome.data["critical_count"])
+        self.assertEqual(1, outcome.data["error_count"])
+        self.assertEqual(0, outcome.data["warning_count"])
+
+    def test_critical_band_returns_run001_at_severity_critical(self) -> None:
+        """A critical hit returns ``RUN001`` at ``severity=critical``
+        with the critical counter at one (the highest failing band
+        wins the severity assignment)."""
+        from prefab_sentinel.services.runtime_validation.classification import (  # noqa: PLC0415
+            assert_no_critical_errors,
+        )
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        classification = self._classify(
+            ["NullReferenceException in UdonBehaviour.MyEvent"]
+        )
+        outcome = assert_no_critical_errors(classification)
+        assert_error_envelope(outcome, code="RUN001", severity="critical")
+        self.assertEqual(1, outcome.data["critical_count"])
+        self.assertEqual(0, outcome.data["error_count"])
 
 
 def _make_project_root(base: Path, name: str = "projA") -> Path:

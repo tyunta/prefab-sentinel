@@ -12,6 +12,16 @@ import re
 import unittest
 from pathlib import Path
 
+import pytest
+
+# Issue #167: this module reads the C# bridge sources from the
+# un-mutated ``tools/unity`` tree to verify structural and source-text
+# invariants; its assertions are insensitive to mutations applied to
+# ``prefab_sentinel/``.  The marker is the inclusion mechanism for
+# repository-synchrony tests; mutmut's pytest selection excludes it via
+# a single ``-m`` filter.
+pytestmark = pytest.mark.source_text_invariant
+
 TOOLS_DIR = Path(__file__).resolve().parent.parent / "tools" / "unity"
 # Issue #123 — the editor-control bridge is split into a canonical core
 # source plus per-functional partial sources.  Source-level invariants
@@ -1068,11 +1078,16 @@ class TestBestEffortCatchWarnings(unittest.TestCase):
     # #138's split of the legacy HierarchyComponents.cs partial,
     # ``HandleUdonSharpAddComponentIdempotent`` lives in the
     # ``Components.cs`` partial.
+    # Issues #152 / #153 raise ``WriteAtomic`` to ``min_typed=2`` so both
+    # the outer atomic-write fallback and the inner direct-write
+    # fallback are typed catch sites with the warn-level template; a
+    # half-fixed regression that reverts the inner stage to bare catch
+    # therefore fails the audit.
     _SITES = (
         ("PrefabSentinel.UnityEditorControlBridge.Components.cs",
          "HandleUdonSharpAddComponentIdempotent", 2),
         ("PrefabSentinel.EditorBridge.cs", "ProcessRequest", 1),
-        ("PrefabSentinel.EditorBridge.cs", "WriteAtomic", 1),
+        ("PrefabSentinel.EditorBridge.cs", "WriteAtomic", 2),
         ("PrefabSentinel.EditorBridge.cs", "TryDelete", 1),
         ("PrefabSentinel.UnityRuntimeValidationBridge.cs", "WriteResponse", 1),
         ("PrefabSentinel.UnityPatchBridge.cs", "TryIsFixedBufferProperty", 2),
@@ -1142,6 +1157,108 @@ class TestBestEffortCatchWarnings(unittest.TestCase):
             "Expected two 'intentional best-effort' comments at the "
             "UdonSharp idempotent-reuse catch sites.",
         )
+
+    def test_write_atomic_inner_fallback_has_no_commentary_only_catch(self) -> None:
+        """Issue #152 — ``WriteAtomic`` had an inner ``catch { /* best
+        effort */ }`` that swallowed the second-stage write failure with
+        no log trace.  Both fallback stages must now carry a typed catch
+        with the warn-level template; no permitting commentary
+        (``/* best effort */``-style or any other inline comment that
+        annotates the catch as silent) is allowed on either site.
+        """
+        text = (TOOLS_DIR / "PrefabSentinel.EditorBridge.cs").read_text(encoding="utf-8")
+        body = _extract_method(text, "WriteAtomic")
+        # No bare ``catch { ... }`` (no exception parameter list); a
+        # bare catch is the structural marker of the regressed silent
+        # site.  The regex matches ``catch`` followed by optional
+        # whitespace and an opening brace, with no parenthesised
+        # parameter list in between.
+        self.assertNotRegex(
+            body,
+            r"catch\s*\{",
+            "WriteAtomic must not contain a bare 'catch {' (issue #152 silent-catch regression)",
+        )
+        # No ``best effort``-style inline commentary inside the body.
+        self.assertNotRegex(
+            body,
+            r"best\s*effort",
+            "WriteAtomic must not annotate a catch site as 'best effort'",
+        )
+        # Both stages emit the project warn-level template:
+        warn_emissions = re.findall(
+            r"Debug\.LogWarning\(\s*\$\"\[PrefabSentinel\]\s+WriteAtomic:",
+            body,
+        )
+        self.assertGreaterEqual(
+            len(warn_emissions),
+            2,
+            f"WriteAtomic must emit two warn-level templates (outer + inner); found {len(warn_emissions)}",
+        )
+
+    @staticmethod
+    def _extract_outer_catch_block(method_body: str) -> str:
+        """Return the body (between braces) of the outer
+        ``catch (Exception ex) { ... }`` block — the one whose
+        ``Exception`` parameter is ``ex`` (the project convention).
+        Brace-counts so the inner ``catch (Exception fallbackEx)``
+        nested under the outer block remains inside.
+        """
+        match = re.search(r"catch\s*\(\s*Exception\s+ex\s*\)\s*\{", method_body)
+        if not match:
+            return ""
+        start = match.end()
+        depth = 1
+        for index in range(start, len(method_body)):
+            ch = method_body[index]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return method_body[start:index]
+        return ""
+
+    def test_write_response_outer_fallback_uses_warn_level_template(self) -> None:
+        """Issue #153 — the two response-writer methods'
+        ``Debug.LogError`` outer-fallback log lines were inconsistent
+        with the warn-level convention used by every other catch site
+        in the bridge family.  Both must now emit the project
+        warn-level template, and neither must emit ``Debug.LogError``
+        from inside the outer ``catch (Exception ex)`` block.
+
+        Scope (per spec Non-Goals): only the catch-family fallback
+        logs.  Non-catch ``Debug.LogError`` calls elsewhere in the
+        method body (e.g. ``WriteResponseSafe``'s empty-path log
+        statement) are out of scope.
+        """
+        for file_name, method_name in (
+            ("PrefabSentinel.UnityRuntimeValidationBridge.cs", "WriteResponse"),
+            ("PrefabSentinel.UnityPatchBridge.cs", "WriteResponseSafe"),
+        ):
+            with self.subTest(file=file_name, method=method_name):
+                text = (TOOLS_DIR / file_name).read_text(encoding="utf-8")
+                body = _extract_method(text, method_name)
+                outer_catch = self._extract_outer_catch_block(body)
+                self.assertTrue(
+                    outer_catch,
+                    f"{file_name}::{method_name}: outer 'catch (Exception ex)' block not found",
+                )
+                # The outer catch's first emission must be a
+                # ``Debug.LogWarning`` carrying the project template.
+                self.assertRegex(
+                    outer_catch,
+                    r"^\s*Debug\.LogWarning\(\s*\$\"\[PrefabSentinel\]\s+"
+                    + re.escape(method_name)
+                    + r":",
+                    f"{file_name}::{method_name}: outer catch must emit Debug.LogWarning with project template",
+                )
+                # No ``Debug.LogError`` inside the catch-family scope
+                # (the outer catch and its nested inner catch).
+                self.assertNotRegex(
+                    outer_catch,
+                    r"Debug\.LogError\(",
+                    f"{file_name}::{method_name}: outer catch must not emit Debug.LogError; warn-level convention applies",
+                )
 
 
 if __name__ == "__main__":
