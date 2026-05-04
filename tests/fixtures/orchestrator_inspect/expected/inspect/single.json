@@ -1,0 +1,32 @@
+{
+  "code": "INSPECT_VARIANT_RESULT",
+  "fail_fast_triggered": false,
+  "severity": "info",
+  "steps": [
+    {
+      "code": "PVR_CHAIN_OK",
+      "severity": "info",
+      "step": "resolve_prefab_chain",
+      "success": true
+    },
+    {
+      "code": "PVR_OVERRIDES_OK",
+      "severity": "info",
+      "step": "list_overrides",
+      "success": true
+    },
+    {
+      "code": "PVR_EFFECTIVE_OK",
+      "severity": "info",
+      "step": "compute_effective_values",
+      "success": true
+    },
+    {
+      "code": "PVR_STALE_NONE",
+      "severity": "info",
+      "step": "detect_stale_overrides",
+      "success": true
+    }
+  ],
+  "success": true
+}

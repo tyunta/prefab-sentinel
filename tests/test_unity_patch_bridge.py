@@ -1,56 +1,83 @@
 from __future__ import annotations
 
+import io
 import json
 import os
-import subprocess
 import sys
 import tempfile
 import unittest
 import unittest.mock
+from contextlib import redirect_stdout
 from pathlib import Path
+
+from tools.unity_patch_bridge import main as _bridge_main
+
+# Issue #157: the patch-bridge tests drive the entry point in-process
+# rather than spawning a subprocess so mutmut can mutate the underlying
+# package code without losing trampoline state at process boundaries.
+
+_BRIDGE_DISPATCH_ENV_KEYS = (
+    "UNITYTOOL_UNITY_COMMAND",
+    "UNITYTOOL_UNITY_PROJECT_PATH",
+    "UNITYTOOL_UNITY_EXECUTE_METHOD",
+    "UNITYTOOL_UNITY_TIMEOUT_SEC",
+    "UNITYTOOL_UNITY_LOG_FILE",
+    "UNITYTOOL_BRIDGE_MODE",
+    "UNITYTOOL_BRIDGE_WATCH_DIR",
+)
+
+
+def _invoke_bridge(
+    payload: dict[str, object],
+    env_overrides: dict[str, str] | None,
+) -> tuple[int, dict[str, object]]:
+    """Drive ``tools.unity_patch_bridge.main`` in-process.
+
+    Returns ``(exit_code, parsed_response)``.  Pops the bridge-dispatch env
+    vars before the call so each test starts from a deterministic state;
+    ``env_overrides`` then applies the keys the test does intend to set.
+    """
+    pop_keys = {key: None for key in _BRIDGE_DISPATCH_ENV_KEYS}
+    overlay: dict[str, str] = dict(env_overrides) if env_overrides else {}
+
+    captured = io.StringIO()
+    saved: dict[str, str | None] = {key: os.environ.get(key) for key in pop_keys}
+    saved.update({key: os.environ.get(key) for key in overlay})
+    try:
+        for key in pop_keys:
+            os.environ.pop(key, None)
+        for key, value in overlay.items():
+            os.environ[key] = value
+        with redirect_stdout(captured):
+            exit_code = _bridge_main(stdin=io.StringIO(json.dumps(payload)))
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    text = captured.getvalue()
+    parsed = json.loads(text)
+    return exit_code, parsed
 
 
 class UnityPatchBridgeTests(unittest.TestCase):
-    def _bridge_path(self) -> Path:
-        return Path("tools") / "unity_patch_bridge.py"
-
     def _run_bridge(
         self,
         payload: dict[str, object],
         *,
         env_overrides: dict[str, str] | None = None,
     ) -> dict[str, object]:
-        env = os.environ.copy()
-        env.pop("UNITYTOOL_UNITY_COMMAND", None)
-        env.pop("UNITYTOOL_UNITY_PROJECT_PATH", None)
-        env.pop("UNITYTOOL_UNITY_EXECUTE_METHOD", None)
-        env.pop("UNITYTOOL_UNITY_TIMEOUT_SEC", None)
-        env.pop("UNITYTOOL_UNITY_LOG_FILE", None)
-        # Bridge dispatch env vars must not leak from the host shell into
-        # the spawned subprocess: the test suite asserts batchmode-path
-        # behaviour and a host-set ``UNITYTOOL_BRIDGE_MODE=editor`` would
-        # otherwise route every test through the editor file-watcher path.
-        env.pop("UNITYTOOL_BRIDGE_MODE", None)
-        env.pop("UNITYTOOL_BRIDGE_WATCH_DIR", None)
-        if env_overrides:
-            env.update(env_overrides)
-        completed = subprocess.run(
-            [sys.executable, str(self._bridge_path())],
-            input=json.dumps(payload),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            env=env,
-            check=False,
-        )
-        self.assertEqual(0, completed.returncode, msg=completed.stderr)
-        return json.loads(completed.stdout)
+        _exit_code, parsed = _invoke_bridge(payload, env_overrides)
+        return parsed
 
     def test_reference_bridge_keeps_subprocess_env_clean(self) -> None:
-        """Even when the host shell exports the two bridge env vars, the
-        subprocess fixture must strip them so the patch bridge takes the
-        batchmode dispatch path with the supplied ``UNITYTOOL_UNITY_COMMAND``.
+        """Scenario: even when the host shell exports the bridge dispatch env
+        vars (``UNITYTOOL_BRIDGE_MODE`` / ``UNITYTOOL_BRIDGE_WATCH_DIR``), the
+        in-process driver strips them before invocation so the patch bridge
+        takes the batchmode dispatch path with the supplied
+        ``UNITYTOOL_UNITY_COMMAND``.
         """
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -1641,37 +1668,14 @@ response_path.write_text(
 class EditorBridgeModeTests(unittest.TestCase):
     """Tests for UNITYTOOL_BRIDGE_MODE=editor file-watcher dispatch."""
 
-    def _bridge_path(self) -> Path:
-        return Path("tools") / "unity_patch_bridge.py"
-
     def _run_bridge(
         self,
         payload: dict[str, object],
         *,
         env_overrides: dict[str, str] | None = None,
     ) -> dict[str, object]:
-        env = os.environ.copy()
-        env.pop("UNITYTOOL_UNITY_COMMAND", None)
-        env.pop("UNITYTOOL_UNITY_PROJECT_PATH", None)
-        env.pop("UNITYTOOL_UNITY_EXECUTE_METHOD", None)
-        env.pop("UNITYTOOL_UNITY_TIMEOUT_SEC", None)
-        env.pop("UNITYTOOL_UNITY_LOG_FILE", None)
-        env.pop("UNITYTOOL_BRIDGE_MODE", None)
-        env.pop("UNITYTOOL_BRIDGE_WATCH_DIR", None)
-        if env_overrides:
-            env.update(env_overrides)
-        completed = subprocess.run(
-            [sys.executable, str(self._bridge_path())],
-            input=json.dumps(payload),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            env=env,
-            check=False,
-        )
-        self.assertEqual(0, completed.returncode, msg=completed.stderr)
-        return json.loads(completed.stdout)
+        _exit_code, parsed = _invoke_bridge(payload, env_overrides)
+        return parsed
 
     def test_editor_mode_requires_watch_dir(self) -> None:
         result = self._run_bridge(
@@ -2054,6 +2058,93 @@ class EditorBridgeModeTests(unittest.TestCase):
         self.assertIn("target", received_keys)
         self.assertIn("ops", received_keys)
         self.assertIn("protocol_version", received_keys)
+
+
+class InProcessEntryPointContractTests(unittest.TestCase):
+    """Issue #157 — direct ``main()`` invocation contract.
+
+    Pins the entry point's exit-code semantics (zero on success-shape
+    response, non-zero on failure-shape response) and the stdin override
+    so callers can drive the bridge without subprocess.
+    """
+
+    def test_in_process_happy_path_returns_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            unity_runner = root / "fake_unity_inproc.py"
+            unity_runner.write_text(
+                """
+import json
+import sys
+from pathlib import Path
+
+def _arg(flag: str) -> str:
+    args = sys.argv[1:]
+    idx = args.index(flag)
+    return args[idx + 1]
+
+response_path = Path(_arg("-sentinelPatchResponse"))
+response_path.write_text(
+    json.dumps(
+        {
+            "protocol_version": 2,
+            "success": True,
+            "severity": "info",
+            "code": "SER_APPLY_OK",
+            "message": "Applied by fake Unity runner.",
+            "data": {"applied": 0},
+            "diagnostics": [],
+        }
+    ),
+    encoding="utf-8",
+)
+""".strip(),
+                encoding="utf-8",
+            )
+
+            payload = {
+                "protocol_version": 2,
+                "plan_version": 2,
+                "resources": [
+                    {
+                        "id": "prefab",
+                        "kind": "prefab",
+                        "path": "Assets/Test.prefab",
+                        "mode": "open",
+                    }
+                ],
+                "ops": [],
+            }
+            exit_code, parsed = _invoke_bridge(
+                payload,
+                env_overrides={
+                    "UNITYTOOL_UNITY_COMMAND": f'"{sys.executable}" "{unity_runner}"',
+                    "UNITYTOOL_UNITY_PROJECT_PATH": str(root),
+                },
+            )
+
+        self.assertEqual(0, exit_code)
+        self.assertTrue(parsed["success"])
+        self.assertEqual("SER_APPLY_OK", parsed["code"])
+
+    def test_in_process_malformed_stdin_exits_nonzero(self) -> None:
+        captured = io.StringIO()
+        with redirect_stdout(captured):
+            exit_code = _bridge_main(stdin=io.StringIO("not-json"))
+        parsed = json.loads(captured.getvalue())
+        self.assertNotEqual(0, exit_code)
+        self.assertFalse(parsed["success"])
+        self.assertEqual("BRIDGE_REQUEST_JSON", parsed["code"])
+
+    def test_in_process_unknown_argv_exits_nonzero(self) -> None:
+        captured = io.StringIO()
+        with redirect_stdout(captured):
+            exit_code = _bridge_main(argv=["--unknown-flag"], stdin=io.StringIO(""))
+        parsed = json.loads(captured.getvalue())
+        self.assertNotEqual(0, exit_code)
+        self.assertFalse(parsed["success"])
+        self.assertEqual("BRIDGE_REQUEST_SCHEMA", parsed["code"])
+        self.assertEqual(["--unknown-flag"], parsed["data"]["received_argv"])
 
 
 if __name__ == "__main__":

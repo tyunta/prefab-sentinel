@@ -1,0 +1,15 @@
+{
+  "categories": {
+    "broken_pptr": 0,
+    "udon_runtime": 0,
+    "variant_override": 0
+  },
+  "code": "VALIDATE_REFS_RESULT",
+  "diagnostic_severities": [],
+  "missing_asset_unique_count": 0,
+  "severity": "info",
+  "should_proceed": true,
+  "step_code": "REF_SCAN_OK",
+  "step_severity": "info",
+  "success": true
+}

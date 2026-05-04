@@ -97,6 +97,53 @@ class RuntimeValidationClassifyTests(unittest.TestCase):
         self.assertEqual({}, resp.data["count_by_category"])
 
 
+class RuntimeClassificationSeverityBandTests(unittest.TestCase):
+    """C1 — pin the four severity bands (critical / error / warning / info)
+    by value plus the corresponding per-category count by value.
+
+    Issue #145: every distinct severity band must produce a deterministic
+    severity value and a deterministic per-category count so a downgrade
+    mutation (e.g. CRITICAL -> ERROR) fails an equality assertion.
+    """
+
+    def test_critical_band_pins_severity_and_udon_nullref_count(self) -> None:
+        svc = RuntimeValidationService()
+        resp = svc.classify_errors(
+            ["NullReferenceException in UdonBehaviour.MyEvent"],
+        )
+        self.assertEqual(Severity.CRITICAL, resp.severity)
+        self.assertEqual(1, resp.data["count_by_category"]["UDON_NULLREF"])
+        self.assertEqual(1, resp.data["categories_by_severity"]["critical"])
+
+    def test_error_band_pins_severity_and_broken_pptr_count(self) -> None:
+        svc = RuntimeValidationService()
+        resp = svc.classify_errors(["Broken PPtr in file Foo"])
+        self.assertEqual(Severity.ERROR, resp.severity)
+        self.assertEqual(1, resp.data["count_by_category"]["BROKEN_PPTR"])
+        self.assertEqual(1, resp.data["categories_by_severity"]["error"])
+
+    def test_warning_band_pins_severity_and_eventsystem_count(self) -> None:
+        svc = RuntimeValidationService()
+        resp = svc.classify_errors(
+            ["There can be only one active EventSystem in the scene"],
+        )
+        self.assertEqual(Severity.WARNING, resp.severity)
+        self.assertEqual(
+            1, resp.data["count_by_category"]["DUPLICATE_EVENTSYSTEM"]
+        )
+        self.assertEqual(
+            1, resp.data["categories_by_severity"]["warning"]
+        )
+
+    def test_info_band_pins_severity_and_zero_total_for_unmatched_input(self) -> None:
+        svc = RuntimeValidationService()
+        resp = svc.classify_errors(["unrelated runtime log line"])
+        # No pattern matches → severity rolls up to INFO and count_total = 0.
+        self.assertEqual(Severity.INFO, resp.severity)
+        self.assertEqual(0, resp.data["count_total"])
+        self.assertEqual({}, resp.data["count_by_category"])
+
+
 def _make_project_root(base: Path, name: str = "projA") -> Path:
     """Create a minimal Unity-style project under ``base/name`` (has ``Assets/``)."""
     root = base / name

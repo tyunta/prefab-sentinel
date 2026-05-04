@@ -1,0 +1,10 @@
+{
+  "code": "SER_PLAN_INVALID",
+  "data_keys": [
+    "op_count",
+    "read_only",
+    "target"
+  ],
+  "severity": "error",
+  "success": false
+}

@@ -1,0 +1,38 @@
+{
+  "categories": {
+    "broken_pptr": 0,
+    "udon_runtime": 0,
+    "variant_override": 0
+  },
+  "code": "VALIDATE_RUNTIME_RESULT",
+  "fail_fast_triggered": false,
+  "severity": "warning",
+  "should_proceed": true,
+  "steps_summary": [
+    {
+      "code": "WORLD_CANVAS_INSPECT_OK",
+      "step": "inspect_world_canvas"
+    },
+    {
+      "code": "RUN_COMPILE_SKIPPED",
+      "step": "compile_udonsharp"
+    },
+    {
+      "code": "RUN_CLIENTSIM_SKIPPED",
+      "step": "run_clientsim"
+    },
+    {
+      "code": "RUN_LOG_MISSING",
+      "step": "collect_unity_console"
+    },
+    {
+      "code": "RUN_CLASSIFY_OK",
+      "step": "classify_errors"
+    },
+    {
+      "code": "RUN_ASSERT_OK",
+      "step": "assert_no_critical_errors"
+    }
+  ],
+  "success": true
+}

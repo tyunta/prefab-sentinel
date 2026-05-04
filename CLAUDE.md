@@ -102,3 +102,16 @@
 ## ignore-guid 運用
 - `<scope>/config/ignore_guids.txt` を既定とし、存在しなければ無視する。
 - CI での反映は `--out-ignore-guid-file` 明示指定時かつ許可ブランチのみ。既定は `main` / `release/*`（`UNITYTOOL_IGNORE_GUID_ALLOW_BRANCHES` で上書き可）。
+
+## Mutation testing 運用
+- 仕様の正本は `README.md` 14.5 節。本節は運用判断に必要な最小定義のみ置く。
+- カデンス: 四半期ごとに 1 回フル走行。CI には組み込まない。
+- 監査対象モジュール (P0/P1):
+  - `prefab_sentinel.services.reference_resolver`
+  - `prefab_sentinel.services.prefab_variant`
+  - `prefab_sentinel.services.serialized_object.patch_validator`
+  - `prefab_sentinel.services.runtime_validation.classification`
+  - `prefab_sentinel.orchestrator_postcondition`
+  - `prefab_sentinel.orchestrator_validation`
+- survived は critical / trivial / equivalent の三分類で記録する。trivial は `[tool.mutmut].do_not_mutate` に追加し、critical はテストでキルする。
+- 新規テストは `tests._assertion_helpers.assert_error_envelope` で code / severity / field / message を値で固定する。例外発生のみのアサートは禁止。

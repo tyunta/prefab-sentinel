@@ -429,6 +429,212 @@ PrefabInstance:
             self.assertEqual(len(result1) + 1, len(result2))
 
 
+class ReferenceResolverEnvelopeTests(unittest.TestCase):
+    """B1 — pin every reference-resolver failure path by code, severity,
+    and (where reported) GUID / fileID / asset-path values via the
+    structured-envelope helper plus inline data-payload equality.
+
+    The project's REF001 / REF002 codes form the contract surface; this
+    class is the value-pinning home for them.
+    """
+
+    def test_invalid_guid_emits_ref001_with_guid_value(self) -> None:
+        """Issue #141 row: a non-hex GUID hits the first REF001 site."""
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        svc = ReferenceResolverService(project_root=Path("/fake/project"))
+        response = svc.resolve_reference("not-a-guid", "100100000")
+
+        assert_error_envelope(
+            response,
+            code="REF001",
+            severity="error",
+            message_match=r"32-character hexadecimal",
+        )
+        self.assertEqual("not-a-guid", response.data["guid"])
+        self.assertEqual("100100000", response.data["file_id"])
+
+    def test_unknown_guid_emits_ref001_with_normalized_guid_value(self) -> None:
+        """Issue #141 row: a well-formed GUID absent from the project map
+        hits the second REF001 site; the response carries the normalized
+        GUID value alongside the input fileID."""
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_sample_project(root)
+            svc = ReferenceResolverService(project_root=root)
+            response = svc.resolve_reference(MISSING_GUID, "12345")
+
+        assert_error_envelope(
+            response,
+            code="REF001",
+            severity="error",
+            message_match=r"not found",
+        )
+        self.assertEqual(MISSING_GUID, response.data["guid"])
+        self.assertEqual("12345", response.data["file_id"])
+        # missing_asset diagnostic carries the GUID value too.
+        details = [
+            (d.detail, d.evidence) for d in response.diagnostics
+        ]
+        self.assertTrue(
+            any(detail == "missing_asset" and MISSING_GUID in evidence
+                for detail, evidence in details),
+            f"missing_asset diagnostic absent: {details}",
+        )
+
+    def test_missing_local_id_emits_ref002_with_asset_path_and_file_id(self) -> None:
+        """Issue #141 row: a fileID that does not exist in the resolved asset
+        hits REF002; the response carries the asset path, GUID, and fileID.
+
+        The target must be a non-prefab text asset because prefab-external
+        fileID validation is intentionally skipped (the validator avoids
+        false positives against imported model fileIDs)."""
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        asset_guid = "1234567890abcdef1234567890abcdef"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            asset_path = root / "Assets" / "Settings.asset"
+            write_file(
+                asset_path,
+                """%YAML 1.1
+--- !u!114 &11400000
+MonoBehaviour:
+  m_Name: Settings
+""",
+            )
+            write_file(
+                root / "Assets" / "Settings.asset.meta",
+                f"""fileFormatVersion: 2
+guid: {asset_guid}
+""",
+            )
+            svc = ReferenceResolverService(project_root=root)
+            response = svc.resolve_reference(asset_guid, "999999999")
+
+        assert_error_envelope(
+            response,
+            code="REF002",
+            severity="error",
+            message_match=r"fileID was not found",
+        )
+        self.assertEqual(asset_guid, response.data["guid"])
+        self.assertEqual("999999999", response.data["file_id"])
+        self.assertEqual("Assets/Settings.asset", response.data["asset_path"])
+        details = [d.detail for d in response.diagnostics]
+        self.assertIn("missing_local_id", details)
+
+
+class PatchValidatorEnvelopeTests(unittest.TestCase):
+    """B3 — pin every error-emission site of the patch-validator code
+    vocabulary (SER001 / SER002 / SER003) by code, severity, field /
+    property-path, and message regex.
+    """
+
+    def test_validate_property_path_empty_emits_ser001(self) -> None:
+        from prefab_sentinel.services.property_path import (  # noqa: PLC0415
+            validate_property_path,
+        )
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        response = validate_property_path("")
+        assert_error_envelope(
+            response,
+            code="SER001",
+            severity="error",
+            message_match=r"empty",
+        )
+        self.assertEqual("", response.data["property_path"])
+
+    def test_validate_property_path_negative_subscript_emits_ser002(self) -> None:
+        from prefab_sentinel.services.property_path import (  # noqa: PLC0415
+            validate_property_path,
+        )
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        bad_path = "m_List.Array.data[-1]"
+        response = validate_property_path(bad_path)
+        assert_error_envelope(
+            response,
+            code="SER002",
+            severity="error",
+            message_match=r"negative",
+        )
+        self.assertEqual(bad_path, response.data["property_path"])
+
+    def test_set_component_fields_unknown_property_emits_ser003_envelope(self) -> None:
+        """SER003 fires when ``set_component_fields`` cannot resolve the
+        referenced property on the chain.  The helper pins code, severity,
+        and a message regex; inline assertions pin target and component
+        values plus the diagnostic detail tag."""
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+        from tests.test_mcp_server import _run  # noqa: PLC0415
+
+        prefab_yaml = (
+            "%YAML 1.1\n"
+            "%TAG !u! tag:unity3d.com,2011:\n"
+            "--- !u!1 &100\n"
+            "GameObject:\n"
+            "  m_ObjectHideFlags: 0\n"
+            "  serializedVersion: 6\n"
+            "  m_Component:\n"
+            "  - component: {fileID: 200}\n"
+            "  - component: {fileID: 300}\n"
+            "  m_Layer: 0\n"
+            "  m_Name: Cube\n"
+            "  m_TagString: Untagged\n"
+            "  m_IsActive: 1\n"
+            "--- !u!4 &200\n"
+            "Transform:\n"
+            "  m_ObjectHideFlags: 0\n"
+            "  m_GameObject: {fileID: 100}\n"
+            "  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}\n"
+            "  m_LocalPosition: {x: 0, y: 0, z: 0}\n"
+            "  m_LocalScale: {x: 1, y: 1, z: 1}\n"
+            "  m_Children: []\n"
+            "  m_Father: {fileID: 0}\n"
+            "  m_RootOrder: 0\n"
+            "--- !u!23 &300\n"
+            "MeshRenderer:\n"
+            "  m_ObjectHideFlags: 0\n"
+            "  m_GameObject: {fileID: 100}\n"
+            "  m_Enabled: 1\n"
+        )
+
+        with tempfile.TemporaryDirectory() as raw:
+            td = Path(raw)
+            prefab_path = td / "test.prefab"
+            prefab_path.write_text(prefab_yaml, encoding="utf-8")
+            from prefab_sentinel.mcp_server import create_server  # noqa: PLC0415
+
+            server = create_server()
+            _, response = _run(server.call_tool(
+                "set_component_fields",
+                {
+                    "asset_path": str(prefab_path),
+                    "symbol_path": "Cube",
+                    "component": "MeshRenderer",
+                    "fields": {"m_NoSuchField": 0},
+                },
+            ))
+
+        assert_error_envelope(
+            response,
+            code="SER003",
+            severity="error",
+            message_match=r"not found",
+        )
+        # Pin target / component / diagnostic-detail values inline.
+        self.assertEqual(str(prefab_path), response["data"]["target"])
+        self.assertEqual("MeshRenderer", response["data"]["component"])
+        self.assertEqual(
+            "property_not_found",
+            response["diagnostics"][0]["detail"],
+        )
+
+
 class PrefabVariantServiceTests(unittest.TestCase):
     def test_detect_stale_and_compute_effective_values(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -676,7 +882,15 @@ class RuntimeValidationServiceTests(unittest.TestCase):
             _create_sample_project(root)
             svc = RuntimeValidationService(project_root=root)
 
-            with patch.dict(os.environ, {}, clear=True):
+            # Pop only the bridge-related runtime env vars (other env keys
+            # retained); ``clear=True`` would also strip mutmut's own state
+            # variable and trip the trampoline (#156).
+            unitytool_keys = [
+                key for key in os.environ if key.startswith("UNITYTOOL_")
+            ]
+            with patch.dict(os.environ, {}, clear=False):
+                for key in unitytool_keys:
+                    os.environ.pop(key, None)
                 response = svc.compile_udonsharp()
 
             self.assertTrue(response.success)

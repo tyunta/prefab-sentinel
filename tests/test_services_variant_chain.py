@@ -13,6 +13,10 @@ They exercise:
 
 .fbx is already covered by ``test_services.py``; these tests fill in the
 remaining ``.blend``, ``.gltf``, ``.glb``, ``.obj`` members.
+
+Issue #142 (B2 value-pinning): ``OverrideValuePinningTests`` and
+``NestedPrefabInstanceVariantDetectionTests`` pin override count, field
+name, kind, and Variant-detection branches by value.
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ from pathlib import Path
 
 from prefab_sentinel.contracts import Diagnostic, Severity
 from prefab_sentinel.services.prefab_variant import PrefabVariantService
+from prefab_sentinel.unity_assets import is_variant_prefab
 from tests.bridge_test_helpers import write_file
 from tests.yaml_helpers import (
     YAML_HEADER,
@@ -32,6 +37,8 @@ from tests.yaml_helpers import (
     make_transform,
 )
 
+BASE_GUID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+NESTED_GUID = "ddddddddddddddddddddddddddddddddd"[:32]
 VARIANT_GUID = "cccccccccccccccccccccccccccccccc"
 
 
@@ -390,6 +397,173 @@ class ChainValuesSourcePrefabImportTests(unittest.TestCase):
 
         text = Path(cv_mod.__file__).read_text(encoding="utf-8")
         self.assertNotIn("SOURCE_PREFAB_PATTERN", text)
+
+
+# ---------------------------------------------------------------------------
+# Issue #142 — prefab-variant value-pinning (B2)
+# ---------------------------------------------------------------------------
+
+
+def _write_variant_with_known_overrides(root: Path) -> None:
+    write_file(
+        root / "Assets" / "Base.prefab",
+        """%YAML 1.1
+--- !u!1 &100100000
+GameObject:
+  m_Name: Base
+""",
+    )
+    write_file(
+        root / "Assets" / "Base.prefab.meta",
+        f"fileFormatVersion: 2\nguid: {BASE_GUID}\n",
+    )
+    # Three modifications: one scalar property, one array-size, one
+    # array-element.  The override count and the property paths are the
+    # test's pinned values.
+    write_file(
+        root / "Assets" / "Variant.prefab",
+        f"""%YAML 1.1
+--- !u!1001 &100100000
+PrefabInstance:
+  m_SourcePrefab: {{fileID: 100100000, guid: {BASE_GUID}, type: 3}}
+  m_Modification:
+    m_Modifications:
+    - target: {{fileID: 100100000, guid: {BASE_GUID}, type: 3}}
+      propertyPath: m_Name
+      value: VariantName
+      objectReference: {{fileID: 0}}
+    - target: {{fileID: 100100000, guid: {BASE_GUID}, type: 3}}
+      propertyPath: items.Array.size
+      value: 2
+      objectReference: {{fileID: 0}}
+    - target: {{fileID: 100100000, guid: {BASE_GUID}, type: 3}}
+      propertyPath: items.Array.data[0]
+      value: first
+      objectReference: {{fileID: 0}}
+""",
+    )
+    write_file(
+        root / "Assets" / "Variant.prefab.meta",
+        f"fileFormatVersion: 2\nguid: {VARIANT_GUID}\n",
+    )
+
+
+class OverrideValuePinningTests(unittest.TestCase):
+    """B2 row 1 — pin override count and per-entry property_path / kind /
+    target_file_id by value.
+    """
+
+    def test_known_override_set_pins_count_and_property_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _write_variant_with_known_overrides(root)
+            svc = PrefabVariantService(project_root=root)
+
+            response = svc.list_overrides("Assets/Variant.prefab")
+
+        self.assertTrue(response.success)
+        self.assertEqual("PVR_OVERRIDES_OK", response.code)
+        # Pin override count and per-entry property_path values exactly.
+        self.assertEqual(3, response.data["override_count"])
+        property_paths = [entry["property_path"] for entry in response.data["overrides"]]
+        self.assertEqual(
+            ["m_Name", "items.Array.size", "items.Array.data[0]"],
+            property_paths,
+        )
+        # Pin per-entry kind (scalar / array-size / array-element) by
+        # detecting the property_path shape — a property-path family that
+        # ends with ``.Array.size`` or ``.Array.data[N]`` is the kind.
+        first, size, element = response.data["overrides"]
+        self.assertNotIn(".Array.", first["property_path"])
+        self.assertTrue(size["property_path"].endswith(".Array.size"))
+        self.assertIn(".Array.data[", element["property_path"])
+        # Pin the target_file_id and target_guid for every entry.
+        for entry in response.data["overrides"]:
+            self.assertEqual("100100000", entry["target_file_id"])
+            self.assertEqual(BASE_GUID, entry["target_guid"])
+
+
+class NestedPrefabInstanceVariantDetectionTests(unittest.TestCase):
+    """B2 row 2 — a Variant whose source prefab itself contains a nested
+    ``PrefabInstance`` is still detected as a Variant by ``is_variant_prefab``,
+    and the chain values resolve from the variant chain.
+    """
+
+    def _write_base_with_nested_instance_chain(self, root: Path) -> Path:
+        # Inner base prefab — pure GameObject.
+        inner_guid = "abababababababababababababababab"
+        write_file(
+            root / "Assets" / "Inner.prefab",
+            """%YAML 1.1
+--- !u!1 &100100000
+GameObject:
+  m_Name: Inner
+""",
+        )
+        write_file(
+            root / "Assets" / "Inner.prefab.meta",
+            f"fileFormatVersion: 2\nguid: {inner_guid}\n",
+        )
+        # Base prefab that nests Inner as a PrefabInstance and owns its own
+        # GameObject.  Nested-PrefabInstance presence does not promote it
+        # to Variant.
+        write_file(
+            root / "Assets" / "Base.prefab",
+            f"""%YAML 1.1
+--- !u!1 &200200000
+GameObject:
+  m_Name: Base
+--- !u!1001 &300300000
+PrefabInstance:
+  m_SourcePrefab: {{fileID: 100100000, guid: {inner_guid}, type: 3}}
+""",
+        )
+        write_file(
+            root / "Assets" / "Base.prefab.meta",
+            f"fileFormatVersion: 2\nguid: {BASE_GUID}\n",
+        )
+        # Variant of Base — no GameObjects of its own.
+        variant_path = root / "Assets" / "Variant.prefab"
+        write_file(
+            variant_path,
+            f"""%YAML 1.1
+--- !u!1001 &100100000
+PrefabInstance:
+  m_SourcePrefab: {{fileID: 100100000, guid: {BASE_GUID}, type: 3}}
+""",
+        )
+        write_file(
+            root / "Assets" / "Variant.prefab.meta",
+            f"fileFormatVersion: 2\nguid: {VARIANT_GUID}\n",
+        )
+        return variant_path
+
+    def test_variant_with_nested_prefabinstance_in_base_resolves_chain(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            variant_path = self._write_base_with_nested_instance_chain(root)
+            variant_text = variant_path.read_text(encoding="utf-8")
+            base_text = (root / "Assets" / "Base.prefab").read_text(encoding="utf-8")
+
+        # Variant (no GameObject of its own) → True.
+        self.assertTrue(is_variant_prefab(variant_text))
+        # Base prefab that nests a PrefabInstance but owns a GameObject → False.
+        self.assertFalse(is_variant_prefab(base_text))
+
+    def test_chain_values_resolve_from_variant_chain(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            self._write_base_with_nested_instance_chain(root)
+            svc = PrefabVariantService(project_root=root)
+
+            response = svc.resolve_chain_values_with_origin("Assets/Variant.prefab")
+
+        self.assertTrue(response.success)
+        # The chain must include the Variant and its Base; nested-instance
+        # presence inside Base does not derail the walk.
+        chain_paths = [entry["path"] for entry in response.data["chain"]]
+        self.assertIn("Assets/Variant.prefab", chain_paths)
+        self.assertIn("Assets/Base.prefab", chain_paths)
 
 
 if __name__ == "__main__":
