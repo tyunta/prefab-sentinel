@@ -15,3 +15,6 @@ report-*.md
 # audited tree into this directory at run start; it must never appear in
 # version-control status output.
 mutants/
+
+# coverage.py SQLite artifact — local-run only, never committed.
+.coverage
