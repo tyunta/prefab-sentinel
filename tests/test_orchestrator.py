@@ -930,146 +930,14 @@ class ValidateRuntimeTests(unittest.TestCase):
         self.assertEqual(classify_diag.detail, result.diagnostics[0].detail)
 
 
-class PostconditionSchemaTests(unittest.TestCase):
-    def test_non_dict_postcondition(self) -> None:
-        orch = _make_orchestrator()
-        result = orch._validate_postcondition_schema("not_a_dict", resource_ids=set())
-        self.assertFalse(result.success)
-        self.assertEqual("POST_SCHEMA_ERROR", result.code)
-
-    def test_missing_type(self) -> None:
-        orch = _make_orchestrator()
-        result = orch._validate_postcondition_schema({}, resource_ids=set())
-        self.assertFalse(result.success)
-
-    def test_asset_exists_resource_valid(self) -> None:
-        orch = _make_orchestrator()
-        result = orch._validate_postcondition_schema(
-            {"type": "asset_exists", "resource": "res1"},
-            resource_ids={"res1"},
-        )
-        self.assertTrue(result.success)
-        self.assertEqual("POST_SCHEMA_OK", result.code)
-
-    def test_asset_exists_path_valid(self) -> None:
-        orch = _make_orchestrator()
-        result = orch._validate_postcondition_schema(
-            {"type": "asset_exists", "path": "Assets/test.json"},
-            resource_ids=set(),
-        )
-        self.assertTrue(result.success)
-
-    def test_asset_exists_both_resource_and_path(self) -> None:
-        orch = _make_orchestrator()
-        result = orch._validate_postcondition_schema(
-            {"type": "asset_exists", "resource": "res1", "path": "Assets/test.json"},
-            resource_ids={"res1"},
-        )
-        self.assertFalse(result.success)
-        self.assertIn("exactly one", result.message)
-
-    def test_asset_exists_neither_resource_nor_path(self) -> None:
-        orch = _make_orchestrator()
-        result = orch._validate_postcondition_schema(
-            {"type": "asset_exists"},
-            resource_ids=set(),
-        )
-        self.assertFalse(result.success)
-
-    def test_asset_exists_unknown_resource(self) -> None:
-        orch = _make_orchestrator()
-        result = orch._validate_postcondition_schema(
-            {"type": "asset_exists", "resource": "unknown"},
-            resource_ids={"res1"},
-        )
-        self.assertFalse(result.success)
-        self.assertIn("unknown resource", result.message)
-
-    def test_broken_refs_valid(self) -> None:
-        orch = _make_orchestrator()
-        result = orch._validate_postcondition_schema(
-            {"type": "broken_refs", "scope": "Assets/", "expected_count": 0},
-            resource_ids=set(),
-        )
-        self.assertTrue(result.success)
-
-    def test_broken_refs_empty_scope(self) -> None:
-        orch = _make_orchestrator()
-        result = orch._validate_postcondition_schema(
-            {"type": "broken_refs", "scope": "", "expected_count": 0},
-            resource_ids=set(),
-        )
-        self.assertFalse(result.success)
-
-    def test_broken_refs_negative_expected_count(self) -> None:
-        orch = _make_orchestrator()
-        result = orch._validate_postcondition_schema(
-            {"type": "broken_refs", "scope": "Assets/", "expected_count": -1},
-            resource_ids=set(),
-        )
-        self.assertFalse(result.success)
-
-    def test_broken_refs_non_int_expected_count(self) -> None:
-        orch = _make_orchestrator()
-        result = orch._validate_postcondition_schema(
-            {"type": "broken_refs", "scope": "Assets/", "expected_count": "five"},
-            resource_ids=set(),
-        )
-        self.assertFalse(result.success)
-
-    def test_broken_refs_non_list_exclude_patterns(self) -> None:
-        orch = _make_orchestrator()
-        result = orch._validate_postcondition_schema(
-            {
-                "type": "broken_refs",
-                "scope": "Assets/",
-                "expected_count": 0,
-                "exclude_patterns": "not_a_list",
-            },
-            resource_ids=set(),
-        )
-        self.assertFalse(result.success)
-
-    def test_broken_refs_non_string_items(self) -> None:
-        orch = _make_orchestrator()
-        result = orch._validate_postcondition_schema(
-            {
-                "type": "broken_refs",
-                "scope": "Assets/",
-                "expected_count": 0,
-                "exclude_patterns": [123],
-            },
-            resource_ids=set(),
-        )
-        self.assertFalse(result.success)
-
-    def test_broken_refs_negative_max_diagnostics(self) -> None:
-        orch = _make_orchestrator()
-        result = orch._validate_postcondition_schema(
-            {
-                "type": "broken_refs",
-                "scope": "Assets/",
-                "expected_count": 0,
-                "max_diagnostics": -1,
-            },
-            resource_ids=set(),
-        )
-        self.assertFalse(result.success)
-
-    def test_unknown_type(self) -> None:
-        orch = _make_orchestrator()
-        result = orch._validate_postcondition_schema(
-            {"type": "unknown_type"},
-            resource_ids=set(),
-        )
-        self.assertFalse(result.success)
-        self.assertIn("not supported", result.message)
-
-
 class PostconditionSchemaValidationTests(unittest.TestCase):
-    """Issue #146 — pin every postcondition schema-validation outcome
-    by code, severity, type identity, related field identity, and
-    message-shape via the structured-envelope helper.
+    """Issue #146 / #176 — pin every postcondition schema-validation
+    outcome by code, severity, message regex, and full payload via the
+    structured-envelope helper.
+
+    This class is the single home for postcondition schema scenarios in
+    this test module; every schema scenario the module exercises has one
+    row in this class.
     """
 
     def _validate(self, postcondition: object, resource_ids: set[str] | None = None):
@@ -1081,6 +949,8 @@ class PostconditionSchemaValidationTests(unittest.TestCase):
             postcondition, resource_ids=resource_ids or set()
         )
 
+    # --- non-object / missing type -------------------------------------
+
     def test_non_object_emits_post_schema_error(self) -> None:
         from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
 
@@ -1090,6 +960,7 @@ class PostconditionSchemaValidationTests(unittest.TestCase):
             code="POST_SCHEMA_ERROR",
             severity="error",
             message_match=r"must be an object",
+            data={"read_only": True, "executed": False},
         )
 
     def test_missing_type_emits_post_schema_error(self) -> None:
@@ -1101,7 +972,10 @@ class PostconditionSchemaValidationTests(unittest.TestCase):
             code="POST_SCHEMA_ERROR",
             severity="error",
             message_match=r"type is required",
+            data={"read_only": True, "executed": False},
         )
+
+    # --- asset_exists branch -------------------------------------------
 
     def test_asset_exists_mutually_exclusive_emits_post_schema_error(self) -> None:
         from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
@@ -1115,8 +989,30 @@ class PostconditionSchemaValidationTests(unittest.TestCase):
             code="POST_SCHEMA_ERROR",
             severity="error",
             message_match=r"exactly one",
+            data={
+                "type": "asset_exists",
+                "read_only": True,
+                "executed": False,
+            },
         )
-        self.assertEqual("asset_exists", result.data["type"])
+
+    def test_asset_exists_neither_resource_nor_path_emits_post_schema_error(self) -> None:
+        """asset_exists with neither resource nor path must emit POST_SCHEMA_ERROR
+        (the mutually-exclusive guard treats both-empty the same as both-present)."""
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        result = self._validate({"type": "asset_exists"})
+        assert_error_envelope(
+            result,
+            code="POST_SCHEMA_ERROR",
+            severity="error",
+            message_match=r"exactly one",
+            data={
+                "type": "asset_exists",
+                "read_only": True,
+                "executed": False,
+            },
+        )
 
     def test_asset_exists_unknown_resource_emits_post_schema_error(self) -> None:
         from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
@@ -1130,9 +1026,48 @@ class PostconditionSchemaValidationTests(unittest.TestCase):
             code="POST_SCHEMA_ERROR",
             severity="error",
             message_match=r"unknown resource",
+            data={
+                "type": "asset_exists",
+                "resource": "unknown",
+                "read_only": True,
+                "executed": False,
+            },
         )
-        self.assertEqual("asset_exists", result.data["type"])
-        self.assertEqual("unknown", result.data["resource"])
+
+    def test_asset_exists_resource_accept_emits_post_schema_ok(self) -> None:
+        result = self._validate(
+            {"type": "asset_exists", "resource": "r"},
+            resource_ids={"r"},
+        )
+        self.assertTrue(result.success)
+        self.assertEqual("POST_SCHEMA_OK", result.code)
+        self.assertEqual(Severity.INFO, result.severity)
+        self.assertEqual(
+            {
+                "type": "asset_exists",
+                "read_only": True,
+                "executed": False,
+            },
+            result.data,
+        )
+
+    def test_asset_exists_path_accept_emits_post_schema_ok(self) -> None:
+        result = self._validate(
+            {"type": "asset_exists", "path": "Assets/test.json"},
+        )
+        self.assertTrue(result.success)
+        self.assertEqual("POST_SCHEMA_OK", result.code)
+        self.assertEqual(Severity.INFO, result.severity)
+        self.assertEqual(
+            {
+                "type": "asset_exists",
+                "read_only": True,
+                "executed": False,
+            },
+            result.data,
+        )
+
+    # --- broken_refs branch --------------------------------------------
 
     def test_broken_refs_missing_scope_emits_post_schema_error(self) -> None:
         from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
@@ -1143,8 +1078,12 @@ class PostconditionSchemaValidationTests(unittest.TestCase):
             code="POST_SCHEMA_ERROR",
             severity="error",
             message_match=r"non-empty 'scope'",
+            data={
+                "type": "broken_refs",
+                "read_only": True,
+                "executed": False,
+            },
         )
-        self.assertEqual("broken_refs", result.data["type"])
 
     def test_broken_refs_negative_count_emits_post_schema_error(self) -> None:
         from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
@@ -1157,9 +1096,60 @@ class PostconditionSchemaValidationTests(unittest.TestCase):
             code="POST_SCHEMA_ERROR",
             severity="error",
             message_match=r"expected_count",
+            data={
+                "type": "broken_refs",
+                "scope": "Assets/",
+                "read_only": True,
+                "executed": False,
+            },
         )
-        self.assertEqual("broken_refs", result.data["type"])
-        self.assertEqual("Assets/", result.data["scope"])
+
+    def test_broken_refs_non_int_expected_count_emits_post_schema_error(self) -> None:
+        """A non-integer expected_count fails the same isinstance(int) gate as
+        a negative integer; the envelope must carry the same payload shape."""
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        result = self._validate(
+            {"type": "broken_refs", "scope": "Assets/", "expected_count": "five"}
+        )
+        assert_error_envelope(
+            result,
+            code="POST_SCHEMA_ERROR",
+            severity="error",
+            message_match=r"expected_count",
+            data={
+                "type": "broken_refs",
+                "scope": "Assets/",
+                "read_only": True,
+                "executed": False,
+            },
+        )
+
+    def test_broken_refs_non_list_array_field_emits_post_schema_error(self) -> None:
+        """A scalar passed where an array of strings is required (here, a
+        bare string for exclude_patterns) trips the array-of-strings gate."""
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        result = self._validate(
+            {
+                "type": "broken_refs",
+                "scope": "Assets/",
+                "expected_count": 0,
+                "exclude_patterns": "not_a_list",
+            }
+        )
+        assert_error_envelope(
+            result,
+            code="POST_SCHEMA_ERROR",
+            severity="error",
+            message_match=r"exclude_patterns.*array of strings",
+            data={
+                "type": "broken_refs",
+                "scope": "Assets/",
+                "read_only": True,
+                "executed": False,
+            },
+        )
 
     def test_broken_refs_non_string_array_field_emits_post_schema_error(self) -> None:
         from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
@@ -1177,6 +1167,12 @@ class PostconditionSchemaValidationTests(unittest.TestCase):
             code="POST_SCHEMA_ERROR",
             severity="error",
             message_match=r"exclude_patterns.*array of strings",
+            data={
+                "type": "broken_refs",
+                "scope": "Assets/",
+                "read_only": True,
+                "executed": False,
+            },
         )
 
     def test_broken_refs_negative_diagnostics_cap_emits_post_schema_error(self) -> None:
@@ -1195,7 +1191,32 @@ class PostconditionSchemaValidationTests(unittest.TestCase):
             code="POST_SCHEMA_ERROR",
             severity="error",
             message_match=r"max_diagnostics",
+            data={
+                "type": "broken_refs",
+                "scope": "Assets/",
+                "read_only": True,
+                "executed": False,
+            },
         )
+
+    def test_broken_refs_accept_emits_post_schema_ok(self) -> None:
+        result = self._validate(
+            {"type": "broken_refs", "scope": "Assets/", "expected_count": 0}
+        )
+        self.assertTrue(result.success)
+        self.assertEqual("POST_SCHEMA_OK", result.code)
+        self.assertEqual(Severity.INFO, result.severity)
+        self.assertEqual(
+            {
+                "type": "broken_refs",
+                "scope": "Assets/",
+                "read_only": True,
+                "executed": False,
+            },
+            result.data,
+        )
+
+    # --- unsupported type ----------------------------------------------
 
     def test_unsupported_type_emits_post_schema_error(self) -> None:
         from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
@@ -1206,28 +1227,12 @@ class PostconditionSchemaValidationTests(unittest.TestCase):
             code="POST_SCHEMA_ERROR",
             severity="error",
             message_match=r"not supported",
+            data={
+                "type": "made_up_type",
+                "read_only": True,
+                "executed": False,
+            },
         )
-        self.assertEqual("made_up_type", result.data["type"])
-
-    def test_asset_exists_resource_accept_emits_post_schema_ok(self) -> None:
-        result = self._validate(
-            {"type": "asset_exists", "resource": "r"},
-            resource_ids={"r"},
-        )
-        self.assertTrue(result.success)
-        self.assertEqual("POST_SCHEMA_OK", result.code)
-        self.assertEqual(Severity.INFO, result.severity)
-        self.assertEqual("asset_exists", result.data["type"])
-
-    def test_broken_refs_accept_emits_post_schema_ok(self) -> None:
-        result = self._validate(
-            {"type": "broken_refs", "scope": "Assets/", "expected_count": 0}
-        )
-        self.assertTrue(result.success)
-        self.assertEqual("POST_SCHEMA_OK", result.code)
-        self.assertEqual(Severity.INFO, result.severity)
-        self.assertEqual("broken_refs", result.data["type"])
-        self.assertEqual("Assets/", result.data["scope"])
 
 
 class PostconditionEvaluatorTests(unittest.TestCase):
@@ -1268,8 +1273,18 @@ class PostconditionEvaluatorTests(unittest.TestCase):
         )
         self.assertTrue(result.success)
         self.assertEqual("POST_ASSET_EXISTS_OK", result.code)
-        self.assertEqual("/tmp/x.json", result.data["path"])
-        self.assertTrue(result.data["exists"])
+        self.assertEqual(Severity.INFO, result.severity)
+        self.assertEqual(
+            {
+                "type": "asset_exists",
+                "resource": None,
+                "path": "/tmp/x.json",
+                "exists": True,
+                "read_only": True,
+                "executed": True,
+            },
+            result.data,
+        )
 
     def test_asset_exists_absent_emits_post_asset_exists_failed(self) -> None:
         from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
@@ -1279,9 +1294,20 @@ class PostconditionEvaluatorTests(unittest.TestCase):
             target_path="/tmp/x.json",
             target_exists=False,
         )
-        assert_error_envelope(result, code="POST_ASSET_EXISTS_FAILED", severity="error")
-        self.assertEqual("/tmp/x.json", result.data["path"])
-        self.assertFalse(result.data["exists"])
+        assert_error_envelope(
+            result,
+            code="POST_ASSET_EXISTS_FAILED",
+            severity="error",
+            message_match=r"target path was not created",
+            data={
+                "type": "asset_exists",
+                "resource": None,
+                "path": "/tmp/x.json",
+                "exists": False,
+                "read_only": True,
+                "executed": True,
+            },
+        )
 
     def test_broken_refs_scan_failed_emits_post_broken_refs_error(self) -> None:
         from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
@@ -1291,10 +1317,20 @@ class PostconditionEvaluatorTests(unittest.TestCase):
             {"type": "broken_refs", "scope": "Assets/", "expected_count": 0},
             scan_response=scan,
         )
-        assert_error_envelope(result, code="POST_BROKEN_REFS_ERROR", severity="error")
-        self.assertEqual("REF404", result.data["scan_code"])
-        self.assertEqual("Assets/", result.data["scope"])
-        self.assertEqual(0, result.data["expected_count"])
+        assert_error_envelope(
+            result,
+            code="POST_BROKEN_REFS_ERROR",
+            severity="error",
+            message_match=r"could not be evaluated",
+            data={
+                "type": "broken_refs",
+                "scope": "Assets/",
+                "expected_count": 0,
+                "scan_code": "REF404",
+                "read_only": True,
+                "executed": True,
+            },
+        )
 
     def test_broken_refs_count_mismatch_emits_post_broken_refs_failed(self) -> None:
         from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
@@ -1306,10 +1342,21 @@ class PostconditionEvaluatorTests(unittest.TestCase):
             {"type": "broken_refs", "scope": "Assets/", "expected_count": 0},
             scan_response=scan,
         )
-        assert_error_envelope(result, code="POST_BROKEN_REFS_FAILED", severity="error")
-        self.assertEqual(0, result.data["expected_count"])
-        self.assertEqual(7, result.data["actual_count"])
-        self.assertEqual("REF_SCAN_BROKEN", result.data["scan_code"])
+        assert_error_envelope(
+            result,
+            code="POST_BROKEN_REFS_FAILED",
+            severity="error",
+            message_match=r"expected 0 broken refs but found 7",
+            data={
+                "type": "broken_refs",
+                "scope": "Assets/",
+                "expected_count": 0,
+                "actual_count": 7,
+                "scan_code": "REF_SCAN_BROKEN",
+                "read_only": True,
+                "executed": True,
+            },
+        )
 
     def test_broken_refs_count_match_emits_post_broken_refs_ok(self) -> None:
         scan = _ok_response(
@@ -1321,9 +1368,19 @@ class PostconditionEvaluatorTests(unittest.TestCase):
         )
         self.assertTrue(result.success)
         self.assertEqual("POST_BROKEN_REFS_OK", result.code)
-        self.assertEqual(0, result.data["expected_count"])
-        self.assertEqual(0, result.data["actual_count"])
-        self.assertEqual("REF_SCAN_OK", result.data["scan_code"])
+        self.assertEqual(Severity.INFO, result.severity)
+        self.assertEqual(
+            {
+                "type": "broken_refs",
+                "scope": "Assets/",
+                "expected_count": 0,
+                "actual_count": 0,
+                "scan_code": "REF_SCAN_OK",
+                "read_only": True,
+                "executed": True,
+            },
+            result.data,
+        )
 
 
 class PatchApplyTests(unittest.TestCase):

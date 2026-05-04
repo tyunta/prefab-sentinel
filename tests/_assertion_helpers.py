@@ -47,6 +47,7 @@ def assert_error_envelope(
     severity: str = "error",
     field: str | None = None,
     message_match: str | None = None,
+    data: Mapping[str, Any] | None = None,
 ) -> None:
     """Verify a failure-shape envelope by value.
 
@@ -63,6 +64,11 @@ def assert_error_envelope(
             membership), then top-level ``field`` on the envelope.
         message_match: When supplied, a regex pattern that must search-match
             the envelope's ``message`` text.
+        data: When supplied, asserts the envelope's ``data`` payload equals
+            this mapping by full-set, full-value comparison (every expected
+            key/value present and equal, no extra keys).  When the envelope's
+            payload is not a mapping, raises ``AssertionError`` identifying
+            the observed type.
     """
     # success flag must be False on a failure envelope.
     present, success_value = _envelope_get(response, "success")
@@ -93,13 +99,15 @@ def assert_error_envelope(
 
     # field: searched on data.field, data.fields, then top-level.
     if field is not None:
-        _, data = _envelope_get(response, "data")
+        _, envelope_data = _envelope_get(response, "data")
         candidates: list[Any] = []
-        if isinstance(data, Mapping):
-            if "field" in data:
-                candidates.append(data["field"])
-            if "fields" in data and isinstance(data["fields"], (list, tuple)):
-                candidates.extend(data["fields"])
+        if isinstance(envelope_data, Mapping):
+            if "field" in envelope_data:
+                candidates.append(envelope_data["field"])
+            if "fields" in envelope_data and isinstance(
+                envelope_data["fields"], (list, tuple)
+            ):
+                candidates.extend(envelope_data["fields"])
         _, top_field = _envelope_get(response, "field")
         if top_field is not None:
             candidates.append(top_field)
@@ -118,3 +126,29 @@ def assert_error_envelope(
                 f"envelope 'message' regex mismatch: pattern {message_match!r} "
                 f"did not match {observed_text!r}"
             )
+
+    # data: full-set, full-value mapping equality.
+    if data is not None:
+        _, observed_data = _envelope_get(response, "data")
+        if not isinstance(observed_data, Mapping):
+            raise AssertionError(
+                f"envelope 'data' is not a mapping: observed type "
+                f"{type(observed_data).__name__}, value {observed_data!r}"
+            )
+        observed_keys = set(observed_data.keys())
+        expected_keys = set(data.keys())
+        if observed_keys != expected_keys:
+            raise AssertionError(
+                f"envelope 'data' key-set mismatch: "
+                f"expected keys {sorted(expected_keys)!r}, "
+                f"observed keys {sorted(observed_keys)!r}; "
+                f"expected={dict(data)!r} observed={dict(observed_data)!r}"
+            )
+        for key, expected_value in data.items():
+            observed_value = observed_data[key]
+            if observed_value != expected_value:
+                raise AssertionError(
+                    f"envelope 'data[{key!r}]' value mismatch: "
+                    f"expected {expected_value!r}, observed {observed_value!r}; "
+                    f"full expected={dict(data)!r} observed={dict(observed_data)!r}"
+                )
