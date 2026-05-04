@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "prefab-sentinel"
-version = "0.5.157"
+version = "0.5.158"
 description = "Prefab Sentinel — Unity Prefab/Scene inspection and editing toolkit."
 requires-python = ">=3.11"
 readme = "README.md"
@@ -61,7 +61,7 @@ packages = ["prefab_sentinel"]
 "tools/unity" = "prefab_sentinel/_bridge_files"
 
 [tool.bumpversion]
-current_version = "0.5.157"
+current_version = "0.5.158"
 commit = false
 tag = false
 allow_dirty = true
@@ -102,8 +102,27 @@ do_not_mutate = [
     '*"""*',
     "*'''*",
 ]
+# Test collection in the mutated working directory imports modules from
+# ``scripts/`` and ``tools/``; without ``also_copy`` mutmut runs with only
+# ``prefab_sentinel/`` available and ``mutmut run`` aborts at collection
+# (``ModuleNotFoundError: No module named 'scripts'``).  Issues #154 and
+# #157 already retired the runtime line-count and subprocess test
+# exclusions, so the per-test ignore list shrinks to the source-text
+# invariant tests that contribute no mutant detection signal.
+also_copy = ["scripts/", "tools/", "knowledge/"]
+pytest_add_cli_args_test_selection = [
+    "tests/",
+    "--ignore=tests/test_asmdef_references.py",
+    "--ignore=tests/test_bridge_constants_sync.py",
+    "--ignore=tests/test_bridge_constants_drift.py",
+    "--ignore=tests/test_canonical_path_documentation.py",
+    "--ignore=tests/test_editor_control_bridge_source.py",
+    "--ignore=tests/test_knowledge_docs.py",
+    "--ignore=tests/test_vrcsdk_upload_handler_source.py",
+]
 
 [dependency-groups]
 dev = [
+    "mutmut>=3.5.0",
     "pytest>=9.0.3",
 ]

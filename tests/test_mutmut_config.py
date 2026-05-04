@@ -37,13 +37,38 @@ def _load_mutmut_section() -> dict:
 
 
 class MutmutConfigShapeTests(unittest.TestCase):
-    def test_section_exposes_only_audited_path_and_do_not_mutate(self) -> None:
+    def test_section_declares_required_keys(self) -> None:
         section = _load_mutmut_section()
+        # ``paths_to_mutate`` and ``do_not_mutate`` are the contract surfaces
+        # of #149/#150.  ``also_copy`` and ``pytest_add_cli_args_test_selection``
+        # are mutmut runtime requirements: without them test collection in the
+        # mutated working directory fails (``ModuleNotFoundError: scripts``)
+        # and the runtime stops before any mutant is exercised.  No legacy
+        # ``-k`` filters remain — issues #154/#156/#157 retired them.
+        expected_keys = {
+            "paths_to_mutate",
+            "do_not_mutate",
+            "also_copy",
+            "pytest_add_cli_args_test_selection",
+        }
         self.assertEqual(
-            {"paths_to_mutate", "do_not_mutate"},
+            expected_keys,
             set(section.keys()),
             f"unexpected [tool.mutmut] keys: {sorted(section.keys())}",
         )
+        cli_args = section["pytest_add_cli_args_test_selection"]
+        for forbidden in (
+            "test_module_line_limits",
+            "test_every_module_line_limit",
+            "test_compile_udonsharp_returns_skip_without_runtime_env",
+            "test_activate_auto_detect_when_no_root_specified",
+            "tests/test_unity_bridge_smoke.py",
+            "tests/test_unity_patch_bridge.py",
+        ):
+            self.assertFalse(
+                any(forbidden in entry for entry in cli_args),
+                f"legacy filter still present in pytest_add_cli_args_test_selection: {forbidden}",
+            )
 
     def test_audited_path_targets_package_source_root(self) -> None:
         section = _load_mutmut_section()
