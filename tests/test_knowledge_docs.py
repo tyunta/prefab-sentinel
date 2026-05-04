@@ -16,6 +16,15 @@ import re
 import unittest
 from pathlib import Path
 
+import pytest
+
+# Issue #167: this module reads the un-mutated knowledge document; its
+# assertions are insensitive to mutations applied to
+# ``prefab_sentinel/``.  The marker is the inclusion mechanism for
+# repository-synchrony tests; mutmut's pytest selection excludes it via
+# a single ``-m`` filter.
+pytestmark = pytest.mark.source_text_invariant
+
 DOC: Path = (
     Path(__file__).resolve().parent.parent
     / "knowledge"

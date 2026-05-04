@@ -10,7 +10,16 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
+import pytest
+
 from scripts import check_bridge_constants as checker
+
+# Issue #167: this module exercises the drift checker by patching its
+# loader functions; assertions inspect the checker's behaviour, not
+# anything in ``prefab_sentinel/``.  The marker is the inclusion
+# mechanism for repository-synchrony tests; mutmut's pytest selection
+# excludes it via a single ``-m`` filter.
+pytestmark = pytest.mark.source_text_invariant
 
 
 def _fake_cs(

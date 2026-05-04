@@ -5717,7 +5717,7 @@ namespace PrefabSentinel
             }
             catch (Exception ex)
             {
-                Debug.LogError($"[PrefabSentinel] Failed to write bridge response: {ex}");
+                Debug.LogWarning($"[PrefabSentinel] WriteResponseSafe: {ex.GetType().Name}: {ex.Message}");
                 // Fallback: direct write if atomic rename failed.
                 try { File.WriteAllText(responsePath, JsonUtility.ToJson(response)); }
                 catch (Exception fallbackEx)

@@ -10,6 +10,15 @@ import re
 import unittest
 from pathlib import Path
 
+import pytest
+
+# Issue #167: this module reads the un-mutated VRCSDK upload-handler
+# C# source; its assertions are insensitive to mutations applied to
+# ``prefab_sentinel/``.  The marker is the inclusion mechanism for
+# repository-synchrony tests; mutmut's pytest selection excludes it via
+# a single ``-m`` filter.
+pytestmark = pytest.mark.source_text_invariant
+
 TOOLS_DIR = Path(__file__).resolve().parent.parent / "tools" / "unity"
 UPLOAD_HANDLER = TOOLS_DIR / "PrefabSentinel.VRCSDKUploadHandler.cs"
 BRIDGE = TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.cs"

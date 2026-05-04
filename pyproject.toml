@@ -22,14 +22,22 @@ prefab-sentinel-mcp = "prefab_sentinel.mcp_server:main"
 [tool.pytest.ini_options]
 # Custom markers are registered here so pytest does not emit
 # ``PytestUnknownMarkWarning`` for them.  See issue #87 for the
-# ``unity_live`` harness motivation.
+# ``unity_live`` harness motivation; issue #167 motivates
+# ``source_text_invariant`` for repository-synchrony tests that read the
+# original (un-mutated) source tree and therefore contribute no mutant
+# detection signal.
 markers = [
     "unity_live: test requires a live Unity Editor invocation (UNITYTOOL_UNITY_COMMAND must be set); skipped by default.",
+    "source_text_invariant: repository-synchrony test that reads the original (un-mutated) source tree; excluded from the mutmut pytest selection so mutmut runs do not collect it.",
 ]
 
 [tool.ruff]
 target-version = "py311"
 line-length = 120
+# Issue #166: mutmut copies the audited tree into ``mutants/`` at run
+# start; lint must skip that directory so it never produces diagnostics
+# from a transient working copy.
+extend-exclude = ["mutants/"]
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "UP", "B", "SIM", "I", "N"]
@@ -105,20 +113,17 @@ do_not_mutate = [
 # Test collection in the mutated working directory imports modules from
 # ``scripts/`` and ``tools/``; without ``also_copy`` mutmut runs with only
 # ``prefab_sentinel/`` available and ``mutmut run`` aborts at collection
-# (``ModuleNotFoundError: No module named 'scripts'``).  Issues #154 and
-# #157 already retired the runtime line-count and subprocess test
-# exclusions, so the per-test ignore list shrinks to the source-text
-# invariant tests that contribute no mutant detection signal.
+# (``ModuleNotFoundError: No module named 'scripts'``).
 also_copy = ["scripts/", "tools/", "knowledge/"]
+# Issue #167: the source-text invariant tests read the un-mutated
+# repository tree and contribute no mutant detection signal; they carry
+# the ``source_text_invariant`` pytest marker at module scope and are
+# excluded via a single marker filter so adding a new repository-
+# synchrony test only requires applying the marker.
 pytest_add_cli_args_test_selection = [
     "tests/",
-    "--ignore=tests/test_asmdef_references.py",
-    "--ignore=tests/test_bridge_constants_sync.py",
-    "--ignore=tests/test_bridge_constants_drift.py",
-    "--ignore=tests/test_canonical_path_documentation.py",
-    "--ignore=tests/test_editor_control_bridge_source.py",
-    "--ignore=tests/test_knowledge_docs.py",
-    "--ignore=tests/test_vrcsdk_upload_handler_source.py",
+    "-m",
+    "not source_text_invariant",
 ]
 
 [dependency-groups]
