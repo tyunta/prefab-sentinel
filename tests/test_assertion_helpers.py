@@ -94,6 +94,91 @@ class AssertErrorEnvelopeTests(unittest.TestCase):
             message_match=r"missing GUID",
         )
 
+    # --- payload-pinning option ----------------------------------------
+
+    def test_payload_match_passes_silently(self) -> None:
+        envelope = _failure(data={"guid": "abc", "fileID": 7})
+        assert_error_envelope(
+            envelope,
+            code="REF001",
+            data={"guid": "abc", "fileID": 7},
+        )
+
+    def test_rejects_payload_value_mismatch(self) -> None:
+        envelope = _failure(data={"guid": "abc", "fileID": 7})
+        with self.assertRaises(AssertionError) as ctx:
+            assert_error_envelope(
+                envelope,
+                code="REF001",
+                data={"guid": "abc", "fileID": 8},
+            )
+        message = str(ctx.exception)
+        self.assertIn("data", message)
+        self.assertIn("expected", message)
+        self.assertIn("observed", message)
+
+    def test_rejects_payload_missing_key(self) -> None:
+        envelope = _failure(data={"guid": "abc"})
+        with self.assertRaises(AssertionError) as ctx:
+            assert_error_envelope(
+                envelope,
+                code="REF001",
+                data={"guid": "abc", "fileID": 7},
+            )
+        message = str(ctx.exception)
+        self.assertIn("data", message)
+        self.assertIn("fileID", message)
+
+    def test_rejects_payload_extra_key(self) -> None:
+        envelope = _failure(data={"guid": "abc", "fileID": 7, "extra": True})
+        with self.assertRaises(AssertionError) as ctx:
+            assert_error_envelope(
+                envelope,
+                code="REF001",
+                data={"guid": "abc", "fileID": 7},
+            )
+        message = str(ctx.exception)
+        self.assertIn("data", message)
+        self.assertIn("extra", message)
+
+    def test_rejects_non_mapping_payload_when_pinned(self) -> None:
+        envelope = _failure(data=None)
+        # Force payload to a non-mapping scalar to exercise the type guard.
+        envelope["data"] = "scalar"
+        with self.assertRaises(AssertionError) as ctx:
+            assert_error_envelope(
+                envelope,
+                code="REF001",
+                data={"guid": "abc"},
+            )
+        message = str(ctx.exception)
+        self.assertIn("data", message)
+        self.assertIn("str", message)
+
+    def test_field_and_data_pin_together_without_aliasing(self) -> None:
+        """Regression: ``field`` and ``data`` arguments must coexist
+        without name-shadow aliasing.  The data-pinning branch must
+        still apply when both arguments are supplied."""
+        envelope = _failure(data={"field": "guid", "guid": "abc"})
+        # Match path (both checks pass).
+        assert_error_envelope(
+            envelope,
+            code="REF001",
+            field="guid",
+            data={"field": "guid", "guid": "abc"},
+        )
+        # Mismatch path: the data check must still trigger when both
+        # are supplied.  A wrong data dict raises even when the field
+        # check would otherwise pass.
+        with self.assertRaises(AssertionError) as ctx:
+            assert_error_envelope(
+                envelope,
+                code="REF001",
+                field="guid",
+                data={"field": "guid", "guid": "DIFFERENT"},
+            )
+        self.assertIn("data", str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

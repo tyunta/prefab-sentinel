@@ -144,10 +144,96 @@ guid: {BASE_GUID}
 
 
 class MissingGuidContractTests(unittest.TestCase):
-    """T24: ``validate_refs`` surfaces top-level REF001 when any referenced
-    GUID is not resolvable in the project map."""
+    """T24 / Issue #146: ``validate_refs`` top-level outcome and full
+    nested step result envelope binds by exact value on both the
+    missing-GUID fail-fast path and the clean-scope path."""
+
+    @staticmethod
+    def _expected_clean_scan_data(scope: str) -> dict:
+        """Full ``scan_broken_references`` payload shape on the clean
+        single-Base.prefab fixture (one scanned file, zero references)."""
+        return {
+            "scope": scope,
+            "project_root": ".",
+            "scan_project_root": ".",
+            "read_only": True,
+            "details_included": False,
+            "max_diagnostics": 200,
+            "exclude_patterns": [],
+            "ignore_asset_guids": [],
+            "broken_count": 0,
+            "broken_occurrences": 0,
+            "categories": {"missing_asset": 0, "missing_local_id": 0},
+            "categories_occurrences": {"missing_asset": 0, "missing_local_id": 0},
+            "ignored_missing_asset_occurrences": 0,
+            "ignored_missing_asset_unique_count": 0,
+            "returned_diagnostics": 0,
+            "scanned_files": 1,
+            "scanned_references": 0,
+            "skipped_external_prefab_fileid_checks": 0,
+            "skipped_external_prefab_fileid_details": [],
+            "skipped_unreadable_target_checks": 0,
+            "top_ignored_missing_asset_guids": [],
+            "top_missing_asset_guids": [],
+            "truncated_diagnostics": 0,
+            "truncated_hint": None,
+            "unreadable_files": 0,
+        }
+
+    @staticmethod
+    def _expected_missing_guid_scan_data(scope: str) -> dict:
+        """Full ``scan_broken_references`` payload shape on the
+        missing-GUID Base+Variant fixture."""
+        return {
+            "scope": scope,
+            "project_root": ".",
+            "scan_project_root": ".",
+            "read_only": True,
+            "details_included": False,
+            "max_diagnostics": 200,
+            "exclude_patterns": [],
+            "ignore_asset_guids": [],
+            "broken_count": 1,
+            "broken_occurrences": 1,
+            "categories": {"missing_asset": 1, "missing_local_id": 0},
+            "categories_occurrences": {"missing_asset": 1, "missing_local_id": 0},
+            "ignored_missing_asset_occurrences": 0,
+            "ignored_missing_asset_unique_count": 0,
+            "returned_diagnostics": 0,
+            "scanned_files": 2,
+            "scanned_references": 3,
+            "skipped_external_prefab_fileid_checks": 1,
+            "skipped_external_prefab_fileid_details": [
+                {
+                    "source": "Assets/Variant.prefab",
+                    "target_guid": BASE_GUID,
+                    "file_id": "100100000",
+                }
+            ],
+            "skipped_unreadable_target_checks": 0,
+            "top_ignored_missing_asset_guids": [],
+            "top_missing_asset_guids": [
+                {
+                    "guid": MISSING_GUID,
+                    "occurrences": 1,
+                    "asset_name": "",
+                }
+            ],
+            "truncated_diagnostics": 1,
+            "truncated_hint": (
+                "1 broken reference(s) found. Use --details to include"
+                " individual diagnostics."
+            ),
+            "unreadable_files": 0,
+        }
 
     def test_validate_refs_returns_ref001(self) -> None:
+        """Missing-GUID fail-fast: top-level REF001, severity error,
+        and the full nested scan_broken_references step result envelope
+        binds by exact value (per-step success / severity / code /
+        message / data)."""
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             _create_project_with_missing_guid(root)
@@ -155,25 +241,35 @@ class MissingGuidContractTests(unittest.TestCase):
             resolver = ReferenceResolverService(project_root=root)
             response = validate_refs(resolver, scope="Assets")
 
-            self.assertFalse(response.success)
-            self.assertEqual("REF001", response.code)
-            self.assertEqual("error", response.severity.value)
-            # The underlying scan step remains visible in data.steps.
-            step_codes = [step["result"]["code"] for step in response.data["steps"]]
-            self.assertIn("REF_SCAN_BROKEN", step_codes)
-            self.assertGreaterEqual(response.data["missing_asset_unique_count"], 1)
-            # Issue #146 row: pin the step list shape and the data
-            # payload counter by exact value.  The orchestrator emits
-            # exactly one step (``scan_broken_references``) on the
-            # missing-GUID path.
-            self.assertEqual(
-                ["scan_broken_references"],
-                [step["step"] for step in response.data["steps"]],
-            )
-            self.assertEqual(1, response.data["missing_asset_unique_count"])
+        assert_error_envelope(
+            response,
+            code="REF001",
+            severity="error",
+            message_match=r"missing GUID reference",
+            data={
+                "scope": "Assets",
+                "read_only": True,
+                "ignore_asset_guids": [],
+                "missing_asset_unique_count": 1,
+                "steps": [
+                    {
+                        "step": "scan_broken_references",
+                        "result": {
+                            "success": False,
+                            "severity": "error",
+                            "code": "REF_SCAN_BROKEN",
+                            "message": "Broken references were detected in scope.",
+                            "data": self._expected_missing_guid_scan_data("Assets"),
+                        },
+                    }
+                ],
+            },
+        )
 
     def test_validate_refs_clean_scan_returns_validate_refs_result(self) -> None:
-        """Regression guard: clean scan must still return VALIDATE_REFS_RESULT."""
+        """Clean scope: top-level ``VALIDATE_REFS_RESULT`` at info, and
+        the full nested ``scan_broken_references`` result envelope binds
+        by exact value on the clean path too."""
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             _create_clean_project(root)
@@ -181,14 +277,32 @@ class MissingGuidContractTests(unittest.TestCase):
             resolver = ReferenceResolverService(project_root=root)
             response = validate_refs(resolver, scope="Assets")
 
-            self.assertTrue(response.success)
-            self.assertEqual("VALIDATE_REFS_RESULT", response.code)
-            self.assertEqual(0, response.data["missing_asset_unique_count"])
-            # Pin the step list ordering on the clean path too.
-            self.assertEqual(
-                ["scan_broken_references"],
-                [step["step"] for step in response.data["steps"]],
-            )
+        from prefab_sentinel.contracts import Severity  # noqa: PLC0415
+
+        self.assertTrue(response.success)
+        self.assertEqual("VALIDATE_REFS_RESULT", response.code)
+        self.assertEqual(Severity.INFO, response.severity)
+        self.assertEqual(
+            {
+                "scope": "Assets",
+                "read_only": True,
+                "ignore_asset_guids": [],
+                "missing_asset_unique_count": 0,
+                "steps": [
+                    {
+                        "step": "scan_broken_references",
+                        "result": {
+                            "success": True,
+                            "severity": "info",
+                            "code": "REF_SCAN_OK",
+                            "message": "No broken references were detected in scope.",
+                            "data": self._expected_clean_scan_data("Assets"),
+                        },
+                    }
+                ],
+            },
+            response.data,
+        )
 
 
 class InspectStructureContractTests(unittest.TestCase):
@@ -358,18 +472,56 @@ class ValidateRuntimePipelineTests(unittest.TestCase):
             data=data or {"read_only": True},
         )
 
+    @staticmethod
+    def _canvas_step_result(scene_path: str) -> dict:
+        """Full nested ``inspect_world_canvas`` result envelope (the
+        canvas step is real, not mocked, so its payload is deterministic)."""
+        return {
+            "success": True,
+            "severity": "info",
+            "code": "WORLD_CANVAS_INSPECT_OK",
+            "message": "World canvas inspection completed (read-only).",
+            "data": {
+                "scene_path": scene_path,
+                "read_only": True,
+                "diagnostic_count": 0,
+            },
+            "diagnostics": [],
+        }
+
+    @staticmethod
+    def _stub_step_result(
+        *,
+        success: bool,
+        severity: str,
+        code: str,
+        data: dict | None = None,
+    ) -> dict:
+        """Full nested step result envelope for a stubbed runtime step.
+        The mock response carries message ``"m"`` and the supplied data."""
+        return {
+            "success": success,
+            "severity": severity,
+            "code": code,
+            "message": "m",
+            "data": data or {"read_only": True},
+            "diagnostics": [],
+        }
+
     def test_fail_fast_runtime_step_error_aborts_pipeline(self) -> None:
         """When ``run_clientsim`` returns ``severity=error``, the
-        pipeline aborts at the run-clientsim step.  Top-level success
-        is False, ``fail_fast_triggered`` is True, and the steps list
-        contains exactly the canvas / compile / run-clientsim entries
-        in pipeline order."""
+        pipeline aborts at the run-clientsim step.  The full top-level
+        payload binds by value, with ``fail_fast_triggered`` true,
+        scene_path and profile echoed, and each step's name plus its
+        full nested result envelope (canvas / compile / run-clientsim)
+        bound by exact value."""
         from unittest.mock import MagicMock  # noqa: PLC0415
 
         from prefab_sentinel.contracts import Severity  # noqa: PLC0415
         from prefab_sentinel.orchestrator_validation import (  # noqa: PLC0415
             validate_runtime,
         )
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
 
         runtime = MagicMock()
         runtime.compile_udonsharp.return_value = self._make_response(
@@ -384,29 +536,49 @@ class ValidateRuntimePipelineTests(unittest.TestCase):
             scene.write_text(
                 "%YAML 1.1\n--- !u!1 &1\nGameObject:\n", encoding="utf-8"
             )
-            response = validate_runtime(runtime, str(scene))
+            scene_path = str(scene)
+            response = validate_runtime(runtime, scene_path)
 
-        self.assertFalse(response.success)
-        self.assertEqual("VALIDATE_RUNTIME_RESULT", response.code)
-        self.assertTrue(response.data["fail_fast_triggered"])
-        # Pipeline-position-ordered step list, pinned by exact step
-        # name and step code.
-        steps_seq = [
-            (entry["step"], entry["result"]["code"])
-            for entry in response.data["steps"]
-        ]
-        self.assertEqual(
-            [
-                ("inspect_world_canvas", "WORLD_CANVAS_INSPECT_OK"),
-                ("compile_udonsharp", "RUN_COMPILE_OK"),
-                ("run_clientsim", "RUN_CLIENTSIM_FAILED"),
-            ],
-            steps_seq,
-        )
+            assert_error_envelope(
+                response,
+                code="VALIDATE_RUNTIME_RESULT",
+                severity="error",
+                message_match=r"fail-fast policy",
+                data={
+                    "scene_path": scene_path,
+                    "profile": "default",
+                    "read_only": True,
+                    "fail_fast_triggered": True,
+                    "steps": [
+                        {
+                            "step": "inspect_world_canvas",
+                            "result": self._canvas_step_result(scene_path),
+                        },
+                        {
+                            "step": "compile_udonsharp",
+                            "result": self._stub_step_result(
+                                success=True,
+                                severity="info",
+                                code="RUN_COMPILE_OK",
+                            ),
+                        },
+                        {
+                            "step": "run_clientsim",
+                            "result": self._stub_step_result(
+                                success=False,
+                                severity="error",
+                                code="RUN_CLIENTSIM_FAILED",
+                            ),
+                        },
+                    ],
+                },
+            )
 
     def test_clean_pipeline_runs_full_step_sequence(self) -> None:
-        """When every step succeeds, the pipeline runs the full six-
-        step sequence; ``fail_fast_triggered`` is False."""
+        """When every step succeeds, the pipeline runs the full
+        six-step sequence; ``fail_fast_triggered`` is False; the full
+        top-level payload binds by value, with each step's name plus
+        its full nested result envelope bound by exact value."""
         from unittest.mock import MagicMock  # noqa: PLC0415
 
         from prefab_sentinel.contracts import Severity  # noqa: PLC0415
@@ -427,7 +599,10 @@ class ValidateRuntimePipelineTests(unittest.TestCase):
             "RUN_CLIENTSIM_OK", Severity.INFO, True
         )
         runtime.collect_unity_console.return_value = self._make_response(
-            "RUN_LOG_COLLECTED", Severity.INFO, True, data={"log_lines": [], "read_only": True}
+            "RUN_LOG_COLLECTED",
+            Severity.INFO,
+            True,
+            data={"log_lines": [], "read_only": True},
         )
         runtime.classify_errors.return_value = self._make_response(
             "RUN_CLASSIFY_OK", Severity.INFO, True
@@ -441,23 +616,70 @@ class ValidateRuntimePipelineTests(unittest.TestCase):
             scene.write_text(
                 "%YAML 1.1\n--- !u!1 &1\nGameObject:\n", encoding="utf-8"
             )
-            response = validate_runtime(runtime, str(scene))
+            scene_path = str(scene)
+            response = validate_runtime(runtime, scene_path)
 
-        self.assertTrue(response.success)
-        self.assertEqual("VALIDATE_RUNTIME_RESULT", response.code)
-        self.assertFalse(response.data["fail_fast_triggered"])
-        steps_seq = [entry["step"] for entry in response.data["steps"]]
-        self.assertEqual(
-            [
-                "inspect_world_canvas",
-                "compile_udonsharp",
-                "run_clientsim",
-                "collect_unity_console",
-                "classify_errors",
-                "assert_no_critical_errors",
-            ],
-            steps_seq,
-        )
+            from prefab_sentinel.contracts import Severity as _Severity  # noqa: PLC0415
+
+            self.assertTrue(response.success)
+            self.assertEqual("VALIDATE_RUNTIME_RESULT", response.code)
+            self.assertEqual(_Severity.INFO, response.severity)
+            self.assertEqual(
+                {
+                    "scene_path": scene_path,
+                    "profile": "default",
+                    "read_only": True,
+                    "fail_fast_triggered": False,
+                    "steps": [
+                        {
+                            "step": "inspect_world_canvas",
+                            "result": self._canvas_step_result(scene_path),
+                        },
+                        {
+                            "step": "compile_udonsharp",
+                            "result": self._stub_step_result(
+                                success=True,
+                                severity="info",
+                                code="RUN_COMPILE_OK",
+                            ),
+                        },
+                        {
+                            "step": "run_clientsim",
+                            "result": self._stub_step_result(
+                                success=True,
+                                severity="info",
+                                code="RUN_CLIENTSIM_OK",
+                            ),
+                        },
+                        {
+                            "step": "collect_unity_console",
+                            "result": self._stub_step_result(
+                                success=True,
+                                severity="info",
+                                code="RUN_LOG_COLLECTED",
+                                data={"log_lines": [], "read_only": True},
+                            ),
+                        },
+                        {
+                            "step": "classify_errors",
+                            "result": self._stub_step_result(
+                                success=True,
+                                severity="info",
+                                code="RUN_CLASSIFY_OK",
+                            ),
+                        },
+                        {
+                            "step": "assert_no_critical_errors",
+                            "result": self._stub_step_result(
+                                success=True,
+                                severity="info",
+                                code="RUN_ASSERT_OK",
+                            ),
+                        },
+                    ],
+                },
+                response.data,
+            )
 
 
 class TestValidationSnapshotPinning:

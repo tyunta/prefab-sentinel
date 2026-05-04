@@ -97,6 +97,281 @@ class RuntimeValidationClassifyTests(unittest.TestCase):
         self.assertEqual({}, resp.data["count_by_category"])
 
 
+class ClassificationSeverityBoundaryTests(unittest.TestCase):
+    """Issue #145 — value-pinning rows for every documented severity
+    boundary of ``classify_errors`` and the ``assert_no_critical_errors``
+    downgrade boundary, using the structured-envelope helper for failure
+    envelopes and full-payload equality for success envelopes.
+
+    Spec rows: one row per documented log category (BROKEN_PPTR,
+    UDON_NULLREF, VARIANT_OVERRIDE_MISMATCH, DUPLICATE_EVENTSYSTEM,
+    MISSING_COMPONENT), one no-match rollup row, and four assertion-stage
+    rows (critical present / error only / warning disallowed / warning
+    allowed).
+    """
+
+    # --- classify_errors per-category severity boundaries ----------
+
+    def test_broken_pptr_emits_run001_at_severity_error(self) -> None:
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        svc = RuntimeValidationService()
+        resp = svc.classify_errors(["Broken PPtr in file Foo"])
+        assert_error_envelope(
+            resp,
+            code="RUN001",
+            severity="error",
+            message_match=r"error or critical",
+            data={
+                "count_total": 1,
+                "count_by_category": {"BROKEN_PPTR": 1},
+                "categories_by_severity": {
+                    "critical": 0,
+                    "error": 1,
+                    "warning": 0,
+                },
+                "line_count": 1,
+                "returned_diagnostics": 1,
+                "truncated_diagnostics": 0,
+                "read_only": True,
+            },
+        )
+
+    def test_udon_nullref_emits_run001_at_severity_critical(self) -> None:
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        svc = RuntimeValidationService()
+        resp = svc.classify_errors(
+            ["NullReferenceException in UdonBehaviour.MyEvent"]
+        )
+        assert_error_envelope(
+            resp,
+            code="RUN001",
+            severity="critical",
+            message_match=r"error or critical",
+            data={
+                "count_total": 1,
+                "count_by_category": {"UDON_NULLREF": 1},
+                "categories_by_severity": {
+                    "critical": 1,
+                    "error": 0,
+                    "warning": 0,
+                },
+                "line_count": 1,
+                "returned_diagnostics": 1,
+                "truncated_diagnostics": 0,
+                "read_only": True,
+            },
+        )
+
+    def test_variant_override_mismatch_emits_run001_at_severity_error(self) -> None:
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        svc = RuntimeValidationService()
+        resp = svc.classify_errors(["override mismatch detected on Foo"])
+        assert_error_envelope(
+            resp,
+            code="RUN001",
+            severity="error",
+            message_match=r"error or critical",
+            data={
+                "count_total": 1,
+                "count_by_category": {"VARIANT_OVERRIDE_MISMATCH": 1},
+                "categories_by_severity": {
+                    "critical": 0,
+                    "error": 1,
+                    "warning": 0,
+                },
+                "line_count": 1,
+                "returned_diagnostics": 1,
+                "truncated_diagnostics": 0,
+                "read_only": True,
+            },
+        )
+
+    def test_duplicate_eventsystem_emits_run_classify_warn(self) -> None:
+        """Warning band: ``RUN_CLASSIFY_WARN`` is a *success* envelope
+        whose severity is warning; full-payload pinned via direct equality."""
+        svc = RuntimeValidationService()
+        resp = svc.classify_errors(
+            ["There can be only one active EventSystem in the scene"]
+        )
+        self.assertTrue(resp.success)
+        self.assertEqual("RUN_CLASSIFY_WARN", resp.code)
+        self.assertEqual(Severity.WARNING, resp.severity)
+        self.assertEqual(
+            {
+                "count_total": 1,
+                "count_by_category": {"DUPLICATE_EVENTSYSTEM": 1},
+                "categories_by_severity": {
+                    "critical": 0,
+                    "error": 0,
+                    "warning": 1,
+                },
+                "line_count": 1,
+                "returned_diagnostics": 1,
+                "truncated_diagnostics": 0,
+                "read_only": True,
+            },
+            resp.data,
+        )
+
+    def test_missing_component_emits_run001_at_severity_error(self) -> None:
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        svc = RuntimeValidationService()
+        resp = svc.classify_errors(
+            ["The referenced script on this Behaviour is missing!"]
+        )
+        assert_error_envelope(
+            resp,
+            code="RUN001",
+            severity="error",
+            message_match=r"error or critical",
+            data={
+                "count_total": 1,
+                "count_by_category": {"MISSING_COMPONENT": 1},
+                "categories_by_severity": {
+                    "critical": 0,
+                    "error": 1,
+                    "warning": 0,
+                },
+                "line_count": 1,
+                "returned_diagnostics": 1,
+                "truncated_diagnostics": 0,
+                "read_only": True,
+            },
+        )
+
+    def test_no_match_input_rolls_up_to_run_classify_ok_at_info(self) -> None:
+        """No-match rollup: an unrelated log line returns
+        ``RUN_CLASSIFY_OK`` at severity info, ``count_total`` zero, every
+        per-band counter zero, and an empty ``count_by_category``."""
+        svc = RuntimeValidationService()
+        resp = svc.classify_errors(["unrelated runtime log line"])
+        self.assertTrue(resp.success)
+        self.assertEqual("RUN_CLASSIFY_OK", resp.code)
+        self.assertEqual(Severity.INFO, resp.severity)
+        self.assertEqual(
+            {
+                "count_total": 0,
+                "count_by_category": {},
+                "categories_by_severity": {
+                    "critical": 0,
+                    "error": 0,
+                    "warning": 0,
+                },
+                "line_count": 1,
+                "returned_diagnostics": 0,
+                "truncated_diagnostics": 0,
+                "read_only": True,
+            },
+            resp.data,
+        )
+
+    # --- assert_no_critical_errors downgrade boundary --------------
+
+    def test_assert_critical_present_emits_run001_at_severity_critical(self) -> None:
+        from prefab_sentinel.services.runtime_validation.classification import (  # noqa: PLC0415
+            assert_no_critical_errors,
+        )
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        svc = RuntimeValidationService()
+        classification = svc.classify_errors(
+            ["NullReferenceException in UdonBehaviour.X"]
+        )
+        outcome = assert_no_critical_errors(classification)
+        assert_error_envelope(
+            outcome,
+            code="RUN001",
+            severity="critical",
+            message_match=r"critical/error",
+            data={
+                "critical_count": 1,
+                "error_count": 0,
+                "warning_count": 0,
+                "allow_warnings": False,
+                "read_only": True,
+            },
+        )
+
+    def test_assert_error_only_emits_run001_at_severity_error(self) -> None:
+        from prefab_sentinel.services.runtime_validation.classification import (  # noqa: PLC0415
+            assert_no_critical_errors,
+        )
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        svc = RuntimeValidationService()
+        classification = svc.classify_errors(["Broken PPtr in file Foo"])
+        outcome = assert_no_critical_errors(classification)
+        assert_error_envelope(
+            outcome,
+            code="RUN001",
+            severity="error",
+            message_match=r"critical/error",
+            data={
+                "critical_count": 0,
+                "error_count": 1,
+                "warning_count": 0,
+                "allow_warnings": False,
+                "read_only": True,
+            },
+        )
+
+    def test_assert_warning_disallowed_emits_run_warnings(self) -> None:
+        from prefab_sentinel.services.runtime_validation.classification import (  # noqa: PLC0415
+            assert_no_critical_errors,
+        )
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        svc = RuntimeValidationService()
+        classification = svc.classify_errors(
+            ["There can be only one active EventSystem in the scene"]
+        )
+        outcome = assert_no_critical_errors(classification, allow_warnings=False)
+        assert_error_envelope(
+            outcome,
+            code="RUN_WARNINGS",
+            severity="warning",
+            message_match=r"warnings are not allowed",
+            data={
+                "critical_count": 0,
+                "error_count": 0,
+                "warning_count": 1,
+                "allow_warnings": False,
+                "read_only": True,
+            },
+        )
+
+    def test_assert_warning_allowed_emits_run_assert_ok(self) -> None:
+        """Warning bypass: with ``allow_warnings=True`` a warning hit
+        returns ``RUN_ASSERT_OK`` at info; the warning counter is still
+        one (the bypass does not silence the count)."""
+        from prefab_sentinel.services.runtime_validation.classification import (  # noqa: PLC0415
+            assert_no_critical_errors,
+        )
+
+        svc = RuntimeValidationService()
+        classification = svc.classify_errors(
+            ["There can be only one active EventSystem in the scene"]
+        )
+        outcome = assert_no_critical_errors(classification, allow_warnings=True)
+        self.assertTrue(outcome.success)
+        self.assertEqual("RUN_ASSERT_OK", outcome.code)
+        self.assertEqual(Severity.INFO, outcome.severity)
+        self.assertEqual(
+            {
+                "critical_count": 0,
+                "error_count": 0,
+                "warning_count": 1,
+                "allow_warnings": True,
+                "read_only": True,
+            },
+            outcome.data,
+        )
+
+
 class RuntimeClassificationSeverityBandTests(unittest.TestCase):
     """C1 — pin the four severity bands (critical / error / warning / info)
     by value plus the corresponding per-category count by value.

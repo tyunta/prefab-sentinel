@@ -451,9 +451,12 @@ class ReferenceResolverEnvelopeTests(unittest.TestCase):
             code="REF001",
             severity="error",
             message_match=r"32-character hexadecimal",
+            data={
+                "guid": "not-a-guid",
+                "file_id": "100100000",
+                "read_only": True,
+            },
         )
-        self.assertEqual("not-a-guid", response.data["guid"])
-        self.assertEqual("100100000", response.data["file_id"])
 
     def test_unknown_guid_emits_ref001_with_normalized_guid_value(self) -> None:
         """Issue #141 row: a well-formed GUID absent from the project map
@@ -472,18 +475,20 @@ class ReferenceResolverEnvelopeTests(unittest.TestCase):
             code="REF001",
             severity="error",
             message_match=r"not found",
+            data={
+                "guid": MISSING_GUID,
+                "file_id": "12345",
+                "read_only": True,
+            },
         )
-        self.assertEqual(MISSING_GUID, response.data["guid"])
-        self.assertEqual("12345", response.data["file_id"])
-        # missing_asset diagnostic carries the GUID value too.
-        details = [
-            (d.detail, d.evidence) for d in response.diagnostics
-        ]
-        self.assertTrue(
-            any(detail == "missing_asset" and MISSING_GUID in evidence
-                for detail, evidence in details),
-            f"missing_asset diagnostic absent: {details}",
-        )
+        # missing_asset diagnostic carries the GUID value verbatim by
+        # full-string equality on detail and evidence.
+        self.assertEqual(1, len(response.diagnostics))
+        diag = response.diagnostics[0]
+        self.assertEqual("", diag.path)
+        self.assertEqual("guid", diag.location)
+        self.assertEqual("missing_asset", diag.detail)
+        self.assertEqual(f"guid {MISSING_GUID} not found", diag.evidence)
 
     def test_missing_local_id_emits_ref002_with_asset_path_and_file_id(self) -> None:
         """Issue #141 row: a fileID that does not exist in the resolved asset
@@ -520,12 +525,21 @@ guid: {asset_guid}
             code="REF002",
             severity="error",
             message_match=r"fileID was not found",
+            data={
+                "guid": asset_guid,
+                "file_id": "999999999",
+                "asset_path": "Assets/Settings.asset",
+                "read_only": True,
+            },
         )
-        self.assertEqual(asset_guid, response.data["guid"])
-        self.assertEqual("999999999", response.data["file_id"])
-        self.assertEqual("Assets/Settings.asset", response.data["asset_path"])
-        details = [d.detail for d in response.diagnostics]
-        self.assertIn("missing_local_id", details)
+        self.assertEqual(1, len(response.diagnostics))
+        diag = response.diagnostics[0]
+        self.assertEqual("Assets/Settings.asset", diag.path)
+        self.assertEqual("local fileID", diag.location)
+        self.assertEqual("missing_local_id", diag.detail)
+        self.assertEqual(
+            "fileID 999999999 not found in referenced asset", diag.evidence
+        )
 
     # ----- Issue #141: resolve_reference success outcomes -----
 
@@ -543,10 +557,15 @@ guid: {asset_guid}
         self.assertTrue(response.success)
         self.assertEqual("REF_BUILTIN", response.code)
         self.assertEqual(Severity.INFO, response.severity)
-        # Normalised: input upper-cased, output is lower-case 32 hex.
-        self.assertEqual(UNITY_BUILTIN_EXTRA_GUID, response.data["guid"])
-        self.assertEqual("10303", response.data["file_id"])
-        self.assertTrue(response.data["read_only"])
+        # Full-payload pinning: normalised GUID, input fileID, read-only flag.
+        self.assertEqual(
+            {
+                "guid": UNITY_BUILTIN_EXTRA_GUID,
+                "file_id": "10303",
+                "read_only": True,
+            },
+            response.data,
+        )
 
     def test_resolved_normal_guid_emits_ref_resolved_with_asset_path(self) -> None:
         """A normal (non-builtin) GUID present in the project map and a
@@ -561,17 +580,25 @@ guid: {asset_guid}
         self.assertTrue(response.success)
         self.assertEqual("REF_RESOLVED", response.code)
         self.assertEqual(Severity.INFO, response.severity)
-        self.assertEqual(BASE_GUID, response.data["guid"])
-        self.assertEqual("0", response.data["file_id"])
-        self.assertEqual("Assets/Base.prefab", response.data["asset_path"])
+        # Full-payload pinning for the asset-level fileID success path.
+        self.assertEqual(
+            {
+                "guid": BASE_GUID,
+                "file_id": "0",
+                "asset_path": "Assets/Base.prefab",
+                "file_id_validated": True,
+                "validation_note": "",
+                "read_only": True,
+            },
+            response.data,
+        )
 
     # ----- Issue #141: scan_broken_references outcomes -----
 
     def test_scan_broken_references_clean_emits_ref_scan_ok(self) -> None:
         """A scope free of broken references returns ``REF_SCAN_OK``
-        with ``severity=info`` and a per-category map whose
-        missing-asset and missing-local-id keys both read zero (the
-        published quality-gate counters)."""
+        with ``severity=info`` and the full quality-gate counter
+        payload bound by value."""
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             # Single self-contained asset with a meta file but no
@@ -597,14 +624,42 @@ guid: 1111111111111111111111111111aaaa
         self.assertTrue(response.success)
         self.assertEqual("REF_SCAN_OK", response.code)
         self.assertEqual(Severity.INFO, response.severity)
-        self.assertEqual(0, response.data["broken_count"])
-        self.assertEqual(0, response.data["categories"]["missing_asset"])
-        self.assertEqual(0, response.data["categories"]["missing_local_id"])
+        self.assertEqual(
+            {
+                "scope": "Assets",
+                "project_root": ".",
+                "scan_project_root": ".",
+                "read_only": True,
+                "details_included": False,
+                "max_diagnostics": 200,
+                "exclude_patterns": [],
+                "ignore_asset_guids": [],
+                "broken_count": 0,
+                "broken_occurrences": 0,
+                "categories": {"missing_asset": 0, "missing_local_id": 0},
+                "categories_occurrences": {"missing_asset": 0, "missing_local_id": 0},
+                "ignored_missing_asset_occurrences": 0,
+                "ignored_missing_asset_unique_count": 0,
+                "returned_diagnostics": 0,
+                "scanned_files": 1,
+                "scanned_references": 0,
+                "skipped_external_prefab_fileid_checks": 0,
+                "skipped_external_prefab_fileid_details": [],
+                "skipped_unreadable_target_checks": 0,
+                "top_ignored_missing_asset_guids": [],
+                "top_missing_asset_guids": [],
+                "truncated_diagnostics": 0,
+                "truncated_hint": None,
+                "unreadable_files": 0,
+            },
+            response.data,
+        )
+        self.assertEqual([], response.diagnostics)
 
     def test_scan_broken_references_partial_emits_ref_scan_partial(self) -> None:
         """A scope where every reference resolves but one or more files
         could not be UTF-8/CP932 decoded returns ``REF_SCAN_PARTIAL``
-        with ``severity=warning`` and ``unreadable_files >= 1``."""
+        with ``severity=warning`` and ``unreadable_files == 1``."""
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             # An undecodable .prefab keeps the scope non-broken (no
@@ -624,18 +679,30 @@ guid: 2222222222222222222222222222bbbb
         self.assertTrue(response.success)
         self.assertEqual("REF_SCAN_PARTIAL", response.code)
         self.assertEqual(Severity.WARNING, response.severity)
+        # Pin the load-bearing partial-scan counters by exact value.
         self.assertEqual(0, response.data["broken_count"])
-        self.assertGreaterEqual(response.data["unreadable_files"], 1)
-        # The diagnostic detail tag for the partial-scan case is the
-        # documented "unreadable_file" tag.
-        details = [d.detail for d in response.diagnostics]
-        self.assertIn("unreadable_file", details)
+        self.assertEqual(1, response.data["unreadable_files"])
+        self.assertEqual(1, response.data["returned_diagnostics"])
+        self.assertEqual(True, response.data["details_included"])
+        # The diagnostic detail tag for the partial-scan case binds by
+        # full-string equality on detail / location / path / evidence.
+        self.assertEqual(1, len(response.diagnostics))
+        diag = response.diagnostics[0]
+        self.assertEqual("Assets/Bad.prefab", diag.path)
+        self.assertEqual("", diag.location)
+        self.assertEqual("unreadable_file", diag.detail)
+        self.assertEqual(
+            "File could not be decoded (UTF-8/CP932). References inside this"
+            " file were not validated. Check file encoding (UTF-8 or CP932"
+            " expected) and permissions.",
+            diag.evidence,
+        )
 
     def test_scan_broken_references_broken_emits_ref_scan_broken_with_categories(self) -> None:
         """Issue #141 row: a scope with broken references returns
-        ``REF_SCAN_BROKEN`` with ``severity=error`` and per-category
-        counts pinned by value; the category map's ``missing_asset``
-        key is the published quality-gate counter."""
+        ``REF_SCAN_BROKEN`` with ``severity=error`` and the full
+        quality-gate counter payload bound by value (per-category
+        map, top-missing-asset list, broken count)."""
         from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -649,10 +716,74 @@ guid: 2222222222222222222222222222bbbb
             code="REF_SCAN_BROKEN",
             severity="error",
             message_match=r"[Bb]roken",
+            data={
+                "scope": "Assets",
+                "project_root": ".",
+                "scan_project_root": ".",
+                "read_only": True,
+                "details_included": False,
+                "max_diagnostics": 200,
+                "exclude_patterns": [],
+                "ignore_asset_guids": [],
+                "broken_count": 2,
+                "broken_occurrences": 2,
+                "categories": {"missing_asset": 1, "missing_local_id": 1},
+                "categories_occurrences": {"missing_asset": 1, "missing_local_id": 1},
+                "ignored_missing_asset_occurrences": 0,
+                "ignored_missing_asset_unique_count": 0,
+                "returned_diagnostics": 0,
+                "scanned_files": 2,
+                "scanned_references": 13,
+                "skipped_external_prefab_fileid_checks": 6,
+                "skipped_external_prefab_fileid_details": [
+                    {
+                        "source": "Assets/Variant.prefab",
+                        "target_guid": BASE_GUID,
+                        "file_id": "100100000",
+                    },
+                    {
+                        "source": "Assets/Variant.prefab",
+                        "target_guid": BASE_GUID,
+                        "file_id": "999999",
+                    },
+                    {
+                        "source": "Assets/Variant.prefab",
+                        "target_guid": BASE_GUID,
+                        "file_id": "100100000",
+                    },
+                    {
+                        "source": "Assets/Variant.prefab",
+                        "target_guid": BASE_GUID,
+                        "file_id": "100100000",
+                    },
+                    {
+                        "source": "Assets/Variant.prefab",
+                        "target_guid": BASE_GUID,
+                        "file_id": "100100000",
+                    },
+                    {
+                        "source": "Assets/Variant.prefab",
+                        "target_guid": BASE_GUID,
+                        "file_id": "100100000",
+                    },
+                ],
+                "skipped_unreadable_target_checks": 0,
+                "top_ignored_missing_asset_guids": [],
+                "top_missing_asset_guids": [
+                    {
+                        "guid": MISSING_GUID,
+                        "occurrences": 1,
+                        "asset_name": "",
+                    }
+                ],
+                "truncated_diagnostics": 2,
+                "truncated_hint": (
+                    "2 broken reference(s) found. Use --details to include"
+                    " individual diagnostics."
+                ),
+                "unreadable_files": 0,
+            },
         )
-        self.assertEqual(2, response.data["broken_count"])
-        self.assertEqual(1, response.data["categories"]["missing_asset"])
-        self.assertEqual(1, response.data["categories"]["missing_local_id"])
 
     def test_scan_broken_references_missing_scope_emits_ref404(self) -> None:
         """An unspecified scope (path not present on disk) returns
@@ -670,8 +801,11 @@ guid: 2222222222222222222222222222bbbb
             code="REF404",
             severity="error",
             message_match=r"does not exist",
+            data={
+                "scope": "Assets/Does/Not/Exist",
+                "read_only": True,
+            },
         )
-        self.assertEqual("Assets/Does/Not/Exist", response.data["scope"])
 
     def test_scan_broken_references_invalid_ignore_entry_emits_ref001(self) -> None:
         """An ignore-asset-guid entry that is not a 32-char hex GUID
@@ -693,16 +827,20 @@ guid: 2222222222222222222222222222bbbb
             code="REF001",
             severity="error",
             message_match=r"32-character hexadecimal",
+            data={
+                "scope": "Assets",
+                "invalid_ignore_asset_guids": ["not-a-guid"],
+                "read_only": True,
+            },
         )
-        self.assertEqual(["not-a-guid"], response.data["invalid_ignore_asset_guids"])
 
     # ----- Issue #141: where_used outcomes -----
 
     def test_where_used_resolved_emits_ref_where_used_with_pinned_shape(self) -> None:
         """A resolvable GUID with a scope that contains usages returns
-        ``REF_WHERE_USED`` with usages of stable per-entry shape
-        (``path`` / ``line`` / ``column`` / ``reference``) and an
-        accurate ``returned_usages`` count."""
+        ``REF_WHERE_USED`` with the deterministic fixture count
+        (BASE_GUID appears 6 times in Variant.prefab) and the full
+        usage entry list bound by value."""
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             _create_sample_project(root)
@@ -711,13 +849,76 @@ guid: 2222222222222222222222222222bbbb
 
         self.assertTrue(response.success)
         self.assertEqual("REF_WHERE_USED", response.code)
-        self.assertEqual(BASE_GUID, response.data["guid"])
-        self.assertEqual("Assets/Base.prefab", response.data["asset_path"])
-        self.assertEqual("Assets", response.data["scope"])
-        self.assertGreaterEqual(response.data["returned_usages"], 1)
-        first = response.data["usages"][0]
-        for key in ("path", "line", "column", "reference"):
-            self.assertIn(key, first)
+        self.assertEqual(Severity.INFO, response.severity)
+        # Full-payload pinning. The 6 usages come from m_SourcePrefab
+        # + m_ExternalPrefabRef + 4 modification targets (4 m_LocalRef
+        # without GUID is filtered).
+        self.assertEqual(
+            {
+                "guid": BASE_GUID,
+                "asset_path": "Assets/Base.prefab",
+                "scope": "Assets",
+                "scan_project_root": ".",
+                "usage_count": 6,
+                "returned_usages": 6,
+                "truncated_usages": 0,
+                "max_usages": 500,
+                "scanned_files": 2,
+                "exclude_patterns": [],
+                "read_only": True,
+                "usages": [
+                    {
+                        "path": "Assets/Variant.prefab",
+                        "line": 4,
+                        "column": 19,
+                        "reference": (
+                            f"{{fileID: 100100000, guid: {BASE_GUID}, type: 3}}"
+                        ),
+                    },
+                    {
+                        "path": "Assets/Variant.prefab",
+                        "line": 5,
+                        "column": 24,
+                        "reference": (
+                            f"{{fileID: 999999, guid: {BASE_GUID}, type: 3}}"
+                        ),
+                    },
+                    {
+                        "path": "Assets/Variant.prefab",
+                        "line": 8,
+                        "column": 15,
+                        "reference": (
+                            f"{{fileID: 100100000, guid: {BASE_GUID}, type: 3}}"
+                        ),
+                    },
+                    {
+                        "path": "Assets/Variant.prefab",
+                        "line": 12,
+                        "column": 15,
+                        "reference": (
+                            f"{{fileID: 100100000, guid: {BASE_GUID}, type: 3}}"
+                        ),
+                    },
+                    {
+                        "path": "Assets/Variant.prefab",
+                        "line": 16,
+                        "column": 15,
+                        "reference": (
+                            f"{{fileID: 100100000, guid: {BASE_GUID}, type: 3}}"
+                        ),
+                    },
+                    {
+                        "path": "Assets/Variant.prefab",
+                        "line": 20,
+                        "column": 15,
+                        "reference": (
+                            f"{{fileID: 100100000, guid: {BASE_GUID}, type: 3}}"
+                        ),
+                    },
+                ],
+            },
+            response.data,
+        )
 
     def test_where_used_missing_scope_emits_ref404(self) -> None:
         """A scope path that does not exist returns ``REF404`` with
@@ -735,8 +936,11 @@ guid: 2222222222222222222222222222bbbb
             code="REF404",
             severity="error",
             message_match=r"does not exist",
+            data={
+                "scope": "Assets/NotFound",
+                "read_only": True,
+            },
         )
-        self.assertEqual("Assets/NotFound", response.data["scope"])
 
     def test_where_used_unknown_guid_emits_ref001(self) -> None:
         """A well-formed but unknown GUID returns ``REF001`` with the
@@ -754,8 +958,11 @@ guid: 2222222222222222222222222222bbbb
             code="REF001",
             severity="error",
             message_match=r"not found",
+            data={
+                "asset_or_guid": MISSING_GUID,
+                "read_only": True,
+            },
         )
-        self.assertEqual(MISSING_GUID, response.data["asset_or_guid"])
 
 
 class PatchValidatorEnvelopeTests(unittest.TestCase):
@@ -776,8 +983,8 @@ class PatchValidatorEnvelopeTests(unittest.TestCase):
             code="SER001",
             severity="error",
             message_match=r"empty",
+            data={"property_path": ""},
         )
-        self.assertEqual("", response.data["property_path"])
 
     def test_validate_property_path_negative_subscript_emits_ser002(self) -> None:
         from prefab_sentinel.services.property_path import (  # noqa: PLC0415
@@ -792,52 +999,54 @@ class PatchValidatorEnvelopeTests(unittest.TestCase):
             code="SER002",
             severity="error",
             message_match=r"negative",
+            data={"property_path": bad_path},
         )
-        self.assertEqual(bad_path, response.data["property_path"])
+
+    # Shared prefab fixture YAML used by SER003 set_component_fields rows.
+    _SER003_PREFAB_YAML = (
+        "%YAML 1.1\n"
+        "%TAG !u! tag:unity3d.com,2011:\n"
+        "--- !u!1 &100\n"
+        "GameObject:\n"
+        "  m_ObjectHideFlags: 0\n"
+        "  serializedVersion: 6\n"
+        "  m_Component:\n"
+        "  - component: {fileID: 200}\n"
+        "  - component: {fileID: 300}\n"
+        "  m_Layer: 0\n"
+        "  m_Name: Cube\n"
+        "  m_TagString: Untagged\n"
+        "  m_IsActive: 1\n"
+        "--- !u!4 &200\n"
+        "Transform:\n"
+        "  m_ObjectHideFlags: 0\n"
+        "  m_GameObject: {fileID: 100}\n"
+        "  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}\n"
+        "  m_LocalPosition: {x: 0, y: 0, z: 0}\n"
+        "  m_LocalScale: {x: 1, y: 1, z: 1}\n"
+        "  m_Children: []\n"
+        "  m_Father: {fileID: 0}\n"
+        "  m_RootOrder: 0\n"
+        "--- !u!23 &300\n"
+        "MeshRenderer:\n"
+        "  m_ObjectHideFlags: 0\n"
+        "  m_GameObject: {fileID: 100}\n"
+        "  m_Enabled: 1\n"
+    )
 
     def test_set_component_fields_unknown_property_emits_ser003_envelope(self) -> None:
-        """SER003 fires when ``set_component_fields`` cannot resolve the
-        referenced property on the chain.  The helper pins code, severity,
-        and a message regex; inline assertions pin target and component
-        values plus the diagnostic detail tag."""
+        """SER003 (property_not_found classification): the supplied
+        component exists on the chain but the referenced property does
+        not.  Pins the full payload (target, component, property_path,
+        suggestions, read_only) and the diagnostic by full-string
+        equality on path / location / detail / evidence."""
         from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
         from tests.test_mcp_server import _run  # noqa: PLC0415
-
-        prefab_yaml = (
-            "%YAML 1.1\n"
-            "%TAG !u! tag:unity3d.com,2011:\n"
-            "--- !u!1 &100\n"
-            "GameObject:\n"
-            "  m_ObjectHideFlags: 0\n"
-            "  serializedVersion: 6\n"
-            "  m_Component:\n"
-            "  - component: {fileID: 200}\n"
-            "  - component: {fileID: 300}\n"
-            "  m_Layer: 0\n"
-            "  m_Name: Cube\n"
-            "  m_TagString: Untagged\n"
-            "  m_IsActive: 1\n"
-            "--- !u!4 &200\n"
-            "Transform:\n"
-            "  m_ObjectHideFlags: 0\n"
-            "  m_GameObject: {fileID: 100}\n"
-            "  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}\n"
-            "  m_LocalPosition: {x: 0, y: 0, z: 0}\n"
-            "  m_LocalScale: {x: 1, y: 1, z: 1}\n"
-            "  m_Children: []\n"
-            "  m_Father: {fileID: 0}\n"
-            "  m_RootOrder: 0\n"
-            "--- !u!23 &300\n"
-            "MeshRenderer:\n"
-            "  m_ObjectHideFlags: 0\n"
-            "  m_GameObject: {fileID: 100}\n"
-            "  m_Enabled: 1\n"
-        )
 
         with tempfile.TemporaryDirectory() as raw:
             td = Path(raw)
             prefab_path = td / "test.prefab"
-            prefab_path.write_text(prefab_yaml, encoding="utf-8")
+            prefab_path.write_text(self._SER003_PREFAB_YAML, encoding="utf-8")
             from prefab_sentinel.mcp_server import create_server  # noqa: PLC0415
 
             server = create_server()
@@ -856,13 +1065,75 @@ class PatchValidatorEnvelopeTests(unittest.TestCase):
             code="SER003",
             severity="error",
             message_match=r"not found",
+            data={
+                "target": str(prefab_path),
+                "component": "MeshRenderer",
+                "property_path": "m_NoSuchField",
+                "suggestions": ["m_ObjectHideFlags", "m_GameObject", "m_Enabled"],
+                "read_only": True,
+            },
         )
-        # Pin target / component / diagnostic-detail values inline.
-        self.assertEqual(str(prefab_path), response["data"]["target"])
-        self.assertEqual("MeshRenderer", response["data"]["component"])
+        # Diagnostic binds by full-string equality on every field.
+        self.assertEqual(1, len(response["diagnostics"]))
+        diag = response["diagnostics"][0]
+        self.assertEqual(str(prefab_path), diag["path"])
         self.assertEqual(
-            "property_not_found",
-            response["diagnostics"][0]["detail"],
+            "component 'MeshRenderer' property 'm_NoSuchField'",
+            diag["location"],
+        )
+        self.assertEqual("property_not_found", diag["detail"])
+        self.assertEqual(
+            f"property path 'm_NoSuchField' did not resolve on component"
+            f" 'MeshRenderer' for target '{prefab_path}'",
+            diag["evidence"],
+        )
+
+    def test_set_component_fields_unknown_component_emits_ser003_envelope(self) -> None:
+        """SER003 (component_not_found classification): the supplied
+        component type is not present on the resolved chain.  Pins the
+        full payload (target, component, suggestions, read_only) and
+        the diagnostic by full-string equality."""
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+        from tests.test_mcp_server import _run  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as raw:
+            td = Path(raw)
+            prefab_path = td / "test.prefab"
+            prefab_path.write_text(self._SER003_PREFAB_YAML, encoding="utf-8")
+            from prefab_sentinel.mcp_server import create_server  # noqa: PLC0415
+
+            server = create_server()
+            _, response = _run(server.call_tool(
+                "set_component_fields",
+                {
+                    "asset_path": str(prefab_path),
+                    "symbol_path": "Cube",
+                    "component": "NoSuchComponent",
+                    "fields": {"m_X": 0},
+                },
+            ))
+
+        assert_error_envelope(
+            response,
+            code="SER003",
+            severity="error",
+            message_match=r"not found",
+            data={
+                "target": str(prefab_path),
+                "component": "NoSuchComponent",
+                "suggestions": ["Transform", "MeshRenderer"],
+                "read_only": True,
+            },
+        )
+        self.assertEqual(1, len(response["diagnostics"]))
+        diag = response["diagnostics"][0]
+        self.assertEqual(str(prefab_path), diag["path"])
+        self.assertEqual("component 'NoSuchComponent'", diag["location"])
+        self.assertEqual("component_not_found", diag["detail"])
+        self.assertEqual(
+            f"component type 'NoSuchComponent' is not present in the chain"
+            f" for target '{prefab_path}'",
+            diag["evidence"],
         )
 
     # ----- Issue #143: validate_property_path family rows -----
@@ -883,8 +1154,8 @@ class PatchValidatorEnvelopeTests(unittest.TestCase):
             code="SER001",
             severity="error",
             message_match=r"empty segment",
+            data={"property_path": bad_path},
         )
-        self.assertEqual(bad_path, response.data["property_path"])
 
     def test_validate_property_path_unterminated_bracket_emits_ser001(self) -> None:
         """Path-shape: a segment with ``[`` and no ``]`` is rejected by
@@ -901,8 +1172,8 @@ class PatchValidatorEnvelopeTests(unittest.TestCase):
             code="SER001",
             severity="error",
             message_match=r"unterminated",
+            data={"property_path": bad_path},
         )
-        self.assertEqual(bad_path, response.data["property_path"])
 
     def test_validate_property_path_empty_subscript_emits_ser001(self) -> None:
         """Path-shape: ``[]`` with no inner text is the empty-subscript
@@ -919,8 +1190,8 @@ class PatchValidatorEnvelopeTests(unittest.TestCase):
             code="SER001",
             severity="error",
             message_match=r"\[\]",
+            data={"property_path": bad_path},
         )
-        self.assertEqual(bad_path, response.data["property_path"])
 
     def test_validate_property_path_non_integer_subscript_emits_ser002(self) -> None:
         """Path-index: ``[abc]`` is not an integer — SER002 site."""
@@ -936,8 +1207,8 @@ class PatchValidatorEnvelopeTests(unittest.TestCase):
             code="SER002",
             severity="error",
             message_match=r"integer",
+            data={"property_path": bad_path},
         )
-        self.assertEqual(bad_path, response.data["property_path"])
 
     def test_validate_property_path_size_with_subscript_emits_ser002(self) -> None:
         """Path-index: ``Array.size[0]`` — ``size`` is scalar and
@@ -954,8 +1225,8 @@ class PatchValidatorEnvelopeTests(unittest.TestCase):
             code="SER002",
             severity="error",
             message_match=r"size.*scalar|scalar.*size",
+            data={"property_path": bad_path},
         )
-        self.assertEqual(bad_path, response.data["property_path"])
 
     def test_validate_property_path_well_formed_emits_pp_ok(self) -> None:
         """Happy-path: a well-formed path returns ``PP_OK`` at
@@ -969,7 +1240,7 @@ class PatchValidatorEnvelopeTests(unittest.TestCase):
         self.assertTrue(response.success)
         self.assertEqual("PP_OK", response.code)
         self.assertEqual(Severity.INFO, response.severity)
-        self.assertEqual(path, response.data["property_path"])
+        self.assertEqual({"property_path": path}, response.data)
 
     # ----- Issue #143: validate_op rejection-family rows -----
 
@@ -991,77 +1262,136 @@ class PatchValidatorEnvelopeTests(unittest.TestCase):
         result = validate_op(service, target="Assets/X.prefab", index=0, op=op, diagnostics=diagnostics)
         return result, diagnostics
 
+    def _assert_single_diagnostic(
+        self,
+        diagnostics: list[Diagnostic],
+        *,
+        location: str,
+        detail: str,
+        evidence: str,
+    ) -> None:
+        """Pin a single rejection diagnostic by full-string equality on
+        every field (path / location / detail / evidence)."""
+        self.assertEqual(1, len(diagnostics))
+        diag = diagnostics[0]
+        self.assertEqual("Assets/X.prefab", diag.path)
+        self.assertEqual(location, diag.location)
+        self.assertEqual(detail, diag.detail)
+        self.assertEqual(evidence, diag.evidence)
+
     def test_validate_op_unsupported_op_emits_schema_error(self) -> None:
         """Rejection family: an op name absent from both ``VALUE_OPS``
         and ``PREFAB_CREATE_OPS`` (e.g. ``"foo"``) appends a
         ``schema_error`` diagnostic with ``unsupported op`` evidence."""
         result, diagnostics = self._run_validate_op({"op": "foo", "component": "X", "path": "m_X"})
         self.assertIsNone(result)
-        self.assertEqual(1, len(diagnostics))
-        self.assertEqual("schema_error", diagnostics[0].detail)
-        self.assertIn("unsupported op", diagnostics[0].evidence)
-        self.assertIn("foo", diagnostics[0].evidence)
-        self.assertIn("ops[0]", diagnostics[0].location)
+        self._assert_single_diagnostic(
+            diagnostics,
+            location="ops[0] (foo).op",
+            detail="schema_error",
+            evidence="unsupported op 'foo'",
+        )
 
     def test_validate_op_create_mode_op_in_open_mode_emits_schema_error(self) -> None:
         """Rejection family: a ``PREFAB_CREATE_OPS``-only name (e.g.
-        ``add_component``) in open-mode is rejected with a
-        create-mode-specific evidence string."""
+        ``add_component``) in open-mode is rejected with the documented
+        create-mode evidence string."""
         result, diagnostics = self._run_validate_op({"op": "add_component", "component": "X", "path": "m_X"})
         self.assertIsNone(result)
-        self.assertEqual("schema_error", diagnostics[0].detail)
-        self.assertIn("create-mode operation", diagnostics[0].evidence)
+        self._assert_single_diagnostic(
+            diagnostics,
+            location="ops[0] (add_component).op",
+            detail="schema_error",
+            evidence=(
+                "'add_component' is a create-mode operation and cannot be"
+                " used in open-mode patch plans. To add components to"
+                " existing prefabs, edit the YAML directly or use Unity's"
+                " Add Component menu."
+            ),
+        )
 
     def test_validate_op_missing_component_emits_schema_error(self) -> None:
         """Rejection family: ``component`` empty or absent emits a
-        schema_error diagnostic with ``component is required`` evidence."""
-        result, diagnostics = self._run_validate_op({"op": "set", "component": "", "path": "m_X", "value": 1})
+        ``schema_error`` diagnostic with ``component is required`` evidence."""
+        result, diagnostics = self._run_validate_op(
+            {"op": "set", "component": "", "path": "m_X", "value": 1}
+        )
         self.assertIsNone(result)
-        self.assertEqual("schema_error", diagnostics[0].detail)
-        self.assertEqual("component is required", diagnostics[0].evidence)
-        self.assertIn(".component", diagnostics[0].location)
+        self._assert_single_diagnostic(
+            diagnostics,
+            location="ops[0] (set).component",
+            detail="schema_error",
+            evidence="component is required",
+        )
 
     def test_validate_op_numeric_fileid_component_emits_likely_fileid(self) -> None:
         """Rejection family: a numeric component string (e.g. ``"123"``)
-        appends a ``likely_fileid`` diagnostic *in addition to* (not
-        instead of) the normal flow.  When ``path`` is also missing the
-        op is rejected; this test pins both diagnostics."""
-        result, diagnostics = self._run_validate_op({"op": "set", "component": "123", "path": "", "value": 0})
+        appends a ``likely_fileid`` diagnostic *in addition to* the
+        ``schema_error`` for the missing path.  Both diagnostics bind
+        by full-string equality."""
+        result, diagnostics = self._run_validate_op(
+            {"op": "set", "component": "123", "path": "", "value": 0}
+        )
         self.assertIsNone(result)
-        details = [d.detail for d in diagnostics]
-        self.assertIn("likely_fileid", details)
+        self.assertEqual(2, len(diagnostics))
+        self.assertEqual("Assets/X.prefab", diagnostics[0].path)
+        self.assertEqual("ops[0] (set).component", diagnostics[0].location)
+        self.assertEqual("likely_fileid", diagnostics[0].detail)
+        self.assertEqual(
+            "component '123' looks like a numeric fileID. The Unity bridge"
+            " resolves components by type name (e.g. 'SkinnedMeshRenderer'"
+            " or 'TypeName@/hierarchy/path'). Numeric fileIDs will fail"
+            " at apply time.",
+            diagnostics[0].evidence,
+        )
+        self.assertEqual("Assets/X.prefab", diagnostics[1].path)
+        self.assertEqual("ops[0] (set).path", diagnostics[1].location)
+        self.assertEqual("schema_error", diagnostics[1].detail)
+        self.assertEqual("path is required", diagnostics[1].evidence)
 
     def test_validate_op_missing_path_emits_schema_error(self) -> None:
-        """Rejection family: empty ``path`` emits schema_error with
+        """Rejection family: empty ``path`` emits ``schema_error`` with
         ``path is required`` evidence."""
-        result, diagnostics = self._run_validate_op({"op": "set", "component": "X", "path": "", "value": 0})
+        result, diagnostics = self._run_validate_op(
+            {"op": "set", "component": "X", "path": "", "value": 0}
+        )
         self.assertIsNone(result)
-        details = [(d.detail, d.evidence) for d in diagnostics]
-        self.assertTrue(
-            any(detail == "schema_error" and evidence == "path is required" for detail, evidence in details),
-            f"missing path is required diagnostic: {details}",
+        self._assert_single_diagnostic(
+            diagnostics,
+            location="ops[0] (set).path",
+            detail="schema_error",
+            evidence="path is required",
         )
 
     def test_validate_op_missing_value_for_set_emits_schema_error(self) -> None:
         """Rejection family: ``set`` without a ``value`` key emits
-        schema_error with ``value is required for set`` evidence."""
-        result, diagnostics = self._run_validate_op({"op": "set", "component": "X", "path": "m_X"})
+        ``schema_error`` with ``value is required for set`` evidence."""
+        result, diagnostics = self._run_validate_op(
+            {"op": "set", "component": "X", "path": "m_X"}
+        )
         self.assertIsNone(result)
-        self.assertEqual("schema_error", diagnostics[0].detail)
-        self.assertEqual("value is required for set", diagnostics[0].evidence)
+        self._assert_single_diagnostic(
+            diagnostics,
+            location="ops[0] (set).value",
+            detail="schema_error",
+            evidence="value is required for set",
+        )
 
     def test_validate_op_handle_prefix_value_emits_warning_on_set(self) -> None:
         """Rejection family: ``set`` with a value that looks like a
-        create-mode handle (``$``-prefixed, ``c_``-prefixed, or
-        ``go_``-prefixed) attaches a ``_warning`` to the preview row
-        rather than rejecting; the row is still returned."""
+        create-mode handle (``$``-prefixed) attaches a ``_warning`` to
+        the preview row rather than rejecting; the row is still returned
+        and no diagnostic is appended."""
         result, diagnostics = self._run_validate_op(
             {"op": "set", "component": "X", "path": "m_X", "value": "$handle"}
         )
         self.assertIsNotNone(result)
-        self.assertIn("_warning", result)
-        self.assertIn("$handle", result["_warning"])
-        # No diagnostics emitted for this case.
+        self.assertEqual(
+            "Value '$handle' looks like a create-mode handle. Handle strings"
+            " are only resolved in 'target'/'parent' fields. For"
+            ' ObjectReference, use {"guid": "...", "fileID": ...} or null.',
+            result["_warning"],
+        )
         self.assertEqual([], diagnostics)
 
     def test_validate_op_array_op_without_array_suffix_emits_schema_error(self) -> None:
@@ -1069,11 +1399,25 @@ class PatchValidatorEnvelopeTests(unittest.TestCase):
         ``remove_array_element`` whose path does not end in
         ``.Array.data`` is rejected with the array-suffix evidence."""
         result, diagnostics = self._run_validate_op(
-            {"op": "insert_array_element", "component": "X", "path": "m_NotArray", "index": 0, "value": 1}
+            {
+                "op": "insert_array_element",
+                "component": "X",
+                "path": "m_NotArray",
+                "index": 0,
+                "value": 1,
+            }
         )
         self.assertIsNone(result)
-        self.assertEqual("schema_error", diagnostics[0].detail)
-        self.assertIn("Array.data", diagnostics[0].evidence)
+        self._assert_single_diagnostic(
+            diagnostics,
+            location="ops[0] (insert_array_element).path",
+            detail="schema_error",
+            evidence=(
+                "Array operations require path ending with '.Array.data',"
+                " got 'm_NotArray'. Example:"
+                " 'globalSwitches.Array.data' instead of 'globalSwitches'."
+            ),
+        )
 
     def test_validate_op_missing_index_emits_schema_error(self) -> None:
         """Rejection family: ``insert_array_element`` /
@@ -1083,78 +1427,121 @@ class PatchValidatorEnvelopeTests(unittest.TestCase):
             {"op": "remove_array_element", "component": "X", "path": "m_X.Array.data"}
         )
         self.assertIsNone(result)
-        self.assertEqual("schema_error", diagnostics[0].detail)
-        self.assertEqual("index is required for remove_array_element", diagnostics[0].evidence)
+        self._assert_single_diagnostic(
+            diagnostics,
+            location="ops[0] (remove_array_element).index",
+            detail="schema_error",
+            evidence="index is required for remove_array_element",
+        )
 
     def test_validate_op_non_integer_index_emits_schema_error(self) -> None:
         """Rejection family: a non-integer ``index`` (here ``"abc"``)
-        emits schema_error with ``index must be an integer``."""
+        emits ``schema_error`` with ``index must be an integer``."""
         result, diagnostics = self._run_validate_op(
-            {"op": "remove_array_element", "component": "X", "path": "m_X.Array.data", "index": "abc"}
+            {
+                "op": "remove_array_element",
+                "component": "X",
+                "path": "m_X.Array.data",
+                "index": "abc",
+            }
         )
         self.assertIsNone(result)
-        self.assertEqual("schema_error", diagnostics[0].detail)
-        self.assertEqual("index must be an integer", diagnostics[0].evidence)
+        self._assert_single_diagnostic(
+            diagnostics,
+            location="ops[0] (remove_array_element).index",
+            detail="schema_error",
+            evidence="index must be an integer",
+        )
 
     def test_validate_op_negative_index_emits_schema_error(self) -> None:
         """Rejection family: a negative integer ``index`` (here ``-1``)
-        emits schema_error with ``index must be >= 0``."""
+        emits ``schema_error`` with ``index must be >= 0``."""
         result, diagnostics = self._run_validate_op(
-            {"op": "remove_array_element", "component": "X", "path": "m_X.Array.data", "index": -1}
+            {
+                "op": "remove_array_element",
+                "component": "X",
+                "path": "m_X.Array.data",
+                "index": -1,
+            }
         )
         self.assertIsNone(result)
-        self.assertEqual("schema_error", diagnostics[0].detail)
-        self.assertEqual("index must be >= 0", diagnostics[0].evidence)
+        self._assert_single_diagnostic(
+            diagnostics,
+            location="ops[0] (remove_array_element).index",
+            detail="schema_error",
+            evidence="index must be >= 0",
+        )
 
     def test_validate_op_missing_value_for_array_insert_emits_schema_error(self) -> None:
         """Rejection family: ``insert_array_element`` without ``value``
-        emits schema_error with ``value is required for insert_array_element``."""
+        emits ``schema_error`` with
+        ``value is required for insert_array_element``."""
         result, diagnostics = self._run_validate_op(
-            {"op": "insert_array_element", "component": "X", "path": "m_X.Array.data", "index": 0}
+            {
+                "op": "insert_array_element",
+                "component": "X",
+                "path": "m_X.Array.data",
+                "index": 0,
+            }
         )
         self.assertIsNone(result)
-        self.assertEqual("schema_error", diagnostics[0].detail)
-        self.assertEqual("value is required for insert_array_element", diagnostics[0].evidence)
+        self._assert_single_diagnostic(
+            diagnostics,
+            location="ops[0] (insert_array_element).value",
+            detail="schema_error",
+            evidence="value is required for insert_array_element",
+        )
 
 
 class PrefabVariantServiceTests(unittest.TestCase):
-    def test_detect_stale_and_compute_effective_values(self) -> None:
+    def test_detect_stale_mixed_categories_returns_pvr001(self) -> None:
+        """Mixed categories (duplicate + array-size) yield the umbrella
+        code ``PVR001`` whose ``categories`` list pins both classifications."""
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             _create_sample_project(root)
             svc = PrefabVariantService(project_root=root)
-
-            chain = svc.resolve_prefab_chain("Assets/Variant.prefab")
-            self.assertTrue(chain.success)
-            self.assertEqual("PVR_CHAIN_OK", chain.code)
-            self.assertGreaterEqual(len(chain.data["chain"]), 2)
-
-            overrides = svc.list_overrides("Assets/Variant.prefab")
-            self.assertEqual(5, overrides.data["override_count"])
-
-            effective = svc.compute_effective_values("Assets/Variant.prefab")
-            dup_values = [
-                item
-                for item in effective.data["effective_values"]
-                if item["property_path"] == "duplicated.path"
-            ]
-            self.assertEqual(1, len(dup_values))
-            self.assertEqual("second", dup_values[0]["value"])
-
             stale = svc.detect_stale_overrides("Assets/Variant.prefab")
-            self.assertFalse(stale.success)
-            # Mixed categories → umbrella code PVR001
-            self.assertEqual("PVR001", stale.code)
-            details = [diag.detail for diag in stale.diagnostics]
-            self.assertIn("duplicate_override", details)
-            self.assertIn("array_size_mismatch", details)
-            self.assertCountEqual(
-                ["array_size_mismatch", "duplicate_override"],
-                stale.data["categories"],
-            )
+
+        assert_error_envelope(
+            stale,
+            code="PVR001",
+            severity="warning",
+            message_match=r"[Ss]tale",
+            data={
+                "variant_path": "Assets/Variant.prefab",
+                "stale_count": 2,
+                "categories": ["array_size_mismatch", "duplicate_override"],
+                "read_only": True,
+            },
+        )
+        self.assertEqual(2, len(stale.diagnostics))
+        # Diagnostic per category, in deterministic order: duplicate then array.
+        dup_diag = stale.diagnostics[0]
+        self.assertEqual("Assets/Variant.prefab", dup_diag.path)
+        self.assertEqual("16:1..20:1", dup_diag.location)
+        self.assertEqual("duplicate_override", dup_diag.detail)
+        self.assertEqual(
+            f"{BASE_GUID}:100100000 / duplicated.path appears 2 times;"
+            " later entries shadow earlier entries",
+            dup_diag.evidence,
+        )
+        arr_diag = stale.diagnostics[1]
+        self.assertEqual("Assets/Variant.prefab", arr_diag.path)
+        self.assertEqual("array_override", arr_diag.location)
+        self.assertEqual("array_size_mismatch", arr_diag.detail)
+        self.assertEqual(
+            f"{BASE_GUID}:100100000 / mic_obj_extra:"
+            " size=1 but data index 1 exists",
+            arr_diag.evidence,
+        )
 
     def test_detect_stale_duplicate_only_returns_pvr002(self) -> None:
-        """Single-category duplicate_override → PVR002."""
+        """Single-category duplicate_override yields ``PVR002``."""
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             write_file(
@@ -1189,16 +1576,34 @@ PrefabInstance:
             )
             svc = PrefabVariantService(project_root=root)
             stale = svc.detect_stale_overrides("Assets/Dup.prefab")
-            self.assertFalse(stale.success)
-            self.assertEqual("PVR002", stale.code)
-            self.assertEqual(Severity.WARNING, stale.severity)
-            self.assertEqual(["duplicate_override"], stale.data["categories"])
-            # Location includes both first and last occurrence
-            loc = stale.diagnostics[0].location
-            self.assertIn("..", loc)
+
+        assert_error_envelope(
+            stale,
+            code="PVR002",
+            severity="warning",
+            message_match=r"[Ss]tale",
+            data={
+                "variant_path": "Assets/Dup.prefab",
+                "stale_count": 1,
+                "categories": ["duplicate_override"],
+                "read_only": True,
+            },
+        )
+        self.assertEqual(1, len(stale.diagnostics))
+        diag = stale.diagnostics[0]
+        self.assertEqual("Assets/Dup.prefab", diag.path)
+        self.assertEqual("7:1..11:1", diag.location)
+        self.assertEqual("duplicate_override", diag.detail)
+        self.assertEqual(
+            f"{BASE_GUID}:100100000 / some.path appears 2 times;"
+            " later entries shadow earlier entries",
+            diag.evidence,
+        )
 
     def test_detect_stale_array_mismatch_only_returns_pvr003(self) -> None:
-        """Single-category array_size_mismatch → PVR003."""
+        """Single-category array_size_mismatch yields ``PVR003``."""
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             write_file(
@@ -1233,16 +1638,34 @@ PrefabInstance:
             )
             svc = PrefabVariantService(project_root=root)
             stale = svc.detect_stale_overrides("Assets/Arr.prefab")
-            self.assertFalse(stale.success)
-            self.assertEqual("PVR003", stale.code)
-            self.assertEqual(Severity.WARNING, stale.severity)
-            self.assertEqual(["array_size_mismatch"], stale.data["categories"])
+
+        assert_error_envelope(
+            stale,
+            code="PVR003",
+            severity="warning",
+            message_match=r"[Ss]tale",
+            data={
+                "variant_path": "Assets/Arr.prefab",
+                "stale_count": 1,
+                "categories": ["array_size_mismatch"],
+                "read_only": True,
+            },
+        )
+        self.assertEqual(1, len(stale.diagnostics))
+        diag = stale.diagnostics[0]
+        self.assertEqual("Assets/Arr.prefab", diag.path)
+        self.assertEqual("array_override", diag.location)
+        self.assertEqual("array_size_mismatch", diag.detail)
+        self.assertEqual(
+            f"{BASE_GUID}:100100000 / items: size=1 but data index 2 exists",
+            diag.evidence,
+        )
 
     def test_detect_stale_clean_variant_returns_pvr_stale_none(self) -> None:
         """Clean family: a variant with one unique scalar override (no
         duplicates, no array-size mismatch) returns ``PVR_STALE_NONE``
-        with ``success=True``, ``severity=INFO``, ``stale_count=0``, and
-        an empty ``diagnostics`` list."""
+        with ``success=True``, ``severity=INFO``, full-payload pinning,
+        and an empty ``diagnostics`` list."""
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             write_file(
@@ -1273,52 +1696,134 @@ PrefabInstance:
             )
             svc = PrefabVariantService(project_root=root)
             stale = svc.detect_stale_overrides("Assets/Clean.prefab")
-            self.assertTrue(stale.success)
-            self.assertEqual("PVR_STALE_NONE", stale.code)
-            self.assertEqual(Severity.INFO, stale.severity)
-            self.assertEqual(0, stale.data["stale_count"])
-            self.assertEqual([], stale.diagnostics)
+
+        self.assertTrue(stale.success)
+        self.assertEqual("PVR_STALE_NONE", stale.code)
+        self.assertEqual(Severity.INFO, stale.severity)
+        self.assertEqual(
+            {
+                "variant_path": "Assets/Clean.prefab",
+                "stale_count": 0,
+                "read_only": True,
+            },
+            stale.data,
+        )
+        self.assertEqual([], stale.diagnostics)
+
+    # ----- Issue #142: variant load-failure envelopes -----
+
+    def test_variant_load_missing_path_returns_pvr404(self) -> None:
+        """A variant path not present on disk fails with ``PVR404`` and
+        echoes the input path verbatim."""
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            svc = PrefabVariantService(project_root=root)
+            response = svc.list_overrides("Assets/DoesNotExist.prefab")
+
+        assert_error_envelope(
+            response,
+            code="PVR404",
+            severity="error",
+            message_match=r"does not exist",
+            data={
+                "variant_path": "Assets/DoesNotExist.prefab",
+                "read_only": True,
+            },
+        )
+
+    def test_variant_load_decode_failure_returns_pvr400(self) -> None:
+        """A variant path that exists but cannot be UTF-8 decoded fails
+        with ``PVR400`` and echoes the input path verbatim."""
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            bad = root / "Assets" / "BadBinary.prefab"
+            bad.parent.mkdir(parents=True, exist_ok=True)
+            bad.write_bytes(b"\xff\xfe\xfd\xfc not valid utf-8 \x80\x81\x82")
+            svc = PrefabVariantService(project_root=root)
+            response = svc.list_overrides("Assets/BadBinary.prefab")
+
+        assert_error_envelope(
+            response,
+            code="PVR400",
+            severity="error",
+            message_match=r"could not be decoded",
+            data={
+                "variant_path": "Assets/BadBinary.prefab",
+                "read_only": True,
+            },
+        )
 
     # ----- Issue #142: prefab-variant value-pinning rows -----
 
-    def test_list_overrides_pins_count_and_first_entry_shape(self) -> None:
+    def test_list_overrides_pins_full_payload(self) -> None:
         """Issue #142 row: ``list_overrides`` returns
-        ``PVR_OVERRIDES_OK`` whose ``override_count`` equals 5 for the
-        sample variant and whose first entry carries every documented
-        per-entry field by exact value (``line``, ``target_file_id``,
-        ``target_guid``, ``property_path``, ``value``,
-        ``object_reference``)."""
+        ``PVR_OVERRIDES_OK`` whose full payload (override count, the
+        ordered ``overrides`` list with every per-entry field, and the
+        echoed variant path / read-only flag / component filter) binds
+        by value."""
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             _create_sample_project(root)
             svc = PrefabVariantService(project_root=root)
-
             response = svc.list_overrides("Assets/Variant.prefab")
 
         self.assertTrue(response.success)
         self.assertEqual("PVR_OVERRIDES_OK", response.code)
         self.assertEqual(Severity.INFO, response.severity)
-        self.assertEqual(5, response.data["override_count"])
-        self.assertEqual("Assets/Variant.prefab", response.data["variant_path"])
-        # First entry pins every per-entry field by value.
-        first = response.data["overrides"][0]
-        self.assertEqual("100100000", first["target_file_id"])
-        self.assertEqual(BASE_GUID, first["target_guid"])
-        self.assertEqual("mic_obj_extra.Array.size", first["property_path"])
-        self.assertEqual("1", first["value"])
-        self.assertEqual("{fileID: 0}", first["object_reference"])
-        # Order is preserved: every property_path appears once and the
-        # full ordered list matches the YAML order.
-        property_paths = [entry["property_path"] for entry in response.data["overrides"]]
         self.assertEqual(
-            [
-                "mic_obj_extra.Array.size",
-                "mic_obj_extra.Array.data[1]",
-                "duplicated.path",
-                "duplicated.path",
-                "missing.asset",
-            ],
-            property_paths,
+            {
+                "variant_path": "Assets/Variant.prefab",
+                "override_count": 5,
+                "component_filter": None,
+                "read_only": True,
+                "overrides": [
+                    {
+                        "line": 8,
+                        "target_file_id": "100100000",
+                        "target_guid": BASE_GUID,
+                        "property_path": "mic_obj_extra.Array.size",
+                        "value": "1",
+                        "object_reference": "{fileID: 0}",
+                    },
+                    {
+                        "line": 12,
+                        "target_file_id": "100100000",
+                        "target_guid": BASE_GUID,
+                        "property_path": "mic_obj_extra.Array.data[1]",
+                        "value": "0",
+                        "object_reference": "{fileID: 0}",
+                    },
+                    {
+                        "line": 16,
+                        "target_file_id": "100100000",
+                        "target_guid": BASE_GUID,
+                        "property_path": "duplicated.path",
+                        "value": "first",
+                        "object_reference": "{fileID: 0}",
+                    },
+                    {
+                        "line": 20,
+                        "target_file_id": "100100000",
+                        "target_guid": BASE_GUID,
+                        "property_path": "duplicated.path",
+                        "value": "second",
+                        "object_reference": "{fileID: 0}",
+                    },
+                    {
+                        "line": 24,
+                        "target_file_id": "100100000",
+                        "target_guid": MISSING_GUID,
+                        "property_path": "missing.asset",
+                        "value": "0",
+                        "object_reference": "{fileID: 0}",
+                    },
+                ],
+            },
+            response.data,
         )
 
     def test_parse_overrides_pins_per_entry_tuple_sequence(self) -> None:
@@ -1357,10 +1862,10 @@ PrefabInstance:
             line_paths,
         )
 
-    def test_resolve_prefab_chain_pins_ordered_chain_identity(self) -> None:
+    def test_resolve_prefab_chain_pins_full_payload(self) -> None:
         """Issue #142 row: ``resolve_prefab_chain`` returns
-        ``PVR_CHAIN_OK`` whose ``chain`` list orders entries from the
-        leaf variant to the root base by exact ``path`` value."""
+        ``PVR_CHAIN_OK`` whose full payload (variant path, leaf-to-root
+        chain list, read-only flag) binds by value."""
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             _create_sample_project(root)
@@ -1370,20 +1875,24 @@ PrefabInstance:
         self.assertTrue(response.success)
         self.assertEqual("PVR_CHAIN_OK", response.code)
         self.assertEqual(Severity.INFO, response.severity)
-        chain_paths = [entry["path"] for entry in response.data["chain"]]
         self.assertEqual(
-            ["Assets/Variant.prefab", "Assets/Base.prefab"],
-            chain_paths,
+            {
+                "variant_path": "Assets/Variant.prefab",
+                "chain": [
+                    {"path": "Assets/Variant.prefab", "guid": None},
+                    {"path": "Assets/Base.prefab", "guid": None},
+                ],
+                "read_only": True,
+            },
+            response.data,
         )
-        self.assertEqual("Assets/Variant.prefab", response.data["variant_path"])
 
-    def test_resolve_chain_values_with_origin_pins_value_and_origin_per_property(self) -> None:
+    def test_resolve_chain_values_with_origin_pins_full_payload(self) -> None:
         """Issue #142 row: ``resolve_chain_values_with_origin`` returns
-        ``PVR_CHAIN_VALUES_WITH_ORIGIN`` whose per-entry ``values``
-        list carries one ``{property_path, value, origin_path,
-        origin_depth, target_file_id}`` row per resolved property; the
-        origin annotation lets callers tell variant-level overrides
-        from base-prefab values."""
+        ``PVR_CHAIN_VALUES_WITH_ORIGIN`` whose full per-entry origin
+        annotations bind by value (variant-level overrides have
+        ``origin_depth=0`` and the variant path; base values have
+        ``origin_depth=1`` and the base path)."""
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             _create_sample_project(root)
@@ -1392,23 +1901,118 @@ PrefabInstance:
 
         self.assertTrue(response.success)
         self.assertEqual("PVR_CHAIN_VALUES_WITH_ORIGIN", response.code)
-        values = response.data["values"]
-        # Map property_path -> entry to assert per-property origin
-        # without coupling to list order.
-        by_path = {entry["property_path"]: entry for entry in values}
-        # A variant-level override carries origin_depth=0 and the
-        # variant path under origin_path.
-        self.assertIn("mic_obj_extra.Array.size", by_path)
-        variant_entry = by_path["mic_obj_extra.Array.size"]
-        self.assertEqual("Assets/Variant.prefab", variant_entry["origin_path"])
-        self.assertEqual(0, variant_entry["origin_depth"])
-        self.assertEqual("1", variant_entry["value"])
-        # A base-prefab value (``m_Name``) carries origin_depth=1 and
-        # the base prefab path under origin_path.
-        self.assertIn("m_Name", by_path)
-        base_entry = by_path["m_Name"]
-        self.assertEqual("Assets/Base.prefab", base_entry["origin_path"])
-        self.assertEqual(1, base_entry["origin_depth"])
+        self.assertEqual(Severity.INFO, response.severity)
+        self.assertEqual(
+            {
+                "variant_path": "Assets/Variant.prefab",
+                "value_count": 5,
+                "chain": [
+                    {"path": "Assets/Variant.prefab", "depth": 0},
+                    {"path": "Assets/Base.prefab", "depth": 1},
+                ],
+                "values": [
+                    {
+                        "target_file_id": "100100000",
+                        "property_path": "mic_obj_extra.Array.size",
+                        "value": "1",
+                        "origin_path": "Assets/Variant.prefab",
+                        "origin_depth": 0,
+                    },
+                    {
+                        "target_file_id": "100100000",
+                        "property_path": "mic_obj_extra.Array.data[1]",
+                        "value": "0",
+                        "origin_path": "Assets/Variant.prefab",
+                        "origin_depth": 0,
+                    },
+                    {
+                        "target_file_id": "100100000",
+                        "property_path": "duplicated.path",
+                        "value": "first",
+                        "origin_path": "Assets/Variant.prefab",
+                        "origin_depth": 0,
+                    },
+                    {
+                        "target_file_id": "100100000",
+                        "property_path": "missing.asset",
+                        "value": "0",
+                        "origin_path": "Assets/Variant.prefab",
+                        "origin_depth": 0,
+                    },
+                    {
+                        "target_file_id": "100100000",
+                        "property_path": "m_Name",
+                        "value": "Base",
+                        "origin_path": "Assets/Base.prefab",
+                        "origin_depth": 1,
+                    },
+                ],
+                "read_only": True,
+            },
+            response.data,
+        )
+
+    def test_compute_effective_values_pins_full_payload(self) -> None:
+        """Issue #142 row: ``compute_effective_values`` returns
+        ``PVR_EFFECTIVE_OK`` whose full payload (variant path,
+        component filter, read-only flag, value count, and the
+        last-write-wins ``effective_values`` list) binds by value."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_sample_project(root)
+            svc = PrefabVariantService(project_root=root)
+            response = svc.compute_effective_values("Assets/Variant.prefab")
+
+        self.assertTrue(response.success)
+        self.assertEqual("PVR_EFFECTIVE_OK", response.code)
+        self.assertEqual(Severity.INFO, response.severity)
+        self.assertEqual(
+            {
+                "variant_path": "Assets/Variant.prefab",
+                "value_count": 4,
+                "component_filter": None,
+                "read_only": True,
+                "effective_values": [
+                    {
+                        "target_key": f"{BASE_GUID}:100100000",
+                        "target_guid": BASE_GUID,
+                        "target_file_id": "100100000",
+                        "property_path": "mic_obj_extra.Array.size",
+                        "value": "1",
+                        "object_reference": "{fileID: 0}",
+                        "line": "8",
+                    },
+                    {
+                        "target_key": f"{BASE_GUID}:100100000",
+                        "target_guid": BASE_GUID,
+                        "target_file_id": "100100000",
+                        "property_path": "mic_obj_extra.Array.data[1]",
+                        "value": "0",
+                        "object_reference": "{fileID: 0}",
+                        "line": "12",
+                    },
+                    {
+                        "target_key": f"{BASE_GUID}:100100000",
+                        "target_guid": BASE_GUID,
+                        "target_file_id": "100100000",
+                        "property_path": "duplicated.path",
+                        "value": "second",
+                        "object_reference": "{fileID: 0}",
+                        "line": "20",
+                    },
+                    {
+                        "target_key": f"{MISSING_GUID}:100100000",
+                        "target_guid": MISSING_GUID,
+                        "target_file_id": "100100000",
+                        "property_path": "missing.asset",
+                        "value": "0",
+                        "object_reference": "{fileID: 0}",
+                        "line": "24",
+                    },
+                ],
+            },
+            response.data,
+        )
 
 
 class ModelFileSuffixDiagnosticTests(unittest.TestCase):
