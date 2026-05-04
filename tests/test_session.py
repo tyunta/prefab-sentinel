@@ -581,11 +581,11 @@ class TestActivate(unittest.TestCase):
         mock_resolve.return_value = Path("/unity/Assets/Scope")
         mock_build.return_value = {}
 
-        env_clean = {
-            k: v for k, v in os.environ.items()
-            if k != UNITY_PROJECT_PATH_ENV
-        }
-        with patch.dict(os.environ, env_clean, clear=True):
+        # Pop only ``UNITY_PROJECT_PATH_ENV`` (other env keys retained); a
+        # ``clear=True`` blanket would also strip mutmut's runtime state and
+        # trip the trampoline (#156).
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(UNITY_PROJECT_PATH_ENV, None)
             session = ProjectSession()
             asyncio.run(session.activate("Assets/Scope"))
 

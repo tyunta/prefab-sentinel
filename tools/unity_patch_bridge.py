@@ -9,7 +9,7 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
@@ -61,9 +61,17 @@ _SEVERITY_ORDER = {"info": 0, "warning": 1, "error": 2, "critical": 3}
 
 
 def _emit(payload: dict[str, Any]) -> int:
+    """Write the response envelope to stdout and return a process-exit code.
+
+    Issue #157 brings this entry point into the in-process test path, where
+    callers want the bridge's failure-path code values to flow through the
+    return value as well as the response payload.  ``success=False`` maps
+    to a non-zero exit code so direct callers can assert failure with a
+    standard ``rc != 0`` check.
+    """
     sys.stdout.write(json.dumps(payload, ensure_ascii=False))
     sys.stdout.write("\n")
-    return 0
+    return 0 if bool(payload.get("success", False)) else 1
 
 
 def _error_response(
@@ -799,8 +807,32 @@ def _run_unity_for_resource(
     return response
 
 
-def main() -> int:
-    raw = sys.stdin.read()
+def main(argv: list[str] | None = None, stdin: TextIO | None = None) -> int:
+    """Drive the patch bridge end-to-end.
+
+    Args:
+        argv: Optional argument list; reserved for future flags.  The
+            bridge currently consumes no positional or option arguments,
+            so any non-empty list is rejected as malformed input.
+        stdin: Optional text stream to read the request from.  Defaults
+            to ``sys.stdin`` when omitted, matching the script-mode
+            behaviour.
+
+    Returns:
+        Process exit code: ``0`` on a success response, non-zero on any
+        failure response (the response payload is still written to
+        stdout).
+    """
+    if argv:
+        return _emit(
+            _error_response(
+                code="BRIDGE_REQUEST_SCHEMA",
+                message="Bridge accepts no command-line arguments.",
+                data={"received_argv": list(argv)},
+            )
+        )
+    source = stdin if stdin is not None else sys.stdin
+    raw = source.read()
     if not raw.strip():
         return _emit(
             _error_response(
@@ -990,4 +1022,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv[1:]))

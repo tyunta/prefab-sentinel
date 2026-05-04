@@ -4,7 +4,6 @@ import argparse
 import io
 import json
 import os
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -465,7 +464,11 @@ sys.stdout.write(json.dumps({"success": False, "severity": "error", "code": "FAI
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             main(["--plan", "ignored.json", "--expected-applied", "-1"])
 
-    def test_script_entrypoint_runs_when_invoked_by_path(self) -> None:
+    def test_main_returns_zero_when_failure_is_expected(self) -> None:
+        """Issue #157: direct ``main()`` invocation replaces the legacy
+        subprocess-driven script-entry-point case.  Ignoring the bridge
+        script in mutmut becomes unnecessary once the smoke runner is
+        exercised entirely in-process."""
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             plan = root / "plan.json"
@@ -483,28 +486,45 @@ sys.stdout.write(json.dumps({"success": False, "severity": "error", "code": "BRI
 """.strip(),
                 encoding="utf-8",
             )
-            completed = subprocess.run(
-                [
-                    sys.executable,
-                    str(Path("scripts") / "unity_bridge_smoke.py"),
-                    "--plan",
-                    str(plan),
-                    "--bridge-script",
-                    str(bridge),
-                    "--python",
-                    sys.executable,
-                    "--expect-failure",
-                ],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                check=False,
-            )
-        self.assertEqual(0, completed.returncode, msg=completed.stderr)
-        payload = json.loads(completed.stdout)
+            output = io.StringIO()
+            with redirect_stdout(output):
+                exit_code = main(
+                    [
+                        "--plan",
+                        str(plan),
+                        "--bridge-script",
+                        str(bridge),
+                        "--python",
+                        sys.executable,
+                        "--expect-failure",
+                    ]
+                )
+        payload = json.loads(output.getvalue())
+        self.assertEqual(0, exit_code)
         self.assertFalse(payload["success"])
         self.assertEqual("BRIDGE_FAIL", payload["code"])
+
+    def test_main_returns_nonzero_when_plan_path_missing(self) -> None:
+        """Spec A4: an invalid plan path surfaces a runner failure response
+        with its code intact and exits non-zero."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            missing_plan = Path(temp_dir) / "does_not_exist.json"
+            output = io.StringIO()
+            with redirect_stdout(output):
+                exit_code = main(
+                    [
+                        "--plan",
+                        str(missing_plan),
+                        "--bridge-script",
+                        str(Path("tools") / "unity_patch_bridge.py"),
+                        "--python",
+                        sys.executable,
+                    ]
+                )
+        payload = json.loads(output.getvalue())
+        self.assertNotEqual(0, exit_code)
+        self.assertFalse(payload["success"])
+        self.assertEqual("SMOKE_BRIDGE_ERROR", payload["code"])
 
 
 if __name__ == "__main__":

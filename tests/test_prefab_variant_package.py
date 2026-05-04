@@ -1,18 +1,13 @@
-"""Structural tests guarding the prefab_variant package split (#75).
+"""Structural test guarding the prefab_variant package import surface (#75).
 
-These tests exist to keep the two architectural invariants introduced
-when ``prefab_variant.py`` was split into a package:
-
-* the public API surface (``PrefabVariantService``) continues to resolve
-  from the canonical import path (call-site compatibility);
-* every ``.py`` module in the package stays within the project's
-  300-line file size hard limit.
+The line-count invariant for files under this package is enforced by the
+CI-side static gate ``scripts/check_module_line_limits.py``; this file
+holds only the package's import-surface invariant.
 """
 
 from __future__ import annotations
 
 import unittest
-from pathlib import Path
 
 import prefab_sentinel.services.prefab_variant as prefab_variant_pkg
 from prefab_sentinel.services.prefab_variant import PrefabVariantService
@@ -20,33 +15,12 @@ from prefab_sentinel.services.prefab_variant.service import (
     PrefabVariantService as _ServicePrefabVariantService,
 )
 
-PACKAGE_DIR = Path(prefab_variant_pkg.__file__).parent
-LINE_LIMIT = 300
-
 
 class PrefabVariantPackageImportTests(unittest.TestCase):
     def test_public_surface_preserved(self) -> None:
         """Legacy import path ``from prefab_sentinel.services.prefab_variant import PrefabVariantService`` resolves to the post-split implementation."""
         self.assertIs(PrefabVariantService, _ServicePrefabVariantService)
         self.assertIn("PrefabVariantService", prefab_variant_pkg.__all__)
-
-    def test_module_line_limits(self) -> None:
-        """Each ``.py`` file in the package stays within the 300-line hard limit."""
-        self.assertTrue(PACKAGE_DIR.is_dir(), f"Package dir missing: {PACKAGE_DIR}")
-        modules = sorted(PACKAGE_DIR.glob("*.py"))
-        self.assertGreater(len(modules), 0, "Package contains no .py modules")
-
-        oversized: list[tuple[str, int]] = []
-        for module_path in modules:
-            line_count = sum(1 for _ in module_path.open(encoding="utf-8"))
-            if line_count > LINE_LIMIT:
-                oversized.append((module_path.name, line_count))
-
-        self.assertEqual(
-            oversized,
-            [],
-            f"Modules exceed {LINE_LIMIT}-line limit: {oversized}",
-        )
 
 
 if __name__ == "__main__":

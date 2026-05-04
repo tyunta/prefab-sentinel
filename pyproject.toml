@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "prefab-sentinel"
-version = "0.5.156"
+version = "0.5.157"
 description = "Prefab Sentinel — Unity Prefab/Scene inspection and editing toolkit."
 requires-python = ">=3.11"
 readme = "README.md"
@@ -61,7 +61,7 @@ packages = ["prefab_sentinel"]
 "tools/unity" = "prefab_sentinel/_bridge_files"
 
 [tool.bumpversion]
-current_version = "0.5.156"
+current_version = "0.5.157"
 commit = false
 tag = false
 allow_dirty = true
@@ -80,6 +80,28 @@ replace = '"version": "{new_version}"'
 filename = "tools/unity/PrefabSentinel.UnityEditorControlBridge.cs"
 search = 'BridgeVersion = "{current_version}"'
 replace = 'BridgeVersion = "{new_version}"'
+
+[tool.mutmut]
+# Audited-path scope: the `prefab_sentinel` Python package source root, so
+# operational-cadence runs mutate the package as a whole; per-module
+# sub-selection is supplied by mutmut command-line invocation rather than
+# by this configuration file.  See README.md "Mutation testing" for the
+# `uv run mutmut run --max-children 180` invocation form.
+paths_to_mutate = ["prefab_sentinel/"]
+# Do-not-mutate pattern list: structural noise whose mutations would not
+# strengthen the test suite.  Logger-style calls (`logger.info(...)` etc.)
+# and triple-quoted-string forms produce equivalent or trivially-killed
+# mutants without informing the production-code contract under test.
+do_not_mutate = [
+    "*logger.*",
+    "*log.debug*",
+    "*log.info*",
+    "*log.warning*",
+    "*log.error*",
+    "*log.critical*",
+    '*"""*',
+    "*'''*",
+]
 
 [dependency-groups]
 dev = [

@@ -868,9 +868,45 @@ uv run python -m pytest tests/ -v
 - 既知不具合（Broken PPtr, Udon nullref）再現ケースを固定
 
 ### 14.4 CI ゲート
-- `ci.yml`: ruff check → mypy → ユニットテスト → bridge smoke contract → integration test contract
+- `ci.yml`: ruff check → mypy → モジュール行数ゲート → ユニットテスト → bridge smoke contract → integration test contract
+- モジュール行数ゲート: `scripts/check_module_line_limits.py` が `prefab_variant` / `runtime_validation` / `serialized_object` の三パッケージを 300 行/ファイル上限で監査
 - bridge smoke contract: Unity 未インストール環境で期待エラーコード（`BRIDGE_UNITY_COMMAND_MISSING`）を検証
 - integration test contract: 非ゼロ終了コードを検証
+
+### 14.5 Mutation testing
+
+CI に組み込まないオフ・カデンス検証として、四半期ごとに [mutmut](https://github.com/boxed/mutmut) によるミューテーションテストを実施する。設定は `pyproject.toml` の `[tool.mutmut]` テーブル（audited path = `prefab_sentinel/`、`do_not_mutate` パターンのみ）。
+
+#### 監査対象モジュール（P0/P1）
+
+操作系・検証系の主要 6 モジュール:
+
+- `prefab_sentinel.services.reference_resolver`
+- `prefab_sentinel.services.prefab_variant`（パッケージ全体）
+- `prefab_sentinel.services.serialized_object.patch_validator`
+- `prefab_sentinel.services.runtime_validation.classification`
+- `prefab_sentinel.orchestrator_postcondition`
+- `prefab_sentinel.orchestrator_validation`
+
+#### 標準実行コマンド
+
+```bash
+uv run mutmut run --max-children 180
+```
+
+並列ワーカー数 `180` は再現性のために固定値とし、同値での再実行を再現条件とする。
+
+#### 運用カデンス
+
+- 四半期ごとに 1 回フル走行する。CI に常設しない。
+- 各 P0/P1 モジュールの mutation score 目標は各 issue の受け入れ基準が定める閾値（70/75/65/60% などの帯）に従う。
+- 結果は走行担当者がレポートとしてリポジトリに添付し、survived の分類（critical / trivial / equivalent）を残す。
+- trivial-class パターンは `[tool.mutmut].do_not_mutate` に追加する（証跡をコミットメッセージに残す）。
+- critical-class survivors はテストでキルする（このテストは通常 PR 単位で追加され、四半期走行の入力になる）。
+
+#### テスト書き方ガイド (envelope value-pinning)
+
+新しいテストは `tests._assertion_helpers.assert_error_envelope` を使い、code / severity / field / message-pattern を値で固定する。「例外が出る」だけのアサートはミューテーションが拾えないため、code 文字列・severity 値・data 内のフィールド値まで等価性で固定すること。
 
 ---
 

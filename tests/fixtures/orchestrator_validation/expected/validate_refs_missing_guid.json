@@ -1,0 +1,15 @@
+{
+  "categories": {
+    "broken_pptr": 1,
+    "udon_runtime": 0,
+    "variant_override": 0
+  },
+  "code": "REF001",
+  "diagnostic_severities": [],
+  "missing_asset_unique_count": 1,
+  "severity": "error",
+  "should_proceed": false,
+  "step_code": "REF_SCAN_BROKEN",
+  "step_severity": "error",
+  "success": false
+}

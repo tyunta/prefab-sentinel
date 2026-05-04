@@ -119,13 +119,18 @@ def run_bridge(
         env=env,
         check=False,
     )
-    if completed.returncode != 0:
-        raise RuntimeError(
-            f"Bridge process exited with {completed.returncode}: {completed.stderr.strip()}"
-        )
+    # Issue #157: the bridge entry point now signals failure-shape responses
+    # by returning a non-zero exit code as well as an envelope on stdout.
+    # The envelope is still authoritative for callers that need to inspect
+    # the failure code, so parse stdout first and only treat a non-zero
+    # exit as fatal when the envelope is missing or malformed.
     try:
         payload = load_json(completed.stdout)
     except json.JSONDecodeError as exc:
+        if completed.returncode != 0:
+            raise RuntimeError(
+                f"Bridge process exited with {completed.returncode}: {completed.stderr.strip()}"
+            ) from exc
         raise RuntimeError("Bridge stdout is not valid JSON.") from exc
     if not isinstance(payload, dict):
         raise RuntimeError("Bridge response root must be an object.")
