@@ -132,8 +132,10 @@ class ParseResultsTests(unittest.TestCase):
     def test_parse_rejects_missing_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = self._write_results(tmp, {"success": True})
-            with self.assertRaises(ValueError):
+            with self.assertRaises(ValueError) as cm:
                 parse_integration_results(path)
+        self.assertIsInstance(cm.exception, ValueError)
+        self.assertTrue(str(cm.exception))
 
     def test_parse_rejects_invalid_severity(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -145,8 +147,9 @@ class ParseResultsTests(unittest.TestCase):
                 "data": {},
                 "diagnostics": [],
             })
-            with self.assertRaises(ValueError):
+            with self.assertRaises(ValueError) as cm:
                 parse_integration_results(path)
+        self.assertIn("severity", str(cm.exception).lower())
 
 
 class ExtractLogErrorsTests(unittest.TestCase):

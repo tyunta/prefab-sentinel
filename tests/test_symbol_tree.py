@@ -300,8 +300,10 @@ class TestSymbolTreeResolve(unittest.TestCase):
 
     def test_resolve_unique_not_found(self) -> None:
         tree = self._build_simple()
-        with self.assertRaises(SymbolNotFoundError):
+        with self.assertRaises(SymbolNotFoundError) as cm:
             tree.resolve_unique("Root/Camera")
+        self.assertIsInstance(cm.exception, SymbolNotFoundError)
+        self.assertIn("Root/Camera", str(cm.exception))
 
     def test_resolve_unique_ambiguous(self) -> None:
         text = (
@@ -314,8 +316,10 @@ class TestSymbolTreeResolve(unittest.TestCase):
             + make_transform("600", "500", father_file_id="200")
         )
         tree = build_symbol_tree(text, "test.prefab")
-        with self.assertRaises(AmbiguousSymbolError):
+        with self.assertRaises(AmbiguousSymbolError) as cm:
             tree.resolve_unique("Root/Child")
+        self.assertIsInstance(cm.exception, AmbiguousSymbolError)
+        self.assertIn("Root/Child", str(cm.exception))
 
     def test_resolve_file_id(self) -> None:
         tree = self._build_simple()

@@ -9,6 +9,7 @@ passthrough.
 
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import sys
@@ -230,6 +231,11 @@ class MutmutResultsSubprocessFailureTests(unittest.TestCase):
                 "run_mutmut_results",
                 return_value=outcome,
             ),
+            mock.patch.object(
+                mutmut_score_report,
+                "_detect_mutmut_version",
+                return_value="unknown",
+            ),
             redirect_stderr(captured_stderr),
         ):
             rc = mutmut_score_report.main(["--format", "markdown"])
@@ -259,6 +265,11 @@ class MutmutResultsSubprocessFailureTests(unittest.TestCase):
                 "run_mutmut_results",
                 return_value=outcome,
             ),
+            mock.patch.object(
+                mutmut_score_report,
+                "_detect_mutmut_version",
+                return_value="unknown",
+            ),
             redirect_stdout(captured_stdout),
         ):
             rc = mutmut_score_report.main(["--format", "markdown"])
@@ -281,6 +292,11 @@ class MutmutResultsCliEndToEndTests(unittest.TestCase):
                 mutmut_score_report,
                 "run_mutmut_results",
                 return_value=outcome,
+            ),
+            mock.patch.object(
+                mutmut_score_report,
+                "_detect_mutmut_version",
+                return_value="unknown",
             ),
             redirect_stdout(captured),
         ):
@@ -317,6 +333,11 @@ class MutmutResultsCliEndToEndTests(unittest.TestCase):
                 "run_mutmut_results",
                 return_value=outcome,
             ),
+            mock.patch.object(
+                mutmut_score_report,
+                "_detect_mutmut_version",
+                return_value="unknown",
+            ),
             redirect_stdout(captured),
         ):
             rc = mutmut_score_report.main(
@@ -333,6 +354,210 @@ class MutmutResultsCliEndToEndTests(unittest.TestCase):
                     for name in mutmut_score_report.AUDITED_MODULES
                 )
             )
+
+
+class MutmutVersionDetectionTests(unittest.TestCase):
+    """Issue #185 — ``_detect_mutmut_version`` returns the captured version
+    string on success and the literal ``"unknown"`` on any subprocess failure.
+    """
+
+    def test_subprocess_failure_returns_unknown(self) -> None:
+        with mock.patch.object(
+            mutmut_score_report.subprocess,
+            "run",
+            side_effect=FileNotFoundError("mutmut not installed"),
+        ):
+            result = mutmut_score_report._detect_mutmut_version()
+        self.assertEqual("unknown", result)
+
+    def test_non_zero_return_code_returns_unknown(self) -> None:
+        completed = mock.Mock()
+        completed.returncode = 2
+        completed.stdout = ""
+        completed.stderr = "something failed"
+        with mock.patch.object(
+            mutmut_score_report.subprocess, "run", return_value=completed
+        ):
+            result = mutmut_score_report._detect_mutmut_version()
+        self.assertEqual("unknown", result)
+
+    def test_empty_output_returns_unknown(self) -> None:
+        completed = mock.Mock()
+        completed.returncode = 0
+        completed.stdout = ""
+        completed.stderr = ""
+        with mock.patch.object(
+            mutmut_score_report.subprocess, "run", return_value=completed
+        ):
+            result = mutmut_score_report._detect_mutmut_version()
+        self.assertEqual("unknown", result)
+
+    def test_typical_banner_returns_parsed_version(self) -> None:
+        completed = mock.Mock()
+        completed.returncode = 0
+        completed.stdout = "mutmut 3.5.0\n"
+        completed.stderr = ""
+        with mock.patch.object(
+            mutmut_score_report.subprocess, "run", return_value=completed
+        ):
+            result = mutmut_score_report._detect_mutmut_version()
+        self.assertEqual("3.5.0", result)
+
+    def test_bare_version_returns_value(self) -> None:
+        completed = mock.Mock()
+        completed.returncode = 0
+        completed.stdout = "3.5.1\n"
+        completed.stderr = ""
+        with mock.patch.object(
+            mutmut_score_report.subprocess, "run", return_value=completed
+        ):
+            result = mutmut_score_report._detect_mutmut_version()
+        self.assertEqual("3.5.1", result)
+
+
+class MutmutResultsRunContextTests(unittest.TestCase):
+    """Issue #185 — the CSV run-context columns reflect the resolved
+    run-context (CLI override > auto-detection > documented placeholder).
+    """
+
+    def _outcome_with(
+        self,
+        mutmut_version: str,
+        parallelism: str,
+    ) -> mutmut_score_report.SubprocessOutcome:
+        metadata = mutmut_score_report.RunMetadata(
+            run_date="2026-05-05",
+            mutmut_version=mutmut_version,
+            parallelism=parallelism,
+        )
+        return mutmut_score_report.SubprocessOutcome(
+            returncode=0,
+            stdout=_SAMPLE_MULTI_MODULE_RESULTS,
+            stderr="",
+            metadata=metadata,
+        )
+
+    def _capture_run_context(
+        self,
+        argv: list[str],
+        run_outcome: mutmut_score_report.SubprocessOutcome,
+        detected_version: str | None = None,
+    ) -> tuple[int, dict[str, str], str]:
+        captured = io.StringIO()
+        recorded_kwargs: dict[str, str] = {}
+
+        def fake_run(*, mutmut_version: str, parallelism: str) -> mutmut_score_report.SubprocessOutcome:
+            recorded_kwargs["mutmut_version"] = mutmut_version
+            recorded_kwargs["parallelism"] = parallelism
+            return mutmut_score_report.SubprocessOutcome(
+                returncode=run_outcome.returncode,
+                stdout=run_outcome.stdout,
+                stderr=run_outcome.stderr,
+                metadata=mutmut_score_report.RunMetadata(
+                    run_date=run_outcome.metadata.run_date,
+                    mutmut_version=mutmut_version,
+                    parallelism=parallelism,
+                ),
+            )
+
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(
+                mock.patch.object(
+                    mutmut_score_report,
+                    "run_mutmut_results",
+                    side_effect=fake_run,
+                )
+            )
+            stack.enter_context(redirect_stdout(captured))
+            if detected_version is not None:
+                stack.enter_context(
+                    mock.patch.object(
+                        mutmut_score_report,
+                        "_detect_mutmut_version",
+                        return_value=detected_version,
+                    )
+                )
+            rc = mutmut_score_report.main(argv)
+        return rc, recorded_kwargs, captured.getvalue()
+
+    def test_explicit_version_flag_overrides_metadata(self) -> None:
+        rc, kwargs, output = self._capture_run_context(
+            argv=["--format", "csv", "--mutmut-version", "9.9.9"],
+            run_outcome=self._outcome_with("9.9.9", "unknown"),
+            detected_version="ignored-detection-value",
+        )
+        self.assertEqual(0, rc)
+        self.assertEqual("9.9.9", kwargs["mutmut_version"])
+        # Every CSV data row carries the supplied version string.
+        data_lines = [line for line in output.strip().splitlines()[1:] if line]
+        self.assertTrue(data_lines)
+        for line in data_lines:
+            self.assertIn("9.9.9", line)
+
+    def test_explicit_parallelism_flag_overrides_metadata(self) -> None:
+        rc, kwargs, output = self._capture_run_context(
+            argv=["--format", "csv", "--parallelism", "180"],
+            run_outcome=self._outcome_with("unknown", "180"),
+            detected_version="3.5.0",
+        )
+        self.assertEqual(0, rc)
+        self.assertEqual("180", kwargs["parallelism"])
+        data_lines = [line for line in output.strip().splitlines()[1:] if line]
+        self.assertTrue(data_lines)
+        for line in data_lines:
+            self.assertIn("180", line)
+
+    def test_default_metadata_falls_back_to_unknown_when_detection_fails(
+        self,
+    ) -> None:
+        rc, kwargs, output = self._capture_run_context(
+            argv=["--format", "csv"],
+            run_outcome=self._outcome_with("unknown", "unknown"),
+            detected_version="unknown",
+        )
+        self.assertEqual(0, rc)
+        self.assertEqual("unknown", kwargs["mutmut_version"])
+        self.assertEqual("unknown", kwargs["parallelism"])
+        data_lines = [line for line in output.strip().splitlines()[1:] if line]
+        self.assertTrue(data_lines)
+        for line in data_lines:
+            self.assertIn(",unknown,", line)
+
+
+class MutmutResultsExitCodeTests(unittest.TestCase):
+    """Issue #185 — the captured non-zero subprocess exit maps to the
+    documented exit code 4 even when run-context CLI flags are present.
+    """
+
+    def test_non_zero_subprocess_returncode_yields_documented_exit_code(
+        self,
+    ) -> None:
+        outcome = mutmut_score_report.SubprocessOutcome(
+            returncode=2,
+            stdout="",
+            stderr="mutmut: fatal\n",
+        )
+        captured_stderr = io.StringIO()
+        with (
+            mock.patch.object(
+                mutmut_score_report,
+                "run_mutmut_results",
+                return_value=outcome,
+            ),
+            mock.patch.object(
+                mutmut_score_report,
+                "_detect_mutmut_version",
+                return_value="unknown",
+            ),
+            redirect_stderr(captured_stderr),
+        ):
+            rc = mutmut_score_report.main(
+                ["--format", "csv", "--mutmut-version", "explicit"]
+            )
+        self.assertEqual(
+            mutmut_score_report.MUTMUT_SUBPROCESS_FAILURE_EXIT_CODE, rc
+        )
+        self.assertIn("mutmut: fatal", captured_stderr.getvalue())
 
 
 if __name__ == "__main__":

@@ -32,7 +32,13 @@ from pathlib import Path
 
 import prefab_sentinel.services.prefab_variant as prefab_variant_pkg
 from prefab_sentinel.services.prefab_variant import PrefabVariantService
-from prefab_sentinel.services.prefab_variant.overrides import OverrideEntry
+from prefab_sentinel.services.prefab_variant.overrides import (
+    OverrideEntry,
+    effective_value,
+    find_modification_line_ranges,
+    iter_base_property_values,
+    parse_overrides,
+)
 from prefab_sentinel.services.prefab_variant.service import (
     PrefabVariantService as _ServicePrefabVariantService,
 )
@@ -279,6 +285,211 @@ class ListOverridesErrorPathTests(unittest.TestCase):
                 "read_only": True,
             },
         )
+
+
+class OverridesParserTests(unittest.TestCase):
+    """Issue #187 — pin parser, line-range, effective-value, and base-property
+    iterator behaviour by value so mutations on the parsing primitives cannot
+    survive.
+    """
+
+    def _entry(
+        self,
+        property_path: str = "",
+        object_reference: str = "",
+        value: str = "",
+    ) -> OverrideEntry:
+        return OverrideEntry(
+            target_file_id="100100000",
+            target_guid=_BASE_GUID,
+            target_type="3",
+            target_raw="",
+            property_path=property_path,
+            value=value,
+            object_reference=object_reference,
+            line=1,
+        )
+
+    # --- effective_value branches ------------------------------------------
+
+    def test_effective_value_uses_reference_when_non_zero(self) -> None:
+        entry = self._entry(
+            object_reference=f"{{fileID: 21300000, guid: {_REF_GUID}, type: 3}}",
+            value="ignored",
+        )
+        self.assertEqual(
+            f"{{fileID: 21300000, guid: {_REF_GUID}, type: 3}}",
+            effective_value(entry),
+        )
+
+    def test_effective_value_falls_back_to_value_when_reference_is_zero(
+        self,
+    ) -> None:
+        entry = self._entry(object_reference="{fileID: 0}", value="kept")
+        self.assertEqual("kept", effective_value(entry))
+
+    def test_effective_value_falls_back_to_value_when_reference_empty(
+        self,
+    ) -> None:
+        entry = self._entry(object_reference="", value="kept")
+        self.assertEqual("kept", effective_value(entry))
+
+    # --- parse_overrides edges ---------------------------------------------
+
+    def test_parser_skips_lines_preceding_modifications_block(self) -> None:
+        text = f"""%YAML 1.1
+--- !u!1001 &100100000
+PrefabInstance:
+  m_SourcePrefab: {{fileID: 100100000, guid: {_BASE_GUID}, type: 3}}
+  m_Modification:
+    m_Modifications:
+    - target: {{fileID: 100100000, guid: {_BASE_GUID}, type: 3}}
+      propertyPath: m_Name
+      value: First
+      objectReference: {{fileID: 0}}
+"""
+        entries = parse_overrides(text)
+        self.assertEqual(1, len(entries))
+        # The line attribute records the actual ``- target:`` line, not
+        # any of the leading non-modification lines.
+        self.assertEqual(7, entries[0].line)
+
+    def test_parser_handles_target_with_optional_type_field(self) -> None:
+        text = f"""m_Modifications:
+- target: {{fileID: 1, guid: {_BASE_GUID}, type: 3}}
+  propertyPath: m_Name
+  value: V
+  objectReference: {{fileID: 0}}
+"""
+        entries = parse_overrides(text)
+        self.assertEqual(1, len(entries))
+        self.assertEqual("3", entries[0].target_type)
+        self.assertEqual(_BASE_GUID, entries[0].target_guid)
+        self.assertEqual("1", entries[0].target_file_id)
+
+    def test_parser_handles_target_without_type_field(self) -> None:
+        text = f"""m_Modifications:
+- target: {{fileID: 2, guid: {_BASE_GUID}}}
+  propertyPath: m_Name
+  value: V
+  objectReference: {{fileID: 0}}
+"""
+        entries = parse_overrides(text)
+        self.assertEqual(1, len(entries))
+        self.assertIsNone(entries[0].target_type)
+
+    def test_parser_handles_target_without_guid_field(self) -> None:
+        text = """m_Modifications:
+- target: {fileID: 3}
+  propertyPath: m_Name
+  value: V
+  objectReference: {fileID: 0}
+"""
+        entries = parse_overrides(text)
+        self.assertEqual(1, len(entries))
+        self.assertEqual("", entries[0].target_guid)
+        self.assertEqual("3", entries[0].target_file_id)
+
+    def test_parser_emits_one_entry_per_target_block(self) -> None:
+        text = f"""m_Modifications:
+- target: {{fileID: 1, guid: {_BASE_GUID}, type: 3}}
+  propertyPath: a
+  value: 1
+  objectReference: {{fileID: 0}}
+- target: {{fileID: 2, guid: {_BASE_GUID}, type: 3}}
+  propertyPath: b
+  value: 2
+  objectReference: {{fileID: 0}}
+- target: {{fileID: 3, guid: {_BASE_GUID}, type: 3}}
+  propertyPath: c
+  value: 3
+  objectReference: {{fileID: 0}}
+"""
+        entries = parse_overrides(text)
+        self.assertEqual(3, len(entries))
+        self.assertEqual(
+            ["a", "b", "c"], [e.property_path for e in entries]
+        )
+
+    # --- find_modification_line_ranges -------------------------------------
+
+    def test_line_ranges_emit_one_range_per_entry(self) -> None:
+        text = f"""  m_Modifications:
+  - target: {{fileID: 1, guid: {_BASE_GUID}, type: 3}}
+    propertyPath: a
+    value: 1
+    objectReference: {{fileID: 0}}
+  - target: {{fileID: 2, guid: {_BASE_GUID}, type: 3}}
+    propertyPath: b
+    value: 2
+    objectReference: {{fileID: 0}}
+"""
+        lines = text.splitlines()
+        ranges = find_modification_line_ranges(lines)
+        self.assertEqual(2, len(ranges))
+        # Each range covers exactly the four lines of its entry block.
+        for range_start, range_end in ranges.values():
+            self.assertEqual(4, range_end - range_start)
+
+    def test_line_ranges_include_trailing_blank_lines_for_last_entry(
+        self,
+    ) -> None:
+        text = f"""  m_Modifications:
+  - target: {{fileID: 1, guid: {_BASE_GUID}, type: 3}}
+    propertyPath: a
+    value: 1
+    objectReference: {{fileID: 0}}
+
+"""
+        lines = text.splitlines()
+        ranges = find_modification_line_ranges(lines)
+        self.assertEqual(1, len(ranges))
+        # Last entry's range extends across the trailing blank line.
+        only_range = next(iter(ranges.values()))
+        self.assertEqual(5, only_range[1] - only_range[0])
+
+    # --- iter_base_property_values -----------------------------------------
+
+    def test_iter_base_property_values_emits_array_data_paths_for_lists(
+        self,
+    ) -> None:
+        text = """%YAML 1.1
+--- !u!137 &100
+SkinnedMeshRenderer:
+  m_GameObject: {fileID: 50}
+  m_Materials:
+  - {fileID: 1}
+  - {fileID: 2}
+"""
+        entries = list(iter_base_property_values(text))
+        # Expect the two array-data entries on m_Materials.
+        materials = [e for e in entries if "m_Materials.Array.data[" in e[1]]
+        self.assertEqual(2, len(materials))
+        self.assertEqual("100", materials[0][0])
+        self.assertEqual("m_Materials.Array.data[0]", materials[0][1])
+        self.assertEqual("m_Materials.Array.data[1]", materials[1][1])
+
+    def test_iter_base_property_values_yields_scalar_field_values(self) -> None:
+        text = """%YAML 1.1
+--- !u!1 &100
+GameObject:
+  m_Name: Hello
+"""
+        entries = list(iter_base_property_values(text))
+        scalars = [e for e in entries if e[1] == "m_Name"]
+        self.assertEqual(1, len(scalars))
+        self.assertEqual("Hello", scalars[0][2])
+
+    def test_iter_base_property_values_skips_empty_array_marker(self) -> None:
+        text = """%YAML 1.1
+--- !u!137 &100
+SkinnedMeshRenderer:
+  m_Materials: []
+"""
+        entries = list(iter_base_property_values(text))
+        # Empty-array marker is skipped (no array-data, no scalar).
+        materials = [e for e in entries if "m_Materials" in e[1]]
+        self.assertEqual([], materials)
 
 
 if __name__ == "__main__":

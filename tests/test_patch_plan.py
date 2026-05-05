@@ -81,24 +81,29 @@ class NormalizeResourceTests(unittest.TestCase):
         self.assertEqual(result["mode"], "open")
 
     def test_non_dict_raises(self) -> None:
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as cm:
             _normalize_resource("not_a_dict", 0)
+        self.assertIn("must be an object", str(cm.exception))
 
     def test_missing_id_raises(self) -> None:
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as cm:
             _normalize_resource({"path": "a.prefab"}, 0)
+        self.assertIn(".id", str(cm.exception))
 
     def test_empty_id_raises(self) -> None:
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as cm:
             _normalize_resource({"id": "  ", "path": "a.prefab"}, 0)
+        self.assertIn(".id", str(cm.exception))
 
     def test_missing_path_raises(self) -> None:
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as cm:
             _normalize_resource({"id": "r1"}, 0)
+        self.assertIn(".path", str(cm.exception))
 
     def test_empty_path_raises(self) -> None:
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as cm:
             _normalize_resource({"id": "r1", "path": "  "}, 0)
+        self.assertIn(".path", str(cm.exception))
 
     def test_kind_inferred_from_path(self) -> None:
         resource = {"id": "r1", "path": "Assets/a.unity"}
@@ -121,8 +126,9 @@ class NormalizeResourceTests(unittest.TestCase):
         self.assertEqual(result["mode"], "open")
 
     def test_empty_mode_raises(self) -> None:
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as cm:
             _normalize_resource({"id": "r1", "path": "a.prefab", "mode": "  "}, 0)
+        self.assertIn(".mode", str(cm.exception))
 
     def test_strips_whitespace(self) -> None:
         resource = {"id": " r1 ", "path": " Assets/a.prefab "}
@@ -162,32 +168,38 @@ class NormalizePatchPlanTests(unittest.TestCase):
         self.assertIn("plan_version", str(ctx.exception))
 
     def test_wrong_version_raises(self) -> None:
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as cm:
             normalize_patch_plan({"plan_version": 99})
+        self.assertIn("plan_version", str(cm.exception))
 
     def test_non_dict_root_raises(self) -> None:
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as cm:
             normalize_patch_plan("not_a_dict")  # type: ignore[arg-type]
+        self.assertIn("root must be an object", str(cm.exception))
 
     def test_empty_resources_raises(self) -> None:
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as cm:
             normalize_patch_plan({"plan_version": PLAN_VERSION, "resources": []})
+        self.assertIn("resources", str(cm.exception))
 
     def test_non_list_resources_raises(self) -> None:
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as cm:
             normalize_patch_plan({"plan_version": PLAN_VERSION, "resources": "bad"})
+        self.assertIn("resources", str(cm.exception))
 
     def test_non_list_ops_raises(self) -> None:
         plan = _v2_plan()
         plan["ops"] = "not_a_list"
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as cm:
             normalize_patch_plan(plan)
+        self.assertIn("ops", str(cm.exception))
 
     def test_non_list_postconditions_raises(self) -> None:
         plan = _v2_plan()
         plan["postconditions"] = "not_a_list"
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as cm:
             normalize_patch_plan(plan)
+        self.assertIn("postconditions", str(cm.exception))
 
     def test_duplicate_resource_id_raises(self) -> None:
         plan = _v2_plan(
@@ -197,27 +209,31 @@ class NormalizePatchPlanTests(unittest.TestCase):
             ],
             ops=[],
         )
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as cm:
             normalize_patch_plan(plan)
+        self.assertIn("duplicates resource id", str(cm.exception))
 
     def test_unknown_resource_ref_raises(self) -> None:
         plan = _v2_plan(
             resources=[{"id": "res1", "path": "a.prefab"}],
             ops=[{"resource": "unknown", "op": "set"}],
         )
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as cm:
             normalize_patch_plan(plan)
+        self.assertIn("unknown resource id", str(cm.exception))
 
     def test_non_dict_op_raises(self) -> None:
         plan = _v2_plan()
         plan["ops"] = ["not_a_dict"]
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as cm:
             normalize_patch_plan(plan)
+        self.assertIn("ops[0]", str(cm.exception))
 
     def test_empty_resource_ref_in_op_raises(self) -> None:
         plan = _v2_plan(ops=[{"resource": "  ", "op": "set"}])
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as cm:
             normalize_patch_plan(plan)
+        self.assertIn("resource", str(cm.exception))
 
     def test_non_dict_postcondition_raises(self) -> None:
         plan = _v2_plan(
@@ -225,18 +241,21 @@ class NormalizePatchPlanTests(unittest.TestCase):
             ops=[],
             postconditions=["not_a_dict"],
         )
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as cm:
             normalize_patch_plan(plan)
+        self.assertIn("postconditions[0]", str(cm.exception))
 
     def test_postcondition_missing_type_raises(self) -> None:
         plan = _v2_plan(postconditions=[{"resource": "res1"}])
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as cm:
             normalize_patch_plan(plan)
+        self.assertIn("type", str(cm.exception))
 
     def test_postcondition_empty_type_raises(self) -> None:
         plan = _v2_plan(postconditions=[{"type": "  "}])
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as cm:
             normalize_patch_plan(plan)
+        self.assertIn("type", str(cm.exception))
 
     def test_postcondition_type_stripped(self) -> None:
         plan = _v2_plan(postconditions=[{"type": " asset_exists "}])
@@ -396,12 +415,14 @@ class IterResourceBatchesTests(unittest.TestCase):
         self.assertEqual(ops, [])
 
     def test_non_list_resources_raises(self) -> None:
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as cm:
             iter_resource_batches({"resources": "bad", "ops": []})
+        self.assertIn("normalized", str(cm.exception))
 
     def test_non_list_ops_raises(self) -> None:
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as cm:
             iter_resource_batches({"resources": [], "ops": "bad"})
+        self.assertIn("normalized", str(cm.exception))
 
     def test_deepcopy_isolation(self) -> None:
         plan = normalize_patch_plan(_v2_plan())

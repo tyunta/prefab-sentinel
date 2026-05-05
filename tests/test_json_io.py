@@ -27,8 +27,9 @@ class TestDumpJson(unittest.TestCase):
         self.assertNotIn("あ", result)
 
     def test_non_serializable_raises_type_error(self) -> None:
-        with self.assertRaises(TypeError):
+        with self.assertRaises(TypeError) as cm:
             dump_json(object())
+        self.assertIn("not JSON serializable", str(cm.exception))
 
 
 class TestLoadJson(unittest.TestCase):

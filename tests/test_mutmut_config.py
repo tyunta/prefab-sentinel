@@ -35,10 +35,30 @@ import tempfile
 import tomllib
 import unittest
 from pathlib import Path
+from unittest import mock
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT_PATH = PROJECT_ROOT / "pyproject.toml"
 GITIGNORE_PATH = PROJECT_ROOT / ".gitignore"
+README_PATH = PROJECT_ROOT / "README.md"
+QUARTERLY_TEMPLATE_PATH = PROJECT_ROOT / "docs" / "quarterly_mutmut_report_template.md"
+
+# Make ``scripts/mutmut_score_report.py`` importable so the audited
+# module list can be re-exported instead of duplicated in this file.
+_SCRIPTS_DIR = PROJECT_ROOT / "scripts"
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+
+from mutmut_score_report import AUDITED_MODULES as AUDITED_MODULES_FOR_HISTORY  # noqa: E402
+
+# Issue #182 — exact suppression-pattern strings validated in PR #186.
+# The configuration test below pins these by literal string comparison so
+# any rename, duplicate, or accidental drift surfaces as a test failure.
+PR186_SUPPRESSION_PATTERNS: tuple[str, ...] = (
+    "*_text_cache.get*",
+    "*_guid_map*",
+    "*invalidate_*_cache*",
+)
 
 
 def _load_pyproject() -> dict:
@@ -178,6 +198,91 @@ class MutmutConfigShapeTests(unittest.TestCase):
         )
 
 
+class QuarterlyTemplateTests(unittest.TestCase):
+    """Issue #170 / #149 — the quarterly mutation-report template exists at
+    the documented path and exposes the two structural sections the
+    audited cadence relies on.  The README mutation operational-cadence
+    subsection cross-references the template so a reader can land on the
+    quarterly artefact directly from the operational documentation.
+    """
+
+    def test_quarterly_template_exists_and_has_suppression_impact_section(
+        self,
+    ) -> None:
+        self.assertTrue(
+            QUARTERLY_TEMPLATE_PATH.exists(),
+            f"quarterly template not found at {QUARTERLY_TEMPLATE_PATH}",
+        )
+        text = QUARTERLY_TEMPLATE_PATH.read_text(encoding="utf-8")
+        # Heading is locked to the documented wording so a future rename
+        # surfaces as a failure here rather than as a silent doc drift.
+        self.assertIn(
+            "## 3. Suppression-impact section",
+            text,
+            "missing suppression-impact section heading",
+        )
+        # The per-pattern table header ("Suppression pattern ... Delta")
+        # must be present so the section is structurally complete.
+        self.assertIn("| Suppression pattern |", text)
+        self.assertIn("Delta", text)
+
+    def test_quarterly_template_has_per_audited_module_history_section(
+        self,
+    ) -> None:
+        text = QUARTERLY_TEMPLATE_PATH.read_text(encoding="utf-8")
+        self.assertIn(
+            "## 2. Per-audited-module mutation-score history",
+            text,
+            "missing per-audited-module score-history heading",
+        )
+        # The history section must enumerate every audited module by
+        # dotted path so the reader can locate the row without grep.
+        for module in AUDITED_MODULES_FOR_HISTORY:
+            self.assertIn(
+                module,
+                text,
+                f"per-audited-module section missing module row: {module}",
+            )
+
+    def test_readme_mutation_section_references_quarterly_template(
+        self,
+    ) -> None:
+        text = README_PATH.read_text(encoding="utf-8")
+        self.assertIn(
+            "docs/quarterly_mutmut_report_template.md",
+            text,
+            "README mutation section does not cross-reference the quarterly template path",
+        )
+
+
+class SuppressionPatternPinTests(unittest.TestCase):
+    """Issue #182 — the three documented equivalent-mutation patterns
+    appear verbatim in ``[tool.mutmut].do_not_mutate``.  This pins the
+    strings by literal equality so a future rename / duplicate / accidental
+    deletion surfaces as a test failure rather than as silent drift.
+    """
+
+    def test_each_pr186_suppression_pattern_is_pinned_by_literal_string(
+        self,
+    ) -> None:
+        section = _load_mutmut_section()
+        patterns = section["do_not_mutate"]
+        # Each documented pattern appears at least once, by exact string.
+        for required in PR186_SUPPRESSION_PATTERNS:
+            self.assertIn(
+                required,
+                patterns,
+                f"missing PR-#186 suppression pattern {required!r}: {patterns}",
+            )
+        # No duplicates of the documented patterns (drift catcher).
+        for required in PR186_SUPPRESSION_PATTERNS:
+            self.assertEqual(
+                1,
+                patterns.count(required),
+                f"PR-#186 suppression pattern {required!r} appears more than once: {patterns}",
+            )
+
+
 class MutmutSanityInvocationTests(unittest.TestCase):
     """Per-module mutmut sanity invocation against ``contracts.py``.
 
@@ -245,7 +350,6 @@ class MutmutSanityInvocationTests(unittest.TestCase):
         # indefinitely.  Skip the subprocess call in that case — the
         # configuration shape assertions on the parent invocation are
         # the surface that matters.
-        import os  # noqa: PLC0415
         if os.environ.get("MUTANT_UNDER_TEST"):
             self.skipTest("running inside mutmut; subprocess invocation would recurse")
         # Likewise, if the unit suite is being run by ``mutmut run``
@@ -353,8 +457,6 @@ class RunUnitTestsStaleMutantsPreflightTests(unittest.TestCase):
         return run_unit_tests
 
     def test_stale_mutants_directory_aborts_runner(self) -> None:
-        from unittest import mock  # noqa: PLC0415
-
         run_unit_tests = self._import_entrypoint()
         captured_stderr: list[str] = []
 
@@ -381,8 +483,6 @@ class RunUnitTestsStaleMutantsPreflightTests(unittest.TestCase):
         self.assertIn("rm -rf mutants/", joined)
 
     def test_mutmut_child_indicator_allows_runner_passthrough(self) -> None:
-        from unittest import mock  # noqa: PLC0415
-
         run_unit_tests = self._import_entrypoint()
         sentinel_returncode = 17
 

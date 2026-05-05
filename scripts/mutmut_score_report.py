@@ -273,8 +273,52 @@ class SubprocessOutcome:
     )
 
 
-def run_mutmut_results() -> SubprocessOutcome:
+_UNKNOWN_RUN_CONTEXT = "unknown"
+
+
+def _detect_mutmut_version() -> str:
+    """Return the installed mutmut version, or ``"unknown"`` on any failure.
+
+    Why subprocess and not ``importlib.metadata``: mutmut's own ``--version``
+    invocation is the source of truth for "what version actually ran"; the
+    CLI sequence used by the audited cadence (`uv run mutmut run`) and the
+    runtime selected here are normally the same Python environment, but the
+    ``--version`` invocation is the only signal that survives mutmut being
+    invoked through a wrapper such as ``uv``.
+    """
+    try:
+        completed = subprocess.run(
+            ["mutmut", "version"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except (FileNotFoundError, OSError):
+        return _UNKNOWN_RUN_CONTEXT
+    if completed.returncode != 0:
+        return _UNKNOWN_RUN_CONTEXT
+    text = (completed.stdout or completed.stderr or "").strip()
+    if not text:
+        return _UNKNOWN_RUN_CONTEXT
+    # mutmut ``version`` emits a single line; strip optional ``mutmut ``
+    # prefix so the CSV column carries just the version number.
+    first_line = text.splitlines()[0].strip()
+    if first_line.lower().startswith("mutmut "):
+        first_line = first_line[len("mutmut "):].strip()
+    return first_line or _UNKNOWN_RUN_CONTEXT
+
+
+def run_mutmut_results(
+    *,
+    mutmut_version: str | None,
+    parallelism: str | None,
+) -> SubprocessOutcome:
     """Invoke ``mutmut results --all=true`` and return the captured outcome.
+
+    The caller resolves the run-context (``mutmut_version`` / ``parallelism``)
+    at the CLI boundary; this helper stamps whatever it is given onto the
+    outcome's metadata so the CSV columns reflect the actual run state.
+    Passing ``None`` means "use the documented placeholder" (``"unknown"``).
 
     Why a thin wrapper: tests stub this function at its import site to
     avoid spawning the real CLI; the parser itself is pure.
@@ -289,7 +333,10 @@ def run_mutmut_results() -> SubprocessOutcome:
         returncode=completed.returncode,
         stdout=completed.stdout,
         stderr=completed.stderr,
-        metadata=RunMetadata.from_now("unknown", "unknown"),
+        metadata=RunMetadata.from_now(
+            mutmut_version or _UNKNOWN_RUN_CONTEXT,
+            parallelism or _UNKNOWN_RUN_CONTEXT,
+        ),
     )
 
 
@@ -318,6 +365,27 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=("markdown", "csv", "json"),
         default="markdown",
     )
+    parser.add_argument(
+        "--mutmut-version",
+        dest="mutmut_version",
+        default=None,
+        help=(
+            "Override the mutation-tool version recorded in the CSV "
+            "run-context column.  When omitted, the version is auto-detected "
+            "from `mutmut version`; on detection failure the column carries "
+            "the literal 'unknown'."
+        ),
+    )
+    parser.add_argument(
+        "--parallelism",
+        dest="parallelism",
+        default=None,
+        help=(
+            "Override the parallelism setting recorded in the CSV "
+            "run-context column.  When omitted, the column carries the "
+            "literal 'unknown'."
+        ),
+    )
     return parser
 
 
@@ -325,7 +393,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
 
-    outcome = run_mutmut_results()
+    mutmut_version = args.mutmut_version or _detect_mutmut_version()
+    parallelism = args.parallelism or _UNKNOWN_RUN_CONTEXT
+
+    outcome = run_mutmut_results(
+        mutmut_version=mutmut_version,
+        parallelism=parallelism,
+    )
     if outcome.returncode != 0:
         if outcome.stderr:
             sys.stderr.write(outcome.stderr)

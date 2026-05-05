@@ -207,10 +207,12 @@ class RoundUpTimeoutTests(unittest.TestCase):
         self.assertEqual(0, _round_up_timeout(0.0, 30))
 
     def test_invalid_step_raises(self) -> None:
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as cm0:
             _round_up_timeout(10.0, 0)
-        with self.assertRaises(ValueError):
+        self.assertTrue(str(cm0.exception))
+        with self.assertRaises(ValueError) as cm_neg:
             _round_up_timeout(10.0, -1)
+        self.assertTrue(str(cm_neg.exception))
 
 
 class BuildTargetStatsTests(unittest.TestCase):
