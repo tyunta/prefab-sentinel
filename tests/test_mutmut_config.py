@@ -27,9 +27,11 @@ the operational contract documented in ``README.md`` §14.5:
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import tomllib
 import unittest
 from pathlib import Path
@@ -98,6 +100,29 @@ class MutmutConfigShapeTests(unittest.TestCase):
             f"missing triple-single-quote pattern: {patterns}",
         )
 
+    def test_do_not_mutate_extends_with_documented_equivalent_patterns(
+        self,
+    ) -> None:
+        """Issue #182 — three documented equivalent-mutation patterns
+        appear verbatim in ``[tool.mutmut].do_not_mutate``.  The patterns
+        target internal cache state in ``ReferenceResolverService`` whose
+        mutations are semantically equivalent (cache hit/miss skip,
+        guid-index re-read, cache invalidation) and would not strengthen
+        the suite if mutated.
+        """
+        section = _load_mutmut_section()
+        patterns = section["do_not_mutate"]
+        for required in (
+            "*_text_cache.get*",
+            "*_guid_map*",
+            "*invalidate_*_cache*",
+        ):
+            self.assertIn(
+                required,
+                patterns,
+                f"missing equivalent-mutation pattern '{required}': {patterns}",
+            )
+
     def test_pytest_selection_uses_single_marker_filter(self) -> None:
         # The selection list must consist of the test root, a ``-m``
         # flag, and the marker expression — exactly three entries — and
@@ -154,6 +179,34 @@ class MutmutConfigShapeTests(unittest.TestCase):
 
 
 class MutmutSanityInvocationTests(unittest.TestCase):
+    """Per-module mutmut sanity invocation against ``contracts.py``.
+
+    The test calls ``mutmut run`` on the smallest audited leaf module
+    and asserts that none of the four documented historical regression
+    strings (issue #165) appears in the combined stdout/stderr capture.
+
+    Skip conditions (issue #144 — these are the conditions a developer
+    reading a ``pytest --skipped`` summary can map back here without
+    opening the test body):
+
+    1. **Stale ``mutants/`` directory present at the repository root.**
+       When the working tree already contains a ``mutants/`` artifact
+       tree, a mutmut session is in progress (or was abandoned without
+       cleanup) and re-entering ``mutmut run`` here would tangle with
+       it.  The recovery is ``rm -rf mutants/`` from the repository
+       root.
+    2. **Upstream ``multiprocessing.set_start_method('fork')`` double-call
+       ``RuntimeError`` is detected** in the combined output.  This
+       indicates the mutmut runtime hit the upstream double-init bug
+       (``context has already been set``); the failure is unrelated to
+       the regression strings the test pins.
+    3. **The ``mutmut`` binary is unavailable on PATH.**  In that case
+       the configuration-shape assertions in
+       :class:`MutmutConfigShapeTests` already cover the static surface
+       of ``[tool.mutmut]``; the per-module sanity invocation has no
+       runtime to drive.
+    """
+
     # Four documented historical regression strings (issue #165):
     # * ``MUTANT_UNDER_TEST`` — the missing-state-variable identifier
     #   that mutmut's runtime raises when the test environment is not
@@ -257,6 +310,111 @@ class MutmutSanityInvocationTests(unittest.TestCase):
                 combined.lower(),
                 f"mutmut output surfaced a documented regression string '{needle}': {combined}",
             )
+
+
+class MutmutSanityDocstringTests(unittest.TestCase):
+    """Issue #144 — the sanity test class's docstring enumerates each
+    documented skip condition so a developer reading a
+    ``pytest --skipped`` summary can locate the cause without reading
+    the test body.
+    """
+
+    def test_class_docstring_lists_three_skip_conditions(self) -> None:
+        docstring = MutmutSanityInvocationTests.__doc__ or ""
+        # Skip condition 1: stale ``mutants/`` directory at repo root.
+        self.assertIn("mutants/", docstring)
+        self.assertRegex(
+            docstring,
+            r"(?is)stale.*mutants.*(repository|repo).*root",
+        )
+        # Skip condition 2: upstream multiprocessing double-call.
+        self.assertIn("set_start_method", docstring)
+        self.assertIn("fork", docstring)
+        self.assertIn("RuntimeError", docstring)
+        # Skip condition 3: mutmut binary unavailable on PATH.
+        self.assertRegex(docstring, r"(?is)mutmut.*PATH")
+        # Cleanup string: literal recovery instruction.
+        self.assertIn("rm -rf mutants/", docstring)
+
+
+class RunUnitTestsStaleMutantsPreflightTests(unittest.TestCase):
+    """Issue #174 — ``scripts/run_unit_tests.py`` aborts with a distinct
+    exit code when a stale ``mutants/`` directory is present at the
+    repository root and the mutmut child indicator is unset; passes
+    through to the parallel-runner dispatch when the indicator is set.
+    """
+
+    _STALE_MUTANTS_EXIT_CODE = 3
+    _MISSING_RUNNER_EXIT_CODE = 2
+
+    def _import_entrypoint(self):
+        from scripts import run_unit_tests  # noqa: PLC0415
+
+        return run_unit_tests
+
+    def test_stale_mutants_directory_aborts_runner(self) -> None:
+        from unittest import mock  # noqa: PLC0415
+
+        run_unit_tests = self._import_entrypoint()
+        captured_stderr: list[str] = []
+
+        def fake_print(*args: object, **kwargs: object) -> None:
+            captured_stderr.append(" ".join(str(arg) for arg in args))
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            (root / "mutants").mkdir()
+            (root / "tests").mkdir()
+            with (
+                mock.patch.dict(os.environ, {}, clear=False),
+                mock.patch.object(run_unit_tests, "ROOT_DIR", root),
+                mock.patch.object(run_unit_tests, "print", fake_print),
+            ):
+                os.environ.pop("MUTANT_UNDER_TEST", None)
+                rc = run_unit_tests.main([])
+        self.assertEqual(self._STALE_MUTANTS_EXIT_CODE, rc)
+        self.assertNotEqual(self._MISSING_RUNNER_EXIT_CODE, rc)
+        self.assertNotEqual(0, rc)
+        self.assertNotEqual(1, rc)
+        joined = "\n".join(captured_stderr)
+        self.assertIn("mutants", joined)
+        self.assertIn("rm -rf mutants/", joined)
+
+    def test_mutmut_child_indicator_allows_runner_passthrough(self) -> None:
+        from unittest import mock  # noqa: PLC0415
+
+        run_unit_tests = self._import_entrypoint()
+        sentinel_returncode = 17
+
+        class _FakeCompletedProcess:
+            returncode = sentinel_returncode
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            (root / "mutants").mkdir()
+            (root / "tests").mkdir()
+            with (
+                mock.patch.dict(
+                    os.environ, {"MUTANT_UNDER_TEST": "yes"}, clear=False
+                ),
+                mock.patch.object(run_unit_tests, "ROOT_DIR", root),
+                # ``find_spec`` returns ``None`` when ``unittest_parallel`` is
+                # not installed.  The passthrough path under test runs *after*
+                # that guard, so the test must short-circuit it with a truthy
+                # spec object before reaching the mocked subprocess dispatch.
+                mock.patch.object(
+                    run_unit_tests.importlib.util,
+                    "find_spec",
+                    return_value=object(),
+                ),
+                mock.patch.object(
+                    run_unit_tests.subprocess,
+                    "run",
+                    return_value=_FakeCompletedProcess(),
+                ),
+            ):
+                rc = run_unit_tests.main([])
+        self.assertEqual(sentinel_returncode, rc)
 
 
 if __name__ == "__main__":

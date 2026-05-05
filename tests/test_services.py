@@ -1782,6 +1782,8 @@ PrefabInstance:
                 "read_only": True,
                 "overrides": [
                     {
+                        "kind": "array_size",
+                        "target_key": f"{BASE_GUID}:100100000",
                         "line": 8,
                         "target_file_id": "100100000",
                         "target_guid": BASE_GUID,
@@ -1790,6 +1792,8 @@ PrefabInstance:
                         "object_reference": "{fileID: 0}",
                     },
                     {
+                        "kind": "array_data",
+                        "target_key": f"{BASE_GUID}:100100000",
                         "line": 12,
                         "target_file_id": "100100000",
                         "target_guid": BASE_GUID,
@@ -1798,6 +1802,8 @@ PrefabInstance:
                         "object_reference": "{fileID: 0}",
                     },
                     {
+                        "kind": "value",
+                        "target_key": f"{BASE_GUID}:100100000",
                         "line": 16,
                         "target_file_id": "100100000",
                         "target_guid": BASE_GUID,
@@ -1806,6 +1812,8 @@ PrefabInstance:
                         "object_reference": "{fileID: 0}",
                     },
                     {
+                        "kind": "value",
+                        "target_key": f"{BASE_GUID}:100100000",
                         "line": 20,
                         "target_file_id": "100100000",
                         "target_guid": BASE_GUID,
@@ -1814,6 +1822,8 @@ PrefabInstance:
                         "object_reference": "{fileID: 0}",
                     },
                     {
+                        "kind": "value",
+                        "target_key": f"{MISSING_GUID}:100100000",
                         "line": 24,
                         "target_file_id": "100100000",
                         "target_guid": MISSING_GUID,

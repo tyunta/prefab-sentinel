@@ -116,3 +116,4 @@
 - survived は critical / trivial / equivalent の三分類で記録する。trivial は `[tool.mutmut].do_not_mutate` に追加し、critical はテストでキルする。
 - 新規テストは `tests._assertion_helpers.assert_error_envelope` で code / severity / field / message を値で固定する。例外発生のみのアサートは禁止。
 - 新規のリポジトリ同期テスト（`tools/unity/` や `knowledge/` の un-mutated tree を読むだけで `prefab_sentinel/` のミューテーションを観測できないテスト）は、`@pytest.mark.source_text_invariant` をモジュールスコープで宣言する。これが mutmut のテスト選択（`-m "not source_text_invariant"` 単一フィルタ）からの除外メカニズム。
+- 数値リテラルがデフォルトパラメータとして truncation cap / size limit / threshold を担う場合、`±1` 境界 3 点（cap-1 / cap / cap+1）のテストを `tests/test_default_parameter_boundaries.py` に追加する（issue #179）。テスト本体ではデフォルトを明示的に渡さず、デフォルトリテラルを必ず発火させること（オーバーライドするとミューテーションが境界条件をすり抜ける）。発見手順は `grep -rnE "def .* = [0-9]+" prefab_sentinel/` を再走行し、ファイル冒頭の docstring に列挙されている既知サイトと差分を取って未カバーを追補する。

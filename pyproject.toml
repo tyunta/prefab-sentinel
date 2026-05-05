@@ -109,6 +109,16 @@ do_not_mutate = [
     "*log.critical*",
     '*"""*',
     "*'''*",
+    # Issue #182: three semantically-equivalent mutation patterns over
+    # ``ReferenceResolverService`` internal cache state.  Skipping the
+    # cache fetch (``_text_cache.get`` returning None instead of the
+    # cached value) re-enters the slow path; mutating the GUID-index
+    # cache backing field triggers a fresh ``collect_project_guid_index``
+    # walk; mutating the cache-invalidation helpers leaves stale entries
+    # the next read clears anyway — none of these strengthen the suite.
+    "*_text_cache.get*",
+    "*_guid_map*",
+    "*invalidate_*_cache*",
 ]
 # Test collection in the mutated working directory imports modules from
 # ``scripts/`` and ``tools/``; without ``also_copy`` mutmut runs with only

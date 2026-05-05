@@ -160,6 +160,8 @@ class PrefabVariantService:
 
         payload = [
             {
+                "kind": entry.kind,
+                "target_key": entry.target_key,
                 "line": entry.line,
                 "target_file_id": entry.target_file_id,
                 "target_guid": entry.target_guid,

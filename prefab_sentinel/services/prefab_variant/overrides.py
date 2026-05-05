@@ -40,6 +40,25 @@ class OverrideEntry:
     def target_key(self) -> str:
         return f"{self.target_guid}:{self.target_file_id}"
 
+    @property
+    def kind(self) -> str:
+        """Discriminant string identifying the shape of this override.
+
+        Why a derived property instead of a stored field: the four kinds
+        are deterministic functions of the already-parsed
+        ``property_path`` and ``object_reference`` fields, so a stored
+        discriminant would either duplicate the parser logic or risk
+        drift between the field and the underlying values.
+        """
+        if ARRAY_SIZE_PATH_PATTERN.match(self.property_path):
+            return "array_size"
+        if ARRAY_DATA_PATH_PATTERN.match(self.property_path):
+            return "array_data"
+        ref = self.object_reference
+        if ref and ref != "{fileID: 0}":
+            return "object_reference"
+        return "value"
+
 
 def effective_value(entry: OverrideEntry) -> str:
     """Return the effective value of an override entry.
