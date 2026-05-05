@@ -37,6 +37,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import pytest
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT_PATH = PROJECT_ROOT / "pyproject.toml"
 GITIGNORE_PATH = PROJECT_ROOT / ".gitignore"
@@ -198,12 +200,20 @@ class MutmutConfigShapeTests(unittest.TestCase):
         )
 
 
+@pytest.mark.source_text_invariant
 class QuarterlyTemplateTests(unittest.TestCase):
     """Issue #170 / #149 — the quarterly mutation-report template exists at
     the documented path and exposes the two structural sections the
     audited cadence relies on.  The README mutation operational-cadence
     subsection cross-references the template so a reader can land on the
     quarterly artefact directly from the operational documentation.
+
+    Marked ``source_text_invariant`` because the assertions read
+    ``docs/quarterly_mutmut_report_template.md`` and ``README.md`` from
+    the repository tree — neither is part of the mutmut ``also_copy``
+    surface (which is restricted to importable Python sources), so the
+    class contributes no mutant-detection signal and would otherwise
+    fail collection inside the ``mutants/`` working tree.
     """
 
     def test_quarterly_template_exists_and_has_suppression_impact_section(
@@ -352,6 +362,14 @@ class MutmutSanityInvocationTests(unittest.TestCase):
         # the surface that matters.
         if os.environ.get("MUTANT_UNDER_TEST"):
             self.skipTest("running inside mutmut; subprocess invocation would recurse")
+        # mutmut's clean-test phase invokes pytest from inside the
+        # ``mutants/`` working tree without ``MUTANT_UNDER_TEST`` set.
+        # Detect that case by checking whether this test file is
+        # itself resident inside a ``mutants/`` directory: if so, we
+        # are being collected by the outer mutmut session and the
+        # subprocess would spawn a nested ``mutants/mutants/`` tree.
+        if "mutants" in PROJECT_ROOT.parts:
+            self.skipTest("collected from inside mutants/; subprocess invocation would recurse")
         # Likewise, if the unit suite is being run by ``mutmut run``
         # from outside this test file — i.e. the working tree already
         # contains a ``mutants/`` artifact directory whose mutated
