@@ -42,16 +42,19 @@ class ValidateBridgeResponseTests(unittest.TestCase):
             with self.subTest(field=field):
                 resp = _valid_response()
                 del resp[field]
-                with self.assertRaises(RuntimeError):
+                with self.assertRaises(RuntimeError) as cm:
                     validate_bridge_response(resp)
+                self.assertIn(field, str(cm.exception))
 
     def test_non_bool_success_raises(self) -> None:
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(RuntimeError) as cm:
             validate_bridge_response(_valid_response(success="yes"))  # type: ignore[arg-type]
+        self.assertIn("success", str(cm.exception))
 
     def test_invalid_severity_raises(self) -> None:
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(RuntimeError) as cm:
             validate_bridge_response(_valid_response(severity="fatal"))
+        self.assertIn("severity", str(cm.exception))
 
     def test_all_valid_severities(self) -> None:
         for sev in ("info", "warning", "error", "critical"):
@@ -59,32 +62,37 @@ class ValidateBridgeResponseTests(unittest.TestCase):
                 validate_bridge_response(_valid_response(severity=sev))
 
     def test_empty_code_raises(self) -> None:
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(RuntimeError) as cm:
             validate_bridge_response(_valid_response(code="  "))
+        self.assertIn("code", str(cm.exception))
 
     def test_non_string_code_raises(self) -> None:
         resp = _valid_response()
         resp["code"] = 123
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(RuntimeError) as cm:
             validate_bridge_response(resp)
+        self.assertIn("code", str(cm.exception))
 
     def test_non_string_message_raises(self) -> None:
         resp = _valid_response()
         resp["message"] = 123
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(RuntimeError) as cm:
             validate_bridge_response(resp)
+        self.assertIn("message", str(cm.exception))
 
     def test_non_dict_data_raises(self) -> None:
         resp = _valid_response()
         resp["data"] = "not_a_dict"
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(RuntimeError) as cm:
             validate_bridge_response(resp)
+        self.assertIn("data", str(cm.exception))
 
     def test_non_list_diagnostics_raises(self) -> None:
         resp = _valid_response()
         resp["diagnostics"] = "not_a_list"
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(RuntimeError) as cm:
             validate_bridge_response(resp)
+        self.assertIn("diagnostics", str(cm.exception))
 
 
 class ResolveExpectedAppliedTests(unittest.TestCase):

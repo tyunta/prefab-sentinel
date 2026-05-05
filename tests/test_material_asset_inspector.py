@@ -122,8 +122,10 @@ class TestInspectMaterialAsset(unittest.TestCase):
         self.assertEqual(result.render_queue, 2450)
 
     def test_malformed_raises(self) -> None:
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as cm:
             inspect_material_asset(str(FIXTURES / "malformed.mat"))
+        self.assertIsInstance(cm.exception, ValueError)
+        self.assertTrue(str(cm.exception))
 
 
 # ---------------------------------------------------------------------------

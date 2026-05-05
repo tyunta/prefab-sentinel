@@ -87,66 +87,75 @@ class LoadTimeoutProfileMapTests(unittest.TestCase):
     def test_non_dict_root_raises(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = self._write_profile(tmpdir, [1, 2])
-            with self.assertRaises(ValueError):
+            with self.assertRaises(ValueError) as cm:
                 _load_timeout_profile_map(path)
+        self.assertIn("timeout profile root must be an object", str(cm.exception))
 
     def test_missing_profiles_key_raises(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = self._write_profile(tmpdir, {"other": 1})
-            with self.assertRaises(ValueError):
+            with self.assertRaises(ValueError) as cm:
                 _load_timeout_profile_map(path)
+        self.assertIn("must include profiles list", str(cm.exception))
 
     def test_non_list_profiles_raises(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = self._write_profile(tmpdir, {"profiles": "bad"})
-            with self.assertRaises(ValueError):
+            with self.assertRaises(ValueError) as cm:
                 _load_timeout_profile_map(path)
+        self.assertIn("profiles", str(cm.exception))
 
     def test_non_dict_entry_raises(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = self._write_profile(tmpdir, {"profiles": ["not_dict"]})
-            with self.assertRaises(ValueError):
+            with self.assertRaises(ValueError) as cm:
                 _load_timeout_profile_map(path)
+        self.assertIn("timeout profile entry must be an object", str(cm.exception))
 
     def test_invalid_target_raises(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = self._write_profile(tmpdir, {
                 "profiles": [{"target": "unknown", "recommended_timeout_sec": 100}],
             })
-            with self.assertRaises(ValueError):
+            with self.assertRaises(ValueError) as cm:
                 _load_timeout_profile_map(path)
+        self.assertIn("avatar/world", str(cm.exception))
 
     def test_non_int_timeout_raises(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = self._write_profile(tmpdir, {
                 "profiles": [{"target": "avatar", "recommended_timeout_sec": "abc"}],
             })
-            with self.assertRaises(ValueError):
+            with self.assertRaises(ValueError) as cm:
                 _load_timeout_profile_map(path)
+        self.assertIn("integer", str(cm.exception))
 
     def test_zero_timeout_raises(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = self._write_profile(tmpdir, {
                 "profiles": [{"target": "avatar", "recommended_timeout_sec": 0}],
             })
-            with self.assertRaises(ValueError):
+            with self.assertRaises(ValueError) as cm:
                 _load_timeout_profile_map(path)
+        self.assertIn("greater than 0", str(cm.exception))
 
     def test_negative_timeout_raises(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = self._write_profile(tmpdir, {
                 "profiles": [{"target": "avatar", "recommended_timeout_sec": -10}],
             })
-            with self.assertRaises(ValueError):
+            with self.assertRaises(ValueError) as cm:
                 _load_timeout_profile_map(path)
+        self.assertIn("greater than 0", str(cm.exception))
 
     def test_missing_target_key_raises(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = self._write_profile(tmpdir, {
                 "profiles": [{"recommended_timeout_sec": 100}],
             })
-            with self.assertRaises(ValueError):
+            with self.assertRaises(ValueError) as cm:
                 _load_timeout_profile_map(path)
+        self.assertIn("avatar/world", str(cm.exception))
 
 
 class ResolveCaseUnityTimeoutSecTests(unittest.TestCase):

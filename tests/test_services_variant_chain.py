@@ -24,9 +24,15 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 
 from prefab_sentinel.contracts import Diagnostic, Severity
-from prefab_sentinel.services.prefab_variant import PrefabVariantService
+from prefab_sentinel.services.prefab_variant import PrefabVariantService, chain_values as cv_mod
+from prefab_sentinel.services.prefab_variant.chain import (
+    CHAIN_DEPTH_LIMIT,
+    ChainValue,
+    walk_chain_levels,
+)
 from prefab_sentinel.unity_assets import is_variant_prefab
 from tests.bridge_test_helpers import write_file
 from tests.yaml_helpers import (
@@ -393,8 +399,6 @@ class ChainValuesSourcePrefabImportTests(unittest.TestCase):
     """
 
     def test_module_does_not_import_source_prefab_pattern(self) -> None:
-        from prefab_sentinel.services.prefab_variant import chain_values as cv_mod  # noqa: PLC0415
-
         text = Path(cv_mod.__file__).read_text(encoding="utf-8")
         self.assertNotIn("SOURCE_PREFAB_PATTERN", text)
 
@@ -564,6 +568,250 @@ PrefabInstance:
         chain_paths = [entry["path"] for entry in response.data["chain"]]
         self.assertIn("Assets/Variant.prefab", chain_paths)
         self.assertIn("Assets/Base.prefab", chain_paths)
+
+
+class ChainWalkerDiagnosticTests(unittest.TestCase):
+    """Issue #187 — pin every diagnostic detail string and the depth-limit
+    boundary for ``walk_chain_levels`` so mutations on the literal strings
+    cannot survive.
+    """
+
+    def _relative(self, project_root: Path) -> Any:  # noqa: ANN401
+        def _fn(path: Path) -> str:
+            try:
+                return str(path.relative_to(project_root))
+            except ValueError:
+                return str(path)
+
+        return _fn
+
+    def test_base_level_when_no_source_prefab_is_referenced(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            asset = root / "Assets" / "Base.prefab"
+            asset.parent.mkdir(parents=True)
+            asset.write_text(
+                """%YAML 1.1
+--- !u!1 &100
+GameObject:
+  m_Name: Base
+""",
+                encoding="utf-8",
+            )
+            diags: list[Diagnostic] = []
+            levels = list(
+                walk_chain_levels(
+                    initial_text=asset.read_text(encoding="utf-8"),
+                    initial_path=asset,
+                    guid_map={},
+                    relative_fn=self._relative(root),
+                    diagnostics=diags,
+                )
+            )
+
+        self.assertEqual(1, len(levels))
+        self.assertTrue(levels[0].is_base)
+        self.assertEqual([], diags)
+
+    def test_loop_detected_diagnostic_emitted_on_self_reference(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            asset = root / "Assets" / "SelfRef.prefab"
+            asset.parent.mkdir(parents=True)
+            self_guid = "ab" * 16
+            text = f"""%YAML 1.1
+--- !u!1001 &100
+PrefabInstance:
+  m_SourcePrefab: {{fileID: 100, guid: {self_guid}, type: 3}}
+"""
+            asset.write_text(text, encoding="utf-8")
+            diags: list[Diagnostic] = []
+            # First reference resolves to itself; visited set then catches
+            # the second hop as loop_detected.
+            levels = list(
+                walk_chain_levels(
+                    initial_text=text,
+                    initial_path=asset,
+                    guid_map={self_guid: asset},
+                    relative_fn=self._relative(root),
+                    diagnostics=diags,
+                )
+            )
+
+        details = [d.detail for d in diags]
+        self.assertIn("loop_detected", details)
+        loop_diag = next(d for d in diags if d.detail == "loop_detected")
+        self.assertEqual("prefab_chain", loop_diag.location)
+        self.assertEqual(
+            "prefab source chain references an already visited asset",
+            loop_diag.evidence,
+        )
+        # Walk must terminate: at most one base-or-iterative-step
+        # entry plus the final visited level.
+        self.assertGreaterEqual(2, len(levels))
+
+    def test_missing_asset_diagnostic_carries_guid_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            asset = root / "Assets" / "Missing.prefab"
+            asset.parent.mkdir(parents=True)
+            missing = "de" * 16
+            text = f"""%YAML 1.1
+--- !u!1001 &100
+PrefabInstance:
+  m_SourcePrefab: {{fileID: 100, guid: {missing}, type: 3}}
+"""
+            asset.write_text(text, encoding="utf-8")
+            diags: list[Diagnostic] = []
+            levels = list(
+                walk_chain_levels(
+                    initial_text=text,
+                    initial_path=asset,
+                    guid_map={},
+                    relative_fn=self._relative(root),
+                    diagnostics=diags,
+                )
+            )
+
+        self.assertEqual(1, len(diags))
+        diag = diags[0]
+        self.assertEqual("missing_asset", diag.detail)
+        self.assertEqual("m_SourcePrefab", diag.location)
+        self.assertEqual(missing, diag.evidence)
+        # Walk terminated after the diagnostic emission.
+        self.assertEqual(1, len(levels))
+
+    def test_each_model_suffix_emits_model_file_base_diagnostic(self) -> None:
+        for suffix in (".fbx", ".blend", ".gltf", ".glb", ".obj"):
+            with tempfile.TemporaryDirectory() as raw:
+                root = Path(raw)
+                variant = root / "Assets" / "V.prefab"
+                variant.parent.mkdir(parents=True)
+                model_guid = "01" * 16
+                model_path = root / "Assets" / f"M{suffix}"
+                model_path.write_bytes(b"\xff\xfe binary garbage")
+                variant_text = f"""%YAML 1.1
+--- !u!1001 &100
+PrefabInstance:
+  m_SourcePrefab: {{fileID: 100, guid: {model_guid}, type: 3}}
+"""
+                variant.write_text(variant_text, encoding="utf-8")
+                diags: list[Diagnostic] = []
+                list(
+                    walk_chain_levels(
+                        initial_text=variant_text,
+                        initial_path=variant,
+                        guid_map={model_guid: model_path},
+                        relative_fn=self._relative(root),
+                        diagnostics=diags,
+                    )
+                )
+
+            details = [d.detail for d in diags]
+            self.assertIn(
+                "model_file_base",
+                details,
+                msg=f"{suffix}: expected model_file_base, got {details}",
+            )
+            diag = next(d for d in diags if d.detail == "model_file_base")
+            self.assertIn(f"({suffix})", diag.evidence)
+
+    def test_unreadable_file_diagnostic_for_binary_non_model(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            variant = root / "Assets" / "V.prefab"
+            variant.parent.mkdir(parents=True)
+            base_guid = "02" * 16
+            base_path = root / "Assets" / "Base.prefab"
+            base_path.write_bytes(b"\xff\xfe binary garbage")
+            variant_text = f"""%YAML 1.1
+--- !u!1001 &100
+PrefabInstance:
+  m_SourcePrefab: {{fileID: 100, guid: {base_guid}, type: 3}}
+"""
+            variant.write_text(variant_text, encoding="utf-8")
+            diags: list[Diagnostic] = []
+            list(
+                walk_chain_levels(
+                    initial_text=variant_text,
+                    initial_path=variant,
+                    guid_map={base_guid: base_path},
+                    relative_fn=self._relative(root),
+                    diagnostics=diags,
+                )
+            )
+
+        self.assertEqual(1, len(diags))
+        diag = diags[0]
+        self.assertEqual("unreadable_file", diag.detail)
+        self.assertEqual("file", diag.location)
+        self.assertEqual("unable to decode source prefab", diag.evidence)
+
+    def test_depth_limit_diagnostic_at_threshold(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            assets = root / "Assets"
+            assets.mkdir(parents=True)
+            # Build a chain of CHAIN_DEPTH_LIMIT + 1 prefabs each pointing
+            # at the next; the walker emits depth_limit when it cannot
+            # continue.
+            guids = [f"{i:032x}" for i in range(CHAIN_DEPTH_LIMIT + 2)]
+            paths: list[Path] = []
+            for i in range(CHAIN_DEPTH_LIMIT + 2):
+                p = assets / f"P{i}.prefab"
+                if i == CHAIN_DEPTH_LIMIT + 1:
+                    # Tail base prefab (no source ref).
+                    p.write_text(
+                        """%YAML 1.1
+--- !u!1 &100
+GameObject:
+  m_Name: Tail
+""",
+                        encoding="utf-8",
+                    )
+                else:
+                    next_guid = guids[i + 1]
+                    p.write_text(
+                        f"""%YAML 1.1
+--- !u!1001 &100
+PrefabInstance:
+  m_SourcePrefab: {{fileID: 100, guid: {next_guid}, type: 3}}
+""",
+                        encoding="utf-8",
+                    )
+                paths.append(p)
+            guid_map = dict(zip(guids, paths, strict=True))
+
+            diags: list[Diagnostic] = []
+            list(
+                walk_chain_levels(
+                    initial_text=paths[0].read_text(encoding="utf-8"),
+                    initial_path=paths[0],
+                    guid_map=guid_map,
+                    relative_fn=self._relative(root),
+                    diagnostics=diags,
+                )
+            )
+
+        details = [d.detail for d in diags]
+        self.assertIn("depth_limit", details)
+        diag = next(d for d in diags if d.detail == "depth_limit")
+        self.assertEqual("prefab_chain", diag.location)
+        self.assertIn(str(CHAIN_DEPTH_LIMIT), diag.evidence)
+
+    def test_chain_value_records_origin_path_and_depth(self) -> None:
+        cv = ChainValue(
+            target_file_id="100",
+            property_path="m_Name",
+            value="Hello",
+            origin_path="Assets/Base.prefab",
+            origin_depth=2,
+        )
+        self.assertEqual("100", cv.target_file_id)
+        self.assertEqual("m_Name", cv.property_path)
+        self.assertEqual("Hello", cv.value)
+        self.assertEqual("Assets/Base.prefab", cv.origin_path)
+        self.assertEqual(2, cv.origin_depth)
 
 
 if __name__ == "__main__":

@@ -332,8 +332,9 @@ class TestResolveScriptFields(unittest.TestCase):
             resolve_script_fields("/nonexistent/Test.cs")
 
     def test_resolve_guid_without_project_root_raises(self) -> None:
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as cm:
             resolve_script_fields("aaaa1111bbbb2222cccc3333dddd4444")
+        self.assertIn("project_root", str(cm.exception))
 
     def test_resolve_unknown_guid_raises(self) -> None:
         with tempfile.TemporaryDirectory() as td:

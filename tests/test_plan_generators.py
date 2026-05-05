@@ -174,7 +174,7 @@ class CircleLayoutGeneratorTests(unittest.TestCase):
         self.assertEqual("m_LocalPosition.z", pos_b_op["path"])
 
     def test_invalid_axis_raises(self) -> None:
-        with self.assertRaises(ValueError, msg="axis must be"):
+        with self.assertRaises(ValueError) as cm:
             generate_circle_layout(
                 output_path="Assets/C.prefab",
                 root_name="C",
@@ -182,15 +182,17 @@ class CircleLayoutGeneratorTests(unittest.TestCase):
                 radius=1.0,
                 axis="zx",
             )
+        self.assertIn("axis must be", str(cm.exception))
 
     def test_negative_count_raises(self) -> None:
-        with self.assertRaises(ValueError, msg="count must be"):
+        with self.assertRaises(ValueError) as cm:
             generate_circle_layout(
                 output_path="Assets/C.prefab",
                 root_name="C",
                 count=-1,
                 radius=1.0,
             )
+        self.assertIn("count must be", str(cm.exception))
 
     def test_child_naming_pattern(self) -> None:
         plan = generate_circle_layout(

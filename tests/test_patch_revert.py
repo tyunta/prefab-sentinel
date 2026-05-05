@@ -3,8 +3,11 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from prefab_sentinel.patch_revert import revert_overrides
+from prefab_sentinel.contracts import Severity
+from prefab_sentinel.patch_revert import _collect_referenced_guids, revert_overrides
+from prefab_sentinel.services.prefab_variant.overrides import parse_overrides
 from tests.bridge_test_helpers import write_file
 
 BASE_GUID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -497,6 +500,254 @@ class TestRevertChangeReasonRequired(unittest.TestCase):
 
             self.assertFalse(response.success)
             self.assertEqual("CHANGE_REASON_REQUIRED", response.code)
+
+
+class PatchRevertEnvelopeTests(unittest.TestCase):
+    """Issue #147 — pin every revert envelope code by value, including the
+    write-error and reference-error paths, plus the referenced-guid
+    collector deduplication and lower-casing.
+    """
+
+    def _create_minimal_variant(self, root: Path) -> Path:
+        write_file(
+            root / "Assets" / "Base.prefab",
+            """%YAML 1.1
+--- !u!1 &100100000
+GameObject:
+  m_Name: Base
+""",
+        )
+        write_file(
+            root / "Assets" / "Base.prefab.meta",
+            f"fileFormatVersion: 2\nguid: {BASE_GUID}\n",
+        )
+        variant = root / "Assets" / "Variant.prefab"
+        write_file(
+            variant,
+            f"""%YAML 1.1
+--- !u!1001 &100100000
+PrefabInstance:
+  m_SourcePrefab: {{fileID: 100100000, guid: {BASE_GUID}, type: 3}}
+  m_Modification:
+    m_Modifications:
+    - target: {{fileID: 100100000, guid: {BASE_GUID}, type: 3}}
+      propertyPath: m_Name
+      value: VariantName
+      objectReference: {{fileID: 0}}
+""",
+        )
+        write_file(
+            root / "Assets" / "Variant.prefab.meta",
+            f"fileFormatVersion: 2\nguid: {VARIANT_GUID}\n",
+        )
+        return variant
+
+    def test_target_not_found_envelope(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            (root / "Assets").mkdir(parents=True)
+            response = revert_overrides(
+                variant_path="Assets/Missing.prefab",
+                target_file_id="1",
+                property_path="m_Name",
+                dry_run=True,
+                confirm=False,
+                change_reason=None,
+                project_root=root,
+            )
+        self.assertFalse(response.success)
+        self.assertEqual("REVERT_TARGET_NOT_FOUND", response.code)
+        self.assertEqual(True, response.data["read_only"])
+
+    def test_read_error_envelope(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            assets = root / "Assets"
+            assets.mkdir(parents=True)
+            (assets / "Bin.prefab").write_bytes(b"\xff\xfe garbage")
+            (assets / "Bin.prefab.meta").write_text(
+                f"fileFormatVersion: 2\nguid: {VARIANT_GUID}\n",
+                encoding="utf-8",
+            )
+            response = revert_overrides(
+                variant_path="Assets/Bin.prefab",
+                target_file_id="1",
+                property_path="m_Name",
+                dry_run=True,
+                confirm=False,
+                change_reason=None,
+                project_root=root,
+            )
+        self.assertFalse(response.success)
+        self.assertEqual("REVERT_READ_ERROR", response.code)
+        self.assertEqual(True, response.data["read_only"])
+
+    def test_reference_error_envelope_lists_missing_guids(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            missing = "ff" * 16
+            assets = root / "Assets"
+            assets.mkdir(parents=True)
+            write_file(
+                assets / "OrphanVariant.prefab",
+                f"""%YAML 1.1
+--- !u!1001 &100100000
+PrefabInstance:
+  m_SourcePrefab: {{fileID: 100100000, guid: {missing}, type: 3}}
+  m_Modification:
+    m_Modifications:
+    - target: {{fileID: 100100000, guid: {missing}, type: 3}}
+      propertyPath: m_Name
+      value: V
+      objectReference: {{fileID: 0}}
+""",
+            )
+            write_file(
+                assets / "OrphanVariant.prefab.meta",
+                f"fileFormatVersion: 2\nguid: {VARIANT_GUID}\n",
+            )
+            response = revert_overrides(
+                variant_path="Assets/OrphanVariant.prefab",
+                target_file_id="100100000",
+                property_path="m_Name",
+                dry_run=True,
+                confirm=False,
+                change_reason=None,
+                project_root=root,
+            )
+        self.assertFalse(response.success)
+        self.assertEqual("REF001", response.code)
+        self.assertIn(missing, response.data["missing_guids"])
+        self.assertEqual(True, response.data["read_only"])
+        self.assertEqual(False, response.data["executed"])
+
+    def test_no_match_envelope_warning_severity(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            self._create_minimal_variant(root)
+            response = revert_overrides(
+                variant_path="Assets/Variant.prefab",
+                target_file_id="9999",
+                property_path="m_Name",
+                dry_run=True,
+                confirm=False,
+                change_reason=None,
+                project_root=root,
+            )
+        self.assertFalse(response.success)
+        self.assertEqual("REVERT_NO_MATCH", response.code)
+        self.assertEqual(Severity.WARNING, response.severity)
+        self.assertEqual(0, response.data["match_count"])
+
+    def test_dry_run_envelope_carries_match_count(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            self._create_minimal_variant(root)
+            response = revert_overrides(
+                variant_path="Assets/Variant.prefab",
+                target_file_id="100100000",
+                property_path="m_Name",
+                dry_run=True,
+                confirm=False,
+                change_reason=None,
+                project_root=root,
+            )
+        self.assertTrue(response.success)
+        self.assertEqual("REVERT_DRY_RUN", response.code)
+        self.assertEqual(1, response.data["match_count"])
+        self.assertEqual(1, len(response.data["matches"]))
+
+    def test_not_confirmed_envelope_warning_severity(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            self._create_minimal_variant(root)
+            response = revert_overrides(
+                variant_path="Assets/Variant.prefab",
+                target_file_id="100100000",
+                property_path="m_Name",
+                dry_run=False,
+                confirm=False,
+                change_reason=None,
+                project_root=root,
+            )
+        self.assertFalse(response.success)
+        self.assertEqual("REVERT_NOT_CONFIRMED", response.code)
+        self.assertEqual(Severity.WARNING, response.severity)
+
+    def test_change_reason_required_envelope(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            self._create_minimal_variant(root)
+            response = revert_overrides(
+                variant_path="Assets/Variant.prefab",
+                target_file_id="100100000",
+                property_path="m_Name",
+                dry_run=False,
+                confirm=True,
+                change_reason="",
+                project_root=root,
+            )
+        self.assertFalse(response.success)
+        self.assertEqual("CHANGE_REASON_REQUIRED", response.code)
+        self.assertEqual(True, response.data["read_only"])
+
+    def test_write_error_envelope_when_write_raises_os_error(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            self._create_minimal_variant(root)
+            with patch.object(Path, "write_text", side_effect=OSError("disk full")):
+                response = revert_overrides(
+                    variant_path="Assets/Variant.prefab",
+                    target_file_id="100100000",
+                    property_path="m_Name",
+                    dry_run=False,
+                    confirm=True,
+                    change_reason="test",
+                    project_root=root,
+                )
+        self.assertFalse(response.success)
+        self.assertEqual("REVERT_WRITE_ERROR", response.code)
+        self.assertEqual(False, response.data["executed"])
+
+    def test_applied_envelope_full_success(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            self._create_minimal_variant(root)
+            response = revert_overrides(
+                variant_path="Assets/Variant.prefab",
+                target_file_id="100100000",
+                property_path="m_Name",
+                dry_run=False,
+                confirm=True,
+                change_reason="full success path",
+                project_root=root,
+            )
+        self.assertTrue(response.success)
+        self.assertEqual("REVERT_APPLIED", response.code)
+        self.assertEqual(1, response.data["match_count"])
+        self.assertEqual("full success path", response.data["change_reason"])
+        self.assertEqual(False, response.data["read_only"])
+        self.assertEqual(True, response.data["executed"])
+
+    def test_referenced_guid_collector_deduplicates_and_lower_cases(self) -> None:
+        upper = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        lower = upper.lower()
+        text = f"""m_SourcePrefab: {{fileID: 100, guid: {upper}, type: 3}}
+  m_Modification:
+    m_Modifications:
+    - target: {{fileID: 1, guid: {upper}, type: 3}}
+      propertyPath: a
+      value: V
+      objectReference: {{fileID: 0}}
+    - target: {{fileID: 2, guid: {upper}, type: 3}}
+      propertyPath: b
+      value: V
+      objectReference: {{fileID: 0}}
+"""
+        entries = parse_overrides(text)
+        guids = _collect_referenced_guids(text, entries)
+        # Single deduplicated, lower-cased entry.
+        self.assertEqual([lower], guids)
 
 
 if __name__ == "__main__":

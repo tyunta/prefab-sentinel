@@ -273,11 +273,13 @@ class TestSymbolTools(unittest.TestCase):
     def test_get_unity_symbols_file_not_found(self) -> None:
         from mcp.server.fastmcp.exceptions import ToolError
 
-        with self.assertRaises(ToolError):
+        with self.assertRaises(ToolError) as cm:
             _run(self.server.call_tool(
                 "get_unity_symbols",
                 {"asset_path": "/nonexistent/test.prefab"},
             ))
+        self.assertIsInstance(cm.exception, ToolError)
+        self.assertTrue(str(cm.exception))
 
 
 class TestGetUnitySymbolsDetail(unittest.TestCase):

@@ -223,8 +223,9 @@ class PatchExecutorCoverageTests(unittest.TestCase):
         self.assertEqual(2, payload["a"])
 
     def test_set_with_missing_key_raises_keyerror(self) -> None:
-        with self.assertRaises(KeyError):
+        with self.assertRaises(KeyError) as cm:
             apply_op({}, {"op": "set", "path": "a", "value": 2})
+        self.assertEqual(("a",), cm.exception.args)
 
     def test_array_size_set_grows_then_shrinks(self) -> None:
         payload = {"items": [1, 2]}
@@ -237,14 +238,15 @@ class PatchExecutorCoverageTests(unittest.TestCase):
         self.assertEqual([1, 2, None, None], payload["items"])
 
     def test_array_size_set_negative_raises_valueerror(self) -> None:
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as cm:
             apply_op(
                 {"items": [1, 2]},
                 {"op": "set", "path": "items.Array.size", "value": -1},
             )
+        self.assertIn(">= 0", str(cm.exception))
 
     def test_insert_array_element_out_of_bounds_raises_indexerror(self) -> None:
-        with self.assertRaises(IndexError):
+        with self.assertRaises(IndexError) as cm:
             apply_op(
                 {"items": [1]},
                 {
@@ -254,10 +256,12 @@ class PatchExecutorCoverageTests(unittest.TestCase):
                     "value": 0,
                 },
             )
+        self.assertIn("out of bounds", str(cm.exception))
 
     def test_unsupported_op_raises_valueerror(self) -> None:
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as cm:
             apply_op({}, {"op": "WhoKnows"})
+        self.assertIn("WhoKnows", str(cm.exception))
 
 
 class PrefabCreateStructureCoverageTests(unittest.TestCase):

@@ -260,8 +260,10 @@ class TestCopyAsset(unittest.TestCase):
             shutil.copy(_FIXTURES / "standard_textured.mat", src)
             dest = Path(tmpdir) / "copied.mat"
 
-            with self.assertRaises(TypeError):
+            with self.assertRaises(TypeError) as cm:
                 copy_asset(str(src), str(dest), True)
+            # Pin message to the keyword-only argument signature.
+            self.assertIn("positional", str(cm.exception))
 
     def test_should_set_m_name_unchanged_when_dest_stem_matches(self) -> None:
         """Regression: F-003 — dest stem equals existing m_Name."""
@@ -394,8 +396,9 @@ class TestRenameAsset(unittest.TestCase):
             src = Path(tmpdir) / "original.mat"
             shutil.copy(_FIXTURES / "standard_textured.mat", src)
 
-            with self.assertRaises(TypeError):
+            with self.assertRaises(TypeError) as cm:
                 rename_asset(str(src), "renamed.mat", True)
+            self.assertIn("positional", str(cm.exception))
 
     def test_should_set_m_name_unchanged_when_rename_stem_matches(self) -> None:
         """Regression: F-003 — m_name_unchanged when m_Name already matches new stem."""

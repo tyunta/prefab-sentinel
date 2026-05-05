@@ -12,6 +12,11 @@ Issue #147 / #143 acceptance:
   and the dry-run branch carrying ``executed=False``.
 * Patch revert side-effects — pinned by ``match_count`` plus the post-
   revert write count (file mtime increases / file body shrinks).
+
+The apply-op and revert envelope rows live next to their target modules
+in ``tests/test_d1_branch_coverage.py`` (``PatchExecutorOpTests``) and
+``tests/test_patch_revert.py`` (``PatchRevertEnvelopeTests``); this file
+holds the dispatch-level envelope rows in ``PatchDispatchEnvelopeTests``.
 """
 
 from __future__ import annotations
@@ -22,9 +27,20 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from prefab_sentinel.contracts import Diagnostic, Severity, success_response
 from prefab_sentinel.patch_revert import revert_overrides
 from prefab_sentinel.services.serialized_object import SerializedObjectService
-from prefab_sentinel.services.serialized_object.patch_dispatch import dry_run_patch
+from prefab_sentinel.services.serialized_object.patch_dispatch import (
+    _dry_run_json_ops,
+    _validate_target_and_ops,
+    apply_and_save,
+    dry_run_patch,
+    prevalidate_property_paths,
+)
+from prefab_sentinel.services.serialized_object.patch_executor import apply_op
+from prefab_sentinel.services.serialized_object.patch_json_apply import (
+    apply_json_target,
+)
 from tests.bridge_test_helpers import write_file
 
 BASE_GUID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -175,13 +191,6 @@ class PatchExecutorParityTests(unittest.TestCase):
     """
 
     def test_dry_run_vs_apply_structural_parity(self) -> None:
-        from prefab_sentinel.services.serialized_object.patch_executor import (  # noqa: PLC0415
-            apply_op,
-        )
-        from prefab_sentinel.services.serialized_object.patch_json_apply import (  # noqa: PLC0415
-            apply_json_target,
-        )
-
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             target = root / "data.json"
@@ -295,6 +304,198 @@ PrefabInstance:
         # override block disappears from the YAML text).
         self.assertNotEqual(original_text, new_text)
         self.assertNotIn("propertyPath: m_Name", new_text)
+
+
+class PatchDispatchEnvelopeTests(unittest.TestCase):
+    """Issue #147 — pin every dispatch envelope code by value, including the
+    prevalidator op-index, target-and-ops, JSON dry-run schema/warning,
+    unsupported-target, Unity-bridge routing, and dry-run-clean apply paths.
+    """
+
+    def _service(self, root: Path) -> SerializedObjectService:
+        return SerializedObjectService(project_root=root)
+
+    # --- prevalidate_property_paths ----------------------------------------
+
+    def test_prevalidator_returns_envelope_for_first_invalid_path(self) -> None:
+        ops = [
+            {"op": "set", "path": "..bad-path", "value": 1},
+            {"op": "set", "path": "second.path", "value": 2},
+        ]
+        response = prevalidate_property_paths("Assets/T.json", ops)
+        self.assertIsNotNone(response)
+        self.assertFalse(response.success)
+        # Op index zero, op count two, target carried verbatim.
+        self.assertEqual(0, response.data["op_index"])
+        self.assertEqual(2, response.data["op_count"])
+        self.assertEqual("Assets/T.json", response.data["target"])
+        self.assertEqual(True, response.data["read_only"])
+
+    def test_prevalidator_returns_envelope_for_second_invalid_path(self) -> None:
+        ops = [
+            {"op": "set", "path": "good.path", "value": 1},
+            {"op": "set", "path": "..bad-path", "value": 2},
+        ]
+        response = prevalidate_property_paths("Assets/T.json", ops)
+        self.assertIsNotNone(response)
+        self.assertEqual(1, response.data["op_index"])
+
+    def test_prevalidator_skips_ops_without_path(self) -> None:
+        # No ``path`` field => skipped; downstream validators take over.
+        response = prevalidate_property_paths(
+            "Assets/T.json",
+            [{"op": "set"}, {"op": "set", "path": ""}],
+        )
+        self.assertIsNone(response)
+
+    # --- _validate_target_and_ops ------------------------------------------
+
+    def test_target_validator_rejects_empty_target(self) -> None:
+        response = _validate_target_and_ops("", [{"op": "set"}])
+        self.assertIsNotNone(response)
+        self.assertEqual("SER_PLAN_INVALID", response.code)
+        diags = response.diagnostics
+        self.assertTrue(diags)
+        self.assertEqual("schema_error", diags[0].detail)
+        self.assertEqual("target is required", diags[0].evidence)
+
+    def test_target_validator_rejects_empty_ops(self) -> None:
+        response = _validate_target_and_ops("Assets/T.json", [])
+        self.assertIsNotNone(response)
+        self.assertEqual("SER_PLAN_INVALID", response.code)
+        self.assertEqual(
+            "ops must contain at least one operation",
+            response.diagnostics[0].evidence,
+        )
+
+    # --- _dry_run_json_ops -------------------------------------------------
+
+    def test_dry_run_json_ops_emits_schema_error_for_non_dict_op(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            target = root / "data.json"
+            target.write_text(json.dumps({"a": 1}), encoding="utf-8")
+            svc = self._service(root)
+            response = _dry_run_json_ops(svc, str(target), ["not-a-dict"])  # type: ignore[list-item]
+        self.assertFalse(response.success)
+        self.assertEqual("SER_PLAN_INVALID", response.code)
+        details = [d.detail for d in response.diagnostics]
+        self.assertIn("schema_error", details)
+
+    def test_dry_run_json_ops_emits_warning_envelope_when_soft_warnings_present(
+        self,
+    ) -> None:
+        """Soft-warning path: ``soft_warnings_for_preview`` returns a non-empty
+        list, so ``_dry_run_json_ops`` returns a success-but-warning envelope
+        with ``applied=0`` and ``read_only=True``.
+        """
+        soft = [
+            Diagnostic(
+                path="Assets/T.json",
+                location="C:p",
+                detail="handle_in_value",
+                evidence="raw bridge handle leaked into value",
+            )
+        ]
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            target = root / "data.json"
+            target.write_text(json.dumps({"a": 1}), encoding="utf-8")
+            svc = self._service(root)
+            ops = [{"op": "set", "component": "C", "path": "a", "value": 9}]
+            with patch(
+                "prefab_sentinel.services.serialized_object.patch_dispatch.soft_warnings_for_preview",
+                return_value=soft,
+            ):
+                response = _dry_run_json_ops(svc, str(target), ops)
+        self.assertTrue(response.success)
+        self.assertEqual("SER_DRY_RUN_OK", response.code)
+        self.assertEqual(Severity.WARNING, response.severity)
+        self.assertEqual(0, response.data["applied"])
+        self.assertEqual(True, response.data["read_only"])
+
+    # --- apply_and_save propagation, unsupported, bridge, applied ----------
+
+    def test_apply_and_save_propagates_dry_run_failure_verbatim(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            target = root / "data.json"
+            target.write_text(json.dumps({"a": 1}), encoding="utf-8")
+            svc = self._service(root)
+            response = apply_and_save(
+                svc, str(target), [{"op": "set", "path": "..bad", "value": 1}]
+            )
+        self.assertFalse(response.success)
+        # Prevalidator failure surfaces with executed=False / read_only=False.
+        self.assertEqual(False, response.data["executed"])
+        self.assertEqual(False, response.data["read_only"])
+
+    def test_apply_and_save_returns_unsupported_target_envelope(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            target = root / "data.txt"
+            target.write_text("not handled", encoding="utf-8")
+            svc = self._service(root)
+            # Dry-run must succeed before the apply path can reach the
+            # unsupported-target branch; provide a component so validate_op
+            # accepts the JSON-route op.
+            response = apply_and_save(
+                svc,
+                str(target),
+                [{"op": "set", "component": "C", "path": "x", "value": 1}],
+            )
+        self.assertFalse(response.success)
+        self.assertEqual("SER_UNSUPPORTED_TARGET", response.code)
+        self.assertEqual(False, response.data["executed"])
+        self.assertEqual(False, response.data["read_only"])
+
+    def test_apply_and_save_routes_unity_bridge_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            target = root / "Assets" / "Mat.mat"
+            target.parent.mkdir(parents=True)
+            target.write_text(
+                "%YAML 1.1\n--- !u!21 &1\nMaterial:\n  m_Name: M\n",
+                encoding="utf-8",
+            )
+            svc = self._service(root)
+            with patch(
+                "prefab_sentinel.services.serialized_object.patch_dispatch.resource_bridge.apply_with_unity_bridge",
+                return_value=success_response("BRIDGE_OK", "applied"),
+            ) as mock_bridge, patch(
+                "prefab_sentinel.services.serialized_object.patch_dispatch.validate_asset_open_ops",
+                return_value=([], []),
+            ):
+                response = apply_and_save(
+                    svc, str(target), [{"op": "set", "path": "x", "value": 1}]
+                )
+        self.assertTrue(response.success)
+        self.assertEqual(1, mock_bridge.call_count)
+        # Bridge is called once with the resolved target_path and the
+        # original ops list.
+        kwargs = mock_bridge.call_args.kwargs
+        self.assertEqual(target, kwargs["target_path"])
+        self.assertEqual(
+            [{"op": "set", "path": "x", "value": 1}], kwargs["ops"]
+        )
+
+    def test_apply_and_save_returns_applied_envelope_on_dry_run_clean_json(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            target = root / "data.json"
+            target.write_text(json.dumps({"a": 1}), encoding="utf-8")
+            svc = self._service(root)
+            # JSON-target validate_op requires the ``component`` field.
+            ops = [{"op": "set", "component": "C", "path": "a", "value": 9}]
+            response = apply_and_save(svc, str(target), ops)
+        self.assertTrue(response.success, response)
+        self.assertEqual("SER_APPLY_OK", response.code)
+        self.assertEqual(1, response.data["op_count"])
+        self.assertEqual(1, response.data["applied"])
+        self.assertEqual(False, response.data["read_only"])
+        self.assertEqual(True, response.data["executed"])
 
 
 if __name__ == "__main__":

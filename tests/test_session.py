@@ -555,16 +555,20 @@ class TestActivate(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch.dict(os.environ, {UNITY_PROJECT_PATH_ENV: tmpdir}):
                 session = ProjectSession()
-                with self.assertRaises(InvalidProjectRootError):
+                with self.assertRaises(InvalidProjectRootError) as cm:
                     asyncio.run(session.activate("Assets/Scope"))
+                self.assertIsInstance(cm.exception, InvalidProjectRootError)
+                self.assertTrue(str(cm.exception))
 
     def test_activate_explicit_root_invalid_path_raises(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             session = ProjectSession()
-            with self.assertRaises(InvalidProjectRootError):
+            with self.assertRaises(InvalidProjectRootError) as cm:
                 asyncio.run(
                     session.activate("Assets/Scope", project_root=tmpdir)
                 )
+            self.assertIsInstance(cm.exception, InvalidProjectRootError)
+            self.assertTrue(str(cm.exception))
 
     @patch("prefab_sentinel.session_cache.build_script_name_map")
     @patch("prefab_sentinel.session_cache.Phase1Orchestrator")

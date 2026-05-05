@@ -29,13 +29,15 @@ class PatchPlanBuilderTests(unittest.TestCase):
     def test_duplicate_resource_id_raises(self) -> None:
         b = PatchPlanBuilder()
         b.add_resource(id="r", path="Assets/A.prefab")
-        with self.assertRaises(ValueError, msg="Duplicate resource id"):
+        with self.assertRaises(ValueError) as cm:
             b.add_resource(id="r", path="Assets/B.prefab")
+        self.assertIn("Duplicate resource id", str(cm.exception))
 
     def test_no_resource_raises_on_op(self) -> None:
         b = PatchPlanBuilder()
-        with self.assertRaises(ValueError, msg="No active resource"):
+        with self.assertRaises(ValueError) as cm:
             b.save()
+        self.assertIn("No active resource", str(cm.exception))
 
     def test_fluent_chaining(self) -> None:
         plan = (
