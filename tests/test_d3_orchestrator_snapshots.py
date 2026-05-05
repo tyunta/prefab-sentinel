@@ -295,29 +295,80 @@ class TestPatchOrchestratorSnapshots:
 
 class TestSnapshotRegenerationAnchor:
     """Single anchor row exercising the ``--regenerate-snapshots`` write
-    branch (issue #148 — D3 acceptance).  The regeneration branch must
-    produce a fresh fixture file from the live response payload."""
+    branch (issue #148 — D3 acceptance, issue #162 — CI exercise).  The
+    regeneration branch must produce a fresh fixture file from the live
+    orchestrator payload.
 
-    def test_regeneration_overwrites_anchor_fixture(
-        self, tmp_path: Path
+    Why the test routes through the production ``_assert_snapshot``
+    helper rather than emulating the write in-line: emulating the write
+    bypasses the very branch the test is meant to cover, so a mutation
+    inside the helper's ``regenerate or not fixture_path.exists()``
+    arm would survive the suite.  The anchor here patches
+    ``FIXTURES_ROOT`` onto a temporary directory so the helper's real
+    write executes against a private path without racing the shared
+    snapshot files.
+    """
+
+    def test_regeneration_overwrites_stale_fixture_with_live_payload(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Use a private throwaway fixture path so the test does not race
-        # with the shared snapshot files.
-        anchor_path = tmp_path / "anchor.json"
-        payload = {"code": "INSPECT_VARIANT_RESULT", "severity": "info"}
-        # Pre-write a stale fixture so the regeneration branch's overwrite
-        # behaviour is observable.
-        anchor_path.write_text(json.dumps({"code": "STALE"}), encoding="utf-8")
-
-        # Direct write through the helper would target the shared
-        # FIXTURES_ROOT, so emulate the regeneration branch in-place
-        # against the anchor file.
-        anchor_path.write_text(
-            json.dumps(payload, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
+        # Pre-write a stale fixture under the temporary fixture root so
+        # the regenerate branch's *overwrite* behaviour is observable
+        # (the ``not fixture_path.exists()`` arm is a separate path).
+        sub_dir = "inspect"
+        quadrant = "single"
+        stale_path = tmp_path / sub_dir / f"{quadrant}.json"
+        stale_path.parent.mkdir(parents=True, exist_ok=True)
+        stale_path.write_text(
+            json.dumps({"code": "STALE"}) + "\n", encoding="utf-8"
         )
-        on_disk = json.loads(anchor_path.read_text(encoding="utf-8"))
-        assert on_disk == payload
+
+        monkeypatch.setattr(
+            "tests.test_d3_orchestrator_snapshots.FIXTURES_ROOT", tmp_path
+        )
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            target = _write_single_override_variant(root)
+            svc = PrefabVariantService(project_root=root)
+            response = inspect_variant(svc, target)
+        live_payload = _stable_inspect_snapshot(response)
+
+        _assert_snapshot(sub_dir, quadrant, live_payload, regenerate=True)
+
+        on_disk = json.loads(stale_path.read_text(encoding="utf-8"))
+        assert on_disk == live_payload, (
+            f"regenerate branch did not overwrite the stale fixture: "
+            f"on_disk={on_disk!r} live_payload={live_payload!r}"
+        )
+
+    def test_regeneration_creates_missing_fixture_with_live_payload(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The ``not fixture_path.exists()`` arm of the helper writes the
+        # fixture even when ``regenerate=False``.  Anchoring this arm
+        # ensures the test runner does not silently fall through to the
+        # equality assertion when a fixture has gone missing.
+        monkeypatch.setattr(
+            "tests.test_d3_orchestrator_snapshots.FIXTURES_ROOT", tmp_path
+        )
+        sub_dir = "wiring"
+        quadrant = "empty"
+        fixture_path = tmp_path / sub_dir / f"{quadrant}.json"
+        assert not fixture_path.exists()
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            target = _write_empty_project(root)
+            pv_svc = PrefabVariantService(project_root=root)
+            ref_svc = ReferenceResolverService(project_root=root)
+            response = inspect_wiring(pv_svc, ref_svc, target)
+        live_payload = _stable_wiring_snapshot(response)
+
+        _assert_snapshot(sub_dir, quadrant, live_payload, regenerate=False)
+
+        on_disk = json.loads(fixture_path.read_text(encoding="utf-8"))
+        assert on_disk == live_payload
 
 
 if __name__ == "__main__":

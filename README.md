@@ -421,6 +421,30 @@ Base/Variant/Sceneインスタンスを横断して実効値とoverrideを可視
 - 自動修復不可の場合は`decision_required`として返却
 - 自動修復対象は`safe_fix`として提案と根拠を返却
 
+### `list_overrides` レスポンス形状（issue #172）
+
+`list_overrides` の `data.overrides[]` 各エントリは次の 8 キーを必ず持つ:
+
+| キー | 値 |
+|---|---|
+| `kind` | 4 値の判別文字列 (`array_size` / `array_data` / `object_reference` / `value`) |
+| `target_key` | `<guid>:<fileID>` 複合識別子 |
+| `line` | YAML 中の `- target:` 行番号（1 始まり） |
+| `target_file_id` | override 対象の fileID 文字列 |
+| `target_guid` | override 対象の正規化済み GUID |
+| `property_path` | Unity の SerializedProperty パス |
+| `value` | 平文 value フィールド |
+| `object_reference` | objectReference フィールド (`{fileID: 0}` を含む) |
+
+`kind` の決定規則:
+
+- `array_size`: `property_path` が `*.Array.size` に一致するとき。
+- `array_data`: `property_path` が `*.Array.data[<index>]` に一致するとき。
+- `object_reference`: `object_reference` が空でも `{fileID: 0}` でもないとき。
+- `value`: 上記以外（`object_reference` が空または `{fileID: 0}`、もしくは `objectReference` フィールドが無いケースを含む）。
+
+`target_key` は `OverrideEntry.target_key` プロパティと同一値で、`target_guid` と `target_file_id` の `<guid>:<fileID>` 連結文字列。下流コンシューマは個別フィールドを再連結せず `target_key` を識別子として使う。
+
 ---
 
 ### 4.3 reference-resolver
@@ -843,6 +867,8 @@ uv run python -m pytest tests/ -v
 
 ### テストファイル配置
 
+D3 オーケストレータのスナップショット試験（issue #148）はファイル名 `tests/test_d3_orchestrator_snapshots.py` を正本とする（issue #161）。`tests/test_orchestrator.py` と `tests/test_orchestrator_patch.py` は既に高ボリュームの MagicMock 駆動テストおよび missing-GUID コントラクトテストで占有されており、スナップショットテスト一式を移植する利得がない。新しい inspect / wiring / patch オーケストレータのスナップショットを追加する場合は同ファイルへ追記する。
+
 | ソースモジュール | テストファイル |
 |---|---|
 | `prefab_sentinel/unity_assets.py` | `tests/test_unity_assets.py` |
@@ -921,6 +947,25 @@ uv run mutmut results
 - trivial-class パターンは `[tool.mutmut].do_not_mutate` に追加する（証跡をコミットメッセージに残す）。
 - critical-class survivors はテストでキルする（このテストは通常 PR 単位で追加され、四半期走行の入力になる）。
 - `[tool.mutmut].do_not_mutate` の追加と削除は四半期レポートに before/after の survived 件数差分を記録する（issue #149/#170 option A）。
+
+#### スコア集計（`scripts/mutmut_score_report.py`）
+
+四半期走行直後の `mutmut results` 出力をモジュール単位で集計するための専用スクリプト（issue #169）。`mutmut run --max-children 180` 完了後に走らせ、Markdown 表 / CSV / JSON のいずれかでスコアを出力する。
+
+```bash
+# 監査対象 6 モジュールのみで集計し Markdown 表を出力
+uv run python scripts/mutmut_score_report.py --audited-only --format markdown
+
+# 1 モジュールを掘り下げる
+uv run python scripts/mutmut_score_report.py \
+  --module prefab_sentinel.services.reference_resolver \
+  --format json
+
+# 四半期推移の累積追記用
+uv run python scripts/mutmut_score_report.py --format csv >> reports/mutmut_history.csv
+```
+
+CSV ヘッダには走行日 (`run_date`) / mutmut version / `parallelism` が含まれ、四半期推移を時系列で蓄積する設計。スコアは `(killed + timeout) / (killed + survived + timeout)` で計算する（`not_checked` は分母から除外する）。`mutmut results` 自体が非ゼロ終了した場合、スクリプトは exit code 4（`MUTMUT_SUBPROCESS_FAILURE_EXIT_CODE`）で停止し、stderr をそのまま透過する。
 
 #### テスト書き方ガイド (envelope value-pinning)
 
