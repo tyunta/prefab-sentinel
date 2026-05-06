@@ -1,6 +1,8 @@
 # Local environment
 .venv/
 .serena/
+.claude/
+.superpowers/
 __pycache__/
 *.pyc
 
@@ -8,8 +10,12 @@ __pycache__/
 sample/
 
 # Generated reports/artifacts
+report/
 reports/
 report-*.md
+
+# Out-of-repo planning/spec drafts (local-only)
+docs/superpowers/
 
 # Mutation-testing artifact directory (issue #166): mutmut copies the
 # audited tree into this directory at run start; it must never appear in
