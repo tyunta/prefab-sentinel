@@ -750,5 +750,50 @@ PrefabInstance:
         self.assertEqual([lower], guids)
 
 
+class PatchRevertAssertStrengthening(unittest.TestCase):
+    """Issue #147 — value-pinned post-revert side-effect assertions on the
+    confirm path.  Pins:
+    * ``REVERT_APPLIED`` envelope code with ``executed=True``;
+    * ``match_count`` equals the input matched-override count;
+    * file mtime advances (the file was actually written);
+    * the matched override block is absent from the post-revert text.
+    """
+
+    def test_revert_confirm_writes_file_and_pins_match_count(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_variant_project(root)
+            variant_path = root / "Assets" / "Variant.prefab"
+            original_text = variant_path.read_text(encoding="utf-8")
+            original_mtime = variant_path.stat().st_mtime_ns
+            # Ensure the next write produces a strictly different mtime.
+            import os
+            future = original_mtime + 10_000_000_000  # +10 seconds
+            os.utime(variant_path, ns=(future, future))
+            baseline_mtime = variant_path.stat().st_mtime_ns
+
+            response = revert_overrides(
+                variant_path="Assets/Variant.prefab",
+                target_file_id="3430728864525902586",
+                property_path="m_Materials.Array.data[0]",
+                dry_run=False,
+                confirm=True,
+                change_reason="strengthening row",
+                project_root=root,
+            )
+            new_text = variant_path.read_text(encoding="utf-8")
+            new_mtime = variant_path.stat().st_mtime_ns
+
+        self.assertTrue(response.success)
+        self.assertEqual("REVERT_APPLIED", response.code)
+        self.assertEqual(1, response.data["match_count"])
+        self.assertEqual(True, response.data["executed"])
+        # mtime advanced — write happened.
+        self.assertNotEqual(baseline_mtime, new_mtime)
+        # The matched override line is absent from the post-revert content.
+        self.assertIn("m_Materials.Array.data[0]", original_text)
+        self.assertNotIn("m_Materials.Array.data[0]", new_text)
+
+
 if __name__ == "__main__":
     unittest.main()

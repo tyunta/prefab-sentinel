@@ -230,7 +230,7 @@ public void SubmitUrl(VRCUrl pcUrl, ...)
 4. GameObject 階層を構築（`Create Empty Child` + `editor_rename`）
 5. `editor_add_component` で UdonSharp コンポーネント追加（backing UdonBehaviour 自動生成）
 6. `editor_set_property` でフィールド配線（`object_reference` にヒエラルキーパス指定）
-7. `editor_save_as_prefab` で Prefab 化
+7. `editor_safe_save_prefab` で Prefab 化
 8. `inspect_wiring` + `validate_refs` で検証
 
 ### フォールバック: 手動 wiring パターン (2026-04-30)
@@ -249,13 +249,14 @@ public void SubmitUrl(VRCUrl pcUrl, ...)
 
 ### `OnBeforeSerialize` ArgumentNullException は非致命扱い (2026-05-03)
 
-- 症状: `editor_save_as_prefab` 実行中に `ArgumentNullException` が console に出る。stack trace の先頭に `UdonSharpBehaviour.OnBeforeSerialize`（または `UdonSharp.UdonSharpBehaviour.OnBeforeSerialize` を含む派生型）が現れる。
+- 症状: `editor_safe_save_prefab` 実行中に `ArgumentNullException` が console に出る。stack trace の先頭に `UdonSharpBehaviour.OnBeforeSerialize`（または `UdonSharp.UdonSharpBehaviour.OnBeforeSerialize` を含む派生型）が現れる。
 - 原因: UdonSharp 1.x が proxy MonoBehaviour を Unity の serialization callback に晒しており、未リンクのフィールドや stripped instance に対して NRE を投げる。SaveAsPrefabAsset 自体は成功するため、結果アセットには影響しない。
 - 分類: PrefabSentinel の Editor Bridge は label `udonsharp_obs_nre` でこのパターンを **non-fatal** として登録（issue #117、`tools/unity/PrefabSentinel.UnityEditorControlBridge.cs` の `NonFatalExceptionClassifier`）。
 - 観測:
-  - `editor_save_as_prefab` / `editor_instantiate_to_scene` は `success=true` のまま `data.warnings.udonsharp_obs_nre_count` と `data.warnings.nonfatal_patterns` に件数とラベルを返す。
+  - `editor_safe_save_prefab` / `editor_instantiate_to_scene` は `success=true` のまま `data.warnings.udonsharp_obs_nre_count` と `data.warnings.nonfatal_patterns` に件数とラベルを返す。
   - `editor_console` の `classification_filter="non_fatal"` でこのエントリだけを抽出可能。`fatal` で除外可能。
-- 推奨フロー: 保存自体は止めない。ノイズが多い場合のみ proxy を一旦 unparent して保存し戻す、または当該 UdonBehaviour 側の `OnBeforeSerialize` を空実装で override する。
+- 推奨フロー: 保存自体は止めない。ノイズが多い場合のみ proxy を一旦 unparent して保存し戻す。
+- **`OnBeforeSerialize` を override しないこと** (issue #200): UdonSharp 1.x の `UdonSharpBehaviour` 基底クラスは `ISerializationCallbackReceiver.OnBeforeSerialize` を **明示的インターフェース実装** (explicit interface implementation) として持つため、サブクラスから `public override void OnBeforeSerialize()` を書こうとしても U# コンパイラが拒否する。空実装でノイズを抑える対処は不可能。代わりに console 側で `classification_filter="non_fatal"` などで除外する。
 
 ### DualButtonSwitcher パターン (2026-03-27)
 - 2ボタン + 3状態（None/A/B）のグローバル切り替えシステム
@@ -296,7 +297,7 @@ public void SubmitUrl(VRCUrl pcUrl, ...)
 - **object_reference の `::ComponentType` 記法**: `editor_set_component_fields` では UdonSharp コンポーネントに対して `::DoneruEventStore` サフィックスが解決できない。パスのみ（`/Path/To/Object`）で解決する
 - **`editor_batch_add_component`**: 同種コンポーネント（Text x5）を一括追加可能。個別呼び出しの 5 倍速い
 - **`inspect_wiring` の `is_udon_sharp` フラグ**: コンポーネント再作成後に `true` を確認し、UdonBehaviour として正しく認識されていることを検証できた
-- **Prefab Variant 問題**: 同一パスに再度 `editor_save_as_prefab` すると Variant として保存される。初回保存で生成された Prefab がベースになるため
+- **Prefab Variant 問題**: 同一パスに再度 `editor_safe_save_prefab` すると Variant として保存される。初回保存で生成された Prefab がベースになるため
 - **Legacy Text → TMPro 移行**: フィールド型を `Text` → `TextMeshProUGUI` に変更後、Prefab 上の旧コンポーネント削除 → TMPro 追加 → DoneruDisplay 再作成 → 再配線が必要。コンポーネント型が変わるとフィールド参照が切れるため、コンポーネントごと再作成になる
 - **UI レイアウト**: RectTransform の `m_SizeDelta`, `m_AnchoredPosition`, `m_LocalScale` を `editor_batch_set_property` で一括設定可能。World Space Canvas は `m_LocalScale` = 0.001 が実用的（Canvas 座標 800x500 → 世界座標 0.8m x 0.5m）
 
@@ -318,7 +319,7 @@ NadeVision 動画プレイヤーパッケージにマルチユーザ同期機能
 
 ### v0.5.85 フルワークフロー検証 (2026-03-27)
 - `editor_set_property` で UdonSharp フィールド (`targetObject`) への ObjectReference 配線に成功
-- `editor_save_as_prefab` で `PrefabUtility.SaveAsPrefabAsset` による正規 Prefab 化に成功
+- `editor_safe_save_prefab` で `PrefabUtility.SaveAsPrefabAsset` による正規 Prefab 化に成功
 - `editor_add_component` で `UnityEngine.BoxCollider` は完全修飾名が必要（`BoxCollider` だけだと `TYPE_NOT_FOUND`）
 - `editor_execute_menu_item` で `GameObject/Create Empty Child` を使えば選択中の GO の子として作成可能
 - 全工程（スクリプト作成 → プログラムアセット → 階層構築 → コンポーネント追加 → 配線 → Prefab 化 → 検証）が MCP のみで完結

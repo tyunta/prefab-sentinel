@@ -264,6 +264,125 @@ class PatchExecutorCoverageTests(unittest.TestCase):
         self.assertIn("WhoKnows", str(cm.exception))
 
 
+class PatchExecutorCoverageStrengthening(unittest.TestCase):
+    """Issue #147 — value-pinned coverage of every patch_executor branch.
+
+    These rows pin the diff-row contents (not just lengths) and the
+    array-grow padding identity (not just length) so a mutation that
+    swaps the sentinel value or drops a diff field is caught.
+    """
+
+    def test_array_grow_pads_with_none_sentinel(self) -> None:
+        # Given a length-1 array and a set-array-size op for length 3, the
+        # post-op list has length 3 with the original element at index 0
+        # and ``None`` sentinels at the new positions.
+        payload = {"items": ["alpha"]}
+        row = apply_op(
+            payload, {"op": "set", "path": "items.Array.size", "value": 3}
+        )
+        self.assertEqual(["alpha", None, None], payload["items"])
+        self.assertEqual(1, row["before"])
+        self.assertEqual(3, row["after"])
+
+    def test_remove_diff_carries_removed_value(self) -> None:
+        # Given a two-element array, removing index 1 returns the popped
+        # value in the diff row plus the post-remove size.
+        payload = {"items": ["zero", "one"]}
+        row = apply_op(
+            payload,
+            {
+                "op": "remove_array_element",
+                "path": "items.Array.data",
+                "index": 1,
+            },
+        )
+        self.assertEqual("one", row["before"]["removed"])
+        self.assertEqual(2, row["before"]["size"])
+        self.assertEqual(1, row["after"]["size"])
+        self.assertEqual(1, row["after"]["index"])
+
+    def test_set_diff_row_carries_op_component_path(self) -> None:
+        # The set-op diff row pins op / component / path / before / after
+        # to their input-derived values.
+        payload = {"a": 1}
+        row = apply_op(
+            payload,
+            {"op": "set", "component": "C", "path": "a", "value": 9},
+        )
+        self.assertEqual("set", row["op"])
+        self.assertEqual("C", row["component"])
+        self.assertEqual("a", row["path"])
+        self.assertEqual(1, row["before"])
+        self.assertEqual(9, row["after"])
+
+    def test_insert_diff_carries_size_and_index(self) -> None:
+        payload = {"items": ["b"]}
+        row = apply_op(
+            payload,
+            {
+                "op": "insert_array_element",
+                "path": "items.Array.data",
+                "index": 0,
+                "value": "a",
+            },
+        )
+        self.assertEqual(1, row["before"]["size"])
+        self.assertEqual(2, row["after"]["size"])
+        self.assertEqual(0, row["after"]["index"])
+        self.assertEqual(["a", "b"], payload["items"])
+
+    def test_array_size_non_integer_value_raises_value_error(self) -> None:
+        with self.assertRaises(ValueError) as cm:
+            apply_op(
+                {"items": [1]},
+                {"op": "set", "path": "items.Array.size", "value": "not-int"},
+            )
+        self.assertIn("integer", str(cm.exception))
+
+    def test_array_size_targets_root_payload_when_base_path_empty(self) -> None:
+        # Empty base path means the path is just ``.Array.size`` — the
+        # array-size set targets the root payload itself when it is a list.
+        payload: list[object] = ["a"]
+        row = apply_op(
+            payload, {"op": "set", "path": ".Array.size", "value": 3}
+        )
+        self.assertEqual(1, row["before"])
+        self.assertEqual(3, row["after"])
+        self.assertEqual(3, len(payload))
+        self.assertEqual("a", payload[0])
+        self.assertIsNone(payload[1])
+        self.assertIsNone(payload[2])
+
+    def test_array_size_target_must_be_list_raises_type_error(self) -> None:
+        with self.assertRaises(TypeError) as cm:
+            apply_op(
+                {"items": {"not": "a list"}},
+                {"op": "set", "path": "items.Array.size", "value": 3},
+            )
+        self.assertIn("array", str(cm.exception))
+
+    def test_array_size_shrink_truncates_tail_elements(self) -> None:
+        payload = {"items": [1, 2, 3, 4]}
+        row = apply_op(
+            payload, {"op": "set", "path": "items.Array.size", "value": 2}
+        )
+        self.assertEqual(4, row["before"])
+        self.assertEqual(2, row["after"])
+        self.assertEqual([1, 2], payload["items"])
+
+    def test_remove_array_element_negative_index_raises_indexerror(self) -> None:
+        with self.assertRaises(IndexError) as cm:
+            apply_op(
+                {"items": ["a"]},
+                {
+                    "op": "remove_array_element",
+                    "path": "items.Array.data",
+                    "index": -1,
+                },
+            )
+        self.assertIn("out of bounds", str(cm.exception))
+
+
 class PrefabCreateStructureCoverageTests(unittest.TestCase):
     """``prefab_create_structure`` — root creation schema-error rows."""
 

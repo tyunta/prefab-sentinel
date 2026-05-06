@@ -12,6 +12,9 @@ from tests.yaml_helpers import (
     make_transform,
 )
 
+SCRIPT_GUID_ALPHA = "11112222111122221111222211112222"
+SCRIPT_GUID_BETA = "33334444333344443333444433334444"
+
 # ---------------------------------------------------------------------------
 # analyze_hierarchy tests
 # ---------------------------------------------------------------------------
@@ -142,6 +145,31 @@ class TestAnalyzeHierarchy:
         result = analyze_hierarchy(text)
         root = result.roots[0]
         assert "MonoBehaviour" in root.components
+
+    def test_class_id_65_renders_as_3d_box_collider(self) -> None:
+        # Unity ClassIDReference: class ID 65 = BoxCollider (3D)
+        text = (
+            YAML_HEADER
+            + make_gameobject("100", "Obj", ["200", "300"])
+            + make_transform("200", "100")
+            + "--- !u!65 &300\nBoxCollider:\n  m_GameObject: {fileID: 100}\n"
+        )
+        result = analyze_hierarchy(text)
+        root = result.roots[0]
+        assert "BoxCollider" in root.components
+        assert "BoxCollider2D" not in root.components
+
+    def test_class_id_61_renders_as_box_collider_2d(self) -> None:
+        # Unity ClassIDReference: class ID 61 = BoxCollider2D
+        text = (
+            YAML_HEADER
+            + make_gameobject("100", "Obj", ["200", "300"])
+            + make_transform("200", "100")
+            + "--- !u!61 &300\nBoxCollider2D:\n  m_GameObject: {fileID: 100}\n"
+        )
+        result = analyze_hierarchy(text)
+        root = result.roots[0]
+        assert "BoxCollider2D" in root.components
 
     def test_transform_info_attached(self) -> None:
         text = YAML_HEADER + make_gameobject("100", "Obj", ["200"]) + make_transform("200", "100")
@@ -277,3 +305,58 @@ class TestOverrideAnnotation:
         result = analyze_hierarchy(text)
         tree = format_tree(result)
         assert "[overridden" not in tree
+
+
+# ---------------------------------------------------------------------------
+# MonoBehaviour resolver tests (issue #196)
+# ---------------------------------------------------------------------------
+
+
+class TestFormatTreeMonobehaviour:
+    """Issue #196 — opt-in MonoBehaviour expansion replaces the generic
+    label with the script class name when a resolver is supplied.
+    """
+
+    def _two_mono_hierarchy(self) -> str:
+        return (
+            YAML_HEADER
+            + make_gameobject("100", "Obj", ["200", "300", "400"])
+            + make_transform("200", "100")
+            + make_monobehaviour("300", "100", guid=SCRIPT_GUID_ALPHA)
+            + make_monobehaviour("400", "100", guid=SCRIPT_GUID_BETA)
+        )
+
+    def test_resolver_substitutes_script_names(self) -> None:
+        result = analyze_hierarchy(self._two_mono_hierarchy())
+        names = {SCRIPT_GUID_ALPHA: "AlphaController", SCRIPT_GUID_BETA: "BetaState"}
+        tree = format_tree(
+            result,
+            monobehaviour_resolver=lambda guid: names.get(guid),
+        )
+        assert "AlphaController" in tree
+        assert "BetaState" in tree
+        # The generic MonoBehaviour label is replaced for both entries.
+        assert "MonoBehaviour" not in tree
+
+    def test_resolver_falls_back_to_monobehaviour_for_unknown_guid(self) -> None:
+        result = analyze_hierarchy(self._two_mono_hierarchy())
+        # Resolver returns empty / None for unknown GUIDs.
+        tree = format_tree(
+            result,
+            monobehaviour_resolver=lambda guid: None,
+        )
+        assert "MonoBehaviour" in tree
+
+    def test_resolver_empty_string_falls_back_to_monobehaviour(self) -> None:
+        result = analyze_hierarchy(self._two_mono_hierarchy())
+        tree = format_tree(
+            result,
+            monobehaviour_resolver=lambda guid: "",
+        )
+        assert "MonoBehaviour" in tree
+
+    def test_no_resolver_keeps_generic_monobehaviour_label(self) -> None:
+        result = analyze_hierarchy(self._two_mono_hierarchy())
+        tree = format_tree(result)
+        assert "MonoBehaviour" in tree
+        assert "AlphaController" not in tree

@@ -2888,11 +2888,18 @@ namespace PrefabSentinel
             {
                 EmitSyntheticObsNreException();
                 string goPath = "/" + instance.name;
+                // Issue #193: the safe-save action is the sole public
+                // prefab-save bridge action.  The integration test supplies
+                // a non-empty ``protect_components_json`` payload so the
+                // safe-save handler's required-argument contract is
+                // satisfied even though this scenario does not exercise
+                // the re-attach path.
                 string extra = "\"hierarchy_path\":\"" + EscapeJsonString(goPath) + "\","
                              + "\"asset_path\":\"" + EscapeJsonString(outPath) + "\","
+                             + "\"protect_components_json\":\"[\\\"Transform\\\"]\","
                              + "\"confirm\":true,"
                              + "\"change_reason\":\"integration test non-fatal classification\"";
-                var resp = RunEditorControlBridge(BuildEditorControlRequest("save_as_prefab", extra));
+                var resp = RunEditorControlBridge(BuildEditorControlRequest("safe_save_prefab", extra));
                 var err = AssertEditorControlSuccess(name, resp);
                 if (err != null) return err;
 

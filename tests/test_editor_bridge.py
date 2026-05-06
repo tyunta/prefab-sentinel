@@ -213,6 +213,18 @@ class TestSendAction(unittest.TestCase):
                 self.assertEqual("/tmp/test.png", result["data"]["output_path"])
 
 
+class TestEditorBridgeSupportedActions(unittest.TestCase):
+    """Issue #193 — membership test: the supported-actions set contains
+    exactly one prefab-save action (``safe_save_prefab``), and contains
+    no other prefab-save action name (e.g. the legacy ``save_as_prefab``).
+    """
+
+    def test_safe_save_prefab_is_only_prefab_save_action(self) -> None:
+        self.assertIn("safe_save_prefab", SUPPORTED_ACTIONS)
+        # No other prefab-save action.
+        self.assertNotIn("save_as_prefab", SUPPORTED_ACTIONS)
+
+
 class TestSupportedActions(unittest.TestCase):
     """Verify the action set is complete."""
 
@@ -248,7 +260,8 @@ class TestSupportedActions(unittest.TestCase):
             "editor_remove_component",
             "create_udon_program_asset",
             "editor_set_property",
-            "save_as_prefab",
+            # Issue #193: ``safe_save_prefab`` is the sole public prefab-save action.
+            "safe_save_prefab",
             "editor_set_parent",
             "editor_create_empty",
             "editor_create_primitive",

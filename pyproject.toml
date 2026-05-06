@@ -119,6 +119,14 @@ do_not_mutate = [
     "*_text_cache.get*",
     "*_guid_map*",
     "*invalidate_*_cache*",
+    # Issue #182: empty-string ``dict.get`` default-equivalence pattern.
+    # ``mapping.get("key", "")`` callers commonly chain straight into a
+    # ``str`` consumer that treats absent keys and empty values
+    # identically, so mutating the empty-string sentinel to a non-empty
+    # marker either reproduces the same downstream behaviour (equivalent
+    # mutant) or surfaces a contrived sentinel-string difference that
+    # does not strengthen the production-code contract under test.
+    '*.get("*", "")*',
 ]
 # Test collection in the mutated working directory imports modules from
 # ``scripts/`` and ``tools/``; without ``also_copy`` mutmut runs with only

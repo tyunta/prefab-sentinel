@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from prefab_sentinel.contracts import (
@@ -22,7 +23,29 @@ from prefab_sentinel.material_inspector import (
 )
 from prefab_sentinel.orchestrator_variant import _read_target_file, _resolve_variant_base
 from prefab_sentinel.services.prefab_variant import PrefabVariantService
-from prefab_sentinel.unity_assets import GAMEOBJECT_BEARING_SUFFIXES
+from prefab_sentinel.unity_assets import GAMEOBJECT_BEARING_SUFFIXES, collect_project_guid_index
+
+
+def _build_script_name_resolver(
+    project_root: Path,
+) -> Callable[[str], str | None]:
+    """Build a script-name resolver keyed by Unity script GUID.
+
+    The resolver maps a 32-char Unity script GUID to the ``.cs`` file's
+    stem (the conventional class name) by consulting the project's GUID
+    index.  Non-script GUIDs and unknown GUIDs return ``None``.
+    """
+    index = collect_project_guid_index(project_root, include_package_cache=False)
+
+    def _resolve(guid: str) -> str | None:
+        path = index.get(guid)
+        if path is None:
+            return None
+        if path.suffix.lower() != ".cs":
+            return None
+        return path.stem
+
+    return _resolve
 
 
 def inspect_hierarchy(
@@ -31,6 +54,7 @@ def inspect_hierarchy(
     *,
     max_depth: int | None = None,
     show_components: bool = True,
+    expand_monobehaviour: bool = False,
 ) -> ToolResponse:
     text_or_error = _read_target_file(prefab_variant, target_path, "INSPECT_HIERARCHY")
     if isinstance(text_or_error, ToolResponse):
@@ -66,10 +90,28 @@ def inspect_hierarchy(
         diagnostics.extend(overrides_response.diagnostics)
 
     result = analyze_hierarchy(text, override_counts=override_counts)
+    monobehaviour_resolver: Callable[[str], str | None] | None = None
+    script_index_unavailable = False
+    if expand_monobehaviour:
+        try:
+            monobehaviour_resolver = _build_script_name_resolver(
+                prefab_variant.project_root
+            )
+        except (OSError, RuntimeError) as exc:
+            script_index_unavailable = True
+            diagnostics.append(
+                Diagnostic(
+                    path=target_path,
+                    location="expand_monobehaviour",
+                    detail="warning",
+                    evidence=f"project GUID index unavailable: {exc}",
+                )
+            )
     tree_text = format_tree(
         result,
         max_depth=max_depth,
         show_components=show_components,
+        monobehaviour_resolver=monobehaviour_resolver,
     )
 
     def _serialize_node(node: HierarchyNode) -> dict[str, object]:
@@ -97,10 +139,16 @@ def inspect_hierarchy(
     if is_variant:
         data["is_variant"] = True
         data["base_prefab_path"] = base_prefab_path
+    if expand_monobehaviour:
+        data["expand_monobehaviour"] = True
+        if script_index_unavailable:
+            data["script_index_unavailable"] = True
 
+    severity = Severity.WARNING if script_index_unavailable else Severity.INFO
     return success_response(
         "INSPECT_HIERARCHY_RESULT",
         "inspect.hierarchy completed (read-only).",
+        severity=severity,
         data=data,
         diagnostics=diagnostics,
     )

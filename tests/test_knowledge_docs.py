@@ -234,5 +234,106 @@ class WorldCanvasKnowledgeTests(unittest.TestCase):
         self.assertIn("creators.vrchat.com", text)
 
 
+_UDONSHARP_DOC: Path = (
+    Path(__file__).resolve().parent.parent
+    / "knowledge"
+    / "udonsharp.md"
+)
+_BUILD_FROM_SCRATCH_DOC: Path = (
+    Path(__file__).resolve().parent.parent
+    / "knowledge"
+    / "prefab-sentinel-build-from-scratch.md"
+)
+_PITFALLS_DOC: Path = (
+    Path(__file__).resolve().parent.parent
+    / "knowledge"
+    / "prefab-sentinel-saveasprefabasset-pitfalls.md"
+)
+
+
+class TestKnowledgeDocs(unittest.TestCase):
+    """Issue #200 / #193 / #196 / #198 / #199 — knowledge corrections.
+
+    The four knowledge invariants pin:
+    * UdonSharp 1.x ``OnBeforeSerialize`` is implemented as an explicit
+      interface implementation; subclass override is rejected by the
+      U# compiler.
+    * Operational examples in the UdonSharp doc name the safe-save
+      MCP tool (``editor_safe_save_prefab``) and contain no occurrence
+      of the legacy ``editor_save_as_prefab`` tool name in active
+      guidance text.
+    * The build-from-scratch doc cross-references the new SaveAsPrefab
+      pitfalls knowledge document.
+    * The workflow-patterns doc recommends reading the editor console
+      with the error log-type filter for user-driven compile and does
+      not introduce a compile-status MCP API.
+    * The SaveAsPrefab pitfalls knowledge doc exists and lists the
+      VRC_UiShape strip mode, the nested override strip mode, and the
+      TextMeshPro font-asset requirement mode.
+    """
+
+    def test_udonsharp_onbeforeserialize_advice_corrected(self) -> None:
+        text = _UDONSHARP_DOC.read_text(encoding="utf-8")
+        self.assertIn("OnBeforeSerialize", text)
+        # The corrected advice explains the compiler reject reason —
+        # explicit interface implementation in the U# 1.x base class.
+        self.assertTrue(
+            (
+                "explicit interface" in text.lower()
+                or "明示的インターフェース実装" in text
+                or "明示的インターフェイス実装" in text
+            ),
+            "UdonSharp doc must explain that OnBeforeSerialize is an explicit "
+            "interface implementation in U# 1.x and override is rejected by "
+            "the compiler",
+        )
+
+    def test_udonsharp_uses_safe_save_tool_name(self) -> None:
+        text = _UDONSHARP_DOC.read_text(encoding="utf-8")
+        self.assertIn("editor_safe_save_prefab", text)
+        # The legacy tool name must not appear in active guidance.
+        self.assertNotIn("editor_save_as_prefab", text)
+
+    def test_build_from_scratch_links_pitfalls_doc(self) -> None:
+        text = _BUILD_FROM_SCRATCH_DOC.read_text(encoding="utf-8")
+        self.assertIn("prefab-sentinel-saveasprefabasset-pitfalls", text)
+
+    def test_workflow_patterns_recommends_console_compile_observation(
+        self,
+    ) -> None:
+        # Local _read() reads the workflow-patterns doc.
+        text = _read()
+        # The user-driven-compile advisory must recommend reading
+        # editor_console with the error log-type filter.
+        self.assertIn("editor_console", text)
+        self.assertIn('log_type_filter="error"', text)
+        # And the doc must NOT introduce a compile-status MCP API.
+        self.assertNotIn("editor_compile_status", text)
+
+    def test_pitfalls_doc_exists_and_lists_three_modes(self) -> None:
+        self.assertTrue(_PITFALLS_DOC.is_file(), _PITFALLS_DOC)
+        text = _PITFALLS_DOC.read_text(encoding="utf-8")
+        # All three documented pitfall modes must appear by their
+        # canonical names.
+        self.assertIn("VRC_UiShape", text)
+        # Nested override strip mode — the issue uses this phrasing.
+        self.assertTrue(
+            ("nested override strip" in text.lower())
+            or ("nested-override strip" in text.lower())
+            or ("ネストされた override" in text)
+            or ("ネスト override" in text),
+            "Pitfalls doc must document the nested override strip mode",
+        )
+        # TextMeshPro font-asset requirement mode.
+        self.assertIn("TextMeshPro", text)
+        self.assertTrue(
+            ("font asset" in text.lower())
+            or ("fontAsset" in text)
+            or ("font-asset" in text.lower())
+            or ("フォントアセット" in text),
+            "Pitfalls doc must document the TextMeshPro font-asset requirement mode",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

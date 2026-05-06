@@ -407,20 +407,135 @@ namespace PrefabSentinel
                 });
         }
 
-        private static EditorControlResponse HandleSaveAsPrefab(EditorControlRequest request)
+        // Issue #193 — safe-save handler.  Takes a non-empty list of
+        // protected component type names, calls the underlying
+        // ``SaveAsPrefabAsset`` invocation through the private
+        // ``SaveAsPrefabCore`` helper, then verifies that every protected
+        // type is attached on the saved asset.  When a protected type was
+        // stripped during the save (the documented VRC_UiShape and
+        // missing-script cases) the handler re-attaches it via
+        // ``Undo.AddComponent`` and re-saves so the resulting asset
+        // matches the safe-save contract.  The response payload carries
+        // the list of re-attached component types and the list of
+        // parent-prefab modification overrides that became orphan as a
+        // result of the save.
+        private static EditorControlResponse HandleSafeSaveAsPrefab(EditorControlRequest request)
         {
-            if (string.IsNullOrEmpty(request.hierarchy_path))
-                return BuildError("EDITOR_CTRL_SAVE_PREFAB_NO_PATH", "hierarchy_path is required.");
-            if (string.IsNullOrEmpty(request.asset_path))
-                return BuildError("EDITOR_CTRL_SAVE_PREFAB_NO_OUTPUT", "asset_path is required.");
-            if (!request.asset_path.EndsWith(".prefab", System.StringComparison.OrdinalIgnoreCase))
-                return BuildError("EDITOR_CTRL_SAVE_PREFAB_BAD_EXT",
-                    $"asset_path must end with .prefab: {request.asset_path}");
+            if (string.IsNullOrEmpty(request.protect_components_json))
+                return BuildError(
+                    "EDITOR_CTRL_SAFE_SAVE_PREFAB_PROTECT_REQUIRED",
+                    "protect_components is required and must be a non-empty list of component type names.");
+
+            string[] protectTypes;
+            try
+            {
+                var wrapper = JsonUtility.FromJson<StringArrayWrapper>(
+                    "{\"items\":" + request.protect_components_json + "}");
+                protectTypes = wrapper != null && wrapper.items != null
+                    ? wrapper.items
+                    : Array.Empty<string>();
+            }
+            catch (Exception ex)
+            {
+                return BuildError(
+                    "EDITOR_CTRL_SAFE_SAVE_PREFAB_BAD_JSON",
+                    $"protect_components_json could not be parsed as a string array: {ex.Message}");
+            }
+
+            if (protectTypes.Length == 0)
+                return BuildError(
+                    "EDITOR_CTRL_SAFE_SAVE_PREFAB_PROTECT_REQUIRED",
+                    "protect_components must list at least one component type name.");
 
             var go = GameObject.Find(request.hierarchy_path);
             if (go == null)
-                return BuildError("EDITOR_CTRL_SAVE_PREFAB_NOT_FOUND",
+                return BuildError(
+                    "EDITOR_CTRL_SAFE_SAVE_PREFAB_NOT_FOUND",
                     $"GameObject not found: {request.hierarchy_path}");
+
+            // Capture pre-save parent-prefab modifications so we can detect
+            // which overrides became orphan once the save runs.
+            var preSaveModifications = CollectParentModifications(go);
+
+            EditorControlResponse coreResponse = SaveAsPrefabCore(go, request, out GameObject savedAsset);
+            if (!coreResponse.success || savedAsset == null)
+                return coreResponse;
+
+            var reattached = new List<string>();
+            foreach (string typeName in protectTypes)
+            {
+                if (string.IsNullOrEmpty(typeName)) continue;
+                if (HasComponentByName(savedAsset, typeName)) continue;
+
+                Type resolved = ResolveComponentType(typeName);
+                if (resolved == null)
+                {
+                    // Unknown type — skip rather than crash; surface in diagnostics.
+                    coreResponse.diagnostics = AppendDiagnostic(coreResponse.diagnostics,
+                        new EditorControlDiagnostic
+                        {
+                            path = request.asset_path,
+                            location = "protect_components",
+                            detail = "warning",
+                            evidence = $"protected component type '{typeName}' could not be resolved",
+                        });
+                    continue;
+                }
+                Undo.AddComponent(savedAsset, resolved);
+                reattached.Add(typeName);
+            }
+
+            if (reattached.Count > 0)
+            {
+                bool resaveSuccess;
+                PrefabUtility.SaveAsPrefabAsset(savedAsset, request.asset_path, out resaveSuccess);
+                if (!resaveSuccess)
+                    return BuildError(
+                        "EDITOR_CTRL_SAFE_SAVE_PREFAB_FAILED",
+                        $"safe-save re-save after re-attach failed for: {request.asset_path}");
+            }
+
+            var orphanEntries = ComputeOrphanModifications(preSaveModifications, savedAsset);
+            coreResponse.data.reattached_components = reattached.ToArray();
+            coreResponse.data.orphan_modifications = orphanEntries;
+            if (orphanEntries.Length > 0)
+            {
+                coreResponse.severity = "warning";
+                coreResponse.diagnostics = AppendDiagnostic(coreResponse.diagnostics,
+                    new EditorControlDiagnostic
+                    {
+                        path = request.asset_path,
+                        location = "orphan_modifications",
+                        detail = "warning",
+                        evidence = $"{orphanEntries.Length} parent-prefab override(s) became orphan after save",
+                    });
+            }
+            return coreResponse;
+        }
+
+        [Serializable]
+        private sealed class StringArrayWrapper
+        {
+            public string[] items;
+        }
+
+        // Underlying prefab-save invocation used by the safe-save handler.
+        // Encapsulates path validation, directory creation, the
+        // ``PrefabUtility.SaveAsPrefabAsset`` call, and the non-fatal
+        // classification snapshot.  The saved asset is returned via the
+        // out parameter so the caller can re-attach protected components.
+        private static EditorControlResponse SaveAsPrefabCore(
+            GameObject go,
+            EditorControlRequest request,
+            out GameObject savedAsset)
+        {
+            savedAsset = null;
+            if (string.IsNullOrEmpty(request.asset_path))
+                return BuildError("EDITOR_CTRL_SAFE_SAVE_PREFAB_FAILED",
+                    "asset_path is required.");
+            if (!request.asset_path.EndsWith(".prefab", System.StringComparison.OrdinalIgnoreCase))
+                return BuildError("EDITOR_CTRL_SAFE_SAVE_PREFAB_FAILED",
+                    $"asset_path must end with .prefab: {request.asset_path}");
 
             string dir = System.IO.Path.GetDirectoryName(request.asset_path);
             if (!string.IsNullOrEmpty(dir) && !System.IO.Directory.Exists(dir))
@@ -452,16 +567,16 @@ namespace PrefabSentinel
             double saveSnapshotTime = EditorApplication.timeSinceStartup;
 
             bool success;
-            PrefabUtility.SaveAsPrefabAsset(go, request.asset_path, out success);
+            savedAsset = PrefabUtility.SaveAsPrefabAsset(go, request.asset_path, out success);
             if (!success)
-                return BuildError("EDITOR_CTRL_SAVE_PREFAB_FAILED",
+                return BuildError("EDITOR_CTRL_SAFE_SAVE_PREFAB_FAILED",
                     $"SaveAsPrefabAsset failed for: {request.asset_path}");
 
             var (saveObsCount, saveLabels) = ConsoleLogBuffer
                 .CollectNonFatalCountsSince(saveSnapshotTime);
 
             string kind = isVariant ? "Prefab Variant" : "Prefab";
-            var resp = BuildSuccess("EDITOR_CTRL_SAVE_PREFAB_OK",
+            var resp = BuildSuccess("EDITOR_CTRL_SAFE_SAVE_PREFAB_OK",
                 $"Saved {request.hierarchy_path} as {kind}: {request.asset_path}",
                 data: new EditorControlData
                 {
@@ -496,6 +611,96 @@ namespace PrefabSentinel
                 });
             resp.diagnostics = diags.ToArray();
             return resp;
+        }
+
+        private static bool HasComponentByName(GameObject go, string typeName)
+        {
+            if (go == null || string.IsNullOrEmpty(typeName)) return false;
+            foreach (var comp in go.GetComponentsInChildren<Component>(true))
+            {
+                if (comp == null) continue;
+                Type t = comp.GetType();
+                if (t.Name == typeName || t.FullName == typeName)
+                    return true;
+            }
+            return false;
+        }
+
+        private static Type ResolveComponentType(string typeName)
+        {
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                Type t = asm.GetType(typeName, throwOnError: false, ignoreCase: false);
+                if (t != null && typeof(Component).IsAssignableFrom(t))
+                    return t;
+                foreach (var candidate in asm.GetTypes())
+                {
+                    if (candidate.Name == typeName && typeof(Component).IsAssignableFrom(candidate))
+                        return candidate;
+                }
+            }
+            return null;
+        }
+
+        private static List<PropertyModification> CollectParentModifications(GameObject go)
+        {
+            var result = new List<PropertyModification>();
+            if (go == null) return result;
+            if (!PrefabUtility.IsPartOfPrefabInstance(go)) return result;
+            var mods = PrefabUtility.GetPropertyModifications(go);
+            if (mods == null) return result;
+            foreach (var mod in mods) result.Add(mod);
+            return result;
+        }
+
+        private static OrphanModificationEntry[] ComputeOrphanModifications(
+            List<PropertyModification> preSaveModifications,
+            GameObject savedAsset)
+        {
+            if (preSaveModifications == null || preSaveModifications.Count == 0
+                || savedAsset == null)
+                return Array.Empty<OrphanModificationEntry>();
+
+            var assetTransforms = savedAsset.GetComponentsInChildren<Transform>(true);
+            var assetPaths = new HashSet<string>();
+            foreach (var t in assetTransforms)
+            {
+                if (t != null) assetPaths.Add(GetHierarchyPath(t));
+            }
+
+            var orphans = new List<OrphanModificationEntry>();
+            foreach (var mod in preSaveModifications)
+            {
+                if (mod == null || mod.target == null) continue;
+                string targetPath = "";
+                var targetGo = mod.target as GameObject;
+                if (targetGo != null) targetPath = GetHierarchyPath(targetGo.transform);
+                else
+                {
+                    var targetComp = mod.target as Component;
+                    if (targetComp != null) targetPath = GetHierarchyPath(targetComp.transform);
+                }
+                if (string.IsNullOrEmpty(targetPath)) continue;
+                if (!assetPaths.Contains(targetPath))
+                {
+                    orphans.Add(new OrphanModificationEntry
+                    {
+                        target_object_path = targetPath,
+                        property_path = mod.propertyPath ?? "",
+                    });
+                }
+            }
+            return orphans.ToArray();
+        }
+
+        private static EditorControlDiagnostic[] AppendDiagnostic(
+            EditorControlDiagnostic[] existing, EditorControlDiagnostic added)
+        {
+            if (existing == null) return new[] { added };
+            var combined = new EditorControlDiagnostic[existing.Length + 1];
+            Array.Copy(existing, combined, existing.Length);
+            combined[existing.Length] = added;
+            return combined;
         }
     }
 }

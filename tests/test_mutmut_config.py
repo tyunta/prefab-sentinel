@@ -125,12 +125,15 @@ class MutmutConfigShapeTests(unittest.TestCase):
     def test_do_not_mutate_extends_with_documented_equivalent_patterns(
         self,
     ) -> None:
-        """Issue #182 — three documented equivalent-mutation patterns
-        appear verbatim in ``[tool.mutmut].do_not_mutate``.  The patterns
-        target internal cache state in ``ReferenceResolverService`` whose
+        """Issue #182 — four documented equivalent-mutation patterns
+        appear verbatim in ``[tool.mutmut].do_not_mutate``.  Three target
+        internal cache state in ``ReferenceResolverService`` whose
         mutations are semantically equivalent (cache hit/miss skip,
-        guid-index re-read, cache invalidation) and would not strengthen
-        the suite if mutated.
+        guid-index re-read, cache invalidation); the fourth covers the
+        empty-string ``dict.get`` default-equivalence pattern (``.get("k", "")``)
+        whose mutation to ``.get("k", "XX")`` rarely changes behavior in
+        an empty-string-fallback caller and produces equivalent mutants
+        that would not strengthen the suite.
         """
         section = _load_mutmut_section()
         patterns = section["do_not_mutate"]
@@ -138,6 +141,7 @@ class MutmutConfigShapeTests(unittest.TestCase):
             "*_text_cache.get*",
             "*_guid_map*",
             "*invalidate_*_cache*",
+            '*.get("*", "")*',
         ):
             self.assertIn(
                 required,

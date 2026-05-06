@@ -159,7 +159,7 @@ class TestToolRegistration(unittest.TestCase):
             "editor_rename", "editor_add_component",
             "editor_remove_component",
             "editor_create_udon_program_asset",
-            "editor_set_property", "editor_save_as_prefab",
+            "editor_set_property", "editor_safe_save_prefab",
             "editor_set_parent",
             "editor_create_empty", "editor_create_primitive",
             "editor_batch_create", "editor_batch_set_property",
@@ -530,6 +530,9 @@ class TestOrchestratorTools(unittest.TestCase):
             scope="/some/path",
             details=False,
             max_diagnostics=200,
+            top_missing_breakdown=False,
+            snapshot_save="",
+            snapshot_diff="",
         )
 
     def test_inspect_wiring_delegates_to_orchestrator(self) -> None:
@@ -2983,6 +2986,7 @@ class TestInspectHierarchyTool(unittest.TestCase):
             target_path="Assets/A.prefab",
             max_depth=None,
             show_components=True,
+            expand_monobehaviour=False,
         )
 
     def test_passes_optional_params(self) -> None:
@@ -3000,7 +3004,10 @@ class TestInspectHierarchyTool(unittest.TestCase):
             }))
 
         mock_orch.inspect_hierarchy.assert_called_once_with(
-            target_path="Assets/A.prefab", max_depth=2, show_components=False,
+            target_path="Assets/A.prefab",
+            max_depth=2,
+            show_components=False,
+            expand_monobehaviour=False,
         )
 
 
@@ -5110,21 +5117,86 @@ class TestEditorSetComponentFieldsIntegration(unittest.TestCase):
         self.assertIn("data", result)
 
 
-class TestEditorSaveAsPrefab(unittest.TestCase):
-    """Tests for editor_save_as_prefab force_original parameter."""
+class TestSafeSaveAsPrefabPython(unittest.TestCase):
+    """Issue #193 — editor_safe_save_prefab MCP tool surface tests.
 
-    def test_force_original_true_passed_to_send_action(self) -> None:
+    The Python wrapper validates the required ``protect_components`` list
+    before forwarding to the bridge action, JSON-serializes the list onto
+    the request payload, and passes through ``force_original`` when set.
+    The supported-actions exhaustive expectation lists ``safe_save_prefab``
+    as the sole prefab-save action.
+    """
+
+    def setUp(self) -> None:
+        # The bridge dispatch env vars must not leak from the host shell;
+        # tests must drive the batchmode path regardless of whether the
+        # developer has the editor mode exported.
+        os.environ.pop("UNITYTOOL_BRIDGE_MODE", None)
+        os.environ.pop("UNITYTOOL_BRIDGE_WATCH_DIR", None)
+
+    def test_protect_components_empty_returns_protect_required(self) -> None:
+        server = create_server()
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_ops.send_action",
+            return_value={"success": True, "data": {}},
+        ) as mock_send:
+            _, envelope = _run(server.call_tool(
+                "editor_safe_save_prefab",
+                {
+                    "hierarchy_path": "/Obj",
+                    "asset_path": "Assets/X.prefab",
+                    "protect_components": [],
+                },
+            ))
+        # send_action is not invoked when the contract rejects the input.
+        self.assertEqual(0, mock_send.call_count)
+        self.assertFalse(envelope["success"])
+        self.assertEqual(
+            "EDITOR_CTRL_SAFE_SAVE_PREFAB_PROTECT_REQUIRED",
+            envelope["code"],
+        )
+        self.assertEqual("error", envelope["severity"])
+
+    def test_protect_components_serialized_as_json(self) -> None:
         server = create_server()
         with patch(
             "prefab_sentinel.mcp_tools_editor_ops.send_action",
             return_value={"success": True, "data": {}},
         ) as mock_send:
             _run(server.call_tool(
-                "editor_save_as_prefab",
-                {"hierarchy_path": "/Obj", "asset_path": "Assets/X.prefab", "force_original": True},
+                "editor_safe_save_prefab",
+                {
+                    "hierarchy_path": "/Obj",
+                    "asset_path": "Assets/X.prefab",
+                    "protect_components": ["VRC_UiShape", "OtherComp"],
+                },
             ))
         mock_send.assert_called_once()
-        self.assertTrue(mock_send.call_args.kwargs.get("force_original"))
+        kwargs = mock_send.call_args.kwargs
+        self.assertEqual("safe_save_prefab", kwargs.get("action"))
+        self.assertIn("protect_components_json", kwargs)
+        parsed = json.loads(kwargs["protect_components_json"])
+        self.assertEqual(["VRC_UiShape", "OtherComp"], parsed)
+
+    def test_force_original_true_passes_through(self) -> None:
+        server = create_server()
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_ops.send_action",
+            return_value={"success": True, "data": {}},
+        ) as mock_send:
+            _run(server.call_tool(
+                "editor_safe_save_prefab",
+                {
+                    "hierarchy_path": "/Obj",
+                    "asset_path": "Assets/X.prefab",
+                    "protect_components": ["VRC_UiShape"],
+                    "force_original": True,
+                },
+            ))
+        mock_send.assert_called_once()
+        kwargs = mock_send.call_args.kwargs
+        self.assertEqual("safe_save_prefab", kwargs.get("action"))
+        self.assertTrue(kwargs.get("force_original"))
 
     def test_force_original_default_omits_key(self) -> None:
         server = create_server()
@@ -5133,11 +5205,31 @@ class TestEditorSaveAsPrefab(unittest.TestCase):
             return_value={"success": True, "data": {}},
         ) as mock_send:
             _run(server.call_tool(
-                "editor_save_as_prefab",
-                {"hierarchy_path": "/Obj", "asset_path": "Assets/X.prefab"},
+                "editor_safe_save_prefab",
+                {
+                    "hierarchy_path": "/Obj",
+                    "asset_path": "Assets/X.prefab",
+                    "protect_components": ["VRC_UiShape"],
+                },
             ))
         mock_send.assert_called_once()
-        self.assertNotIn("force_original", mock_send.call_args.kwargs)
+        kwargs = mock_send.call_args.kwargs
+        self.assertEqual("safe_save_prefab", kwargs.get("action"))
+        self.assertNotIn("force_original", kwargs)
+
+
+class TestMcpServerToolNames(unittest.TestCase):
+    """Issue #193 — membership test that the MCP tool registry contains
+    exactly one prefab-save tool (``editor_safe_save_prefab``) and no
+    other prefab-save tool name (e.g. the legacy ``editor_save_as_prefab``).
+    """
+
+    def test_safe_save_prefab_is_only_prefab_save_tool(self) -> None:
+        server = create_server()
+        tools = _run(server.list_tools())
+        names = {t.name for t in tools}
+        self.assertIn("editor_safe_save_prefab", names)
+        self.assertNotIn("editor_save_as_prefab", names)
 
 
 class TestEditorBatchCreateComponents(unittest.TestCase):

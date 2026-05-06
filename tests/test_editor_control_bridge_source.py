@@ -601,6 +601,87 @@ class TestRecompileAndWaitDomainReloadResume(unittest.TestCase):
         self.assertIn("EDITOR_CTRL_RECOMPILE_AND_WAIT_OK", body)
         self.assertIn("EDITOR_CTRL_RECOMPILE_TIMEOUT", body)
 
+    def test_resumer_uses_minus_one_reload_count_threshold(self) -> None:
+        """Issue #191: the resumer-driven poll runs after a domain reload has
+        already occurred, so the post-reload counter has already advanced past
+        any positive snapshot. A threshold of -1 makes the
+        ``AssemblyReloadCount > threshold`` check pass on the first tick
+        regardless of whether ``[InitializeOnLoad]`` static constructors run
+        before or after ``afterAssemblyReload``.
+        """
+        source = _read(BRIDGE)
+        body = _extract_method(source, "ResumePendingAsyncRunners")
+        # Extract the BuildRecompileAndWaitPoll(...) call inside the resumer
+        # branch and verify the third positional argument (reload-count
+        # threshold) is the literal -1.
+        call_match = re.search(
+            r"BuildRecompileAndWaitPoll\s*\(([^;]*?)\)\s*;",
+            body,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(
+            call_match,
+            "Resumer must call BuildRecompileAndWaitPoll(...) to share completion logic",
+        )
+        args = [a.strip() for a in call_match.group(1).split(",")]
+        # Args: responsePath, deadlineUnixMs, callTimeAssemblyMtimeUnixMs,
+        # reloadCountThreshold, timeoutDetail
+        self.assertGreaterEqual(len(args), 5)
+        self.assertEqual(args[3], "-1")
+
+
+class TestSafeSaveAsPrefabSource(unittest.TestCase):
+    """Issue #193 — source-text invariants for ``HandleSafeSaveAsPrefab``.
+
+    The handler body must reference the protect-components payload field,
+    the Editor add-component API, the prefab-save API for the re-save
+    step, the parent-prefab modification enumeration API, and emit both
+    the re-attached-components list field and the orphan-modifications
+    list field in the response payload.  All four documented response
+    codes must appear as literal strings.
+    """
+
+    def test_handler_body_references_required_apis_and_codes(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleSafeSaveAsPrefab")
+        # Protect-components payload field.
+        self.assertIn("protect_components_json", body)
+        # Save core helper invocation (the prefab-save API for the
+        # initial save and the re-attach re-save step are both routed
+        # through ``SaveAsPrefabCore`` / ``PrefabUtility.SaveAsPrefabAsset``).
+        self.assertIn("SaveAsPrefabCore", body)
+        # Editor add-component API for re-attaching protected types.
+        self.assertIn("Undo.AddComponent", body)
+        # Parent-prefab modification enumeration entry point (used by
+        # the orphan-modifications detection helper).
+        self.assertIn("CollectParentModifications", body)
+        # Response payload list fields.
+        self.assertIn("reattached_components", body)
+        self.assertIn("orphan_modifications", body)
+        # Documented response codes — value-pinned literal occurrences.
+        self.assertIn("EDITOR_CTRL_SAFE_SAVE_PREFAB_PROTECT_REQUIRED", body)
+        self.assertIn("EDITOR_CTRL_SAFE_SAVE_PREFAB_BAD_JSON", body)
+        self.assertIn("EDITOR_CTRL_SAFE_SAVE_PREFAB_NOT_FOUND", body)
+        # The save-failed envelope is emitted from the core helper that
+        # the handler delegates to; reading the concatenated bridge text
+        # ensures both surfaces remain consistent.
+        self.assertIn("EDITOR_CTRL_SAFE_SAVE_PREFAB_FAILED", source)
+
+    def test_orphan_modification_entry_carries_target_object_path_and_property_path(
+        self,
+    ) -> None:
+        source = _read(BRIDGE)
+        # The DTO defines both fields; the handler emits orphan entries
+        # via ``ComputeOrphanModifications`` which must use both.
+        self.assertRegex(
+            source,
+            r"public sealed class OrphanModificationEntry[^}]*"
+            r"target_object_path[^}]*property_path",
+        )
+        compute_body = _extract_method(source, "ComputeOrphanModifications")
+        self.assertIn("target_object_path", compute_body)
+        self.assertIn("property_path", compute_body)
+
 
 class TestBridgePartialLayout(unittest.TestCase):
     """Issue #123 — every named bridge partial source must exist and

@@ -203,5 +203,6 @@ edge が滑らかになる (visual size は同じ)。
 ## 関連
 
 - [prefab-sentinel-workflow-patterns.md](prefab-sentinel-workflow-patterns.md) — 既存の workflow パターン
+- [prefab-sentinel-saveasprefabasset-pitfalls.md](prefab-sentinel-saveasprefabasset-pitfalls.md) — `SaveAsPrefabAsset` の落とし穴と `editor_safe_save_prefab` のカタログ (issue #200)
 - [udonsharp.md](udonsharp.md) — UdonSharp 全般 (proxy / backing UB / publicVariables)
 - [vrchat-sdk-worlds.md](vrchat-sdk-worlds.md) — World SDK の component 一般
