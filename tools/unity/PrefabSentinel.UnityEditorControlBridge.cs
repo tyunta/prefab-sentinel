@@ -68,7 +68,9 @@ namespace PrefabSentinel
             "create_udon_program_asset",
             // Phase 5: SetProperty + SaveAsPrefab
             "editor_set_property",
-            "save_as_prefab",
+            // Issue #193: ``safe_save_prefab`` replaces the legacy
+            // ``save_as_prefab`` as the sole public prefab-save action.
+            "safe_save_prefab",
             "editor_set_parent",
             // Phase 6: Batch Operations + Scene
             "editor_create_empty",
@@ -168,6 +170,12 @@ namespace PrefabSentinel
             public bool confirm = false;                  // dry-run gate
             public string platforms = string.Empty;  // JSON array: "[\"windows\",\"android\"]"
             public bool force_original = false;       // break Prefab Instance before saving
+            // Issue #193: caller-supplied non-empty JSON array of component type
+            // names that the safe-save handler must keep attached on the saved
+            // asset.  Mandatory on the safe_save_prefab action; rejected when
+            // empty / malformed (EDITOR_CTRL_SAFE_SAVE_PREFAB_PROTECT_REQUIRED /
+            // EDITOR_CTRL_SAFE_SAVE_PREFAB_BAD_JSON).
+            public string protect_components_json = string.Empty;
 
             // Phase 2: BlendShape
             public string filter = string.Empty;            // name substring filter / menu prefix
@@ -438,6 +446,24 @@ namespace PrefabSentinel
             public UdonSharpComponentHandle component_handle =
                 new UdonSharpComponentHandle();
             public string udon_program_asset_path = string.Empty;
+
+            // Issue #193: safe-save response payload.
+            // ``reattached_components`` lists the component type names the
+            // safe-save handler re-attached during the save (when the raw
+            // ``SaveAsPrefabAsset`` stripped them).  ``orphan_modifications``
+            // lists the parent-prefab modification overrides that became
+            // orphan as a result of the save, each entry identified by its
+            // target object path and property path.
+            public string[] reattached_components = Array.Empty<string>();
+            public OrphanModificationEntry[] orphan_modifications =
+                Array.Empty<OrphanModificationEntry>();
+        }
+
+        [Serializable]
+        public sealed class OrphanModificationEntry
+        {
+            public string target_object_path = string.Empty;
+            public string property_path = string.Empty;
         }
 
         // Issue #119: stable handle returned from
@@ -585,8 +611,8 @@ namespace PrefabSentinel
                 case "editor_set_property":
                     response = HandleEditorSetProperty(request);
                     break;
-                case "save_as_prefab":
-                    response = HandleSaveAsPrefab(request);
+                case "safe_save_prefab":
+                    response = HandleSafeSaveAsPrefab(request);
                     break;
                 case "editor_set_parent":
                     response = HandleEditorSetParent(request);

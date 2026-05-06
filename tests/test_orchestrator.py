@@ -2451,5 +2451,115 @@ class InspectMaterialsRelativePathTests(unittest.TestCase):
         self.assertEqual("MyScript", comps[0]["script_name"])
 
 
+class TestInspectHierarchyExpand(unittest.TestCase):
+    """Issue #196 — opt-in MonoBehaviour expansion on inspect-hierarchy.
+
+    The expand flag substitutes script class names for the generic
+    MonoBehaviour label by resolving each component's script GUID
+    through the project GUID index.  When the index cannot be built the
+    response surfaces a warning diagnostic and a ``script_index_unavailable``
+    flag in the response data, and the rendered tree falls back to the
+    plain MonoBehaviour label.
+    """
+
+    SCRIPT_GUID = "11112222111122221111222211112222"
+
+    def _write_project_with_script(self, root: Path) -> Path:
+        from tests.yaml_helpers import (
+            YAML_HEADER,
+            make_gameobject,
+            make_monobehaviour,
+            make_transform,
+        )
+
+        assets = root / "Assets"
+        assets.mkdir(parents=True)
+        # A C# script and its meta produce the GUID lookup target.
+        (assets / "MyController.cs").write_text(
+            "using UnityEngine;\npublic class MyController : MonoBehaviour {}\n",
+            encoding="utf-8",
+        )
+        (assets / "MyController.cs.meta").write_text(
+            f"fileFormatVersion: 2\nguid: {self.SCRIPT_GUID}\n",
+            encoding="utf-8",
+        )
+        prefab = assets / "Test.prefab"
+        prefab.write_text(
+            YAML_HEADER
+            + make_gameobject("100", "Obj", ["200", "300"])
+            + make_transform("200", "100")
+            + make_monobehaviour("300", "100", guid=self.SCRIPT_GUID),
+            encoding="utf-8",
+        )
+        # Prefab also needs a meta so resolve_target_path is happy.
+        (assets / "Test.prefab.meta").write_text(
+            "fileFormatVersion: 2\nguid: aaaa1111aaaa1111aaaa1111aaaa1111\n",
+            encoding="utf-8",
+        )
+        return prefab
+
+    def test_expand_flag_substitutes_script_class_name(self) -> None:
+        from prefab_sentinel.orchestrator_inspect import inspect_hierarchy
+        from prefab_sentinel.services.prefab_variant import PrefabVariantService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_project_with_script(root)
+            svc = PrefabVariantService(project_root=root)
+
+            response = inspect_hierarchy(
+                svc, "Assets/Test.prefab", expand_monobehaviour=True
+            )
+
+        self.assertTrue(response.success, msg=response.message)
+        # Tree carries the resolved script class name; the generic
+        # MonoBehaviour label is replaced.
+        tree = response.data["tree"]
+        self.assertIn("MyController", tree)
+        self.assertNotIn("MonoBehaviour", tree)
+        # Response data records the expand mode active.
+        self.assertEqual(True, response.data["expand_monobehaviour"])
+
+    def test_expand_flag_off_keeps_generic_monobehaviour_label(self) -> None:
+        from prefab_sentinel.orchestrator_inspect import inspect_hierarchy
+        from prefab_sentinel.services.prefab_variant import PrefabVariantService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_project_with_script(root)
+            svc = PrefabVariantService(project_root=root)
+
+            response = inspect_hierarchy(svc, "Assets/Test.prefab")
+
+        self.assertTrue(response.success)
+        tree = response.data["tree"]
+        self.assertIn("MonoBehaviour", tree)
+        self.assertNotIn("MyController", tree)
+
+    def test_expand_fallback_when_index_unavailable(self) -> None:
+        from prefab_sentinel.orchestrator_inspect import inspect_hierarchy
+        from prefab_sentinel.services.prefab_variant import PrefabVariantService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_project_with_script(root)
+            svc = PrefabVariantService(project_root=root)
+
+            with patch(
+                "prefab_sentinel.orchestrator_inspect.collect_project_guid_index",
+                side_effect=OSError("simulated index build failure"),
+            ):
+                response = inspect_hierarchy(
+                    svc, "Assets/Test.prefab", expand_monobehaviour=True
+                )
+
+        self.assertTrue(response.success)
+        self.assertEqual(Severity.WARNING, response.severity)
+        self.assertEqual(True, response.data["script_index_unavailable"])
+        # Fallback: rendered tree carries the plain MonoBehaviour label.
+        tree = response.data["tree"]
+        self.assertIn("MonoBehaviour", tree)
+
+
 if __name__ == "__main__":
     unittest.main()

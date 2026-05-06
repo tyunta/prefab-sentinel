@@ -29,6 +29,36 @@ from prefab_sentinel.unity_assets import (
 from prefab_sentinel.unity_assets_path import relative_to_root, resolve_scope_path
 
 
+def _build_top_missing_entry(
+    guid: str,
+    occurrences: int,
+    *,
+    guid_map: dict[str, Path],
+    scan_project_root: Path,
+    per_source: Counter | None,
+    include_breakdown: bool,
+) -> dict[str, object]:
+    """Build a top-missing-asset entry, optionally with per-source breakdown.
+
+    When ``include_breakdown`` is true and a per-source counter is supplied,
+    the entry carries a ``referenced_from`` list of ``{source, count}``
+    rows sorted by descending count.  Without the flag the field is absent.
+    """
+    entry: dict[str, object] = {
+        "guid": guid,
+        "occurrences": occurrences,
+        "asset_name": resolve_guid_to_asset_name(
+            guid, guid_map, scan_project_root,
+        ),
+    }
+    if include_breakdown and per_source is not None:
+        entry["referenced_from"] = [
+            {"source": source, "count": count}
+            for source, count in per_source.most_common()
+        ]
+    return entry
+
+
 class ReferenceResolverService:
     """Read-only reference validation service."""
 
@@ -334,6 +364,8 @@ class ReferenceResolverService:
         exclude_patterns: tuple[str, ...] = (),
         top_guid_limit: int = 10,
         ignore_asset_guids: tuple[str, ...] = (),
+        *,
+        top_missing_breakdown: bool = False,
     ) -> ToolResponse:
         """Scan all Unity text assets in scope for broken GUID/fileID references.
 
@@ -382,6 +414,10 @@ class ReferenceResolverService:
         unique_issue_keys: set[tuple[str, ...]] = set()
         missing_asset_guid_occurrences = Counter()
         ignored_missing_asset_guid_occurrences = Counter()
+        # Issue #198: per-(missing GUID, source path) occurrence counter,
+        # populated only when the breakdown flag is enabled so the default
+        # path keeps O(unique GUIDs) memory.
+        missing_asset_per_source: dict[str, Counter] = {}
         scanned_files = 0
         scanned_refs = 0
         # unreadable_files: SOURCE files in scope that could not be decoded
@@ -462,6 +498,10 @@ class ReferenceResolverService:
                             ignored_missing_asset_guid_occurrences[ref.guid] += 1
                             continue
                         missing_asset_guid_occurrences[ref.guid] += 1
+                        if top_missing_breakdown:
+                            missing_asset_per_source.setdefault(
+                                ref.guid, Counter()
+                            )[src_path] += 1
                         record_issue(
                             ("missing_asset_guid", ref.guid),
                             "missing_asset",
@@ -568,13 +608,14 @@ class ReferenceResolverService:
                 "missing_local_id": raw_counts["missing_local_id"],
             },
             "top_missing_asset_guids": [
-                {
-                    "guid": guid,
-                    "occurrences": count,
-                    "asset_name": resolve_guid_to_asset_name(
-                        guid, guid_map, scan_project_root,
-                    ),
-                }
+                _build_top_missing_entry(
+                    guid,
+                    count,
+                    guid_map=guid_map,
+                    scan_project_root=scan_project_root,
+                    per_source=missing_asset_per_source.get(guid),
+                    include_breakdown=top_missing_breakdown,
+                )
                 for guid, count in missing_asset_guid_occurrences.most_common(top_guid_limit)
             ],
             "top_ignored_missing_asset_guids": [

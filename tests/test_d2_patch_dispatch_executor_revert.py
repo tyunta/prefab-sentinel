@@ -498,5 +498,241 @@ class PatchDispatchEnvelopeTests(unittest.TestCase):
         self.assertEqual(True, response.data["executed"])
 
 
+class PatchDispatchAssertStrengthening(unittest.TestCase):
+    """Issue #147 — value-pinned dry-run vs apply envelope assertions on the
+    patch-dispatch surface, beyond the existing parity row.  Pins:
+    * dry-run carries ``applied=0`` and ``executed`` not true and
+      ``read_only=True``;
+    * apply on a clean plan carries ``applied=1`` and ``executed=True`` and
+      ``read_only=False``.
+    """
+
+    def _service(self, root: Path) -> SerializedObjectService:
+        return SerializedObjectService(project_root=root)
+
+    def test_dry_run_carries_applied_zero_and_executed_not_true(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            target = root / "data.json"
+            target.write_text(json.dumps({"a": 1}), encoding="utf-8")
+            svc = self._service(root)
+            response = dry_run_patch(
+                svc,
+                str(target),
+                [{"op": "set", "component": "C", "path": "a", "value": 2}],
+            )
+        self.assertTrue(response.success)
+        self.assertEqual(0, response.data["applied"])
+        # ``executed`` is either absent or False in a dry-run envelope; pin
+        # both branches as "not true".
+        self.assertNotEqual(True, response.data.get("executed", False))
+        self.assertEqual(True, response.data["read_only"])
+
+    def test_apply_carries_applied_one_and_executed_true(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            target = root / "data.json"
+            target.write_text(json.dumps({"a": 1}), encoding="utf-8")
+            svc = self._service(root)
+            response = apply_and_save(
+                svc,
+                str(target),
+                [{"op": "set", "component": "C", "path": "a", "value": 9}],
+            )
+        self.assertTrue(response.success)
+        self.assertEqual(1, response.data["applied"])
+        self.assertEqual(True, response.data["executed"])
+        self.assertEqual(False, response.data["read_only"])
+
+
+class PatchDispatchPerBranchRouting(unittest.TestCase):
+    """Issue #147 — per-target-branch dispatch matrix.  Each routing row pins
+    the dispatched-to backend by ``assert_called_with``-style argument value
+    verification, and asserts the other branches stay untouched.
+    """
+
+    def _service(self, root: Path) -> SerializedObjectService:
+        return SerializedObjectService(project_root=root)
+
+    def test_scene_target_invokes_scene_validator_with_open_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            scene = root / "Assets" / "T.unity"
+            scene.parent.mkdir(parents=True)
+            scene.write_text(
+                "%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: T\n",
+                encoding="utf-8",
+            )
+            svc = self._service(root)
+            ops = [{"op": "set", "path": "x", "value": 1}]
+            with patch(
+                "prefab_sentinel.services.serialized_object.patch_dispatch.validate_scene_ops",
+                return_value=([], []),
+            ) as mock_scene, patch(
+                "prefab_sentinel.services.serialized_object.patch_dispatch.validate_asset_open_ops",
+                return_value=([], []),
+            ) as mock_asset, patch(
+                "prefab_sentinel.services.serialized_object.patch_dispatch._dry_run_json_ops",
+            ) as mock_json:
+                dry_run_patch(svc, str(scene), ops)
+        # Exactly once with target=scene path, mode="open".
+        self.assertEqual(1, mock_scene.call_count)
+        kwargs = mock_scene.call_args.kwargs
+        self.assertEqual(str(scene), kwargs["target"])
+        self.assertEqual("open", kwargs["mode"])
+        self.assertEqual(ops, kwargs["ops"])
+        # No other backend touched.
+        self.assertEqual(0, mock_asset.call_count)
+        self.assertEqual(0, mock_json.call_count)
+
+    def test_asset_target_invokes_asset_open_validator_with_asset_kind(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            asset = root / "Assets" / "T.asset"
+            asset.parent.mkdir(parents=True)
+            asset.write_text(
+                "%YAML 1.1\n--- !u!114 &1\nMonoBehaviour:\n  m_Name: T\n",
+                encoding="utf-8",
+            )
+            svc = self._service(root)
+            ops = [{"op": "set", "path": "x", "value": 1}]
+            with patch(
+                "prefab_sentinel.services.serialized_object.patch_dispatch.validate_scene_ops",
+                return_value=([], []),
+            ) as mock_scene, patch(
+                "prefab_sentinel.services.serialized_object.patch_dispatch.validate_asset_open_ops",
+                return_value=([], []),
+            ) as mock_asset, patch(
+                "prefab_sentinel.services.serialized_object.patch_dispatch._dry_run_json_ops",
+            ) as mock_json:
+                dry_run_patch(svc, str(asset), ops)
+        self.assertEqual(1, mock_asset.call_count)
+        kwargs = mock_asset.call_args.kwargs
+        self.assertEqual(str(asset), kwargs["target"])
+        self.assertEqual("asset", kwargs["kind"])
+        self.assertEqual(ops, kwargs["ops"])
+        self.assertEqual(0, mock_scene.call_count)
+        self.assertEqual(0, mock_json.call_count)
+
+    def test_material_target_invokes_asset_open_validator_with_material_kind(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            mat = root / "Assets" / "T.mat"
+            mat.parent.mkdir(parents=True)
+            mat.write_text(
+                "%YAML 1.1\n--- !u!21 &1\nMaterial:\n  m_Name: T\n",
+                encoding="utf-8",
+            )
+            svc = self._service(root)
+            ops = [{"op": "set", "path": "x", "value": 1}]
+            with patch(
+                "prefab_sentinel.services.serialized_object.patch_dispatch.validate_scene_ops",
+                return_value=([], []),
+            ) as mock_scene, patch(
+                "prefab_sentinel.services.serialized_object.patch_dispatch.validate_asset_open_ops",
+                return_value=([], []),
+            ) as mock_asset, patch(
+                "prefab_sentinel.services.serialized_object.patch_dispatch._dry_run_json_ops",
+            ) as mock_json:
+                dry_run_patch(svc, str(mat), ops)
+        self.assertEqual(1, mock_asset.call_count)
+        kwargs = mock_asset.call_args.kwargs
+        self.assertEqual(str(mat), kwargs["target"])
+        self.assertEqual("material", kwargs["kind"])
+        self.assertEqual(ops, kwargs["ops"])
+        self.assertEqual(0, mock_scene.call_count)
+        self.assertEqual(0, mock_json.call_count)
+
+    def test_json_target_invokes_json_dry_run_helper(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            target = root / "data.json"
+            target.write_text(json.dumps({"a": 1}), encoding="utf-8")
+            svc = self._service(root)
+            ops = [{"op": "set", "component": "C", "path": "a", "value": 9}]
+            with patch(
+                "prefab_sentinel.services.serialized_object.patch_dispatch.validate_scene_ops",
+                return_value=([], []),
+            ) as mock_scene, patch(
+                "prefab_sentinel.services.serialized_object.patch_dispatch.validate_asset_open_ops",
+                return_value=([], []),
+            ) as mock_asset, patch(
+                "prefab_sentinel.services.serialized_object.patch_dispatch._dry_run_json_ops",
+                return_value=success_response("SER_DRY_RUN_OK", "ok", data={"applied": 0}),
+            ) as mock_json:
+                dry_run_patch(svc, str(target), ops)
+        self.assertEqual(1, mock_json.call_count)
+        # _dry_run_json_ops(service, target, ops) — three positional args.
+        call_args = mock_json.call_args.args
+        self.assertEqual(svc, call_args[0])
+        self.assertEqual(str(target), call_args[1])
+        self.assertEqual(ops, call_args[2])
+        self.assertEqual(0, mock_scene.call_count)
+        self.assertEqual(0, mock_asset.call_count)
+
+    def test_unity_bridge_apply_invokes_bridge_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            target = root / "Assets" / "T.mat"
+            target.parent.mkdir(parents=True)
+            target.write_text(
+                "%YAML 1.1\n--- !u!21 &1\nMaterial:\n  m_Name: T\n",
+                encoding="utf-8",
+            )
+            svc = self._service(root)
+            ops = [{"op": "set", "path": "x", "value": 1}]
+            with patch(
+                "prefab_sentinel.services.serialized_object.patch_dispatch.resource_bridge.apply_with_unity_bridge",
+                return_value=success_response("BRIDGE_OK", "applied"),
+            ) as mock_bridge, patch(
+                "prefab_sentinel.services.serialized_object.patch_dispatch.validate_asset_open_ops",
+                return_value=([], []),
+            ), patch(
+                "prefab_sentinel.services.serialized_object.patch_dispatch.apply_json_target",
+            ) as mock_json_apply:
+                response = apply_and_save(svc, str(target), ops)
+        self.assertTrue(response.success)
+        self.assertEqual(1, mock_bridge.call_count)
+        kwargs = mock_bridge.call_args.kwargs
+        # apply_with_unity_bridge(bridge, target_path=..., ops=...).
+        self.assertEqual(svc.bridge, mock_bridge.call_args.args[0])
+        self.assertEqual(target, kwargs["target_path"])
+        self.assertEqual(ops, kwargs["ops"])
+        # JSON apply path is not exercised on a Unity-bridge target.
+        self.assertEqual(0, mock_json_apply.call_count)
+
+
+class PatchDispatchUnsupportedTarget(unittest.TestCase):
+    """Issue #147 — unsupported-target apply branch returns the deterministic
+    ``SER_UNSUPPORTED_TARGET`` envelope with ``applied=0``, ``executed=False``,
+    ``read_only=False``.  The resource-bridge predicate is stubbed to false so
+    the test reaches the unsupported branch on a target whose suffix is
+    neither ``.json`` nor a Unity bridge target.
+    """
+
+    def _service(self, root: Path) -> SerializedObjectService:
+        return SerializedObjectService(project_root=root)
+
+    def test_unsupported_target_returns_envelope_with_pinned_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            target = root / "data.txt"
+            target.write_text("not handled", encoding="utf-8")
+            svc = self._service(root)
+            ops = [{"op": "set", "component": "C", "path": "x", "value": 1}]
+            with patch(
+                "prefab_sentinel.services.serialized_object.patch_dispatch.resource_bridge.is_unity_bridge_target",
+                return_value=False,
+            ):
+                response = apply_and_save(svc, str(target), ops)
+        self.assertFalse(response.success)
+        self.assertEqual("SER_UNSUPPORTED_TARGET", response.code)
+        self.assertEqual(0, response.data["applied"])
+        self.assertEqual(False, response.data["executed"])
+        self.assertEqual(False, response.data["read_only"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -714,16 +714,22 @@ namespace PrefabSentinel
                     }
                     else if (entry.action == "editor_recompile_and_wait")
                     {
-                        // After a reload, the AssemblyReloadCount snapshot
-                        // captured at registration time is gone; the post-
-                        // reload counter on this AppDomain starts at 0,
-                        // so any positive count satisfies the "reload has
-                        // fired since the request" condition.
+                        // Issue #191: the resumer running already implies a
+                        // domain reload has occurred — the post-reload counter
+                        // on this AppDomain starts at 0, and the
+                        // ``AssemblyReloadCount > threshold`` check inside the
+                        // shared poll is what gates success.  A threshold of
+                        // -1 is satisfied on the very first tick (0 > -1)
+                        // independent of whether ``[InitializeOnLoad]`` static
+                        // constructors run before or after the
+                        // ``afterAssemblyReload`` increment, eliminating the
+                        // off-by-one race that left the wait blocked until
+                        // the next reload.
                         EditorApplication.CallbackFunction poll = BuildRecompileAndWaitPoll(
                             entry.responsePath,
                             entry.deadlineUnixMs,
                             entry.callTimeAssemblyMtimeUnixMs,
-                            0,
+                            -1,
                             "editor_recompile_and_wait: timed out after domain reload.");
                         PendingAsyncRunner.RehydrateEntry(entry, poll);
                     }

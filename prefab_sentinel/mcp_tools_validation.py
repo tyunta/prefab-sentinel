@@ -53,6 +53,9 @@ def register_validation_tools(server: FastMCP, session: ProjectSession) -> None:
         scope: str,
         details: bool = False,
         max_diagnostics: int = 200,
+        top_missing_breakdown: bool = False,
+        snapshot_save: str = "",
+        snapshot_diff: str = "",
     ) -> dict[str, Any]:
         """Scan for broken GUID/fileID references in a Unity project scope.
 
@@ -60,6 +63,12 @@ def register_validation_tools(server: FastMCP, session: ProjectSession) -> None:
             scope: Directory or file path to scan.
             details: Include per-reference diagnostics.
             max_diagnostics: Cap on the number of diagnostics returned.
+            top_missing_breakdown: Emit a per-source-file occurrence
+                breakdown for each top missing GUID (issue #198).
+            snapshot_save: When non-empty, persist this scan's result
+                under the supplied snapshot name (issue #199).
+            snapshot_diff: When non-empty, diff this scan against the
+                snapshot of the same name (issue #199).
         """
         orch = session.get_orchestrator()
         resolved_scope = session.resolve_scope(scope) or scope
@@ -67,6 +76,9 @@ def register_validation_tools(server: FastMCP, session: ProjectSession) -> None:
             scope=resolved_scope,
             details=details,
             max_diagnostics=max_diagnostics,
+            top_missing_breakdown=top_missing_breakdown,
+            snapshot_save=snapshot_save,
+            snapshot_diff=snapshot_diff,
         )
         return resp.to_dict()
 
@@ -235,6 +247,7 @@ def register_validation_tools(server: FastMCP, session: ProjectSession) -> None:
         asset_path: str,
         depth: int | None = None,
         show_components: bool = True,
+        expand_monobehaviour: bool = False,
     ) -> dict[str, Any]:
         """Display the GameObject hierarchy tree of a Unity asset.
 
@@ -242,12 +255,17 @@ def register_validation_tools(server: FastMCP, session: ProjectSession) -> None:
             asset_path: Path to a .prefab or .unity file.
             depth: Maximum tree depth to display (None = unlimited).
             show_components: Show component annotations (default: True).
+            expand_monobehaviour: Substitute script class names for the
+                generic ``MonoBehaviour`` label by resolving each
+                component's script GUID through the project GUID index
+                (issue #196, default: False).
         """
         orch = session.get_orchestrator()
         resp = orch.inspect_hierarchy(
             target_path=asset_path,
             max_depth=depth,
             show_components=show_components,
+            expand_monobehaviour=expand_monobehaviour,
         )
         return resp.to_dict()
 

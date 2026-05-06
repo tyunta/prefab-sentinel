@@ -13,6 +13,13 @@ from prefab_sentinel.contracts import (
 from prefab_sentinel.orchestrator_variant import _read_target_file
 from prefab_sentinel.services.prefab_variant import PrefabVariantService
 from prefab_sentinel.services.reference_resolver import ReferenceResolverService
+from prefab_sentinel.services.reference_resolver_snapshots import (
+    SnapshotNameError,
+    SnapshotPayloadError,
+    diff_snapshots,
+    load_snapshot,
+    save_snapshot,
+)
 from prefab_sentinel.services.runtime_validation import RuntimeValidationService
 from prefab_sentinel.structure_validator import validate_structure
 from prefab_sentinel.unity_assets import GAMEOBJECT_BEARING_SUFFIXES
@@ -68,6 +75,91 @@ def inspect_structure(
     )
 
 
+def _handle_snapshot_modes(
+    *,
+    scope: str,
+    project_root: Path,
+    scan_data: dict,
+    snapshot_save: str,
+    snapshot_diff: str,
+) -> ToolResponse | None:
+    """Apply the snapshot-save / snapshot-diff modes to ``scan_data``.
+
+    Mutates ``scan_data`` in place on success: ``snapshot_save`` adds
+    ``scan_data['snapshot_saved_to']``; ``snapshot_diff`` adds
+    ``scan_data['snapshot_diff']``.  Returns a ``ToolResponse`` error
+    envelope to short-circuit the caller on invalid name, absent
+    snapshot, or malformed snapshot file; returns ``None`` when no mode
+    was requested or the requested mode succeeded.
+    """
+    if snapshot_save:
+        try:
+            saved_path = save_snapshot(snapshot_save, scan_data, project_root)
+        except SnapshotNameError as exc:
+            return _snapshot_error(
+                "VALIDATE_REFS_SNAPSHOT_BAD_NAME",
+                str(exc),
+                scope=scope,
+                snapshot_save=snapshot_save,
+                snapshot_diff=snapshot_diff,
+            )
+        scan_data["snapshot_saved_to"] = str(saved_path)
+        return None
+
+    if snapshot_diff:
+        try:
+            prev = load_snapshot(snapshot_diff, project_root)
+        except SnapshotNameError as exc:
+            return _snapshot_error(
+                "VALIDATE_REFS_SNAPSHOT_BAD_NAME",
+                str(exc),
+                scope=scope,
+                snapshot_save=snapshot_save,
+                snapshot_diff=snapshot_diff,
+            )
+        except SnapshotPayloadError as exc:
+            return _snapshot_error(
+                "VALIDATE_REFS_SNAPSHOT_BAD_NAME",
+                f"snapshot file is malformed: {exc}",
+                scope=scope,
+                snapshot_save=snapshot_save,
+                snapshot_diff=snapshot_diff,
+            )
+        if prev is None:
+            return _snapshot_error(
+                "VALIDATE_REFS_SNAPSHOT_NOT_FOUND",
+                f"no snapshot named {snapshot_diff!r} for project {project_root}",
+                scope=scope,
+                snapshot_save=snapshot_save,
+                snapshot_diff=snapshot_diff,
+            )
+        scan_data["snapshot_diff"] = diff_snapshots(prev, scan_data)
+    return None
+
+
+def _snapshot_error(
+    code: str,
+    message: str,
+    *,
+    scope: str,
+    snapshot_save: str,
+    snapshot_diff: str,
+) -> ToolResponse:
+    return ToolResponse(
+        success=False,
+        severity=Severity.ERROR,
+        code=code,
+        message=message,
+        data={
+            "scope": scope,
+            "read_only": True,
+            "snapshot_save": snapshot_save,
+            "snapshot_diff": snapshot_diff,
+        },
+        diagnostics=[],
+    )
+
+
 def validate_refs(
     reference_resolver: ReferenceResolverService,
     scope: str,
@@ -75,15 +167,49 @@ def validate_refs(
     max_diagnostics: int = 200,
     exclude_patterns: tuple[str, ...] = (),
     ignore_asset_guids: tuple[str, ...] = (),
+    *,
+    top_missing_breakdown: bool = False,
+    snapshot_save: str = "",
+    snapshot_diff: str = "",
 ) -> ToolResponse:
+    if snapshot_save and snapshot_diff:
+        return ToolResponse(
+            success=False,
+            severity=Severity.ERROR,
+            code="VALIDATE_REFS_SNAPSHOT_ARG_CONFLICT",
+            message=(
+                "snapshot_save and snapshot_diff are mutually exclusive; "
+                "supply at most one of the two."
+            ),
+            data={
+                "scope": scope,
+                "read_only": True,
+                "snapshot_save": snapshot_save,
+                "snapshot_diff": snapshot_diff,
+            },
+            diagnostics=[],
+        )
+
     step = reference_resolver.scan_broken_references(
         scope=scope,
         include_diagnostics=details,
         max_diagnostics=max_diagnostics,
         exclude_patterns=exclude_patterns,
         ignore_asset_guids=ignore_asset_guids,
+        top_missing_breakdown=top_missing_breakdown,
     )
     step_data = step.data if isinstance(step.data, dict) else {}
+
+    snapshot_response = _handle_snapshot_modes(
+        scope=scope,
+        project_root=reference_resolver.project_root,
+        scan_data=step_data,
+        snapshot_save=snapshot_save,
+        snapshot_diff=snapshot_diff,
+    )
+    if isinstance(snapshot_response, ToolResponse):
+        return snapshot_response
+
     categories = step_data.get("categories", {}) or {}
     missing_asset_unique = int(categories.get("missing_asset", 0) or 0)
     if missing_asset_unique > 0:

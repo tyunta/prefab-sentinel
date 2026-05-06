@@ -146,32 +146,64 @@ def register_editor_ops_tools(server: FastMCP) -> None:
         )
 
     @server.tool()
-    def editor_save_as_prefab(
+    def editor_safe_save_prefab(
         hierarchy_path: str,
         asset_path: str,
+        protect_components: list[str],
         force_original: bool = False,
     ) -> dict[str, Any]:
-        """Save a scene GameObject as a Prefab or Prefab Variant asset.
+        """Save a scene GameObject as a Prefab or Prefab Variant asset
+        while guaranteeing every caller-named component type stays
+        attached on the saved asset (issue #193).
 
-        If the GameObject is a Prefab instance (connected to a base),
-        the result is automatically a Prefab Variant.
-        If it's a plain GameObject, a new original Prefab is created.
-        The scene instance is not reconnected to the new Prefab asset.
+        Unlike a raw ``PrefabUtility.SaveAsPrefabAsset`` call, the
+        bridge handler observes the saved asset, re-attaches any
+        component type listed in ``protect_components`` that the save
+        stripped, and reports both the re-attached component types and
+        the parent-prefab modification overrides that became orphan as
+        a result of the save.  ``protect_components`` is required and
+        rejects empty / omitted input — there is no built-in always-
+        protected list.
 
         Args:
             hierarchy_path: Hierarchy path to the GameObject to save.
             asset_path: Output .prefab path (e.g. "Assets/Prefabs/MyObj.prefab").
-            force_original: If True, break any Prefab Instance connection before
-                saving, forcing the result to be an original Prefab (not a Variant).
-                Warning: this unpacks the scene GameObject (destructive, but Undo-able).
+            protect_components: Non-empty list of component type names
+                to preserve through the save (e.g. ``["VRC_UiShape"]``).
+            force_original: If True, break any Prefab Instance connection
+                before saving, forcing the result to be an original
+                Prefab (not a Variant).  Warning: this unpacks the scene
+                GameObject (destructive, but Undo-able).
         """
+        if not protect_components:
+            return {
+                "success": False,
+                "severity": "error",
+                "code": "EDITOR_CTRL_SAFE_SAVE_PREFAB_PROTECT_REQUIRED",
+                "message": (
+                    "protect_components must be a non-empty list of "
+                    "component type names; the safe-save contract has "
+                    "no built-in protected-component default."
+                ),
+                "data": {
+                    "hierarchy_path": hierarchy_path,
+                    "asset_path": asset_path,
+                    "protect_components": list(protect_components),
+                    "executed": False,
+                    "read_only": True,
+                },
+                "diagnostics": [],
+            }
         kwargs: dict[str, Any] = {
             "hierarchy_path": hierarchy_path,
             "asset_path": asset_path,
+            "protect_components_json": dump_json(
+                list(protect_components), indent=None
+            ),
         }
         if force_original:
             kwargs["force_original"] = True
-        return send_action(action="save_as_prefab", **kwargs)
+        return send_action(action="safe_save_prefab", **kwargs)
 
     @server.tool()
     def editor_set_parent(

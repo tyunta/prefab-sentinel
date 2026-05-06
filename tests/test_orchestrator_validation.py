@@ -10,10 +10,12 @@ match the on-disk fixture exactly.
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
 
+from prefab_sentinel.contracts import Severity
 from prefab_sentinel.orchestrator_validation import validate_refs
 from prefab_sentinel.services.reference_resolver import ReferenceResolverService
 from tests.bridge_test_helpers import write_file
@@ -776,6 +778,253 @@ class TestValidationSnapshotPinning:
             snapshot,
             regenerate=regenerate_snapshots,
         )
+
+
+class TestValidateRefsSnapshot(unittest.TestCase):
+    """Issue #199 — snapshot save / snapshot diff modes for validate-refs.
+
+    Tests use ``PREFAB_SENTINEL_SNAPSHOT_DIR`` to direct the helper at
+    a fresh tempdir so they do not collide with developer state.
+    """
+
+    BASE_GUID = "11111111111111111111111111111111"
+    MISSING_A = "aa" * 16
+    MISSING_B = "bb" * 16
+
+    def _project_with_missing(self, root: Path, missing: list[str]) -> None:
+        assets = root / "Assets"
+        assets.mkdir(parents=True, exist_ok=True)
+        for index, guid in enumerate(missing):
+            write_file(
+                assets / f"P{index}.prefab",
+                f"""%YAML 1.1
+--- !u!1 &100
+GameObject:
+  m_Name: P{index}
+  m_Component:
+    - component: {{fileID: 200, guid: {guid}, type: 3}}
+""",
+            )
+            write_file(
+                assets / f"P{index}.prefab.meta",
+                f"fileFormatVersion: 2\nguid: {self.BASE_GUID[:31]}{index}\n",
+            )
+
+    def test_save_then_diff_returns_partition(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            snap_dir = root / "snapshots"
+            self._project_with_missing(root, [self.MISSING_A, self.MISSING_B])
+            svc = ReferenceResolverService(project_root=root)
+
+            os.environ["PREFAB_SENTINEL_SNAPSHOT_DIR"] = str(snap_dir)
+            try:
+                # Save current state with two missing GUIDs.
+                save_resp = validate_refs(
+                    svc,
+                    scope=str(root / "Assets"),
+                    snapshot_save="baseline",
+                )
+                self.assertTrue(save_resp.success or save_resp.code == "REF001")
+
+                # Resolve one missing GUID by deleting the prefab that
+                # carried it.  P1 references MISSING_B; remove that file.
+                (root / "Assets" / "P1.prefab").unlink()
+                (root / "Assets" / "P1.prefab.meta").unlink()
+                # Drop the cache so the next scan picks up the deletion.
+                svc.invalidate_text_cache()
+                svc.invalidate_scope_files_cache()
+
+                # Diff against the baseline.
+                diff_resp = validate_refs(
+                    svc,
+                    scope=str(root / "Assets"),
+                    snapshot_diff="baseline",
+                )
+            finally:
+                os.environ.pop("PREFAB_SENTINEL_SNAPSHOT_DIR", None)
+
+        step_data = diff_resp.data["steps"][0]["result"]["data"]
+        partition = step_data["snapshot_diff"]
+        # MISSING_B was resolved; MISSING_A is unchanged.
+        resolved_guids = [
+            sig[1] for sig in partition["resolved"] if sig[0] == "missing_asset"
+        ]
+        self.assertIn(self.MISSING_B, resolved_guids)
+        self.assertEqual([], partition["new_broken"])
+
+    def test_diff_against_absent_snapshot_emits_not_found(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            snap_dir = root / "snapshots"
+            self._project_with_missing(root, [self.MISSING_A])
+            svc = ReferenceResolverService(project_root=root)
+
+            os.environ["PREFAB_SENTINEL_SNAPSHOT_DIR"] = str(snap_dir)
+            try:
+                resp = validate_refs(
+                    svc,
+                    scope=str(root / "Assets"),
+                    snapshot_diff="never-saved",
+                )
+            finally:
+                os.environ.pop("PREFAB_SENTINEL_SNAPSHOT_DIR", None)
+        self.assertFalse(resp.success)
+        self.assertEqual("VALIDATE_REFS_SNAPSHOT_NOT_FOUND", resp.code)
+        self.assertEqual(Severity.ERROR, resp.severity)
+
+    def test_save_and_diff_mutually_exclusive(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            self._project_with_missing(root, [self.MISSING_A])
+            svc = ReferenceResolverService(project_root=root)
+
+            resp = validate_refs(
+                svc,
+                scope=str(root / "Assets"),
+                snapshot_save="x",
+                snapshot_diff="y",
+            )
+        self.assertFalse(resp.success)
+        self.assertEqual("VALIDATE_REFS_SNAPSHOT_ARG_CONFLICT", resp.code)
+        self.assertEqual(Severity.ERROR, resp.severity)
+
+    def test_snapshot_name_path_separator_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            snap_dir = root / "snapshots"
+            self._project_with_missing(root, [self.MISSING_A])
+            svc = ReferenceResolverService(project_root=root)
+
+            os.environ["PREFAB_SENTINEL_SNAPSHOT_DIR"] = str(snap_dir)
+            try:
+                resp = validate_refs(
+                    svc,
+                    scope=str(root / "Assets"),
+                    snapshot_save="../escape",
+                )
+            finally:
+                os.environ.pop("PREFAB_SENTINEL_SNAPSHOT_DIR", None)
+        self.assertFalse(resp.success)
+        self.assertEqual("VALIDATE_REFS_SNAPSHOT_BAD_NAME", resp.code)
+
+    def test_diff_against_malformed_snapshot_emits_bad_name(self) -> None:
+        # Cover the SnapshotPayloadError branch in
+        # _handle_snapshot_modes: a snapshot file that exists on disk
+        # but does not deserialize as a JSON dict must be reported as
+        # BAD_NAME with "malformed" in the message (issue #199 / Boy
+        # Scout coverage).  The on-disk path is computed via the helper
+        # so the test pins the same namespace layout the helper uses.
+        from prefab_sentinel.services.reference_resolver_snapshots import (
+            snapshot_path,
+        )
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            snap_dir = root / "snapshots"
+            self._project_with_missing(root, [self.MISSING_A])
+            svc = ReferenceResolverService(project_root=root)
+
+            os.environ["PREFAB_SENTINEL_SNAPSHOT_DIR"] = str(snap_dir)
+            try:
+                target = snapshot_path("corrupt", root)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("not-valid-json{", encoding="utf-8")
+
+                resp = validate_refs(
+                    svc,
+                    scope=str(root / "Assets"),
+                    snapshot_diff="corrupt",
+                )
+            finally:
+                os.environ.pop("PREFAB_SENTINEL_SNAPSHOT_DIR", None)
+
+        self.assertFalse(resp.success)
+        self.assertEqual("VALIDATE_REFS_SNAPSHOT_BAD_NAME", resp.code)
+        self.assertEqual(Severity.ERROR, resp.severity)
+        self.assertIn("malformed", resp.message)
+
+
+class TestValidateRefsBreakdown(unittest.TestCase):
+    """Issue #198 — opt-in per-source-file occurrence breakdown for each
+    top missing GUID.  When the breakdown flag is enabled, top-missing
+    entries gain a ``referenced_from`` list of ``{source, count}`` rows
+    sorted by descending count; without the flag the field is absent.
+    """
+
+    MISSING_GUID = "ff" * 16
+
+    def _project_with_two_referrers(self, root: Path) -> None:
+        # Two prefabs both reference the same missing GUID; one prefab
+        # carries it twice so the breakdown produces a non-trivial sort.
+        assets = root / "Assets"
+        assets.mkdir(parents=True)
+        write_file(
+            assets / "First.prefab",
+            f"""%YAML 1.1
+--- !u!1 &100
+GameObject:
+  m_Name: First
+  m_Component:
+    - component: {{fileID: 200, guid: {self.MISSING_GUID}, type: 3}}
+    - component: {{fileID: 201, guid: {self.MISSING_GUID}, type: 3}}
+""",
+        )
+        write_file(
+            assets / "First.prefab.meta",
+            "fileFormatVersion: 2\nguid: 11111111111111111111111111111111\n",
+        )
+        write_file(
+            assets / "Second.prefab",
+            f"""%YAML 1.1
+--- !u!1 &100
+GameObject:
+  m_Name: Second
+  m_Component:
+    - component: {{fileID: 300, guid: {self.MISSING_GUID}, type: 3}}
+""",
+        )
+        write_file(
+            assets / "Second.prefab.meta",
+            "fileFormatVersion: 2\nguid: 22222222222222222222222222222222\n",
+        )
+
+    def test_breakdown_emits_referenced_from_with_counts(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            self._project_with_two_referrers(root)
+            svc = ReferenceResolverService(project_root=root)
+
+            response = validate_refs(
+                svc, scope=str(root / "Assets"), top_missing_breakdown=True
+            )
+
+        step = response.data["steps"][0]["result"]["data"]
+        top = step["top_missing_asset_guids"]
+        self.assertEqual(1, len(top))
+        entry = top[0]
+        self.assertEqual(self.MISSING_GUID, entry["guid"])
+        # Per-source-file occurrence list, sorted by descending count.
+        ref_from = entry["referenced_from"]
+        # Two source files; First has 2 occurrences, Second has 1.
+        self.assertEqual(2, len(ref_from))
+        self.assertEqual(2, ref_from[0]["count"])
+        self.assertEqual(1, ref_from[1]["count"])
+        self.assertIn("First.prefab", ref_from[0]["source"])
+        self.assertIn("Second.prefab", ref_from[1]["source"])
+
+    def test_default_omits_referenced_from(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            self._project_with_two_referrers(root)
+            svc = ReferenceResolverService(project_root=root)
+
+            response = validate_refs(svc, scope=str(root / "Assets"))
+
+        step = response.data["steps"][0]["result"]["data"]
+        top = step["top_missing_asset_guids"]
+        self.assertEqual(1, len(top))
+        self.assertNotIn("referenced_from", top[0])
 
 
 if __name__ == "__main__":

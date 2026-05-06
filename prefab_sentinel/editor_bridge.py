@@ -72,7 +72,12 @@ SUPPORTED_ACTIONS = frozenset(
         "create_udon_program_asset",
         # Phase 5: SetProperty + SaveAsPrefab
         "editor_set_property",
-        "save_as_prefab",
+        # Issue #193: ``safe_save_prefab`` is the sole public prefab-save
+        # action.  Its handler guarantees that every caller-named protected
+        # component type stays attached on the saved asset and reports both
+        # the re-attached component types and the orphan parent-prefab
+        # modification overrides.
+        "safe_save_prefab",
         "editor_set_parent",
         # Phase 6: Batch Operations + Scene
         "editor_create_empty",

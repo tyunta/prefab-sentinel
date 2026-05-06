@@ -307,6 +307,7 @@ class Phase1Orchestrator:
         *,
         max_depth: int | None = None,
         show_components: bool = True,
+        expand_monobehaviour: bool = False,
     ) -> ToolResponse:
         """Build the GameObject/Transform hierarchy tree (read-only).
 
@@ -314,13 +315,20 @@ class Phase1Orchestrator:
             target_path: Path to a ``.prefab`` or ``.unity`` file.
             max_depth: Limit the tree depth in the text representation.
             show_components: Include component names in tree nodes.
+            expand_monobehaviour: Substitute script class names for the
+                generic MonoBehaviour label when the script GUID resolves
+                through the project GUID index (issue #196).
 
         Returns:
             ``ToolResponse`` with ``data.tree`` (formatted text) and
             ``data.roots`` (structured hierarchy nodes).
         """
         return orchestrator_inspect.inspect_hierarchy(
-            self.prefab_variant, target_path, max_depth=max_depth, show_components=show_components,
+            self.prefab_variant,
+            target_path,
+            max_depth=max_depth,
+            show_components=show_components,
+            expand_monobehaviour=expand_monobehaviour,
         )
 
     def inspect_materials(
@@ -468,6 +476,10 @@ class Phase1Orchestrator:
         max_diagnostics: int = 200,
         exclude_patterns: tuple[str, ...] = (),
         ignore_asset_guids: tuple[str, ...] = (),
+        *,
+        top_missing_breakdown: bool = False,
+        snapshot_save: str = "",
+        snapshot_diff: str = "",
     ) -> ToolResponse:
         """Scan for broken GUID/fileID references in scope (read-only).
 
@@ -477,6 +489,12 @@ class Phase1Orchestrator:
             max_diagnostics: Cap on returned diagnostic entries.
             exclude_patterns: Glob patterns for paths to skip.
             ignore_asset_guids: GUIDs to exclude from missing-asset reports.
+            top_missing_breakdown: Emit a ``referenced_from`` per-source
+                file occurrence list per top missing GUID (issue #198).
+            snapshot_save: When non-empty, persist this scan's data
+                under the supplied snapshot name (issue #199).
+            snapshot_diff: When non-empty, diff this scan against a
+                previously saved snapshot of the same name (issue #199).
 
         Returns:
             ``ToolResponse`` whose ``data.steps[0].result.data`` contains
@@ -485,6 +503,9 @@ class Phase1Orchestrator:
         return orchestrator_validation.validate_refs(
             self.reference_resolver, scope, details, max_diagnostics,
             exclude_patterns, ignore_asset_guids,
+            top_missing_breakdown=top_missing_breakdown,
+            snapshot_save=snapshot_save,
+            snapshot_diff=snapshot_diff,
         )
 
     def validate_runtime(
