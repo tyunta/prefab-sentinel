@@ -22,6 +22,21 @@ from prefab_sentinel.unity_assets import (
 )
 from prefab_sentinel.unity_yaml_parser import iter_nested_prefab_children
 
+# Issue #197: pagination contract for inspect_wiring.
+#
+# Packaged scenes (e.g. NadeVision.prefab + VVMW package) merge into a
+# components list large enough to overflow the MCP token cap (65,859 chars
+# was observed). We expose the merged list one page at a time via an
+# opaque continuation token, mirroring the convention established by the
+# console-capture surface (``ConsoleCursorPrefix = "seq:"``). The default
+# page size and the inclusive bounds are pinned here as load-bearing
+# constants so tests in ``tests/test_default_parameter_boundaries.py`` can
+# anchor mutation testing on the literals.
+INSPECT_WIRING_CURSOR_PREFIX = "pos:"
+INSPECT_WIRING_PAGE_SIZE_DEFAULT = 50
+INSPECT_WIRING_PAGE_SIZE_MIN = 1
+INSPECT_WIRING_PAGE_SIZE_MAX = 500
+
 # ------------------------------------------------------------------
 # Module-level helpers (no self)
 # ------------------------------------------------------------------
@@ -141,13 +156,63 @@ def inspect_where_used(
     )
 
 
+def _parse_inspect_wiring_cursor(
+    cursor: str, total: int,
+) -> int | ToolResponse:
+    """Resolve the opaque continuation token to an integer offset.
+
+    An empty cursor maps to position 0 (fresh page). A non-empty cursor
+    must start with ``INSPECT_WIRING_CURSOR_PREFIX``; the body must
+    parse as a non-negative integer in ``[0, total]``. ``total`` itself
+    is a valid terminal position that yields a zero-length slice for
+    callers that request one extra page after exhaustion.
+    """
+    if cursor == "":
+        return 0
+    if not cursor.startswith(INSPECT_WIRING_CURSOR_PREFIX):
+        return error_response(
+            "INSPECT_WIRING_INVALID_CURSOR",
+            f"cursor token {cursor!r} must start with "
+            f"'{INSPECT_WIRING_CURSOR_PREFIX}' (opaque continuation "
+            f"token from a previous response).",
+        )
+    body = cursor[len(INSPECT_WIRING_CURSOR_PREFIX):]
+    try:
+        position = int(body)
+    except ValueError:
+        return error_response(
+            "INSPECT_WIRING_INVALID_CURSOR",
+            f"cursor token {cursor!r} could not be parsed as a "
+            f"page offset.",
+        )
+    if position < 0 or position > total:
+        return error_response(
+            "INSPECT_WIRING_INVALID_CURSOR",
+            f"cursor token {cursor!r} references position {position} "
+            f"outside the merged components range [0, {total}].",
+        )
+    return position
+
+
 def inspect_wiring(
     prefab_variant: PrefabVariantService,
     reference_resolver: ReferenceResolverService,
     target_path: str,
     *,
     udon_only: bool = False,
+    cursor: str = "",
+    page_size: int = INSPECT_WIRING_PAGE_SIZE_DEFAULT,
 ) -> ToolResponse:
+    # Issue #197: validate page_size before any I/O so a misconfigured
+    # caller short-circuits before the YAML scan.
+    if page_size < INSPECT_WIRING_PAGE_SIZE_MIN or page_size > INSPECT_WIRING_PAGE_SIZE_MAX:
+        return error_response(
+            "INSPECT_WIRING_PAGE_SIZE_OUT_OF_RANGE",
+            f"page_size={page_size} is outside the inclusive range "
+            f"[{INSPECT_WIRING_PAGE_SIZE_MIN}, "
+            f"{INSPECT_WIRING_PAGE_SIZE_MAX}].",
+        )
+
     text_or_error = _read_target_file(prefab_variant, target_path, "INSPECT_WIRING")
     if isinstance(text_or_error, ToolResponse):
         return text_or_error
@@ -204,7 +269,7 @@ def inspect_wiring(
     except Exception as exc:
         logging.getLogger(__name__).debug("GUID index build failed (best-effort): %s", exc)
 
-    component_summaries = []
+    component_summaries: list[dict[str, object]] = []
     for comp in result.components:
         go = result.game_objects.get(comp.game_object_file_id)
         go_name = go.name if go and go.name else ""
@@ -229,15 +294,34 @@ def inspect_wiring(
             nested_broken_refs.extend(nr.internal_broken_refs)
             nested_dup_refs.extend(nr.duplicate_references)
 
+    # Pagination: page over the merged components list. Diagnostic counts
+    # below remain page-independent (full merged totals) so the caller can
+    # judge severity from any page. Cursor validation runs after the merged
+    # total is known so position can be range-checked against it.
+    total = len(component_summaries)
+    cursor_or_error = _parse_inspect_wiring_cursor(cursor, total)
+    if isinstance(cursor_or_error, ToolResponse):
+        return cursor_or_error
+    position = cursor_or_error
+    end = min(position + page_size, total)
+    page_slice = component_summaries[position:end]
+    next_cursor = (
+        f"{INSPECT_WIRING_CURSOR_PREFIX}{end}" if end < total else ""
+    )
+
     data: dict[str, object] = {
         "target_path": target_path,
         "udon_only": udon_only,
         "read_only": True,
-        "component_count": len(component_summaries),
+        "component_count": total,
         "null_reference_count": len(result.null_references) + len(nested_null_refs),
         "internal_broken_ref_count": len(result.internal_broken_refs) + len(nested_broken_refs),
         "duplicate_reference_count": len(result.duplicate_references) + len(nested_dup_refs),
-        "components": component_summaries,
+        "components": page_slice,
+        "page_slice_length": len(page_slice),
+        "page_size": page_size,
+        "cursor": cursor,
+        "next_cursor": next_cursor,
     }
     if is_variant:
         data["is_variant"] = True
@@ -286,8 +370,13 @@ def validate_all_wiring(
 
     for p in paths:
         try:
+            # Issue #197: pass the documented inclusive upper bound for
+            # page_size so the per-file scan returns the merged
+            # components list on a single page; the aggregate envelope
+            # never paginates.
             result = inspect_wiring(
                 prefab_variant, reference_resolver, target_path=str(p),
+                page_size=INSPECT_WIRING_PAGE_SIZE_MAX,
             )
             resp_dict = result.to_dict()
             if not resp_dict.get("success", False):

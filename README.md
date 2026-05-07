@@ -78,7 +78,7 @@ prefab-sentinel-mcp --transport streamable-http
 | `diff_unity_symbols` | Variant と Base の差分のみ返す（override プロパティ + オリジン注釈） |
 | `find_referencing_assets` | GUID/パスの参照元アセット検索 |
 | `validate_refs` | 壊れた GUID/fileID 参照のスキャン (issue #198 で `top_missing_breakdown=true` の per-source-file 占有率内訳; issue #199 で `snapshot_save` / `snapshot_diff` の build-before/after 差分モード追加) |
-| `inspect_wiring` | MonoBehaviour フィールド配線の分析 |
+| `inspect_wiring` | MonoBehaviour フィールド配線の分析（issue #197 で `cursor`（不透明 continuation token、`pos:<offset>` 形式）と `page_size`（既定 50、受理範囲 `[1, 500]`）を追加。マージ後 components リストを 1 ページ分返し、`data.next_cursor` が空文字なら exhausted。`data.component_count` は常に総件数で `data.components` が当ページのスライス。`null_reference_count` などの diagnostic counts はページ非依存）|
 | `inspect_variant` | Prefab Variant の override チェーン分析 |
 | `set_property` | シンボルパスでコンポーネントのフィールド値を設定（dry-run/confirm ゲート付き） |
 | `copy_component_fields` | 同一型コンポーネント間でシリアライズフィールド値をコピー（cross-asset/same-asset、dry-run/confirm ゲート付き） |
@@ -111,7 +111,7 @@ prefab-sentinel-mcp --transport streamable-http
 | `editor_console` | Unity Console のログエントリを構造化データとして取得（`classification_filter` で non-fatal/fatal 分類フィルタ可。詳細は §7.7） |
 | `editor_refresh` | AssetDatabase.Refresh() のトリガー |
 | `editor_recompile` | C# スクリプト再コンパイルのトリガー（fire-and-return） |
-| `editor_recompile_and_wait` | C# スクリプト再コンパイルを発行し、コンパイル完了 + `Library/ScriptAssemblies/Assembly-CSharp.dll` の mtime 更新 + `afterAssemblyReload` を確認するまで同期で待機（issue #118、既定 60 秒、`timeout_sec` で上書き可。issue #134 で受理範囲は `(0, 1800]` 秒に制限。範囲外は `COMPILE_TIMEOUT_OUT_OF_RANGE` を返してブリッジに送らない） |
+| `editor_recompile_and_wait` | C# スクリプト再コンパイルを発行し、`CompilationPipeline.compilationFinished` イベントで完了を観測する（issue #203）。3 つの結果を発する: 全アセンブリが `assemblyCompilationNotRequired` だった場合は同期で `EDITOR_CTRL_RECOMPILE_AND_WAIT_NOOP`（成功、SessionState 永続化なし）、`assemblyCompilationFinished` で error severity のメッセージが 1 件以上記録された場合は `EDITOR_CTRL_RECOMPILE_FAILED`（`data.errors` にメッセージ列）、1 件以上のアセンブリが実コンパイルされた場合は domain reload 後の `AssemblyReloadCount` 増加で `EDITOR_CTRL_RECOMPILE_AND_WAIT_OK`。issue #118、既定 60 秒、`timeout_sec` で上書き可。issue #134 で受理範囲は `(0, 1800]` 秒に制限。範囲外は `COMPILE_TIMEOUT_OUT_OF_RANGE` を返してブリッジに送らない |
 | `editor_add_udonsharp_component` | `UdonSharpBehaviour` 派生コンポーネントを upsert（追加 or 既存再利用）し、`UdonSharpEditor.UdonSharpUndo.AddComponent`（内部で `Undo.AddComponent` + `RunBehaviourSetupWithUndo` を実行）→ 初期フィールド適用 → `CopyProxyToUdon` を 1 トランザクションで実行（issue #119、既存時は `was_existing=true`、応答 `data` には `applied_fields` / `component_handle` / `udon_program_asset_path` が乗る。コンポーネント追加失敗は `EDITOR_CTRL_UDON_ADD_COMPONENT_FAILED`、フィールド適用失敗は `EDITOR_CTRL_UDON_ADD_FIELD_FAILED`） |
 | `editor_set_udonsharp_field` | 一意の `UdonSharpBehaviour` の指定フィールドを `SerializedObject.FindProperty` で解決して書き込み、`CopyProxyToUdon` で backing と同期（`public` / `[SerializeField] private` の双方対応、`VRCUrl` は内側 `url` 文字列を直接書き込む。`value` と `object_reference` は相互排他、両方未指定は `EDITOR_CTRL_UDON_SET_FIELD_NO_VALUE`） |
 | `editor_wire_persistent_listener` | `UnityEventTools.AddStringPersistentListener` の高水準ラッパー（issue #119）。源コンポーネントの `event_path` フィールド → 対象 GameObject の `void method(string)` メソッドへ string モードでパーシステントリスナを追加、対象/メソッド/モード/引数が一致する既存リスナがある場合はノーオプ |
@@ -129,6 +129,7 @@ prefab-sentinel-mcp --transport streamable-http
 | `editor_set_parent` | 既存 GameObject の親子関係を変更（Undo 対応） |
 | `editor_create_empty` | 空の GameObject を名前・親・位置指定で作成 |
 | `editor_create_primitive` | プリミティブ (Cube/Sphere 等) を1回で作成 (位置・スケール・回転指定) |
+| `editor_create_ui_element` | uGUI 要素 (`Image` / `TextMeshProUGUI` / `Button` / `Slider` / `Toggle`) を作成（issue #195）。RectTransform の `anchorMin` / `anchorMax` / `sizeDelta` は `rect` で第一級指定、`color` (RGBA) と `font` (TextMeshPro asset path) は `properties` で指定。`TextMeshProUGUI` で `font` 未指定時は `Assets/TextMesh Pro/Resources/Fonts & Materials/LiberationSans SDF.asset` を自動代入（同 asset が存在しない場合は `EDITOR_CTRL_CREATE_UI_TMP_FONT_MISSING` warning を返す）|
 | `editor_batch_create` | 複数オブジェクトを1リクエストで一括生成 (Undo グループ) |
 | `editor_batch_set_property` | 複数プロパティを1リクエストで一括設定 (Undo グループ) |
 | `editor_set_component_fields` | 単一コンポーネントの複数フィールドを1リクエストで一括設定（hierarchy_path + コンポーネント型名、Undo グループ） |
@@ -640,7 +641,11 @@ Udonログを根拠に修正候補を最短で絞る。
 - `EDITOR_CTRL_SET_PROP_QUATERNION_NOT_NORMALIZED`: `editor_set_property` で `SerializedPropertyType.Quaternion` に与えた xyzw 4 要素のノルムが `1.0 ± 1e-4` の許容範囲外だった場合（issue #111）。`severity="error"`、メッセージに供給値とノルムを明示。Bridge 側では自動 normalize しない。Component 数が 4 でない（例えば 3 要素の euler を渡した）場合は既存の `EDITOR_CTRL_SET_PROP_TYPE_MISMATCH` で 4 要素必須を案内。
 - `COMPILE_TIMEOUT_OUT_OF_RANGE`: `editor_run_script` の `compile_timeout_ms` が許容範囲 `[1, 120000]`（ミリ秒、両端含む）の外だった場合（issue #127）。`severity="error"`、Bridge へは送信せず Python の入口で拒否。メッセージに供給値・両端境界値を含める（CLAMP しない）。
 - `MAX_ENTRIES_OUT_OF_RANGE` / `EDITOR_CTRL_MAX_ENTRIES_OUT_OF_RANGE`: `editor_console` の `max_entries` が許容範囲 `[1, ConsoleLogBuffer.DefaultCapacity]`（既定 1000、両端含む）の外だった場合（issue #131）。`severity="error"`。Python 側 (`MAX_ENTRIES_OUT_OF_RANGE`) は Bridge に送る前に拒否し、C# Bridge 側 (`EDITOR_CTRL_MAX_ENTRIES_OUT_OF_RANGE`) は buffer を見る前に拒否する。上限の根拠は「Bridge は ring buffer に保持している件数以上は返せない」という不変条件で、C# `ConsoleLogBuffer.DefaultCapacity` と Python `bridge_constants.CONSOLE_LOG_BUFFER_MAX_ENTRIES` は `scripts/check_bridge_constants.py` の drift detector で同期する。
-- `EDITOR_CTRL_RECOMPILE_TIMEOUT`: `editor_recompile_and_wait` が `timeout_sec`（既定 60 秒）以内にコンパイル完了 + assembly mtime 進行 + `afterAssemblyReload` の 3 条件を観測できなかった場合（issue #118）。`severity="error"`。Bridge 内の async runner は SessionState ミラーで domain reload を跨いで継続し、deadline 超過時のみ timeout envelope を返す。
+- `EDITOR_CTRL_RECOMPILE_TIMEOUT`: `editor_recompile_and_wait` が `timeout_sec`（既定 60 秒）以内に `CompilationPipeline.compilationFinished` イベント、もしくは事後の `AssemblyReloadCount` 増加を観測できなかった場合（issue #118 / issue #203）。`severity="error"`。Bridge 内の async runner は `compiledAny=true` の場合のみ SessionState ミラーで domain reload を跨いで継続する（NOOP / FAILED は同期で返るので永続化エントリは作らない）。
+- `EDITOR_CTRL_RECOMPILE_AND_WAIT_NOOP`: `editor_recompile_and_wait` が全アセンブリで `CompilationPipeline.assemblyCompilationNotRequired` を観測した場合（issue #203）。`severity="info"`、`success=true`。Domain reload は発生しないので SessionState mirror は使わず同期で応答。
+- `EDITOR_CTRL_RECOMPILE_FAILED`: `editor_recompile_and_wait` が `assemblyCompilationFinished` で `CompilerMessageType.Error` のメッセージを 1 件以上観測した場合（issue #203）。`severity="error"`、`data.errors` にメッセージ列を返す。
+- `EDITOR_CTRL_CREATE_UI_NO_NAME` / `..._BAD_TYPE` / `..._PARENT_NOT_FOUND` / `..._TMP_FONT_MISSING` / `..._OK`: `editor_create_ui_element` の応答コード（issue #195）。`..._BAD_TYPE` は `data.suggestions` に `Image` / `TextMeshProUGUI` / `Button` / `Slider` / `Toggle` の正規許容セットを含める。`..._TMP_FONT_MISSING` は warning（`success=false`）で、GameObject は作成されるが TextMeshPro の font は未代入。
+- `INSPECT_WIRING_INVALID_CURSOR` / `INSPECT_WIRING_PAGE_SIZE_OUT_OF_RANGE`: `inspect_wiring` の pagination ガード（issue #197）。前者は `cursor` が `pos:<offset>` 形式でない、もしくは `[0, total]` の範囲外の場合に `severity="error"` を返す。後者は `page_size` が `[1, 500]` の外の場合に `severity="error"` を返す。
 
 #### severity 境界: `critical` と `error` の使い分け
 

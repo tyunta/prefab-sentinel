@@ -68,6 +68,57 @@ def register_editor_batch_tools(server: FastMCP) -> None:
         return send_action(action="editor_create_primitive", **kwargs)
 
     @server.tool()
+    def editor_create_ui_element(
+        name: str,
+        type: str,
+        parent_path: str = "",
+        rect: dict[str, list[float]] | None = None,
+        properties: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Create a uGUI element under the requested parent (issue #195).
+
+        ``editor_create_primitive`` only supports the six built-in mesh
+        ``PrimitiveType`` values; this tool is the dedicated surface for
+        Canvas elements. Allowed ``type`` values are exactly
+        ``Image``, ``TextMeshProUGUI``, ``Button``, ``Slider``, ``Toggle``;
+        the Bridge handler owns the canonical type validation and emits
+        the typed envelope.
+
+        ``rect`` accepts ``anchorMin`` / ``anchorMax`` / ``sizeDelta``
+        as ``[x, y]`` pairs and is forwarded as JSON; the Bridge handler
+        applies them to the new RectTransform.
+
+        ``properties`` accepts the recognized graphic property keys
+        ``color`` (RGBA tuple, applied to the primary Graphic) and
+        ``font`` (TextMeshPro font asset path, applied to TextMeshPro
+        components). When ``font`` is omitted on TextMeshPro elements
+        the Bridge assigns the canonical default font asset
+        (LiberationSans SDF) per the
+        ``knowledge/prefab-sentinel-saveasprefabasset-pitfalls.md`` §3
+        guidance. Unknown keys are silently ignored.
+
+        Args:
+            name: Name for the new GameObject. Empty rejected by Bridge.
+            type: One of the canonical allowed type tokens.
+            parent_path: Hierarchy path to parent. Empty = scene root.
+            rect: Optional ``{"anchorMin": [x, y], "anchorMax": [x, y],
+                "sizeDelta": [x, y]}`` payload.
+            properties: Optional graphic property payload.
+        """
+        kwargs: dict[str, Any] = {
+            "new_name": name,
+            "component_type": type,
+        }
+        if parent_path:
+            kwargs["hierarchy_path"] = parent_path
+        # Always forward the rect / properties payloads as JSON, even
+        # when empty, so the Bridge sees a stable shape and can apply
+        # the documented defaults uniformly.
+        kwargs["ui_rect_json"] = dump_json(rect or {}, indent=None)
+        kwargs["ui_properties_json"] = dump_json(properties or {}, indent=None)
+        return send_action(action="editor_create_ui_element", **kwargs)
+
+    @server.tool()
     def editor_batch_create(
         objects: list[dict[str, str | list[str]]],
     ) -> dict[str, Any]:

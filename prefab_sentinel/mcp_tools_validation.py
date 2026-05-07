@@ -5,6 +5,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+from prefab_sentinel.orchestrator_wiring import INSPECT_WIRING_PAGE_SIZE_DEFAULT
 from prefab_sentinel.session import ProjectSession
 
 __all__ = ["register_validation_tools"]
@@ -86,15 +87,34 @@ def register_validation_tools(server: FastMCP, session: ProjectSession) -> None:
     def inspect_wiring(
         asset_path: str,
         udon_only: bool = False,
+        cursor: str = "",
+        page_size: int = INSPECT_WIRING_PAGE_SIZE_DEFAULT,
     ) -> dict[str, Any]:
         """Analyze MonoBehaviour field wiring in a Prefab or Scene.
+
+        Issue #197: the merged components list (root + nested package
+        prefabs) is paginated to keep the response under the MCP token
+        cap on packaged scenes. Pass an empty ``cursor`` to request the
+        first page; subsequent calls echo back the ``next_cursor`` value
+        from the previous response. ``data.next_cursor`` is empty when
+        the slice has exhausted the list. ``data.component_count``
+        always reports the full merged total; ``data.components``
+        carries the current page slice.
 
         Args:
             asset_path: Asset file path (.prefab, .unity).
             udon_only: Only inspect UdonSharp components.
+            cursor: Opaque continuation token from a previous response.
+            page_size: Maximum components per page (inclusive bounds
+                ``[1, 500]``; default ``50``).
         """
         orch = session.get_orchestrator()
-        resp = orch.inspect_wiring(target_path=asset_path, udon_only=udon_only)
+        resp = orch.inspect_wiring(
+            target_path=asset_path,
+            udon_only=udon_only,
+            cursor=cursor,
+            page_size=page_size,
+        )
         return resp.to_dict()
 
     @server.tool()

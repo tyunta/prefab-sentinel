@@ -10,7 +10,7 @@
 - 根拠優先: 前提・不変条件・判断理由を明文化する。
 - 検証可能性: 設定値と結果の対応を説明できる実装のみ採用する。
 - 必須参照の欠落は補完せず `error` で停止する（fail-fast）。
-- ファイルサイズ目安（200〜400 行）は **partial 単位**で評価する。`tools/unity/PrefabSentinel.UnityEditorControlBridge*.cs` は 1 つの CLR クラスを核 + 機能別 partial（CameraView / SaveInstantiate / RunScriptCompile / ConsoleCapture / MaterialQuery / MaterialWrite / MaterialBatch / BlendShape / Hierarchy / Components / Properties / Menu / Helpers / UdonSharpAddComponent / UdonSharpInvocation / UdonSharpFieldWrite / UdonSharpListenerWiring）の 18 ファイルへ分割しており、合計行数ではなく partial ごとの責務単位で行数を判定する（issue #123, issue #138）。
+- ファイルサイズ目安（200〜400 行）は **partial 単位**で評価する。`tools/unity/PrefabSentinel.UnityEditorControlBridge*.cs` は 1 つの CLR クラスを核 + 機能別 partial（CameraView / SaveInstantiate / RunScriptCompile / ConsoleCapture / MaterialQuery / MaterialWrite / MaterialBatch / BlendShape / Hierarchy / Components / Properties / Menu / Helpers / UdonSharpAddComponent / UdonSharpInvocation / UdonSharpFieldWrite / UdonSharpListenerWiring / UiElement）の 19 ファイルへ分割しており、合計行数ではなく partial ごとの責務単位で行数を判定する（issue #123, issue #138, issue #195）。
 
 ## 責務境界（Services / Skills / MCP）
 - `serialized-object`: 何を書き換えるか（操作実行）。

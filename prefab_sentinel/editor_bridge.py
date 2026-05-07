@@ -82,6 +82,9 @@ SUPPORTED_ACTIONS = frozenset(
         # Phase 6: Batch Operations + Scene
         "editor_create_empty",
         "editor_create_primitive",
+        # Issue #195: dedicated uGUI element creation surface
+        # (Image / TextMeshProUGUI / Button / Slider / Toggle).
+        "editor_create_ui_element",
         "editor_batch_create",
         "editor_batch_set_property",
         "editor_batch_set_material_property",

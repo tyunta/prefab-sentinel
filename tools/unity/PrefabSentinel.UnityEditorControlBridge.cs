@@ -75,6 +75,9 @@ namespace PrefabSentinel
             // Phase 6: Batch Operations + Scene
             "editor_create_empty",
             "editor_create_primitive",
+            // Issue #195: dedicated uGUI element creation surface;
+            // canonical allowed type set is owned by the handler.
+            "editor_create_ui_element",
             "editor_batch_create",
             "editor_batch_set_property",
             "editor_batch_set_material_property",
@@ -271,6 +274,19 @@ namespace PrefabSentinel
             public string target_path = string.Empty;
             public string method = string.Empty;
             public string arg = string.Empty;
+
+            // Issue #195: ``editor_create_ui_element`` payload.
+            // ``new_name`` carries the GameObject name, ``component_type``
+            // selects from the canonical allowed type set, and
+            // ``hierarchy_path`` resolves the parent (empty = scene root).
+            // ``ui_rect_json`` carries
+            // ``{"anchorMin":[x,y], "anchorMax":[x,y], "sizeDelta":[x,y]}``
+            // and ``ui_properties_json`` carries the recognized graphic
+            // property keys (``color``, ``font``); both are forwarded as
+            // JSON strings because Unity's JsonUtility cannot bind nested
+            // dictionaries with heterogeneous value shapes.
+            public string ui_rect_json = string.Empty;
+            public string ui_properties_json = string.Empty;
         }
 
         [Serializable]
@@ -622,6 +638,9 @@ namespace PrefabSentinel
                     break;
                 case "editor_create_primitive":
                     response = HandleEditorCreatePrimitive(request);
+                    break;
+                case "editor_create_ui_element":
+                    response = HandleEditorCreateUiElement(request);
                     break;
                 case "editor_batch_create":
                     response = HandleEditorBatchCreate(request);
@@ -1089,6 +1108,13 @@ namespace PrefabSentinel
                 ActiveCallbacks =
                     new Dictionary<string, EditorApplication.CallbackFunction>();
 
+            // Issue #203: response paths whose entry is transient (lives
+            // only on the current AppDomain). Excluded from ``Persist`` so
+            // a parallel handler's persistence call does not leak the
+            // transient entry into SessionState.
+            private static readonly HashSet<string> TransientResponsePaths
+                = new HashSet<string>();
+
             // ``afterAssemblyReload`` fires on the new AppDomain after a
             // reload completes; we tick this counter so the
             // ``HandleRecompileAndWait`` poller can detect "the reload we
@@ -1113,9 +1139,31 @@ namespace PrefabSentinel
             {
                 ActiveEntries[entry.responsePath] = entry;
                 ActiveCallbacks[entry.responsePath] = poll;
+                TransientResponsePaths.Remove(entry.responsePath);
                 EditorApplication.update -= poll;
                 EditorApplication.update += poll;
                 Persist();
+            }
+
+            /// <summary>
+            /// Issue #203: register a per-frame poll without mirroring the
+            /// entry to SessionState. Used by ``HandleRecompileAndWait``'s
+            /// pre-reload phase, which observes pipeline events on the
+            /// current AppDomain — those subscriptions cannot survive a
+            /// domain reload, so persisting the entry would resurrect a
+            /// stale state on the new domain. The handler escalates to
+            /// ``Register`` only when at least one assembly compiled and
+            /// the post-reload wait must therefore survive a reload.
+            /// </summary>
+            internal static void RegisterTransient(
+                PersistedEntry entry,
+                EditorApplication.CallbackFunction poll)
+            {
+                ActiveEntries[entry.responsePath] = entry;
+                ActiveCallbacks[entry.responsePath] = poll;
+                TransientResponsePaths.Add(entry.responsePath);
+                EditorApplication.update -= poll;
+                EditorApplication.update += poll;
             }
 
             internal static void Complete(string responsePath)
@@ -1126,6 +1174,7 @@ namespace PrefabSentinel
                     ActiveCallbacks.Remove(responsePath);
                 }
                 ActiveEntries.Remove(responsePath);
+                TransientResponsePaths.Remove(responsePath);
                 Persist();
             }
 
@@ -1153,7 +1202,11 @@ namespace PrefabSentinel
                 try
                 {
                     var list = new PersistedEntryList();
-                    foreach (var e in ActiveEntries.Values) list.items.Add(e);
+                    foreach (var kv in ActiveEntries)
+                    {
+                        if (TransientResponsePaths.Contains(kv.Key)) continue;
+                        list.items.Add(kv.Value);
+                    }
                     string json = JsonUtility.ToJson(list);
                     SessionState.SetString(SessionStateKey, json);
                 }

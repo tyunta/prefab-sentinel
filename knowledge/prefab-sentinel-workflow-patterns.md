@@ -5,8 +5,8 @@
 | 項目 | 値 |
 |------|---|
 | 対象 | prefab-sentinel MCP ツール群のワークフロー |
-| version_tested | prefab-sentinel 0.5.153 |
-| last_updated | 2026-04-30 |
+| version_tested | prefab-sentinel 0.5.162 |
+| last_updated | 2026-05-07 |
 | confidence | high |
 
 ## L1: 確定パターン
@@ -150,3 +150,6 @@ Inspector の表示名と SerializedProperty の `propertyPath` が食い違う 
 - **UI Text の font size プロパティパス (2026-04-30)**: Unity UI の `Text` コンポーネントの font size は `m_FontSize` ではなく `m_FontData.m_FontSize` (nested struct)。`Property not found: m_FontSize on Text` エラーが出たらこちらを試す。同様に `m_Alignment` は `m_FontData.m_Alignment` の場合あり
 - **Edit 後の recompile pickup の不安定さ (2026-04-30)**: `Edit` ツールで `Assets/Editor/*.cs` を更新後、`editor_refresh` + `editor_recompile` を呼んでも次の `editor_execute_menu_item` で **古いコンパイル結果** で動作するケースあり (stack trace の行番号が古い版のまま)。`touch` だけでは不十分。回避策: 先頭にコメントを追加するなど substantive content change を加える、または完全 rewrite で timestamp を確実に更新する
 - `editor_set_component_fields` の `object_reference` で `::ComponentType` サフィックスは UdonSharp コンポーネントに対して機能しない。パスのみ（`/Path/To/Object`）を使う
+- **`inspect_wiring` のページネーション契約 (2026-05-07, issue #197)**: Nested package prefab を多数含む対象（NadeVision.prefab + VVMW package など）を呼ぶと MCP token cap を超える（実測 65,859 chars）。`cursor` は `pos:<offset>` 形式の不透明 continuation token、`page_size` は `[1, 500]` の inclusive bounds（既定 50）。`data.component_count` は常に総件数で、`data.components` は当ページのスライス。`data.next_cursor` が空文字のとき exhausted。`null_reference_count` 等の diagnostic counts はページ非依存（全ページで同じ値）。`Phase1Orchestrator.validate_all_wiring`（aggregator）は `page_size=500` で呼ぶので、aggregate scan は 1 ページに収まる前提
+- **`editor_recompile_and_wait` の三分岐 (2026-05-07, issue #203)**: ソース無変更で呼ぶと固定タイムアウトしていた問題を解消。`CompilationPipeline.compilationFinished` イベント駆動で 3 つの結果を返す: 全アセンブリ `assemblyCompilationNotRequired` → `EDITOR_CTRL_RECOMPILE_AND_WAIT_NOOP`（同期 success、SessionState 永続化なし）/ `assemblyCompilationFinished` で `CompilerMessageType.Error` のメッセージ 1 件以上 → `EDITOR_CTRL_RECOMPILE_FAILED`（`data.errors` にメッセージ列）/ 1 件以上のアセンブリが実コンパイル → domain reload 後の `AssemblyReloadCount` 増加で `EDITOR_CTRL_RECOMPILE_AND_WAIT_OK`。mtime polling は完全廃止 — Unity が `assemblyCompilationNotRequired` を返すケースで mtime が進まないため絶対に発火しない仕様だった
+- **`editor_create_ui_element` の使い分け (2026-05-07, issue #195)**: `editor_create_primitive` は `GameObject.CreatePrimitive(PrimitiveType.X)` のラッパなので Cube/Sphere/Cylinder/Capsule/Plane/Quad の 6 値のみ。uGUI 要素（Image/TextMeshProUGUI/Button/Slider/Toggle）は `editor_create_ui_element` を使う。`rect={"anchorMin": [...], "anchorMax": [...], "sizeDelta": [...]}` で RectTransform を第一級指定、`properties={"color": [r,g,b,a], "font": "<asset path>"}` で graphic を設定。TMP の `font` を省略すると `Assets/TextMesh Pro/Resources/Fonts & Materials/LiberationSans SDF.asset` を自動代入（fontSize 体感サイズの再現に必要、§3 trap 回避）

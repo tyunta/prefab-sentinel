@@ -264,20 +264,29 @@ class Phase1Orchestrator:
         target_path: str,
         *,
         udon_only: bool = False,
+        cursor: str = "",
+        page_size: int = orchestrator_wiring.INSPECT_WIRING_PAGE_SIZE_DEFAULT,
     ) -> ToolResponse:
         """Analyze MonoBehaviour field wiring in a Prefab or Scene (read-only).
 
         Args:
             target_path: Path to a ``.prefab`` or ``.unity`` file.
             udon_only: When ``True``, only report UdonSharp components.
+            cursor: Opaque continuation token from a previous response;
+                empty string requests the first page.
+            page_size: Maximum number of merged components to return per
+                page; inclusive bounds are
+                ``[INSPECT_WIRING_PAGE_SIZE_MIN, INSPECT_WIRING_PAGE_SIZE_MAX]``.
 
         Returns:
-            ``ToolResponse`` with ``data.components`` listing each
-            MonoBehaviour, its fields, and any null/broken/duplicate
-            reference diagnostics.
+            ``ToolResponse`` with ``data.components`` carrying a single
+            page slice of the merged components list, plus
+            ``data.next_cursor`` (empty when exhausted) and the
+            page-independent diagnostic counts.
         """
         return orchestrator_wiring.inspect_wiring(
-            self.prefab_variant, self.reference_resolver, target_path, udon_only=udon_only,
+            self.prefab_variant, self.reference_resolver, target_path,
+            udon_only=udon_only, cursor=cursor, page_size=page_size,
         )
 
     def validate_all_wiring(

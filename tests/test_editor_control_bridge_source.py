@@ -488,20 +488,44 @@ class TestRecompileAndWaitDispatch(unittest.TestCase):
         self.assertIsNotNone(match)
         self.assertIn('"run_script"', match.group(0))
 
-    def test_recompile_and_wait_handler_references_completion_signals(self) -> None:
+    def test_recompile_and_wait_handler_subscribes_to_pipeline_events(self) -> None:
+        # Issue #203: the event-driven handler subscribes to the three
+        # documented pipeline events on entry — the per-assembly finished
+        # event (records compile errors and "compiled" outcomes), the
+        # per-assembly not-required event (classifies the no-op case),
+        # and the pipeline-level finished event (always-fires terminator).
         source = _read(BRIDGE)
         body = _extract_method(source, "HandleRecompileAndWait")
-        # The handler must reference both completion signals: the
-        # compiled-assembly file (via the published rel-path constant
-        # whose value is ``Library/ScriptAssemblies/Assembly-CSharp.dll``)
-        # and the post-reload signal (``afterAssemblyReload``).
-        self.assertIn("CompiledAssemblyRelPath", body)
-        self.assertIn("afterAssemblyReload", body)
-        # The constant itself must resolve to the canonical path.
-        self.assertRegex(
-            source,
-            r'CompiledAssemblyRelPath\s*=\s*\n?\s*"Library/ScriptAssemblies/Assembly-CSharp\.dll"',
-        )
+        self.assertIn("CompilationPipeline.assemblyCompilationFinished", body)
+        self.assertIn("CompilationPipeline.assemblyCompilationNotRequired", body)
+        self.assertIn("CompilationPipeline.compilationFinished", body)
+
+    def test_recompile_and_wait_handler_emits_three_outcome_codes(self) -> None:
+        # Issue #203: on the pipeline-level finished event the handler
+        # synthesises one of three outcomes — no-op (every assembly
+        # reported as not requiring compilation), OK (post-reload signal
+        # fired after at least one assembly compiled), or FAILED (at
+        # least one compile error of error severity recorded).
+        # The handler body emits the no-op and failed envelopes inline
+        # and delegates the OK envelope to the post-reload poll builder
+        # via ``BuildRecompileReloadWaitPoll``; the OK code therefore
+        # lives in the bridge source as a whole.
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleRecompileAndWait")
+        self.assertIn("EDITOR_CTRL_RECOMPILE_AND_WAIT_NOOP", body)
+        self.assertIn("EDITOR_CTRL_RECOMPILE_FAILED", body)
+        self.assertIn("BuildRecompileReloadWaitPoll", body)
+        self.assertIn("EDITOR_CTRL_RECOMPILE_AND_WAIT_OK", source)
+
+    def test_recompile_and_wait_handler_does_not_poll_assembly_mtime(self) -> None:
+        # Issue #203 root cause: ``Library/ScriptAssemblies/Assembly-CSharp.dll``
+        # mtime does not advance when Unity reports the assembly as not
+        # requiring compilation. The new event-driven handler must not
+        # reference the modification-time read helper, otherwise the
+        # original timeout bug recurs.
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleRecompileAndWait")
+        self.assertNotIn("ReadAssemblyMtimeUnixMs", body)
 
     def test_recompile_and_wait_handler_references_timeout_envelope(self) -> None:
         source = _read(BRIDGE)
@@ -561,12 +585,13 @@ class TestRunScriptNoSleep(unittest.TestCase):
 
 
 class TestRecompileAndWaitDomainReloadResume(unittest.TestCase):
-    """Issue #118: after a domain reload, the in-flight
-    ``editor_recompile_and_wait`` request must be resumed by
-    ``ResumePendingAsyncRunners`` so completion drainage continues from
-    the new AppDomain.  The completion-signal logic is centralised in
-    ``BuildRecompileAndWaitPoll`` (DRY); the resume branch dispatches
-    on the persisted action string and re-installs the shared poll.
+    """Issue #118 / #203: after a domain reload triggered by the
+    "compiledAny=true" path, the in-flight ``editor_recompile_and_wait``
+    request is resumed by ``ResumePendingAsyncRunners`` so completion
+    drainage continues from the new AppDomain. The post-reload poll
+    observes only the reload counter and the deadline (issue #203
+    redesign) — the mtime / pipeline-event observation is owned by the
+    pre-reload phase inside ``HandleRecompileAndWait``.
     """
 
     def test_resume_wires_recompile_and_wait_action(self) -> None:
@@ -575,59 +600,167 @@ class TestRecompileAndWaitDomainReloadResume(unittest.TestCase):
         # Resume branch must dispatch on the persisted action string.
         self.assertIn('"editor_recompile_and_wait"', body)
 
-    def test_resume_delegates_to_shared_poll_builder(self) -> None:
+    def test_resume_uses_reload_only_poll_builder(self) -> None:
+        # Issue #203: the post-reload phase has its own dedicated poll
+        # builder (``BuildRecompileReloadWaitPoll``) which observes only
+        # the reload counter and the deadline. The resumer must invoke
+        # this builder, not any mtime-based variant.
         source = _read(BRIDGE)
         body = _extract_method(source, "ResumePendingAsyncRunners")
-        # Shared helper avoids duplicating the completion-signal checks
-        # between first-dispatch and post-reload paths.
-        self.assertIn("BuildRecompileAndWaitPoll", body)
+        self.assertIn("BuildRecompileReloadWaitPoll", body)
         # The rehydrated entry must be reattached to the in-flight
         # registry so ``Complete`` can later drain it.
         self.assertIn("RehydrateEntry", body)
 
-    def test_shared_poll_observes_documented_completion_signals(self) -> None:
+    def test_reload_only_poll_observes_only_reload_counter(self) -> None:
+        # Issue #203: the post-reload poll body must reference the
+        # reload counter, the OK code, and the timeout code, and must
+        # NOT reference the mtime helper. Cross-call interference from
+        # any mtime-based check would re-introduce the no-op timeout
+        # regression.
         source = _read(BRIDGE)
-        body = _extract_method(source, "BuildRecompileAndWaitPoll")
-        # Three completion signals: compile finished, assembly mtime
-        # advanced beyond the call-time snapshot, and the post-reload
-        # counter ticked past the threshold supplied by the call site.
-        self.assertIn("EditorApplication.isCompiling", body)
-        self.assertIn("ReadAssemblyMtimeUnixMs", body)
+        body = _extract_method(source, "BuildRecompileReloadWaitPoll")
         self.assertIn("AssemblyReloadCount", body)
-
-    def test_shared_poll_emits_success_and_timeout_envelopes(self) -> None:
-        source = _read(BRIDGE)
-        body = _extract_method(source, "BuildRecompileAndWaitPoll")
         self.assertIn("EDITOR_CTRL_RECOMPILE_AND_WAIT_OK", body)
         self.assertIn("EDITOR_CTRL_RECOMPILE_TIMEOUT", body)
+        self.assertNotIn("ReadAssemblyMtimeUnixMs", body)
 
     def test_resumer_uses_minus_one_reload_count_threshold(self) -> None:
-        """Issue #191: the resumer-driven poll runs after a domain reload has
-        already occurred, so the post-reload counter has already advanced past
-        any positive snapshot. A threshold of -1 makes the
-        ``AssemblyReloadCount > threshold`` check pass on the first tick
-        regardless of whether ``[InitializeOnLoad]`` static constructors run
-        before or after ``afterAssemblyReload``.
-        """
+        # Issue #191 / #203 race-condition pin: the resumer runs on the
+        # post-reload AppDomain whose ``AssemblyReloadCount`` starts at
+        # ``0``. The post-reload poll completes the request the first
+        # time ``AssemblyReloadCount > threshold`` evaluates true. With
+        # ``threshold = 0`` (mutation candidate) ``0 > 0`` is false on
+        # the first tick and the request stalls until the next reload —
+        # the exact regression issue #191 fixed. Pin the literal so the
+        # mutation kills the test.
         source = _read(BRIDGE)
         body = _extract_method(source, "ResumePendingAsyncRunners")
-        # Extract the BuildRecompileAndWaitPoll(...) call inside the resumer
-        # branch and verify the third positional argument (reload-count
-        # threshold) is the literal -1.
-        call_match = re.search(
-            r"BuildRecompileAndWaitPoll\s*\(([^;]*?)\)\s*;",
+        # Restrict to the recompile-and-wait branch so a future addition
+        # of another action's resumer cannot accidentally satisfy the
+        # match.
+        branch_match = re.search(
+            r'else if \(entry\.action == "editor_recompile_and_wait"\)\s*\{(.*?)^\s{16}\}',
             body,
+            flags=re.DOTALL | re.MULTILINE,
+        )
+        self.assertIsNotNone(
+            branch_match,
+            "ResumePendingAsyncRunners must contain the "
+            "editor_recompile_and_wait branch",
+        )
+        branch_body = branch_match.group(1)
+        call_match = re.search(
+            r"BuildRecompileReloadWaitPoll\s*\(([^;]*)\)\s*;",
+            branch_body,
             flags=re.DOTALL,
         )
         self.assertIsNotNone(
             call_match,
-            "Resumer must call BuildRecompileAndWaitPoll(...) to share completion logic",
+            "Resumer branch must call BuildRecompileReloadWaitPoll",
         )
+        # The poll builder signature is
+        # ``(responsePath, deadlineMs, reloadCountThreshold, timeoutDetail)``;
+        # the third positional argument is the threshold literal.
         args = [a.strip() for a in call_match.group(1).split(",")]
-        # Args: responsePath, deadlineUnixMs, callTimeAssemblyMtimeUnixMs,
-        # reloadCountThreshold, timeoutDetail
-        self.assertGreaterEqual(len(args), 5)
-        self.assertEqual(args[3], "-1")
+        self.assertGreaterEqual(
+            len(args), 4,
+            f"BuildRecompileReloadWaitPoll call must have 4 args, got {args}",
+        )
+        self.assertEqual(
+            "-1", args[2],
+            "reloadCountThreshold must be -1 to satisfy the first-tick "
+            "post-reload check (issue #191).",
+        )
+
+
+class TestCreateUiElementSource(unittest.TestCase):
+    """Issue #195 — source-text invariants for ``HandleEditorCreateUiElement``.
+
+    The uGUI element creation handler must:
+
+    * Live behind the dedicated ``editor_create_ui_element`` action so the
+      surface name doesn't lie about its scope.
+    * Pin the canonical allowed type set as exactly the five tokens
+      ``Image``, ``TextMeshProUGUI``, ``Button``, ``Slider``, ``Toggle``.
+    * Emit the documented typed envelopes (no-name, bad-type,
+      parent-not-found, TMP-font-missing) and the OK envelope.
+    * Reference the canonical default font asset path used when the
+      caller omits ``font`` for TextMeshPro elements.
+    """
+
+    def test_supported_action_lists_create_ui_element(self) -> None:
+        source = _read(BRIDGE)
+        match = re.search(
+            r"SupportedActions\s*=\s*new\s+HashSet<string>\s*\{[^}]*\}",
+            source,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(match)
+        self.assertIn('"editor_create_ui_element"', match.group(0))
+
+    def test_dispatcher_routes_create_ui_element(self) -> None:
+        source = _read(BRIDGE)
+        self.assertRegex(
+            source,
+            r'case\s+"editor_create_ui_element"\s*:\s*\n\s*response\s*=\s*HandleEditorCreateUiElement',
+        )
+
+    def test_handler_pins_canonical_allowed_type_set(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleEditorCreateUiElement")
+        # The handler must reference each canonical type token verbatim
+        # so a future edit can't silently drop one or add an undocumented
+        # token. Source-text assertion (not runtime) so the test fires
+        # on the un-mutated tree.
+        for token in (
+            '"Image"', '"TextMeshProUGUI"', '"Button"', '"Slider"', '"Toggle"',
+        ):
+            self.assertIn(
+                token, body,
+                f"canonical allowed type set must include {token}",
+            )
+
+    def test_handler_emits_no_name_envelope(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleEditorCreateUiElement")
+        self.assertIn("EDITOR_CTRL_CREATE_UI_NO_NAME", body)
+
+    def test_handler_emits_bad_type_envelope(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleEditorCreateUiElement")
+        self.assertIn("EDITOR_CTRL_CREATE_UI_BAD_TYPE", body)
+
+    def test_handler_emits_parent_not_found_envelope(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleEditorCreateUiElement")
+        self.assertIn("EDITOR_CTRL_CREATE_UI_PARENT_NOT_FOUND", body)
+
+    def test_handler_emits_tmp_font_missing_envelope(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleEditorCreateUiElement")
+        self.assertIn("EDITOR_CTRL_CREATE_UI_TMP_FONT_MISSING", body)
+
+    def test_handler_emits_ok_envelope(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleEditorCreateUiElement")
+        self.assertIn("EDITOR_CTRL_CREATE_UI_OK", body)
+
+    def test_handler_references_canonical_default_font_asset(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleEditorCreateUiElement")
+        # Per ``knowledge/prefab-sentinel-saveasprefabasset-pitfalls.md``
+        # §3 the canonical default font asset path is LiberationSans SDF
+        # under the TMP Resources tree. The handler assigns this via the
+        # named constant; the source file holds the literal path so a
+        # mutation of either site fires the assertion.
+        self.assertIn("UiElementDefaultTmpFontAssetPath", body)
+        self.assertIn(
+            'UiElementDefaultTmpFontAssetPath =\n'
+            '            "Assets/TextMesh Pro/Resources/Fonts & Materials/'
+            'LiberationSans SDF.asset"',
+            source,
+        )
 
 
 class TestSafeSaveAsPrefabSource(unittest.TestCase):

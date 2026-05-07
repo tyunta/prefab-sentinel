@@ -3,9 +3,13 @@
   "data_keys": [
     "component_count",
     "components",
+    "cursor",
     "duplicate_reference_count",
     "internal_broken_ref_count",
+    "next_cursor",
     "null_reference_count",
+    "page_size",
+    "page_slice_length",
     "read_only",
     "target_path",
     "udon_only"
