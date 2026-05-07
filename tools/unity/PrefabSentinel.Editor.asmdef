@@ -2,7 +2,9 @@
     "name": "PrefabSentinel.Editor",
     "rootNamespace": "PrefabSentinel",
     "references": [
-        "VRC.SDKBase.Editor"
+        "VRC.SDKBase.Editor",
+        "Unity.TextMeshPro",
+        "UnityEngine.UI"
     ],
     "includePlatforms": [
         "Editor"

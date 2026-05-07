@@ -235,20 +235,37 @@ namespace PrefabSentinel
             //   * ``assemblyCompilationFinished`` for per-assembly
             //     outcome (records compile errors of error severity and
             //     marks ``compiledAny`` when a real compile occurred).
-            //   * ``assemblyCompilationNotRequired`` for the no-op
-            //     classification (the ``compiledAny == false`` path
-            //     resolves to ``EDITOR_CTRL_RECOMPILE_AND_WAIT_NOOP``).
             //   * ``compilationFinished`` as the always-fires terminator
-            //     that triggers outcome synthesis.
+            //     that synthesises the outcome before Unity enters the
+            //     domain reload that destroys this AppDomain (issue #213).
+            //     The no-op case is determined passively at this point:
+            //     ``compiledAny == false`` means no per-assembly finished
+            //     event ever fired, which corresponds to every assembly
+            //     having been reported as not requiring compilation.
             //
-            // The handler unsubscribes its event handlers on every exit
-            // path to keep the registry per-request.
+            // Issue #213 root cause: the previous implementation only set
+            // a flag inside ``compilationFinished`` and deferred outcome
+            // processing to the next ``EditorApplication.update`` tick.
+            // Unity begins domain reload in the same frame as
+            // ``compilationFinished``, so the deferred lambda was
+            // destroyed before it could write the response — every call
+            // surfaced as a transport timeout. Synthesising the outcome
+            // synchronously inside the pipeline-finished subscription
+            // guarantees the response file is written while the original
+            // AppDomain is still alive. ``resolved`` is the shared
+            // re-entry guard between the subscription and the deadline
+            // watchdog so exactly one envelope is written per request
+            // even if both observe a terminal condition in the same frame.
             bool compiledAny = false;
-            bool pipelineFinished = false;
+            bool resolved = false;
             var compileErrors = new List<string>();
 
-            CompilationPipeline.AssemblyCompilationFinished onAsmFinished = null;
-            Action<string> onAsmNotRequired = null;
+            // Per-assembly compile-finished delegate type (issue #213
+            // secondary bug A / CS0426): Unity 2022.3 publishes the event
+            // signature as ``Action<string, CompilerMessage[]>``. No
+            // nested delegate type exists on the public compilation-
+            // pipeline API surface in this version.
+            Action<string, CompilerMessage[]> onAsmFinished = null;
             Action<object> onPipelineFinished = null;
 
             onAsmFinished = (asmPath, messages) =>
@@ -271,61 +288,41 @@ namespace PrefabSentinel
                 if (!asmHadError)
                     compiledAny = true;
             };
-            onAsmNotRequired = _ => { /* classification only; outcome handled at pipelineFinished */ };
-            onPipelineFinished = _ => { pipelineFinished = true; };
 
             void Unsubscribe()
             {
                 CompilationPipeline.assemblyCompilationFinished -= onAsmFinished;
-                CompilationPipeline.assemblyCompilationNotRequired -= onAsmNotRequired;
                 CompilationPipeline.compilationFinished -= onPipelineFinished;
             }
 
-            CompilationPipeline.assemblyCompilationFinished += onAsmFinished;
-            CompilationPipeline.assemblyCompilationNotRequired += onAsmNotRequired;
-            CompilationPipeline.compilationFinished += onPipelineFinished;
-
-            EditorApplication.CallbackFunction prePoll = null;
-            prePoll = () =>
+            onPipelineFinished = _ =>
             {
-                long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                if (nowMs > deadlineMs && !pipelineFinished)
-                {
-                    Unsubscribe();
-                    PendingAsyncRunner.Complete(responsePath);
-                    WriteResponse(responsePath, BuildError(
-                        "EDITOR_CTRL_RECOMPILE_TIMEOUT",
-                        $"editor_recompile_and_wait: timed out after {budgetSec:F1}s "
-                        + "before CompilationPipeline.compilationFinished fired."));
-                    return;
-                }
-                if (!pipelineFinished) return;
-
+                if (resolved) return;
+                resolved = true;
                 Unsubscribe();
 
                 if (compileErrors.Count > 0)
                 {
                     PendingAsyncRunner.Complete(responsePath);
-                    var failed = BuildError(
+                    WriteResponse(responsePath, BuildError(
                         "EDITOR_CTRL_RECOMPILE_FAILED",
                         $"editor_recompile_and_wait: {compileErrors.Count} compile error(s).",
                         data: new EditorControlData
                         {
                             executed = true,
                             errors = compileErrors.ToArray(),
-                        });
-                    WriteResponse(responsePath, failed);
+                        }));
                     return;
                 }
 
                 if (!compiledAny)
                 {
-                    // Every assembly reported assemblyCompilationNotRequired
-                    // (or no per-assembly events fired). No domain reload
-                    // will follow, so synthesise the no-op success
-                    // synchronously and skip the SessionState mirror —
-                    // there is nothing to resume after a reload that
-                    // never happens.
+                    // No per-assembly finished event ever fired, which
+                    // corresponds to every assembly having been reported
+                    // as not requiring compilation. No domain reload will
+                    // follow, so synthesise the no-op success synchronously
+                    // and skip the SessionState mirror — there is nothing
+                    // to resume after a reload that never happens.
                     PendingAsyncRunner.Complete(responsePath);
                     WriteResponse(responsePath, BuildSuccess(
                         "EDITOR_CTRL_RECOMPILE_AND_WAIT_NOOP",
@@ -337,7 +334,8 @@ namespace PrefabSentinel
 
                 // At least one assembly compiled. Switch over to the
                 // post-reload wait poll and persist the entry so the
-                // wait survives the inevitable domain reload.
+                // wait survives the inevitable domain reload that Unity
+                // begins immediately after this subscription returns.
                 PendingAsyncRunner.Complete(responsePath);
                 var reloadEntry = new PendingAsyncRunner.PersistedEntry
                 {
@@ -356,12 +354,33 @@ namespace PrefabSentinel
                 PendingAsyncRunner.Register(reloadEntry, reloadPoll);
             };
 
+            CompilationPipeline.assemblyCompilationFinished += onAsmFinished;
+            CompilationPipeline.compilationFinished += onPipelineFinished;
+
+            EditorApplication.CallbackFunction prePoll = null;
+            prePoll = () =>
+            {
+                if (resolved) return;
+                long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                if (nowMs <= deadlineMs) return;
+
+                resolved = true;
+                Unsubscribe();
+                PendingAsyncRunner.Complete(responsePath);
+                WriteResponse(responsePath, BuildError(
+                    "EDITOR_CTRL_RECOMPILE_TIMEOUT",
+                    $"editor_recompile_and_wait: timed out after {budgetSec:F1}s "
+                    + "before CompilationPipeline.compilationFinished fired."));
+            };
+
             // Pre-reload entry: not persisted to SessionState — the
             // pipeline-event subscriptions live on this AppDomain and
             // cannot survive a reload. Persistence happens only on the
-            // ``compiledAny`` switchover path above. We still register
-            // the poller against the response path so the
-            // ``EditorApplication.update`` loop drives it.
+            // ``compiledAny`` switchover path inside the
+            // ``compilationFinished`` subscription. We still register
+            // the watchdog against the response path so the
+            // ``EditorApplication.update`` loop drives it as a fallback
+            // for the case where ``compilationFinished`` never fires.
             var preEntry = new PendingAsyncRunner.PersistedEntry
             {
                 action = "editor_recompile_and_wait",
@@ -378,10 +397,16 @@ namespace PrefabSentinel
             }
             catch (Exception ex)
             {
+                // Issue #204: editor-side rejection of the compilation
+                // request is a schedule-failure, not a deadline-elapsed
+                // condition. Use a dedicated code so callers can
+                // distinguish "Unity refused to start" from "we waited
+                // and got no response".
+                resolved = true;
                 Unsubscribe();
                 PendingAsyncRunner.Complete(responsePath);
                 return BuildError(
-                    "EDITOR_CTRL_RECOMPILE_TIMEOUT",
+                    "EDITOR_CTRL_RECOMPILE_SCHEDULE_FAILED",
                     $"editor_recompile_and_wait: failed to schedule compilation: {ex.Message}");
             }
 
