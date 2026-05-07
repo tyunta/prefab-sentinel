@@ -8,6 +8,7 @@ I3 (BatchObjectSpec.components field and attachment logic).
 
 from __future__ import annotations
 
+import json
 import re
 import unittest
 from pathlib import Path
@@ -73,6 +74,28 @@ def _extract_method(source: str, method_name: str) -> str:
                 return source[start : i + 1]
 
     raise AssertionError(f"Could not find closing brace for {method_name}")
+
+
+def _extract_braced_block(source: str, start: int, context: str) -> str:
+    """Return the body of a brace-delimited block.
+
+    ``start`` must point one past an opening ``{`` already consumed by
+    the caller (typically ``match.end()`` of a regex that ends in
+    ``\\{``); the returned slice runs up to — but not including — the
+    matching closing ``}``, with nested braces accounted for. ``context``
+    is a human label used in the AssertionError raised when the input
+    runs out before the matching close-brace is found.
+    """
+    depth = 1
+    for index in range(start, len(source)):
+        ch = source[index]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return source[start:index]
+    raise AssertionError(f"Could not find closing brace of {context}")
 
 
 class TestGetHierarchyPathDedup(unittest.TestCase):
@@ -489,16 +512,18 @@ class TestRecompileAndWaitDispatch(unittest.TestCase):
         self.assertIn('"run_script"', match.group(0))
 
     def test_recompile_and_wait_handler_subscribes_to_pipeline_events(self) -> None:
-        # Issue #203: the event-driven handler subscribes to the three
-        # documented pipeline events on entry — the per-assembly finished
-        # event (records compile errors and "compiled" outcomes), the
-        # per-assembly not-required event (classifies the no-op case),
-        # and the pipeline-level finished event (always-fires terminator).
+        # Issue #203 / #213: the event-driven handler subscribes to the
+        # per-assembly finished event (records compile errors and
+        # ``compiledAny``) and the pipeline-level finished event (the
+        # always-fires terminator that synthesises the outcome before
+        # Unity enters domain reload). The no-op case is determined
+        # passively via ``!compiledAny`` at pipeline-finished time, so no
+        # subscription to ``assemblyCompilationNotRequired`` is needed.
         source = _read(BRIDGE)
         body = _extract_method(source, "HandleRecompileAndWait")
         self.assertIn("CompilationPipeline.assemblyCompilationFinished", body)
-        self.assertIn("CompilationPipeline.assemblyCompilationNotRequired", body)
         self.assertIn("CompilationPipeline.compilationFinished", body)
+        self.assertNotIn("CompilationPipeline.assemblyCompilationNotRequired", body)
 
     def test_recompile_and_wait_handler_emits_three_outcome_codes(self) -> None:
         # Issue #203: on the pipeline-level finished event the handler
@@ -1415,22 +1440,16 @@ class TestBestEffortCatchWarnings(unittest.TestCase):
         ``catch (Exception ex) { ... }`` block — the one whose
         ``Exception`` parameter is ``ex`` (the project convention).
         Brace-counts so the inner ``catch (Exception fallbackEx)``
-        nested under the outer block remains inside.
+        nested under the outer block remains inside. Returns the empty
+        string when no such outer catch is present (the caller asserts
+        the result is truthy).
         """
         match = re.search(r"catch\s*\(\s*Exception\s+ex\s*\)\s*\{", method_body)
         if not match:
             return ""
-        start = match.end()
-        depth = 1
-        for index in range(start, len(method_body)):
-            ch = method_body[index]
-            if ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    return method_body[start:index]
-        return ""
+        return _extract_braced_block(
+            method_body, match.end(), "outer catch (Exception ex) block"
+        )
 
     def test_write_response_outer_fallback_uses_warn_level_template(self) -> None:
         """Issue #153 — the two response-writer methods'
@@ -1473,6 +1492,176 @@ class TestBestEffortCatchWarnings(unittest.TestCase):
                     r"Debug\.LogError\(",
                     f"{file_name}::{method_name}: outer catch must not emit Debug.LogError; warn-level convention applies",
                 )
+
+
+class TestEditorAsmdefUiReferences(unittest.TestCase):
+    """Issue #213 secondary bug B (CS0246): the editor assembly definition
+    must list the package references that ``UiElement.cs`` depends on so
+    the deployed bridge compiles in projects that consume it.
+    """
+
+    _ASMDEF = TOOLS_DIR / "PrefabSentinel.Editor.asmdef"
+
+    def _references(self) -> list[str]:
+        manifest = json.loads(self._ASMDEF.read_text(encoding="utf-8"))
+        return manifest["references"]
+
+    def test_textmeshpro_reference_present(self) -> None:
+        self.assertIn("Unity.TextMeshPro", self._references())
+
+    def test_ugui_reference_present(self) -> None:
+        self.assertIn("UnityEngine.UI", self._references())
+
+
+class TestResolveComponentTypeDedup(unittest.TestCase):
+    """Issue #212 (CS0111): exactly one ``ResolveComponentType`` definition
+    must exist across all bridge partials so the deployed bridge compiles.
+    """
+
+    def test_single_resolve_component_type_definition(self) -> None:
+        source = _read(BRIDGE)
+        matches = re.findall(
+            r"private\s+static\s+(?:System\.)?Type\s+ResolveComponentType\s*\(\s*string\s+typeName\s*\)",
+            source,
+        )
+        self.assertEqual(
+            1,
+            len(matches),
+            f"Expected exactly 1 ResolveComponentType definition, found {len(matches)}",
+        )
+
+
+class TestRecompileAsmFinishedDelegateType(unittest.TestCase):
+    """Issue #213 secondary bug A (CS0426): the per-assembly compile-finished
+    subscription uses Unity's publicly documented two-argument delegate
+    signature, not a non-existent nested delegate type on
+    ``CompilationPipeline``.
+    """
+
+    def test_handler_uses_action_string_compilermessage_array(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleRecompileAndWait")
+        self.assertRegex(
+            body,
+            r"Action<\s*string\s*,\s*CompilerMessage\[\]\s*>",
+            "Per-assembly compile-finished subscription must use Action<string, CompilerMessage[]>",
+        )
+
+    def test_handler_does_not_reference_nested_delegate(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleRecompileAndWait")
+        self.assertNotIn("CompilationPipeline.AssemblyCompilationFinished", body)
+
+
+class TestRecompileAndWaitOutcomeSync(unittest.TestCase):
+    """Issue #213 root cause: outcome synthesis must run inside the
+    pipeline-finished event subscription on the original application
+    domain (before Unity's domain reload destroys the callback), and a
+    boolean re-entry guard must prevent double-resolution if the deadline
+    watchdog and the pipeline-finished signal both observe a terminal
+    condition in the same frame.
+    """
+
+    @staticmethod
+    def _pipeline_finished_subscription_body(handler_body: str) -> str:
+        """Return the body of the ``compilationFinished`` lambda assigned
+        to ``onPipelineFinished``.
+        """
+        match = re.search(
+            r"onPipelineFinished\s*=\s*[^=]*?=>\s*\{",
+            handler_body,
+        )
+        if match is None:
+            raise AssertionError("onPipelineFinished assignment not found")
+        return _extract_braced_block(
+            handler_body, match.end(), "onPipelineFinished body"
+        )
+
+    def test_pipeline_finished_body_synthesises_failure_noop_and_switchover(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleRecompileAndWait")
+        sub_body = self._pipeline_finished_subscription_body(body)
+        self.assertIn("EDITOR_CTRL_RECOMPILE_FAILED", sub_body)
+        self.assertIn("EDITOR_CTRL_RECOMPILE_AND_WAIT_NOOP", sub_body)
+        self.assertIn("BuildRecompileReloadWaitPoll", sub_body)
+        self.assertIn("WriteResponse(", sub_body)
+
+    def test_pipeline_finished_body_checks_and_sets_reentry_flag(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleRecompileAndWait")
+        # The shared re-entry flag must be declared as a captured local
+        # of the handler.
+        self.assertRegex(body, r"bool\s+resolved\s*=\s*false\s*;")
+        sub_body = self._pipeline_finished_subscription_body(body)
+        # The subscription must short-circuit on re-entry and arm the
+        # flag before tearing down its own subscriptions.
+        self.assertRegex(sub_body, r"if\s*\(\s*resolved\s*\)\s*return\s*;")
+        self.assertRegex(sub_body, r"resolved\s*=\s*true\s*;")
+
+
+class TestRecompileAndWaitDeadlineWatchdog(unittest.TestCase):
+    """Issue #213: the per-frame deadline watchdog observes only the
+    deadline and the shared re-entry flag. It does not classify outcomes
+    or reach into the post-reload path; otherwise the same race that
+    motivates this work resurfaces.
+    """
+
+    @staticmethod
+    def _watchdog_body(handler_body: str) -> str:
+        """Return the body of the ``prePoll`` lambda — the per-frame
+        deadline watchdog.
+        """
+        match = re.search(r"prePoll\s*=\s*\(\s*\)\s*=>\s*\{", handler_body)
+        if match is None:
+            raise AssertionError("prePoll assignment not found")
+        return _extract_braced_block(handler_body, match.end(), "prePoll body")
+
+    def test_watchdog_only_emits_timeout_envelope(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleRecompileAndWait")
+        watchdog = self._watchdog_body(body)
+        self.assertIn("EDITOR_CTRL_RECOMPILE_TIMEOUT", watchdog)
+        self.assertNotIn("EDITOR_CTRL_RECOMPILE_FAILED", watchdog)
+        self.assertNotIn("EDITOR_CTRL_RECOMPILE_AND_WAIT_NOOP", watchdog)
+        self.assertNotIn("BuildRecompileReloadWaitPoll", watchdog)
+
+    def test_watchdog_consults_shared_reentry_flag(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleRecompileAndWait")
+        watchdog = self._watchdog_body(body)
+        self.assertRegex(watchdog, r"if\s*\(\s*resolved\s*\)\s*return\s*;")
+        self.assertRegex(watchdog, r"resolved\s*=\s*true\s*;")
+
+
+class TestRecompileScheduleFailedCode(unittest.TestCase):
+    """Issue #204: the editor-side rejection of ``RequestScriptCompilation``
+    is a schedule-failure, not a deadline-elapsed condition. It must use
+    a dedicated ``EDITOR_CTRL_RECOMPILE_SCHEDULE_FAILED`` code so callers
+    can distinguish "Unity refused to start" from "we waited and got no
+    response".
+    """
+
+    @staticmethod
+    def _schedule_catch_body(handler_body: str) -> str:
+        """Return the body of the catch block surrounding
+        ``CompilationPipeline.RequestScriptCompilation()``.
+        """
+        match = re.search(
+            r"CompilationPipeline\.RequestScriptCompilation\(\)\s*;\s*\}\s*"
+            r"catch\s*\(\s*Exception\s+\w+\s*\)\s*\{",
+            handler_body,
+        )
+        if match is None:
+            raise AssertionError(
+                "catch block surrounding RequestScriptCompilation not found"
+            )
+        return _extract_braced_block(
+            handler_body, match.end(), "RequestScriptCompilation schedule-failure catch"
+        )
+
+    def test_schedule_failed_code_emitted(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleRecompileAndWait")
+        catch_body = self._schedule_catch_body(body)
+        self.assertIn("EDITOR_CTRL_RECOMPILE_SCHEDULE_FAILED", catch_body)
+
+    def test_schedule_catch_does_not_emit_timeout_code(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleRecompileAndWait")
+        catch_body = self._schedule_catch_body(body)
+        self.assertNotIn("EDITOR_CTRL_RECOMPILE_TIMEOUT", catch_body)
 
 
 if __name__ == "__main__":

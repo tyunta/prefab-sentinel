@@ -626,22 +626,6 @@ namespace PrefabSentinel
             return false;
         }
 
-        private static Type ResolveComponentType(string typeName)
-        {
-            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
-            {
-                Type t = asm.GetType(typeName, throwOnError: false, ignoreCase: false);
-                if (t != null && typeof(Component).IsAssignableFrom(t))
-                    return t;
-                foreach (var candidate in asm.GetTypes())
-                {
-                    if (candidate.Name == typeName && typeof(Component).IsAssignableFrom(candidate))
-                        return candidate;
-                }
-            }
-            return null;
-        }
-
         private static List<PropertyModification> CollectParentModifications(GameObject go)
         {
             var result = new List<PropertyModification>();

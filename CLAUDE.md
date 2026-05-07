@@ -44,7 +44,7 @@
 - **操作系・検証系ツール**（`set_property`, `validate_refs`, `validate_field_rename`, `check_field_coverage`, `activate_project` 等）: `success / severity / code / message / data / diagnostics` エンベロープを返す。`diagnostics` が意味のあるデータを運ぶため。
 - **参照系ツール**（`get_unity_symbols`, `find_unity_symbol`, `find_referencing_assets`）: ペイロードを直接返す（エンベロープなし）。該当なしは空 `matches` 配列で表現し、エラーとしない。インフラエラー（ファイル不在等）は MCP `ToolError` で伝播。
 - **orchestrator 系ツール**（`inspect_wiring`, `inspect_variant` 等）: `ToolResponse.to_dict()` 経由でエンベロープを返す。
-- 主要コード: `SER001`, `SER002`, `SER003`（`set_component_fields` が dry-run 段階で component / property path を解決できない場合）、`PVR001`, `PVR002`, `PVR003`, `REF001`, `REF002`, `RUN001`, `RUN002`, `CHANGE_REASON_REQUIRED`（`confirm=True` 時に `change_reason` が未指定）。
+- 主要コード: `SER001`, `SER002`, `SER003`（`set_component_fields` が dry-run 段階で component / property path を解決できない場合）、`PVR001`, `PVR002`, `PVR003`, `REF001`, `REF002`, `RUN001`, `RUN002`, `CHANGE_REASON_REQUIRED`（`confirm=True` 時に `change_reason` が未指定）、`EDITOR_CTRL_RECOMPILE_SCHEDULE_FAILED`（`editor_recompile_and_wait` で `CompilationPipeline.RequestScriptCompilation()` が Editor 側に拒否された場合。`EDITOR_CTRL_RECOMPILE_TIMEOUT` は deadline 経過専用）。
 - `severity` は `info | warning | error | critical` を使用する。
 - MCP レベルの例外（`ToolError`）はインフラエラー（ファイル不在、import 失敗）のみ。
 
