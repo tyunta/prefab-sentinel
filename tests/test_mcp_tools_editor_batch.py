@@ -47,6 +47,7 @@ def _register() -> _RecorderServer:
 _DOCUMENTED_TOOLS = {
     "editor_create_empty",
     "editor_create_primitive",
+    "editor_create_ui_element",
     "editor_batch_create",
     "editor_batch_set_property",
     "editor_batch_set_material_property",
@@ -258,6 +259,54 @@ class EditorBatchRoutingTests(unittest.TestCase):
         kwargs = self.mock_send.call_args.kwargs
         self.assertEqual("editor_create_scene", kwargs["action"])
         self.assertEqual("Assets/Scenes/New.unity", kwargs["asset_path"])
+
+    # --- editor_create_ui_element (issue #195) -----------------------------
+
+    def test_create_ui_element_image_with_anchor_size_delta_and_color(self) -> None:
+        # Issue #195: rect anchor / sizeDelta are first-class parameters;
+        # ``color`` is a recognized graphic property that the Bridge applies
+        # to the primary Graphic component. The Python tool must serialize
+        # both payloads and forward the typed action so the Bridge's typed
+        # envelope governs the response.
+        self.server.registered["editor_create_ui_element"](
+            name="MyImage",
+            type="Image",
+            parent_path="Canvas",
+            rect={
+                "anchorMin": [0.0, 0.0],
+                "anchorMax": [1.0, 1.0],
+                "sizeDelta": [0.0, 0.0],
+            },
+            properties={"color": [0.9, 0.6, 0.2, 1.0]},
+        )
+        kwargs = self.mock_send.call_args.kwargs
+        self.assertEqual("editor_create_ui_element", kwargs["action"])
+        self.assertEqual("MyImage", kwargs["new_name"])
+        self.assertEqual("Image", kwargs["component_type"])
+        self.assertEqual("Canvas", kwargs["hierarchy_path"])
+        rect_payload = json.loads(kwargs["ui_rect_json"])
+        self.assertEqual([0.0, 0.0], rect_payload["anchorMin"])
+        self.assertEqual([1.0, 1.0], rect_payload["anchorMax"])
+        self.assertEqual([0.0, 0.0], rect_payload["sizeDelta"])
+        properties = json.loads(kwargs["ui_properties_json"])
+        self.assertEqual([0.9, 0.6, 0.2, 1.0], properties["color"])
+
+    def test_create_ui_element_tmp_with_explicit_font(self) -> None:
+        self.server.registered["editor_create_ui_element"](
+            name="Label",
+            type="TextMeshProUGUI",
+            properties={
+                "font": "Assets/TextMesh Pro/Resources/Fonts & Materials/LiberationSans SDF.asset",
+            },
+        )
+        kwargs = self.mock_send.call_args.kwargs
+        self.assertEqual("editor_create_ui_element", kwargs["action"])
+        self.assertEqual("TextMeshProUGUI", kwargs["component_type"])
+        properties = json.loads(kwargs["ui_properties_json"])
+        self.assertEqual(
+            "Assets/TextMesh Pro/Resources/Fonts & Materials/LiberationSans SDF.asset",
+            properties["font"],
+        )
 
 
 if __name__ == "__main__":

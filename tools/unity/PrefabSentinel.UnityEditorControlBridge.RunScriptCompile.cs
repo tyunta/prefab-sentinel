@@ -160,20 +160,18 @@ namespace PrefabSentinel
         private const float RecompileAndWaitTimeoutMaxSec = 1800f;
 
         /// <summary>
-        /// Builds the per-frame poller used by ``editor_recompile_and_wait``
-        /// — both at first dispatch (``HandleRecompileAndWait``) and after a
-        /// domain-reload resume (``ResumePendingAsyncRunners``).  Centralised
-        /// so the three completion signals (deadline, ``isCompiling``,
-        /// assembly mtime advance, reload-count advance) and the success /
-        /// timeout envelopes stay in one place.  The two call sites differ
-        /// only in their reload-count threshold (call-time snapshot vs. 0
-        /// after the reloaded AppDomain reset the counter) and in the
-        /// timeout message body.
+        /// Builds the post-reload poll used by ``editor_recompile_and_wait``
+        /// once compilation has finished and at least one assembly was
+        /// recompiled. Issue #203: the post-reload phase observes only
+        /// the reload counter and the deadline — the
+        /// ``CompilationPipeline.compilationFinished`` event is the
+        /// authoritative pre-reload terminator and lives in
+        /// ``HandleRecompileAndWait`` itself, so this poll never reads
+        /// the assembly modification time.
         /// </summary>
-        private static EditorApplication.CallbackFunction BuildRecompileAndWaitPoll(
+        private static EditorApplication.CallbackFunction BuildRecompileReloadWaitPoll(
             string responsePath,
             long deadlineMs,
-            long callTimeAssemblyMtime,
             int reloadCountThreshold,
             string timeoutDetail)
         {
@@ -189,9 +187,6 @@ namespace PrefabSentinel
                         timeoutDetail));
                     return;
                 }
-                if (EditorApplication.isCompiling) return;
-                long currentMtime = PendingAsyncRunner.ReadAssemblyMtimeUnixMs();
-                if (currentMtime <= callTimeAssemblyMtime) return;
                 if (PendingAsyncRunner.AssemblyReloadCount <= reloadCountThreshold) return;
 
                 PendingAsyncRunner.Complete(responsePath);
@@ -227,29 +222,155 @@ namespace PrefabSentinel
                 : RecompileAndWaitDefaultTimeoutSec;
             long callTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             long deadlineMs = callTimeMs + (long)(budgetSec * 1000f);
-            long callTimeAssemblyMtime =
-                PendingAsyncRunner.ReadAssemblyMtimeUnixMs();
             int callTimeReloadCount = PendingAsyncRunner.AssemblyReloadCount;
 
-            var entry = new PendingAsyncRunner.PersistedEntry
+            // Issue #203: event-driven completion. The mtime polling
+            // approach failed because Unity does not advance
+            // ``Library/ScriptAssemblies/Assembly-CSharp.dll``'s mtime
+            // when every assembly is reported as not requiring
+            // compilation, so the old completion check could never fire
+            // and the surface always timed out on no-op compiles. The
+            // event-driven approach observes:
+            //
+            //   * ``assemblyCompilationFinished`` for per-assembly
+            //     outcome (records compile errors of error severity and
+            //     marks ``compiledAny`` when a real compile occurred).
+            //   * ``assemblyCompilationNotRequired`` for the no-op
+            //     classification (the ``compiledAny == false`` path
+            //     resolves to ``EDITOR_CTRL_RECOMPILE_AND_WAIT_NOOP``).
+            //   * ``compilationFinished`` as the always-fires terminator
+            //     that triggers outcome synthesis.
+            //
+            // The handler unsubscribes its event handlers on every exit
+            // path to keep the registry per-request.
+            bool compiledAny = false;
+            bool pipelineFinished = false;
+            var compileErrors = new List<string>();
+
+            CompilationPipeline.AssemblyCompilationFinished onAsmFinished = null;
+            Action<string> onAsmNotRequired = null;
+            Action<object> onPipelineFinished = null;
+
+            onAsmFinished = (asmPath, messages) =>
+            {
+                bool asmHadError = false;
+                if (messages != null)
+                {
+                    foreach (var msg in messages)
+                    {
+                        if (msg.type == CompilerMessageType.Error)
+                        {
+                            asmHadError = true;
+                            compileErrors.Add(
+                                string.IsNullOrEmpty(msg.file)
+                                    ? msg.message
+                                    : $"{msg.file}({msg.line},{msg.column}): {msg.message}");
+                        }
+                    }
+                }
+                if (!asmHadError)
+                    compiledAny = true;
+            };
+            onAsmNotRequired = _ => { /* classification only; outcome handled at pipelineFinished */ };
+            onPipelineFinished = _ => { pipelineFinished = true; };
+
+            void Unsubscribe()
+            {
+                CompilationPipeline.assemblyCompilationFinished -= onAsmFinished;
+                CompilationPipeline.assemblyCompilationNotRequired -= onAsmNotRequired;
+                CompilationPipeline.compilationFinished -= onPipelineFinished;
+            }
+
+            CompilationPipeline.assemblyCompilationFinished += onAsmFinished;
+            CompilationPipeline.assemblyCompilationNotRequired += onAsmNotRequired;
+            CompilationPipeline.compilationFinished += onPipelineFinished;
+
+            EditorApplication.CallbackFunction prePoll = null;
+            prePoll = () =>
+            {
+                long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                if (nowMs > deadlineMs && !pipelineFinished)
+                {
+                    Unsubscribe();
+                    PendingAsyncRunner.Complete(responsePath);
+                    WriteResponse(responsePath, BuildError(
+                        "EDITOR_CTRL_RECOMPILE_TIMEOUT",
+                        $"editor_recompile_and_wait: timed out after {budgetSec:F1}s "
+                        + "before CompilationPipeline.compilationFinished fired."));
+                    return;
+                }
+                if (!pipelineFinished) return;
+
+                Unsubscribe();
+
+                if (compileErrors.Count > 0)
+                {
+                    PendingAsyncRunner.Complete(responsePath);
+                    var failed = BuildError(
+                        "EDITOR_CTRL_RECOMPILE_FAILED",
+                        $"editor_recompile_and_wait: {compileErrors.Count} compile error(s).",
+                        data: new EditorControlData
+                        {
+                            executed = true,
+                            errors = compileErrors.ToArray(),
+                        });
+                    WriteResponse(responsePath, failed);
+                    return;
+                }
+
+                if (!compiledAny)
+                {
+                    // Every assembly reported assemblyCompilationNotRequired
+                    // (or no per-assembly events fired). No domain reload
+                    // will follow, so synthesise the no-op success
+                    // synchronously and skip the SessionState mirror —
+                    // there is nothing to resume after a reload that
+                    // never happens.
+                    PendingAsyncRunner.Complete(responsePath);
+                    WriteResponse(responsePath, BuildSuccess(
+                        "EDITOR_CTRL_RECOMPILE_AND_WAIT_NOOP",
+                        "editor_recompile_and_wait: every assembly was reported "
+                        + "as not requiring compilation; no domain reload occurred.",
+                        new EditorControlData { executed = true }));
+                    return;
+                }
+
+                // At least one assembly compiled. Switch over to the
+                // post-reload wait poll and persist the entry so the
+                // wait survives the inevitable domain reload.
+                PendingAsyncRunner.Complete(responsePath);
+                var reloadEntry = new PendingAsyncRunner.PersistedEntry
+                {
+                    action = "editor_recompile_and_wait",
+                    responsePath = responsePath,
+                    requestJson = JsonUtility.ToJson(request),
+                    callTimeUnixMs = callTimeMs,
+                    deadlineUnixMs = deadlineMs,
+                };
+                EditorApplication.CallbackFunction reloadPoll = BuildRecompileReloadWaitPoll(
+                    responsePath,
+                    deadlineMs,
+                    callTimeReloadCount,
+                    $"editor_recompile_and_wait: timed out after {budgetSec:F1}s waiting "
+                    + "for the post-reload AssemblyReloadCount tick.");
+                PendingAsyncRunner.Register(reloadEntry, reloadPoll);
+            };
+
+            // Pre-reload entry: not persisted to SessionState — the
+            // pipeline-event subscriptions live on this AppDomain and
+            // cannot survive a reload. Persistence happens only on the
+            // ``compiledAny`` switchover path above. We still register
+            // the poller against the response path so the
+            // ``EditorApplication.update`` loop drives it.
+            var preEntry = new PendingAsyncRunner.PersistedEntry
             {
                 action = "editor_recompile_and_wait",
                 responsePath = responsePath,
                 requestJson = JsonUtility.ToJson(request),
                 callTimeUnixMs = callTimeMs,
                 deadlineUnixMs = deadlineMs,
-                callTimeAssemblyMtimeUnixMs = callTimeAssemblyMtime,
             };
-
-            EditorApplication.CallbackFunction poll = BuildRecompileAndWaitPoll(
-                responsePath,
-                deadlineMs,
-                callTimeAssemblyMtime,
-                callTimeReloadCount,
-                $"editor_recompile_and_wait: timed out after {budgetSec:F1}s. " +
-                "Editor still reports compilation in progress, the compiled " +
-                $"{PendingAsyncRunner.CompiledAssemblyRelPath} mtime has not " +
-                "advanced, or the afterAssemblyReload signal has not fired.");
+            PendingAsyncRunner.RegisterTransient(preEntry, prePoll);
 
             try
             {
@@ -257,12 +378,13 @@ namespace PrefabSentinel
             }
             catch (Exception ex)
             {
+                Unsubscribe();
+                PendingAsyncRunner.Complete(responsePath);
                 return BuildError(
                     "EDITOR_CTRL_RECOMPILE_TIMEOUT",
                     $"editor_recompile_and_wait: failed to schedule compilation: {ex.Message}");
             }
 
-            PendingAsyncRunner.Register(entry, poll);
             return null;
         }
 
@@ -714,21 +836,25 @@ namespace PrefabSentinel
                     }
                     else if (entry.action == "editor_recompile_and_wait")
                     {
+                        // Issue #203: only the ``compiledAny=true`` path
+                        // persists a SessionState entry — the no-op and
+                        // failed paths complete synchronously inside the
+                        // pre-reload phase and never reach this resumer.
+                        // The post-reload poll (``BuildRecompileReloadWaitPoll``)
+                        // therefore only needs to observe the reload counter
+                        // and the deadline; the pipeline-event subscriptions
+                        // do not survive the reload and would not fire again.
+                        //
                         // Issue #191: the resumer running already implies a
                         // domain reload has occurred — the post-reload counter
-                        // on this AppDomain starts at 0, and the
-                        // ``AssemblyReloadCount > threshold`` check inside the
-                        // shared poll is what gates success.  A threshold of
-                        // -1 is satisfied on the very first tick (0 > -1)
-                        // independent of whether ``[InitializeOnLoad]`` static
-                        // constructors run before or after the
-                        // ``afterAssemblyReload`` increment, eliminating the
-                        // off-by-one race that left the wait blocked until
-                        // the next reload.
-                        EditorApplication.CallbackFunction poll = BuildRecompileAndWaitPoll(
+                        // on this AppDomain starts at 0. A threshold of -1
+                        // satisfies ``AssemblyReloadCount > threshold`` on the
+                        // very first tick (0 > -1) regardless of whether
+                        // ``[InitializeOnLoad]`` static constructors run before
+                        // or after the ``afterAssemblyReload`` increment.
+                        EditorApplication.CallbackFunction poll = BuildRecompileReloadWaitPoll(
                             entry.responsePath,
                             entry.deadlineUnixMs,
-                            entry.callTimeAssemblyMtimeUnixMs,
                             -1,
                             "editor_recompile_and_wait: timed out after domain reload.");
                         PendingAsyncRunner.RehydrateEntry(entry, poll);

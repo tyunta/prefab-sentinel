@@ -162,6 +162,7 @@ class TestToolRegistration(unittest.TestCase):
             "editor_set_property", "editor_safe_save_prefab",
             "editor_set_parent",
             "editor_create_empty", "editor_create_primitive",
+            "editor_create_ui_element",
             "editor_batch_create", "editor_batch_set_property",
             "editor_batch_set_material_property",
             "editor_open_scene", "editor_save_scene",
@@ -191,7 +192,9 @@ class TestToolRegistration(unittest.TestCase):
     def test_tool_count(self) -> None:
         server = create_server()
         tools = _run(server.list_tools())
-        self.assertEqual(75, len(tools))
+        # Issue #195 added the dedicated ``editor_create_ui_element``
+        # tool, bringing the registered surface from 75 to 76.
+        self.assertEqual(76, len(tools))
 
 
 class TestSymbolTools(unittest.TestCase):
@@ -560,6 +563,45 @@ class TestOrchestratorTools(unittest.TestCase):
         mock_orch.inspect_wiring.assert_called_once_with(
             target_path="/some/test.prefab",
             udon_only=False,
+            cursor="",
+            page_size=50,
+        )
+
+    def test_inspect_wiring_delegates_cursor_and_page_size(self) -> None:
+        # Issue #197: the MCP tool surface forwards the opaque continuation
+        # token and the bounded page size so the caller can paginate the
+        # merged components list across responses.
+        mock_resp = MagicMock()
+        mock_resp.to_dict.return_value = {
+            "success": True,
+            "severity": "info",
+            "data": {"components": []},
+        }
+        mock_orch = MagicMock()
+        mock_orch.inspect_wiring.return_value = mock_resp
+
+        server = self._make_server()
+
+        with patch(
+            "prefab_sentinel.session_cache.Phase1Orchestrator"
+        ) as mock_cls:
+            mock_cls.default.return_value = mock_orch
+            _, result = _run(server.call_tool(
+                "inspect_wiring",
+                {
+                    "asset_path": "/some/test.prefab",
+                    "udon_only": True,
+                    "cursor": "pos:50",
+                    "page_size": 25,
+                },
+            ))
+
+        self.assertTrue(result["success"])
+        mock_orch.inspect_wiring.assert_called_once_with(
+            target_path="/some/test.prefab",
+            udon_only=True,
+            cursor="pos:50",
+            page_size=25,
         )
 
     def test_find_referencing_assets_delegates(self) -> None:

@@ -126,9 +126,12 @@ def _handle_snapshot_modes(
                 snapshot_diff=snapshot_diff,
             )
         if prev is None:
+            # Issue #201: omit the host filesystem ``project_root`` from the
+            # message and from the data envelope. Snapshot identifier alone
+            # is sufficient context for the caller.
             return _snapshot_error(
                 "VALIDATE_REFS_SNAPSHOT_NOT_FOUND",
-                f"no snapshot named {snapshot_diff!r} for project {project_root}",
+                f"no snapshot named {snapshot_diff!r}",
                 scope=scope,
                 snapshot_save=snapshot_save,
                 snapshot_diff=snapshot_diff,

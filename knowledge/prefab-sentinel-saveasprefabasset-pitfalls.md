@@ -181,6 +181,15 @@ tmp.fontSize = 14;
 
 fontAsset 割当後は既存 TMP labels と同じ fontSize 単位で見た目が揃う。
 
+**回避 (MCP 経由 / 推奨, issue #195)**: `editor_create_ui_element(type="TextMeshProUGUI", ...)`
+を呼ぶと、`properties.font` 未指定時に Bridge handler が上記 `LiberationSans SDF.asset`
+を canonical default として `AssetDatabase.LoadAssetAtPath<TMP_FontAsset>` で解決し、
+`tmp.font` に代入する。同 asset がプロジェクトに存在しない場合は
+`EDITOR_CTRL_CREATE_UI_TMP_FONT_MISSING` warning を返し、GameObject は作成されるが
+font は未代入のまま（呼び出し元が明示的に font asset を指定するか、TextMeshPro
+Essentials package を import するかを判断できる）。`color` も `properties.color`
+で第一級指定できる。
+
 ## まとめ (3 modes)
 
 | Mode | 検知 | 自動修復 | 残作業 |

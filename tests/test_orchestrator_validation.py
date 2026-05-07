@@ -873,6 +873,31 @@ GameObject:
         self.assertEqual("VALIDATE_REFS_SNAPSHOT_NOT_FOUND", resp.code)
         self.assertEqual(Severity.ERROR, resp.severity)
 
+    def test_snapshot_not_found_message_omits_project_root(self) -> None:
+        # Issue #201: VALIDATE_REFS_SNAPSHOT_NOT_FOUND.message must name only
+        # the snapshot identifier and never leak the host filesystem path.
+        # The data envelope must also contain no project-root path key.
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            snap_dir = root / "snapshots"
+            self._project_with_missing(root, [self.MISSING_A])
+            svc = ReferenceResolverService(project_root=root)
+
+            os.environ["PREFAB_SENTINEL_SNAPSHOT_DIR"] = str(snap_dir)
+            try:
+                resp = validate_refs(
+                    svc,
+                    scope=str(root / "Assets"),
+                    snapshot_diff="never-saved",
+                )
+            finally:
+                os.environ.pop("PREFAB_SENTINEL_SNAPSHOT_DIR", None)
+        self.assertEqual("VALIDATE_REFS_SNAPSHOT_NOT_FOUND", resp.code)
+        self.assertEqual("no snapshot named 'never-saved'", resp.message)
+        self.assertNotIn(str(root), resp.message)
+        self.assertNotIn(str(snap_dir), resp.message)
+        self.assertNotIn("project_root", resp.data)
+
     def test_save_and_diff_mutually_exclusive(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
