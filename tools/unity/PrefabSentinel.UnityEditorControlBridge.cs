@@ -19,7 +19,7 @@ namespace PrefabSentinel
     public static partial class UnityEditorControlBridge
     {
         public const int ProtocolVersion = 1;
-        public const string BridgeVersion = "0.5.197";
+        public const string BridgeVersion = "0.5.198";
 
         /// <summary>Actions that write their response file asynchronously (not on return).</summary>
         // Issues #108 / #118 / #225: ``run_script``, ``editor_recompile_and_wait``,
