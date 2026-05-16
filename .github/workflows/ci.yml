@@ -1,0 +1,106 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+
+      - name: Setup Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.11"
+
+      - name: Install lint dependencies
+        run: uv sync --extra lint
+
+      - name: Ruff check
+        run: uv run ruff check prefab_sentinel/ tests/ scripts/ tools/
+
+      - name: Mypy
+        run: uv run mypy prefab_sentinel/
+
+      - name: Module line-limit gate
+        run: uv run python scripts/check_module_line_limits.py
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+
+      - name: Setup Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependencies
+        run: uv sync --extra test --extra mcp
+
+      - name: Run Unit Tests
+        run: uv run python scripts/run_unit_tests.py
+
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      csharp: ${{ steps.filter.outputs.csharp }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Detect C# surface changes
+        id: filter
+        uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3
+        with:
+          filters: |
+            csharp:
+              - 'tools/unity/**'
+              - 'tests/csharp/**'
+              - 'global.json'
+              - '.github/workflows/ci.yml'
+
+  csharp-tests:
+    runs-on: ubuntu-latest
+    needs: changes
+    # Issue #292: ``workflow_dispatch`` runs collapse the path-filter
+    # output to false because no base ref exists, which silently
+    # skipped the C# tests on manual reruns. The disjunct keeps
+    # path-change-driven runs gated by the filter and forces manual
+    # runs to execute the job unconditionally.
+    if: needs.changes.outputs.csharp == 'true' || github.event_name == 'workflow_dispatch'
+    defaults:
+      run:
+        working-directory: tests/csharp
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Setup .NET (pinned by global.json)
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: tests/csharp/packages.lock.json
+
+      - name: Restore (locked mode)
+        run: dotnet restore --locked-mode
+
+      - name: Build (no restore)
+        run: dotnet build --no-restore --configuration Release
+
+      - name: Test (no build)
+        run: dotnet test --no-build --configuration Release --logger "console;verbosity=normal"

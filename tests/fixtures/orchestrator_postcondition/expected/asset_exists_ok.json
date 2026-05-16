@@ -1,0 +1,14 @@
+{
+  "success": true,
+  "severity": "info",
+  "code": "POST_ASSET_EXISTS_OK",
+  "message": "asset_exists postcondition passed.",
+  "data": {
+    "type": "asset_exists",
+    "resource": null,
+    "path": "<TMP>/Assets/Created.asset",
+    "exists": true,
+    "read_only": true,
+    "executed": true
+  }
+}

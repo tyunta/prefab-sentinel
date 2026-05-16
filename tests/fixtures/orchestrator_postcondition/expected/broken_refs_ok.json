@@ -1,0 +1,15 @@
+{
+  "success": true,
+  "severity": "info",
+  "code": "POST_BROKEN_REFS_OK",
+  "message": "broken_refs postcondition passed.",
+  "data": {
+    "type": "broken_refs",
+    "scope": "Assets",
+    "expected_count": 0,
+    "actual_count": 0,
+    "scan_code": "REF_SCAN_OK",
+    "read_only": true,
+    "executed": true
+  }
+}

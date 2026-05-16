@@ -1,0 +1,295 @@
+"""Contract tests for the AnimationClip primitives (issue #243).
+
+Pins the wrapper-side contract for the three surfaces:
+
+* ``editor_inspect_animation_clip`` forwards the asset path.
+* ``editor_create_animation_clip`` gates on the audit pair and forwards
+  the target directory, the clip name, the curve specification, and
+  the audit pair verbatim.
+* ``editor_apply_animation_clip`` gates on the audit pair (whitespace
+  is treated as missing) and forwards the asset path, the target
+  hierarchy path, and the audit pair verbatim.
+
+#222 Mode A: assertion-shape strengthening is applied throughout;
+exception-asserting tests pair the envelope code with the severity /
+success / message-substring value pin so a partial regression surfaces
+all observable fields in one diagnostic.
+"""
+
+from __future__ import annotations
+
+import json
+import unittest
+from unittest.mock import patch
+
+from prefab_sentinel import mcp_tools_editor_animation
+
+
+def _success_envelope() -> dict:
+    return {
+        "success": True,
+        "severity": "info",
+        "code": "EDITOR_CTRL_ANIMATION_CLIP_OK",
+        "message": "ok",
+        "data": {"executed": True},
+        "diagnostics": [],
+    }
+
+
+class EditorInspectAnimationClipTests(unittest.TestCase):
+    """Inspect surface routing."""
+
+    def test_inspect_reaches_inspect_action_with_asset_path(self) -> None:
+        with patch.object(
+            mcp_tools_editor_animation, "send_action",
+            return_value=_success_envelope(),
+        ) as send:
+            mcp_tools_editor_animation.editor_inspect_animation_clip(
+                asset_path="Assets/Animations/Smile.anim",
+            )
+        send.assert_called_once()
+        kwargs = send.call_args.kwargs
+        self.assertEqual(
+            ("inspect_animation_clip", "Assets/Animations/Smile.anim"),
+            (kwargs["action"], kwargs["asset_path"]),
+            msg=(
+                "editor_inspect_animation_clip must reach the "
+                "inspect_animation_clip action with the asset path."
+            ),
+        )
+
+
+class EditorCreateAnimationClipAuditGateTests(unittest.TestCase):
+    """Create surface audit gating."""
+
+    def test_confirm_false_rejected_pre_bridge(self) -> None:
+        with patch.object(
+            mcp_tools_editor_animation, "send_action",
+            return_value=_success_envelope(),
+        ) as send:
+            response = mcp_tools_editor_animation.editor_create_animation_clip(
+                target_dir="Assets/Animations",
+                name="Wink",
+                curves=[],
+                confirm=False,
+                change_reason="repro",
+            )
+        send.assert_not_called()
+        self.assertEqual(
+            ("CHANGE_REASON_REQUIRED", "error", False),
+            (response["code"], response["severity"], response["success"]),
+            msg=(
+                "editor_create_animation_clip must short-circuit with "
+                "CHANGE_REASON_REQUIRED when confirm is False."
+            ),
+        )
+
+    def test_blank_change_reason_rejected_pre_bridge(self) -> None:
+        with patch.object(
+            mcp_tools_editor_animation, "send_action",
+            return_value=_success_envelope(),
+        ) as send:
+            response = mcp_tools_editor_animation.editor_create_animation_clip(
+                target_dir="Assets/Animations",
+                name="Wink",
+                curves=[],
+                confirm=True,
+                change_reason="   ",
+            )
+        send.assert_not_called()
+        self.assertEqual(
+            ("CHANGE_REASON_REQUIRED", "error", False),
+            (response["code"], response["severity"], response["success"]),
+            msg=(
+                "Whitespace-only change_reason must be treated as "
+                "missing and short-circuit with CHANGE_REASON_REQUIRED."
+            ),
+        )
+
+
+class EditorCreateAnimationClipForwardingTests(unittest.TestCase):
+    """Create surface forwards every input to the bridge verbatim."""
+
+    def test_valid_input_forwards_dir_name_curves_and_audit_pair(self) -> None:
+        curves = [
+            {"relative_path": "Head", "type": "Transform",
+             "property": "m_LocalPosition.x", "value": 0.5},
+        ]
+        with patch.object(
+            mcp_tools_editor_animation, "send_action",
+            return_value=_success_envelope(),
+        ) as send:
+            mcp_tools_editor_animation.editor_create_animation_clip(
+                target_dir="Assets/Animations",
+                name="Wink",
+                curves=curves,
+                confirm=True,
+                change_reason="author wink expression",
+            )
+        send.assert_called_once()
+        kwargs = send.call_args.kwargs
+        decoded = json.loads(kwargs["curves_json"])
+        # Value-pin: action label + every forwarded field shape + the
+        # parseable curve payload length, in one tuple, so a regression
+        # in any single forwarded field surfaces every observable.
+        self.assertEqual(
+            (
+                "create_animation_clip", "Assets/Animations", "Wink",
+                1, True, "author wink expression",
+            ),
+            (
+                kwargs["action"], kwargs["target_dir"],
+                kwargs["animation_clip_name"],
+                len(decoded), kwargs["confirm"], kwargs["change_reason"],
+            ),
+            msg=(
+                "Create must forward target_dir, animation_clip_name, "
+                "JSON curves of matching length, confirm=True, and the "
+                "audit reason verbatim."
+            ),
+        )
+
+
+class EditorCreateAnimationClipPathTraversalTests(unittest.TestCase):
+    """Create surface rejects path-traversal segments pre-bridge.
+
+    Defence-in-depth gate complementing the bridge-side canonical-path
+    check (issue #243 / security review). A ``target_dir`` of
+    ``Assets/../../../tmp`` would satisfy the trivial ``StartsWith("Assets/")``
+    test, and an unvalidated ``name`` could embed path separators that
+    would let ``Path.Combine`` write the .anim outside the project
+    assets root.
+    """
+
+    def test_target_dir_with_parent_traversal_rejected_pre_bridge(self) -> None:
+        with patch.object(
+            mcp_tools_editor_animation, "send_action",
+            return_value=_success_envelope(),
+        ) as send:
+            response = mcp_tools_editor_animation.editor_create_animation_clip(
+                target_dir="Assets/../../../tmp",
+                name="Evil",
+                curves=[],
+                confirm=True,
+                change_reason="security regression",
+            )
+        send.assert_not_called()
+        self.assertEqual(
+            ("EDITOR_CTRL_ANIMATION_CLIP_WRITE_FAILED", "error", False),
+            (response["code"], response["severity"], response["success"]),
+            msg=(
+                "Any '..' segment in target_dir must short-circuit "
+                "pre-bridge — Assets/../tmp escapes the project assets "
+                "root after canonicalisation."
+            ),
+        )
+
+    def test_name_with_path_separator_rejected_pre_bridge(self) -> None:
+        with patch.object(
+            mcp_tools_editor_animation, "send_action",
+            return_value=_success_envelope(),
+        ) as send:
+            response = mcp_tools_editor_animation.editor_create_animation_clip(
+                target_dir="Assets/Animations",
+                name="../../etc/passwd",
+                curves=[],
+                confirm=True,
+                change_reason="security regression",
+            )
+        send.assert_not_called()
+        self.assertEqual(
+            ("EDITOR_CTRL_ANIMATION_CLIP_WRITE_FAILED", "error", False),
+            (response["code"], response["severity"], response["success"]),
+            msg=(
+                "A name carrying path separators or '..' must be "
+                "rejected pre-bridge — Path.Combine would otherwise "
+                "send the .anim outside the target directory."
+            ),
+        )
+
+    def test_name_with_backslash_rejected_pre_bridge(self) -> None:
+        with patch.object(
+            mcp_tools_editor_animation, "send_action",
+            return_value=_success_envelope(),
+        ) as send:
+            response = mcp_tools_editor_animation.editor_create_animation_clip(
+                target_dir="Assets/Animations",
+                name="foo\\bar",
+                curves=[],
+                confirm=True,
+                change_reason="security regression",
+            )
+        send.assert_not_called()
+        self.assertEqual(
+            ("EDITOR_CTRL_ANIMATION_CLIP_WRITE_FAILED", "error", False),
+            (response["code"], response["severity"], response["success"]),
+            msg=(
+                "Backslash separator in name must be rejected pre-"
+                "bridge on the path-traversal fence."
+            ),
+        )
+
+
+class EditorApplyAnimationClipAuditGateTests(unittest.TestCase):
+    """Apply surface audit gating; whitespace is treated as missing."""
+
+    def test_whitespace_reason_treated_as_missing(self) -> None:
+        with patch.object(
+            mcp_tools_editor_animation, "send_action",
+            return_value=_success_envelope(),
+        ) as send:
+            response = mcp_tools_editor_animation.editor_apply_animation_clip(
+                asset_path="Assets/Animations/Smile.anim",
+                target_hierarchy_path="/Avatar/Body",
+                confirm=True,
+                change_reason="\t  \n",
+            )
+        send.assert_not_called()
+        self.assertEqual(
+            ("CHANGE_REASON_REQUIRED", "error", False),
+            (response["code"], response["severity"], response["success"]),
+            msg=(
+                "Whitespace-only change_reason on apply must short-"
+                "circuit pre-bridge with CHANGE_REASON_REQUIRED."
+            ),
+        )
+
+
+class EditorApplyAnimationClipForwardingTests(unittest.TestCase):
+    """Apply surface forwards every input verbatim."""
+
+    def test_valid_input_forwards_asset_target_and_audit_pair(self) -> None:
+        with patch.object(
+            mcp_tools_editor_animation, "send_action",
+            return_value=_success_envelope(),
+        ) as send:
+            mcp_tools_editor_animation.editor_apply_animation_clip(
+                asset_path="Assets/Animations/Smile.anim",
+                target_hierarchy_path="/Avatar/Body",
+                confirm=True,
+                change_reason="preview smile pose",
+            )
+        send.assert_called_once()
+        kwargs = send.call_args.kwargs
+        self.assertEqual(
+            (
+                "apply_animation_clip",
+                "Assets/Animations/Smile.anim",
+                "/Avatar/Body",
+                True,
+                "preview smile pose",
+            ),
+            (
+                kwargs["action"], kwargs["asset_path"],
+                kwargs["target_hierarchy_path"],
+                kwargs["confirm"], kwargs["change_reason"],
+            ),
+            msg=(
+                "Apply must forward the asset path, target hierarchy "
+                "path, confirm=True, and the audit reason verbatim."
+            ),
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

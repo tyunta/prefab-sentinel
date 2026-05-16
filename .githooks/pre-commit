@@ -1,0 +1,25 @@
+#!/bin/bash
+set -e
+
+# このフックは tracked（issue: pre-commit hook の version 管理化）。
+# 各クローンで一度だけ `git config core.hooksPath .githooks` が必要。
+# 詳細は CLAUDE.md「バージョン管理」節。
+
+# SKIP_BUMP=1 で明示スキップ可能
+if [ "${SKIP_BUMP:-}" = "1" ]; then
+  exit 0
+fi
+
+# lint チェック（CI と同じ基準で弾く）
+uv run ruff check
+
+# パッチバージョンを自動バンプ
+uv run bump-my-version bump patch --no-commit --no-tag
+
+# lock ファイルを同期
+uv lock --quiet
+
+# バンプされたファイルをステージに追加
+# 注: バージョン正本ファイルは pyproject.toml [tool.bumpversion] と同期させること。
+# issue #338 で .codex-plugin/plugin.json が 4 番目の正本として追加された。
+git add pyproject.toml .claude-plugin/plugin.json .codex-plugin/plugin.json uv.lock tools/unity/PrefabSentinel.UnityEditorControlBridge.cs

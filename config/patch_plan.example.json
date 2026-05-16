@@ -1,0 +1,49 @@
+{
+  "plan_version": 2,
+  "resources": [
+    {
+      "id": "variant",
+      "kind": "prefab",
+      "path": "Assets/Example/Variant.prefab",
+      "mode": "open"
+    }
+  ],
+  "ops": [
+    {
+      "resource": "variant",
+      "op": "set",
+      "component": "Example.Component",
+      "path": "items.Array.size",
+      "value": 2
+    },
+    {
+      "resource": "variant",
+      "op": "insert_array_element",
+      "component": "Example.Component",
+      "path": "items.Array.data",
+      "index": 1,
+      "value": {
+        "guid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "file_id": "100100000"
+      }
+    },
+    {
+      "resource": "variant",
+      "op": "remove_array_element",
+      "component": "Example.Component",
+      "path": "items.Array.data",
+      "index": 0
+    }
+  ],
+  "postconditions": [
+    {
+      "type": "asset_exists",
+      "resource": "variant"
+    },
+    {
+      "type": "broken_refs",
+      "scope": "Assets/Example",
+      "expected_count": 0
+    }
+  ]
+}

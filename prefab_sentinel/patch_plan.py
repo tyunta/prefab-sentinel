@@ -1,0 +1,195 @@
+from __future__ import annotations
+
+import hashlib
+import hmac
+from copy import deepcopy
+from pathlib import Path
+from typing import Any
+
+from prefab_sentinel.json_io import load_json_file
+
+PLAN_VERSION = 2
+_RESOURCE_KIND_BY_SUFFIX = {
+    ".json": "json",
+    ".prefab": "prefab",
+    ".unity": "scene",
+    ".asset": "asset",
+    ".mat": "material",
+    ".anim": "animation",
+    ".controller": "controller",
+}
+
+
+def _error(field: str, message: str) -> ValueError:
+    return ValueError(f"Patch plan field '{field}' {message}")
+
+
+def _infer_resource_kind(path: str) -> str:
+    suffix = Path(path).suffix.lower()
+    return _RESOURCE_KIND_BY_SUFFIX.get(suffix, "asset")
+
+
+def _normalize_resource(resource: object, index: int) -> dict[str, Any]:
+    field_prefix = f"resources[{index}]"
+    if not isinstance(resource, dict):
+        raise _error(field_prefix, "must be an object.")
+
+    resource_id = resource.get("id")
+    if not isinstance(resource_id, str) or not resource_id.strip():
+        raise _error(f"{field_prefix}.id", "must be a non-empty string.")
+
+    path = resource.get("path")
+    if not isinstance(path, str) or not path.strip():
+        raise _error(f"{field_prefix}.path", "must be a non-empty string.")
+
+    kind_value = resource.get("kind")
+    kind = str(kind_value).strip() if kind_value is not None else ""
+    if not kind:
+        kind = _infer_resource_kind(path)
+
+    mode_value = resource.get("mode", "open")
+    mode = str(mode_value).strip()
+    if not mode:
+        raise _error(f"{field_prefix}.mode", "must be a non-empty string when provided.")
+
+    normalized = deepcopy(resource)
+    normalized["id"] = resource_id.strip()
+    normalized["path"] = path.strip()
+    normalized["kind"] = kind
+    normalized["mode"] = mode
+    return normalized
+
+
+def normalize_patch_plan(payload: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError("Patch plan root must be an object.")
+
+    raw_version = payload.get("plan_version", payload.get("version"))
+    if raw_version is None:
+        # Legacy ``{target, ops}`` shape is no longer accepted (#88).  Callers
+        # must send the canonical v2 schema with an explicit ``plan_version``.
+        raise _error(
+            "plan_version",
+            "is required; the legacy {target, ops} shape is no longer accepted.",
+        )
+    try:
+        plan_version = int(raw_version)
+    except (TypeError, ValueError) as exc:
+        raise _error("plan_version", f"must be an integer, got {raw_version!r}.") from exc
+    if plan_version != PLAN_VERSION:
+        raise _error("plan_version", f"must equal {PLAN_VERSION}, got {plan_version}.")
+
+    resources = payload.get("resources")
+    if not isinstance(resources, list) or not resources:
+        raise _error("resources", "must be a non-empty array.")
+
+    ops = payload.get("ops")
+    if not isinstance(ops, list):
+        raise _error("ops", "must be an array.")
+
+    postconditions = payload.get("postconditions", [])
+    if not isinstance(postconditions, list):
+        raise _error("postconditions", "must be an array when provided.")
+
+    normalized_resources: list[dict[str, Any]] = [
+        _normalize_resource(resource, index) for index, resource in enumerate(resources)
+    ]
+    normalized_ops: list[dict[str, Any]] = [deepcopy(op) for op in ops]
+    normalized_postconditions: list[dict[str, Any]] = [deepcopy(pc) for pc in postconditions]
+
+    resource_ids: set[str] = set()
+    resource_map: dict[str, dict[str, Any]] = {}
+    for index, resource in enumerate(normalized_resources):
+        resource_id = resource["id"]
+        if resource_id in resource_ids:
+            raise _error(f"resources[{index}].id", f"duplicates resource id '{resource_id}'.")
+        resource_ids.add(resource_id)
+        resource_map[resource_id] = resource
+
+    for index, op in enumerate(normalized_ops):
+        if not isinstance(op, dict):
+            raise _error(f"ops[{index}]", "must be an object.")
+        resource_id = op.get("resource")
+        if not isinstance(resource_id, str) or not resource_id.strip():
+            raise _error(f"ops[{index}].resource", "must be a non-empty string.")
+        resource_id = resource_id.strip()
+        if resource_id not in resource_map:
+            raise _error(
+                f"ops[{index}].resource",
+                f"references unknown resource id '{resource_id}'.",
+            )
+        op["resource"] = resource_id
+
+    for index, postcondition in enumerate(normalized_postconditions):
+        if not isinstance(postcondition, dict):
+            raise _error(f"postconditions[{index}]", "must be an object.")
+        postcondition_type = postcondition.get("type")
+        if not isinstance(postcondition_type, str) or not postcondition_type.strip():
+            raise _error(
+                f"postconditions[{index}].type",
+                "must be a non-empty string.",
+            )
+        postcondition["type"] = postcondition_type.strip()
+
+    return {
+        "plan_version": PLAN_VERSION,
+        "resources": normalized_resources,
+        "ops": normalized_ops,
+        "postconditions": normalized_postconditions,
+    }
+
+
+def load_patch_plan(path: Path) -> dict[str, Any]:
+    payload = load_json_file(path)
+    return normalize_patch_plan(payload)
+
+
+def compute_patch_plan_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def compute_patch_plan_hmac_sha256(path: Path, key: str) -> str:
+    digest = hmac.new(key.encode("utf-8"), path.read_bytes(), hashlib.sha256)
+    return digest.hexdigest()
+
+
+def count_plan_ops(plan: dict[str, Any]) -> int:
+    ops = plan.get("ops")
+    return len(ops) if isinstance(ops, list) else 0
+
+
+def iter_resource_batches(plan: dict[str, Any]) -> list[tuple[dict[str, Any], list[dict[str, Any]]]]:
+    resources = plan.get("resources")
+    ops = plan.get("ops")
+    if not isinstance(resources, list) or not isinstance(ops, list):
+        raise ValueError("Patch plan must be normalized before iterating resources.")
+
+    grouped: dict[str, list[dict[str, Any]]] = {
+        resource["id"]: [] for resource in resources if isinstance(resource, dict) and "id" in resource
+    }
+    for op in ops:
+        resource_id = op["resource"]
+        grouped.setdefault(resource_id, []).append(
+            {key: deepcopy(value) for key, value in op.items() if key != "resource"}
+        )
+
+    return [
+        (deepcopy(resource), grouped.get(resource["id"], []))
+        for resource in resources
+    ]
+
+
+def build_bridge_request(plan: dict[str, Any]) -> dict[str, Any]:
+    """Build the stdin request for ``unity_patch_bridge.main``.
+
+    Emits only the canonical v2 shape (``protocol_version``, ``plan_version``,
+    ``resources``, ``ops``).  The bridge rejects any request carrying a
+    top-level ``target`` key with ``BRIDGE_LEGACY_SCHEMA_REJECTED`` (#88), so
+    this function must not populate that key even for single-resource plans.
+    """
+    return {
+        "protocol_version": PLAN_VERSION,
+        "plan_version": PLAN_VERSION,
+        "resources": deepcopy(plan.get("resources", [])),
+        "ops": deepcopy(plan.get("ops", [])),
+    }

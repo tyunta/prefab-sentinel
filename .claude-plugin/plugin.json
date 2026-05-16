@@ -1,0 +1,22 @@
+{
+  "name": "prefab-sentinel",
+  "version": "0.5.197",
+  "description": "An MCP server specialized for VRChat avatar and world projects: it parses the asset YAML directly — including UdonSharp's split program/behaviour structure — to detect and repair broken references, prefab Variant override drift, and null wiring across prefabs, scenes, and materials. Built for AI agents, every fix runs through a dry-run → confirm gate with an audit log, so asset YAML is never hand-edited.",
+  "author": {
+    "name": "tyunta",
+    "url": "https://github.com/tyunta"
+  },
+  "repository": "https://github.com/tyunta/prefab-sentinel",
+  "license": "MIT",
+  "keywords": ["unity", "prefab", "validation", "inspection", "reference", "patch"],
+  "mcpServers": {
+    "prefab-sentinel": {
+      "command": "uvx",
+      "args": [
+        "--from", "${CLAUDE_PLUGIN_ROOT}",
+        "--with", "mcp>=1.12",
+        "prefab-sentinel-mcp"
+      ]
+    }
+  }
+}

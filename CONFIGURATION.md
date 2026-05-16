@@ -1,0 +1,65 @@
+# Configuration
+
+`UNITYTOOL_*` 環境変数・`ignore_guids.txt` ファイル・`<scope>/config/` 規約・書き込み系ツールの監査ペアの正本。実行・bridge 連携の仕様は [docs/execution-reference.md](./docs/execution-reference.md)、運用ルールの正本は [CLAUDE.md](./CLAUDE.md)。本ファイルは設定項目を 1 箇所に集約して、新規・既存いずれのコントリビュータが「何を設定すれば動くか / 何を設定しないと止まるか」を一覧で確認できるようにする。
+
+## 環境変数一覧
+
+`UNITYTOOL_*` プレフィックスの環境変数は Unity Editor Bridge 連携・CI 連携・テストゲーティングに使用する。`種別` 列の値は **active**（実運用で active に読まれる）/ **test-only**（テストの opt-in ゲートにのみ使用）/ **planned**（CLAUDE.md / README.md で仕様化済みだが現コードベースでは未参照）/ **legacy**（旧経路用で現コードでは未参照、docstring または ideas doc にのみ残る）。
+
+| 変数名 | 既定値 | 用途 | 種別 | 関連 issue |
+|--------|--------|------|------|-----------|
+| `UNITYTOOL_BRIDGE_E2E_LIVE` | （未設定） | 値 `"1"` で `tests/test_mcp_server.py` の live Editor Bridge E2E テストを有効化する opt-in ゲート。未設定時は該当テストが skip される。 | test-only | #270 |
+| `UNITYTOOL_BRIDGE_WATCH_DIR` | （未設定 = fail-fast） | 常駐 Editor Bridge との file-IPC watch ディレクトリ。Python 側が `{uuid}.request.json` を書き込み、Editor Bridge が `{uuid}.response.json` をアトミック書き出しで返す。未設定時は `BRIDGE_WATCH_DIR_MISSING` で fail-fast 停止する。 | active | #88, #89, #270 |
+| `UNITYTOOL_CI_BRANCH` | （未設定。`GITHUB_REF_NAME` をフォールバック） | CI 上の現在ブランチ名。`<scope>/config/ignore_guids.txt` の auto-update（`suggest ignore-guids --out-ignore-guid-file`）の許可ブランチ判定で参照される想定。現コードベースでは `suggest ignore-guids --out-ignore-guid-file` 自体が未実装のため、参照箇所はまだ存在しない（CLAUDE.md / README.md の仕様記述のみ）。 | planned | #237 |
+| `UNITYTOOL_IGNORE_GUID_ALLOW_BRANCHES` | `main,release/*` | ignore-guid file の auto-update を許可するブランチパターンのカンマ区切り上書き。明示指定時のみ、許可ブランチ上でのみ ignore-guid file が更新される想定。現コードベースでは未参照（CLAUDE.md / README.md の仕様記述のみ）。 | planned | #237 |
+| `UNITYTOOL_PATCH_BRIDGE` | （未設定） | 非 JSON resource（`.prefab` / `.unity` / `.mat` / `.asset` / `.anim` / `.controller`）の patch 適用に使う外部 bridge コマンドを `shlex` 形式で指定する。未設定で非 JSON resource を扱おうとすると `SER_UNSUPPORTED_TARGET` で停止する。受理コマンドは allowlist（`python` / `uv` / `prefab-sentinel-unity-bridge` 等）に限定される。 | active | — |
+| `UNITYTOOL_UNITY_COMMAND` | （未設定） | 旧 Unity batchmode 経路の Unity 実行コマンド。issue #270 で batchmode 経路が削除され、現行コードでは参照されない。導入当時は Editor headless 経路を MCP 統合と並行で運用していたが、常駐 Editor Bridge への一本化に伴い削除された経緯がある。 | legacy | #270 |
+| `UNITYTOOL_UNITY_EXECUTE_METHOD` | （未設定） | 旧 Unity batchmode 経路の `-executeMethod` エンドポイント。issue #270 で削除済みで、現行コードでは参照されない。`tools/unity/PrefabSentinel.UnityPatchBridge.cs` の docstring コメントにのみ残る。 | legacy | #270 |
+| `UNITYTOOL_UNITY_LOG_FILE` | （未設定） | `collect_unity_console` / `validate_runtime` が読む Unity Editor ログファイルパス。`runtime_root` 配下の絶対パスに正規化される（外指定は `RUN_CONFIG_ERROR`）。 | active | — |
+| `UNITYTOOL_UNITY_PROJECT_PATH` | （未設定。`activate_project` の引数優先） | Unity プロジェクトルート（`Assets/` の親）。WSL 環境では Windows パス（`D:/...`）と WSL パス（`/mnt/d/...`）の両方を受け付ける（`prefab_sentinel/wsl_compat.py`）。 | active | — |
+| `UNITYTOOL_UNITY_TIMEOUT_SEC` | `120` | Editor Bridge のレスポンスファイル出現を待つポーリング上限秒数。整数値で指定する（不正値・非正値はパスに応じて `BRIDGE_TIMEOUT_INVALID` / `EDITOR_BRIDGE_TIMEOUT_INVALID` / `RUN_CONFIG_ERROR` のエラーエンベロープで拒否され、silent fallback はしない）。既定値はパスごとに異なり、patch bridge が `120`、`prefab_sentinel.editor_bridge` が `30`、`runtime_validation` 経路が `300`。 | active | — |
+
+## ignore_guids.txt 形式仕様
+
+`<scope>/config/ignore_guids.txt` は `validate_refs` の missing-asset 判定から除外する GUID リストの正本（issue #237）。
+
+- ファイル形式は UTF-8 テキスト。1 行 1 GUID。
+- `#` 以降は行内コメントとして無視する。
+- 空行は無視する。
+- `validate_refs` MCP ツールの `ignore_asset_guids` 引数（caller-supplied list）とこのファイルは併用され、union-dedupe で orchestrator に転送される。
+- ファイルが寄与した場合（1 件以上の GUID を取り込んだ場合）は `IGNORE_GUIDS_FILE_LOADED` info diagnostic を `diagnostics[]` に追加し、`data.path` に解決後の絶対パス・`data.count` に取り込み件数を返す。
+- ファイルが存在しない場合は無視する（diagnostic は出さない）。読み取り不能の場合も同様に黙って無視する。
+- malformed エントリ（GUID として無効な行）は既存の `REF001` envelope で表面化する。
+- ファイルパスは `--scope` で指定した scope の `config/ignore_guids.txt` を自動解決する。固定パスは持たない。ファイル auto-load とは別に caller が GUID を直接指定したい場合は `validate_refs` の `ignore_asset_guids` 引数を使う。
+
+## scope config 規約
+
+`<scope>/config/*.txt` 系の設定ファイルはすべて `--scope` 起点で相対解決する。固定パスは持たない。
+
+- 走査対象（`--scope`）は実行時に明示する。`activate_project` の `project_root` 引数と独立して、検査ごとに scope を切り替えられる。
+- `<scope>/config/ignore_guids.txt` は `validate_refs` / `find_referencing_assets` の各 entry point から auto-load される。
+- ファイルが存在しない場合は黙って無視する（fail にも warning にもしない）。明示要求のない absent file は単に「適用なし」を意味する。
+- scope の区切り文字は `/` と `\` のどちらでも受け付け、内部で `/` に正規化される。WSL 環境のパス変換は `prefab_sentinel/wsl_compat.py` が担う。
+- ベンチマーク・smoke batch・regression report 等の出力先パスは scope 配下の `reports/` / `benchmark_*.json` を慣例として使うが、本ファイルは scope 規約の正本としては扱わない（個別スクリプトの引数仕様は [docs/execution-reference.md](./docs/execution-reference.md) を参照）。
+- `<scope>/config/` 配下に新規の設定ファイルを追加する場合は、auto-load 規約とサンプルパスを本節に追記し、対応 issue 番号を残す。
+
+## confirm / change_reason 必須対象一覧
+
+| ツール名 | `change_reason` 必須 | `out_report` 必須 |
+|----------|----------------------|--------------------|
+| `set_property` | ✅ | — |
+| `add_component` | ✅ | — |
+| `remove_component` | ✅ | — |
+| `copy_component_fields` | ✅ | — |
+| `set_component_fields` | ✅ | ✅ |
+| `set_material_property` | ✅ | — |
+| `copy_asset` | ✅ | — |
+| `rename_asset` | ✅ | — |
+| `revert_overrides` | ✅ | — |
+| `patch_apply` | ✅ | ✅ |
+| `vrcsdk_upload` | ✅ | — |
+| `editor_run_script` | ✅ | — |
+| `editor_run_script_submit` | ✅ | — |
+| `editor_create_animation_clip` | ✅ | — |
+| `editor_apply_animation_clip` | ✅ | — |
+| `editor_close_prefab` | ✅ | — |

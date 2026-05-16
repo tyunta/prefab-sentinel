@@ -1,0 +1,21 @@
+{
+  "code": "INSPECT_WIRING_RESULT",
+  "data_keys": [
+    "base_prefab_path",
+    "component_count",
+    "components",
+    "cursor",
+    "duplicate_reference_count",
+    "internal_broken_ref_count",
+    "is_variant",
+    "next_cursor",
+    "null_reference_count",
+    "page_size",
+    "page_slice_length",
+    "read_only",
+    "target_path",
+    "udon_only"
+  ],
+  "severity": "info",
+  "success": true
+}

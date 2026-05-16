@@ -1,0 +1,54 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+
+    <!--
+      Lock-file restore is the reproducibility surface for the C# harness
+      (issue #290 §14.6). When set, `dotnet restore` emits packages.lock.json
+      and `dotnet restore /p:RestoreLockedMode=true` fails if the csproj and
+      lock file disagree. CI runs restore in locked mode; local edits
+      regenerate the lock file via plain `dotnet restore`.
+    -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+
+    <!--
+      The Microsoft Testing Platform runner ships with .NET 10 SDK and would
+      take precedence over VSTest when not opted out. The xUnit 2.9.x line
+      targets VSTest only, so we pin the legacy runner here. Switching to
+      MTP belongs to a separate migration (xUnit v3), which is explicitly
+      out of scope for issue #290.
+    -->
+    <UseMicrosoftTestingPlatformRunner>false</UseMicrosoftTestingPlatformRunner>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.5.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <!--
+    Cross-project source inclusion (#222 Phase 3 / #309 §14.6).
+    The bridge-side pure helpers under ``tools/unity/`` are authored
+    without Unity assembly references so they can be exercised by
+    this xUnit harness without dragging a Unity install into CI.
+    The classifier is the first such helper; new entries follow the
+    same pattern (one ``Compile Include`` per file with a ``Link``
+    that flattens into a ``Bridge\`` virtual folder).
+  -->
+  <ItemGroup>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.Screenshot.ViewAllowlistClassifier.cs">
+      <Link>Bridge\PrefabSentinel.Screenshot.ViewAllowlistClassifier.cs</Link>
+    </Compile>
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,26 @@
+{
+    "name": "PrefabSentinel.Editor",
+    "rootNamespace": "PrefabSentinel",
+    "references": [
+        "VRC.SDKBase.Editor",
+        "Unity.TextMeshPro",
+        "UnityEngine.UI"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [
+        {
+            "name": "com.vrchat.base",
+            "expression": "3.8.0",
+            "define": "PS_VRCSDK_BASE_3_8_0"
+        }
+    ],
+    "noEngineReferences": false
+}

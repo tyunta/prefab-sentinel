@@ -1,0 +1,44 @@
+name: バグ報告
+description: 想定と異なる挙動・エラー・再現する不具合を報告する
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        再現手順と環境を添えてください。MCP ツールのエラーは
+        `success / severity / code / message / data / diagnostics` エンベロープを
+        そのまま貼ると診断が速くなります。
+  - type: textarea
+    id: summary
+    attributes:
+      label: 症状
+      description: 何が起きたか。期待した挙動と実際の挙動を分けて書いてください。
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: 再現手順
+      description: >-
+        最小の再現手順。対象 scope（Prefab / Scene / Assets）と、呼んだツール名・
+        引数を含めてください。
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: エラー出力 / ログ
+      description: MCP 応答エンベロープ・Unity Console・スタックトレース等。
+      render: text
+    validations:
+      required: false
+  - type: textarea
+    id: environment
+    attributes:
+      label: 環境
+      description: >-
+        prefab-sentinel のバージョン、Unity / VRChat SDK のバージョン、OS、
+        ホスト（Claude Code / Codex CLI）。
+    validations:
+      required: true

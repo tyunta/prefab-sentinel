@@ -1,0 +1,42 @@
+# Local environment
+.venv/
+.serena/
+.claude/
+.superpowers/
+.takt/
+__pycache__/
+*.pyc
+
+# User sample projects (requested exclusion)
+sample/
+
+# Generated reports/artifacts
+report/
+reports/
+report-*.md
+
+# Out-of-repo planning/spec drafts (local-only)
+docs/superpowers/
+
+# Mutation-testing artifact directory (issue #166): mutmut copies the
+# audited tree into this directory at run start; it must never appear in
+# version-control status output.
+mutants/
+
+# Orphan-test detector output (issue #272): scripts/find_orphan_tests.py
+# writes this per-run report to the working directory; it is a quarterly
+# artifact, never committed.
+mutmut_orphan_tests.json
+
+# coverage.py SQLite artifact — local-run only, never committed.
+.coverage
+
+# .NET test harness (issue #290): build output and IDE-user files for the
+# C# xUnit harness under tests/csharp/ must never appear in `git status`.
+# Lock file (packages.lock.json) is intentionally not ignored — it is the
+# reproducibility surface that gates locked-mode restore in CI.
+bin/
+obj/
+*.user
+*.suo
+.vs/

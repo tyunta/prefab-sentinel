@@ -1,0 +1,26 @@
+name: 質問
+description: 使い方・仕様・運用についての質問
+title: "[question] "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        先に [README.md](https://github.com/tyunta/prefab-sentinel/blob/main/README.md)
+        のドキュメントマップと
+        [docs/tools.md](https://github.com/tyunta/prefab-sentinel/blob/main/docs/tools.md)
+        を確認すると解決することがあります。
+  - type: textarea
+    id: question
+    attributes:
+      label: 質問
+      description: 知りたいことを具体的に書いてください。
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: 背景・試したこと
+      description: 何をしようとしていて、どこまで試したか。
+    validations:
+      required: false

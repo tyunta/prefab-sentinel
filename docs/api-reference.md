@@ -1,0 +1,216 @@
+# API共通仕様
+
+MCP ツールが返す応答エンベロープの形状とエラーコードの正本。`README.md` はこのドキュメントへのポインタのみを持つ。
+
+## レスポンスフォーマット
+
+ツールの種類によって 2 つのレスポンス形式を使い分ける。
+
+**参照系ツール**（`get_unity_symbols`, `find_unity_symbol`, `find_referencing_assets`）— ペイロード直接返却:
+
+```json
+{
+  "asset_path": "Assets/Player.prefab",
+  "symbols": [ ... ]
+}
+```
+
+`find_referencing_assets` は直接ペイロード:
+
+```json
+{
+  "matches": [ ... ],
+  "target": "queried_asset_or_guid",
+  "metadata": { "total_count": 3, "truncated": false, "scope": "Assets/..." }
+}
+```
+
+該当なしは空配列（`"matches": []`）で表現する。インフラエラー（ファイル不在等）は MCP `ToolError` で伝播。
+
+**操作系・検証系・orchestrator 系ツール** — 標準エンベロープ:
+
+```json
+{
+  "success": true,
+  "severity": "info|warning|error|critical",
+  "code": "TOOL_SPECIFIC_CODE",
+  "message": "human readable",
+  "data": {},
+  "diagnostics": [
+    {
+      "severity": "info|warning|error|critical",
+      "code": "DIAGNOSTIC_SPECIFIC_CODE",
+      "message": "human readable",
+      "data": {}
+    }
+  ]
+}
+```
+
+`diagnostics[]` の wire 上 contract は単一の 4 キー dict `{severity, code, message, data}` に統一されている（issue #244 以降の標準形、issue #304 でレガシー経路も同 contract へ adapt 済み）。`mcp_tools_validation.py:127` 等の新規 emitter は `ToolResponse.to_dict()` の戻り値に対し直接この 4 キー dict を append する（例: `IGNORE_GUIDS_FILE_LOADED`）。レガシー orchestrator 経路で構築される `prefab_sentinel.contracts.Diagnostic` dataclass も、`ToolResponse.to_dict()` 内の `_diagnostic_to_wire` adapter を通じて同じ 4 キー dict へ正規化される: `Diagnostic.detail` → wire `code`、`Diagnostic.evidence` → wire `message`（空文字なら `code` フォールバック）、`Diagnostic.path` / `Diagnostic.location` は非空時のみ `data` 配下に格納される。`Diagnostic` dataclass 自体の内部 field 名は変えていない（呼び出し側 28+ サイトの破壊的変更を回避）。`mcp_tools_session._build_session_diagnostic` ヘルパは session-level の ad-hoc 経路（`deploy_bridge` / `get_project_status`）が同 contract で wire に乗ることを保証する。
+
+## エラーコード規約
+
+| コード | 説明 |
+|--------|------|
+| `SER001` | Serialized path not found — `propertyPath` の構文不正（空文字列、空セグメント `a..b`、閉じ括弧欠落 `a.Array.data[0` 等）または対象のプロパティが存在しない。 |
+| `SER002` | Type mismatch — `propertyPath` の添字が不正（負のインデックス `Array.data[-1]`、非整数インデックス `Array.data[abc]`、`Array.size[0]` のような禁止された組み合わせ）または型の不一致。Python 的な負インデックス意味論は採用しない。 |
+| `PVR001` | Stale override — empty propertyPath (single category) or mixed categories |
+| `PVR002` | Stale override — duplicate propertyPath (later entries shadow earlier) |
+| `PVR003` | Stale override — array size/index mismatch |
+| `REF001` | Missing asset guid — `patch_apply` / `revert_overrides` / `validate_refs` は、参照されたアセットの GUID が 1 件でもプロジェクト内に見つからない場合、**fail-fast** で全体を中断し `success=False`, `severity="error"`, `code="REF001"` を返す。部分適用や書き込みは一切行わない。 |
+| `REF002` | Missing local fileID |
+| `RUN001` | Udon runtime exception |
+| `RUN002` | ClientSim startup failure |
+| `CHANGE_REASON_REQUIRED` | `confirm=True` で呼ばれた書き込み系ツールが `change_reason` を欠いた場合。`editor_run_script` は `confirm=False` や空文字の `change_reason` も同コードで拒否する（監査トレイル強制）。 |
+| `SER003` | `set_component_fields` が dry-run 段階でチェーン上に解決できない component 型または property path を検出した場合（issue #109）。`severity="error"`、`data.suggestions` に近似候補（最大 5 件）、`diagnostics[].detail` に `component_not_found` または `property_not_found` を載せる。 |
+| `SER_APPLY_REJECTED` | `patch_apply` の Prefab 経路で `SerializedObject.ApplyModifiedPropertiesWithoutUndo()` 直前のバリデーション（`TryApplyOp`）が op を拒否した場合（issue #298）。`severity="error"`。`diagnostics` 配列には各失敗 op の `BridgeDiagnostic` に加え、`property_path` / `component_type` / `attempted_value` を `evidence` に埋めた summary 行が末尾に追加される。`AudioSource.m_Priority` 等の既知トラップを応答だけで診断できることが目的。Editor 例外路は `UNITY_BRIDGE_APPLY_EXCEPTION` のまま（未捕捉例外と rejection を別コードで区別）。 |
+| `BRIDGE_LEGACY_SCHEMA_REJECTED` | `unity_patch_bridge` がレガシー形状（トップレベル `target` キー）のリクエストを受け取った場合。v2 スキーマ（`{plan_version, resources, ops}`）のみを受け入れる。互換レイヤは存在しない。 |
+| `EDITOR_CTRL_RUN_SCRIPT_OK` / `..._COMPILE` / `..._RUNTIME` / `..._BAD_ID` | `editor_run_script` の成功 / コンパイル失敗 / 実行例外 / 不正 temp id。 |
+| `EDITOR_CTRL_RUN_SCRIPT_RECOVERY` | 同一スニペットが 2 回連続で `..._COMPILE` 拒否された場合に発火する `severity="warning"` 応答（issue #116）。Bridge は temp ディレクトリを掃除し、`AssetDatabase.Refresh` で再コンパイルを要求した上で、診断ペイロード（`diagnostic_compiling` / `diagnostic_temp_files` / `diagnostic_last_domain_reload`）を返す。次回呼び出しはクリーンな状態で再試行できる。 |
+| `EDITOR_CTRL_ADD_COMPONENT_REUSED` / `..._RELINKED` | `editor_add_component` が UdonSharp 派生型に対して呼ばれ、既存ペアが見つかった（reuse）または孤立 proxy に新規 UdonBehaviour を再リンクした（relinked）場合の `severity="info"` 成功応答（issue #103）。 |
+| `EDITOR_CTRL_CAMERA_CONFLICT` | `editor_set_camera` が `position` と `pivot` を同時指定、または `look_at` を `position` 抜きで指定した場合（issue #112）。 |
+| `EDITOR_CTRL_INVALID_CLASSIFICATION_FILTER` | `editor_console` の `classification_filter` が `all` / `non_fatal` / `fatal` 以外の場合（issue #117）。 |
+| `EDITOR_CTRL_INVALID_PHASE_FILTER` | `editor_console` の `phase_filter` が `all` / `edit` / `play` / `build` 以外の場合（issue #239）。`severity="error"`、メッセージで受理可能な値を列挙。Bridge 境界で buffer に触れる前に拒否される。 |
+| `EDITOR_CTRL_EDITOR_STATE_OK` | `get_editor_state` action の成功時応答コード（issue #239）。`get_project_status` MCP ツールから内部的に発火し、`data.editor_state` に 4 つの bool フラグ（`is_playing` / `is_will_change_playmode` / `is_compiling` / `is_building_player`）のスナップショットを返す。`severity="info"`。 |
+| `IGNORE_GUIDS_FILE_LOADED` | `validate_refs` MCP ツールの `<scope>/config/ignore_guids.txt` auto-load が寄与した場合に `diagnostics` に付与される info diagnostic（issue #237）。`data.path` に解決後の絶対パス、`data.count` に取り込まれた件数を含める。ファイルが存在しない・読み取り不能の場合は発火しない。 |
+| `EDITOR_CTRL_INVALID_ORDER` | `editor_console` の `order` が `newest_first` / `oldest_first` 以外の場合（issue #113）。`severity="error"`、メッセージで受理可能な値を列挙。 |
+| `EDITOR_CTRL_INVALID_CURSOR` | `editor_console` の `cursor` が現在の取り込み済み範囲外、もしくは Bridge のフォーマット (`seq:<long>`) に合致しない場合（issue #113）。`severity="error"`、メッセージで原因を明示。 |
+| `EDITOR_CTRL_SET_PROP_QUATERNION_NOT_NORMALIZED` | `editor_set_property` で `SerializedPropertyType.Quaternion` に与えた xyzw 4 要素のノルムが `1.0 ± 1e-4` の許容範囲外だった場合（issue #111）。`severity="error"`、メッセージに供給値とノルムを明示。Bridge 側では自動 normalize しない。Component 数が 4 でない（例えば 3 要素の euler を渡した）場合は既存の `EDITOR_CTRL_SET_PROP_TYPE_MISMATCH` で 4 要素必須を案内。 |
+| `COMPILE_TIMEOUT_OUT_OF_RANGE` | `editor_run_script` の `compile_timeout_ms` が許容範囲 `[1, 120000]`（ミリ秒、両端含む）の外だった場合（issue #127）。`severity="error"`、Bridge へは送信せず Python の入口で拒否。メッセージに供給値・両端境界値を含める（CLAMP しない）。 |
+| `MAX_ENTRIES_OUT_OF_RANGE` / `EDITOR_CTRL_MAX_ENTRIES_OUT_OF_RANGE` | `editor_console` の `max_entries` が許容範囲 `[1, ConsoleLogBuffer.DefaultCapacity]`（既定 1000、両端含む）の外だった場合（issue #131）。`severity="error"`。Python 側 (`MAX_ENTRIES_OUT_OF_RANGE`) は Bridge に送る前に拒否し、C# Bridge 側 (`EDITOR_CTRL_MAX_ENTRIES_OUT_OF_RANGE`) は buffer を見る前に拒否する。上限の根拠は「Bridge は ring buffer に保持している件数以上は返せない」という不変条件で、C# `ConsoleLogBuffer.DefaultCapacity` と Python `bridge_constants.CONSOLE_LOG_BUFFER_MAX_ENTRIES` は `scripts/check_bridge_constants.py` の drift detector で同期する。 |
+| `EDITOR_CTRL_RECOMPILE_TIMEOUT` | `editor_recompile_and_wait` が `timeout_sec`（既定 60 秒）以内に `CompilationPipeline.compilationFinished` イベント、もしくは事後の `AssemblyReloadCount` 増加を観測できなかった、純粋な deadline 経過の場合（issue #118 / issue #203 / issue #204）。`severity="error"`。Bridge 内の async runner は `compiledAny=true` の場合のみ SessionState ミラーで domain reload を跨いで継続する（NOOP / FAILED は同期で返るので永続化エントリは作らない）。Editor 側が `RequestScriptCompilation` を拒否した schedule-failure 経路では本コードは返らず、`EDITOR_CTRL_RECOMPILE_SCHEDULE_FAILED` を返す。 |
+| `EDITOR_CTRL_RECOMPILE_SCHEDULE_FAILED` | `editor_recompile_and_wait` が `CompilationPipeline.RequestScriptCompilation()` を呼び出した時点で Editor が例外を投げた場合（issue #204 / issue #213）。deadline 経過ではなく Editor 側の即時拒否を表すため、`EDITOR_CTRL_RECOMPILE_TIMEOUT` とは別コードに分離している。`severity="error"`。pipeline event 購読は応答返却前に解除され、async runner エントリも撤去される。 |
+| `EDITOR_CTRL_RECOMPILE_AND_WAIT_NOOP` | `editor_recompile_and_wait` が `CompilationPipeline.compilationFinished` 時点で 1 件も `assemblyCompilationFinished` を観測していない（= 全アセンブリが not-required と扱われた）場合（issue #203 / issue #213）。`severity="info"`、`success=true`。Domain reload は発生しないので SessionState mirror は使わず同期で応答。 |
+| `EDITOR_CTRL_RECOMPILE_FAILED` | `editor_recompile_and_wait` が `assemblyCompilationFinished` で `CompilerMessageType.Error` のメッセージを 1 件以上観測した場合（issue #203）。`severity="error"`、`data.errors` にメッセージ列を返す。 |
+| `EDITOR_CTRL_CREATE_UI_NO_NAME` / `..._BAD_TYPE` / `..._PARENT_NOT_FOUND` / `..._TMP_FONT_MISSING` / `..._OK` | `editor_create_ui_element` の応答コード（issue #195）。`..._BAD_TYPE` は `data.suggestions` に `Image` / `TextMeshProUGUI` / `Button` / `Slider` / `Toggle` の正規許容セットを含める。`..._TMP_FONT_MISSING` は warning（`success=false`）で、GameObject は作成されるが TextMeshPro の font は未代入。 |
+| `INSPECT_WIRING_INVALID_CURSOR` / `INSPECT_WIRING_PAGE_SIZE_OUT_OF_RANGE` | `inspect_wiring` の pagination ガード（issue #197）。前者は `cursor` が `pos:<offset>` 形式でない、もしくは `[0, total]` の範囲外の場合に `severity="error"` を返す。後者は `page_size` が `[1, 500]` の外の場合に `severity="error"` を返す。 |
+| `INSPECT_WIRING_EMPTY_FILTER_RESULT` | `inspect_wiring` の `script_filter` が non-empty にもかかわらずマッチするコンポーネントが 1 件もなかった場合（issue #227）。`severity="warning"`、メッセージに供給フィルタと正規化後のサフィックスを含める。caller が「filter のスペルミス」と「対象に MonoBehaviour がそもそも無い」を区別できるようにするため `INSPECT_WIRING_NO_MONOBEHAVIOURS` とは別コードに分離している。 |
+| `EDITOR_RUN_SCRIPT_TRANSPORT_TIMEOUT` | `editor_run_script` が transport poll で timeout を観測した場合（issue #226）。`severity="error"`。Wrapper は bridge から返された汎用 `EDITOR_BRIDGE_TIMEOUT` 応答をこのコードに書き換え、メッセージに供給 `compile_timeout_ms` と派生した `transport_timeout_sec`、retry 推奨上限値の 3 つを含める。`data.compile_timeout_ms` / `data.transport_timeout_sec` / `data.compile_timeout_max_ms` でプログラム的にも参照できる。Transport budget は `max(RUN_SCRIPT_TRANSPORT_TIMEOUT_FLOOR_SEC=30, ceil(compile_timeout_ms / 1000) + RUN_SCRIPT_TRANSPORT_DISPATCH_MARGIN_SEC=5)` で算出され、bridge 側の deadline より transport が先に諦めることはない。 |
+| `EDITOR_RUN_SCRIPT_COMPILE_TIMEOUT` | `editor_run_script` の compile-pending 段階で bridge 側の deadline (`compile_timeout_ms` + `RunScriptEntryTypeTimeoutMs(=4 s)`) が経過した場合（issue #234）。`severity="error"`、bridge → wrapper を素通しする（wrapper は transport-timeout rewrite を発火させない）。caller は `EDITOR_CTRL_RUN_SCRIPT_COMPILE`（compile / staging / entry-point failure）と `EDITOR_RUN_SCRIPT_TRANSPORT_TIMEOUT`（transport poll timeout）と本コードの 3 通りを応答コードだけで判別できる。応答 `data` には既存の compile-pending 診断 (`diagnostic_compiling` / `diagnostic_temp_files` / `diagnostic_last_domain_reload`) が unchanged で乗る。 |
+| `EDITOR_CTRL_SAFE_SAVE_PREFAB_PROTECT_REQUIRED` | `editor_safe_save_prefab` の request payload に `protect_components` フィールド自体が含まれない場合（issue #193 / issue #228）。`severity="error"`。issue #228 でトリガが「リスト未指定」のみに narrow され、明示的な空リスト `[]` は raw-save mode へ向かう（rejection ではなく success path）。 |
+| `STALE_GUID_INDEX_HINT`（`Diagnostic.detail`） | `validate_refs` の missing-asset 失敗パスで、cached resolver が missing と報告した GUID のうち少なくとも 1 件が fresh meta-file scan で resolve できた場合（issue #229）。トップレベル code ではなく warning severity の `Diagnostic` として diagnostics 配列に追加される。`evidence` に stale-resolved 件数と `refresh_guid_index=True` を retry 推奨として含める。`refresh_guid_index=True` がすでにセット済みの場合・missing asset がそもそも報告されなかった場合・fresh scan も resolve できなかった場合は発火しない。 |
+| `CROP_ROI_INVALID` / `EDITOR_CTRL_CROP_ROI_INVALID` / `EDITOR_CTRL_CROP_ROI_OUT_OF_BOUNDS` / `EDITOR_CTRL_CROP_ROI_NO_TARGET` | `editor_screenshot` の `crop_roi` 検証（issue #249）。`severity="error"`。Wrapper 側は allowlist preset でも pixel quadruple でもない値を `CROP_ROI_INVALID` で pre-bridge reject。Bridge 側は同一形状違反を `_INVALID`、ピクセル範囲外を `_OUT_OF_BOUNDS`、対象 RenderTexture / Camera が存在しない場合を `_NO_TARGET` で返す。 |
+| `EDITOR_CTRL_BATCH_BLEND_SHAPE_PARSE` | `editor_batch_set_blend_shape` の `shapes_json` を JSON として parse できなかった場合（issue #240）。`severity="error"`、Bridge 側で発火。 |
+| `EDITOR_CTRL_PREFAB_STAGE_NOT_FOUND` / `..._OPEN_FAILED` / `..._CLOSE_FAILED` | Prefab Stage open/close 系の Bridge 失敗（issue #236）。`severity="error"`。`_NOT_FOUND` は対象 Prefab パスが解決できない、`_OPEN_FAILED` / `_CLOSE_FAILED` は `PrefabStageUtility` 呼び出しで例外。 |
+| `REQUEST_ID_INVALID` | `editor_run_script_poll` 等の poll 系 MCP ツールが受け取った request identifier の形状違反（issue #233）。`severity="error"`、Python 入口で pre-bridge reject。期待形状は `prefab_sentinel.mcp_tools_editor_exec._build_request_id_invalid_envelope` を参照。 |
+| `EDITOR_CTRL_RUN_SCRIPT_UNKNOWN_REQUEST` / `EDITOR_RUN_SCRIPT_SUBMIT_TIMEOUT` | `editor_run_script_submit` / `editor_run_script_poll` の bridge 側応答（issue #233）。`severity="error"`。前者は async runner が当該 request id を保持していない場合、後者は submit から bridge が deadline 内に ACK を返さなかった場合に発火。 |
+| `EDITOR_CTRL_ANIMATION_CLIP_NOT_FOUND` / `..._TARGET_NOT_FOUND` / `..._WRITE_FAILED` / `..._APPLY_FAILED` | AnimationClip 検査・編集系の Bridge 失敗（issue #243）。`severity="error"`。`_NOT_FOUND` は clip asset 不在、`_TARGET_NOT_FOUND` は curve の binding 先 GameObject 不在、`_WRITE_FAILED` / `_APPLY_FAILED` は AssetDatabase 書き込み / Animator 反映の失敗。 |
+| `EDITOR_CTRL_FORCE_REFRESH_FAILED` | `force_scene_view_refresh` が player-loop tick 内で例外を観測した場合（issue #242）。`severity="error"`、Bridge 側で発火。 |
+| `INSPECT_HIERARCHY_RECT_PARENT_UNRESOLVED` | `inspect_hierarchy` で stretched anchor を持つ RectTransform の親 rect chain が未解決の場合（issue #238）。`severity="warning"`、`Diagnostic.detail` に当該識別子。 |
+
+### severity 境界: `critical` と `error` の使い分け
+
+- `critical`: 後続処理の継続が不可能な停止級エラー。実行時に検出された致命的な状態（例: `UDON_NULLREF` マッチ、ClientSim が起動不能）。呼び出し元は即座に停止し、ユーザー判断を仰ぐ。
+- `error`: 契約違反や入力の不備だが、呼び出し元の文脈では実行自体は続行しうる（例: `SER001`/`SER002`/`REF001`/`BRIDGE_LEGACY_SCHEMA_REJECTED`/`CHANGE_REASON_REQUIRED`）。該当操作は拒否されるが、後続の無関係な操作は継続可能。
+- `warning` / `info`: 情報系。診断のみ、動作への影響なし。
+
+## Runtime Validation レスポンス (`classify_errors`)
+
+`validate_runtime` / `RuntimeValidationService.classify_errors` の `data` ペイロードは下記 2 キーで件数を返す（旧 `matched_issue_count` / `categories` は削除済み・互換なし）。
+
+| キー | 型 | 説明 |
+|---|---|---|
+| `count_total` | `int` | マッチしたログ行の総数 |
+| `count_by_category` | `dict[str, int]` | カテゴリ別のヒット件数（例: `{"UDON_NULLREF": 3}`） |
+
+`UDON_NULLREF` がマッチした場合、`severity="critical"` を返す。それ以外は最大ランク（`info < warning < error < critical`）の severity を返す。
+
+## `editor_run_script` (MCP ツール / Editor Bridge アクション)
+
+`editor_run_script` は Unity Editor 内で C# スニペットを 1 ステップでコンパイル・実行する MCP ツール（Issue #74）。
+
+- 入力: `code: str`, `confirm: bool`, `change_reason: str`, `compile_timeout_ms: int = 15000`
+- `confirm=True` **かつ** 非空の `change_reason` が常に必須。どちらかを欠く呼び出しは Bridge に到達する前に `CHANGE_REASON_REQUIRED` で拒否される。dry-run モードは未サポート。
+- Bridge 側では `Assets/Editor/_PrefabSentinelTemp/<temp_id>.cs` にソースを書き出し、`AssetDatabase.Refresh()` でコンパイル後 `PrefabSentinelTempScript.Run()`（`public static void`、固定のクラス/メソッド名）を呼び出す。成功・失敗を問わず temp の `.cs` / `.cs.meta` は応答前に削除する。Editor 起動時にも前回クラッシュの残骸を掃除する。
+- 既定のコンパイル待ち budget は 15000 ms（issue #116）。コールド起動でも大きめのスニペットが 1 度で確定するように調整した値。
+- `compile_timeout_ms` の許容範囲は **`[1, 120000]` ミリ秒（両端含む、120 秒上限）**（issue #127）。範囲外を渡すと Bridge へは送信せず Python の入口で `COMPILE_TIMEOUT_OUT_OF_RANGE`（`severity="error"`）を返す。clamp はしない。上限はワーストケースで Editor Bridge の poll を 1 リクエストあたり 120 秒に制限するためのセキュリティガード。下限は 0 / 負値（busy loop / 即時エラー）を排除する。
+- スタック検出: 同一スニペット（`temp_id`、もしくは省略時はコード本文の安定ハッシュ）が連続して `..._COMPILE` 拒否となった場合、2 回目で Bridge が temp ディレクトリを再掃除して `AssetDatabase.Refresh` を要求し、`EDITOR_CTRL_RUN_SCRIPT_RECOVERY`（severity=warning）を返す。次回呼び出しでは Bridge を再起動せずに復帰できる。
+- すべての `..._COMPILE` / `..._RECOVERY` 応答に診断 (`diagnostic_compiling`, `diagnostic_temp_files`, `diagnostic_last_domain_reload`) が添付される。
+- エラーコード: `EDITOR_CTRL_RUN_SCRIPT_OK` / `..._COMPILE` / `..._RUNTIME` / `..._BAD_ID` / `..._RECOVERY`。
+
+## Editor camera modes (`editor_set_camera`)
+
+`editor_set_camera` は SceneView を Unity 公開 API `SceneView.LookAt(point, rotation, size, ortho, instant: true)` 経由で同期的に駆動する。3 つのモードは相互排他（issue #112）。
+
+| モード | 入力 | 効果 |
+|--------|------|------|
+| Pivot orbit | `pivot` (+ `yaw` / `pitch` / `distance`) | pivot を中心に yaw/pitch/distance で周回。pivot 省略時は現在値を維持。 |
+| Position | `position` (+ `look_at` または `yaw`/`pitch`) | カメラ世界座標を直接指定。`look_at` で注視点モード、`yaw`/`pitch` でオイラーモード。`position` と `pivot` の同時指定は `EDITOR_CTRL_CAMERA_CONFLICT`。 |
+| Reset | `reset_to_defaults=True` | pivot=`(0,0,0)`, rotation=`Euler(30, -45, 0)`, size=10、perspective に戻す。他のパラメータは無視。 |
+
+**Yaw=0 の参照軸は +Z**。`yaw=0, pitch=0` のときカメラは +Z 方向を見る。Unity 内部の Euler とは反転しているため、Bridge 側で `internalYaw = (yaw + 180) mod 360` を適用してから `Quaternion.Euler` に渡す。
+
+応答の `data.camera_position` は `LookAt(instant=true)` 完了後の世界座標スナップショット。前回値は `data.previous_camera_*` として返る。
+
+## Variant 判定ルール
+
+YAML が Prefab Variant かどうかは「**`m_SourcePrefab` 参照が存在し**、かつ **自身に GameObject ブロックを持たない**」を同時に満たすことを要件とする。`m_SourcePrefab` 参照のみを根拠にすると、ネストされた `PrefabInstance` を含む通常の base prefab を誤って Variant 扱いする（issue #114）。
+
+判定は `prefab_sentinel.unity_assets.is_variant_prefab(text)` に集約しており、`orchestrator_variant._resolve_variant_base` および `inspect_hierarchy` がこのヘルパー経由で判定する。
+
+## 非致命例外の分類 (`editor_safe_save_prefab` / `editor_console`)
+
+Bridge は内部に「non-fatal exception pattern table」を持ち、ログ分類に利用する（issue #117）。現行登録パターン:
+
+| label | 条件 |
+|-------|------|
+| `udonsharp_obs_nre` | `LogType.Exception` で message に `ArgumentNullException`、stack trace に `OnBeforeSerialize` を含むエントリ |
+
+挙動:
+
+- `editor_safe_save_prefab` / `editor_instantiate_to_scene` は操作中に発生したログを当該テーブルで分類し、件数とラベル一覧を `data.warnings.udonsharp_obs_nre_count` / `data.warnings.nonfatal_patterns` に積む。`SaveAsPrefabAsset` が成功している限り、ノイズが出ても応答は `success=true`。
+- `editor_console` は `classification_filter` パラメータを受け取り、`all`（既定）/ `non_fatal`（テーブルにマッチしたものだけ）/ `fatal`（テーブルにマッチしないものだけ）を返す。値が不正なら `EDITOR_CTRL_INVALID_CLASSIFICATION_FILTER`。
+
+### `editor_console` の既定値とページング (issue #113, breaking)
+
+issue #113 で `editor_console` の既定値とページング契約を**破壊的に**置き換えた。後方互換は提供しない。
+
+| パラメータ | 旧既定値 | 新既定値 | 備考 |
+|----------|----------|----------|------|
+| `since_seconds` | `0.0`（時間フィルタなし） | `60.0` 秒（直近 60 秒） | 対話的デバッグの典型ユースケースに合わせた。`0.0` を渡せば従来どおり時間フィルタなし。 |
+| `order` | （存在せず、常に oldest-first） | `"newest_first"` | 受理可能な値: `newest_first` / `oldest_first`。範囲外は `EDITOR_CTRL_INVALID_ORDER`。 |
+| `cursor` | （存在せず） | `""`（空＝先頭ページ） | 不透明な継続トークン。`""` 以外は前回応答の `next_cursor` をそのまま渡す。Bridge のフォーマット (`seq:<long>`) に合致しない場合や取り込み済み範囲外は `EDITOR_CTRL_INVALID_CURSOR`。 |
+
+ページング動作:
+
+- 各エントリには Bridge 側で取り込み時刻に単調増加する `sequence_id`（`long`）が割り当てられる。`order` が指す方向で buffer を歩き、`cursor` 位置を **排他的に** 越えたエントリだけを取り出す。
+- 1 ページに `max_entries` 件まで詰めた状態でフィルタ条件を満たすエントリがまだ存在すれば、応答 `data.next_cursor` に不透明トークン（`seq:<long>`、Bridge 私物のフォーマット）を返す。次の呼び出しで同じトークンを `cursor` に渡せば続きから取得できる。
+- 末尾まで到達すると `next_cursor` は空文字列。
+- `order` を切り替える場合は `cursor` をリセットすること（前回トークンを別方向で再利用しても同じページが返る保証はない）。
+
+## `editor_set_property` の Quaternion サポート (issue #111)
+
+`editor_set_property` は `SerializedPropertyType.Quaternion`（例: `m_LocalRotation`）に対して xyzw 4 要素のリテラル文字列のみを受け付ける。Euler 入力は対象外（既存の euler hint 専用 SerializedProperty 経由で設定する）。
+
+- 入力: カンマ区切りの 4 要素 `"x,y,z,w"`（順序は xyzw 固定）。
+- 4 要素以外（例えば 3 要素の euler）は `EDITOR_CTRL_SET_PROP_TYPE_MISMATCH`。メッセージに「4 要素必須」を明示。
+- ノルムが `1.0 ± 1e-4` の許容範囲外なら `EDITOR_CTRL_SET_PROP_QUATERNION_NOT_NORMALIZED`（`severity="error"`）。Bridge 側で自動 normalize はしない。許容幅は Unity の Transform.localRotation が float32 でやり取りされる際の丸め誤差を吸収する目的。
+- 同一トランザクションで euler hint を同期する副作用は持たない（要件は呼び出し側に委ねる）。
+
+## Before-value 解決の `UnresolvedReason` StrEnum (issue #124, breaking)
+
+`prefab_sentinel.services.serialized_object.before_cache.resolve_before_value` の戻り値型を **breaking** に置き換えた。後方互換は提供しない。
+
+- 旧契約: 解決失敗時はラベル付きの sentinel 文字列（`"(unresolved)"` / `"(unresolved: file unreadable)"` / `"(unresolved: not a variant)"` / `"(unresolved: type not found in chain)"` / `"(unresolved: ambiguous component type)"` / `"(unresolved: not found in chain)"`）を返していた。`patch_preview.soft_warnings_for_preview` は `before_val.startswith("(unresolved")` の string-prefix sniff で検出していた。
+- 新契約: 戻り型は `str | UnresolvedReason`（`UnresolvedReason` は `enum.StrEnum`）。解決成功時は plain `str`、解決失敗時は下表のいずれかの enum メンバを返す。`soft_warnings_for_preview` は `isinstance(before_val, UnresolvedReason)` で検出し、診断 evidence に enum の `.value` を載せる。
+
+| Member | 発生条件 |
+|--------|--------|
+| `UnresolvedReason.NO_VARIANT_RESOLVER` | サービスに `PrefabVariantService` が bind されていない |
+| `UnresolvedReason.FILE_UNREADABLE` | 対象 YAML が `OSError` で読めない（解決アタック中に削除された場合等） |
+| `UnresolvedReason.NOT_A_VARIANT` | 対象が Variant ではなく base prefab |
+| `UnresolvedReason.EMPTY_CHAIN` | チェーンは解決したが値マップが空 |
+| `UnresolvedReason.TYPE_NOT_FOUND` | チェーンの class map に当該 component 型名が存在しない |
+| `UnresolvedReason.AMBIGUOUS_TYPE` | 当該 component 型名がチェーンに 2 件以上存在する |
+| `UnresolvedReason.PATH_NOT_FOUND` | property path が解決済み chain values に存在しない |
+
+外部呼び出し側で旧 sentinel 文字列に依存している箇所は `isinstance(..., UnresolvedReason)` ベースに書き換える必要がある。`StrEnum` を継承しているため `str(value)` および `f"{value}"` で取り出した値は enum の `.value` 文字列（例: `"type_not_found"`）になる。
+
+## テスト環境変数の取り扱い
+
+ユニットテストは Editor Bridge のディスパッチ環境変数（`UNITYTOOL_BRIDGE_WATCH_DIR`）が **ホストシェルから漏れていない状態** を前提に動作する（issue #88, #89, #270）。
+
+- `tests/test_unity_patch_bridge.py::_invoke_bridge` はテスト中に上記変数を pop し、各テストが決定的な状態から開始するようにする。
+- `tests/test_services.py::RuntimeValidationServiceTests` および `SerializedObjectServiceTests` は `setUp` で同変数を pop し、`addCleanup` で復元する。
+- 開発者シェルが `UNITYTOOL_BRIDGE_WATCH_DIR` を export した状態でも、`scripts/run_unit_tests.py` は green を維持する。

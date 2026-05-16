@@ -1,0 +1,47 @@
+{
+  "plan_version": 2,
+  "resources": [
+    {
+      "id": "avatar_prefab",
+      "kind": "prefab",
+      "path": "Assets/PrefabSentinelSmoke/GeneratedAvatar.prefab",
+      "mode": "create"
+    }
+  ],
+  "ops": [
+    {
+      "resource": "avatar_prefab",
+      "op": "create_prefab",
+      "name": "PrefabSentinelAvatarSmoke"
+    },
+    {
+      "resource": "avatar_prefab",
+      "op": "add_component",
+      "target": "$root",
+      "type": "UnityEngine.BoxCollider",
+      "result": "root_collider"
+    },
+    {
+      "resource": "avatar_prefab",
+      "op": "set",
+      "target": "$root_collider",
+      "path": "m_IsTrigger",
+      "value": true
+    },
+    {
+      "resource": "avatar_prefab",
+      "op": "save"
+    }
+  ],
+  "postconditions": [
+    {
+      "type": "asset_exists",
+      "resource": "avatar_prefab"
+    },
+    {
+      "type": "broken_refs",
+      "scope": "Assets/PrefabSentinelSmoke",
+      "expected_count": 0
+    }
+  ]
+}

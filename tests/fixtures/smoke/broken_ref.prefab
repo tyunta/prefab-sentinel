@@ -1,0 +1,13 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &100
+GameObject:
+  m_Component:
+  - component: {fileID: 200}
+  m_Name: BrokenObj
+--- !u!114 &200
+MonoBehaviour:
+  m_GameObject: {fileID: 100}
+  m_Script: {fileID: 11500000, guid: abcd1234abcd1234abcd1234abcd1234, type: 3}
+  goodRef: {fileID: 100}
+  badRef: {fileID: 99999}
