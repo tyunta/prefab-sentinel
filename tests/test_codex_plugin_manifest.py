@@ -2,9 +2,11 @@
 
 The Codex CLI install path reads ``.codex-plugin/plugin.json`` to
 provision the plugin. The manifest carries identity, canonical version,
-and the MCP server invocation block; it deliberately omits the
-``interface`` block (icon/screenshot/displayName) because issue #338
-excludes per-plugin asset authoring and issue #339 places
+and ``mcpServers`` as a *string path* to a bundled MCP config file —
+Codex's parser rejects Claude Code's inline object map there ("invalid
+type: map, expected a string", issue #1). The manifest deliberately
+omits the ``interface`` block (icon/screenshot/displayName) because
+issue #338 excludes per-plugin asset authoring and issue #339 places
 ``interface.displayName`` at the marketplace root rather than inside
 plugin manifests.
 """
@@ -47,10 +49,25 @@ class TestCodexPluginManifest(unittest.TestCase):
         manifest = self._load_manifest()
         self.assertEqual(_canonical_project_version(), manifest["version"])
 
-    def test_mcp_invocation_command_is_non_empty(self) -> None:
-        manifest = self._load_manifest()
-        servers = manifest["mcpServers"]
-        self.assertIn("prefab-sentinel", servers)
+    def test_mcp_servers_field_is_a_relative_path_string(self) -> None:
+        # Codex's manifest parser requires ``mcpServers`` to be a string
+        # path to a bundled config file. An inline object map (Claude
+        # Code's form) fails the Codex install with "invalid type: map,
+        # expected a string" (issue #1).
+        mcp_servers = self._load_manifest()["mcpServers"]
+        self.assertIsInstance(mcp_servers, str)
+        self.assertTrue(
+            mcp_servers.startswith("./"),
+            f"mcpServers path must start with './': {mcp_servers!r}",
+        )
+
+    def test_mcp_servers_file_carries_non_empty_command(self) -> None:
+        rel = self._load_manifest()["mcpServers"]
+        mcp_path = _PROJECT_ROOT / rel
+        self.assertTrue(mcp_path.is_file(), f"missing MCP config: {mcp_path}")
+        config = json.loads(mcp_path.read_text(encoding="utf-8"))
+        # Codex accepts a direct server map or a ``mcp_servers`` wrapper.
+        servers = config.get("mcp_servers", config)
         invocation = servers["prefab-sentinel"]
         command = invocation.get("command", "")
         self.assertNotEqual("", command, f"command empty: {invocation!r}")
