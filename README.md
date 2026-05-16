@@ -40,11 +40,11 @@ read-only 経路（`validate_refs` / `inspect_*` / `find_*` 等）は Unity を�
 /plugin install prefab-sentinel@tyunta-prefab-sentinel
 ```
 
-**Codex CLI**（シェルで実行）:
+**Codex CLI**（Codex CLI 内に入力するスラッシュコマンド）:
 
-```bash
-codex plugin marketplace add tyunta/prefab-sentinel
-codex plugin install prefab-sentinel@tyunta-prefab-sentinel
+```text
+/plugin marketplace add tyunta/prefab-sentinel
+/plugin install prefab-sentinel@tyunta-prefab-sentinel
 ```
 
 導入後、MCP クライアントから `activate_project(scope=..., project_root=...)` で scope と Unity プロジェクトルートを宣言し、`validate_refs(scope="Assets/...")` を呼ぶと broken GUID / fileID が JSON で返る。
@@ -67,7 +67,7 @@ MCP サーバーは Plugin 内部で `uv` / `uvx` 経由でローカル起動さ
 
 ### Codex CLI Plugin
 
-[Quickstart](#quickstart) の 2 コマンドで導入する。MCP サーバーは Plugin 定義（`.codex-plugin/plugin.json`）の `mcpServers` エントリから自動登録され、skill bundle も同時に展開される。Plugin を更新したら Codex CLI セッションを再起動する。登録解除は `codex plugin uninstall prefab-sentinel@tyunta-prefab-sentinel`。
+[Quickstart](#quickstart) の 2 コマンドで導入する。MCP サーバーは Plugin 定義（`.codex-plugin/plugin.json`）の `mcpServers` エントリから自動登録され、skill bundle も同時に展開される。Plugin を更新したら Codex CLI セッションを再起動する。登録解除は Codex CLI 内のスラッシュコマンド `/plugin uninstall prefab-sentinel@tyunta-prefab-sentinel`。
 
 ### スキル
 
