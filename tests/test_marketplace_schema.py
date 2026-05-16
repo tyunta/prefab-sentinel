@@ -1,13 +1,18 @@
-"""Schema pin for the cross-tool marketplace catalog (issue #339).
+"""Schema pin for the cross-tool marketplace catalog (issue #339, #1).
 
-The marketplace catalog must satisfy both installer toolchains: it
-carries Codex-shaped fields (object-form ``source``, ``policy``,
-``category``) for the Codex CLI installer and preserves the Claude
-Code-required identity (``name`` / ``owner``) plus per-plugin
-``name`` / ``description`` for the Claude Code installer. The
-``interface.displayName`` field lives at the marketplace root, not
-inside any ``plugins[]`` entry — premature relocation would couple
-display-name authoring to per-plugin schema.
+The marketplace catalog must satisfy both installer toolchains. The
+plugin ``source`` uses the relative-path string form (``"./"``):
+Claude Code's marketplace schema has no ``local`` source type and
+rejects the object form ``{"source": "local", ...}`` at install
+("source type your Claude Code version does not support" — issue #1),
+while Codex CLI accepts the string shorthand as well — so the string
+satisfies both installers where the object form satisfied only Codex.
+The catalog still carries ``policy`` and ``category`` for the Codex CLI
+installer and preserves the Claude Code-required identity (``name`` /
+``owner``) plus per-plugin ``name`` / ``description`` for the Claude
+Code installer. The ``interface.displayName`` field lives at the
+marketplace root, not inside any ``plugins[]`` entry — premature
+relocation would couple display-name authoring to per-plugin schema.
 """
 
 from __future__ import annotations
@@ -55,15 +60,18 @@ class TestMarketplaceCatalogSchema(unittest.TestCase):
                 f"marketplace root per issue #339.",
             )
 
-    def test_plugin_source_is_object_with_local_discriminator(self) -> None:
+    def test_plugin_source_is_relative_path_string(self) -> None:
         catalog = self._load_catalog()
         entry = catalog["plugins"][0]
         source = entry["source"]
-        # Object-form source per the Codex schema; ``source`` is the
-        # discriminator key and ``path`` is the repo-relative location.
-        self.assertIsInstance(source, dict)
-        self.assertEqual("local", source["source"])
-        self.assertEqual("./", source["path"])
+        # Cross-tool relative-path form. Claude Code's marketplace schema
+        # has no ``local`` source type and rejects the object form
+        # ``{"source": "local", ...}`` at install (issue #1); it requires
+        # the string shorthand starting with ``./``. Codex CLI accepts
+        # the same string shorthand, so the string satisfies both
+        # installers. The plugin and the marketplace share one repo, so
+        # ``"./"`` resolves the plugin from the marketplace root.
+        self.assertEqual("./", source)
 
     def test_plugin_policy_carries_installation_and_authentication(self) -> None:
         catalog = self._load_catalog()
