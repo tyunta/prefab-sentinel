@@ -50,7 +50,7 @@ codex plugin marketplace add tyunta/prefab-sentinel
 
 導入後、MCP クライアントから `activate_project(scope=..., project_root=...)` で scope と Unity プロジェクトルートを宣言し、`validate_refs(scope="Assets/...")` を呼ぶと broken GUID / fileID が JSON で返る。
 
-各経路の詳細は [セットアップ](#セットアップ)、リポジトリから MCP サーバーを直接起動する開発者向け手順は [CONTRIBUTING.md](./CONTRIBUTING.md) を参照。
+各経路の詳細は [セットアップ](#セットアップ)、ツールの使い方・MCP ツールリファレンス・Bridge セットアップは導入後に `guide` スキル（`/prefab-sentinel:guide`）、リポジトリから MCP サーバーを直接起動する開発者向け手順は [CONTRIBUTING.md](./CONTRIBUTING.md) を参照。
 
 ## セットアップ
 
