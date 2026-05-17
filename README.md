@@ -48,9 +48,9 @@ codex plugin marketplace add tyunta/prefab-sentinel
 
 登録後、Codex CLI 内で `/plugins` を開き、一覧から `prefab-sentinel` を選んで Install する（`codex plugin install` というシェルコマンドは存在しない）。
 
-導入後、MCP クライアントから `activate_project(scope=..., project_root=...)` で scope と Unity プロジェクトルートを宣言し、`validate_refs(scope="Assets/...")` を呼ぶと broken GUID / fileID が JSON で返る。
+導入後の使い方は `guide` スキル（`/prefab-sentinel:guide`）が入口 — MCP ツールの一覧と呼び出し方、パッチスキーマ、Editor Bridge のセットアップがまとまっている。MCP ツールを実際に呼ぶのは AI エージェント側なので、エージェントにこの guide を参照させれば使い始められる。
 
-各経路の詳細は [セットアップ](#セットアップ)、ツールの使い方・MCP ツールリファレンス・Bridge セットアップは導入後に `guide` スキル（`/prefab-sentinel:guide`）、リポジトリから MCP サーバーを直接起動する開発者向け手順は [CONTRIBUTING.md](./CONTRIBUTING.md) を参照。
+各経路の詳細は [セットアップ](#セットアップ)、リポジトリから MCP サーバーを直接起動する開発者向け手順は [CONTRIBUTING.md](./CONTRIBUTING.md) を参照。
 
 ## セットアップ
 
