@@ -176,7 +176,7 @@ namespace PrefabSentinel
         // ``editor_add_udonsharp_component`` consumes ``component_type``
         // (already declared above) plus ``fields_json``: a JSON object
         // mapping serialized-field name to a string-encoded value
-        // (parsed through the same ApplyPropertyValue surface as
+        // (parsed through the same unified WritePropertyValue layer as
         // ``editor_set_property``).  ``editor_set_udonsharp_field``
         // consumes ``hierarchy_path``, ``field_name``, and the
         // existing value-vs-reference pair (``property_value`` /

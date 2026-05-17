@@ -3,6 +3,9 @@ using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
 
+// Property-write handlers — the editor_set_property handler and its
+// batch variant. Per-type value application is owned by the unified
+// property-write layer in PrefabSentinel.UnityEditorControlBridge.PropertyWrite.cs.
 namespace PrefabSentinel
 {
     public static partial class UnityEditorControlBridge
@@ -100,137 +103,13 @@ namespace PrefabSentinel
             }
 
             // ── Set value by type ──
-            string v = request.property_value;
-            try
-            {
-                switch (prop.propertyType)
-                {
-                    case SerializedPropertyType.Integer:
-                        prop.intValue = int.Parse(v, System.Globalization.CultureInfo.InvariantCulture);
-                        break;
-                    case SerializedPropertyType.Float:
-                        prop.floatValue = float.Parse(v, System.Globalization.CultureInfo.InvariantCulture);
-                        break;
-                    case SerializedPropertyType.Boolean:
-                        prop.boolValue = bool.Parse(v);
-                        break;
-                    case SerializedPropertyType.String:
-                        prop.stringValue = v;
-                        break;
-                    case SerializedPropertyType.Enum:
-                    {
-                        // enumNames returns internal C# names (preferred for programmatic input).
-                        // enumDisplayNames (Unity 2021.1+) returns formatted display names which
-                        // may contain spaces; unsuitable for API input.
-#pragma warning disable 0618  // enumNames deprecated but intentionally used
-                        int idx = System.Array.IndexOf(prop.enumNames, v);
-                        if (idx >= 0)
-                            prop.enumValueIndex = idx;
-                        else if (int.TryParse(v, out int numIdx))
-                            prop.enumValueIndex = numIdx;
-                        else
-                            return BuildError("EDITOR_CTRL_SET_PROP_TYPE_MISMATCH",
-                                $"Enum value '{v}' not found. Valid: {string.Join(", ", prop.enumNames)}");
-#pragma warning restore 0618
-                        break;
-                    }
-                    case SerializedPropertyType.Color:
-                    {
-                        var parts = v.Split(',');
-                        if (parts.Length < 3)
-                            return BuildError("EDITOR_CTRL_SET_PROP_TYPE_MISMATCH",
-                                "Color requires 3 or 4 comma-separated floats (r,g,b[,a]).");
-                        float r = float.Parse(parts[0].Trim(), System.Globalization.CultureInfo.InvariantCulture);
-                        float g = float.Parse(parts[1].Trim(), System.Globalization.CultureInfo.InvariantCulture);
-                        float b = float.Parse(parts[2].Trim(), System.Globalization.CultureInfo.InvariantCulture);
-                        float a = parts.Length >= 4
-                            ? float.Parse(parts[3].Trim(), System.Globalization.CultureInfo.InvariantCulture)
-                            : 1f;
-                        prop.colorValue = new Color(r, g, b, a);
-                        break;
-                    }
-                    case SerializedPropertyType.Vector2:
-                    {
-                        var parts = v.Split(',');
-                        if (parts.Length < 2)
-                            return BuildError("EDITOR_CTRL_SET_PROP_TYPE_MISMATCH",
-                                "Vector2 requires 2 comma-separated floats (x,y).");
-                        prop.vector2Value = new Vector2(
-                            float.Parse(parts[0].Trim(), System.Globalization.CultureInfo.InvariantCulture),
-                            float.Parse(parts[1].Trim(), System.Globalization.CultureInfo.InvariantCulture));
-                        break;
-                    }
-                    case SerializedPropertyType.Vector3:
-                    {
-                        var parts = v.Split(',');
-                        if (parts.Length < 3)
-                            return BuildError("EDITOR_CTRL_SET_PROP_TYPE_MISMATCH",
-                                "Vector3 requires 3 comma-separated floats (x,y,z).");
-                        prop.vector3Value = new Vector3(
-                            float.Parse(parts[0].Trim(), System.Globalization.CultureInfo.InvariantCulture),
-                            float.Parse(parts[1].Trim(), System.Globalization.CultureInfo.InvariantCulture),
-                            float.Parse(parts[2].Trim(), System.Globalization.CultureInfo.InvariantCulture));
-                        break;
-                    }
-                    case SerializedPropertyType.Vector4:
-                    {
-                        var parts = v.Split(',');
-                        if (parts.Length < 4)
-                            return BuildError("EDITOR_CTRL_SET_PROP_TYPE_MISMATCH",
-                                "Vector4 requires 4 comma-separated floats (x,y,z,w).");
-                        prop.vector4Value = new Vector4(
-                            float.Parse(parts[0].Trim(), System.Globalization.CultureInfo.InvariantCulture),
-                            float.Parse(parts[1].Trim(), System.Globalization.CultureInfo.InvariantCulture),
-                            float.Parse(parts[2].Trim(), System.Globalization.CultureInfo.InvariantCulture),
-                            float.Parse(parts[3].Trim(), System.Globalization.CultureInfo.InvariantCulture));
-                        break;
-                    }
-                    case SerializedPropertyType.Quaternion:
-                    {
-                        // Issue #111 / H-4: accept only the four-component
-                        // xyzw form. Arity and unit-norm validation are owned
-                        // by the Unity-free QuaternionInputValidator; a
-                        // non-numeric component surfaces a FormatException
-                        // caught by the surrounding catch below.
-                        QuaternionParse q = QuaternionInputValidator.Validate(v);
-                        if (!q.Success)
-                        {
-                            if (q.ErrorCode == QuaternionInputValidator.NotNormalizedCode)
-                                return BuildError(q.ErrorCode,
-                                    $"Quaternion value (x={q.X}, y={q.Y}, z={q.Z}, w={q.W}) "
-                                    + $"has non-unit norm; unit norm "
-                                    + $"(1.0 ± {QuaternionInputValidator.NormTolerance}) is required. "
-                                    + "Normalize the input on the caller side.");
-                            return BuildError(q.ErrorCode,
-                                "Quaternion requires exactly 4 comma-separated floats (x,y,z,w).");
-                        }
-                        prop.quaternionValue = new Quaternion(q.X, q.Y, q.Z, q.W);
-                        break;
-                    }
-                    case SerializedPropertyType.ArraySize:
-                    case SerializedPropertyType.FixedBufferSize:
-                        prop.intValue = int.Parse(v, System.Globalization.CultureInfo.InvariantCulture);
-                        break;
-                    case SerializedPropertyType.ObjectReference:
-                    {
-                        string refPath = hasRef ? request.object_reference : v;
-                        var (obj, refError) = ResolveObjectReference(refPath);
-                        if (obj == null)
-                            return BuildError("EDITOR_CTRL_SET_PROP_REF_NOT_FOUND",
-                                refError ?? $"Object reference not found: {refPath}");
-                        prop.objectReferenceValue = obj;
-                        break;
-                    }
-                    default:
-                        return BuildError("EDITOR_CTRL_SET_PROP_TYPE_MISMATCH",
-                            $"Unsupported property type: {prop.propertyType}");
-                }
-            }
-            catch (System.FormatException ex)
-            {
-                return BuildError("EDITOR_CTRL_SET_PROP_TYPE_MISMATCH",
-                    $"Failed to parse value '{v}' for {prop.propertyType}: {ex.Message}");
-            }
+            // The unified property-write layer owns per-type application
+            // and try-parse error classification; for an object-reference
+            // target the supplied string is the reference path (issue #24).
+            string writeInput = hasRef ? request.object_reference : request.property_value;
+            PropertyWriteResult writeResult = WritePropertyValue(prop, writeInput);
+            if (!writeResult.Success)
+                return BuildError(writeResult.ErrorCode, writeResult.ErrorMessage);
 
             so.ApplyModifiedProperties();
 

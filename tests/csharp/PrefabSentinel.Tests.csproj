@@ -93,6 +93,9 @@
     <Compile Include="..\..\tools\unity\PrefabSentinel.Prefab.ApplyRejectionEnvelope.cs">
       <Link>Bridge\PrefabSentinel.Prefab.ApplyRejectionEnvelope.cs</Link>
     </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.PrefabStage.StageHierarchyPathLogic.cs">
+      <Link>Bridge\PrefabSentinel.PrefabStage.StageHierarchyPathLogic.cs</Link>
+    </Compile>
   </ItemGroup>
 
 </Project>

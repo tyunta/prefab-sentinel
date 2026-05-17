@@ -166,52 +166,126 @@ class TestGetHierarchyPathDedup(unittest.TestCase):
 
 
 class TestApplyPropertyValueTypes(unittest.TestCase):
-    """S4: ApplyPropertyValue value-kind coverage.
+    """Issue #24 — the unified property-write layer.
 
-    Post H-track migration the per-type literal parsing (Color/Vector2/
-    Vector4/ObjectReference) was extracted into the Unity-free
-    ``PropertyValueParser``; that behavioral coverage now lives in
-    ``tests/csharp/PropertiesPureLogicTests.cs``. This source-text test
-    retains only the Tier 3 delegation invariant: the bridge handler must
-    still route parsing through ``PropertyValueParser.TryParse``.
+    The two former property-write implementations — the boolean
+    ``ApplyPropertyValue`` helper and the per-type ``switch`` inlined
+    into ``HandleEditorSetProperty`` — are consolidated into a single
+    ``WritePropertyValue`` layer returning a ``PropertyWriteResult``.
+    The layer operates on a live Unity ``SerializedProperty`` and so
+    cannot be executed by this harness (spec Tier 3 Justification: no
+    Unity-loadable serialized-property harness in this repo). Its
+    Unity-free parsing sub-logic is exercised at Tier 1 in
+    ``tests/csharp/PropertiesPureLogicTests.cs``; these source-text
+    invariants pin the parser delegation and the absence of any parallel
+    implementation.
     """
 
-    def test_apply_property_value_delegates_to_property_value_parser(self) -> None:
-        source = _read(BRIDGE)
-        body = _extract_method(source, "ApplyPropertyValue")
-        self.assertIn("PropertyValueParser.TryParse", body)
+    def test_unified_writer_delegates_parsing_to_property_value_parser(self) -> None:
+        source = _strip_cs_comments(_read(BRIDGE))
+        body = _extract_method(source, "WritePropertyValue")
+        self.assertIn(
+            "PropertyValueParser.TryParse",
+            body,
+            msg=(
+                "WritePropertyValue must route textual parsing through "
+                "the Unity-free PropertyValueParser; a reverted inline "
+                "parse path re-introduces the duplication (issue #24)."
+            ),
+        )
+
+    def test_no_standalone_boolean_property_write_helper_remains(self) -> None:
+        # Tier 3 Justification (spec): exactly one property-write layer
+        # may exist. The former boolean ``ApplyPropertyValue`` helper
+        # must be fully removed — no parallel implementation or alias.
+        source = _strip_cs_comments(_read(BRIDGE))
+        self.assertEqual(
+            [],
+            re.findall(r"\bApplyPropertyValue\b", source),
+            msg=(
+                "The boolean ApplyPropertyValue helper must not survive "
+                "the issue #24 unification — no parallel property-write "
+                "implementation or alias may remain."
+            ),
+        )
+
+    def test_set_property_handler_carries_no_per_type_branching(self) -> None:
+        # The per-type ``switch (prop.propertyType)`` block must live
+        # only in the unified layer; the set-property handler obtains
+        # its write outcome from WritePropertyValue.
+        source = _strip_cs_comments(_read(BRIDGE))
+        body = _extract_method(source, "HandleEditorSetProperty")
+        self.assertIn(
+            "WritePropertyValue",
+            body,
+            msg=(
+                "HandleEditorSetProperty must obtain its write outcome "
+                "from the unified WritePropertyValue layer (issue #24)."
+            ),
+        )
+        self.assertNotIn(
+            "switch (prop.propertyType)",
+            body,
+            msg=(
+                "HandleEditorSetProperty must not carry a per-type "
+                "property switch — per-type dispatch is owned solely by "
+                "the unified WritePropertyValue layer (issue #24)."
+            ),
+        )
 
 
 class TestHandleEditorSetPropertyQuaternion(unittest.TestCase):
-    """Issue #111 — HandleEditorSetProperty Quaternion handling.
+    """Issue #24 / #111 — quaternion coverage in the unified layer.
 
-    Post H-track migration the arity and unit-norm validation logic was
-    extracted into the Unity-free ``QuaternionInputValidator``; that
-    behavioral coverage now lives in
-    ``tests/csharp/PropertiesPureLogicTests.cs``. This source-text test
-    retains the Tier 3 delegation invariant (the handler routes through
-    ``QuaternionInputValidator.Validate``) plus a constant-value pin on
-    the relocated ``NormTolerance`` literal.
+    Quaternion handling moved from the inline ``HandleEditorSetProperty``
+    switch into the unified ``WritePropertyValue`` layer, where it must
+    remain covered. Arity and unit-norm validation is owned by the
+    Unity-free ``QuaternionInputValidator`` (Tier 1-covered in
+    ``tests/csharp/PropertiesPureLogicTests.cs``). These source-text
+    invariants pin the dispatch and the delegation; the final test is a
+    constant-value pin on the relocated ``NormTolerance`` literal.
     """
 
-    def test_handle_editor_set_property_handles_quaternion(self) -> None:
-        source = _read(BRIDGE)
-        body = _extract_method(source, "HandleEditorSetProperty")
-        self.assertIn("SerializedPropertyType.Quaternion", body)
+    def test_unified_writer_dispatches_quaternion_type(self) -> None:
+        source = _strip_cs_comments(_read(BRIDGE))
+        body = _extract_method(source, "WritePropertyValue")
+        self.assertIn(
+            "SerializedPropertyType.Quaternion",
+            body,
+            msg=(
+                "WritePropertyValue must dispatch the Quaternion "
+                "property type so quaternion coverage is not lost when "
+                "the two implementations are consolidated (issue #24)."
+            ),
+        )
 
-    def test_handle_editor_set_property_quaternion_delegates_to_validator(self) -> None:
-        source = _read(BRIDGE)
-        body = _extract_method(source, "HandleEditorSetProperty")
-        self.assertIn("QuaternionInputValidator.Validate", body)
+    def test_unified_writer_delegates_quaternion_to_validator(self) -> None:
+        source = _strip_cs_comments(_read(BRIDGE))
+        body = _extract_method(source, "WriteQuaternionValue")
+        self.assertIn(
+            "QuaternionInputValidator.Validate",
+            body,
+            msg=(
+                "The quaternion write path must route arity / unit-norm "
+                "validation through QuaternionInputValidator.Validate."
+            ),
+        )
 
-    def test_handle_editor_set_property_quaternion_unit_norm_code(self) -> None:
-        source = _read(BRIDGE)
-        body = _extract_method(source, "HandleEditorSetProperty")
-        # Non-unit norm rejection must surface the relocated dedicated code.
-        self.assertIn("QuaternionInputValidator.NotNormalizedCode", body)
+    def test_unified_writer_quaternion_surfaces_unit_norm_code(self) -> None:
+        source = _strip_cs_comments(_read(BRIDGE))
+        body = _extract_method(source, "WriteQuaternionValue")
+        # Non-unit norm rejection must surface the dedicated code.
+        self.assertIn(
+            "QuaternionInputValidator.NotNormalizedCode",
+            body,
+            msg=(
+                "A non-unit-norm quaternion must surface the dedicated "
+                "QuaternionInputValidator.NotNormalizedCode."
+            ),
+        )
 
     def test_handle_editor_set_property_quaternion_tolerance_constant(self) -> None:
-        # Constant-value pin: the norm tolerance literal (1e-4f) now lives
+        # Constant-value pin: the norm tolerance literal (1e-4f) lives
         # on QuaternionInputValidator; a regression must keep that value.
         source = INPUT_VALIDATORS.read_text(encoding="utf-8")
         self.assertIn("internal const float NormTolerance = 1e-4f;", source)
@@ -1485,6 +1559,34 @@ class TestSetUdonSharpFieldHandler(unittest.TestCase):
         ):
             with self.subTest(code=code):
                 self.assertIn(code, body)
+
+    def test_handler_consumes_unified_writer_under_its_envelope_code(self) -> None:
+        """Issue #24 — the UdonSharp field-write handler applies values
+        through the unified ``WritePropertyValue`` layer but maps a
+        non-success outcome onto its own documented
+        ``EDITOR_CTRL_UDON_SET_FIELD_FAILED`` envelope code rather than
+        surfacing the writer's error code (Non-Goal: the UdonSharp
+        field-write envelope code is unchanged).
+        """
+        source = _strip_cs_comments(_read(BRIDGE))
+        body = _extract_method(source, "HandleSetUdonSharpField")
+        self.assertIn(
+            "WritePropertyValue",
+            body,
+            msg=(
+                "HandleSetUdonSharpField must apply values through the "
+                "unified WritePropertyValue layer (issue #24)."
+            ),
+        )
+        self.assertIn(
+            "EDITOR_CTRL_UDON_SET_FIELD_FAILED",
+            body,
+            msg=(
+                "A failed unified-writer outcome must surface under the "
+                "UdonSharp field-write envelope code, not the writer's "
+                "own error code (issue #24 Non-Goal)."
+            ),
+        )
 
 
 class TestWirePersistentListenerHandler(unittest.TestCase):
@@ -3232,29 +3334,25 @@ class PrefabStagePersistFixSourceInvariantTests(unittest.TestCase):
             "HandleClosePrefab",
         )
 
-    def test_resolver_normalizes_absolute_paths_under_stage_root(self) -> None:
-        body = self._resolver_body()
-        # The leading-slash normalization must run inside the
-        # active-stage branch — i.e. between the ``stage != null`` /
-        # ``stageRoot != null`` guards and the ``stageRoot.transform
-        # .Find`` call.  Pin the literal ``StartsWith("/"`` token AND
-        # the substring-strip token together.
+    def test_resolver_delegates_normalization_to_path_logic(self) -> None:
+        """Issue #18 / H-10 T1 — the active-stage resolver must route
+        leading-slash normalization through the dedicated Unity-free
+        ``StageHierarchyPathLogic.NormalizeStagePath`` component (whose
+        behavior is exercised by ``StageHierarchyPathLogicTests`` in the
+        C# harness) rather than re-inlining the strip, and must descend
+        into the stage root via ``Transform.Find`` once a stage is
+        active.
+        """
+        body = _strip_cs_comments(self._resolver_body())
         self.assertIn(
-            'StartsWith("/"',
+            "StageHierarchyPathLogic.NormalizeStagePath",
             body,
             msg=(
-                "ResolveGameObjectInActiveStage must normalize "
-                "leading-slash paths before delegating to the stage "
-                "root (issue #264 absolute-path regression)."
-            ),
-        )
-        self.assertIn(
-            "Substring(1)",
-            body,
-            msg=(
-                "ResolveGameObjectInActiveStage must strip the "
-                "leading slash with ``Substring(1)`` before "
-                "delegating to Transform.Find."
+                "ResolveGameObjectInActiveStage must delegate "
+                "active-stage path normalization to "
+                "StageHierarchyPathLogic.NormalizeStagePath; a "
+                "re-inlined StartsWith/Substring strip re-introduces "
+                "the duplicated normalization (issue #18)."
             ),
         )
         self.assertIn(

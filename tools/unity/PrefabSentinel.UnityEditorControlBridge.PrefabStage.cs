@@ -34,12 +34,10 @@ namespace PrefabSentinel
                 if (stageRoot == null) return null;
                 // Absolute-style paths (``/Root/Child``) are accepted as
                 // a convenience for callers that mirror Unity's
-                // hierarchy log format; the leading slash is stripped
-                // before resolution because ``Transform.Find`` rejects
-                // it.
-                string normalized = hierarchyPath.StartsWith("/", StringComparison.Ordinal)
-                    ? hierarchyPath.Substring(1)
-                    : hierarchyPath;
+                // hierarchy log format; leading-slash normalization is
+                // owned by the Unity-free StageHierarchyPathLogic so it
+                // is exercised by the C# xUnit harness (issue #18).
+                string normalized = StageHierarchyPathLogic.NormalizeStagePath(hierarchyPath);
                 // A single-name path addresses the stage root rather
                 // than a child of an unnamed pivot.
                 if (stageRoot.name == normalized) return stageRoot;

@@ -145,12 +145,18 @@ class ProjectSession:
         """
         detected = self.detect_bridge_version()
         if detected is None:
+            # Issue #2: the missing-bridge diagnostic carries the unified
+            # four-key wire shape {severity, code, message, data} — the
+            # same shape as the version-mismatch diagnostic below — so MCP
+            # clients see a consistent shape across every session
+            # diagnostic. The data payload is empty for this condition.
             return {
                 "severity": "warning",
                 "code": "BRIDGE_NOT_FOUND",
                 "message": "Bridge C# files not found in project. "
                 "Deploy with deploy_bridge tool or copy tools/unity/*.cs "
                 "to Assets/Editor/PrefabSentinel/",
+                "data": {},
             }
         from importlib.metadata import version
 

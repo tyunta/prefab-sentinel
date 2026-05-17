@@ -115,6 +115,34 @@ uv run python scripts/mutmut_score_report.py --audited-only --format markdown
 
 **テストの書き方（envelope value-pinning）** — 新規テストは `tests._assertion_helpers.assert_error_envelope` を使い、code / severity / field / message-pattern を値で固定する。「例外が出る」だけのアサートはミューテーションが拾えない。`assertRaises` 系も同様に値固定が必須で、`tests/test_assertion_density.py` がリポジトリ全体を AST で歩いて全 `assertRaises` サイトにこのルールを meta-test として強制する。同じルールは [CLAUDE.md の Mutation testing 運用](./CLAUDE.md#mutation-testing-運用) にも置かれている。
 
+### 四半期 run チェックリスト
+
+四半期 mutation サイクルは以下を **必須ステップ** として 1 回の run 内で完結させる。項目 2〜4 は
+かつて standing GitHub issue（#210 do_not_mutate 実効性検証 / #211 低スコアモジュール survived
+分類 / #272 orphan-test 棚卸し）として恒久 open されていた自己監査タスクであり、本チェックリスト
+への組み込みにより新規 standing issue を生まない self-contained な運用に移行する（issue #7）。
+
+1. **フル走行とスコア集計** — `uv run mutmut run --max-children 180` を走らせ、直後に
+   `uv run python scripts/mutmut_score_report.py --audited-only --format csv` で監査対象 6
+   モジュールのスコアを集計する（`mutmut` の走行状態は run 間で永続化されないため集計は同一
+   run 直後に行う）。
+2. **`do_not_mutate` 実効性の再検証**（旧 issue #210） — `[tool.mutmut].do_not_mutate` の各
+   パターンについて、当該パターンを 1 つだけ一時的に外した並行 run を行い survivor 数の
+   delta（`without − with`）を測る。delta が正かつ分類が `critical`（抑制が本来 kill され得る
+   非等価ミュータントを隠している）なら、そのパターンを削除し value-pinning テストで置き換える。
+   結果は四半期レポート §3 の suppression-impact 表に記録する。
+3. **survived ミュータントの三分類**（旧 issue #211） — 監査対象 6 モジュールに加え、非監査
+   low-score モジュール（`prefab_sentinel.watcher` / `prefab_sentinel.editor_bridge`）の
+   survived を critical / trivial / equivalent に分類する。critical はテストでキル、trivial は
+   `do_not_mutate` へ追加、equivalent はレポートに証跡を残す。
+4. **orphan-test の棚卸し**（旧 issue #272） — 同一 run の mutmut キャッシュに対し
+   `uv run python scripts/find_orphan_tests.py` を走らせ、`mutmut_orphan_tests.json` の
+   0-kill テスト候補を確認する。各候補は削除・補強・据え置きのいずれかを判断し、根拠を
+   レポートの action items に残す。
+5. **四半期レポートの記録** — 上記の結果を `docs/quarterly_mutmut_report_template.md` の
+   テンプレート（§1 run context / §2 スコア履歴 / §3 suppression-impact / §4 抑制パターン
+   roster / §5 action items）へ転記し、CSV は `reports/mutmut_history.csv` に追記する。
+
 ## source_text_invariant マーカー
 
 `tools/unity/` や `knowledge/` 等の **un-mutated tree を読むだけのリポジトリ同期テスト** は、`prefab_sentinel/` のミューテーションを観測できないノイズとなるため、`@pytest.mark.source_text_invariant` をモジュールスコープで宣言して mutmut の選択から除外する。

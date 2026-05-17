@@ -155,7 +155,12 @@ namespace PrefabSentinel
                             }
                             else if (!string.IsNullOrEmpty(entry.value))
                             {
-                                ApplyPropertyValue(prop, entry.value);
+                                // Issue #24: value application goes through the
+                                // unified property-write layer; the structured
+                                // outcome is intentionally not surfaced here so
+                                // the add-component initial-property failure
+                                // handling stays as before.
+                                WritePropertyValue(prop, entry.value);
                             }
                         }
                         so.ApplyModifiedProperties();

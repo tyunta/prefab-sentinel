@@ -185,7 +185,7 @@ Tier 列の `(+T3)` 表記は「クラス内に移行するアサーションと
 
 | concern | source-text テスト箇所 | アサーション種別 | Tier | 移行先 xUnit テスト案 |
 |---|---|---|---|---|
-| PrefabStage | `…::PrefabStagePersistFixSourceInvariantTests` | string-literal-grep, structural-invariant | **T1 + T2b** | **(a) T1（無条件・clean-win）**: パス正規化（`StartsWith("/")`→`Substring(1)`）を `internal static class StageHierarchyPathLogic.NormalizeStagePath(string)` へ抽出、`ViewAllowlistClassifier` パターンで xUnit 検証。**(b) T2b（opportunistic）**: `IPrefabStagePersistencePort`（`bool IsActive`, `bool SaveAsPrefabAsset(out bool didSave)`, `void ClearDirtiness()`）を導入し close ハンドラを Unity-free `ClosePrefabPlanner.Execute(request, port)` へ。`save_on_close` false→未呼び出し / true→1 回・`saved` は `out didSave` 反映 / `IsActive=false`→`EDITOR_CTRL_PREFAB_STAGE_CLOSE_FAILED` / 例外→コード+`ex.Message` を fake port で xUnit 検証。**(b) は production への interface 新設 — §6.1 の通り opportunistic（standalone 移行しない）。(a) のみ先行 clean-win として実施可。** |
+| PrefabStage | `…::PrefabStagePersistFixSourceInvariantTests` | string-literal-grep, structural-invariant | **T1 + T2b** | **(a) T1 → 移行済（2026-05-17 / issue #18）**: パス正規化（`StartsWith("/")`→`Substring(1)`）を `internal static class StageHierarchyPathLogic.NormalizeStagePath(string)`（`tools/unity/PrefabSentinel.PrefabStage.StageHierarchyPathLogic.cs`）へ抽出済。behavioral 検証は `tests/csharp/StageHierarchyPathLogicTests.cs` の xUnit へ移行。`PrefabStagePersistFixSourceInvariantTests` 側は resolver の `StageHierarchyPathLogic.NormalizeStagePath` 委譲不変条件のみ narrow T3 残骸として残置。**(b) T2b（opportunistic・未着手）**: `IPrefabStagePersistencePort`（`bool IsActive`, `bool SaveAsPrefabAsset(out bool didSave)`, `void ClearDirtiness()`）を導入し close ハンドラを Unity-free `ClosePrefabPlanner.Execute(request, port)` へ。`save_on_close` false→未呼び出し / true→1 回・`saved` は `out didSave` 反映 / `IsActive=false`→`EDITOR_CTRL_PREFAB_STAGE_CLOSE_FAILED` / 例外→コード+`ex.Message` を fake port で xUnit 検証。**(b) は production への interface 新設 — §6.1 の通り opportunistic（standalone 移行しない）。close ハンドラ系アサーション（`HandleClosePrefab` の永続化 API・dirty クリア・`saved` フラグ束縛・no-active-stage envelope）は引き続き `PrefabStagePersistFixSourceInvariantTests` の source-text coverage に残る。** |
 
 ### 4.11 Helpers / core — dispatch・DTO
 
@@ -290,7 +290,7 @@ opportunistic（H-10）。
 | **H-7** | #369 | clean-win | RunScriptCompile（recompile 解決 / redaction） | `RecompileResolutionGuard`, `RecompileOutcomeClassifier`, `ScheduleFailureEnvelope`, `ReimportDiagnostic`（いずれも T2a — 純関数 / 非インターフェースの小クラス） | `TestRecompileAndWaitOutcomeSync`, `TestRecompileAndWaitDeadlineWatchdog`, `RecompileScheduleFailedSanitization`, `RecompileForceReimportDiagnosticRedaction` |
 | **H-8** | #370 | clean-win | core（dispatch / DTO） | `ActionRegistry`（T2a）, `EditorControlRequest` の `<Compile Include>` harness 取り込み | `TestUdonSharpActionWiring`, `TestUdonSharpRequestFields` |
 | **H-9** | #371 | **opportunistic** | Screenshot | `CameraState`（値オブジェクト）+ `ICameraStatePort`（**T2b** interface seam） | `EditorControlBridgeScreenshotCameraStateRestoreTests` |
-| **H-10** | #372 | **mixed** | PrefabStage | `StageHierarchyPathLogic`（T1、clean-win）, `ClosePrefabPlanner` + `IPrefabStagePersistencePort`（**T2b** interface seam、opportunistic） | `PrefabStagePersistFixSourceInvariantTests` |
+| **H-10** | #372 | **mixed** | PrefabStage | `StageHierarchyPathLogic`（T1、clean-win — **移行済 2026-05-17 / issue #18**）, `ClosePrefabPlanner` + `IPrefabStagePersistencePort`（**T2b** interface seam、opportunistic — 未着手） | `PrefabStagePersistFixSourceInvariantTests` |
 | **H-11** | #373 | clean-win | UnityPatchBridge（Prefab） | `PrefabApplyRejectionEnvelope` + 値オブジェクト `PrefabApplyFailure`（T2a 純関数） | `TestPrefabApplyRejectionEnvelopeSource` |
 | **H-12** | #374 | **opportunistic** | VRCSDKUploadHandler | `IUploadWorkflow`, `ILoginGate`, `IBuilderProbe`（いずれも **T2b** interface seam） | `TestHandleAsyncFullProtection`, `TestLoginPollingInsideTryCatch`, `TestLoginPollingInHandleAsync`, `TestResolveBuilderAsyncRetry` |
 
@@ -305,6 +305,16 @@ opportunistic（H-10）。
 > 既存 Python source-text テストは #290 規約どおり behavioral 部のみ削除し、delegation-invariant
 > （"bridge X calls ClassY.MethodZ"）と constant/field pin を narrow T3 として残置。
 > 残る clean-win なし。opportunistic 3 件（H-9 / H-10 port 部 / H-12）は §6.1 の通り未着手。
+
+> **[2026-05-17] H-10 の T1 部（`StageHierarchyPathLogic`）を issue #18 で landed。** §4.10 の
+> (a) clean-win 部のみを実施。パス正規化（`StartsWith("/")`→`Substring(1)`）を Unity-free な
+> `internal static class StageHierarchyPathLogic.NormalizeStagePath(string)`
+> （`tools/unity/PrefabSentinel.PrefabStage.StageHierarchyPathLogic.cs`）へ抽出し、behavioral
+> 検証は `tests/csharp/StageHierarchyPathLogicTests.cs` の xUnit へ移行。`PrefabStagePersist
+> FixSourceInvariantTests` 側は resolver の `StageHierarchyPathLogic.NormalizeStagePath`
+> 委譲不変条件のみ narrow T3 として残置し、close ハンドラ系アサーションは従来どおり source-text
+> coverage に残る。**H-10 の T2b 部（`ClosePrefabPlanner` + `IPrefabStagePersistencePort`）は
+> §6.1 の通り opportunistic で引き続き未着手。**
 
 ### 6.1 T2b は opportunistic — standalone 移行 PR にしない
 

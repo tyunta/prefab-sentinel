@@ -127,6 +127,33 @@ class ActivationSeverityBlock(unittest.TestCase):
             ),
         )
 
+    def test_missing_bridge_diagnostic_surfaces_four_key_shape(self) -> None:
+        # Issue #2: the activation response appends the session's
+        # missing-bridge diagnostic verbatim into its diagnostics list;
+        # that entry must carry the unified four-key wire shape so MCP
+        # clients observe a consistent shape through the activation path.
+        response = self._run_activate()
+        missing = [
+            d for d in response["diagnostics"]
+            if d.get("code") == "BRIDGE_NOT_FOUND"
+        ]
+        self.assertEqual(
+            1,
+            len(missing),
+            msg=(
+                "activation response must surface exactly one "
+                f"BRIDGE_NOT_FOUND diagnostic; got {response['diagnostics']!r}"
+            ),
+        )
+        self.assertEqual(
+            {"severity", "code", "message", "data"},
+            set(missing[0]),
+            msg=(
+                "missing-bridge diagnostic in the activation response "
+                f"must carry exactly the four unified keys; got {missing[0]!r}"
+            ),
+        )
+
     def test_unknown_severity_string_is_floored_to_info(self) -> None:
         # ``_compose_envelope_severity`` maps an unrecognized severity
         # string (defensive ``ValueError`` branch) to ``info`` so an

@@ -758,14 +758,29 @@ class TestBridgeVersionDetection(unittest.TestCase):
             self.assertIsNotNone(diag)
             self.assertEqual("BRIDGE_VERSION_MISMATCH", diag["code"])
 
-    def test_check_bridge_not_found(self) -> None:
+    def test_check_bridge_not_found_carries_unified_four_key_shape(self) -> None:
+        # Issue #2: the missing-bridge diagnostic must carry the unified
+        # four-key wire shape {severity, code, message, data} so MCP
+        # clients observe a consistent shape across every session
+        # diagnostic; data is empty for this condition.
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "Assets").mkdir()
             session = ProjectSession(project_root=root)
             diag = session.check_bridge_version()
-            self.assertIsNotNone(diag)
-            self.assertEqual("BRIDGE_NOT_FOUND", diag["code"])
+            self.assertEqual(
+                {"severity", "code", "message", "data"},
+                set(diag),
+                msg=(
+                    "missing-bridge diagnostic must carry exactly the "
+                    f"four unified keys; got {diag!r}"
+                ),
+            )
+            self.assertEqual(
+                ("warning", "BRIDGE_NOT_FOUND", {}),
+                (diag["severity"], diag["code"], diag["data"]),
+                msg=f"missing-bridge diagnostic shape mismatch: {diag!r}",
+            )
 
 
 # Watcher exception logging

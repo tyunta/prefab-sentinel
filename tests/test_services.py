@@ -115,25 +115,44 @@ class ReferenceResolverServiceTests(unittest.TestCase):
 
             response = svc.scan_broken_references("Assets")
 
-            self.assertFalse(response.success)
-            self.assertEqual("REF_SCAN_BROKEN", response.code)
+            self.assertEqual(
+                (False, "REF_SCAN_BROKEN"),
+                (response.success, response.code),
+                msg=f"envelope mismatch: {response!r}",
+            )
             self.assertEqual(1, response.data["categories"]["missing_asset"])
             self.assertEqual(1, response.data["categories"]["missing_local_id"])
             self.assertEqual(1, response.data["categories_occurrences"]["missing_asset"])
             self.assertEqual(1, response.data["categories_occurrences"]["missing_local_id"])
             self.assertEqual(2, response.data["broken_count"])
             self.assertEqual(2, response.data["broken_occurrences"])
-            self.assertFalse(response.data["details_included"])
+            self.assertEqual(
+                False,
+                response.data["details_included"],
+                msg=f"details should be excluded without --details: {response.data!r}",
+            )
             self.assertEqual(0, len(response.diagnostics))
             # truncated hint is in data, not diagnostics
             self.assertIn("--details", response.data["truncated_hint"])
-            self.assertGreaterEqual(
+            self.assertEqual(
+                6,
                 response.data["skipped_external_prefab_fileid_checks"],
-                1,
+                msg=(
+                    "exactly six external-prefab fileID checks should be skipped "
+                    "(one m_ExternalPrefabRef plus five m_Modifications targets, "
+                    f"all referencing Base.prefab by fileID): {response.data!r}"
+                ),
             )
             # Details include per-reference info (capped at top_guid_limit)
             details = response.data["skipped_external_prefab_fileid_details"]
-            self.assertGreaterEqual(len(details), 1)
+            self.assertEqual(
+                6,
+                len(details),
+                msg=(
+                    "exactly six skipped-check details expected "
+                    f"(one per skipped external-prefab fileID check): {details!r}"
+                ),
+            )
             self.assertIn("source", details[0])
             self.assertIn("target_guid", details[0])
             self.assertIn("file_id", details[0])
@@ -150,7 +169,11 @@ class ReferenceResolverServiceTests(unittest.TestCase):
                 max_diagnostics=1,
             )
 
-            self.assertFalse(response.success)
+            self.assertEqual(
+                False,
+                response.success,
+                msg=f"broken-reference scan should report failure: {response!r}",
+            )
             self.assertEqual(1, len(response.diagnostics))
             self.assertEqual(1, response.data["returned_diagnostics"])
             # truncated hint is in data, not diagnostics
@@ -159,6 +182,10 @@ class ReferenceResolverServiceTests(unittest.TestCase):
             self.assertGreaterEqual(
                 response.data["broken_occurrences"],
                 response.data["broken_count"],
+                msg=(
+                    "occurrence count must be >= unique broken-reference count: "
+                    f"{response.data!r}"
+                ),
             )
 
     def test_scan_broken_references_honors_ignore_asset_guids(self) -> None:
@@ -172,7 +199,11 @@ class ReferenceResolverServiceTests(unittest.TestCase):
                 ignore_asset_guids=(MISSING_GUID,),
             )
 
-            self.assertFalse(response.success)
+            self.assertEqual(
+                False,
+                response.success,
+                msg=f"scan should still fail on the remaining broken local id: {response!r}",
+            )
             self.assertEqual(0, response.data["categories"]["missing_asset"])
             self.assertEqual(1, response.data["categories"]["missing_local_id"])
             self.assertEqual(0, response.data["categories_occurrences"]["missing_asset"])
@@ -192,8 +223,11 @@ class ReferenceResolverServiceTests(unittest.TestCase):
                 ignore_asset_guids=("not-a-guid",),
             )
 
-            self.assertFalse(response.success)
-            self.assertEqual("REF001", response.code)
+            self.assertEqual(
+                (False, "REF001"),
+                (response.success, response.code),
+                msg=f"envelope mismatch: {response!r}",
+            )
             self.assertIn("invalid_ignore_asset_guids", response.data)
 
     def test_resolve_reference_and_where_used(self) -> None:
@@ -203,15 +237,30 @@ class ReferenceResolverServiceTests(unittest.TestCase):
             svc = ReferenceResolverService(project_root=root)
 
             resolved = svc.resolve_reference(BASE_GUID, "100100000")
-            self.assertTrue(resolved.success)
-            self.assertEqual("REF_RESOLVED", resolved.code)
+            self.assertEqual(
+                (True, "REF_RESOLVED"),
+                (resolved.success, resolved.code),
+                msg=f"envelope mismatch: {resolved!r}",
+            )
 
             usage = svc.where_used(BASE_GUID, scope="Assets", max_usages=1)
-            self.assertTrue(usage.success)
+            self.assertEqual(
+                True,
+                usage.success,
+                msg=f"where_used should succeed for a resolvable guid: {usage!r}",
+            )
             self.assertEqual("Assets", usage.data["scope"])
             self.assertEqual(1, usage.data["returned_usages"])
-            self.assertGreater(usage.data["usage_count"], 1)
-            self.assertGreater(usage.data["truncated_usages"], 0)
+            self.assertGreater(
+                usage.data["usage_count"],
+                1,
+                msg=f"total usage count should exceed the max_usages=1 cap: {usage.data!r}",
+            )
+            self.assertGreater(
+                usage.data["truncated_usages"],
+                0,
+                msg=f"usages beyond the cap should be reported as truncated: {usage.data!r}",
+            )
 
     def test_where_used_returns_missing_scope_error(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -221,8 +270,11 @@ class ReferenceResolverServiceTests(unittest.TestCase):
 
             usage = svc.where_used(BASE_GUID, scope="Assets/NotFound")
 
-            self.assertFalse(usage.success)
-            self.assertEqual("REF404", usage.code)
+            self.assertEqual(
+                (False, "REF404"),
+                (usage.success, usage.code),
+                msg=f"envelope mismatch: {usage!r}",
+            )
 
     def test_scan_broken_references_scopes_guid_index_to_unity_project(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -260,7 +312,11 @@ guid: {CROSS_PROJECT_GUID}
             svc = ReferenceResolverService(project_root=repo_root)
             response = svc.scan_broken_references("sample/avatar/Assets")
 
-            self.assertFalse(response.success)
+            self.assertEqual(
+                False,
+                response.success,
+                msg=f"scan should fail on the cross-project broken reference: {response!r}",
+            )
             self.assertEqual(1, response.data["categories"]["missing_asset"])
             self.assertEqual("sample/avatar", response.data["scan_project_root"])
 
@@ -281,8 +337,15 @@ PrefabInstance:
             usage = svc.where_used(BASE_GUID)
             paths = [item["path"] for item in usage.data["usages"]]
 
-            self.assertTrue(paths)
-            self.assertFalse(any(path.startswith("Library/") for path in paths))
+            self.assertGreater(
+                len(paths),
+                0,
+                msg=f"non-Library usages of the base guid should be reported: {paths!r}",
+            )
+            self.assertFalse(
+                any(path.startswith("Library/") for path in paths),
+                msg=f"Library-scoped paths must be excluded from usages: {paths!r}",
+            )
 
     def test_invalidate_text_cache_single_file(self) -> None:
         svc = ReferenceResolverService(project_root=Path("/fake/project"))
@@ -336,7 +399,11 @@ PrefabInstance:
 
             for f in files:
                 self.assertIn(f, svc._text_cache)
-                self.assertIsNotNone(svc._text_cache[f])
+                self.assertEqual(
+                    f.read_text(encoding="utf-8"),
+                    svc._text_cache[f],
+                    msg=f"preload should cache the on-disk text of {f}",
+                )
 
     def test_preload_texts_handles_unreadable(self) -> None:
         """_preload_texts should mark unreadable files in _unreadable_paths."""
@@ -352,7 +419,10 @@ PrefabInstance:
             svc.preload_texts([bad])
 
             self.assertIn(bad, svc._unreadable_paths)
-            self.assertIsNone(svc._text_cache[bad])
+            self.assertIsNone(
+                svc._text_cache[bad],
+                msg=f"unreadable file should be cached as None sentinel: {bad}",
+            )
 
     def test_preload_texts_idempotent(self) -> None:
         """Calling _preload_texts twice should not re-read cached files."""
@@ -551,8 +621,11 @@ guid: {asset_guid}
         svc = ReferenceResolverService(project_root=Path("/fake/project"))
         response = svc.resolve_reference(UNITY_BUILTIN_EXTRA_GUID.upper(), "10303")
 
-        self.assertTrue(response.success)
-        self.assertEqual("REF_BUILTIN", response.code)
+        self.assertEqual(
+            (True, "REF_BUILTIN"),
+            (response.success, response.code),
+            msg=f"envelope mismatch: {response!r}",
+        )
         self.assertEqual(Severity.INFO, response.severity)
         # Full-payload pinning: normalised GUID, input fileID, read-only flag.
         self.assertEqual(
@@ -574,8 +647,11 @@ guid: {asset_guid}
             svc = ReferenceResolverService(project_root=root)
             response = svc.resolve_reference(BASE_GUID, "0")
 
-        self.assertTrue(response.success)
-        self.assertEqual("REF_RESOLVED", response.code)
+        self.assertEqual(
+            (True, "REF_RESOLVED"),
+            (response.success, response.code),
+            msg=f"envelope mismatch: {response!r}",
+        )
         self.assertEqual(Severity.INFO, response.severity)
         # Full-payload pinning for the asset-level fileID success path.
         self.assertEqual(
@@ -618,8 +694,11 @@ guid: 1111111111111111111111111111aaaa
             svc = ReferenceResolverService(project_root=root)
             response = svc.scan_broken_references("Assets")
 
-        self.assertTrue(response.success)
-        self.assertEqual("REF_SCAN_OK", response.code)
+        self.assertEqual(
+            (True, "REF_SCAN_OK"),
+            (response.success, response.code),
+            msg=f"envelope mismatch: {response!r}",
+        )
         self.assertEqual(Severity.INFO, response.severity)
         self.assertEqual(
             {
@@ -674,8 +753,11 @@ guid: 2222222222222222222222222222bbbb
             svc = ReferenceResolverService(project_root=root)
             response = svc.scan_broken_references("Assets", include_diagnostics=True)
 
-        self.assertTrue(response.success)
-        self.assertEqual("REF_SCAN_PARTIAL", response.code)
+        self.assertEqual(
+            (True, "REF_SCAN_PARTIAL"),
+            (response.success, response.code),
+            msg=f"envelope mismatch: {response!r}",
+        )
         self.assertEqual(Severity.WARNING, response.severity)
         # Pin the load-bearing partial-scan counters by exact value.
         self.assertEqual(0, response.data["broken_count"])
@@ -846,8 +928,11 @@ guid: 2222222222222222222222222222bbbb
             svc = ReferenceResolverService(project_root=root)
             response = svc.where_used(BASE_GUID, scope="Assets")
 
-        self.assertTrue(response.success)
-        self.assertEqual("REF_WHERE_USED", response.code)
+        self.assertEqual(
+            (True, "REF_WHERE_USED"),
+            (response.success, response.code),
+            msg=f"envelope mismatch: {response!r}",
+        )
         self.assertEqual(Severity.INFO, response.severity)
         # Full-payload pinning. The 6 usages come from m_SourcePrefab
         # + m_ExternalPrefabRef + 4 modification targets (4 m_LocalRef
@@ -1240,8 +1325,11 @@ class PatchValidatorEnvelopeTests(unittest.TestCase):
 
         path = "m_Outer.Array.data[0].m_Inner.Array.data[1]"
         response = validate_property_path(path)
-        self.assertTrue(response.success)
-        self.assertEqual("PP_OK", response.code)
+        self.assertEqual(
+            (True, "PP_OK"),
+            (response.success, response.code),
+            msg=f"envelope mismatch: {response!r}",
+        )
         self.assertEqual(Severity.INFO, response.severity)
         self.assertEqual({"property_path": path}, response.data)
 
@@ -1287,7 +1375,10 @@ class PatchValidatorEnvelopeTests(unittest.TestCase):
         and ``PREFAB_CREATE_OPS`` (e.g. ``"foo"``) appends a
         ``schema_error`` diagnostic with ``unsupported op`` evidence."""
         result, diagnostics = self._run_validate_op({"op": "foo", "component": "X", "path": "m_X"})
-        self.assertIsNone(result)
+        self.assertIsNone(
+            result,
+            msg=f"a rejected op must not yield a preview row, got {result!r}",
+        )
         self._assert_single_diagnostic(
             diagnostics,
             location="ops[0] (foo).op",
@@ -1300,7 +1391,10 @@ class PatchValidatorEnvelopeTests(unittest.TestCase):
         ``add_component``) in open-mode is rejected with the documented
         create-mode evidence string."""
         result, diagnostics = self._run_validate_op({"op": "add_component", "component": "X", "path": "m_X"})
-        self.assertIsNone(result)
+        self.assertIsNone(
+            result,
+            msg=f"a rejected op must not yield a preview row, got {result!r}",
+        )
         self._assert_single_diagnostic(
             diagnostics,
             location="ops[0] (add_component).op",
@@ -1319,7 +1413,10 @@ class PatchValidatorEnvelopeTests(unittest.TestCase):
         result, diagnostics = self._run_validate_op(
             {"op": "set", "component": "", "path": "m_X", "value": 1}
         )
-        self.assertIsNone(result)
+        self.assertIsNone(
+            result,
+            msg=f"a rejected op must not yield a preview row, got {result!r}",
+        )
         self._assert_single_diagnostic(
             diagnostics,
             location="ops[0] (set).component",
@@ -1335,7 +1432,10 @@ class PatchValidatorEnvelopeTests(unittest.TestCase):
         result, diagnostics = self._run_validate_op(
             {"op": "set", "component": "123", "path": "", "value": 0}
         )
-        self.assertIsNone(result)
+        self.assertIsNone(
+            result,
+            msg=f"a rejected op must not yield a preview row, got {result!r}",
+        )
         self.assertEqual(2, len(diagnostics))
         self.assertEqual("Assets/X.prefab", diagnostics[0].path)
         self.assertEqual("ops[0] (set).component", diagnostics[0].location)
@@ -1358,7 +1458,10 @@ class PatchValidatorEnvelopeTests(unittest.TestCase):
         result, diagnostics = self._run_validate_op(
             {"op": "set", "component": "X", "path": "", "value": 0}
         )
-        self.assertIsNone(result)
+        self.assertIsNone(
+            result,
+            msg=f"a rejected op must not yield a preview row, got {result!r}",
+        )
         self._assert_single_diagnostic(
             diagnostics,
             location="ops[0] (set).path",
@@ -1372,7 +1475,10 @@ class PatchValidatorEnvelopeTests(unittest.TestCase):
         result, diagnostics = self._run_validate_op(
             {"op": "set", "component": "X", "path": "m_X"}
         )
-        self.assertIsNone(result)
+        self.assertIsNone(
+            result,
+            msg=f"a rejected op must not yield a preview row, got {result!r}",
+        )
         self._assert_single_diagnostic(
             diagnostics,
             location="ops[0] (set).value",
@@ -1388,7 +1494,6 @@ class PatchValidatorEnvelopeTests(unittest.TestCase):
         result, diagnostics = self._run_validate_op(
             {"op": "set", "component": "X", "path": "m_X", "value": "$handle"}
         )
-        self.assertIsNotNone(result)
         self.assertEqual(
             "Value '$handle' looks like a create-mode handle. Handle strings"
             " are only resolved in 'target'/'parent' fields. For"
@@ -1410,7 +1515,10 @@ class PatchValidatorEnvelopeTests(unittest.TestCase):
                 "value": 1,
             }
         )
-        self.assertIsNone(result)
+        self.assertIsNone(
+            result,
+            msg=f"a rejected op must not yield a preview row, got {result!r}",
+        )
         self._assert_single_diagnostic(
             diagnostics,
             location="ops[0] (insert_array_element).path",
@@ -1429,7 +1537,10 @@ class PatchValidatorEnvelopeTests(unittest.TestCase):
         result, diagnostics = self._run_validate_op(
             {"op": "remove_array_element", "component": "X", "path": "m_X.Array.data"}
         )
-        self.assertIsNone(result)
+        self.assertIsNone(
+            result,
+            msg=f"a rejected op must not yield a preview row, got {result!r}",
+        )
         self._assert_single_diagnostic(
             diagnostics,
             location="ops[0] (remove_array_element).index",
@@ -1448,7 +1559,10 @@ class PatchValidatorEnvelopeTests(unittest.TestCase):
                 "index": "abc",
             }
         )
-        self.assertIsNone(result)
+        self.assertIsNone(
+            result,
+            msg=f"a rejected op must not yield a preview row, got {result!r}",
+        )
         self._assert_single_diagnostic(
             diagnostics,
             location="ops[0] (remove_array_element).index",
@@ -1467,7 +1581,10 @@ class PatchValidatorEnvelopeTests(unittest.TestCase):
                 "index": -1,
             }
         )
-        self.assertIsNone(result)
+        self.assertIsNone(
+            result,
+            msg=f"a rejected op must not yield a preview row, got {result!r}",
+        )
         self._assert_single_diagnostic(
             diagnostics,
             location="ops[0] (remove_array_element).index",
@@ -1487,7 +1604,10 @@ class PatchValidatorEnvelopeTests(unittest.TestCase):
                 "index": 0,
             }
         )
-        self.assertIsNone(result)
+        self.assertIsNone(
+            result,
+            msg=f"a rejected op must not yield a preview row, got {result!r}",
+        )
         self._assert_single_diagnostic(
             diagnostics,
             location="ops[0] (insert_array_element).value",
@@ -1700,8 +1820,11 @@ PrefabInstance:
             svc = PrefabVariantService(project_root=root)
             stale = svc.detect_stale_overrides("Assets/Clean.prefab")
 
-        self.assertTrue(stale.success)
-        self.assertEqual("PVR_STALE_NONE", stale.code)
+        self.assertEqual(
+            (True, "PVR_STALE_NONE"),
+            (stale.success, stale.code),
+            msg=f"envelope mismatch: {stale!r}",
+        )
         self.assertEqual(Severity.INFO, stale.severity)
         self.assertEqual(
             {
@@ -1774,8 +1897,11 @@ PrefabInstance:
             svc = PrefabVariantService(project_root=root)
             response = svc.list_overrides("Assets/Variant.prefab")
 
-        self.assertTrue(response.success)
-        self.assertEqual("PVR_OVERRIDES_OK", response.code)
+        self.assertEqual(
+            (True, "PVR_OVERRIDES_OK"),
+            (response.success, response.code),
+            msg=f"envelope mismatch: {response!r}",
+        )
         self.assertEqual(Severity.INFO, response.severity)
         self.assertEqual(
             {
@@ -1885,8 +2011,11 @@ PrefabInstance:
             svc = PrefabVariantService(project_root=root)
             response = svc.resolve_prefab_chain("Assets/Variant.prefab")
 
-        self.assertTrue(response.success)
-        self.assertEqual("PVR_CHAIN_OK", response.code)
+        self.assertEqual(
+            (True, "PVR_CHAIN_OK"),
+            (response.success, response.code),
+            msg=f"envelope mismatch: {response!r}",
+        )
         self.assertEqual(Severity.INFO, response.severity)
         self.assertEqual(
             {
@@ -1912,8 +2041,11 @@ PrefabInstance:
             svc = PrefabVariantService(project_root=root)
             response = svc.resolve_chain_values_with_origin("Assets/Variant.prefab")
 
-        self.assertTrue(response.success)
-        self.assertEqual("PVR_CHAIN_VALUES_WITH_ORIGIN", response.code)
+        self.assertEqual(
+            (True, "PVR_CHAIN_VALUES_WITH_ORIGIN"),
+            (response.success, response.code),
+            msg=f"envelope mismatch: {response!r}",
+        )
         self.assertEqual(Severity.INFO, response.severity)
         self.assertEqual(
             {
@@ -1976,8 +2108,11 @@ PrefabInstance:
             svc = PrefabVariantService(project_root=root)
             response = svc.compute_effective_values("Assets/Variant.prefab")
 
-        self.assertTrue(response.success)
-        self.assertEqual("PVR_EFFECTIVE_OK", response.code)
+        self.assertEqual(
+            (True, "PVR_EFFECTIVE_OK"),
+            (response.success, response.code),
+            msg=f"envelope mismatch: {response!r}",
+        )
         self.assertEqual(Severity.INFO, response.severity)
         self.assertEqual(
             {
@@ -2080,7 +2215,6 @@ class ParseOverridesBoundaryTests(unittest.TestCase):
 
         entries = parse_overrides(text)
         self.assertEqual(1, len(entries))
-        self.assertIsNotNone(entries[0])
         self.assertEqual("in_block", entries[0].property_path)
         self.assertEqual("100", entries[0].target_file_id)
 
@@ -2118,7 +2252,6 @@ class ParseOverridesBoundaryTests(unittest.TestCase):
 
         entries = parse_overrides(text)
         self.assertEqual(1, len(entries))
-        self.assertIsNotNone(entries[0])
         # The in-block entry's property path must remain its in-block
         # source value; the post-sibling continuation row must not leak
         # into it.
@@ -2151,7 +2284,6 @@ class ParseOverridesBoundaryTests(unittest.TestCase):
 
         entries = parse_overrides(text)
         self.assertEqual(1, len(entries))
-        self.assertIsNotNone(entries[0])
         self.assertEqual("deep_path", entries[0].property_path)
         self.assertEqual("deep_value", entries[0].value)
         self.assertEqual("{fileID: 0}", entries[0].object_reference)
@@ -2192,7 +2324,10 @@ class ParseOverridesBoundaryTests(unittest.TestCase):
         # No entry may be ``None`` regardless of which of the four
         # ``entries.append(...)`` call sites the mutation hits.
         for entry in entries:
-            self.assertIsNotNone(entry)
+            self.assertIsNotNone(
+                entry,
+                msg=f"no parsed override entry may be None, got {entries!r}",
+            )
         # Per-entry dataclass attributes pinned by exact tuple equality.
         observed = [
             (e.target_file_id, e.target_guid, e.property_path, e.value)
@@ -2241,7 +2376,6 @@ class ParseOverridesBoundaryTests(unittest.TestCase):
         # Only the post-header in-block row becomes an entry; the
         # pre-header target-shaped row is ignored.
         self.assertEqual(1, len(entries))
-        self.assertIsNotNone(entries[0])
         self.assertEqual("real_entry", entries[0].property_path)
         self.assertEqual("100", entries[0].target_file_id)
 
@@ -2300,8 +2434,11 @@ PrefabInstance:
                     variant_stem = f"{Path(base_filename).stem}Variant"
                     svc = PrefabVariantService(project_root=root)
                     chain = svc.resolve_prefab_chain(f"Assets/{variant_stem}.prefab")
-                    self.assertTrue(chain.success)
-                    self.assertEqual("PVR_CHAIN_WARN", chain.code)
+                    self.assertEqual(
+                        (True, "PVR_CHAIN_WARN"),
+                        (chain.success, chain.code),
+                        msg=f"envelope mismatch: {chain!r}",
+                    )
                     model_diags = [
                         d for d in chain.diagnostics if d.detail == "model_file_base"
                     ]
@@ -2322,14 +2459,22 @@ PrefabInstance:
             self._build_variant_referencing(root, "Unknown.bin", bin_guid)
             svc = PrefabVariantService(project_root=root)
             chain = svc.resolve_prefab_chain("Assets/UnknownVariant.prefab")
-            self.assertTrue(chain.success)
+            self.assertEqual(
+                True,
+                chain.success,
+                msg=f"chain resolution should succeed for a non-model binary: {chain!r}",
+            )
             unreadable = [
                 d for d in chain.diagnostics if d.detail == "unreadable_file"
             ]
             self.assertEqual(1, len(unreadable))
             self.assertEqual("unable to decode source prefab", unreadable[0].evidence)
             self.assertFalse(
-                any(d.detail == "model_file_base" for d in chain.diagnostics)
+                any(d.detail == "model_file_base" for d in chain.diagnostics),
+                msg=(
+                    "a non-model binary must not emit a model_file_base diagnostic: "
+                    f"{chain.diagnostics!r}"
+                ),
             )
 
 
@@ -2430,7 +2575,11 @@ class RuntimeValidationServiceTests(unittest.TestCase):
 
             self.assertEqual("RUN_COMPILE_OK", response.code)
             self.assertEqual(3, response.data["udon_program_count"])
-            self.assertTrue(response.data["executed"])
+            self.assertEqual(
+                True,
+                response.data["executed"],
+                msg=f"bridge compile must report executed=True: {response.data!r}",
+            )
 
     def test_run_clientsim_returns_missing_scene_error(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2441,8 +2590,14 @@ class RuntimeValidationServiceTests(unittest.TestCase):
             response = svc.run_clientsim("Assets/MissingScene.unity", "default")
 
             self.assertEqual("RUN002", response.code)
-            self.assertTrue(response.data["read_only"])
-            self.assertFalse(response.data["executed"])
+            self.assertEqual(
+                (True, False),
+                (response.data["read_only"], response.data["executed"]),
+                msg=(
+                    "a rejected clientsim run stays read-only and unexecuted: "
+                    f"{response.data!r}"
+                ),
+            )
 
     def test_run_clientsim_rejects_non_unity_extension(self) -> None:
         """``run_clientsim`` rejects scene paths whose suffix is not
@@ -2459,8 +2614,14 @@ class RuntimeValidationServiceTests(unittest.TestCase):
             response = svc.run_clientsim("Assets/Scenes/Smoke.txt", "default")
 
             self.assertEqual("RUN002", response.code)
-            self.assertTrue(response.data["read_only"])
-            self.assertFalse(response.data["executed"])
+            self.assertEqual(
+                (True, False),
+                (response.data["read_only"], response.data["executed"]),
+                msg=(
+                    "a non-.unity scene path stays read-only and unexecuted: "
+                    f"{response.data!r}"
+                ),
+            )
 
     def test_run_clientsim_reaches_unity_via_editor_bridge(self) -> None:
         """The clientsim dispatcher writes a request file to the watch
@@ -2510,8 +2671,14 @@ GameObject:
                     response = svc.run_clientsim("Assets/Scenes/Smoke.unity", "default")
 
             self.assertEqual("RUN_CLIENTSIM_OK", response.code)
-            self.assertTrue(response.data["clientsim_ready"])
-            self.assertTrue(response.data["executed"])
+            self.assertEqual(
+                (True, True),
+                (response.data["clientsim_ready"], response.data["executed"]),
+                msg=(
+                    "a bridge clientsim run reports ready and executed: "
+                    f"{response.data!r}"
+                ),
+            )
             self.assertEqual(".", response.data["project_root"])
 
     def test_classify_errors_detects_known_categories(self) -> None:
@@ -2524,8 +2691,11 @@ GameObject:
             ]
         )
 
-        self.assertFalse(response.success)
-        self.assertEqual("RUN001", response.code)
+        self.assertEqual(
+            (False, "RUN001"),
+            (response.success, response.code),
+            msg=f"envelope mismatch: {response!r}",
+        )
         self.assertEqual(1, response.data["count_by_category"]["BROKEN_PPTR"])
         self.assertEqual(1, response.data["count_by_category"]["UDON_NULLREF"])
         self.assertEqual(1, response.data["count_by_category"]["DUPLICATE_EVENTSYSTEM"])
@@ -2559,8 +2729,11 @@ GameObject:
                 log_file="Logs/Editor.log",
             )
 
-            self.assertFalse(response.success)
-            self.assertEqual("VALIDATE_RUNTIME_RESULT", response.code)
+            self.assertEqual(
+                (False, "VALIDATE_RUNTIME_RESULT"),
+                (response.success, response.code),
+                msg=f"envelope mismatch: {response!r}",
+            )
             self.assertEqual("error", response.severity.value)
             step_codes = [
                 step["result"]["code"]
@@ -2637,8 +2810,11 @@ GameObject:
                         scene_path="Assets/Scenes/Smoke.unity",
                     )
 
-            self.assertTrue(response.success)
-            self.assertEqual("VALIDATE_RUNTIME_RESULT", response.code)
+            self.assertEqual(
+                (True, "VALIDATE_RUNTIME_RESULT"),
+                (response.success, response.code),
+                msg=f"envelope mismatch: {response!r}",
+            )
             step_codes = [
                 step["result"]["code"]
                 for step in response.data["steps"]
@@ -2754,8 +2930,11 @@ class SerializedObjectServiceTests(unittest.TestCase):
             ],
         )
 
-        self.assertTrue(response.success)
-        self.assertEqual("SER_DRY_RUN_OK", response.code)
+        self.assertEqual(
+            (True, "SER_DRY_RUN_OK"),
+            (response.success, response.code),
+            msg=f"envelope mismatch: {response!r}",
+        )
         self.assertEqual(2, response.data["op_count"])
         self.assertEqual(2, len(response.data["diff"]))
 
@@ -2777,8 +2956,11 @@ class SerializedObjectServiceTests(unittest.TestCase):
             ],
         )
 
-        self.assertFalse(response.success)
-        self.assertEqual("SER002", response.code)
+        self.assertEqual(
+            (False, "SER002"),
+            (response.success, response.code),
+            msg=f"envelope mismatch: {response!r}",
+        )
         self.assertEqual(Severity.ERROR, response.severity)
 
     def test_dry_run_patch_returns_schema_error(self) -> None:
@@ -2788,9 +2970,16 @@ class SerializedObjectServiceTests(unittest.TestCase):
             ops=[{"op": "set", "component": "", "path": "x"}],
         )
 
-        self.assertFalse(response.success)
-        self.assertEqual("SER_PLAN_INVALID", response.code)
-        self.assertTrue(response.diagnostics)
+        self.assertEqual(
+            (False, "SER_PLAN_INVALID"),
+            (response.success, response.code),
+            msg=f"envelope mismatch: {response!r}",
+        )
+        self.assertGreater(
+            len(response.diagnostics),
+            0,
+            msg=f"an invalid plan must carry diagnostics: {response.diagnostics!r}",
+        )
 
     def test_dry_run_patch_warns_on_unresolved_before(self) -> None:
         svc = SerializedObjectService()
@@ -2806,10 +2995,12 @@ class SerializedObjectServiceTests(unittest.TestCase):
             ],
         )
 
-        self.assertTrue(response.success)
-        self.assertEqual("SER_DRY_RUN_OK", response.code)
+        self.assertEqual(
+            (True, "SER_DRY_RUN_OK"),
+            (response.success, response.code),
+            msg=f"envelope mismatch: {response!r}",
+        )
         self.assertEqual(Severity.WARNING, response.severity)
-        self.assertTrue(response.diagnostics)
         self.assertEqual("unresolved_before_value", response.diagnostics[0].detail)
 
     def test_dry_run_array_op_missing_suffix(self) -> None:
@@ -2828,9 +3019,11 @@ class SerializedObjectServiceTests(unittest.TestCase):
             ],
         )
 
-        self.assertFalse(response.success)
-        self.assertEqual(Severity.ERROR, response.severity)
-        self.assertTrue(response.diagnostics)
+        self.assertEqual(
+            (False, Severity.ERROR),
+            (response.success, response.severity),
+            msg=f"envelope mismatch: {response!r}",
+        )
         self.assertEqual("schema_error", response.diagnostics[0].detail)
         self.assertIn(".Array.data", response.diagnostics[0].evidence)
 
@@ -2850,8 +3043,11 @@ class SerializedObjectServiceTests(unittest.TestCase):
             ],
         )
 
-        self.assertTrue(response.success)
-        self.assertEqual("SER_DRY_RUN_OK", response.code)
+        self.assertEqual(
+            (True, "SER_DRY_RUN_OK"),
+            (response.success, response.code),
+            msg=f"envelope mismatch: {response!r}",
+        )
 
     def test_dry_run_remove_array_missing_suffix(self) -> None:
         """remove_array_element with path missing .Array.data should fail."""
@@ -2868,9 +3064,11 @@ class SerializedObjectServiceTests(unittest.TestCase):
             ],
         )
 
-        self.assertFalse(response.success)
-        self.assertEqual(Severity.ERROR, response.severity)
-        self.assertTrue(response.diagnostics)
+        self.assertEqual(
+            (False, Severity.ERROR),
+            (response.success, response.severity),
+            msg=f"envelope mismatch: {response!r}",
+        )
         self.assertEqual("schema_error", response.diagnostics[0].detail)
         self.assertIn(".Array.data", response.diagnostics[0].evidence)
 
@@ -2888,9 +3086,11 @@ class SerializedObjectServiceTests(unittest.TestCase):
             ],
         )
 
-        self.assertFalse(response.success)
-        self.assertEqual(Severity.ERROR, response.severity)
-        self.assertTrue(response.diagnostics)
+        self.assertEqual(
+            (False, Severity.ERROR),
+            (response.success, response.severity),
+            msg=f"envelope mismatch: {response!r}",
+        )
         self.assertIn("create-mode", response.diagnostics[0].evidence)
 
     def test_dry_run_unknown_op(self) -> None:
@@ -2907,8 +3107,11 @@ class SerializedObjectServiceTests(unittest.TestCase):
             ],
         )
 
-        self.assertFalse(response.success)
-        self.assertEqual(Severity.ERROR, response.severity)
+        self.assertEqual(
+            (False, Severity.ERROR),
+            (response.success, response.severity),
+            msg=f"envelope mismatch: {response!r}",
+        )
         self.assertIn("unsupported op", response.diagnostics[0].evidence)
 
     def test_dry_run_handle_in_value(self) -> None:
@@ -2926,9 +3129,11 @@ class SerializedObjectServiceTests(unittest.TestCase):
             ],
         )
 
-        self.assertTrue(response.success)
-        self.assertEqual(Severity.WARNING, response.severity)
-        self.assertTrue(response.diagnostics)
+        self.assertEqual(
+            (True, Severity.WARNING),
+            (response.success, response.severity),
+            msg=f"envelope mismatch: {response!r}",
+        )
         diag_details = [d.detail for d in response.diagnostics]
         self.assertIn("handle_in_value", diag_details)
 
@@ -2947,8 +3152,11 @@ class SerializedObjectServiceTests(unittest.TestCase):
             ],
         )
 
-        self.assertTrue(response.success)
-        self.assertEqual(Severity.WARNING, response.severity)
+        self.assertEqual(
+            (True, Severity.WARNING),
+            (response.success, response.severity),
+            msg=f"envelope mismatch: {response!r}",
+        )
         diag_details = [d.detail for d in response.diagnostics]
         self.assertIn("handle_in_value", diag_details)
 
@@ -2966,8 +3174,11 @@ class SerializedObjectServiceTests(unittest.TestCase):
             ],
         )
 
-        self.assertTrue(response.success)
-        self.assertEqual("SER_DRY_RUN_OK", response.code)
+        self.assertEqual(
+            (True, "SER_DRY_RUN_OK"),
+            (response.success, response.code),
+            msg=f"envelope mismatch: {response!r}",
+        )
         self.assertEqual(1, len(response.data["diff"]))
 
     def test_dry_run_resource_plan_supports_prefab_create_mode(self) -> None:
@@ -2985,8 +3196,11 @@ class SerializedObjectServiceTests(unittest.TestCase):
             ],
         )
 
-        self.assertTrue(response.success)
-        self.assertEqual("SER_DRY_RUN_OK", response.code)
+        self.assertEqual(
+            (True, "SER_DRY_RUN_OK"),
+            (response.success, response.code),
+            msg=f"envelope mismatch: {response!r}",
+        )
         self.assertEqual("create", response.data["mode"])
         self.assertEqual(2, len(response.data["diff"]))
 
@@ -3016,8 +3230,11 @@ class SerializedObjectServiceTests(unittest.TestCase):
             ],
         )
 
-        self.assertTrue(response.success)
-        self.assertEqual("SER_DRY_RUN_OK", response.code)
+        self.assertEqual(
+            (True, "SER_DRY_RUN_OK"),
+            (response.success, response.code),
+            msg=f"envelope mismatch: {response!r}",
+        )
         self.assertEqual(4, len(response.data["diff"]))
 
     def test_dry_run_resource_plan_supports_prefab_component_ops(self) -> None:
@@ -3054,8 +3271,11 @@ class SerializedObjectServiceTests(unittest.TestCase):
             ],
         )
 
-        self.assertTrue(response.success)
-        self.assertEqual("SER_DRY_RUN_OK", response.code)
+        self.assertEqual(
+            (True, "SER_DRY_RUN_OK"),
+            (response.success, response.code),
+            msg=f"envelope mismatch: {response!r}",
+        )
         self.assertEqual(6, len(response.data["diff"]))
 
     def test_dry_run_resource_plan_supports_prefab_component_mutation_ops(self) -> None:
@@ -3092,8 +3312,11 @@ class SerializedObjectServiceTests(unittest.TestCase):
             ],
         )
 
-        self.assertTrue(response.success)
-        self.assertEqual("SER_DRY_RUN_OK", response.code)
+        self.assertEqual(
+            (True, "SER_DRY_RUN_OK"),
+            (response.success, response.code),
+            msg=f"envelope mismatch: {response!r}",
+        )
         self.assertEqual(5, len(response.data["diff"]))
 
     def test_dry_run_resource_plan_supports_material_create_mode(self) -> None:
@@ -3121,8 +3344,11 @@ class SerializedObjectServiceTests(unittest.TestCase):
             ],
         )
 
-        self.assertTrue(response.success)
-        self.assertEqual("SER_DRY_RUN_OK", response.code)
+        self.assertEqual(
+            (True, "SER_DRY_RUN_OK"),
+            (response.success, response.code),
+            msg=f"envelope mismatch: {response!r}",
+        )
         self.assertEqual(3, len(response.data["diff"]))
 
     def test_dry_run_resource_plan_supports_scriptable_object_create_mode(self) -> None:
@@ -3150,8 +3376,11 @@ class SerializedObjectServiceTests(unittest.TestCase):
             ],
         )
 
-        self.assertTrue(response.success)
-        self.assertEqual("SER_DRY_RUN_OK", response.code)
+        self.assertEqual(
+            (True, "SER_DRY_RUN_OK"),
+            (response.success, response.code),
+            msg=f"envelope mismatch: {response!r}",
+        )
         self.assertEqual(3, len(response.data["diff"]))
 
     def test_dry_run_resource_plan_supports_scene_create_mode(self) -> None:
@@ -3187,8 +3416,11 @@ class SerializedObjectServiceTests(unittest.TestCase):
             ],
         )
 
-        self.assertTrue(response.success)
-        self.assertEqual("SER_DRY_RUN_OK", response.code)
+        self.assertEqual(
+            (True, "SER_DRY_RUN_OK"),
+            (response.success, response.code),
+            msg=f"envelope mismatch: {response!r}",
+        )
         self.assertEqual(5, len(response.data["diff"]))
 
     def test_dry_run_resource_plan_supports_scene_open_mode(self) -> None:
@@ -3212,8 +3444,11 @@ class SerializedObjectServiceTests(unittest.TestCase):
             ],
         )
 
-        self.assertTrue(response.success)
-        self.assertEqual("SER_DRY_RUN_OK", response.code)
+        self.assertEqual(
+            (True, "SER_DRY_RUN_OK"),
+            (response.success, response.code),
+            msg=f"envelope mismatch: {response!r}",
+        )
         self.assertEqual(3, len(response.data["diff"]))
 
     def test_dry_run_scene_find_component_accepts_scene_handle(self) -> None:
@@ -3236,8 +3471,11 @@ class SerializedObjectServiceTests(unittest.TestCase):
                 {"op": "save_scene"},
             ],
         )
-        self.assertTrue(response.success)
-        self.assertEqual("SER_DRY_RUN_OK", response.code)
+        self.assertEqual(
+            (True, "SER_DRY_RUN_OK"),
+            (response.success, response.code),
+            msg=f"envelope mismatch: {response!r}",
+        )
 
     def test_dry_run_scene_add_component_rejects_scene_handle(self) -> None:
         svc = SerializedObjectService()
@@ -3259,10 +3497,21 @@ class SerializedObjectServiceTests(unittest.TestCase):
                 {"op": "save_scene"},
             ],
         )
-        self.assertFalse(response.success)
+        self.assertEqual(
+            False,
+            response.success,
+            msg=f"a handle-kind mismatch must fail the dry run: {response!r}",
+        )
         # Should report handle kind mismatch
         self.assertTrue(
-            any("game object" in d.detail or "game object" in d.evidence for d in response.diagnostics)
+            any(
+                "game object" in d.detail or "game object" in d.evidence
+                for d in response.diagnostics
+            ),
+            msg=(
+                "a diagnostic must name the game-object handle mismatch: "
+                f"{response.diagnostics!r}"
+            ),
         )
 
     def test_dry_run_resource_plan_rejects_non_prefab_target_for_create_mode(self) -> None:
@@ -3280,9 +3529,16 @@ class SerializedObjectServiceTests(unittest.TestCase):
             ],
         )
 
-        self.assertFalse(response.success)
-        self.assertEqual("SER_PLAN_INVALID", response.code)
-        self.assertTrue(response.diagnostics)
+        self.assertEqual(
+            (False, "SER_PLAN_INVALID"),
+            (response.success, response.code),
+            msg=f"envelope mismatch: {response!r}",
+        )
+        self.assertGreater(
+            len(response.diagnostics),
+            0,
+            msg=f"an invalid plan must carry diagnostics: {response.diagnostics!r}",
+        )
 
     def test_dry_run_resource_plan_rejects_material_create_without_shader(self) -> None:
         svc = SerializedObjectService()
@@ -3299,9 +3555,16 @@ class SerializedObjectServiceTests(unittest.TestCase):
             ],
         )
 
-        self.assertFalse(response.success)
-        self.assertEqual("SER_PLAN_INVALID", response.code)
-        self.assertTrue(response.diagnostics)
+        self.assertEqual(
+            (False, "SER_PLAN_INVALID"),
+            (response.success, response.code),
+            msg=f"envelope mismatch: {response!r}",
+        )
+        self.assertGreater(
+            len(response.diagnostics),
+            0,
+            msg=f"an invalid plan must carry diagnostics: {response.diagnostics!r}",
+        )
 
     def test_dry_run_resource_plan_rejects_scene_instantiate_prefab_without_prefab(self) -> None:
         svc = SerializedObjectService()
@@ -3323,9 +3586,16 @@ class SerializedObjectServiceTests(unittest.TestCase):
             ],
         )
 
-        self.assertFalse(response.success)
-        self.assertEqual("SER_PLAN_INVALID", response.code)
-        self.assertTrue(response.diagnostics)
+        self.assertEqual(
+            (False, "SER_PLAN_INVALID"),
+            (response.success, response.code),
+            msg=f"envelope mismatch: {response!r}",
+        )
+        self.assertGreater(
+            len(response.diagnostics),
+            0,
+            msg=f"an invalid plan must carry diagnostics: {response.diagnostics!r}",
+        )
 
     def test_dry_run_resource_plan_rejects_wrong_handle_kind_for_component_op(self) -> None:
         svc = SerializedObjectService()
@@ -3343,9 +3613,16 @@ class SerializedObjectServiceTests(unittest.TestCase):
             ],
         )
 
-        self.assertFalse(response.success)
-        self.assertEqual("SER_PLAN_INVALID", response.code)
-        self.assertTrue(response.diagnostics)
+        self.assertEqual(
+            (False, "SER_PLAN_INVALID"),
+            (response.success, response.code),
+            msg=f"envelope mismatch: {response!r}",
+        )
+        self.assertGreater(
+            len(response.diagnostics),
+            0,
+            msg=f"an invalid plan must carry diagnostics: {response.diagnostics!r}",
+        )
 
     def test_dry_run_resource_plan_rejects_unknown_handle_in_prefab_hierarchy_ops(self) -> None:
         svc = SerializedObjectService()
@@ -3368,9 +3645,16 @@ class SerializedObjectServiceTests(unittest.TestCase):
             ],
         )
 
-        self.assertFalse(response.success)
-        self.assertEqual("SER_PLAN_INVALID", response.code)
-        self.assertTrue(response.diagnostics)
+        self.assertEqual(
+            (False, "SER_PLAN_INVALID"),
+            (response.success, response.code),
+            msg=f"envelope mismatch: {response!r}",
+        )
+        self.assertGreater(
+            len(response.diagnostics),
+            0,
+            msg=f"an invalid plan must carry diagnostics: {response.diagnostics!r}",
+        )
 
     def test_create_plan_handle_value_in_set(self) -> None:
         """set op with {"handle": "c_comp"} in create mode should pass dry-run."""
@@ -3400,8 +3684,11 @@ class SerializedObjectServiceTests(unittest.TestCase):
             ],
         )
 
-        self.assertTrue(response.success)
-        self.assertEqual("SER_DRY_RUN_OK", response.code)
+        self.assertEqual(
+            (True, "SER_DRY_RUN_OK"),
+            (response.success, response.code),
+            msg=f"envelope mismatch: {response!r}",
+        )
 
     def test_create_plan_unknown_handle_in_set(self) -> None:
         """set op with {"handle": "missing"} should produce schema_error."""
@@ -3425,8 +3712,11 @@ class SerializedObjectServiceTests(unittest.TestCase):
             ],
         )
 
-        self.assertFalse(response.success)
-        self.assertEqual("SER_PLAN_INVALID", response.code)
+        self.assertEqual(
+            (False, "SER_PLAN_INVALID"),
+            (response.success, response.code),
+            msg=f"envelope mismatch: {response!r}",
+        )
         diag_details = [d.detail for d in response.diagnostics]
         self.assertIn("schema_error", diag_details)
 
@@ -3459,8 +3749,11 @@ class SerializedObjectServiceTests(unittest.TestCase):
             ],
         )
 
-        self.assertTrue(response.success)
-        self.assertEqual("SER_DRY_RUN_OK", response.code)
+        self.assertEqual(
+            (True, "SER_DRY_RUN_OK"),
+            (response.success, response.code),
+            msg=f"envelope mismatch: {response!r}",
+        )
 
     def test_dry_run_resource_plan_rejects_save_before_final_op(self) -> None:
         svc = SerializedObjectService()
@@ -3483,9 +3776,16 @@ class SerializedObjectServiceTests(unittest.TestCase):
             ],
         )
 
-        self.assertFalse(response.success)
-        self.assertEqual("SER_PLAN_INVALID", response.code)
-        self.assertTrue(response.diagnostics)
+        self.assertEqual(
+            (False, "SER_PLAN_INVALID"),
+            (response.success, response.code),
+            msg=f"envelope mismatch: {response!r}",
+        )
+        self.assertGreater(
+            len(response.diagnostics),
+            0,
+            msg=f"an invalid plan must carry diagnostics: {response.diagnostics!r}",
+        )
 
     def test_apply_and_save_updates_json_target(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -3522,8 +3822,11 @@ class SerializedObjectServiceTests(unittest.TestCase):
                 ],
             )
 
-            self.assertTrue(response.success)
-            self.assertEqual("SER_APPLY_OK", response.code)
+            self.assertEqual(
+                (True, "SER_APPLY_OK"),
+                (response.success, response.code),
+                msg=f"envelope mismatch: {response!r}",
+            )
             updated = json.loads(target.read_text(encoding="utf-8"))
             self.assertEqual({"items": [0, 2], "nested": {"value": 42}}, updated)
 
@@ -3552,8 +3855,11 @@ class SerializedObjectServiceTests(unittest.TestCase):
                 ],
             )
 
-            self.assertTrue(response.success)
-            self.assertEqual("SER_APPLY_OK", response.code)
+            self.assertEqual(
+                (True, "SER_APPLY_OK"),
+                (response.success, response.code),
+                msg=f"envelope mismatch: {response!r}",
+            )
             self.assertEqual(
                 42,
                 json.loads(target.read_text(encoding="utf-8"))["nested"]["value"],
@@ -3578,8 +3884,11 @@ class SerializedObjectServiceTests(unittest.TestCase):
                 ],
             )
 
-            self.assertFalse(response.success)
-            self.assertEqual("SER_UNSUPPORTED_TARGET", response.code)
+            self.assertEqual(
+                (False, "SER_UNSUPPORTED_TARGET"),
+                (response.success, response.code),
+                msg=f"envelope mismatch: {response!r}",
+            )
 
     def test_apply_and_save_uses_unity_bridge_for_prefab_target(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -3628,8 +3937,11 @@ print(
                 ],
             )
 
-            self.assertTrue(response.success)
-            self.assertEqual("SER_APPLY_OK", response.code)
+            self.assertEqual(
+                (True, "SER_APPLY_OK"),
+                (response.success, response.code),
+                msg=f"envelope mismatch: {response!r}",
+            )
             self.assertEqual(1, response.data["applied"])
 
     def test_apply_and_save_uses_unity_bridge_for_material_target(self) -> None:
@@ -3680,8 +3992,11 @@ print(
                 ],
             )
 
-            self.assertTrue(response.success)
-            self.assertEqual("SER_APPLY_OK", response.code)
+            self.assertEqual(
+                (True, "SER_APPLY_OK"),
+                (response.success, response.code),
+                msg=f"envelope mismatch: {response!r}",
+            )
             self.assertEqual("material", response.data["resource_kind"])
 
     def test_apply_and_save_rejects_bridge_protocol_version_mismatch(self) -> None:
@@ -3726,8 +4041,11 @@ print(
                 ],
             )
 
-            self.assertFalse(response.success)
-            self.assertEqual("SER_BRIDGE_PROTOCOL_VERSION", response.code)
+            self.assertEqual(
+                (False, "SER_BRIDGE_PROTOCOL_VERSION"),
+                (response.success, response.code),
+                msg=f"envelope mismatch: {response!r}",
+            )
 
     def test_apply_and_save_rejects_bridge_command_outside_allowlist(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -3748,8 +4066,11 @@ print(
                 ],
             )
 
-            self.assertFalse(response.success)
-            self.assertEqual("SER_BRIDGE_DENIED", response.code)
+            self.assertEqual(
+                (False, "SER_BRIDGE_DENIED"),
+                (response.success, response.code),
+                msg=f"envelope mismatch: {response!r}",
+            )
 
     def test_apply_resource_plan_uses_unity_bridge_for_prefab_create_mode(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -3798,8 +4119,11 @@ print(
                 ],
             )
 
-            self.assertTrue(response.success)
-            self.assertEqual("SER_APPLY_OK", response.code)
+            self.assertEqual(
+                (True, "SER_APPLY_OK"),
+                (response.success, response.code),
+                msg=f"envelope mismatch: {response!r}",
+            )
             self.assertEqual("create", response.data["mode"])
             self.assertEqual(2, response.data["applied"])
 
@@ -3858,8 +4182,11 @@ print(
                 ],
             )
 
-            self.assertTrue(response.success)
-            self.assertEqual("SER_APPLY_OK", response.code)
+            self.assertEqual(
+                (True, "SER_APPLY_OK"),
+                (response.success, response.code),
+                msg=f"envelope mismatch: {response!r}",
+            )
             self.assertEqual("create", response.data["mode"])
             self.assertEqual("create_game_object", response.data["request_ops"][1]["op"])
             self.assertEqual("$root", response.data["request_ops"][1]["parent"])
@@ -3925,8 +4252,11 @@ print(
                 ],
             )
 
-            self.assertTrue(response.success)
-            self.assertEqual("SER_APPLY_OK", response.code)
+            self.assertEqual(
+                (True, "SER_APPLY_OK"),
+                (response.success, response.code),
+                msg=f"envelope mismatch: {response!r}",
+            )
             self.assertEqual("add_component", response.data["request_ops"][2]["op"])
             self.assertEqual(
                 "UnityEngine.BoxCollider",
@@ -3993,8 +4323,11 @@ print(
                 ],
             )
 
-            self.assertTrue(response.success)
-            self.assertEqual("SER_APPLY_OK", response.code)
+            self.assertEqual(
+                (True, "SER_APPLY_OK"),
+                (response.success, response.code),
+                msg=f"envelope mismatch: {response!r}",
+            )
             self.assertEqual("set", response.data["request_ops"][2]["op"])
             self.assertEqual("$root_collider", response.data["request_ops"][2]["target"])
             self.assertEqual("m_IsTrigger", response.data["request_ops"][2]["path"])
@@ -4058,8 +4391,11 @@ print(
                 ],
             )
 
-            self.assertTrue(response.success)
-            self.assertEqual("SER_APPLY_OK", response.code)
+            self.assertEqual(
+                (True, "SER_APPLY_OK"),
+                (response.success, response.code),
+                msg=f"envelope mismatch: {response!r}",
+            )
             self.assertEqual("create", response.data["mode"])
             self.assertEqual("material", response.data["kind"])
             self.assertEqual("create_asset", response.data["request_ops"][0]["op"])
@@ -4118,8 +4454,11 @@ print(
                 ],
             )
 
-            self.assertTrue(response.success)
-            self.assertEqual("SER_APPLY_OK", response.code)
+            self.assertEqual(
+                (True, "SER_APPLY_OK"),
+                (response.success, response.code),
+                msg=f"envelope mismatch: {response!r}",
+            )
             self.assertEqual("open", response.data["mode"])
             self.assertEqual("material", response.data["kind"])
             self.assertEqual("$asset", response.data["request_ops"][0]["target"])
@@ -4179,8 +4518,11 @@ print(
                 ],
             )
 
-            self.assertTrue(response.success)
-            self.assertEqual("SER_APPLY_OK", response.code)
+            self.assertEqual(
+                (True, "SER_APPLY_OK"),
+                (response.success, response.code),
+                msg=f"envelope mismatch: {response!r}",
+            )
             self.assertEqual("create", response.data["mode"])
             self.assertEqual("scene", response.data["kind"])
             self.assertEqual("instantiate_prefab", response.data["request_ops"][1]["op"])
@@ -4244,8 +4586,11 @@ print(
                 ],
             )
 
-            self.assertTrue(response.success)
-            self.assertEqual("SER_APPLY_OK", response.code)
+            self.assertEqual(
+                (True, "SER_APPLY_OK"),
+                (response.success, response.code),
+                msg=f"envelope mismatch: {response!r}",
+            )
             self.assertEqual("open", response.data["mode"])
             self.assertEqual("scene", response.data["kind"])
             self.assertEqual("open_scene", response.data["request_ops"][0]["op"])
@@ -4278,8 +4623,11 @@ print(
             confirm=False,
         )
 
-        self.assertFalse(response.success)
-        self.assertEqual("PATCH_APPLY_RESULT", response.code)
+        self.assertEqual(
+            (False, "PATCH_APPLY_RESULT"),
+            (response.success, response.code),
+            msg=f"envelope mismatch: {response!r}",
+        )
         step_codes = [step["result"]["code"] for step in response.data["steps"]]
         self.assertIn("SER_CONFIRM_REQUIRED", step_codes)
 
@@ -4318,8 +4666,11 @@ print(
                 confirm=True,
             )
 
-            self.assertTrue(response.success)
-            self.assertEqual("PATCH_APPLY_RESULT", response.code)
+            self.assertEqual(
+                (True, "PATCH_APPLY_RESULT"),
+                (response.success, response.code),
+                msg=f"envelope mismatch: {response!r}",
+            )
             step_codes = [step["result"]["code"] for step in response.data["steps"]]
             self.assertIn("SER_APPLY_OK", step_codes)
 
@@ -4364,7 +4715,11 @@ print(
                 confirm=True,
             )
 
-            self.assertTrue(response.success)
+            self.assertEqual(
+                True,
+                response.success,
+                msg=f"the patch-apply pipeline should succeed: {response!r}",
+            )
             step_codes = [step["result"]["code"] for step in response.data["steps"]]
             self.assertIn("POST_ASSET_EXISTS_OK", step_codes)
 
@@ -4411,8 +4766,14 @@ print(
                 confirm=True,
             )
 
-            self.assertFalse(response.success)
-            self.assertTrue(response.data["fail_fast_triggered"])
+            self.assertEqual(
+                (False, True),
+                (response.success, response.data["fail_fast_triggered"]),
+                msg=(
+                    "a failing step must fail the pipeline and trip fail-fast: "
+                    f"{response!r}"
+                ),
+            )
             step_codes = [step["result"]["code"] for step in response.data["steps"]]
             self.assertIn("POST_BROKEN_REFS_FAILED", step_codes)
 
@@ -4450,8 +4811,14 @@ print(
                 scope="Assets",
             )
 
-            self.assertFalse(response.success)
-            self.assertTrue(response.data["fail_fast_triggered"])
+            self.assertEqual(
+                (False, True),
+                (response.success, response.data["fail_fast_triggered"]),
+                msg=(
+                    "a failing step must fail the pipeline and trip fail-fast: "
+                    f"{response!r}"
+                ),
+            )
             step_codes = [step["result"]["code"] for step in response.data["steps"]]
             self.assertIn("REF_SCAN_BROKEN", step_codes)
             self.assertNotIn("SER_APPLY_OK", step_codes)
@@ -4519,17 +4886,26 @@ print(
 
         svc.invalidate_before_cache()
 
-        self.assertIsNone(svc._before_cache)
+        self.assertIsNone(
+            svc._before_cache,
+            msg=f"_before_cache must be cleared to None, got {svc._before_cache!r}",
+        )
 
     def test_invalidate_before_cache_from_none(self) -> None:
         svc = SerializedObjectService(
             project_root=Path("/fake/project"), prefab_variant=MagicMock(),
         )
-        self.assertIsNone(svc._before_cache)
+        self.assertIsNone(
+            svc._before_cache,
+            msg=f"_before_cache must be cleared to None, got {svc._before_cache!r}",
+        )
 
         svc.invalidate_before_cache()  # should not raise
 
-        self.assertIsNone(svc._before_cache)
+        self.assertIsNone(
+            svc._before_cache,
+            msg=f"_before_cache must be cleared to None, got {svc._before_cache!r}",
+        )
 
 
 class OrchestratorSuggestionTests(unittest.TestCase):
@@ -4545,8 +4921,11 @@ class OrchestratorSuggestionTests(unittest.TestCase):
                 max_usages=1,
             )
 
-            self.assertTrue(response.success)
-            self.assertEqual("INSPECT_WHERE_USED_RESULT", response.code)
+            self.assertEqual(
+                (True, "INSPECT_WHERE_USED_RESULT"),
+                (response.success, response.code),
+                msg=f"envelope mismatch: {response!r}",
+            )
             self.assertEqual("where_used", response.data["steps"][0]["step"])
 
 
@@ -4691,8 +5070,13 @@ class TestNumericComponentWarning(unittest.TestCase):
             )
             fileid_diags = [d for d in diagnostics if d.detail == "likely_fileid"]
             self.assertEqual(len(fileid_diags), 1)
-            # Op should still proceed (warning, not error)
-            self.assertIsNotNone(result)
+            # Op should still proceed (warning, not error): a preview row is
+            # produced and carries the resolved ``before`` field.
+            self.assertIn(
+                "before",
+                result,
+                msg=f"a numeric-component set op should still yield a preview row, got {result!r}",
+            )
 
     def test_type_name_no_warning(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -4711,7 +5095,11 @@ class TestNumericComponentWarning(unittest.TestCase):
             )
             fileid_diags = [d for d in diagnostics if d.detail == "likely_fileid"]
             self.assertEqual(len(fileid_diags), 0)
-            self.assertIsNotNone(result)
+            self.assertIn(
+                "before",
+                result,
+                msg=f"a type-name component set op should yield a preview row, got {result!r}",
+            )
 
 
 class TestBeforeValueResolution(unittest.TestCase):
@@ -4753,7 +5141,6 @@ class TestBeforeValueResolution(unittest.TestCase):
                 {"op": "set", "component": "42", "path": "m_Materials.Array.data[0]", "value": "new_mat"},
                 diagnostics,
             )
-            self.assertIsNotNone(result)
             # The before value should be the objectReference from the override
             self.assertNotIsInstance(result["before"], UnresolvedReason)
             # Should contain the GUID reference
@@ -4773,7 +5160,6 @@ class TestBeforeValueResolution(unittest.TestCase):
                 {"op": "set", "component": "42", "path": "m_IsActive", "value": 1},
                 diagnostics,
             )
-            self.assertIsNotNone(result)
             self.assertIs(UnresolvedReason.PATH_NOT_FOUND, result["before"])
 
     def test_before_unresolved_without_prefab_variant(self) -> None:
@@ -4789,7 +5175,6 @@ class TestBeforeValueResolution(unittest.TestCase):
                 {"op": "set", "component": "42", "path": "m_Materials.Array.data[0]", "value": "new_mat"},
                 diagnostics,
             )
-            self.assertIsNotNone(result)
             self.assertIs(UnresolvedReason.NO_VARIANT_RESOLVER, result["before"])
 
     def test_before_unresolved_for_non_variant(self) -> None:
@@ -4811,7 +5196,6 @@ class TestBeforeValueResolution(unittest.TestCase):
                 {"op": "set", "component": "1", "path": "m_Name", "value": "NewRoot"},
                 diagnostics,
             )
-            self.assertIsNotNone(result)
             self.assertIs(UnresolvedReason.NOT_A_VARIANT, result["before"])
 
     def test_cache_cleared_at_dry_run_start(self) -> None:
@@ -4912,7 +5296,6 @@ class TestChainBeforeValueResolution(unittest.TestCase):
                 {"op": "set", "component": "42", "path": "m_Materials.Array.data[0]", "value": "x"},
                 diagnostics,
             )
-            self.assertIsNotNone(result)
             # data[0] is overridden in Mid variant -> should find that value
             self.assertIn("33333333333333333333333333333333", result["before"])
 
@@ -4931,7 +5314,6 @@ class TestChainBeforeValueResolution(unittest.TestCase):
                 {"op": "set", "component": "42", "path": "m_Materials.Array.data[1]", "value": "x"},
                 diagnostics,
             )
-            self.assertIsNotNone(result)
             # data[1] is overridden in the Leaf itself -> should find that value
             self.assertIn("44444444444444444444444444444444", result["before"])
 
@@ -4950,7 +5332,6 @@ class TestChainBeforeValueResolution(unittest.TestCase):
                 {"op": "set", "component": "42", "path": "m_IsActive", "value": 0},
                 diagnostics,
             )
-            self.assertIsNotNone(result)
             # m_IsActive=1 is in the base prefab, not overridden anywhere
             self.assertEqual("1", result["before"])
 
@@ -4977,7 +5358,6 @@ class TestChainBeforeValueResolution(unittest.TestCase):
                 {"op": "set", "component": "42", "path": "m_IsActive", "value": 0},
                 diagnostics,
             )
-            self.assertIsNotNone(result)
             # Parent is missing, m_IsActive not overridden in leaf
             self.assertIsInstance(result["before"], UnresolvedReason)
 
@@ -5053,8 +5433,6 @@ class TestChainBeforeValueResolution(unittest.TestCase):
                 [],
             )
 
-        self.assertIsNotNone(by_id)
-        self.assertIsNotNone(by_name)
         self.assertEqual(by_id["before"], by_name["before"])
 
     def test_chain_ambiguous_type_name(self) -> None:
@@ -5103,7 +5481,6 @@ class TestChainBeforeValueResolution(unittest.TestCase):
                 [],
             )
 
-        self.assertIsNotNone(result)
         self.assertIs(UnresolvedReason.AMBIGUOUS_TYPE, result["before"])
 
     def test_chain_type_name_not_in_chain(self) -> None:
@@ -5122,7 +5499,6 @@ class TestChainBeforeValueResolution(unittest.TestCase):
                 [],
             )
 
-        self.assertIsNotNone(result)
         self.assertIs(UnresolvedReason.TYPE_NOT_FOUND, result["before"])
 
 
@@ -5146,7 +5522,11 @@ class TestResolveChainValuesWithOrigin(unittest.TestCase):
             pv = PrefabVariantService(project_root=project_root)
             response = pv.resolve_chain_values_with_origin("Assets/Leaf.prefab")
 
-            self.assertTrue(response.success)
+            self.assertEqual(
+                True,
+                response.success,
+                msg=f"chain value resolution should succeed: {response!r}",
+            )
             values = response.data["values"]
             by_key = {
                 f"{v['target_file_id']}:{v['property_path']}": v for v in values
@@ -5210,8 +5590,11 @@ class TestResolveChainValuesWithOrigin(unittest.TestCase):
             pv = PrefabVariantService(project_root=project_root)
             response = pv.resolve_chain_values_with_origin("Assets/Base.prefab")
 
-            self.assertTrue(response.success)
-            self.assertEqual("PVR_NOT_VARIANT", response.code)
+            self.assertEqual(
+                (True, "PVR_NOT_VARIANT"),
+                (response.success, response.code),
+                msg=f"envelope mismatch: {response!r}",
+            )
             self.assertEqual(0, response.data["value_count"])
 
 

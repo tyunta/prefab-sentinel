@@ -2,9 +2,10 @@ using System;
 using System.Globalization;
 
 // Property-value parsing — Unity-free decision extracted from the textual
-// parse portion of ApplyPropertyValue (Helpers.cs, issue H-4). The handler
-// maps the live SerializedPropertyType to a SerializedPropertyKind, delegates
-// parsing, and constructs the Unity value (Color / Vector*) from the result.
+// parse portion of the property-write path (issue H-4). The unified
+// WritePropertyValue layer (Properties.cs, issue #24) maps the live
+// SerializedPropertyType to a SerializedPropertyKind, delegates parsing
+// here, and constructs the Unity value (Color / Vector*) from the result.
 namespace PrefabSentinel
 {
     /// <summary>

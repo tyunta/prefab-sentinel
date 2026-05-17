@@ -145,11 +145,18 @@ namespace PrefabSentinel
             }
             else
             {
-                if (!ApplyPropertyValue(prop, request.property_value))
+                // Issue #24: value application is delegated to the unified
+                // property-write layer; a non-success outcome is mapped
+                // onto this handler's own documented envelope code while
+                // surfacing the layer's diagnostic message.
+                PropertyWriteResult write = WritePropertyValue(
+                    prop, request.property_value);
+                if (!write.Success)
                     return BuildError(
                         "EDITOR_CTRL_UDON_SET_FIELD_FAILED",
                         $"Failed to apply value '{request.property_value}' to " +
-                        $"{request.field_name} ({prop.propertyType}).");
+                        $"{request.field_name} ({prop.propertyType}): " +
+                        write.ErrorMessage);
             }
             so.ApplyModifiedProperties();
 
@@ -217,7 +224,10 @@ namespace PrefabSentinel
                 urlProp.stringValue = raw ?? string.Empty;
                 return true;
             }
-            return ApplyPropertyValue(prop, raw ?? string.Empty);
+            // Issue #24: the multi-field add-field path keeps its
+            // success-or-failure bool contract for ApplyUdonSharpInitialFields;
+            // value application itself is delegated to the unified layer.
+            return WritePropertyValue(prop, raw ?? string.Empty).Success;
         }
     }
 }
