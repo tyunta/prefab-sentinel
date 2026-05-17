@@ -122,6 +122,16 @@ set_property(
 - `knowledge/prefab-sentinel-wiring-triage.md` — 配線検査の読み方
 - `knowledge/prefab-sentinel-patch-patterns.md` — パッチ計画の実例集
 
+## VRChat エコシステムナレッジ
+
+`knowledge/` には ModularAvatar / liltoon / VRCFury / AvatarOptimizer など主要な VRChat エコシステムツールのドメインナレッジが同梱されている（L1 概念 / L2 操作パターン / L3 SerializedProperty の 3 レベル構成）。
+
+これらのツールが関わる Prefab / Scene / Material を検査・編集するときは、**判断の前に対応する `knowledge/*.md` を読む**。SerializedProperty 名やコンポーネントの不変条件はツールごとに異なり、読まずに編集するとそのツールの作法を外した変更になる。
+
+対象ファイルは `knowledge/` を Glob し、コンポーネント型名・シェーダー名・パッケージ名から特定する。VRChat SDK / UdonSharp 自体のナレッジも `knowledge/` に含まれる。
+
+個別のファイル名はここに列挙しない — `knowledge/` ディレクトリの内容そのものが単一の正本で、新しいツールのナレッジは knowledge-acquisition スキルが随時追加する。このスキルに一覧を持たせると drift するため、必ず Glob で実体を見る。
+
 ## 関連スキル（ワークフロー自動化）
 
 本 guide は MCP ツールリファレンスと Editor Bridge セットアップ手順。以下のスキルは複数ツールを組み合わせたゲート付きワークフローを提供する。
