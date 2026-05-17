@@ -1,6 +1,5 @@
 # プロジェクト運用ルール
 
-- リポジトリ: https://github.com/tyunta/prefab-sentinel
 - AI agent 初回参照: [AGENT_GUIDE.md](./AGENT_GUIDE.md)
 
 本ファイルは `prefab-sentinel` リポジトリの運用ルール正本。仕様の正本は専門ドキュメント（`docs/api-reference.md` / `docs/execution-reference.md` / `ARCHITECTURE.md` / `TESTING.md` / `CONFIGURATION.md`）に分かれて置かれ、`README.md` はそれらへの入口（エントリポイント兼ルーター）として機能する。
