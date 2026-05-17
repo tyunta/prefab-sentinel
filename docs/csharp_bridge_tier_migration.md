@@ -95,7 +95,7 @@ Tier 列の `(+T3)` 表記は「クラス内に移行するアサーションと
 | SaveInstantiate | `…::TestBatchObjectSpecComponents` | structural-invariant, string-literal-grep | T3 | T3 恒久。`BatchObjectSpec.components` フィールド宣言 + `ResolveComponentType`（`AppDomain` 走査）依存の警告。 |
 | SaveInstantiate | `…::TestSafeSaveAsPrefabSource` | string-literal-grep, structural-invariant | T3 | T3 恒久。`PrefabUtility.SaveAsPrefabAsset` / `Undo.AddComponent` 主体。#228 の `PROTECT_REQUIRED` 1 回・配置順 pin は control-flow-shape 不変条件。 |
 | UdonSharpAddComponent | `…::TestAddUdonSharpComponentHandler` | string-literal-grep | T3 | T3 恒久。`UdonSharpUndo.AddComponent` / proxy-to-backing reflection で本体は Unity 結合。純核なし。 |
-| UdonSharpFieldWrite | `…::TestSetUdonSharpFieldHandler` | string-literal-grep | T3 | T3 恒久。`SerializedObject` / `UdonSharpEditorUtility` 主体。VRCUrl 検出も Unity 型の reflection metadata。 |
+| UdonSharpFieldWrite | `…::TestSetUdonSharpFieldHandler` | string-literal-grep | T3 | T3 恒久。`SerializedObject` / `UdonSharpEditorUtility` 主体。VRCUrl 検出も Unity 型の reflection metadata。#24 で値適用は統一 `WritePropertyValue` へ委譲（非成功は自前の `EDITOR_CTRL_UDON_SET_FIELD_FAILED` エンベロープへマップ）。`HandleSetUdonSharpField` の SerializedField 解決・dispatch は live `SerializedProperty` 依存で T3 恒久（#30、§4.3 末尾注参照）。 |
 | UdonSharpListenerWiring | `…::TestWirePersistentListenerHandler` | string-literal-grep | T3 | T3 恒久。`UnityEventTools` / `UnityEventBase` 走査。抽出可能な純核なし。 |
 
 ### 4.2 ConsoleCapture
@@ -114,10 +114,23 @@ Tier 列の `(+T3)` 表記は「クラス内に移行するアサーションと
 
 | concern | source-text テスト箇所 | アサーション種別 | Tier | 移行先 xUnit テスト案 |
 |---|---|---|---|---|
-| Helpers/Properties | `…::TestApplyPropertyValueTypes` | string-literal-grep | **T2a → 移行済（T3 残骸のみ）** | **[移行済 2026-05-17 / H-4]** `PropertyValueParser` 抽出済。Color alpha デフォルト・Vector arity 拒否の behavioral 検証は `tests/csharp/PropertiesPureLogicTests.cs` へ移行。Python 側は `ApplyPropertyValue` の `PropertyValueParser.TryParse` 委譲 grep のみ残置。 |
-| Properties | `…::TestHandleEditorSetPropertyQuaternion` | string-literal-grep, constant-drift | **T2a→T1 → 移行済（T3 残骸のみ）** | **[移行済 2026-05-17 / H-4]** `QuaternionInputValidator` 抽出済。4 成分要求・ノルム境界・エラーコードの behavioral 検証は `tests/csharp/PropertiesPureLogicTests.cs` へ移行。Python 側はハンドラの `QuaternionInputValidator.Validate` 委譲 grep と `NormTolerance = 1e-4f` 定数 pin のみ残置。 |
+| Properties | `…::TestApplyPropertyValueTypes` | string-literal-grep, structural-invariant | **T2a 移行済 + T3 恒久（dispatch 部）** | **[移行済 2026-05-17 / H-4]** `PropertyValueParser` 抽出済。Color alpha デフォルト・Vector arity 拒否の behavioral 検証は `tests/csharp/PropertiesPureLogicTests.cs` へ移行。**[#24 統一 2026-05-17]** `ApplyPropertyValue` と `HandleEditorSetProperty` の per-type switch は単一の `WritePropertyValue` レイヤーへ統合。Python 側は `WritePropertyValue` の `PropertyValueParser.TryParse` 委譲 grep + 並行実装不在の不変条件を残置。`WritePropertyValue` の per-type dispatch 本体は T3 恒久（§4.3 末尾注 / #30）。 |
+| Properties | `…::TestHandleEditorSetPropertyQuaternion` | string-literal-grep, constant-drift | **T2a→T1 → 移行済（T3 残骸のみ）** | **[移行済 2026-05-17 / H-4]** `QuaternionInputValidator` 抽出済。4 成分要求・ノルム境界・エラーコードの behavioral 検証は `tests/csharp/PropertiesPureLogicTests.cs` へ移行。**[#24 統一 2026-05-17]** Quaternion 処理は統一レイヤーの `WriteQuaternionValue` へ移動。Python 側は `WriteQuaternionValue` の `QuaternionInputValidator.Validate` 委譲 grep と `NormTolerance = 1e-4f` 定数 pin を残置。 |
 | Properties | `…::TestSetPropertyGameObject` | string-literal-grep | **T2a→T1 → 移行済（T3 残骸のみ）** | **[移行済 2026-05-17 / H-4]** `GameObjectPropertyAllowlist` 抽出済。allowlist membership と reject ケースの behavioral 検証は `tests/csharp/PropertiesPureLogicTests.cs` へ移行。Python 側はハンドラの `GameObjectPropertyAllowlist.IsAllowed` 委譲 grep と 4 allowlist 名定数 pin のみ残置。 |
 | Properties | `…::TestSetPropertySuggestions` | string-literal-grep | **T1 → 移行済（T3 残骸のみ）** | **[移行済 2026-05-17 / H-4]** `SuggestionRanker` 抽出済。ランキング・`0.4` distance-ratio 閾値・truncation・空入力ガードの behavioral 検証は `tests/csharp/PropertiesPureLogicTests.cs` へ移行。Python 側は not-found 分岐の `SuggestionRanker.SuggestSimilar` 委譲 grep のみ残置。 |
+
+> **[2026-05-17] #24 統一 `WritePropertyValue` の per-type dispatch 部は T3 恒久（#30）。** issue
+> #24 で `ApplyPropertyValue` と `HandleEditorSetProperty` の per-type switch を単一の
+> `WritePropertyValue` レイヤーへ統合した。テキスト解析・Quaternion 検証のサブロジックは T1
+> （`PropertyValueParser` / `QuaternionInputValidator`、`PropertiesPureLogicTests.cs`）でカバー済。
+> 残る per-type dispatch 本体——live `SerializedProperty` への `prop.<type>Value =` 代入——と
+> `HandleSetUdonSharpField` の SerializedField 解決は、`SerializedProperty` が `UnityEditor`
+> namespace に属し Unity Editor 上でしか生成できないため自動実行不能。H-series の T1/T2 抽出では
+> これ以上落とせない irreducible な Unity 結合部であり、**T3 恒久**として受容する。実行検証には
+> Unity-loadable な serialized-property ハーネス（Unity Test Framework の EditMode テスト基盤）の
+> 新設が前提となるが、未カバー面が dispatch 代入文に限られ本体ロジックは T1 で守られているため、
+> ハーネス新設には見合わない（#30 でこの判断を確定・close）。将来 EditMode ハーネスが別動機で
+> 整備された時点で相乗り移行する（§6.1 の opportunistic 運用と同型）。
 
 ### 4.4 UiElement
 
