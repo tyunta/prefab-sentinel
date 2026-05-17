@@ -20,6 +20,7 @@ read-only 経路（`validate_refs` / `inspect_*` / `find_*` 等）は Unity を�
 - 参照解決（GUID + fileID）と整合性検証を API 化する
 - 実行時検証（UdonSharp compile / ClientSim smoke / ログ分類）をパイプライン化する
 - 人間の判断が要る変更と、機械的に実行できる変更を明確に分離する
+- ModularAvatar / liltoon / VRCFury 等の VRChat エコシステムツールのドメイン知識を同梱し、AI エージェントの判断材料として供給する
 - Skills として運用フローを標準化する（Claude Code / Codex CLI の両ホストに対応）
 
 **やらないこと**
@@ -48,7 +49,7 @@ codex plugin marketplace add tyunta/prefab-sentinel
 
 登録後、Codex CLI 内で `/plugins` を開き、一覧から `prefab-sentinel` を選んで Install する（`codex plugin install` というシェルコマンドは存在しない）。
 
-導入後の使い方は `guide` スキル（`/prefab-sentinel:guide`）が入口 — MCP ツールの一覧と呼び出し方、パッチスキーマ、Editor Bridge のセットアップがまとまっている。MCP ツールを実際に呼ぶのは AI エージェント側なので、エージェントにこの guide を参照させれば使い始められる。
+導入後の使い方は `guide` スキル（`/prefab-sentinel:guide`）が入口 — MCP ツールの一覧と呼び出し方、パッチスキーマ、Editor Bridge のセットアップ、エコシステムナレッジの案内がまとまっている。MCP ツールを実際に呼ぶのは AI エージェント側なので、エージェントにこの guide を参照させれば使い始められる。
 
 各経路の詳細は [セットアップ](#セットアップ)、リポジトリから MCP サーバーを直接起動する開発者向け手順は [CONTRIBUTING.md](./CONTRIBUTING.md) を参照。
 
@@ -64,7 +65,7 @@ MCP サーバーは Plugin 内部で `uv` / `uvx` 経由でローカル起動さ
 
 ### Claude Code Plugin
 
-[Quickstart](#quickstart) の 2 コマンドで導入する。インストールすると MCP サーバーと 5 つのスキルが一括展開され、`/prefab-sentinel:guide` 等のスキルを Claude Code から直接呼び出せる。各スキル内のコマンドは `${CLAUDE_PLUGIN_ROOT}` テンプレート変数でローカルから実行される。
+[Quickstart](#quickstart) の 2 コマンドで導入する。インストールすると MCP サーバー・5 つのスキル・`knowledge/` ディレクトリが一括展開され、`/prefab-sentinel:guide` 等のスキルを Claude Code から直接呼び出せる。各スキル内のコマンドは `${CLAUDE_PLUGIN_ROOT}` テンプレート変数でローカルから実行される。
 
 ### Codex CLI Plugin
 
@@ -74,7 +75,7 @@ MCP サーバーは Plugin 内部で `uv` / `uvx` 経由でローカル起動さ
 
 | スキル | 呼び出し | 説明 |
 |--------|----------|------|
-| guide | `/prefab-sentinel:guide` | MCP ツールリファレンス・パッチスキーマ・Bridge セットアップ |
+| guide | `/prefab-sentinel:guide` | MCP ツールリファレンス・パッチスキーマ・Bridge セットアップ・エコシステムナレッジ案内 |
 | variant-safe-edit | `/prefab-sentinel:variant-safe-edit` | Prefab Variant の安全な編集ワークフロー |
 | prefab-reference-repair | `/prefab-sentinel:prefab-reference-repair` | 壊れた参照の検出・修復ワークフロー |
 | udon-log-triage | `/prefab-sentinel:udon-log-triage` | ランタイムログのトリアージワークフロー |
@@ -106,7 +107,7 @@ read-only 検査（`validate_*` / `inspect_*` / `find_*`）は Unity 不要、`e
 
 ## VRChat エコシステムナレッジ
 
-`knowledge/` ディレクトリに ModularAvatar / liltoon / VRCFury / AvatarOptimizer 等のドメイン知識を 3 レベル（L1 概念 / L2 操作パターン / L3 SerializedProperty）で蓄積し、通常作業中に自動で読み書きする。編集規約は [knowledge/STYLE_GUIDE.md](./knowledge/STYLE_GUIDE.md)。
+`knowledge/` ディレクトリに ModularAvatar / liltoon / VRCFury / AvatarOptimizer 等のドメイン知識を 3 レベル（L1 概念 / L2 操作パターン / L3 SerializedProperty）で蓄積し、プラグインに同梱する。`guide` スキルが参照を案内し、AI エージェントが作業に応じて該当ナレッジを `knowledge/` から読む。ナレッジの調査・拡充は `knowledge-acquisition` スキルで行う。編集規約は [knowledge/STYLE_GUIDE.md](./knowledge/STYLE_GUIDE.md)。
 
 ## ドキュメントマップ
 
