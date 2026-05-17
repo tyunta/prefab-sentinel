@@ -71,6 +71,18 @@ class TestCodexPluginManifest(unittest.TestCase):
         invocation = servers["prefab-sentinel"]
         command = invocation.get("command", "")
         self.assertNotEqual("", command, f"command empty: {invocation!r}")
+        # Codex launches a plugin MCP server with the workspace as cwd,
+        # sets no plugin-root env var, does not expand ${...} templates
+        # in .mcp.json, and does not resolve a relative command against
+        # the plugin root (all confirmed by probe, issue #1). Every arg
+        # must therefore be self-contained — no template, no path that
+        # depends on the install location.
+        for arg in invocation.get("args", []):
+            self.assertNotIn(
+                "${",
+                arg,
+                f"Codex does not expand templates in .mcp.json args: {arg!r}",
+            )
 
     def test_manifest_does_not_declare_interface_block(self) -> None:
         # Issue #338 excludes per-plugin icon/screenshot asset authoring;

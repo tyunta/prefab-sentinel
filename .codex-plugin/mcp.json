@@ -2,7 +2,7 @@
   "prefab-sentinel": {
     "command": "uvx",
     "args": [
-      "--from", "${CLAUDE_PLUGIN_ROOT}",
+      "--from", "git+https://github.com/tyunta/prefab-sentinel.git",
       "--with", "mcp>=1.12",
       "prefab-sentinel-mcp"
     ]
