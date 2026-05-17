@@ -12,26 +12,23 @@ namespace PrefabSentinel
     /// </summary>
     public static partial class UnityEditorControlBridge
     {
-        private const string ConsoleCursorPrefix = "seq:";
-        private static readonly string[] ConsoleSupportedOrders = { "newest_first", "oldest_first" };
-
         private static EditorControlResponse HandleCaptureConsoleLogs(EditorControlRequest request)
         {
             if (!ConsoleLogBuffer.IsCapturing)
                 return BuildError("EDITOR_CTRL_CONSOLE_NOT_ACTIVE",
                     "Console log capture is not active. Enable Editor Bridge to start capturing.");
 
-            // Issue #117: reject unsupported classification filter values
-            // before we touch the buffer, so callers learn the contract
-            // through a typed error instead of silent default behaviour.
+            // Issue #117 / H-3: reject unsupported classification filter
+            // values before we touch the buffer. Filter-support membership
+            // is owned by the Unity-free ``ConsoleLogEntryPredicate``.
             string classificationFilter = string.IsNullOrEmpty(request.classification_filter)
                 ? "all"
                 : request.classification_filter;
-            if (!ConsoleLogBuffer.IsSupportedClassificationFilter(classificationFilter))
+            if (!ConsoleLogEntryPredicate.IsSupportedClassificationFilter(classificationFilter))
                 return BuildError(
                     "EDITOR_CTRL_INVALID_CLASSIFICATION_FILTER",
                     "classification_filter must be one of: "
-                    + string.Join(", ", ConsoleLogBuffer.SupportedClassificationFilters));
+                    + string.Join(", ", ConsoleLogEntryPredicate.SupportedClassificationFilters));
 
             // Issue #239: phase filter — same gating shape as the
             // classification filter so unsupported values yield a typed
@@ -39,78 +36,35 @@ namespace PrefabSentinel
             string phaseFilter = string.IsNullOrEmpty(request.phase_filter)
                 ? "all"
                 : request.phase_filter;
-            if (!ConsoleLogBuffer.IsSupportedPhaseFilter(phaseFilter))
+            if (!ConsoleLogEntryPredicate.IsSupportedPhaseFilter(phaseFilter))
                 return BuildError(
                     "EDITOR_CTRL_INVALID_PHASE_FILTER",
                     "phase_filter must be one of: "
-                    + string.Join(", ", ConsoleLogBuffer.SupportedPhaseFilters));
+                    + string.Join(", ", ConsoleLogEntryPredicate.SupportedPhaseFilters));
 
-            // Issue #113: ordering keyword (default "newest_first") and
-            // opaque continuation token. Both are validated up front so
-            // an invalid request short-circuits before the buffer walk.
-            string order = string.IsNullOrEmpty(request.order)
-                ? "newest_first"
-                : request.order;
-            if (Array.IndexOf(ConsoleSupportedOrders, order) < 0)
-                return BuildError(
-                    "EDITOR_CTRL_INVALID_ORDER",
-                    "order must be one of: " + string.Join(", ", ConsoleSupportedOrders));
-            bool newestFirst = order == "newest_first";
+            // Issue #113 / #131 / H-3: ordering keyword, opaque continuation
+            // token, and the max-entries bound are validated up front by the
+            // Unity-free ``ConsoleCaptureRequestValidator`` so an invalid
+            // request short-circuits before the buffer walk.
+            ConsoleCaptureValidation validation = ConsoleCaptureRequestValidator.Validate(
+                request.order,
+                request.cursor,
+                request.max_entries,
+                ConsoleLogBuffer.PeekHighestIngestedSequenceId(),
+                ConsoleLogBuffer.DefaultCapacity);
+            if (!validation.Success)
+                return BuildError(validation.ErrorCode, validation.ErrorMessage);
 
-            // Empty cursor = fresh page. Sentinels match the half-open
-            // bounds GetEntries uses: long.MaxValue means "anything below"
-            // for newest_first; long.MinValue means "anything above" for
-            // oldest_first.
-            long cursorAfter = newestFirst ? long.MaxValue : long.MinValue;
-            string cursor = request.cursor ?? string.Empty;
-            if (cursor.Length > 0)
-            {
-                if (!cursor.StartsWith(ConsoleCursorPrefix, StringComparison.Ordinal))
-                    return BuildError(
-                        "EDITOR_CTRL_INVALID_CURSOR",
-                        $"cursor token must start with '{ConsoleCursorPrefix}' (opaque continuation token from a previous response).");
-                string body = cursor.Substring(ConsoleCursorPrefix.Length);
-                if (!long.TryParse(body, System.Globalization.NumberStyles.Integer,
-                        System.Globalization.CultureInfo.InvariantCulture, out long parsed))
-                    return BuildError(
-                        "EDITOR_CTRL_INVALID_CURSOR",
-                        $"cursor token '{cursor}' could not be parsed as an ingestion position.");
-                long highest = ConsoleLogBuffer.PeekHighestIngestedSequenceId();
-                // Empty buffer ⇒ highest = -1; reporting "[0, -1]" would be
-                // misleading, so emit a dedicated message before the range
-                // comparison runs.
-                if (highest < 0)
-                    return BuildError(
-                        "EDITOR_CTRL_INVALID_CURSOR",
-                        $"cursor token '{cursor}' cannot be resolved: no entries have been ingested yet.");
-                if (parsed < 0 || parsed > highest)
-                    return BuildError(
-                        "EDITOR_CTRL_INVALID_CURSOR",
-                        $"cursor token '{cursor}' references an ingestion position outside the captured range [0, {highest}].");
-                cursorAfter = parsed;
-            }
-
-            // Issue #131: reject ``max_entries`` outside the inclusive
-            // [1, ConsoleLogBuffer.DefaultCapacity] range before we touch
-            // the buffer.  The upper bound mirrors the published capacity
-            // because the ring buffer can never return more entries than
-            // it has retained; the lower bound rejects 0 / negative
-            // values that would degenerate into a no-op or an error.
-            int maxEntries = request.max_entries;
-            if (maxEntries < 1 || maxEntries > ConsoleLogBuffer.DefaultCapacity)
-                return BuildError(
-                    "EDITOR_CTRL_MAX_ENTRIES_OUT_OF_RANGE",
-                    $"max_entries={maxEntries} is outside the inclusive range "
-                    + $"[1, {ConsoleLogBuffer.DefaultCapacity}] (buffered console entries).");
             var (entries, hasMore) = ConsoleLogBuffer.GetEntries(
-                maxEntries, request.log_type_filter, request.since_seconds,
-                classificationFilter, phaseFilter, newestFirst, cursorAfter);
+                request.max_entries, request.log_type_filter, request.since_seconds,
+                classificationFilter, phaseFilter,
+                validation.NewestFirst, validation.CursorAfter);
 
             string nextCursor = string.Empty;
             if (hasMore && entries.Count > 0)
             {
                 long lastSeq = entries[entries.Count - 1].sequence_id;
-                nextCursor = ConsoleCursorPrefix + lastSeq.ToString(
+                nextCursor = ConsoleCaptureRequestValidator.CursorPrefix + lastSeq.ToString(
                     System.Globalization.CultureInfo.InvariantCulture);
             }
 

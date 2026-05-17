@@ -65,12 +65,11 @@ namespace PrefabSentinel
                         }
                         catch (Exception ex)
                         {
-                            // Issue #214: do not embed exception text in
-                            // the diagnostic evidence returned to the MCP
-                            // client. The exception type identifies the
-                            // failure category sufficiently for triage;
-                            // the full detail is mirrored to the Unity
-                            // console for local diagnosis.
+                            // Issue #214 / H-7: do not embed exception text
+                            // in the diagnostic evidence returned to the MCP
+                            // client. The redacted evidence (type name only)
+                            // is owned by ``ReimportDiagnostic``; the full
+                            // detail is mirrored to the Unity console below.
                             Debug.LogWarning(
                                 $"[PrefabSentinel] HandleRecompileScripts: force-reimport of '{rel}' failed: {ex}");
                             diagnostics.Add(new EditorControlDiagnostic
@@ -78,7 +77,7 @@ namespace PrefabSentinel
                                 path = rel,
                                 location = "force_reimport",
                                 detail = "warning",
-                                evidence = ex.GetType().Name,
+                                evidence = ReimportDiagnostic.Evidence(ex),
                             });
                         }
                     }
@@ -164,18 +163,13 @@ namespace PrefabSentinel
         // constructors run on every domain reload.
         private static DateTime LastDomainReloadUtc = DateTime.UtcNow;
 
-        // ── Recompile-and-wait (#118 / #134) ──
+        // ── Recompile-and-wait (#118 / #134 / H-6) ──
 
-        private const float RecompileAndWaitDefaultTimeoutSec = 60.0f;
-
-        // Issue #134: inclusive upper bound on the synchronous
-        // recompile-and-wait wait budget.  Mirrors the Python constant
-        // ``RECOMPILE_AND_WAIT_TIMEOUT_MAX_SEC`` so a request that slips
-        // past a stale client still gets rejected by the bridge.  The
-        // lower bound is exclusive at zero — a request payload of 0 means
-        // "use the default" per the existing handler contract; any
-        // negative request value is an explicit out-of-range request.
-        private const float RecompileAndWaitTimeoutMaxSec = 1800f;
+        // Issue H-6: the recompile-and-wait timeout bounds are owned by the
+        // Unity-free ``RecompileTimeoutValidator``. This alias is retained
+        // because the menu-execute barrier (Menu.cs) reads the default budget.
+        private const float RecompileAndWaitDefaultTimeoutSec =
+            RecompileTimeoutValidator.DefaultTimeoutSec;
 
         /// <summary>
         /// Builds the post-reload poll used by ``editor_recompile_and_wait``
@@ -197,7 +191,7 @@ namespace PrefabSentinel
             poll = () =>
             {
                 long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                if (nowMs > deadlineMs)
+                if (RecompileDeadline.HasElapsed(nowMs, deadlineMs))
                 {
                     PendingAsyncRunner.Complete(responsePath);
                     WriteResponse(responsePath, BuildError(
@@ -242,25 +236,23 @@ namespace PrefabSentinel
         private static EditorControlResponse HandleRecompileAndWait(
             EditorControlRequest request, string responsePath)
         {
-            // Issue #134: validate the wait budget against the published
-            // acceptance range before doing any work.  ``timeout_sec == 0``
-            // is the default-marker (use ``RecompileAndWaitDefaultTimeoutSec``);
-            // negative values and values above the upper bound are explicit
-            // out-of-range requests that must be rejected with the dedicated
-            // error code, mirroring the client-side check.
-            if (request.timeout_sec < 0f
-                || request.timeout_sec > RecompileAndWaitTimeoutMaxSec)
+            // Issue #134 / H-6: validate the wait budget against the
+            // published acceptance range before doing any work. Range
+            // validation and the zero-maps-to-default rule are owned by the
+            // Unity-free ``RecompileTimeoutValidator``.
+            RecompileTimeoutResult timeout =
+                RecompileTimeoutValidator.Validate(request.timeout_sec);
+            if (!timeout.Success)
             {
                 return BuildError(
-                    "EDITOR_CTRL_COMPILE_TIMEOUT_OUT_OF_RANGE",
+                    timeout.ErrorCode,
                     $"editor_recompile_and_wait: timeout_sec={request.timeout_sec} "
-                    + $"is outside the accepted range (0, {RecompileAndWaitTimeoutMaxSec}] "
+                    + $"is outside the accepted range "
+                    + $"(0, {RecompileTimeoutValidator.MaxTimeoutSec}] "
                     + "(seconds).");
             }
 
-            float budgetSec = request.timeout_sec > 0f
-                ? request.timeout_sec
-                : RecompileAndWaitDefaultTimeoutSec;
+            float budgetSec = timeout.BudgetSec;
             long callTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             long deadlineMs = callTimeMs + (long)(budgetSec * 1000f);
             int callTimeReloadCount = PendingAsyncRunner.AssemblyReloadCount;
@@ -298,7 +290,9 @@ namespace PrefabSentinel
             // watchdog so exactly one envelope is written per request
             // even if both observe a terminal condition in the same frame.
             bool compiledAny = false;
-            bool resolved = false;
+            // Issue H-7: the single-resolution guard shared between the
+            // pipeline-finished subscription and the deadline watchdog.
+            var resolutionGuard = new RecompileResolutionGuard();
             var compileErrors = new List<string>();
 
             // Per-assembly compile-finished delegate type (issue #213
@@ -338,15 +332,19 @@ namespace PrefabSentinel
 
             onPipelineFinished = _ =>
             {
-                if (resolved) return;
-                resolved = true;
+                if (!resolutionGuard.TryClaim()) return;
                 Unsubscribe();
 
-                if (compileErrors.Count > 0)
+                // Issue H-7: outcome precedence (failed > no-op > continue)
+                // is owned by the Unity-free RecompileOutcomeClassifier.
+                string outcome = RecompileOutcomeClassifier.Classify(
+                    new RecompileResultSnapshot(compileErrors.Count, compiledAny));
+
+                if (outcome == RecompileOutcomeClassifier.FailedCode)
                 {
                     PendingAsyncRunner.Complete(responsePath);
                     WriteResponse(responsePath, BuildError(
-                        "EDITOR_CTRL_RECOMPILE_FAILED",
+                        RecompileOutcomeClassifier.FailedCode,
                         $"editor_recompile_and_wait: {compileErrors.Count} compile error(s).",
                         data: new EditorControlData
                         {
@@ -356,7 +354,7 @@ namespace PrefabSentinel
                     return;
                 }
 
-                if (!compiledAny)
+                if (outcome == RecompileOutcomeClassifier.NoopCode)
                 {
                     // No per-assembly finished event ever fired, which
                     // corresponds to every assembly having been reported
@@ -366,7 +364,7 @@ namespace PrefabSentinel
                     // to resume after a reload that never happens.
                     PendingAsyncRunner.Complete(responsePath);
                     WriteResponse(responsePath, BuildSuccess(
-                        "EDITOR_CTRL_RECOMPILE_AND_WAIT_NOOP",
+                        RecompileOutcomeClassifier.NoopCode,
                         "editor_recompile_and_wait: every assembly was reported "
                         + "as not requiring compilation; no domain reload occurred.",
                         new EditorControlData { executed = true }));
@@ -401,11 +399,11 @@ namespace PrefabSentinel
             EditorApplication.CallbackFunction prePoll = null;
             prePoll = () =>
             {
-                if (resolved) return;
                 long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                if (nowMs <= deadlineMs) return;
-
-                resolved = true;
+                // Issue H-7: the watchdog fires only strictly past the
+                // deadline and only if it wins the single-resolution claim.
+                if (!RecompileDeadline.HasElapsed(nowMs, deadlineMs)) return;
+                if (!resolutionGuard.TryClaim()) return;
                 Unsubscribe();
                 PendingAsyncRunner.Complete(responsePath);
                 WriteResponse(responsePath, BuildError(
@@ -452,14 +450,17 @@ namespace PrefabSentinel
                 // failure category; the full exception detail flows to
                 // the Unity console via ``Debug.LogWarning`` for local
                 // diagnosis.
-                resolved = true;
+                resolutionGuard.TryClaim();
                 Unsubscribe();
                 PendingAsyncRunner.Complete(responsePath);
                 Debug.LogWarning(
                     $"[PrefabSentinel] HandleRecompileAndWait: RequestScriptCompilation rejected: {ex}");
+                // Issue #214 / H-7: the caller-visible message is the fixed
+                // redacted string owned by ScheduleFailureEnvelope; the full
+                // exception detail goes only to the Unity console above.
                 return BuildError(
                     "EDITOR_CTRL_RECOMPILE_SCHEDULE_FAILED",
-                    "editor_recompile_and_wait: failed to schedule compilation.");
+                    ScheduleFailureEnvelope.RedactedMessage());
             }
 
             return null;
@@ -508,10 +509,6 @@ namespace PrefabSentinel
             string scriptAbs = Path.Combine(tempDirAbs, tempId + ".cs");
             string metaAbs = scriptAbs + ".meta";
 
-            int compilePollMs = request.compile_timeout > 0
-                ? request.compile_timeout
-                : RunScriptCompileTimeoutMs;
-
             try
             {
                 if (!Directory.Exists(tempDirAbs))
@@ -534,7 +531,13 @@ namespace PrefabSentinel
             }
 
             long callTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            long deadlineMs = callTimeMs + compilePollMs + RunScriptEntryTypeTimeoutMs;
+            // Issue H-6: the compile-poll budget (request override vs bridge
+            // default) and the absolute deadline are resolved by the
+            // Unity-free ``RunScriptDeadline``.
+            RunScriptDeadlineResult deadline = RunScriptDeadline.Resolve(
+                request.compile_timeout, RunScriptCompileTimeoutMs,
+                callTimeMs, RunScriptEntryTypeTimeoutMs);
+            long deadlineMs = deadline.DeadlineMs;
             long callTimeAssemblyMtime =
                 PendingAsyncRunner.ReadAssemblyMtimeUnixMs();
 
@@ -731,12 +734,18 @@ namespace PrefabSentinel
         {
             int prior;
             RunScriptConsecutiveCompilePending.TryGetValue(stuckKey, out prior);
-            int next = prior + 1;
-            RunScriptConsecutiveCompilePending[stuckKey] = next;
+            RunScriptConsecutiveCompilePending[stuckKey] = prior + 1;
 
             EditorControlData data = BuildRunScriptDiagnosticsData(tempId, tempDirAbs);
 
-            if (next >= RunScriptStuckThreshold)
+            // Issue #234 / H-6: the response code (recovery once the
+            // incremented stuck count reaches the threshold, dedicated
+            // compile-timeout code otherwise) is owned by the Unity-free
+            // ``RunScriptCompilePendingCodeSelector``.
+            string code = RunScriptCompilePendingCodeSelector.SelectCode(
+                prior, RunScriptStuckThreshold);
+
+            if (code == RunScriptCompilePendingCodeSelector.RecoveryCode)
             {
                 RunScriptRecoverTempArea(tempDirAbs);
                 RunScriptConsecutiveCompilePending.Remove(stuckKey);
@@ -746,19 +755,13 @@ namespace PrefabSentinel
                     protocol_version = ProtocolVersion,
                     success = false,
                     severity = "warning",
-                    code = "EDITOR_CTRL_RUN_SCRIPT_RECOVERY",
+                    code = code,
                     message = "Script compile appeared stuck; ran recovery cleanup. Retry the script.",
                     data = recovered,
                 };
             }
 
-            // Issue #234: emit a dedicated compile-timeout code on the
-            // deadline-only branch so callers can distinguish "compile
-            // timed out" from generic compile / staging / entry-point
-            // failure and from the wrapper-layer transport timeout.
-            // The recovery branch above retains its existing recovery
-            // code unchanged.
-            return BuildError("EDITOR_RUN_SCRIPT_COMPILE_TIMEOUT", baseMessage, data);
+            return BuildError(code, baseMessage, data);
         }
 
         /// <summary>
@@ -978,7 +981,7 @@ namespace PrefabSentinel
                         poll = () =>
                         {
                             long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                            if (nowMs > deadlineMs)
+                            if (RecompileDeadline.HasElapsed(nowMs, deadlineMs))
                             {
                                 PendingAsyncRunner.Complete(responsePath);
                                 WriteResponse(responsePath, BuildError(

@@ -35,6 +35,23 @@ TOOLS_DIR = Path(__file__).resolve().parent.parent / "tools" / "unity"
 BRIDGE: Path = TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.cs"
 _BRIDGE_GLOB = "PrefabSentinel.UnityEditorControlBridge*.cs"
 
+# H-track xUnit migration: pure-logic decisions were extracted from the
+# bridge handlers into Unity-free classes under ``tools/unity/``. The
+# behavioral coverage of those classes now lives in ``tests/csharp/``;
+# the source-text tests below retain only Tier 3 delegation-invariant
+# and constant-value-pin assertions, reading the relocated declarations
+# from these dedicated files.
+EDITOR_CONTROL_REQUEST: Path = TOOLS_DIR / "PrefabSentinel.Dispatch.EditorControlRequest.cs"
+ACTION_REGISTRY: Path = TOOLS_DIR / "PrefabSentinel.Dispatch.ActionRegistry.cs"
+INPUT_VALIDATORS: Path = TOOLS_DIR / "PrefabSentinel.Properties.InputValidators.cs"
+EDITOR_SCRIPT_PATH_CLASSIFIER: Path = (
+    TOOLS_DIR / "PrefabSentinel.MenuScriptWatch.EditorScriptPathClassifier.cs"
+)
+CONSOLE_REQUEST_VALIDATOR: Path = TOOLS_DIR / "PrefabSentinel.ConsoleCapture.RequestValidator.cs"
+RUN_SCRIPT_COMPILE_VALIDATORS: Path = TOOLS_DIR / "PrefabSentinel.RunScriptCompile.Validators.cs"
+RUN_SCRIPT_COMPILE_REDACTION: Path = TOOLS_DIR / "PrefabSentinel.RunScriptCompile.Redaction.cs"
+UI_ELEMENT_ALLOWLIST: Path = TOOLS_DIR / "PrefabSentinel.UiElement.Allowlist.cs"
+
 
 # Issue #310: C# comment stripping reused from the patch-bridge source
 # tests so the screenshot routing scan does not flag a literal that
@@ -149,38 +166,32 @@ class TestGetHierarchyPathDedup(unittest.TestCase):
 
 
 class TestApplyPropertyValueTypes(unittest.TestCase):
-    """S4: ApplyPropertyValue must handle Color, Vector2, Vector4, ObjectReference."""
+    """S4: ApplyPropertyValue value-kind coverage.
 
-    def test_apply_property_value_handles_color(self) -> None:
+    Post H-track migration the per-type literal parsing (Color/Vector2/
+    Vector4/ObjectReference) was extracted into the Unity-free
+    ``PropertyValueParser``; that behavioral coverage now lives in
+    ``tests/csharp/PropertiesPureLogicTests.cs``. This source-text test
+    retains only the Tier 3 delegation invariant: the bridge handler must
+    still route parsing through ``PropertyValueParser.TryParse``.
+    """
+
+    def test_apply_property_value_delegates_to_property_value_parser(self) -> None:
         source = _read(BRIDGE)
         body = _extract_method(source, "ApplyPropertyValue")
-        self.assertIn("SerializedPropertyType.Color", body)
-
-    def test_apply_property_value_color_alpha_default(self) -> None:
-        source = _read(BRIDGE)
-        body = _extract_method(source, "ApplyPropertyValue")
-        self.assertIn("aParsed", body)
-
-    def test_apply_property_value_handles_vector2(self) -> None:
-        source = _read(BRIDGE)
-        body = _extract_method(source, "ApplyPropertyValue")
-        self.assertIn("SerializedPropertyType.Vector2", body)
-
-    def test_apply_property_value_handles_vector4(self) -> None:
-        source = _read(BRIDGE)
-        body = _extract_method(source, "ApplyPropertyValue")
-        self.assertIn("SerializedPropertyType.Vector4", body)
-
-    def test_apply_property_value_handles_object_reference(self) -> None:
-        source = _read(BRIDGE)
-        body = _extract_method(source, "ApplyPropertyValue")
-        self.assertIn("SerializedPropertyType.ObjectReference", body)
+        self.assertIn("PropertyValueParser.TryParse", body)
 
 
 class TestHandleEditorSetPropertyQuaternion(unittest.TestCase):
-    """Issue #111 — HandleEditorSetProperty must accept the Quaternion
-    type, require xyzw four-component input, enforce a unit-norm
-    tolerance, and reject non-normalized values with a dedicated code.
+    """Issue #111 — HandleEditorSetProperty Quaternion handling.
+
+    Post H-track migration the arity and unit-norm validation logic was
+    extracted into the Unity-free ``QuaternionInputValidator``; that
+    behavioral coverage now lives in
+    ``tests/csharp/PropertiesPureLogicTests.cs``. This source-text test
+    retains the Tier 3 delegation invariant (the handler routes through
+    ``QuaternionInputValidator.Validate``) plus a constant-value pin on
+    the relocated ``NormTolerance`` literal.
     """
 
     def test_handle_editor_set_property_handles_quaternion(self) -> None:
@@ -188,44 +199,45 @@ class TestHandleEditorSetPropertyQuaternion(unittest.TestCase):
         body = _extract_method(source, "HandleEditorSetProperty")
         self.assertIn("SerializedPropertyType.Quaternion", body)
 
-    def test_handle_editor_set_property_quaternion_requires_four_components(self) -> None:
+    def test_handle_editor_set_property_quaternion_delegates_to_validator(self) -> None:
         source = _read(BRIDGE)
         body = _extract_method(source, "HandleEditorSetProperty")
-        # The wrong-component-count branch must reuse the existing
-        # type-mismatch envelope and name the four-component requirement.
-        self.assertIn("EDITOR_CTRL_SET_PROP_TYPE_MISMATCH", body)
-        self.assertRegex(body, r"Quaternion[^\n]*4")
+        self.assertIn("QuaternionInputValidator.Validate", body)
 
     def test_handle_editor_set_property_quaternion_unit_norm_code(self) -> None:
         source = _read(BRIDGE)
         body = _extract_method(source, "HandleEditorSetProperty")
-        # Non-unit norm rejection must use a dedicated severity-error code
-        # (issue #111). The code lives next to the other SET_PROP codes.
-        self.assertIn("EDITOR_CTRL_SET_PROP_QUATERNION_NOT_NORMALIZED", body)
+        # Non-unit norm rejection must surface the relocated dedicated code.
+        self.assertIn("QuaternionInputValidator.NotNormalizedCode", body)
 
     def test_handle_editor_set_property_quaternion_tolerance_constant(self) -> None:
-        source = _read(BRIDGE)
-        body = _extract_method(source, "HandleEditorSetProperty")
-        # Tolerance literal used in the norm check (1e-4). The choice is
-        # documented in the issue spec; a regression must keep that value.
-        self.assertIn("1e-4", body)
+        # Constant-value pin: the norm tolerance literal (1e-4f) now lives
+        # on QuaternionInputValidator; a regression must keep that value.
+        source = INPUT_VALIDATORS.read_text(encoding="utf-8")
+        self.assertIn("internal const float NormTolerance = 1e-4f;", source)
 
 
 class TestHandleCaptureConsoleLogsContract(unittest.TestCase):
-    """Issue #113 — capture handler must accept ordering + opaque cursor,
-    reject unknown ordering / malformed cursor with dedicated codes,
-    and emit a continuation token whenever more matches remain.
+    """Issue #113 — capture handler accepts ordering + opaque cursor.
+
+    Post H-track migration the ordering/cursor/max-entries validation was
+    extracted into the Unity-free ``ConsoleCaptureRequestValidator``; that
+    behavioral coverage now lives in ``tests/csharp/ConsoleCaptureTests.cs``.
+    This source-text test retains the Tier 3 delegation invariant (the
+    handler routes through ``ConsoleCaptureRequestValidator.Validate``)
+    plus the request-DTO field-surface pins (the DTO now lives in
+    ``PrefabSentinel.Dispatch.EditorControlRequest.cs``).
     """
 
     def test_request_struct_carries_order_field(self) -> None:
-        source = _read(BRIDGE)
-        # Request struct holds the ordering keyword forwarded by the wrapper.
-        self.assertIn("public string order", source)
+        body = _extract_editor_control_request_body()
+        # Request DTO holds the ordering keyword forwarded by the wrapper.
+        self.assertIn("public string order", body)
 
     def test_request_struct_carries_cursor_field(self) -> None:
-        source = _read(BRIDGE)
-        # Request struct holds the opaque continuation token.
-        self.assertIn("public string cursor", source)
+        body = _extract_editor_control_request_body()
+        # Request DTO holds the opaque continuation token.
+        self.assertIn("public string cursor", body)
 
     def test_response_data_carries_next_cursor_field(self) -> None:
         source = _read(BRIDGE)
@@ -238,18 +250,12 @@ class TestHandleCaptureConsoleLogsContract(unittest.TestCase):
         # name an ingestion position unambiguously.
         self.assertRegex(source, r"public\s+long\s+sequence_id")
 
-    def test_handler_rejects_unknown_ordering(self) -> None:
+    def test_handler_delegates_request_validation(self) -> None:
         source = _read(BRIDGE)
         body = _extract_method(source, "HandleCaptureConsoleLogs")
-        self.assertIn("EDITOR_CTRL_INVALID_ORDER", body)
-        # Message lists both accepted keywords.
-        self.assertIn("newest_first", body)
-        self.assertIn("oldest_first", body)
-
-    def test_handler_rejects_malformed_cursor(self) -> None:
-        source = _read(BRIDGE)
-        body = _extract_method(source, "HandleCaptureConsoleLogs")
-        self.assertIn("EDITOR_CTRL_INVALID_CURSOR", body)
+        # Ordering / malformed-cursor / max-entries validation is owned by
+        # the Unity-free validator; the handler must route through it.
+        self.assertIn("ConsoleCaptureRequestValidator.Validate", body)
 
 
 class TestBatchCreateParentWarning(unittest.TestCase):
@@ -366,11 +372,21 @@ class TestSetPropertyGameObject(unittest.TestCase):
         # GameObject when the caller addresses the GameObject itself.
         self.assertIn("new SerializedObject(go)", body)
 
-    def test_allowlist_names_present(self) -> None:
+    def test_allowlist_delegates_to_allowlist_class(self) -> None:
+        # Post H-track migration the GameObject property allowlist (the
+        # inline ``gameObjectAllowedProperties`` array) was extracted into
+        # the Unity-free ``GameObjectPropertyAllowlist``; its membership
+        # coverage now lives in ``tests/csharp/PropertiesPureLogicTests.cs``.
+        # The handler must route through the relocated allowlist.
         source = _read(BRIDGE)
         body = _extract_method(source, "HandleEditorSetProperty")
+        self.assertIn("GameObjectPropertyAllowlist.IsAllowed", body)
+
+    def test_allowlist_names_pinned_on_allowlist_class(self) -> None:
+        # Constant-value pin on the relocated allowlist membership.
+        source = INPUT_VALIDATORS.read_text(encoding="utf-8")
         for name in ("m_IsActive", "m_Layer", "m_Name", "m_TagString"):
-            self.assertIn(name, body, f"missing GameObject allowlist name: {name}")
+            self.assertIn(f'"{name}"', source, f"missing allowlist name: {name}")
 
     def test_out_of_allowlist_returns_dedicated_code(self) -> None:
         source = _read(BRIDGE)
@@ -379,39 +395,32 @@ class TestSetPropertyGameObject(unittest.TestCase):
 
 
 class TestSetPropertySuggestions(unittest.TestCase):
-    """Task 10: Property-name suggestions on EDITOR_CTRL_SET_PROP_FIELD_NOT_FOUND."""
+    """Task 10: Property-name suggestions on EDITOR_CTRL_SET_PROP_FIELD_NOT_FOUND.
 
-    def test_emits_suggestions_on_not_found(self) -> None:
+    Post H-track migration the similarity ranking (Levenshtein distance
+    + the 0.4 distance-ratio threshold) was extracted into the Unity-free
+    ``SuggestionRanker``; that behavioral coverage now lives in
+    ``tests/csharp/PropertiesPureLogicTests.cs``. This source-text test
+    retains the Tier 3 delegation invariant (the handler routes the
+    not-found branch through ``SuggestionRanker.SuggestSimilar``).
+    """
+
+    def test_not_found_branch_delegates_to_suggestion_ranker(self) -> None:
         source = _read(BRIDGE)
         body = _extract_method(source, "HandleEditorSetProperty")
-        self.assertIn("data.suggestions", body)
-        self.assertIn("Did you mean", body)
-
-    def test_walks_serialized_iterator(self) -> None:
-        source = _read(BRIDGE)
-        body = _extract_method(source, "HandleEditorSetProperty")
-        self.assertIn("GetIterator()", body)
-        self.assertIn("NextVisible(true)", body)
-
-    def test_zero_candidates_branch_present(self) -> None:
-        """Zero-candidates path must NOT append 'Did you mean' to the message."""
-        source = _read(BRIDGE)
-        body = _extract_method(source, "HandleEditorSetProperty")
-        # The body should reference an empty suggestions array fallback —
-        # i.e. when SuggestSimilar returns Length 0 the response is built
-        # with an empty array. We require both `suggestions` (when non-empty)
-        # and the `Length == 0` short-circuit somewhere in the body.
-        self.assertTrue(
-            re.search(r"suggestions\.Length\s*==\s*0", body)
-            or re.search(r"suggestions\.Length\s*>\s*0", body)
-            or re.search(r"suggestions\.Length\s*<=\s*0", body),
-            "Expected an explicit zero-candidates branch on suggestions.Length",
-        )
+        self.assertIn("SuggestionRanker.SuggestSimilar", body)
 
 
-def _extract_editor_control_request_body(source: str) -> str:
+def _extract_editor_control_request_body() -> str:
     """Return the text between the opening and closing braces of
-    ``public sealed class EditorControlRequest``."""
+    ``public sealed class EditorControlRequest``.
+
+    Post H-track migration the DTO was relocated verbatim out of the
+    bridge core into ``PrefabSentinel.Dispatch.EditorControlRequest.cs``;
+    the relocated file is read directly so request-schema invariants stay
+    pinned to the new home.
+    """
+    source = EDITOR_CONTROL_REQUEST.read_text(encoding="utf-8")
     start = source.find("public sealed class EditorControlRequest")
     if start == -1:
         raise AssertionError("EditorControlRequest class not found")
@@ -429,12 +438,33 @@ def _extract_editor_control_request_body(source: str) -> str:
     raise AssertionError("Could not locate closing brace of EditorControlRequest")
 
 
+def _action_registry_hashset(field: str) -> str:
+    """Return the HashSet initialiser literal for ``ActionRegistry.<field>``.
+
+    Post H-track migration the bridge action sets (``SupportedActions`` /
+    ``AsyncActions``) are aliases of the canonical ``ActionRegistry.Supported``
+    / ``ActionRegistry.Async`` HashSet literals declared in
+    ``PrefabSentinel.Dispatch.ActionRegistry.cs``; the action-string set is
+    pinned there now, so the dispatch/wiring source-text tests read it from
+    the registry file.
+    """
+    source = ACTION_REGISTRY.read_text(encoding="utf-8")
+    match = re.search(
+        rf"\b{re.escape(field)}\s*=\s*new\s+HashSet<string>\s*\{{",
+        source,
+    )
+    if match is None:
+        raise AssertionError(f"ActionRegistry.{field} HashSet initialiser not found")
+    return _extract_braced_block(
+        source, match.end(), f"ActionRegistry.{field} HashSet initialiser"
+    )
+
+
 class TestForceReimportSupport(unittest.TestCase):
     """Task 11: HandleRecompileScripts honors a force_reimport request flag."""
 
     def test_request_carries_force_reimport_field(self) -> None:
-        source = _read(BRIDGE)
-        body = _extract_editor_control_request_body(source)
+        body = _extract_editor_control_request_body()
         self.assertIn("public bool force_reimport", body)
 
     def test_recompile_carries_force_reimport_plumbing(self) -> None:
@@ -452,23 +482,29 @@ class TestForceReimportSupport(unittest.TestCase):
 
 class TestCompileTimeoutRequestField(unittest.TestCase):
     """Task 8: EditorControlRequest carries the per-request compile_timeout
-    budget consumed by HandleRunScript's bounded compile poll."""
+    budget consumed by HandleRunScript's bounded compile poll.
+
+    Post H-track migration the budget-vs-default resolution + deadline
+    arithmetic was extracted into the Unity-free ``RunScriptDeadline``;
+    that behavioral coverage now lives in
+    ``tests/csharp/RunScriptCompileValidatorTests.cs``. This source-text
+    test retains the request-DTO field pin (the DTO lives in
+    ``PrefabSentinel.Dispatch.EditorControlRequest.cs``) and the Tier 3
+    delegation invariant (the handler routes through
+    ``RunScriptDeadline.Resolve`` with ``request.compile_timeout``).
+    """
 
     def test_request_carries_compile_timeout_field(self) -> None:
-        source = _read(BRIDGE)
-        body = _extract_editor_control_request_body(source)
+        body = _extract_editor_control_request_body()
         self.assertIn("public int compile_timeout", body)
 
-    def test_run_script_consumes_request_compile_timeout(self) -> None:
+    def test_run_script_delegates_deadline_resolution(self) -> None:
         source = _read(BRIDGE)
         body = _extract_method(source, "HandleRunScript")
-        # The handler must reference the request's compile_timeout field
-        # and select between it and the bridge default for its compile poll.
+        # The handler must forward the request's compile_timeout field to
+        # the Unity-free deadline resolver.
         self.assertIn("request.compile_timeout", body)
-        # The async-runner registry's deadline must derive from the
-        # resolved budget so a caller-supplied value takes effect across
-        # the frame-poll lifetime.
-        self.assertRegex(body, r"deadlineMs\s*=\s*callTimeMs\s*\+\s*compilePollMs")
+        self.assertIn("RunScriptDeadline.Resolve", body)
 
 
 class TestAsmdefAssemblyDisambiguation(unittest.TestCase):
@@ -515,16 +551,28 @@ class TestConsoleLogBufferCapacityVisibility(unittest.TestCase):
 
 class TestHandleCaptureConsoleLogsBoundCheck(unittest.TestCase):
     """Issue #131: the console-capture handler rejects ``max_entries``
-    outside the inclusive ``[1, ConsoleLogBuffer.DefaultCapacity]`` range
-    with the dedicated bridge-side out-of-range error code, before
-    consulting the buffer.
+    outside the inclusive ``[1, ConsoleLogBuffer.DefaultCapacity]`` range.
+
+    Post H-track migration the range check itself was extracted into the
+    Unity-free ``ConsoleCaptureRequestValidator``; that behavioral
+    coverage now lives in ``tests/csharp/ConsoleCaptureTests.cs``. This
+    source-text test retains the Tier 3 invariants: the handler still
+    feeds ``ConsoleLogBuffer.DefaultCapacity`` into the validator, and
+    the out-of-range error code is constant-pinned on the validator.
     """
 
-    def test_handler_references_published_capacity_and_error_code(self) -> None:
+    def test_handler_feeds_published_capacity_to_validator(self) -> None:
         source = _read(BRIDGE)
         body = _extract_method(source, "HandleCaptureConsoleLogs")
         self.assertIn("ConsoleLogBuffer.DefaultCapacity", body)
-        self.assertIn("EDITOR_CTRL_MAX_ENTRIES_OUT_OF_RANGE", body)
+        self.assertIn("ConsoleCaptureRequestValidator.Validate", body)
+
+    def test_out_of_range_code_pinned_on_validator(self) -> None:
+        source = CONSOLE_REQUEST_VALIDATOR.read_text(encoding="utf-8")
+        self.assertIn(
+            'MaxEntriesOutOfRangeCode =', source
+        )
+        self.assertIn('"EDITOR_CTRL_MAX_ENTRIES_OUT_OF_RANGE"', source)
 
 
 class TestRecompileAndWaitDispatch(unittest.TestCase):
@@ -536,39 +584,19 @@ class TestRecompileAndWaitDispatch(unittest.TestCase):
     """
 
     def test_supported_action_lists_recompile_and_wait(self) -> None:
-        source = _read(BRIDGE)
-        # The supported-action set is the literal hashset initialiser.
-        match = re.search(
-            r"SupportedActions\s*=\s*new\s+HashSet<string>\s*\{[^}]*\}",
-            source,
-            flags=re.DOTALL,
-        )
-        self.assertIsNotNone(match)
-        self.assertIn('"editor_recompile_and_wait"', match.group(0))
+        # The action-string set is the ActionRegistry.Supported literal.
+        literal = _action_registry_hashset("Supported")
+        self.assertIn('"editor_recompile_and_wait"', literal)
 
     def test_async_action_lists_recompile_and_wait(self) -> None:
-        source = _read(BRIDGE)
-        match = re.search(
-            r"AsyncActions\s*=\s*new\s+System\.Collections\.Generic\."
-            r"HashSet<string>\s*\{[^}]*\}",
-            source,
-            flags=re.DOTALL,
-        )
-        self.assertIsNotNone(match)
-        self.assertIn('"editor_recompile_and_wait"', match.group(0))
+        literal = _action_registry_hashset("Async")
+        self.assertIn('"editor_recompile_and_wait"', literal)
 
     def test_async_action_lists_run_script(self) -> None:
         """Issue #108: the script-runner action completes asynchronously
-        through the run-script registry; source must reflect that."""
-        source = _read(BRIDGE)
-        match = re.search(
-            r"AsyncActions\s*=\s*new\s+System\.Collections\.Generic\."
-            r"HashSet<string>\s*\{[^}]*\}",
-            source,
-            flags=re.DOTALL,
-        )
-        self.assertIsNotNone(match)
-        self.assertIn('"run_script"', match.group(0))
+        through the run-script registry; the registry must reflect that."""
+        literal = _action_registry_hashset("Async")
+        self.assertIn('"run_script"', literal)
 
     def test_recompile_and_wait_handler_subscribes_to_pipeline_events(self) -> None:
         # Issue #203 / #213: the event-driven handler subscribes to the
@@ -586,18 +614,19 @@ class TestRecompileAndWaitDispatch(unittest.TestCase):
 
     def test_recompile_and_wait_handler_emits_three_outcome_codes(self) -> None:
         # Issue #203: on the pipeline-level finished event the handler
-        # synthesises one of three outcomes — no-op (every assembly
-        # reported as not requiring compilation), OK (post-reload signal
-        # fired after at least one assembly compiled), or FAILED (at
-        # least one compile error of error severity recorded).
-        # The handler body emits the no-op and failed envelopes inline
-        # and delegates the OK envelope to the post-reload poll builder
-        # via ``BuildRecompileReloadWaitPoll``; the OK code therefore
-        # lives in the bridge source as a whole.
+        # synthesises one of three outcomes — no-op / OK / FAILED.
+        # Post H-track migration the no-op/failed/continue classification
+        # was extracted into the Unity-free ``RecompileOutcomeClassifier``
+        # (behavioral coverage in
+        # ``tests/csharp/RunScriptCompileResolutionTests.cs``); the handler
+        # routes through it (no-op and failed codes are the relocated
+        # ``RecompileOutcomeClassifier`` consts) and delegates the OK
+        # envelope to ``BuildRecompileReloadWaitPoll``.
         source = _read(BRIDGE)
         body = _extract_method(source, "HandleRecompileAndWait")
-        self.assertIn("EDITOR_CTRL_RECOMPILE_AND_WAIT_NOOP", body)
-        self.assertIn("EDITOR_CTRL_RECOMPILE_FAILED", body)
+        self.assertIn("RecompileOutcomeClassifier.Classify", body)
+        self.assertIn("RecompileOutcomeClassifier.NoopCode", body)
+        self.assertIn("RecompileOutcomeClassifier.FailedCode", body)
         self.assertIn("BuildRecompileReloadWaitPoll", body)
         self.assertIn("EDITOR_CTRL_RECOMPILE_AND_WAIT_OK", source)
 
@@ -618,41 +647,36 @@ class TestRecompileAndWaitDispatch(unittest.TestCase):
 
 
 class TestRecompileAndWaitTimeoutBoundCheck(unittest.TestCase):
-    """Issue #134 — the bridge handler must reject non-default
-    out-of-range ``timeout_sec`` values with the dedicated error code
-    before scheduling compilation, mirroring the client-side range.
+    """Issue #134 — the bridge handler rejects non-default out-of-range
+    ``timeout_sec`` values before scheduling compilation.
+
+    Post H-track migration the range check (negative rejection, the zero
+    "use-the-default" sentinel, the 1800s upper bound) was extracted into
+    the Unity-free ``RecompileTimeoutValidator``; that behavioral coverage
+    now lives in ``tests/csharp/RunScriptCompileValidatorTests.cs``. This
+    source-text test retains the Tier 3 delegation invariant (the handler
+    routes ``request.timeout_sec`` through ``RecompileTimeoutValidator``)
+    plus constant-value pins on the relocated bound and error code.
     """
 
-    def test_handler_references_upper_bound_constant_and_error_code(self) -> None:
+    def test_handler_delegates_to_timeout_validator(self) -> None:
         source = _read(BRIDGE)
         body = _extract_method(source, "HandleRecompileAndWait")
-        self.assertIn("RecompileAndWaitTimeoutMaxSec", body)
-        self.assertIn("EDITOR_CTRL_COMPILE_TIMEOUT_OUT_OF_RANGE", body)
+        self.assertIn("request.timeout_sec", body)
+        self.assertIn("RecompileTimeoutValidator.Validate", body)
 
     def test_upper_bound_constant_value(self) -> None:
-        source = _read(BRIDGE)
         # The upper-bound literal must equal the Python mirror value
         # (1800 seconds); drift between the two would let an oversized
         # budget slip past one side and trip the other.
-        self.assertRegex(
-            source,
-            r"RecompileAndWaitTimeoutMaxSec\s*=\s*1800",
-        )
+        source = RUN_SCRIPT_COMPILE_VALIDATORS.read_text(encoding="utf-8")
+        self.assertRegex(source, r"MaxTimeoutSec\s*=\s*1800f")
 
-    def test_handler_rejects_negative_budget_accepts_zero_as_default(self) -> None:
-        """A *negative* budget must be rejected with the out-of-range
-        code, while a literal ``0`` (the JsonUtility default for an
-        omitted ``timeout_sec``) maps to the published default.  The
-        bridge guard is therefore ``< 0f``, not ``<= 0f`` — zero is the
-        documented "use the default" sentinel.
-        """
-        source = _read(BRIDGE)
-        body = _extract_method(source, "HandleRecompileAndWait")
-        # The handler dispatches the out-of-range branch when the
-        # request's timeout_sec is not the default sentinel and falls
-        # outside the published range.
-        self.assertIn("request.timeout_sec", body)
-        self.assertIn("EDITOR_CTRL_COMPILE_TIMEOUT_OUT_OF_RANGE", body)
+    def test_out_of_range_code_pinned_on_validator(self) -> None:
+        source = RUN_SCRIPT_COMPILE_VALIDATORS.read_text(encoding="utf-8")
+        self.assertIn(
+            'OutOfRangeCode = "EDITOR_CTRL_COMPILE_TIMEOUT_OUT_OF_RANGE"', source
+        )
 
 
 class TestRunScriptNoSleep(unittest.TestCase):
@@ -774,14 +798,9 @@ class TestCreateUiElementSource(unittest.TestCase):
     """
 
     def test_supported_action_lists_create_ui_element(self) -> None:
-        source = _read(BRIDGE)
-        match = re.search(
-            r"SupportedActions\s*=\s*new\s+HashSet<string>\s*\{[^}]*\}",
-            source,
-            flags=re.DOTALL,
-        )
-        self.assertIsNotNone(match)
-        self.assertIn('"editor_create_ui_element"', match.group(0))
+        # The action-string set is the ActionRegistry.Supported literal.
+        literal = _action_registry_hashset("Supported")
+        self.assertIn('"editor_create_ui_element"', literal)
 
     def test_dispatcher_routes_create_ui_element(self) -> None:
         source = _read(BRIDGE)
@@ -790,18 +809,24 @@ class TestCreateUiElementSource(unittest.TestCase):
             r'case\s+"editor_create_ui_element"\s*:\s*\n\s*response\s*=\s*HandleEditorCreateUiElement',
         )
 
-    def test_handler_pins_canonical_allowed_type_set(self) -> None:
+    def test_handler_delegates_to_type_allowlist(self) -> None:
+        # Post H-track migration the inline ``UiElementAllowedTypes`` array
+        # was extracted into the Unity-free ``UiElementTypeAllowlist``;
+        # its membership coverage now lives in
+        # ``tests/csharp/UiElementTests.cs``. The handler must route
+        # through the relocated allowlist.
         source = _read(BRIDGE)
         body = _extract_method(source, "HandleEditorCreateUiElement")
-        # The handler must reference each canonical type token verbatim
-        # so a future edit can't silently drop one or add an undocumented
-        # token. Source-text assertion (not runtime) so the test fires
-        # on the un-mutated tree.
+        self.assertIn("UiElementTypeAllowlist.IsAllowed", body)
+
+    def test_handler_pins_canonical_allowed_type_set(self) -> None:
+        # Constant-value pin on the relocated allowlist membership.
+        source = UI_ELEMENT_ALLOWLIST.read_text(encoding="utf-8")
         for token in (
             '"Image"', '"TextMeshProUGUI"', '"Button"', '"Slider"', '"Toggle"',
         ):
             self.assertIn(
-                token, body,
+                token, source,
                 f"canonical allowed type set must include {token}",
             )
 
@@ -1000,27 +1025,20 @@ class TestMenuExecuteBarrierSource(unittest.TestCase):
         body = _extract_method(source, "HandleExecuteMenuItem")
         self.assertIn("HasEditorScriptChangedSince", body)
 
-    def test_change_detector_retains_temp_exclusion_constant(self) -> None:
-        """The change detector body must reference the run-script temp
-        exclusion constant so freshly-staged temp .cs files cannot make
-        the barrier fire on every subsequent menu execute. Pinning the
-        constant identifier in the body and the literal value at its
-        declaration site prevents it from being silently renamed away.
+    def test_change_detector_delegates_to_path_classifier(self) -> None:
+        """The change detector must route per-path Editor/temp-area
+        classification through the Unity-free ``EditorScriptPathClassifier``.
 
-        Issue #248 expanded the walk scope from the single hard-coded
-        ``Assets/Editor`` root to an Editor-segment-filtered walk under
-        the entire Assets root. The walk-root and Editor-segment
-        constants are pinned by ``TestHasEditorScriptChangedSinceScopeExpanded``;
-        this test only retains the temp-exclusion invariant for the
-        existing class.
+        Post H-track migration the temp-exclusion / Editor-segment
+        classification (and its ``_PrefabSentinelTemp`` constant) moved
+        out of ``HasEditorScriptChangedSince`` into the classifier; that
+        behavioral coverage now lives in
+        ``tests/csharp/EditorScriptPathClassifierTests.cs``. This test
+        retains the Tier 3 delegation invariant for the change detector.
         """
         source = _read(BRIDGE)
         body = _extract_method(source, "HasEditorScriptChangedSince")
-        self.assertIn("MenuExecuteRunScriptTempExclusion", body)
-        self.assertRegex(
-            source,
-            r'MenuExecuteRunScriptTempExclusion\s*=\s*\n?\s*"_PrefabSentinelTemp"',
-        )
+        self.assertIn("EditorScriptPathClassifier.IsEditorSourcePath", body)
 
     def test_post_reload_resumer_covers_execute_menu_item(self) -> None:
         """The post-reload resumer
@@ -1043,16 +1061,12 @@ class TestMenuExecuteBarrierSource(unittest.TestCase):
         produces the synchronous error envelope before the async
         callback can write the real response, making the barrier
         feature non-functional.
+
+        Post H-track migration the action-string set is the canonical
+        ``ActionRegistry.Async`` literal; this test reads it there.
         """
-        source = _read(BRIDGE)
-        match = re.search(
-            r"AsyncActions\s*=\s*new\s+System\.Collections\.Generic\."
-            r"HashSet<string>\s*\{[^}]*\}",
-            source,
-            flags=re.DOTALL,
-        )
-        self.assertIsNotNone(match)
-        self.assertIn('"execute_menu_item"', match.group(0))
+        literal = _action_registry_hashset("Async")
+        self.assertIn('"execute_menu_item"', literal)
 
 
 _BRIDGE_PARTIAL_GLOB = "PrefabSentinel.UnityEditorControlBridge*.cs"
@@ -1334,13 +1348,10 @@ class TestUdonSharpActionWiring(unittest.TestCase):
     )
 
     def test_supported_actions_lists_new_udonsharp_actions(self) -> None:
-        source = _read(BRIDGE)
-        # Locate the SupportedActions HashSet literal block.
-        start = source.find("SupportedActions = new HashSet<string>")
-        self.assertNotEqual(-1, start, "SupportedActions block not found")
-        block_close = source.find("};", start)
-        self.assertNotEqual(-1, block_close, "SupportedActions terminator not found")
-        block = source[start:block_close]
+        # Post H-track migration the action-string set is the canonical
+        # ``ActionRegistry.Supported`` HashSet literal; this test reads it
+        # from ``PrefabSentinel.Dispatch.ActionRegistry.cs``.
+        block = _action_registry_hashset("Supported")
         for action in self._NEW_ACTIONS:
             with self.subTest(action=action):
                 self.assertIn(f'"{action}"', block)
@@ -1349,11 +1360,7 @@ class TestUdonSharpActionWiring(unittest.TestCase):
         # The new authoring handlers complete synchronously; if any of
         # them slip into AsyncActions the dispatcher's "no response
         # written" guard would never fire for them.
-        source = _read(BRIDGE)
-        start = source.find("AsyncActions =")
-        self.assertNotEqual(-1, start, "AsyncActions block not found")
-        block_close = source.find("};", start)
-        block = source[start:block_close]
+        block = _action_registry_hashset("Async")
         for action in self._NEW_ACTIONS:
             with self.subTest(action=action):
                 self.assertNotIn(f'"{action}"', block)
@@ -1533,16 +1540,20 @@ class TestUdonSharpRequestFields(unittest.TestCase):
     deserialiser exposes them.  ``editor_set_udonsharp_field`` reuses
     the existing ``field_name`` / ``property_value`` / ``object_reference``
     fields from the property-set surface.
+
+    Post H-track migration the ``EditorControlRequest`` DTO was relocated
+    verbatim into ``PrefabSentinel.Dispatch.EditorControlRequest.cs``; its
+    construction/field-surface coverage now lives in
+    ``tests/csharp/ActionRegistryTests.cs``. These remaining checks are
+    constant/field-surface pins read from the relocated DTO file.
     """
 
     def test_request_carries_field_name_field(self) -> None:
-        source = _read(BRIDGE)
-        body = _extract_editor_control_request_body(source)
+        body = _extract_editor_control_request_body()
         self.assertIn("field_name", body)
 
     def test_request_carries_wire_listener_fields(self) -> None:
-        source = _read(BRIDGE)
-        body = _extract_editor_control_request_body(source)
+        body = _extract_editor_control_request_body()
         # Source/target identity, method name, and the string argument.
         self.assertIn("event_path", body)
         self.assertIn("target_path", body)
@@ -1550,8 +1561,7 @@ class TestUdonSharpRequestFields(unittest.TestCase):
         self.assertIn("arg", body)
 
     def test_request_carries_fields_json_for_add_udonsharp(self) -> None:
-        source = _read(BRIDGE)
-        body = _extract_editor_control_request_body(source)
+        body = _extract_editor_control_request_body()
         self.assertIn("fields_json", body)
 
 
@@ -1846,23 +1856,31 @@ class TestRecompileAndWaitOutcomeSync(unittest.TestCase):
         )
 
     def test_pipeline_finished_body_synthesises_failure_noop_and_switchover(self) -> None:
+        # Post H-track migration the outcome precedence (failed > no-op >
+        # continue) was extracted into the Unity-free
+        # ``RecompileOutcomeClassifier`` (behavioral coverage in
+        # ``tests/csharp/RunScriptCompileResolutionTests.cs``); the
+        # subscription routes through it and emits the relocated consts.
         body = _extract_method(_read(BRIDGE), "HandleRecompileAndWait")
         sub_body = self._pipeline_finished_subscription_body(body)
-        self.assertIn("EDITOR_CTRL_RECOMPILE_FAILED", sub_body)
-        self.assertIn("EDITOR_CTRL_RECOMPILE_AND_WAIT_NOOP", sub_body)
+        self.assertIn("RecompileOutcomeClassifier.Classify", sub_body)
+        self.assertIn("RecompileOutcomeClassifier.FailedCode", sub_body)
+        self.assertIn("RecompileOutcomeClassifier.NoopCode", sub_body)
         self.assertIn("BuildRecompileReloadWaitPoll", sub_body)
         self.assertIn("WriteResponse(", sub_body)
 
     def test_pipeline_finished_body_checks_and_sets_reentry_flag(self) -> None:
+        # Post H-track migration the boolean re-entry guard was extracted
+        # into the Unity-free ``RecompileResolutionGuard`` (behavioral
+        # coverage in ``tests/csharp/RunScriptCompileResolutionTests.cs``).
+        # The handler still owns the shared guard instance and the
+        # subscription claims single-resolution through it.
         body = _extract_method(_read(BRIDGE), "HandleRecompileAndWait")
-        # The shared re-entry flag must be declared as a captured local
-        # of the handler.
-        self.assertRegex(body, r"bool\s+resolved\s*=\s*false\s*;")
+        self.assertIn("new RecompileResolutionGuard()", body)
         sub_body = self._pipeline_finished_subscription_body(body)
-        # The subscription must short-circuit on re-entry and arm the
-        # flag before tearing down its own subscriptions.
-        self.assertRegex(sub_body, r"if\s*\(\s*resolved\s*\)\s*return\s*;")
-        self.assertRegex(sub_body, r"resolved\s*=\s*true\s*;")
+        self.assertRegex(
+            sub_body, r"if\s*\(\s*!\s*resolutionGuard\.TryClaim\(\)\s*\)\s*return\s*;"
+        )
 
 
 class TestRecompileAndWaitDeadlineWatchdog(unittest.TestCase):
@@ -1891,10 +1909,15 @@ class TestRecompileAndWaitDeadlineWatchdog(unittest.TestCase):
         self.assertNotIn("BuildRecompileReloadWaitPoll", watchdog)
 
     def test_watchdog_consults_shared_reentry_flag(self) -> None:
+        # Post H-track migration the single-resolution claim is owned by
+        # the Unity-free ``RecompileResolutionGuard``; the watchdog must
+        # route through ``resolutionGuard.TryClaim()`` so exactly one
+        # envelope is written per request.
         body = _extract_method(_read(BRIDGE), "HandleRecompileAndWait")
         watchdog = self._watchdog_body(body)
-        self.assertRegex(watchdog, r"if\s*\(\s*resolved\s*\)\s*return\s*;")
-        self.assertRegex(watchdog, r"resolved\s*=\s*true\s*;")
+        self.assertRegex(
+            watchdog, r"if\s*\(\s*!\s*resolutionGuard\.TryClaim\(\)\s*\)\s*return\s*;"
+        )
 
 
 class TestRecompileScheduleFailedCode(unittest.TestCase):
@@ -1947,15 +1970,19 @@ class RecompileScheduleFailedSanitization(unittest.TestCase):
         self.assertIn("Debug.LogWarning", catch_body)
 
     def test_schedule_catch_message_is_fixed_redacted_string(self) -> None:
+        # Post H-track migration the fixed redacted message string was
+        # extracted into the Unity-free ``ScheduleFailureEnvelope``
+        # (behavioral coverage in
+        # ``tests/csharp/RunScriptCompileResolutionTests.cs``); the catch
+        # arm routes through ``ScheduleFailureEnvelope.RedactedMessage()``
+        # and the message literal is constant-pinned on that class.
         body = _extract_method(_read(BRIDGE), "HandleRecompileAndWait")
         catch_body = _schedule_catch_body(body)
-        # The redacted human-readable message names the surface
-        # (``editor_recompile_and_wait``) and the failure category
-        # (``failed to schedule compilation``) verbatim, with no
-        # exception-derived interpolation.
+        self.assertIn("ScheduleFailureEnvelope.RedactedMessage()", catch_body)
+        redaction = RUN_SCRIPT_COMPILE_REDACTION.read_text(encoding="utf-8")
         self.assertIn(
-            "editor_recompile_and_wait: failed to schedule compilation",
-            catch_body,
+            "editor_recompile_and_wait: failed to schedule compilation.",
+            redaction,
         )
 
 
@@ -1963,9 +1990,14 @@ class TmpFontMissingMessageBranching(unittest.TestCase):
     """Issue #205: the TextMeshPro font-missing warning emitted by the
     UI element creation handler must differentiate between the case
     where the caller relied on the canonical default path and the case
-    where the caller supplied an explicit font path. The single-string
-    "canonical default path" message is wrong on the explicit-path
-    branch and must be replaced by a branched message.
+    where the caller supplied an explicit font path.
+
+    Post H-track migration the empty-vs-explicit arm selection and
+    message construction were extracted into the Unity-free
+    ``UiFontMissingMessage`` (behavioral coverage in
+    ``tests/csharp/UiElementTests.cs``). This source-text test retains
+    the Tier 3 delegation invariant (the handler routes through
+    ``UiFontMissingMessage.ForMissingFont``) and the envelope-shape pins.
     """
 
     @staticmethod
@@ -1983,19 +2015,16 @@ class TmpFontMissingMessageBranching(unittest.TestCase):
             handler_body, match.end(), "tmpFontMissing branch"
         )
 
-    def test_branch_keys_off_caller_supplied_font_path(self) -> None:
-        """The branch must inspect ``props.font`` (or the equivalent
-        accessor on the parsed payload) so the message differs by
-        whether the caller supplied a font path."""
+    def test_branch_delegates_to_font_missing_message(self) -> None:
+        """The branch must route arm selection + message construction
+        through the Unity-free ``UiFontMissingMessage.ForMissingFont``,
+        forwarding the caller-supplied font path and the canonical
+        default so the message differs by whether the caller supplied a
+        font path."""
         body = _extract_method(_read(BRIDGE), "HandleEditorCreateUiElement")
         branch = self._tmp_font_missing_branch(body)
-        # The branch must distinguish the empty-caller case from the
-        # non-empty-caller case via ``string.IsNullOrEmpty`` against the
-        # caller-supplied font path. The accessor lives on the parsed
-        # ``UiPropertiesPayload`` so the source text references
-        # ``props.font`` (or the equivalent ``properties.font`` accessor
-        # on the same payload type).
-        self.assertRegex(branch, r"string\.IsNullOrEmpty\([^)]*\.font\s*\)")
+        self.assertIn("UiFontMissingMessage.ForMissingFont", branch)
+        self.assertIn("props.font", branch)
 
     def test_branch_message_names_canonical_default_only_on_empty_caller_arm(
         self,
@@ -2009,17 +2038,6 @@ class TmpFontMissingMessageBranching(unittest.TestCase):
         # empty-caller arm names it). The branch must also reference
         # ``UiElementDefaultTmpFontAssetPath`` for the empty-caller case.
         self.assertIn("UiElementDefaultTmpFontAssetPath", branch)
-
-    def test_branch_message_references_caller_supplied_path(self) -> None:
-        """The non-empty arm interpolates the caller-supplied font path
-        verbatim so the warning text is unambiguous about which path
-        was attempted."""
-        body = _extract_method(_read(BRIDGE), "HandleEditorCreateUiElement")
-        branch = self._tmp_font_missing_branch(body)
-        # The non-empty arm must interpolate ``props.font`` into the
-        # outgoing message so the operator sees the path actually
-        # attempted.
-        self.assertRegex(branch, r"\{[^}]*props\.font[^}]*\}")
 
     def test_branch_retains_envelope_code_severity_and_payload_keys(
         self,
@@ -2129,32 +2147,21 @@ class TestConsoleLogEntryDeclaresPhaseField(unittest.TestCase):
 
 
 class TestOnLogMessagePhasePriority(unittest.TestCase):
-    """Issue #239: OnLogMessage snapshots phase with ``build > play > edit``."""
+    """Issue #239: OnLogMessage snapshots phase with ``build > play > edit``.
 
-    def test_priority_order_is_build_then_play_then_edit(self) -> None:
+    Post H-track migration the build > play > edit precedence was
+    extracted into the Unity-free ``ConsoleLogPhaseClassifier.Classify``
+    (behavioral coverage in ``tests/csharp/ConsoleCaptureTests.cs``).
+    This source-text test retains the Tier 3 delegation invariant: the
+    handler reads both canonical editor-API flags and feeds them into
+    the classifier.
+    """
+
+    def test_delegates_phase_classification(self) -> None:
         body = _extract_method(_read(BRIDGE), "OnLogMessage")
-        build_pos = body.find('"build"')
-        play_pos = body.find('"play"')
-        edit_pos = body.find('"edit"')
-        # Tuple value-pin: every anchor must be present and the
-        # textual order ``build`` < ``play`` < ``edit`` must hold so a
-        # mutation that flips two branches breaks the test with a
-        # specific failure message.
-        self.assertEqual(
-            (True, True, True, True),
-            (
-                build_pos >= 0,
-                play_pos > build_pos,
-                edit_pos > play_pos,
-                "BuildPipeline.isBuildingPlayer" in body
-                and "EditorApplication.isPlayingOrWillChangePlaymode" in body,
-            ),
-            msg=(
-                "OnLogMessage must check the three phase tokens in the "
-                "order build > play > edit and read both the build-player "
-                "and playmode flags from their canonical APIs."
-            ),
-        )
+        self.assertIn("ConsoleLogPhaseClassifier.Classify", body)
+        self.assertIn("BuildPipeline.isBuildingPlayer", body)
+        self.assertIn("EditorApplication.isPlayingOrWillChangePlaymode", body)
 
 
 def _extract_get_entries_body(source: str) -> str:
@@ -2171,64 +2178,42 @@ def _extract_get_entries_body(source: str) -> str:
 
 
 class TestConsoleLogBufferRetrievalAppliesPhaseFilter(unittest.TestCase):
-    """Issue #239: ``GetEntries`` honors the phase-filter argument."""
+    """Issue #239: ``GetEntries`` honors the phase-filter argument.
 
-    def test_get_entries_skips_non_matching_phase(self) -> None:
+    Post H-track migration the catch-all / strict phase-match predicate
+    was extracted into the Unity-free
+    ``ConsoleLogEntryPredicate.MatchesPhaseFilter`` (behavioral coverage
+    in ``tests/csharp/ConsoleCaptureTests.cs``). This source-text test
+    retains the Tier 3 delegation invariant: ``GetEntries`` must route
+    its phase filtering through the relocated predicate.
+    """
+
+    def test_get_entries_delegates_to_phase_predicate(self) -> None:
         body = _extract_get_entries_body(_read(BRIDGE))
-        # The retrieval method must accept the new parameter and branch
-        # on it so non-matching entries are filtered out.  The catch-all
-        # ("all") case is implemented inside MatchesPhaseFilter which
-        # ``GetEntries`` invokes.
-        self.assertEqual(
-            (True, True),
-            (
-                "phaseFilter" in body,
-                "MatchesPhaseFilter(entry.phase, phaseFilter)" in body,
-            ),
-            msg=(
-                "GetEntries must take a phaseFilter argument and call "
-                "MatchesPhaseFilter(entry.phase, phaseFilter) so the "
-                "retrieval branches on the requested phase filter."
-            ),
-        )
-
-    def test_matches_phase_filter_admits_catch_all(self) -> None:
-        body = _extract_method(_read(BRIDGE), "MatchesPhaseFilter")
-        self.assertEqual(
-            (True, True),
-            (
-                'filter == "all"' in body,
-                "return entryPhase == filter" in body,
-            ),
-            msg=(
-                "MatchesPhaseFilter must admit every entry on the "
-                "catch-all selector and otherwise return entryPhase == "
-                "filter so strict matching is the only other path."
-            ),
+        self.assertIn("phaseFilter", body)
+        self.assertIn(
+            "ConsoleLogEntryPredicate.MatchesPhaseFilter(entry.phase, phaseFilter)",
+            body,
         )
 
 
 class TestHandleCaptureConsoleLogsValidatesPhaseFilter(unittest.TestCase):
-    """Issue #239: the capture handler rejects unsupported phase selectors."""
+    """Issue #239: the capture handler rejects unsupported phase selectors.
 
-    def test_handler_references_supported_set_and_error_code(self) -> None:
+    Post H-track migration the supported-set membership check (and the
+    ``SupportedPhaseFilters`` array) was extracted into the Unity-free
+    ``ConsoleLogEntryPredicate`` (behavioral coverage in
+    ``tests/csharp/ConsoleCaptureTests.cs``). This source-text test
+    retains the Tier 3 delegation invariant: the handler gates the
+    phase selector through ``ConsoleLogEntryPredicate.IsSupportedPhaseFilter``
+    and surfaces the supported set in the rejection message.
+    """
+
+    def test_handler_delegates_phase_filter_validation(self) -> None:
         body = _extract_method(_read(BRIDGE), "HandleCaptureConsoleLogs")
-        # Tuple value-pin: both the supported-set anchor and the typed
-        # error code must be present, otherwise the rejection path
-        # cannot fire or cannot be identified by callers.
-        self.assertEqual(
-            (True, True),
-            (
-                "ConsoleLogBuffer.SupportedPhaseFilters" in body,
-                "EDITOR_CTRL_INVALID_PHASE_FILTER" in body,
-            ),
-            msg=(
-                "HandleCaptureConsoleLogs must reference both "
-                "ConsoleLogBuffer.SupportedPhaseFilters (gating + error "
-                "message body) and the typed code "
-                "EDITOR_CTRL_INVALID_PHASE_FILTER."
-            ),
-        )
+        self.assertIn("ConsoleLogEntryPredicate.IsSupportedPhaseFilter", body)
+        self.assertIn("ConsoleLogEntryPredicate.SupportedPhaseFilters", body)
+        self.assertIn("EDITOR_CTRL_INVALID_PHASE_FILTER", body)
 
 
 class TestHandleGetEditorStateReadsFourFlags(unittest.TestCase):
@@ -2668,58 +2653,36 @@ class TestBuildRecompileReloadWaitPollDrainsImportQueue(unittest.TestCase):
 
 
 class TestRunScriptCompilePendingResponseDeadlinePath(unittest.TestCase):
-    """Issue #234: the compile-pending response builder's deadline-only
-    branch returns ``EDITOR_RUN_SCRIPT_COMPILE_TIMEOUT`` rather than the
-    generic ``EDITOR_CTRL_RUN_SCRIPT_COMPILE`` code so callers can
-    distinguish "compile timed out" from "compile errored / staging
-    failed". The consecutive-stuck recovery branch is unchanged
-    (``EDITOR_CTRL_RUN_SCRIPT_RECOVERY``).
+    """Issue #234: the compile-pending response builder distinguishes the
+    deadline-only timeout code from the consecutive-stuck recovery code.
+
+    Post H-track migration the recovery-vs-timeout code selection was
+    extracted into the Unity-free ``RunScriptCompilePendingCodeSelector``
+    (behavioral coverage in
+    ``tests/csharp/RunScriptCompileValidatorTests.cs``). This source-text
+    test retains the Tier 3 delegation invariant (the builder routes
+    through ``RunScriptCompilePendingCodeSelector.SelectCode``) plus
+    constant-value pins on the relocated codes.
     """
 
-    def test_deadline_branch_emits_dedicated_timeout_code(self) -> None:
+    def test_builder_delegates_to_pending_code_selector(self) -> None:
         body = _extract_method(_read(BRIDGE), "RunScriptCompilePendingResponse")
-        self.assertIn(
-            "EDITOR_RUN_SCRIPT_COMPILE_TIMEOUT",
-            body,
-            msg=(
-                "RunScriptCompilePendingResponse must emit the new "
-                "dedicated compile-timeout code "
-                "EDITOR_RUN_SCRIPT_COMPILE_TIMEOUT on the deadline-only "
-                "branch (issue #234)."
-            ),
-        )
+        self.assertIn("RunScriptCompilePendingCodeSelector.SelectCode", body)
+        self.assertIn("RunScriptCompilePendingCodeSelector.RecoveryCode", body)
 
     def test_deadline_branch_does_not_emit_generic_compile_code(self) -> None:
         body = _extract_method(_read(BRIDGE), "RunScriptCompilePendingResponse")
-        # The generic compile-failure code must not be the return code
-        # from the deadline-only branch. The recovery branch is the only
-        # other code emitted from this builder.
-        self.assertNotIn(
-            "EDITOR_CTRL_RUN_SCRIPT_COMPILE",
-            body,
-            msg=(
-                "RunScriptCompilePendingResponse must not emit the "
-                "generic EDITOR_CTRL_RUN_SCRIPT_COMPILE code from the "
-                "deadline-only branch — the new dedicated "
-                "EDITOR_RUN_SCRIPT_COMPILE_TIMEOUT code distinguishes "
-                "deadline-elapsed from compile / staging / entry-point "
-                "failure (issue #234)."
-            ),
-        )
+        # The generic compile-failure code must not be returned from this
+        # builder; the selector picks recovery vs. dedicated timeout.
+        self.assertNotIn("EDITOR_CTRL_RUN_SCRIPT_COMPILE", body)
 
-    def test_recovery_branch_code_preserved(self) -> None:
-        body = _extract_method(_read(BRIDGE), "RunScriptCompilePendingResponse")
-        # The consecutive-stuck path must continue to emit the existing
-        # recovery code; the new timeout code only replaces the
-        # generic-compile code on the deadline-only branch.
+    def test_pending_codes_pinned_on_selector(self) -> None:
+        source = RUN_SCRIPT_COMPILE_VALIDATORS.read_text(encoding="utf-8")
         self.assertIn(
-            "EDITOR_CTRL_RUN_SCRIPT_RECOVERY",
-            body,
-            msg=(
-                "RunScriptCompilePendingResponse must continue to emit "
-                "EDITOR_CTRL_RUN_SCRIPT_RECOVERY on the consecutive-"
-                "stuck path (issue #234 leaves recovery unchanged)."
-            ),
+            'RecoveryCode = "EDITOR_CTRL_RUN_SCRIPT_RECOVERY"', source
+        )
+        self.assertIn(
+            'TimeoutCode = "EDITOR_RUN_SCRIPT_COMPILE_TIMEOUT"', source
         )
 
 
@@ -2764,58 +2727,27 @@ class TestHasEditorScriptChangedSinceScopeExpanded(unittest.TestCase):
             ),
         )
 
-    def test_predicate_filters_on_editor_segment(self) -> None:
+    def test_predicate_delegates_segment_classification(self) -> None:
+        # Post H-track migration the per-path Editor-segment match and the
+        # run-script temp-area exclusion were extracted into the Unity-free
+        # ``EditorScriptPathClassifier`` (behavioral coverage in
+        # ``tests/csharp/EditorScriptPathClassifierTests.cs``); the walk
+        # predicate routes per-path classification through it.
         body = _extract_method(_read(BRIDGE), "HasEditorScriptChangedSince")
-        # The Editor-segment match must be present so non-Editor source
-        # files do not trigger the dirty-source path.
-        self.assertIn(
-            "MenuExecuteEditorSegment",
-            body,
-            msg=(
-                "HasEditorScriptChangedSince must reference the "
-                "MenuExecuteEditorSegment constant so the walk filters "
-                "on paths whose chain contains an Editor segment "
-                "(issue #248)."
-            ),
-        )
-
-    def test_predicate_retains_temp_area_exclusion(self) -> None:
-        body = _extract_method(_read(BRIDGE), "HasEditorScriptChangedSince")
-        # The run-script temp-area exclusion must remain so freshly
-        # staged run-script .cs files cannot make the barrier fire on
-        # every subsequent menu execute.
-        self.assertIn(
-            "MenuExecuteRunScriptTempExclusion",
-            body,
-            msg=(
-                "HasEditorScriptChangedSince must retain the run-script "
-                "temp-area exclusion so freshly staged temp .cs files "
-                "do not make the barrier fire on every menu execute "
-                "after a run-script call (issue #248)."
-            ),
-        )
+        self.assertIn("EditorScriptPathClassifier.IsEditorSourcePath", body)
 
     def test_walk_root_constant_is_assets(self) -> None:
         source = _read(BRIDGE)
-        # The walk-root constant literal must be ``Assets`` (the entire
-        # Assets root); the Editor-segment companion constant literal
-        # must be ``Editor``.
-        self.assertRegex(
-            source,
-            r'MenuExecuteAssetsRoot\s*=\s*"Assets"',
-            msg=(
-                "MenuExecuteAssetsRoot must declare the walk-root literal "
-                "``\"Assets\"`` (issue #248)."
-            ),
-        )
-        self.assertRegex(
-            source,
-            r'MenuExecuteEditorSegment\s*=\s*"Editor"',
-            msg=(
-                "MenuExecuteEditorSegment must declare the segment "
-                "literal ``\"Editor\"`` (issue #248)."
-            ),
-        )
+        # The walk-root constant literal must remain ``Assets`` (the
+        # entire Assets root); it stays declared on MenuScriptWatch.cs.
+        self.assertRegex(source, r'MenuExecuteAssetsRoot\s*=\s*"Assets"')
+
+    def test_classifier_segment_constants_pinned(self) -> None:
+        # Constant-value pin: the Editor-segment and run-script temp-area
+        # segment literals moved into EditorScriptPathClassifier.
+        source = EDITOR_SCRIPT_PATH_CLASSIFIER.read_text(encoding="utf-8")
+        self.assertIn('EditorSegment = "Editor"', source)
+        self.assertIn('RunScriptTempSegment = "_PrefabSentinelTemp"', source)
 
 
 class ScreenshotViewAllowlistSourceTests(unittest.TestCase):
@@ -3003,66 +2935,33 @@ class HelpersResolveObjectReferenceSourceTests(unittest.TestCase):
 
 
 class MenuHasEditorScriptChangedSinceSegmentExclusionTests(unittest.TestCase):
-    """Issue #255 — ``HasEditorScriptChangedSince`` expresses the
-    run-script temp-area exclusion as whole-segment equality on the
-    path's directory chain, parallel to the Editor-segment companion
-    check that already lives next to it.
+    """Issue #255 — the run-script temp-area exclusion is whole-segment
+    equality on the path's directory chain, parallel to the
+    Editor-segment companion check.
 
-    T3 source-text invariant: the predicate walks the live Assets tree
-    under the Unity Editor; no in-repo harness exercises the walk
-    (see Tier 3 Justification).  The source-text net pins the
-    segment-equality shape and the temp-exclusion constant literal.
+    Post H-track migration the whole-segment-equality logic (and its
+    ``_PrefabSentinelTemp`` exclusion constant) was extracted into the
+    Unity-free ``EditorScriptPathClassifier``; the segment-match
+    behavioral coverage now lives in
+    ``tests/csharp/EditorScriptPathClassifierTests.cs``. This source-text
+    test retains the Tier 3 delegation invariant (the change detector
+    routes through ``EditorScriptPathClassifier.IsEditorSourcePath``)
+    plus a constant-value pin on the relocated exclusion literal.
     """
 
-    def test_temp_area_exclusion_uses_whole_segment_equality(self) -> None:
+    def test_change_detector_delegates_to_path_classifier(self) -> None:
         body = _extract_method(_read(BRIDGE), "HasEditorScriptChangedSince")
-        # Whole-segment equality must be expressed as a
-        # case-sensitive ``string.Equals(<segment>, MenuExecuteRunScriptTempExclusion, ...)``
-        # comparison on the directory chain (parallel to the Editor
-        # segment check that lives beside it).
-        self.assertRegex(
-            body,
-            r"string\.Equals\(\s*segments\[[^\]]+\]\s*,\s*MenuExecuteRunScriptTempExclusion\s*,",
-            msg=(
-                "HasEditorScriptChangedSince must compare a path "
-                "segment to MenuExecuteRunScriptTempExclusion with "
-                "``string.Equals(segments[...], MenuExecuteRunScriptTempExclusion, ...)`` "
-                "so only the actual ``_PrefabSentinelTemp`` directory "
-                "segment is excluded (#255)."
-            ),
-        )
-
-    def test_temp_area_exclusion_no_longer_uses_substring_indexof(self) -> None:
-        body = _extract_method(_read(BRIDGE), "HasEditorScriptChangedSince")
-        # The prior substring ``IndexOf(MenuExecuteRunScriptTempExclusion, ...)``
-        # form risks false positives on legitimate user paths that
-        # contain the constant value as a substring.  It must be gone.
-        self.assertNotRegex(
-            body,
-            r"IndexOf\(\s*MenuExecuteRunScriptTempExclusion\b",
-            msg=(
-                "HasEditorScriptChangedSince must not call "
-                "``IndexOf(MenuExecuteRunScriptTempExclusion, ...)`` — "
-                "the substring form risks false positives on user "
-                "paths that contain the constant as a substring (#255)."
-            ),
-        )
+        self.assertIn("EditorScriptPathClassifier.IsEditorSourcePath", body)
 
     def test_temp_exclusion_constant_literal_value_unchanged(self) -> None:
-        source = _read(BRIDGE)
-        # The constant value is part of the public operating
-        # convention (CLAUDE.md / README.md); a rename would silently
-        # break the temp-exclusion contract with the run-script handler
-        # that writes there.
+        # The constant value is part of the public operating convention
+        # (CLAUDE.md / README.md); a rename would silently break the
+        # temp-exclusion contract with the run-script handler that writes
+        # there. The literal now lives on EditorScriptPathClassifier.
+        source = EDITOR_SCRIPT_PATH_CLASSIFIER.read_text(encoding="utf-8")
         self.assertRegex(
             source,
-            r'MenuExecuteRunScriptTempExclusion\s*=\s*"_PrefabSentinelTemp"',
-            msg=(
-                "MenuExecuteRunScriptTempExclusion must declare the "
-                "literal ``\"_PrefabSentinelTemp\"`` so the operating "
-                "convention (run-script staging directory) is honoured "
-                "(#255)."
-            ),
+            r'RunScriptTempSegment\s*=\s*"_PrefabSentinelTemp"',
         )
 
 
@@ -3130,8 +3029,7 @@ class EditorControlBridgeRequestSchemaTests(unittest.TestCase):
     )
 
     def test_request_dto_declares_every_new_field(self) -> None:
-        source = _read(BRIDGE)
-        body = _extract_editor_control_request_body(source)
+        body = _extract_editor_control_request_body()
         for field in self._NEW_REQUEST_FIELDS:
             with self.subTest(field=field):
                 self.assertIn(
@@ -3260,14 +3158,10 @@ class EditorControlBridgeDispatcherRoutingTests(unittest.TestCase):
     }
 
     def test_supported_actions_lists_every_new_action(self) -> None:
-        source = _read(BRIDGE)
-        start = source.find("SupportedActions = new HashSet<string>")
-        self.assertNotEqual(
-            -1, start, "SupportedActions block not found",
-        )
-        block_close = source.find("};", start)
-        self.assertNotEqual(-1, block_close)
-        block = source[start:block_close]
+        # Post H-track migration the action-string set is the canonical
+        # ``ActionRegistry.Supported`` HashSet literal in
+        # ``PrefabSentinel.Dispatch.ActionRegistry.cs``.
+        block = _action_registry_hashset("Supported")
         for action in self._NEW_ACTIONS:
             with self.subTest(action=action):
                 self.assertIn(f'"{action}"', block)
@@ -3682,24 +3576,25 @@ class MenuScriptWatchSplitSourceInvariantTests(unittest.TestCase):
             ),
         )
 
-    def test_dedicated_partial_carries_the_three_standalone_constants(
-        self,
-    ) -> None:
+    def test_dedicated_partial_carries_walk_root_constant(self) -> None:
+        """Post H-track migration only the walk-root constant
+        (``MenuExecuteAssetsRoot``) remains on the MenuScriptWatch
+        partial; the Editor-segment and run-script temp-area segment
+        constants were extracted into the Unity-free
+        ``EditorScriptPathClassifier`` (as ``EditorSegment`` /
+        ``RunScriptTempSegment``).
+        """
         text = self._MENU_SCRIPT_WATCH_PARTIAL.read_text(encoding="utf-8")
-        for constant in (
-            "MenuExecuteAssetsRoot",
-            "MenuExecuteEditorSegment",
-            "MenuExecuteRunScriptTempExclusion",
-        ):
+        self.assertIn("MenuExecuteAssetsRoot", text)
+        # The two relocated constants must no longer be declared here.
+        self.assertNotIn("MenuExecuteEditorSegment", text)
+        self.assertNotIn("MenuExecuteRunScriptTempExclusion", text)
+
+    def test_relocated_segment_constants_live_on_path_classifier(self) -> None:
+        text = EDITOR_SCRIPT_PATH_CLASSIFIER.read_text(encoding="utf-8")
+        for constant in ("EditorSegment", "RunScriptTempSegment"):
             with self.subTest(constant=constant):
-                self.assertIn(
-                    constant,
-                    text,
-                    msg=(
-                        f"MenuScriptWatch partial must own the "
-                        f"``{constant}`` constant (issue #262)."
-                    ),
-                )
+                self.assertIn(constant, text)
 
     def test_claude_md_inventory_lists_menuscriptwatch(self) -> None:
         text = self._CLAUDE_MD.read_text(encoding="utf-8")

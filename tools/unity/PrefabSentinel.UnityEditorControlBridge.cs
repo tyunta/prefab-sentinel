@@ -22,358 +22,21 @@ namespace PrefabSentinel
         public const string BridgeVersion = "0.5.208";
 
         /// <summary>Actions that write their response file asynchronously (not on return).</summary>
-        // Issues #108 / #118 / #225: ``run_script``, ``editor_recompile_and_wait``,
-        // and ``execute_menu_item`` (when the implicit recompile barrier fires)
-        // observe the compile-and-reload cycle through an
-        // ``EditorApplication.update`` registry instead of blocking the
-        // main thread on ``Thread.Sleep``; the dispatcher must therefore
-        // skip the synchronous "no response written" guard for them.
-        public static readonly System.Collections.Generic.HashSet<string> AsyncActions =
-            new System.Collections.Generic.HashSet<string>
-            {
-                "vrcsdk_upload",
-                "run_script",
-                "editor_recompile_and_wait",
-                "execute_menu_item",
-                // Issue #233: asynchronous submit + poll observe their
-                // completion through the per-request completion file the
-                // bridge writes; both routes participate in the same async
-                // completion registry as the synchronous ``run_script``.
-                "run_script_submit",
-                "run_script_poll",
-            };
+        // Issue H-8: the membership sets are owned by ``ActionRegistry`` as the
+        // single source of truth; the dispatcher and EditorBridge consume them
+        // through these aliases. The async set lets the dispatcher skip the
+        // synchronous "no response written" guard for compile-and-reload
+        // observing actions (#108 / #118 / #225 / #233).
+        public static readonly HashSet<string> AsyncActions = ActionRegistry.Async;
 
         /// <summary>All action strings handled by this bridge.</summary>
-        public static readonly HashSet<string> SupportedActions = new HashSet<string>
-        {
-            "capture_screenshot",
-            "select_object",
-            "frame_selected",
-            "instantiate_to_scene",
-            "ping_object",
-            "capture_console_logs",
-            "refresh_asset_database",
-            "recompile_scripts",
-            "set_material",
-            "delete_object",
-            "list_children",
-            "list_materials",
-            "get_camera",
-            "set_camera",
-            "list_roots",
-            "get_material_property",
-            "set_material_property",
-            "run_integration_tests",
-            "vrcsdk_upload",
-            // Phase 2: BlendShape + Menu
-            "get_blend_shapes", "set_blend_shape",
-            "list_menu_items", "execute_menu_item",
-            // Phase 3: Material reverse lookup
-            "find_renderers_by_material",
-            // Phase 4: Rename + AddComponent + Udon
-            "editor_rename",
-            "editor_add_component",
-            "create_udon_program_asset",
-            // Phase 5: SetProperty + SaveAsPrefab
-            "editor_set_property",
-            // Issue #193: ``safe_save_prefab`` replaces the legacy
-            // ``save_as_prefab`` as the sole public prefab-save action.
-            "safe_save_prefab",
-            "editor_set_parent",
-            // Phase 6: Batch Operations + Scene
-            "editor_create_empty",
-            "editor_create_primitive",
-            // Issue #195: dedicated uGUI element creation surface;
-            // canonical allowed type set is owned by the handler.
-            "editor_create_ui_element",
-            "editor_batch_create",
-            "editor_batch_set_property",
-            "editor_batch_set_material_property",
-            "editor_open_scene",
-            "editor_save_scene",
-            // Phase 7: UX Review improvements
-            "editor_batch_add_component",
-            "editor_remove_component",
-            "editor_create_scene",
-            // Phase 8: Reflection
-            "editor_reflect",
-            // Phase 9: Editor script exec (#74)
-            "run_script",
-            // Issue #118: synchronous recompile-and-wait surface
-            "editor_recompile_and_wait",
-            // Issue #119: high-level UdonSharp authoring surface — three
-            // synchronous handlers wrapping the AddComponent →
-            // RunBehaviourSetup → CopyProxyToUdon authoring chain, the
-            // SerializedObject field-write surface, and the published
-            // UnityEventTools persistent-listener entry point.
-            "editor_add_udonsharp_component",
-            "editor_set_udonsharp_field",
-            "editor_wire_persistent_listener",
-            // Issue #239: editor-state read action; returns the four
-            // live editor flags as an ``EditorStateSnapshot``.
-            "get_editor_state",
-            // Issue #242: bridge-side force-refresh primitive — sets
-            // ``forceMatrixRecalculationPerRender`` on every active
-            // SkinnedMeshRenderer and drives ``QueuePlayerLoopUpdate`` in
-            // one round-trip.
-            "force_scene_view_refresh",
-            // Issue #240: batch blend-shape write under one Undo group.
-            "batch_set_blend_shape",
-            // Issue #236: Prefab Stage open / close.  Every hierarchy-bound
-            // handler consults ``ResolveGameObjectInActiveStage`` so a live
-            // stage shadows the open scene when present.
-            "open_prefab",
-            "close_prefab",
-            // Issue #233: asynchronous run-script submit / poll surface.
-            // ``run_script`` remains supported for short tasks.
-            "run_script_submit",
-            "run_script_poll",
-            // Issue #243: AnimationClip primitives — inspect, create, apply.
-            "inspect_animation_clip",
-            "create_animation_clip",
-            "apply_animation_clip",
-        };
+        public static readonly HashSet<string> SupportedActions = ActionRegistry.Supported;
 
         // ── Request / Response DTOs ──
 
-        [Serializable]
-        public sealed class EditorControlRequest
-        {
-            public int protocol_version = 0;
-            public string action = string.Empty;
-
-            // capture_screenshot
-            public string view = "scene";   // "scene" | "game"
-            public int width = 0;           // 0 = use current window size
-            public int height = 0;
-
-            // select_object
-            public string hierarchy_path = string.Empty;
-            public string prefab_asset_path = string.Empty; // non-empty = open Prefab Stage first
-
-            // frame_selected
-            public float zoom = 0f;         // 0 = keep current
-
-            // instantiate_to_scene (asset_path = prefab, hierarchy_path = parent)
-            public float[] position = null; // [x, y, z]
-
-            // ping_object / instantiate_to_scene
-            public string asset_path = string.Empty;
-            public int material_index = -1;
-            public string material_guid = string.Empty;
-            public string material_path = string.Empty;  // asset path alternative to GUID
-
-            // capture_console_logs
-            public int max_entries = 200;
-            public string log_type_filter = "all"; // "all" | "error" | "warning" | "exception"
-            public float since_seconds = 0f;       // 0 = no time filter
-            // Issue #113: ordering keyword and opaque continuation token.
-            // Empty ``order`` defaults to "newest_first" inside the
-            // handler. Empty ``cursor`` starts a fresh page from the
-            // most recent (or oldest, depending on ordering) entry.
-            public string order = string.Empty;
-            public string cursor = string.Empty;
-
-            // list_children
-            public int depth = 1;
-
-            // camera (get_camera / set_camera)
-            // Pivot orbit: pivot + yaw/pitch/distance
-            public float[] camera_pivot = null;      // [x, y, z] pivot point
-            public float yaw = float.NaN;           // NaN = keep current
-            public float pitch = float.NaN;
-            public float distance = -1f;             // SceneView.size; -1 = keep current
-            // Position mode: camera_position + camera_look_at or yaw/pitch
-            public float[] camera_position = null;   // [x, y, z] camera world coords
-            public float[] camera_look_at = null;    // [x, y, z] look-at target
-            // Shared
-            public int camera_orthographic = -1;     // -1 = keep, 0 = perspective, 1 = ortho
-
-            // get_material_property
-            public string property_name = string.Empty; // empty = list all properties
-
-            // set_material_property
-            public string property_value = string.Empty;  // raw JSON string, manually parsed by handler
-
-            // vrcsdk_upload
-            public string target_type = string.Empty;    // "avatar" or "world"
-            public string blueprint_id = string.Empty;    // existing VRC asset ID
-            public string description = string.Empty;     // empty = no change
-            public string tags = string.Empty;            // JSON array string, empty = no change
-            public string release_status = string.Empty;  // "public" | "private", empty = no change
-            public bool confirm = false;                  // dry-run gate
-            public string platforms = string.Empty;  // JSON array: "[\"windows\",\"android\"]"
-            public bool force_original = false;       // break Prefab Instance before saving
-            // Issue #193: caller-supplied non-empty JSON array of component type
-            // names that the safe-save handler must keep attached on the saved
-            // asset.  Mandatory on the safe_save_prefab action; rejected when
-            // empty / malformed (EDITOR_CTRL_SAFE_SAVE_PREFAB_PROTECT_REQUIRED /
-            // EDITOR_CTRL_SAFE_SAVE_PREFAB_BAD_JSON).
-            public string protect_components_json = string.Empty;
-
-            // Phase 2: BlendShape
-            public string filter = string.Empty;            // name substring filter / menu prefix
-            public string blend_shape_name = string.Empty;  // BlendShape name
-            public float blend_shape_weight = 0f;           // BlendShape weight (0-100)
-
-            // Phase 2: Menu
-            public string menu_path = string.Empty;         // menu item path
-            // Issue #225: caller-supplied opt-out for the implicit
-            // recompile barrier on menu execution. When true, the
-            // handler skips the barrier and invokes the menu item
-            // synchronously — only safe when the caller has already
-            // verified compile state. Defaults to false so accidental
-            // omission keeps the barrier active.
-            public bool assume_compiled = false;
-
-            // Phase 4: Rename + AddComponent + Udon
-            public string new_name = string.Empty;
-            public string component_type = string.Empty;
-            public int component_index = -1;  // -1 = unspecified
-
-            // Phase 5: SetProperty + SaveAsPrefab
-            public string object_reference = string.Empty;
-
-            // Phase 6: Batch Operations + Scene
-            public string primitive_type = string.Empty;
-            public string scale = string.Empty;
-            public string rotation = string.Empty;
-            public string batch_objects_json = string.Empty;
-            public string batch_operations_json = string.Empty;
-            public string properties_json = string.Empty;
-            public string open_scene_mode = "single";
-
-            // Phase 8: Reflection
-            public string reflect_action = string.Empty;
-            public string query = string.Empty;
-            public string scope = "all";
-            public string class_name = string.Empty;
-            public string member_name = string.Empty;
-
-            // Phase 9: Editor script exec (#74)
-            // `code` is the full C# snippet (must define `public static class PrefabSentinelTempScript`
-            // with `public static void Run()`). `change_reason` is audited on the Python side;
-            // we accept it here only so JsonUtility doesn't fail on the extra field.
-            public string code = string.Empty;
-            public string change_reason = string.Empty;
-            public string temp_id = string.Empty;  // optional; handler generates one when empty
-
-            // Phase 10: Force re-import on recompile (#106)
-            // When set, HandleRecompileScripts runs ImportAsset with
-            // ForceUpdate | ForceSynchronousImport on each editor script
-            // before scheduling compilation, so externally edited files
-            // under Assets/Editor are picked up reliably.
-            public bool force_reimport = false;
-
-            // Phase 10: Caller-supplied compile-poll budget (#102)
-            // When > 0, HandleRunScript uses this as the bounded compile
-            // poll budget (milliseconds) instead of RunScriptCompileTimeoutMs.
-            // 0 (default) means "use the bridge default".
-            public int compile_timeout = 0;
-
-            // Phase 11: Camera reset mode (#112).
-            // When true, HandleSetCamera ignores the other camera fields and
-            // restores the active SceneView to the documented default pivot,
-            // rotation, size, and orthographic flag.
-            public bool reset_to_defaults = false;
-
-            // Phase 11: Console capture classification filter (#117).
-            // ``all`` (default), ``non_fatal`` (only entries matching the
-            // bridge-side non-fatal pattern table), or ``fatal`` (only
-            // entries that do not match it). Validated by the handler so an
-            // unsupported value yields ``EDITOR_CTRL_INVALID_CLASSIFICATION_FILTER``.
-            public string classification_filter = "all";
-
-            // Issue #118: synchronous recompile-and-wait budget, in seconds.
-            // Consumed by ``HandleRecompileAndWait``; ignored by every
-            // other handler.  ``0`` means "use the bridge default".
-            public float timeout_sec = 0f;
-
-            // Issue #239: phase filter selector for the console capture
-            // surface.  ``all`` (default), ``edit``, ``play``, or ``build``.
-            // The handler validates the selector against the
-            // ``ConsoleLogBuffer.SupportedPhaseFilters`` set before
-            // touching the buffer; unsupported values yield the dedicated
-            // ``EDITOR_CTRL_INVALID_PHASE_FILTER`` error envelope.
-            public string phase_filter = "all";
-
-            // Issue #119: UdonSharp authoring surface payload.
-            // ``editor_add_udonsharp_component`` consumes ``component_type``
-            // (already declared above) plus ``fields_json``: a JSON object
-            // mapping serialized-field name to a string-encoded value
-            // (parsed through the same ApplyPropertyValue surface as
-            // ``editor_set_property``).  ``editor_set_udonsharp_field``
-            // consumes ``hierarchy_path``, ``field_name``, and the
-            // existing value-vs-reference pair (``property_value`` /
-            // ``object_reference``).
-            public string fields_json = string.Empty;
-            public string field_name = string.Empty;
-
-            // ``editor_wire_persistent_listener`` consumes the source
-            // identity (``hierarchy_path`` + source component is taken
-            // from the resolved object's component_type), the source
-            // event field name (``event_path``), the target identity
-            // (``target_path``), the method name on the target
-            // (``method``), and the string argument bound at edit time
-            // (``arg``).
-            public string event_path = string.Empty;
-            public string target_path = string.Empty;
-            public string method = string.Empty;
-            public string arg = string.Empty;
-
-            // Issue #195: ``editor_create_ui_element`` payload.
-            // ``new_name`` carries the GameObject name, ``component_type``
-            // selects from the canonical allowed type set, and
-            // ``hierarchy_path`` resolves the parent (empty = scene root).
-            // ``ui_rect_json`` carries
-            // ``{"anchorMin":[x,y], "anchorMax":[x,y], "sizeDelta":[x,y]}``
-            // and ``ui_properties_json`` carries the recognized graphic
-            // property keys (``color``, ``font``); both are forwarded as
-            // JSON strings because Unity's JsonUtility cannot bind nested
-            // dictionaries with heterogeneous value shapes.
-            public string ui_rect_json = string.Empty;
-            public string ui_properties_json = string.Empty;
-
-            // Issue #249: caller-supplied region argument for
-            // ``capture_screenshot``.  Accepts one of the four named
-            // presets (``eye_left | eye_right | mouth | auto_face``) or
-            // a comma-separated pixel quadruple ``"x,y,w,h"``.  Empty =
-            // no region, capture full frame.
-            public string crop_roi = string.Empty;
-
-            // Issue #241: caller-supplied pagination knobs for
-            // ``get_blend_shapes``.  Defaults reproduce the pre-pagination
-            // behaviour for callers that have not opted in.
-            public int offset = 0;
-            public int limit = 200;
-
-            // Issue #240: batch blend-shape payload — JSON array of
-            // ``{"name": string, "weight": float}`` entries forwarded as
-            // a single JSON string because Unity's JsonUtility cannot
-            // bind heterogeneous value shapes.
-            public string shapes_json = string.Empty;
-
-            // Issue #236: ``close_prefab`` save flag.  Defaults to
-            // ``true`` so callers can omit it on the common path.
-            // Name matches the Python-side ``save_on_close`` argument.
-            public bool save_on_close = true;
-
-            // Issue #233: poll-surface inputs.  ``request_id`` identifies
-            // the asynchronous job to poll; ``cleanup_on_timeout`` asks
-            // the bridge to tear down the staging area on deadline elapse.
-            public string request_id = string.Empty;
-            public bool cleanup_on_timeout = false;
-
-            // Issue #243: AnimationClip authoring payload.  ``target_dir``
-            // and ``animation_clip_name`` locate where to write a new clip;
-            // ``curves_json`` carries the curve specification as a JSON
-            // array; ``target_hierarchy_path`` locates the live GameObject
-            // for the apply surface.
-            public string target_dir = string.Empty;
-            public string animation_clip_name = string.Empty;
-            public string curves_json = string.Empty;
-            public string target_hierarchy_path = string.Empty;
-        }
+        // Request / Response DTOs — the EditorControlRequest DTO is
+        // relocated to PrefabSentinel.Dispatch.EditorControlRequest.cs (issue
+        // H-8) so the Unity-free xUnit harness can construct it directly.
 
         [Serializable]
         public sealed class EditorControlDiagnostic
@@ -398,7 +61,7 @@ namespace PrefabSentinel
             public long sequence_id = 0;
             // Issue #239: editor-phase tag assigned at ingestion under
             // the same capture lock.  Values come from
-            // ``ConsoleLogBuffer.SupportedPhaseFilters`` minus ``all``:
+            // ``ConsoleLogEntryPredicate.SupportedPhaseFilters`` minus ``all``:
             // ``edit`` / ``play`` / ``build``.  The priority order
             // ``build > play > edit`` is locked in
             // ``ConsoleLogBuffer.OnLogMessage``.
@@ -1034,8 +697,8 @@ namespace PrefabSentinel
                 // Issue #239: editor-phase tag captured by OnLogMessage
                 // under the same lock as the sequence id, so a single
                 // ingestion snapshots a self-consistent (phase, seq)
-                // pair.  Values are taken from ``SupportedPhaseFilters``
-                // minus ``all``.
+                // pair.  Values are taken from
+                // ``ConsoleLogEntryPredicate.SupportedPhaseFilters`` minus ``all``.
                 public string phase;
             }
 
@@ -1074,21 +737,14 @@ namespace PrefabSentinel
 
             private static void OnLogMessage(string message, string stackTrace, LogType type)
             {
-                // Issue #239: snapshot the phase outside the lock so the
-                // EditorApplication / BuildPipeline reads don't extend
-                // the capture lock's hold time.  Priority order is
-                // build > play > edit because a player build can fire
-                // logs while the editor is in playmode (asset
-                // post-processing during the build pipeline), and we
-                // want such entries tagged as ``build`` so callers
-                // running a build during play can filter them apart.
-                string phase;
-                if (BuildPipeline.isBuildingPlayer)
-                    phase = "build";
-                else if (EditorApplication.isPlayingOrWillChangePlaymode)
-                    phase = "play";
-                else
-                    phase = "edit";
+                // Issue #239 / H-3: snapshot the phase outside the lock so
+                // the EditorApplication / BuildPipeline reads don't extend
+                // the capture lock's hold time. The build > play > edit
+                // priority decision is owned by the Unity-free
+                // ``ConsoleLogPhaseClassifier``.
+                string phase = ConsoleLogPhaseClassifier.Classify(
+                    BuildPipeline.isBuildingPlayer,
+                    EditorApplication.isPlayingOrWillChangePlaymode);
 
                 lock (_lock)
                 {
@@ -1171,7 +827,7 @@ namespace PrefabSentinel
                                 entry.message, entry.stackTrace, entry.logType,
                                 classificationFilter))
                             continue;
-                        if (!MatchesPhaseFilter(entry.phase, phaseFilter))
+                        if (!ConsoleLogEntryPredicate.MatchesPhaseFilter(entry.phase, phaseFilter))
                             continue;
 
                         if (result.Count >= maxEntries)
@@ -1262,44 +918,10 @@ namespace PrefabSentinel
                 }
             }
 
-            // Supported classification filter values; used by the handler
-            // for both gating and the error message body.
-            internal static readonly string[] SupportedClassificationFilters =
-                { "all", "non_fatal", "fatal" };
-
-            internal static bool IsSupportedClassificationFilter(string value)
-            {
-                if (string.IsNullOrEmpty(value)) return true;
-                foreach (var v in SupportedClassificationFilters)
-                {
-                    if (v == value) return true;
-                }
-                return false;
-            }
-
-            // Issue #239: supported phase filter selectors.  ``all`` is
-            // the catch-all that admits every entry regardless of the
-            // recorded phase.  The remaining three values mirror the
-            // per-entry phase tags assigned by OnLogMessage.
-            internal static readonly string[] SupportedPhaseFilters =
-                { "all", "edit", "play", "build" };
-
-            internal static bool IsSupportedPhaseFilter(string value)
-            {
-                if (string.IsNullOrEmpty(value)) return true;
-                foreach (var v in SupportedPhaseFilters)
-                {
-                    if (v == value) return true;
-                }
-                return false;
-            }
-
-            private static bool MatchesPhaseFilter(string entryPhase, string filter)
-            {
-                // Empty filter and ``all`` both accept every entry.
-                if (string.IsNullOrEmpty(filter) || filter == "all") return true;
-                return entryPhase == filter;
-            }
+            // Issue H-3: classification / phase filter-support membership and
+            // the phase-match predicate are owned by the Unity-free
+            // ``ConsoleLogEntryPredicate``. The log-type-typed predicates
+            // above stay here because they take a UnityEngine.LogType.
         }
 
         // ── Batch Operation DTOs ──
@@ -1623,48 +1245,9 @@ namespace PrefabSentinel
             };
         }
 
-        private static int LevenshteinDistance(string a, string b)
-        {
-            if (string.IsNullOrEmpty(a)) return b?.Length ?? 0;
-            if (string.IsNullOrEmpty(b)) return a.Length;
-
-            var dp = new int[a.Length + 1, b.Length + 1];
-            for (int i = 0; i <= a.Length; i++) dp[i, 0] = i;
-            for (int j = 0; j <= b.Length; j++) dp[0, j] = j;
-
-            for (int i = 1; i <= a.Length; i++)
-            {
-                for (int j = 1; j <= b.Length; j++)
-                {
-                    int cost = a[i - 1] == b[j - 1] ? 0 : 1;
-                    dp[i, j] = Math.Min(
-                        Math.Min(dp[i - 1, j] + 1, dp[i, j - 1] + 1),
-                        dp[i - 1, j - 1] + cost
-                    );
-                }
-            }
-            return dp[a.Length, b.Length];
-        }
-
-        private static string[] SuggestSimilar(string word, List<string> candidates, int maxResults = 3)
-        {
-            if (string.IsNullOrEmpty(word) || candidates == null || candidates.Count == 0)
-                return Array.Empty<string>();
-
-            var scored = new List<(string name, int dist)>();
-            foreach (var candidate in candidates)
-            {
-                int dist = LevenshteinDistance(word, candidate);
-                int maxLen = Math.Max(word.Length, candidate.Length);
-                if (maxLen > 0 && dist <= maxLen * 0.4f)
-                    scored.Add((candidate, dist));
-            }
-            scored.Sort((a, b) => a.dist.CompareTo(b.dist));
-            var result = new string[Math.Min(maxResults, scored.Count)];
-            for (int i = 0; i < result.Length; i++)
-                result[i] = scored[i].name;
-            return result;
-        }
+        // Issue H-4: fuzzy suggestion ranking and edit-distance computation
+        // are owned by the Unity-free ``SuggestionRanker``; the property-write
+        // handler delegates to it directly.
 
         private static EditorControlResponse TryHandleVrcsdkUpload(EditorControlRequest request, string responsePath)
         {

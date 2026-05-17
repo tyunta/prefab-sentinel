@@ -14,7 +14,7 @@ Score formula (from issue #169):
 
 ``not_checked`` mutants are reported but excluded from the denominator.
 
-Audited-only mode restricts output to the TESTING.md "Mutation testing" section audited list.
+Audited-only mode restricts output to the TESTING.md#mutation-testing audited list.
 ``--module <dotted.path>`` mode restricts output to that one module.
 
 Distinct exit codes (issue #169 / spec):
@@ -38,7 +38,7 @@ from dataclasses import asdict, dataclass, field
 
 MUTMUT_SUBPROCESS_FAILURE_EXIT_CODE = 4
 
-# TESTING.md "Mutation testing" section audited modules.  Kept in one place so the audited-only
+# TESTING.md#mutation-testing audited modules.  Kept in one place so the audited-only
 # filter and the test suite both read from the same source of truth.
 AUDITED_MODULES: tuple[str, ...] = (
     "prefab_sentinel.services.reference_resolver",
@@ -157,7 +157,7 @@ def parse_mutmut_results(
 
 
 def filter_audited(records: dict[str, ModuleRecord]) -> dict[str, ModuleRecord]:
-    """Restrict *records* to the TESTING.md "Mutation testing" section audited module list."""
+    """Restrict *records* to the TESTING.md#mutation-testing audited module list."""
     audited = set(AUDITED_MODULES)
     return {
         module: record
@@ -357,7 +357,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--audited-only",
         dest="audited_only",
         action="store_true",
-        help="restrict output to the TESTING.md Mutation testing audited module list",
+        help="restrict output to the TESTING.md#mutation-testing audited module list",
     )
     parser.add_argument(
         "--format",

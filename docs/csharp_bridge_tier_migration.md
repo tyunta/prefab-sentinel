@@ -102,11 +102,11 @@ Tier 列の `(+T3)` 表記は「クラス内に移行するアサーションと
 
 | concern | source-text テスト箇所 | アサーション種別 | Tier | 移行先 xUnit テスト案 |
 |---|---|---|---|---|
-| ConsoleCapture | `…::TestConsoleLogBufferRetrievalAppliesPhaseFilter` | string-literal-grep | **T1** (+T3) | `MatchesPhaseFilter` / `MatchesTypeFilter` / `MatchesClassificationFilter`（既に純 — `UnityEditorControlBridge.cs:1287-1302`）を `internal static class ConsoleLogEntryPredicate` へ抽出。xUnit で catch-all / strict-equality を直接検証。`GetEntries` が predicate を呼ぶ点は T3 委譲 grep として残す。 |
-| ConsoleCapture | `…::TestOnLogMessagePhasePriority` | string-literal-grep | **T2a** | `internal static class ConsoleLogPhaseClassifier` に `string Classify(bool isBuildingPlayer, bool isPlayingOrWillChangePlaymode)` を抽出（value-in/value-out 純関数、新インターフェースなし）。`OnLogMessage` が 2 つの Unity static flag を読んで引数で渡す。xUnit で build>play>edit の 3-way 真理値表を検証。 |
-| ConsoleCapture | `…::TestHandleCaptureConsoleLogsContract` | string-literal-grep | **T2a** (+T3) | `internal static class ConsoleCaptureRequestValidator` に `Validate(order, cursor, maxEntries, highestSeqId, capacity) -> (ok, code, cursorAfter)` を抽出。buffer 依存は `long`/`int` 値として注入（インターフェース不要）。xUnit で ordering whitelist / cursor prefix・parse・range / `EDITOR_CTRL_INVALID_*` コードを検証。DTO フィールド presence サブテストは T3 残骸。 |
-| ConsoleCapture | `…::TestHandleCaptureConsoleLogsBoundCheck` | string-literal-grep | **T2a** | 上記 `ConsoleCaptureRequestValidator` に統合。`[1, capacity]` 境界と `EDITOR_CTRL_MAX_ENTRIES_OUT_OF_RANGE` を `test_default_parameter_boundaries.py` 流の ±1 境界テストで pin。 |
-| ConsoleCapture | `…::TestHandleCaptureConsoleLogsValidatesPhaseFilter` | string-literal-grep | **T2a** | 上記 validator に統合。`IsSupportedPhaseFilter`（`:1287` 既に純）の検証 + 未対応 selector で `EDITOR_CTRL_INVALID_PHASE_FILTER` を返すことを xUnit で検証。 |
+| ConsoleCapture | `…::TestConsoleLogBufferRetrievalAppliesPhaseFilter` | string-literal-grep | **T1 → 移行済（T3 残骸のみ）** | **[移行済 2026-05-17 / H-3]** `ConsoleLogEntryPredicate` 抽出済。catch-all / strict-equality の behavioral 検証は `tests/csharp/ConsoleCaptureTests.cs` へ移行。Python 側は `GetEntries` が `ConsoleLogEntryPredicate.MatchesPhaseFilter` を呼ぶ T3 委譲 grep のみ残置。 |
+| ConsoleCapture | `…::TestOnLogMessagePhasePriority` | string-literal-grep | **T2a → 移行済（T3 残骸のみ）** | **[移行済 2026-05-17 / H-3]** `ConsoleLogPhaseClassifier` 抽出済。build>play>edit 3-way 真理値表の behavioral 検証は `tests/csharp/ConsoleCaptureTests.cs` へ移行。Python 側は `OnLogMessage` が `ConsoleLogPhaseClassifier.Classify` を呼び 2 Unity flag を読む T3 委譲 grep のみ残置。 |
+| ConsoleCapture | `…::TestHandleCaptureConsoleLogsContract` | string-literal-grep | **T2a → 移行済（T3 残骸のみ）** | **[移行済 2026-05-17 / H-3]** `ConsoleCaptureRequestValidator` 抽出済。ordering whitelist / cursor / range / `EDITOR_CTRL_INVALID_*` の behavioral 検証は `tests/csharp/ConsoleCaptureTests.cs` へ移行。Python 側はハンドラの `ConsoleCaptureRequestValidator.Validate` 委譲 grep と DTO フィールド presence pin（relocated `EditorControlRequest.cs`）のみ残置。 |
+| ConsoleCapture | `…::TestHandleCaptureConsoleLogsBoundCheck` | string-literal-grep | **T2a → 移行済（T3 残骸のみ）** | **[移行済 2026-05-17 / H-3]** `ConsoleCaptureRequestValidator` に統合済。`[1, capacity]` 境界と `EDITOR_CTRL_MAX_ENTRIES_OUT_OF_RANGE` の behavioral 検証は `tests/csharp/ConsoleCaptureTests.cs` へ移行。Python 側は capacity 委譲 grep と out-of-range コード定数 pin のみ残置。 |
+| ConsoleCapture | `…::TestHandleCaptureConsoleLogsValidatesPhaseFilter` | string-literal-grep | **T2a → 移行済（T3 残骸のみ）** | **[移行済 2026-05-17 / H-3]** `ConsoleLogEntryPredicate.IsSupportedPhaseFilter` の behavioral 検証は `tests/csharp/ConsoleCaptureTests.cs` へ移行。Python 側はハンドラの `ConsoleLogEntryPredicate.IsSupportedPhaseFilter` 委譲 grep のみ残置。 |
 | ConsoleCapture | `…::TestConsoleLogEntryDeclaresPhaseField` | string-literal-grep | T3 | T3 恒久。`ConsoleLogEntry` の `public string phase` フィールド宣言不変条件。 |
 | ConsoleCapture | `…::TestConsoleLogBufferCapacityVisibility` | constant-drift | T3 | T3 恒久。`ConsoleLogBuffer.DefaultCapacity` の `public const` 可視性（C# ↔ Python mirror のドリフト）。 |
 
@@ -114,25 +114,25 @@ Tier 列の `(+T3)` 表記は「クラス内に移行するアサーションと
 
 | concern | source-text テスト箇所 | アサーション種別 | Tier | 移行先 xUnit テスト案 |
 |---|---|---|---|---|
-| Helpers/Properties | `…::TestApplyPropertyValueTypes` | string-literal-grep | **T2a** | `ApplyPropertyValue`（`Helpers.cs:98`）の文字列パース部を Unity-free 純関数 `PropertyValueParser` へ分離。`SerializedPropertyType` は内部 enum にミラーし、戻り値は生 `(kind, float[] components, errorCode)` — UnityEngine 型（`Color`/`Vector4`）を返さないので harness 取り込み可。ハンドラが戻り値から `new Color(...)` 等を構築し `SerializedProperty` へ書く。**`IPropertySink` インターフェースは新設しない**（値オブジェクト戻り値で足りる — 当初案の T2b 化を回避）。Color alpha デフォルト・Vector arity 拒否を xUnit で検証。 |
-| Properties | `…::TestHandleEditorSetPropertyQuaternion` | string-literal-grep, constant-drift | **T2a→T1** | `QuaternionInputValidator.Validate(string) -> (ok, code, qx,qy,qz,qw)` を抽出。`Mathf.Sqrt`/`Mathf.Abs` を `System.Math` に置換すれば完全 T1。xUnit で 4 成分要求・`1e-4` ノルム境界・エラーコードを pin。 |
-| Properties | `…::TestSetPropertyGameObject` | string-literal-grep | **T2a→T1** (+T3) | `internal static class GameObjectPropertyAllowlist`（`string[]` セット + `IsAllowed`）を抽出（`ViewAllowlistClassifier` パターン）。4 つの allowlist 名と reject ケースを xUnit で pin。`new SerializedObject(go)` grep は T3 残骸。 |
-| Properties | `…::TestSetPropertySuggestions` | string-literal-grep | **T1** (+T3) | `SuggestSimilar` + `LevenshteinDistance`（`UnityEditorControlBridge.cs:1649`、既に Unity-free）を `internal static class SuggestionRanker` へ移し `<Compile Include>` link。ランキング・`0.4` distance-ratio 閾値・`maxResults` truncation・空入力ガードを xUnit で pin。"Did you mean" サフィックス分岐と iterator 走査は T3 残骸。 |
+| Helpers/Properties | `…::TestApplyPropertyValueTypes` | string-literal-grep | **T2a → 移行済（T3 残骸のみ）** | **[移行済 2026-05-17 / H-4]** `PropertyValueParser` 抽出済。Color alpha デフォルト・Vector arity 拒否の behavioral 検証は `tests/csharp/PropertiesPureLogicTests.cs` へ移行。Python 側は `ApplyPropertyValue` の `PropertyValueParser.TryParse` 委譲 grep のみ残置。 |
+| Properties | `…::TestHandleEditorSetPropertyQuaternion` | string-literal-grep, constant-drift | **T2a→T1 → 移行済（T3 残骸のみ）** | **[移行済 2026-05-17 / H-4]** `QuaternionInputValidator` 抽出済。4 成分要求・ノルム境界・エラーコードの behavioral 検証は `tests/csharp/PropertiesPureLogicTests.cs` へ移行。Python 側はハンドラの `QuaternionInputValidator.Validate` 委譲 grep と `NormTolerance = 1e-4f` 定数 pin のみ残置。 |
+| Properties | `…::TestSetPropertyGameObject` | string-literal-grep | **T2a→T1 → 移行済（T3 残骸のみ）** | **[移行済 2026-05-17 / H-4]** `GameObjectPropertyAllowlist` 抽出済。allowlist membership と reject ケースの behavioral 検証は `tests/csharp/PropertiesPureLogicTests.cs` へ移行。Python 側はハンドラの `GameObjectPropertyAllowlist.IsAllowed` 委譲 grep と 4 allowlist 名定数 pin のみ残置。 |
+| Properties | `…::TestSetPropertySuggestions` | string-literal-grep | **T1 → 移行済（T3 残骸のみ）** | **[移行済 2026-05-17 / H-4]** `SuggestionRanker` 抽出済。ランキング・`0.4` distance-ratio 閾値・truncation・空入力ガードの behavioral 検証は `tests/csharp/PropertiesPureLogicTests.cs` へ移行。Python 側は not-found 分岐の `SuggestionRanker.SuggestSimilar` 委譲 grep のみ残置。 |
 
 ### 4.4 UiElement
 
 | concern | source-text テスト箇所 | アサーション種別 | Tier | 移行先 xUnit テスト案 |
 |---|---|---|---|---|
-| UiElement | `…::TestCreateUiElementSource` | structural-invariant, string-literal-grep | **T2a→T1** (+T3) | `internal static class UiElementTypeAllowlist`（`{Image, TextMeshProUGUI, Button, Slider, Toggle}` セット + `IsAllowed`）を抽出。5 トークンと `BAD_TYPE` 拒否を xUnit で pin。`SupportedActions` membership・dispatcher case・envelope コード・font-path 定数は T3 残骸。 |
-| UiElement | `…::TmpFontMissingMessageBranching` | string-literal-grep | **T1** | `internal static class UiFontMissingMessage` に `string ForCallerFontPath(string callerFontPath, string canonicalDefaultPath)` を抽出。`string.IsNullOrEmpty(props.font)` の 3 項分岐は純 string/bool。両 arm（空→canonical default 名・非空→caller path 補間）を xUnit で直接検証。envelope code/severity/payload-key は T3 残骸。 |
+| UiElement | `…::TestCreateUiElementSource` | structural-invariant, string-literal-grep | **T2a→T1 → 移行済（T3 残骸のみ）** | **[移行済 2026-05-17 / H-5]** `UiElementTypeAllowlist` 抽出済。5 トークン membership と `BAD_TYPE` 拒否の behavioral 検証は `tests/csharp/UiElementTests.cs` へ移行。Python 側はハンドラの `UiElementTypeAllowlist.IsAllowed` 委譲 grep・5 トークン定数 pin・`SupportedActions` membership（`ActionRegistry.cs` へ repoint）・dispatcher case・envelope コードのみ残置。 |
+| UiElement | `…::TmpFontMissingMessageBranching` | string-literal-grep | **T1 → 移行済（T3 残骸のみ）** | **[移行済 2026-05-17 / H-5]** `UiFontMissingMessage` 抽出済。空→canonical default / 非空→caller path の両 arm behavioral 検証は `tests/csharp/UiElementTests.cs` へ移行。Python 側はハンドラの `UiFontMissingMessage.ForMissingFont` 委譲 grep と envelope code/severity/payload-key pin のみ残置。 |
 
 ### 4.5 Menu + MenuScriptWatch
 
 | concern | source-text テスト箇所 | アサーション種別 | Tier | 移行先 xUnit テスト案 |
 |---|---|---|---|---|
-| MenuScriptWatch | `…::TestHasEditorScriptChangedSinceScopeExpanded` | string-literal-grep, constant-drift | **T2a** | `internal static class EditorScriptPathClassifier` に純 `bool IsEditorSourcePathDirty(string relativePath)`（or `HasEditorSegment(string[])` / `IsInRunScriptTempArea(string[])`）を抽出。`HasEditorScriptChangedSince` は `Directory.GetFiles` 走査 + mtime 比較のみ保持し per-path 分類を委譲（値渡しのみ、インターフェース不要）。nested-Editor 受理・temp-area 除外・substring 偽陰性を xUnit で検証。`MenuExecuteAssetsRoot`/`…EditorSegment` の値 pin は T3 残骸。 |
-| MenuScriptWatch | `…::MenuHasEditorScriptChangedSinceSegmentExclusionTests` | string-literal-grep, structural-invariant, constant-drift | **T2a** (+T3) | 上記 `EditorScriptPathClassifier` に統合。`_PrefabSentinelTemp` を whole-segment `string.Equals` で除外 vs substring `IndexOf`（実バグクラス）を xUnit で検証。`IndexOf` 不在 grep と定数値 pin は T3 残骸。 |
-| Menu+MenuScriptWatch | `…::TestMenuExecuteBarrierSource` | string-literal-grep, constant-drift, structural-invariant | **T1** (+T3) | `HasEditorScriptChangedSince`（`MenuScriptWatch.cs:44`）の Unity-free 核（dir 走査・path-segment split・whole-segment マッチ・mtime 比較、Unity 接点は `Debug.LogWarning` のみ）を `EditorScriptChangeDetector` として抽出。temp ディレクトリツリーを作って whole-segment マッチ・temp 除外・I/O 失敗→`return true` 保守的契約を xUnit で検証。menu-barrier grep（`isCompiling` / `assume_compiled`）・resumer coverage・`AsyncActions` membership は T3 残骸。 |
+| MenuScriptWatch | `…::TestHasEditorScriptChangedSinceScopeExpanded` | string-literal-grep, constant-drift | **T2a → 移行済（T3 残骸のみ）** | **[移行済 2026-05-17 / H-2]** `EditorScriptPathClassifier` 抽出済。nested-Editor 受理・temp-area 除外・substring 偽陰性の behavioral 検証は `tests/csharp/EditorScriptPathClassifierTests.cs` へ移行。Python 側は `HasEditorScriptChangedSince` の `EditorScriptPathClassifier.IsEditorSourcePath` 委譲 grep・`MenuExecuteAssetsRoot` 値 pin・relocated `EditorSegment`/`RunScriptTempSegment` 定数 pin のみ残置。 |
+| MenuScriptWatch | `…::MenuHasEditorScriptChangedSinceSegmentExclusionTests` | string-literal-grep, structural-invariant, constant-drift | **T2a → 移行済（T3 残骸のみ）** | **[移行済 2026-05-17 / H-2]** `EditorScriptPathClassifier` に統合済。whole-segment `string.Equals` 除外 vs substring `IndexOf` 偽陽性の behavioral 検証は `tests/csharp/EditorScriptPathClassifierTests.cs` へ移行。Python 側は change detector の `EditorScriptPathClassifier.IsEditorSourcePath` 委譲 grep と relocated `RunScriptTempSegment` 定数値 pin のみ残置。 |
+| Menu+MenuScriptWatch | `…::TestMenuExecuteBarrierSource` | string-literal-grep, constant-drift, structural-invariant | **T1 → 移行済（detector 部のみ。menu-barrier 部は T3 恒久）** | **[移行済 2026-05-17 / H-2]** change-detector の behavioral 核は `EditorScriptPathClassifier`（`tests/csharp/EditorScriptPathClassifierTests.cs`）へ移行。Python 側の detector 関連アサートは `EditorScriptPathClassifier.IsEditorSourcePath` 委譲 grep に縮退。menu-barrier grep（`isCompiling` / `assume_compiled`）・resumer coverage・`AsyncActions` membership（`ActionRegistry.cs` へ repoint）は T3 恒久として残置。 |
 
 > §4.5 の 3 クラスはすべて `HasEditorScriptChangedSince` の同一純ロジック核に収束する。
 > 1 つの `EditorScriptPathClassifier` / `EditorScriptChangeDetector` 抽出で 3 クラスの
@@ -142,18 +142,18 @@ Tier 列の `(+T3)` 表記は「クラス内に移行するアサーションと
 
 | concern | source-text テスト箇所 | アサーション種別 | Tier | 移行先 xUnit テスト案 |
 |---|---|---|---|---|
-| RunScriptCompile | `…::TestCompileTimeoutRequestField` | string-literal-grep | **T2a** (+T3) | `RunScriptDeadline.Resolve(int requestTimeout, int bridgeDefault, long callTimeMs, int entryTypeTimeoutMs) -> (compilePollMs, deadlineMs)` を純関数として抽出。default-vs-override 選択と deadline 加算を xUnit で pin。DTO フィールド grep は T3 残骸。 |
-| RunScriptCompile | `…::TestRecompileAndWaitTimeoutBoundCheck` | constant-drift, string-literal-grep | **T2a** (+T3) | `RecompileTimeoutValidator.Validate(float timeoutSec) -> (ok, code, resolvedBudgetSec)` を抽出（`RecompileAndWaitTimeoutMaxSec`=1800 を公開）。`<0` 拒否・`0`→default・1800 上限の ±1 境界を xUnit で pin。1800 のクロス言語ドリフトは `check_bridge_constants` 系テストに残す。 |
-| RunScriptCompile | `…::TestRunScriptCompilePendingResponseDeadlinePath` | string-literal-grep | **T2a** (+T3) | `RunScriptCompilePendingCodeSelector.SelectCode(int priorStuckCount, int stuckThreshold) -> string` を抽出。`RunScriptStuckThreshold ± 1` の recovery/timeout 境界を xUnit で pin。`assertNotIn EDITOR_CTRL_RUN_SCRIPT_COMPILE`（generic コード不在）は T3 残骸。 |
+| RunScriptCompile | `…::TestCompileTimeoutRequestField` | string-literal-grep | **T2a → 移行済（T3 残骸のみ）** | **[移行済 2026-05-17 / H-6]** `RunScriptDeadline` 抽出済。default-vs-override 選択と deadline 加算の behavioral 検証は `tests/csharp/RunScriptCompileValidatorTests.cs` へ移行。Python 側は `HandleRunScript` の `RunScriptDeadline.Resolve` 委譲 grep（`request.compile_timeout` 引数含む）と DTO フィールド pin（relocated `EditorControlRequest.cs`）のみ残置。 |
+| RunScriptCompile | `…::TestRecompileAndWaitTimeoutBoundCheck` | constant-drift, string-literal-grep | **T2a → 移行済（T3 残骸のみ）** | **[移行済 2026-05-17 / H-6]** `RecompileTimeoutValidator` 抽出済。`<0` 拒否・`0`→default・1800 上限 ±1 境界の behavioral 検証は `tests/csharp/RunScriptCompileValidatorTests.cs` へ移行。Python 側はハンドラの `RecompileTimeoutValidator.Validate` 委譲 grep・`MaxTimeoutSec = 1800f` 定数 pin・`OutOfRangeCode` 定数 pin のみ残置。 |
+| RunScriptCompile | `…::TestRunScriptCompilePendingResponseDeadlinePath` | string-literal-grep | **T2a → 移行済（T3 残骸のみ）** | **[移行済 2026-05-17 / H-6]** `RunScriptCompilePendingCodeSelector` 抽出済。recovery/timeout 境界の behavioral 検証は `tests/csharp/RunScriptCompileValidatorTests.cs` へ移行。Python 側は builder の `RunScriptCompilePendingCodeSelector.SelectCode` 委譲 grep・`RecoveryCode`/`TimeoutCode` 定数 pin・generic コード不在 negative grep のみ残置。 |
 
 ### 4.7 RunScriptCompile — recompile 解決ガード / 診断 redaction
 
 | concern | source-text テスト箇所 | アサーション種別 | Tier | 移行先 xUnit テスト案 |
 |---|---|---|---|---|
-| RunScriptCompile | `…::TestRecompileAndWaitOutcomeSync` | string-literal-grep | **T2a** (+T3) | 二重解決ガードを `internal sealed class RecompileResolutionGuard` に抽出（`bool TryClaim()` — 初回 true・以後 false。Unity 非依存の小クラス、インターフェースではない）。`FAILED` vs `NOOP` の outcome 選択を `RecompileOutcomeClassifier`（値オブジェクトの compile-result snapshot 入力）へ。single-claim セマンティクスとコード選択を xUnit で検証。lambda 配線は T3 残骸。 |
-| RunScriptCompile | `…::TestRecompileAndWaitDeadlineWatchdog` | string-literal-grep | **T2a** (+T3) | 上記 `RecompileResolutionGuard.TryClaim()` を再利用 + 純 `bool DeadlineElapsed(long nowTicks, long deadlineTicks)` predicate を追加。watchdog が guard を claim し timeout outcome のみ発火することを xUnit で検証。「他コードを参照しない」negative アサートは T3 残骸。 |
-| RunScriptCompile | `…::RecompileScheduleFailedSanitization` | string-literal-grep | **T2a** (+T3) | `internal static class ScheduleFailureEnvelope` に `string RedactedMessage()`（固定定数）を抽出。redacted message が固定リテラルで `ex.Message` を含まないことを xUnit で検証。catch arm がヘルパを呼ぶ配線は T3 残骸。 |
-| RunScriptCompile | `…::RecompileForceReimportDiagnosticRedaction` | string-literal-grep | **T2a** (+T3) | `internal static class ReimportDiagnostic` に `string Evidence(Exception ex)`（`ex.GetType().Name` のみ、`.Message` 不使用。`Exception` は System 型）を抽出。evidence が例外メッセージ本文を含まないことを xUnit で検証。catch arm 配線は T3 残骸。 |
+| RunScriptCompile | `…::TestRecompileAndWaitOutcomeSync` | string-literal-grep | **T2a → 移行済（T3 残骸のみ）** | **[移行済 2026-05-17 / H-7]** `RecompileResolutionGuard` / `RecompileOutcomeClassifier` 抽出済。single-claim セマンティクスと `FAILED`/`NOOP` コード選択の behavioral 検証は `tests/csharp/RunScriptCompileResolutionTests.cs` へ移行。Python 側は subscription の `RecompileOutcomeClassifier.Classify` 委譲 grep と `RecompileResolutionGuard` 配線 grep のみ残置。 |
+| RunScriptCompile | `…::TestRecompileAndWaitDeadlineWatchdog` | string-literal-grep | **T2a → 移行済（T3 残骸のみ）** | **[移行済 2026-05-17 / H-7]** `RecompileResolutionGuard` / `RecompileDeadline.HasElapsed` 抽出済。watchdog の single-claim・timeout-only 発火の behavioral 検証は `tests/csharp/RunScriptCompileResolutionTests.cs` へ移行。Python 側は watchdog の `resolutionGuard.TryClaim()` 委譲 grep のみ残置。 |
+| RunScriptCompile | `…::RecompileScheduleFailedSanitization` | string-literal-grep | **T2a → 移行済（T3 残骸のみ）** | **[移行済 2026-05-17 / H-7]** `ScheduleFailureEnvelope` 抽出済。redacted message が固定リテラル / `ex.Message` 非含有の behavioral 検証は `tests/csharp/RunScriptCompileResolutionTests.cs` へ移行。Python 側は catch arm の `ScheduleFailureEnvelope.RedactedMessage()` 委譲 grep と固定メッセージ定数 pin のみ残置。 |
+| RunScriptCompile | `…::RecompileForceReimportDiagnosticRedaction` | string-literal-grep | **T2a → 移行済（T3 残骸のみ）** | **[移行済 2026-05-17 / H-7]** `ReimportDiagnostic` 抽出済。evidence が例外メッセージ本文非含有の behavioral 検証は `tests/csharp/RunScriptCompileResolutionTests.cs` へ移行。Python 側は catch arm の `ReimportDiagnostic.Evidence` 委譲配線と `.Message` 不在 negative grep のみ残置。 |
 
 ### 4.8 RunScriptCompile — T3 恒久（移行対象外）
 
@@ -191,8 +191,8 @@ Tier 列の `(+T3)` 表記は「クラス内に移行するアサーションと
 
 | concern | source-text テスト箇所 | アサーション種別 | Tier | 移行先 xUnit テスト案 |
 |---|---|---|---|---|
-| core | `test_editor_control_bridge_source.py::TestUdonSharpActionWiring` | string-literal-grep | **T2a** | アクションレジストリを Unity-free `internal static class ActionRegistry` へ抽出（`IReadOnlySet<string> Supported` / `Async` + `bool TryClassify(string action, out ActionDescriptor)`。データのみ、Unity 型なし）。membership と async 分類を xUnit で直接検証。`RunFromPaths` がレジストリを消費。 |
-| core | `…::TestUdonSharpRequestFields` | string-literal-grep | **T2a** | `EditorControlRequest` は Unity 型を持たない値オブジェクト。`<Compile Include>` で xUnit harness に直接取り込み、フィールド presence / JSON round-trip を検証（seam すら不要）。`JsonUtility` パリティが必要な部分のみ source-text に残す。 |
+| core | `test_editor_control_bridge_source.py::TestUdonSharpActionWiring` | string-literal-grep | **T2a → 移行済（T3 残骸のみ）** | **[移行済 2026-05-17 / H-8]** `ActionRegistry` 抽出済（`Supported`/`Async` HashSet リテラル）。membership と async 分類の behavioral 検証は `Supported`/`Async` 集合メンバシップを直接実行する `tests/csharp/ActionRegistryTests.cs` へ移行。Python 側のアクション集合 grep は全て `PrefabSentinel.Dispatch.ActionRegistry.cs` へ repoint した T3 委譲 grep。 |
+| core | `…::TestUdonSharpRequestFields` | string-literal-grep | **T2a → 移行済（T3 残骸のみ）** | **[移行済 2026-05-17 / H-8]** `EditorControlRequest` DTO は `PrefabSentinel.Dispatch.EditorControlRequest.cs` へ verbatim relocate 済。フィールド presence / JSON round-trip の behavioral 検証は `tests/csharp/ActionRegistryTests.cs` へ移行。Python 側は relocated DTO ファイルから読むフィールド presence pin のみ残置。 |
 | Helpers/core | `…::EditorControlBridgeRequestSchemaTests` | string-literal-grep | T3 | T3 恒久。Python wrapper が送る全フィールドを DTO が宣言する完全性不変条件（クロスファイル宣言）。 |
 | Helpers/core | `…::EditorControlBridgeDispatcherRoutingTests` | string-literal-grep | T3 | T3 恒久。網羅ルーティング / C#↔Python アクション集合の対称性不変条件。 |
 | Helpers | `…::HelpersResolveObjectReferenceSourceTests` | string-literal-grep, structural-invariant | T3 | T3 恒久。`ResolveGameObjectInActiveStage` への委譲 net + `GameObject.Find` 直呼び不在の forbidden-pattern grep。 |
@@ -204,7 +204,7 @@ Tier 列の `(+T3)` 表記は「クラス内に移行するアサーションと
 
 | concern | source-text テスト箇所 | アサーション種別 | Tier | 移行先 xUnit テスト案 |
 |---|---|---|---|---|
-| Prefab | `test_unity_patch_bridge_source.py::TestPrefabApplyRejectionEnvelopeSource` | string-literal-grep | **T2a** | `internal static class PrefabApplyRejectionEnvelope` に値オブジェクト `PrefabApplyFailure { PropertyPath, ComponentType, AttemptedValue }`（全フィールド `string`）を入力、`SER_APPLY_REJECTED` コードと 3 つの diagnostic キーを持つ payload を返す純関数を抽出。Unity の prefab-apply 呼び出し site が値オブジェクトを埋めて呼ぶ（インターフェース不要）。 |
+| Prefab | `test_unity_patch_bridge_source.py::TestPrefabApplyRejectionEnvelopeSource` | string-literal-grep | **T2a → 移行済（T3 残骸のみ）** | **[移行済 2026-05-17 / H-11]** `PrefabApplyRejectionEnvelope`（+ 値オブジェクト `PrefabApplyFailure`/`PrefabApplyRejection`）抽出済。`SER_APPLY_REJECTED` コードと 3 diagnostic キーの behavioral 検証は `tests/csharp/PrefabApplyRejectionEnvelopeTests.cs` へ移行。Python 側は `BuildPrefabApplyRejectionDiagnostics` の `PrefabApplyRejectionEnvelope.Build` 委譲 grep・`RejectedCode` 定数 pin・3 payload キー pin（relocated envelope ファイルから）のみ残置。 |
 | core | `…::TestPatchBridgeCoreConstantsPresent` | structural-invariant, constant-drift | T3 | T3 恒久。`ProtocolVersion`・`s_currentHandles` の宣言 site 唯一性（`[ThreadStatic]` 配置含む）。 |
 
 ### 4.13 VRCSDKUploadHandler
@@ -247,13 +247,19 @@ Tier 列の `(+T3)` 表記は「クラス内に移行するアサーションと
 
 クラスを「移行価値のある主 Tier」で 1 件計上（多くが mixed — Tier 行は移行後も T3 残骸を残す）。
 
+> **[2026-05-17 更新]** H-2…H-8 と H-11 が 1 つの combined bundle として landed。下表の
+> T1（4）/ T2a（20）に計上されていた 24 クラスのうち、これら 9 concern に属する **24 クラスの
+> behavioral アサーションは `tests/csharp/` の xUnit へ移行済**。Python source-text テストには
+> delegation-invariant + constant/field pin の T3 残骸のみが残る（§4.2–§4.7 / §4.11 / §4.12 の
+> 各行参照）。H-9 / H-10 / H-12（T2b 6 クラス）は §6.1 の通り opportunistic で未着手。
+
 | Tier | テストクラス数 | 備考 |
 |------|---------------|------|
-| **T1**（純抽出 — Unity 型に一切触れない） | 4 | `ConsoleLogEntryPredicate`（`TestConsoleLogBufferRetrievalAppliesPhaseFilter`）/ `SuggestionRanker`（`TestSetPropertySuggestions`）/ `UiFontMissingMessage`（`TmpFontMissingMessageBranching`）/ `EditorScriptChangeDetector`（`TestMenuExecuteBarrierSource`）。 |
-| **T2a**（値 seam — 無条件の勝ち） | 20 | Unity の値を引数で渡すだけ。新インターフェースを production に追加しない。実質 T1 と同コスト。`QuaternionInputValidator`・`GameObjectPropertyAllowlist`・`UiElementTypeAllowlist` は `Math` 置換等で完全 T1 に落ちる。 |
-| **T2b**（interface seam — opportunistic） | 6 | `ICameraStatePort`（`EditorControlBridgeScreenshotCameraStateRestoreTests`）/ `IPrefabStagePersistencePort`（`PrefabStagePersistFixSourceInvariantTests`）/ `IUploadWorkflow`（`TestHandleAsyncFullProtection`, `TestLoginPollingInsideTryCatch`）/ `ILoginGate`（`TestLoginPollingInHandleAsync`）/ `IBuilderProbe`（`TestResolveBuilderAsyncRetry`）。production に interface を新設する設計判断を伴う → §6.1 の通り opportunistic（standalone 移行 PR にしない）。 |
-| **T3**（source-text 恒久） | 55 | 内訳: 純構造/layout 不変条件、concern 固有の Unity 結合ハンドラ本体 grep、forbidden-token negative grep、定数ドリフト、Python ツールテスト 7 件。 |
-| 計 | 85 | — |
+| **T1**（純抽出 — Unity 型に一切触れない） | 4（**4 移行済**） | `ConsoleLogEntryPredicate`（`TestConsoleLogBufferRetrievalAppliesPhaseFilter`）/ `SuggestionRanker`（`TestSetPropertySuggestions`）/ `UiFontMissingMessage`（`TmpFontMissingMessageBranching`）/ `EditorScriptPathClassifier`（`TestMenuExecuteBarrierSource` detector 部）。全 4 件 2026-05-17 bundle で移行済 — Python 側は T3 残骸のみ。 |
+| **T2a**（値 seam — 無条件の勝ち） | 20（**20 移行済**） | Unity の値を引数で渡すだけ。新インターフェースを production に追加しない。実質 T1 と同コスト。`QuaternionInputValidator`・`GameObjectPropertyAllowlist`・`UiElementTypeAllowlist` は `Math` 置換等で完全 T1 に落ちた。全 20 件 2026-05-17 bundle（H-2…H-8 / H-11）で移行済 — Python 側は delegation-invariant + 定数 pin の T3 残骸のみ。 |
+| **T2b**（interface seam — opportunistic） | 6（**0 移行済**） | `ICameraStatePort`（`EditorControlBridgeScreenshotCameraStateRestoreTests`）/ `IPrefabStagePersistencePort`（`PrefabStagePersistFixSourceInvariantTests`）/ `IUploadWorkflow`（`TestHandleAsyncFullProtection`, `TestLoginPollingInsideTryCatch`）/ `ILoginGate`（`TestLoginPollingInHandleAsync`）/ `IBuilderProbe`（`TestResolveBuilderAsyncRetry`）。production に interface を新設する設計判断を伴う → §6.1 の通り opportunistic（standalone 移行 PR にしない）。 |
+| **T3**（source-text 恒久） | 55 | 内訳: 純構造/layout 不変条件、concern 固有の Unity 結合ハンドラ本体 grep、forbidden-token negative grep、定数ドリフト、Python ツールテスト 7 件。移行済 24 クラスが残す T3 残骸はこの 55 には計上しない（残骸は移行元クラスの一部として既存行に内包）。 |
+| 計 | 85（**移行済 24 / T2b 未着手 6 / T3 恒久 55**） | — |
 
 T1/T2 を持つ concern: ConsoleCapture, Properties, UiElement, MenuScriptWatch, RunScriptCompile,
 Screenshot, PrefabStage, core(dispatch/DTO), Prefab(patch bridge), VRCSDKUploadHandler。
@@ -290,6 +296,15 @@ opportunistic（H-10）。
 
 **N = 11**（H-2…H-12 = #364–#374、本表 merge 後に起票済み）。H-6/H-7 は RunScriptCompile を 2 分割した — 単一 concern に 7 つの
 独立抽出が集中し 1 PR の粒度を超えるため（validators 群 / 解決ガード・redaction 群）。
+
+> **[2026-05-17] H-2…H-8 + H-11 を 1 つの combined bundle として landed。** clean-win 8 issue
+> のうち H-2（MenuScriptWatch）/ H-3（ConsoleCapture）/ H-4（Properties）/ H-5（UiElement）/
+> H-6（RunScriptCompile validators）/ H-7（RunScriptCompile 解決ガード・redaction）/ H-8（core
+> dispatch・DTO）/ H-11（UnityPatchBridge Prefab）が単一 bundle で完了。13 個の Unity-free クラス
+> ファイルが `tools/unity/` に追加され、behavioral 検証は `tests/csharp/` の 8 xUnit ファイルへ移行。
+> 既存 Python source-text テストは #290 規約どおり behavioral 部のみ削除し、delegation-invariant
+> （"bridge X calls ClassY.MethodZ"）と constant/field pin を narrow T3 として残置。
+> 残る clean-win なし。opportunistic 3 件（H-9 / H-10 port 部 / H-12）は §6.1 の通り未着手。
 
 ### 6.1 T2b は opportunistic — standalone 移行 PR にしない
 

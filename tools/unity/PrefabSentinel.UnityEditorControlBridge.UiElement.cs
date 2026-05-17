@@ -29,17 +29,8 @@ namespace PrefabSentinel
         private const string UiElementDefaultTmpFontAssetPath =
             "Assets/TextMesh Pro/Resources/Fonts & Materials/LiberationSans SDF.asset";
 
-        // The canonical allowed type set. Source-text invariants pin
-        // each token literally so a future edit cannot silently drop or
-        // add a token without breaking the test.
-        private static readonly string[] UiElementAllowedTypes =
-        {
-            "Image",
-            "TextMeshProUGUI",
-            "Button",
-            "Slider",
-            "Toggle",
-        };
+        // Issue H-5: the canonical allowed type set is owned by the
+        // Unity-free ``UiElementTypeAllowlist``.
 
         [Serializable]
         private sealed class UiRectPayload
@@ -66,14 +57,14 @@ namespace PrefabSentinel
                     "new_name (UI element name) is required.");
 
             string requestedType = request.component_type ?? string.Empty;
-            if (Array.IndexOf(UiElementAllowedTypes, requestedType) < 0)
+            if (!UiElementTypeAllowlist.IsAllowed(requestedType))
                 return BuildError(
                     "EDITOR_CTRL_CREATE_UI_BAD_TYPE",
                     $"Invalid UI element type: '{requestedType}'. " +
-                    "Allowed: " + string.Join(", ", UiElementAllowedTypes) + ".",
+                    "Allowed: " + string.Join(", ", UiElementTypeAllowlist.AllowedTypes) + ".",
                     data: new EditorControlData
                     {
-                        suggestions = (string[])UiElementAllowedTypes.Clone(),
+                        suggestions = (string[])UiElementTypeAllowlist.AllowedTypes.Clone(),
                     });
 
             Transform parentTransform = null;
@@ -125,22 +116,13 @@ namespace PrefabSentinel
             string elementPath = GetHierarchyPath(go.transform);
             if (tmpFontMissing)
             {
-                // Issue #205: the warning text must name the path the
-                // caller actually relied on. When the caller omitted
-                // ``properties.font`` the resolver falls back to
-                // ``UiElementDefaultTmpFontAssetPath`` (the canonical
-                // default); when the caller supplied an explicit path
-                // we attempted that path and must name it verbatim so
-                // the operator sees the exact path that failed to load.
-                string fontMissingMessage = string.IsNullOrEmpty(props.font)
-                    ? $"TextMeshPro font asset missing at canonical default path " +
-                      $"'{UiElementDefaultTmpFontAssetPath}'. " +
-                      $"GameObject created at {elementPath} with TextMeshProUGUI attached " +
-                      $"but no font assigned."
-                    : $"TextMeshPro font asset missing at caller-supplied path " +
-                      $"'{props.font}'. " +
-                      $"GameObject created at {elementPath} with TextMeshProUGUI attached " +
-                      $"but no font assigned.";
+                // Issue #205 / H-5: the warning text names the path the
+                // caller actually relied on — the canonical default when
+                // ``properties.font`` was omitted, the caller-supplied path
+                // otherwise. Arm selection is owned by the Unity-free
+                // ``UiFontMissingMessage``.
+                string fontMissingMessage = UiFontMissingMessage.ForMissingFont(
+                    props.font, UiElementDefaultTmpFontAssetPath, elementPath);
                 var warnResp = BuildError(
                     "EDITOR_CTRL_CREATE_UI_TMP_FONT_MISSING",
                     fontMissingMessage,

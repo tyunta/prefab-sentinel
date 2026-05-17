@@ -189,7 +189,7 @@ class MutmutResultsFormatterTests(unittest.TestCase):
 
 
 class MutmutResultsAuditedFilterTests(unittest.TestCase):
-    """``filter_audited`` restricts the record set to TESTING.md "Mutation testing" section."""
+    """``filter_audited`` restricts the record set to TESTING.md#mutation-testing."""
 
     def test_audited_only_filter_restricts_to_audited_module_list(self) -> None:
         # The sample contains an off-list module added solely to test

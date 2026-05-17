@@ -242,31 +242,47 @@ class TestPatchBridgeOperationalRulesInventory(unittest.TestCase):
 class TestPrefabApplyRejectionEnvelopeSource(unittest.TestCase):
     """Issue #298 — the prefab apply rejection path declares the
     documented ``SER_APPLY_REJECTED`` code together with the diagnostic
-    payload keys ``property_path`` and ``component_type``. The runtime
-    fixture lands when an Editor-host xUnit harness becomes available;
-    until then this is the in-repo guard against regression to a bare
-    ``UNITY_BRIDGE_APPLY`` envelope.
+    payload keys ``property_path`` and ``component_type``.
+
+    Post H-track migration the rejection-envelope assembly (the
+    ``SER_APPLY_REJECTED`` code and the structured evidence string with
+    the three payload keys) was extracted into the Unity-free
+    ``PrefabApplyRejectionEnvelope``; that behavioral coverage now lives
+    in ``tests/csharp/PrefabApplyRejectionEnvelopeTests.cs``. This
+    source-text test retains the Tier 3 delegation invariant (the
+    ``BuildPrefabApplyRejectionDiagnostics`` handler routes through
+    ``PrefabApplyRejectionEnvelope.Build``) plus constant/field pins on
+    the relocated envelope class.
     """
 
     def _prefab_partial_path(self) -> Path:
         return _TOOLS_DIR / "PrefabSentinel.UnityPatchBridge.Prefab.cs"
 
-    def test_rejection_envelope_declares_new_code(self) -> None:
+    def _envelope_path(self) -> Path:
+        return _TOOLS_DIR / "PrefabSentinel.Prefab.ApplyRejectionEnvelope.cs"
+
+    def test_handler_delegates_to_rejection_envelope(self) -> None:
         text = _strip_cs_comments(
             self._prefab_partial_path().read_text(encoding="utf-8")
         )
+        self.assertIn("PrefabApplyRejectionEnvelope.Build", text)
+
+    def test_rejection_envelope_declares_new_code(self) -> None:
+        text = _strip_cs_comments(
+            self._envelope_path().read_text(encoding="utf-8")
+        )
         self.assertIn(
-            "SER_APPLY_REJECTED",
+            'RejectedCode = "SER_APPLY_REJECTED"',
             text,
             msg=(
-                "Prefab apply rejection envelope must declare the "
-                "documented `SER_APPLY_REJECTED` code (issue #298)."
+                "PrefabApplyRejectionEnvelope must declare the documented "
+                "`SER_APPLY_REJECTED` code (issue #298)."
             ),
         )
 
     def test_rejection_envelope_carries_property_path_field(self) -> None:
         text = _strip_cs_comments(
-            self._prefab_partial_path().read_text(encoding="utf-8")
+            self._envelope_path().read_text(encoding="utf-8")
         )
         # The diagnostic payload's property-path key is named
         # ``property_path`` on the wire (matches the SerializedProperty
@@ -282,7 +298,7 @@ class TestPrefabApplyRejectionEnvelopeSource(unittest.TestCase):
 
     def test_rejection_envelope_carries_component_type_field(self) -> None:
         text = _strip_cs_comments(
-            self._prefab_partial_path().read_text(encoding="utf-8")
+            self._envelope_path().read_text(encoding="utf-8")
         )
         self.assertIn(
             "component_type",
@@ -295,7 +311,7 @@ class TestPrefabApplyRejectionEnvelopeSource(unittest.TestCase):
 
     def test_rejection_envelope_carries_attempted_value_field(self) -> None:
         text = _strip_cs_comments(
-            self._prefab_partial_path().read_text(encoding="utf-8")
+            self._envelope_path().read_text(encoding="utf-8")
         )
         self.assertIn(
             "attempted_value",

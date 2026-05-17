@@ -948,16 +948,17 @@ namespace PrefabSentinel
             string propertyPath = op != null && !string.IsNullOrEmpty(op.path) ? op.path : string.Empty;
             string componentType = op != null && !string.IsNullOrEmpty(op.component) ? op.component : string.Empty;
             string attemptedValue = SummarizePatchOpValue(op);
-            string evidence = string.Format(
-                "property_path={0}; component_type={1}; attempted_value={2}",
-                propertyPath, componentType, attemptedValue
-            );
+            // Issue #298 / H-11: the apply-rejected code and the evidence
+            // string conveying the three diagnostic values are assembled by
+            // the Unity-free ``PrefabApplyRejectionEnvelope``.
+            PrefabApplyRejection rejection = PrefabApplyRejectionEnvelope.Build(
+                new PrefabApplyFailure(propertyPath, componentType, attemptedValue));
             BridgeDiagnostic summary = new BridgeDiagnostic
             {
                 path = target,
                 location = string.Format("ops[{0}]", opIndex),
-                detail = "SER_APPLY_REJECTED",
-                evidence = evidence
+                detail = rejection.Code,
+                evidence = rejection.Evidence
             };
             List<BridgeDiagnostic> combined = new List<BridgeDiagnostic>(innerDiagnostics);
             combined.Add(summary);

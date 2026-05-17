@@ -97,23 +97,12 @@ namespace PrefabSentinel
 
         private static bool ApplyPropertyValue(SerializedProperty prop, string v)
         {
-            var ci = System.Globalization.CultureInfo.InvariantCulture;
+            // Issue H-4: the Enum and ObjectReference cases need Unity
+            // reflection / object resolution and stay inline; every other
+            // case delegates textual parsing to the Unity-free
+            // ``PropertyValueParser`` and applies the parsed result here.
             switch (prop.propertyType)
             {
-                case SerializedPropertyType.Integer:
-                    if (int.TryParse(v, System.Globalization.NumberStyles.Integer, ci, out int iv))
-                    { prop.intValue = iv; return true; }
-                    return false;
-                case SerializedPropertyType.Float:
-                    if (float.TryParse(v, System.Globalization.NumberStyles.Float, ci, out float fv))
-                    { prop.floatValue = fv; return true; }
-                    return false;
-                case SerializedPropertyType.Boolean:
-                    if (bool.TryParse(v, out bool bv))
-                    { prop.boolValue = bv; return true; }
-                    return false;
-                case SerializedPropertyType.String:
-                    prop.stringValue = v; return true;
                 case SerializedPropertyType.Enum:
                 {
 #pragma warning disable 0618
@@ -123,51 +112,6 @@ namespace PrefabSentinel
                     if (int.TryParse(v, out int ei)) { prop.enumValueIndex = ei; return true; }
                     return false;
                 }
-                case SerializedPropertyType.Vector3:
-                {
-                    var parts = v.Split(',');
-                    if (parts.Length >= 3
-                        && float.TryParse(parts[0].Trim(), System.Globalization.NumberStyles.Float, ci, out float x)
-                        && float.TryParse(parts[1].Trim(), System.Globalization.NumberStyles.Float, ci, out float y)
-                        && float.TryParse(parts[2].Trim(), System.Globalization.NumberStyles.Float, ci, out float z))
-                    { prop.vector3Value = new Vector3(x, y, z); return true; }
-                    return false;
-                }
-                case SerializedPropertyType.Color:
-                {
-                    var parts = v.Split(',');
-                    if (parts.Length < 3) return false;
-                    if (!float.TryParse(parts[0].Trim(), System.Globalization.NumberStyles.Float, ci, out float r)
-                        || !float.TryParse(parts[1].Trim(), System.Globalization.NumberStyles.Float, ci, out float g)
-                        || !float.TryParse(parts[2].Trim(), System.Globalization.NumberStyles.Float, ci, out float b))
-                        return false;
-                    float a = 1f;
-                    if (parts.Length >= 4
-                        && float.TryParse(parts[3].Trim(), System.Globalization.NumberStyles.Float, ci, out float aParsed))
-                        a = aParsed;
-                    prop.colorValue = new Color(r, g, b, a);
-                    return true;
-                }
-                case SerializedPropertyType.Vector2:
-                {
-                    var parts = v.Split(',');
-                    if (parts.Length >= 2
-                        && float.TryParse(parts[0].Trim(), System.Globalization.NumberStyles.Float, ci, out float x)
-                        && float.TryParse(parts[1].Trim(), System.Globalization.NumberStyles.Float, ci, out float y))
-                    { prop.vector2Value = new Vector2(x, y); return true; }
-                    return false;
-                }
-                case SerializedPropertyType.Vector4:
-                {
-                    var parts = v.Split(',');
-                    if (parts.Length >= 4
-                        && float.TryParse(parts[0].Trim(), System.Globalization.NumberStyles.Float, ci, out float x)
-                        && float.TryParse(parts[1].Trim(), System.Globalization.NumberStyles.Float, ci, out float y)
-                        && float.TryParse(parts[2].Trim(), System.Globalization.NumberStyles.Float, ci, out float z)
-                        && float.TryParse(parts[3].Trim(), System.Globalization.NumberStyles.Float, ci, out float w))
-                    { prop.vector4Value = new Vector4(x, y, z, w); return true; }
-                    return false;
-                }
                 case SerializedPropertyType.ObjectReference:
                 {
                     var (obj, _) = ResolveObjectReference(v);
@@ -175,12 +119,83 @@ namespace PrefabSentinel
                     { prop.objectReferenceValue = obj; return true; }
                     return false;
                 }
+            }
+
+            if (!TryMapSerializedPropertyKind(prop.propertyType, out SerializedPropertyKind kind))
+                return false;
+            if (!PropertyValueParser.TryParse(kind, v, out ParsedPropertyValue parsed))
+                return false;
+
+            switch (kind)
+            {
+                case SerializedPropertyKind.Integer:
+                case SerializedPropertyKind.IntSize:
+                    prop.intValue = parsed.IntValue;
+                    return true;
+                case SerializedPropertyKind.Float:
+                    prop.floatValue = parsed.FloatValue;
+                    return true;
+                case SerializedPropertyKind.Boolean:
+                    prop.boolValue = parsed.BoolValue;
+                    return true;
+                case SerializedPropertyKind.String:
+                    prop.stringValue = parsed.StringValue;
+                    return true;
+                case SerializedPropertyKind.Vector2:
+                    prop.vector2Value = new Vector2(
+                        parsed.Components[0], parsed.Components[1]);
+                    return true;
+                case SerializedPropertyKind.Vector3:
+                    prop.vector3Value = new Vector3(
+                        parsed.Components[0], parsed.Components[1], parsed.Components[2]);
+                    return true;
+                case SerializedPropertyKind.Vector4:
+                    prop.vector4Value = new Vector4(
+                        parsed.Components[0], parsed.Components[1],
+                        parsed.Components[2], parsed.Components[3]);
+                    return true;
+                case SerializedPropertyKind.Color:
+                    prop.colorValue = new Color(
+                        parsed.Components[0], parsed.Components[1],
+                        parsed.Components[2], parsed.Components[3]);
+                    return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Map a live <see cref="SerializedPropertyType"/> to the Unity-free
+        /// <see cref="SerializedPropertyKind"/> the parser understands.
+        /// Returns false for types the parser does not cover (Enum and
+        /// ObjectReference are handled inline by the caller).
+        /// </summary>
+        private static bool TryMapSerializedPropertyKind(
+            SerializedPropertyType type, out SerializedPropertyKind kind)
+        {
+            switch (type)
+            {
+                case SerializedPropertyType.Integer:
+                    kind = SerializedPropertyKind.Integer; return true;
+                case SerializedPropertyType.Float:
+                    kind = SerializedPropertyKind.Float; return true;
+                case SerializedPropertyType.Boolean:
+                    kind = SerializedPropertyKind.Boolean; return true;
+                case SerializedPropertyType.String:
+                    kind = SerializedPropertyKind.String; return true;
+                case SerializedPropertyType.Vector2:
+                    kind = SerializedPropertyKind.Vector2; return true;
+                case SerializedPropertyType.Vector3:
+                    kind = SerializedPropertyKind.Vector3; return true;
+                case SerializedPropertyType.Vector4:
+                    kind = SerializedPropertyKind.Vector4; return true;
+                case SerializedPropertyType.Color:
+                    kind = SerializedPropertyKind.Color; return true;
                 case SerializedPropertyType.ArraySize:
                 case SerializedPropertyType.FixedBufferSize:
-                    if (int.TryParse(v, System.Globalization.NumberStyles.Integer, ci, out int av))
-                    { prop.intValue = av; return true; }
+                    kind = SerializedPropertyKind.IntSize; return true;
+                default:
+                    kind = default;
                     return false;
-                default: return false;
             }
         }
 

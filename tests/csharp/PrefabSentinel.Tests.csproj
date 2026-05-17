@@ -49,6 +49,50 @@
     <Compile Include="..\..\tools\unity\PrefabSentinel.Screenshot.ViewAllowlistClassifier.cs">
       <Link>Bridge\PrefabSentinel.Screenshot.ViewAllowlistClassifier.cs</Link>
     </Compile>
+    <!--
+      H-track xUnit migration (issues #10-#16, #19): the Unity-free decision
+      classes extracted from the C# bridge handlers. Each file references only
+      the base class library so it compiles into this Unity-free harness.
+    -->
+    <Compile Include="..\..\tools\unity\PrefabSentinel.MenuScriptWatch.EditorScriptPathClassifier.cs">
+      <Link>Bridge\PrefabSentinel.MenuScriptWatch.EditorScriptPathClassifier.cs</Link>
+    </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.ConsoleCapture.LogPredicates.cs">
+      <Link>Bridge\PrefabSentinel.ConsoleCapture.LogPredicates.cs</Link>
+    </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.ConsoleCapture.RequestValidator.cs">
+      <Link>Bridge\PrefabSentinel.ConsoleCapture.RequestValidator.cs</Link>
+    </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.Properties.SuggestionRanker.cs">
+      <Link>Bridge\PrefabSentinel.Properties.SuggestionRanker.cs</Link>
+    </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.Properties.InputValidators.cs">
+      <Link>Bridge\PrefabSentinel.Properties.InputValidators.cs</Link>
+    </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.Properties.PropertyValueParser.cs">
+      <Link>Bridge\PrefabSentinel.Properties.PropertyValueParser.cs</Link>
+    </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.UiElement.Allowlist.cs">
+      <Link>Bridge\PrefabSentinel.UiElement.Allowlist.cs</Link>
+    </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.RunScriptCompile.Validators.cs">
+      <Link>Bridge\PrefabSentinel.RunScriptCompile.Validators.cs</Link>
+    </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.RunScriptCompile.Resolution.cs">
+      <Link>Bridge\PrefabSentinel.RunScriptCompile.Resolution.cs</Link>
+    </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.RunScriptCompile.Redaction.cs">
+      <Link>Bridge\PrefabSentinel.RunScriptCompile.Redaction.cs</Link>
+    </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.Dispatch.ActionRegistry.cs">
+      <Link>Bridge\PrefabSentinel.Dispatch.ActionRegistry.cs</Link>
+    </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.Dispatch.EditorControlRequest.cs">
+      <Link>Bridge\PrefabSentinel.Dispatch.EditorControlRequest.cs</Link>
+    </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.Prefab.ApplyRejectionEnvelope.cs">
+      <Link>Bridge\PrefabSentinel.Prefab.ApplyRejectionEnvelope.cs</Link>
+    </Compile>
   </ItemGroup>
 
 </Project>

@@ -30,7 +30,7 @@ TEST_PROJECT_DIR = PROJECT_ROOT / "tests" / "csharp"
 
 # Wrapper tests check this environment variable at collection time.
 # The variable name is part of the discoverability contract documented
-# in TESTING.md "C# xUnit harness" section and exposed here so a single symbol lookup reveals
+# in TESTING.md#c-xunit-ハーネス and exposed here so a single symbol lookup reveals
 # the gate to operators and other test modules.
 OPT_IN_ENV_VAR = "PREFAB_SENTINEL_RUN_CSHARP_TESTS"
 
@@ -95,7 +95,7 @@ def run_csharp_tests(
     """
     cwd = working_directory if working_directory is not None else TEST_PROJECT_DIR
     # ``--no-restore`` keeps the per-call latency low; CI restores once
-    # per checkout in locked mode (see TESTING.md "C# xUnit harness" section).
+    # per checkout in locked mode (see TESTING.md#c-xunit-ハーネス).
     command = ["dotnet", "test", "--no-restore", "--nologo"]
     if filter_expression is not None:
         command.extend(["--filter", filter_expression])

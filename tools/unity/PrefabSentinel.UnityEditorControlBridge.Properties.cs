@@ -40,17 +40,16 @@ namespace PrefabSentinel
                 string.Equals(request.component_type, "GameObject", StringComparison.Ordinal);
 
             // GameObject-level serialized properties accepted by the
-            // GameObject-as-target branch. Writes to anything outside this
-            // allowlist return EDITOR_CTRL_SET_PROP_GAMEOBJECT_PROP_NOT_ALLOWED.
-            string[] gameObjectAllowedProperties =
-                new[] { "m_IsActive", "m_Layer", "m_Name", "m_TagString" };
-
+            // GameObject-as-target branch are owned by the Unity-free
+            // ``GameObjectPropertyAllowlist`` (issue H-4). Writes to anything
+            // outside it return EDITOR_CTRL_SET_PROP_GAMEOBJECT_PROP_NOT_ALLOWED.
             SerializedObject so;
             if (gameObjectTarget)
             {
-                if (Array.IndexOf(gameObjectAllowedProperties, request.property_name) < 0)
+                if (!GameObjectPropertyAllowlist.IsAllowed(request.property_name))
                 {
-                    string allowed = string.Join(", ", gameObjectAllowedProperties);
+                    string allowed = string.Join(
+                        ", ", GameObjectPropertyAllowlist.AllowedProperties);
                     return BuildError("EDITOR_CTRL_SET_PROP_GAMEOBJECT_PROP_NOT_ALLOWED",
                         $"GameObject-level property '{request.property_name}' is not allowed. " +
                         $"Allowed: {allowed}.");
@@ -85,7 +84,7 @@ namespace PrefabSentinel
                         candidates.Add(iter.propertyPath);
                     } while (iter.NextVisible(false));
                 }
-                string[] suggestions = SuggestSimilar(
+                string[] suggestions = SuggestionRanker.SuggestSimilar(
                     request.property_name, candidates, maxResults: 5);
                 var data = new EditorControlData();
                 data.suggestions = suggestions.Length > 0
@@ -188,31 +187,24 @@ namespace PrefabSentinel
                     }
                     case SerializedPropertyType.Quaternion:
                     {
-                        // Issue #111: accept only the four-component xyzw form.
-                        // Euler input is intentionally not supported here — the
-                        // dedicated euler-hint property already covers that
-                        // shape, and mixing two value shapes inside one type
-                        // case obscures the contract.
-                        var parts = v.Split(',');
-                        if (parts.Length != 4)
-                            return BuildError("EDITOR_CTRL_SET_PROP_TYPE_MISMATCH",
+                        // Issue #111 / H-4: accept only the four-component
+                        // xyzw form. Arity and unit-norm validation are owned
+                        // by the Unity-free QuaternionInputValidator; a
+                        // non-numeric component surfaces a FormatException
+                        // caught by the surrounding catch below.
+                        QuaternionParse q = QuaternionInputValidator.Validate(v);
+                        if (!q.Success)
+                        {
+                            if (q.ErrorCode == QuaternionInputValidator.NotNormalizedCode)
+                                return BuildError(q.ErrorCode,
+                                    $"Quaternion value (x={q.X}, y={q.Y}, z={q.Z}, w={q.W}) "
+                                    + $"has non-unit norm; unit norm "
+                                    + $"(1.0 ± {QuaternionInputValidator.NormTolerance}) is required. "
+                                    + "Normalize the input on the caller side.");
+                            return BuildError(q.ErrorCode,
                                 "Quaternion requires exactly 4 comma-separated floats (x,y,z,w).");
-                        float qx = float.Parse(parts[0].Trim(), System.Globalization.CultureInfo.InvariantCulture);
-                        float qy = float.Parse(parts[1].Trim(), System.Globalization.CultureInfo.InvariantCulture);
-                        float qz = float.Parse(parts[2].Trim(), System.Globalization.CultureInfo.InvariantCulture);
-                        float qw = float.Parse(parts[3].Trim(), System.Globalization.CultureInfo.InvariantCulture);
-                        // Norm tolerance 1e-4 — matches the precision we
-                        // expect from float32 quaternion encodings emitted
-                        // by Unity's Transform.localRotation. Tighter than
-                        // Mathf.Approximately but still loose enough that
-                        // round-tripping a serialized quaternion does not
-                        // get rejected.
-                        float norm = Mathf.Sqrt(qx * qx + qy * qy + qz * qz + qw * qw);
-                        if (Mathf.Abs(norm - 1f) > 1e-4f)
-                            return BuildError("EDITOR_CTRL_SET_PROP_QUATERNION_NOT_NORMALIZED",
-                                $"Quaternion value (x={qx}, y={qy}, z={qz}, w={qw}) has norm {norm}; "
-                                + "unit norm (1.0 ± 1e-4) is required. Normalize the input on the caller side.");
-                        prop.quaternionValue = new Quaternion(qx, qy, qz, qw);
+                        }
+                        prop.quaternionValue = new Quaternion(q.X, q.Y, q.Z, q.W);
                         break;
                     }
                     case SerializedPropertyType.ArraySize:
