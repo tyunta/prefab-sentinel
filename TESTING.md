@@ -256,3 +256,15 @@ dotnet test   tests/csharp/PrefabSentinel.Tests.csproj --no-build  --configurati
 ```
 
 Unity の `internal` メンバを参照する必要が生じた段階で初めて、橋アセンブリに `InternalsVisibleTo("PrefabSentinel.Tests")` を追加する。issue #222 Phase 3 の `PrefabSentinel.Screenshot.ViewAllowlistClassifier` がこの取り込みパターンの初例。Python 側からは `PREFAB_SENTINEL_RUN_CSHARP_TESTS` を立てた場合のみ `tests/_csharp_harness.py:run_csharp_tests` 経由で `dotnet test` をサブプロセス起動し、未設定時は collection 時点で skip する。
+
+## Unity 依存 Bridge C# のコンパイル検証
+
+`tools/unity/` の C# 橋ソース 55 ファイルのうち、CI と上記 xUnit ハーネスがコンパイルするのは Unity 参照を持たない pure-logic 15 ファイルのみ。残る 40 ファイル（`UnityEditor` 参照 36 / `UnityEngine` のみ 4、うち 9 が VRChat SDK / UdonSharp surface に触れる）は **どのテストでもコンパイルされない**。これらは `source_text_invariant` の Tier 3 構造検証と `scripts/check_bridge_constants.py` の定数ドリフト検査の対象だが、いずれも型・メンバ参照を解決しない。ヘルパー抽出リファクタ（H 系）が呼び出し側を取りこぼした場合、実 Unity コンパイルでしか出ないエラー（旧入れ子型パス参照 `CS0426` / 無修飾呼び出し `CS0103` 等）が release をすり抜ける（issue #42 の実績）。
+
+### CI コンパイルゲートを入れない理由（issue #43）
+
+この 40 ファイルに対する CI 型解決ゲート（Roslyn 等）は検討の結果、採用しない。Bridge は本質的に Editor アセンブリ（`PrefabSentinel.Editor`）であり、検証が必要な 36 ファイルが `UnityEditor` に依存する。`UnityEditor.dll` には正規の再配布経路（公式 NuGet reference package 等）が存在せず — community NuGet（`Unity3D` / `UnityAssemblies` 系）はメタデータのみでローカル Unity install のパスを解決するだけ、実 DLL を含む版は `UnityEngine` のみ・旧バージョン・ライセンスがグレー — 加えて 9 ファイルが proprietary な VRChat SDK に依存する。reference assembly の調達には Unity install が不可避であり、Unity を入れる時点で「フル Unity コンパイルを避ける軽量ゲート」という前提が崩れる。GameCI 等によるフル Unity コンパイルは Unity ライセンス管理と CI 実行コストに見合わないと判断した。
+
+### 安全網: 手動 deploy コンパイル確認
+
+Unity 依存 Bridge C#（`tools/unity/` の `UnityEditor` / VRChat SDK 参照ファイル）を変更したら、`deploy_bridge` で実 Unity 2022.3 + VRChat SDK プロジェクトに配置し、Unity のコンパイルがエラー 0 件であることを手動で確認する。これが現状唯一のコンパイル検証経路。pure-logic を新規抽出して Unity 非依存にできた分は xUnit ハーネス（`<Compile Include>`）へ取り込み、検証対象を段階的に CI 側へ移すことで、この未検証 surface を縮小していく。
