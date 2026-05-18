@@ -103,7 +103,7 @@ namespace PrefabSentinel
         // ── Entry Point ──
 
         public static UnityEditorControlBridge.EditorControlResponse Handle(
-            UnityEditorControlBridge.EditorControlRequest request)
+            EditorControlRequest request)
         {
             if (EditorApplication.isCompiling)
                 return UnityEditorControlBridge.BuildError(
@@ -125,7 +125,7 @@ namespace PrefabSentinel
         // ── Action Handlers ──
 
         private static UnityEditorControlBridge.EditorControlResponse HandleSearch(
-            UnityEditorControlBridge.EditorControlRequest request)
+            EditorControlRequest request)
         {
             if (string.IsNullOrEmpty(request.query))
                 return UnityEditorControlBridge.BuildError(
@@ -179,7 +179,7 @@ namespace PrefabSentinel
         }
 
         private static UnityEditorControlBridge.EditorControlResponse HandleGetType(
-            UnityEditorControlBridge.EditorControlRequest request)
+            EditorControlRequest request)
         {
             if (string.IsNullOrEmpty(request.class_name))
                 return UnityEditorControlBridge.BuildError(
@@ -216,7 +216,7 @@ namespace PrefabSentinel
         }
 
         private static UnityEditorControlBridge.EditorControlResponse HandleGetMember(
-            UnityEditorControlBridge.EditorControlRequest request)
+            EditorControlRequest request)
         {
             if (string.IsNullOrEmpty(request.class_name))
                 return UnityEditorControlBridge.BuildError(
