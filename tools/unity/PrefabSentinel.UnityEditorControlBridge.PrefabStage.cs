@@ -20,22 +20,6 @@ namespace PrefabSentinel
     public static partial class UnityEditorControlBridge
     {
         /// <summary>
-        /// Resolve a hierarchy path against the active Prefab Stage when
-        /// one exists, otherwise against the open scene.  Returns
-        /// ``null`` when the lookup misses *or* when the path is
-        /// ambiguous (same-named siblings with no ``#N``); callers report
-        /// their own ``EDITOR_CTRL_*_NOT_FOUND`` envelope.  Handlers that
-        /// need to distinguish an ambiguous path from a genuine miss call
-        /// <see cref="TryResolveGameObjectInActiveStage"/> instead.
-        /// </summary>
-        internal static GameObject ResolveGameObjectInActiveStage(string hierarchyPath)
-        {
-            TryResolveGameObjectInActiveStage(
-                hierarchyPath, out GameObject go, out _);
-            return go;
-        }
-
-        /// <summary>
         /// Issue #38: resolve a ``/``-delimited hierarchy path against the
         /// active Prefab Stage, with each segment allowed to carry a
         /// ``name#N`` disambiguator.  Segment resolution is delegated to

@@ -171,6 +171,12 @@ namespace PrefabSentinel
             public bool read_only = true;
             public bool executed = false;
 
+            // Issue #51: the dispatched action name.  Populated only on
+            // the dispatch-boundary EDITOR_CTRL_HANDLER_EXCEPTION path
+            // so callers can branch on the failing action as a
+            // structured field rather than parsing the message string.
+            public string action = string.Empty;
+
             // vrcsdk_upload response
             public string target_type = string.Empty;
             public string asset_path = string.Empty;
@@ -457,7 +463,8 @@ namespace PrefabSentinel
                     $"editor_control action '{request.action}' failed: the "
                     + $"handler raised {handlerEx.GetType().Name}. "
                     + "Inspect the Unity console for the full exception detail "
-                    + "and retry once the underlying cause is resolved.");
+                    + "and retry once the underlying cause is resolved.",
+                    new EditorControlData { action = request.action });
             }
 
             if (response != null)

@@ -112,6 +112,10 @@ namespace PrefabSentinel
 
         // Phase 4: Rename + AddComponent + Udon
         public string new_name = string.Empty;
+        // Issue #56: dedicated reparent-address field for editor_set_parent.
+        // The parent address travels here rather than overloading
+        // ``new_name`` (the rename field); empty = move to scene root.
+        public string parent_hierarchy_path = string.Empty;
         public string component_type = string.Empty;
         public int component_index = -1;  // -1 = unspecified
 
@@ -252,13 +256,13 @@ namespace PrefabSentinel
         public string request_id = string.Empty;
         public bool cleanup_on_timeout = false;
 
-        // Issue #243: AnimationClip authoring payload.  ``target_dir``
-        // and ``animation_clip_name`` locate where to write a new clip;
-        // ``curves_json`` carries the curve specification as a JSON
-        // array; ``target_hierarchy_path`` locates the live GameObject
-        // for the apply surface.
-        public string target_dir = string.Empty;
-        public string animation_clip_name = string.Empty;
+        // Issue #243 / #53: AnimationClip authoring payload.  The
+        // create surface reuses the existing ``asset_path`` field for
+        // the full ``Assets/…/Name.anim`` destination — the bridge
+        // derives directory and filename from it.  ``curves_json``
+        // carries the curve specification as a JSON array;
+        // ``target_hierarchy_path`` locates the live GameObject for the
+        // apply surface.
         public string curves_json = string.Empty;
         public string target_hierarchy_path = string.Empty;
     }

@@ -49,17 +49,15 @@ namespace PrefabSentinel
 
             if (!string.IsNullOrEmpty(request.hierarchy_path))
             {
-                GameObject parent = ResolveGameObjectInActiveStage(request.hierarchy_path);
-                if (parent != null)
-                {
-                    instance.transform.SetParent(parent.transform, false);
-                }
-                else
+                if (!TryResolveGameObjectInActiveStage(
+                    request.hierarchy_path, out GameObject parent, out var ambiguity))
                 {
                     UnityEngine.Object.DestroyImmediate(instance);
+                    if (ambiguity != null) return ambiguity;
                     return BuildError("EDITOR_CTRL_PARENT_NOT_FOUND",
                         $"Parent not found: {request.hierarchy_path}");
                 }
+                instance.transform.SetParent(parent.transform, false);
             }
 
             if (request.position != null && request.position.Length >= 3)
@@ -95,10 +93,13 @@ namespace PrefabSentinel
             Transform parentTransform = null;
             if (!string.IsNullOrEmpty(request.hierarchy_path))
             {
-                var parentGo = ResolveGameObjectInActiveStage(request.hierarchy_path);
-                if (parentGo == null)
+                if (!TryResolveGameObjectInActiveStage(
+                    request.hierarchy_path, out GameObject parentGo, out var ambiguity))
+                {
+                    if (ambiguity != null) return ambiguity;
                     return BuildError("EDITOR_CTRL_CREATE_EMPTY_PARENT_NOT_FOUND",
                         $"Parent not found: {request.hierarchy_path}");
+                }
                 parentTransform = parentGo.transform;
             }
 
@@ -150,10 +151,13 @@ namespace PrefabSentinel
             Transform parentTransform = null;
             if (!string.IsNullOrEmpty(request.hierarchy_path))
             {
-                var parentGo = ResolveGameObjectInActiveStage(request.hierarchy_path);
-                if (parentGo == null)
+                if (!TryResolveGameObjectInActiveStage(
+                    request.hierarchy_path, out GameObject parentGo, out var ambiguity))
+                {
+                    if (ambiguity != null) return ambiguity;
                     return BuildError("EDITOR_CTRL_CREATE_PRIM_PARENT_NOT_FOUND",
                         $"Parent not found: {request.hierarchy_path}");
+                }
                 parentTransform = parentGo.transform;
             }
 
@@ -250,7 +254,8 @@ namespace PrefabSentinel
 
                 if (!string.IsNullOrEmpty(spec.parent))
                 {
-                    var parent = ResolveGameObjectInActiveStage(spec.parent);
+                    TryResolveGameObjectInActiveStage(
+                        spec.parent, out GameObject parent, out var ambiguity);
                     if (parent != null)
                         Undo.SetTransformParent(go.transform, parent.transform,
                             $"PrefabSentinel: SetParent {go.name}");
@@ -259,8 +264,12 @@ namespace PrefabSentinel
                         {
                             path = spec.parent,
                             location = $"batch item index {createdPaths.Count}",
-                            detail = $"Parent not found: {spec.parent}. Object '{go.name}' created at scene root.",
-                            evidence = "ResolveGameObjectInActiveStage returned null"
+                            detail = ambiguity != null
+                                ? $"Ambiguous parent path: {spec.parent}. Object '{go.name}' created at scene root."
+                                : $"Parent not found: {spec.parent}. Object '{go.name}' created at scene root.",
+                            evidence = ambiguity != null
+                                ? "TryResolveGameObjectInActiveStage reported an ambiguous path"
+                                : "TryResolveGameObjectInActiveStage returned null"
                         });
                 }
 
@@ -447,11 +456,14 @@ namespace PrefabSentinel
                     $"protect_components_json could not be parsed as a string array: {ex.Message}");
             }
 
-            var go = ResolveGameObjectInActiveStage(request.hierarchy_path);
-            if (go == null)
+            if (!TryResolveGameObjectInActiveStage(
+                request.hierarchy_path, out GameObject go, out var ambiguity))
+            {
+                if (ambiguity != null) return ambiguity;
                 return BuildError(
                     "EDITOR_CTRL_SAFE_SAVE_PREFAB_NOT_FOUND",
                     $"GameObject not found: {request.hierarchy_path}");
+            }
 
             // Capture pre-save parent-prefab modifications so we can detect
             // which overrides became orphan once the save runs.

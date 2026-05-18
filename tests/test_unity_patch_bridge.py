@@ -634,6 +634,60 @@ class InProcessEntryPointContractTests(unittest.TestCase):
             ),
         )
 
+    def test_set_op_file_id_target_survives_to_the_bridge_request(self) -> None:
+        """Issue #37: a set op identified by ``file_id`` (no ``component``)
+        passes schema validation and the file_id reaches the editor-bridge
+        request payload — the wire encoder must not drop the new field."""
+        with tempfile.TemporaryDirectory() as watch_dir:
+            watch_path = Path(watch_dir)
+            payload = {
+                "protocol_version": 2,
+                "plan_version": 2,
+                "resources": [
+                    {
+                        "id": "prefab",
+                        "kind": "prefab",
+                        "path": "Assets/Test.prefab",
+                        "mode": "open",
+                    }
+                ],
+                "ops": [
+                    {
+                        "resource": "prefab",
+                        "op": "set",
+                        "file_id": "300",
+                        "path": "m_Enabled",
+                        "value": 1,
+                    }
+                ],
+            }
+            with EditorBridgeResponder(watch_path, _success_response) as responder:
+                exit_code, parsed = _invoke_bridge(
+                    payload,
+                    env_overrides={
+                        "UNITYTOOL_BRIDGE_WATCH_DIR": watch_dir,
+                        "UNITYTOOL_UNITY_TIMEOUT_SEC": "10",
+                    },
+                )
+
+        self.assertEqual(
+            (0, True),
+            (exit_code, bool(parsed["success"])),
+            msg=(
+                "a file_id-targeted set op must pass schema validation; "
+                f"got exit={exit_code!r} envelope={parsed!r}"
+            ),
+        )
+        observed_op = responder.observed_requests[0]["ops"][0]
+        self.assertEqual(
+            "300",
+            observed_op.get("file_id"),
+            msg=(
+                "the bridge wire encoder must forward op.file_id to the "
+                "editor-bridge request (issue #37)."
+            ),
+        )
+
     def test_malformed_stdin_exits_nonzero_with_request_json_failure_envelope(self) -> None:
         captured = io.StringIO()
         with redirect_stdout(captured):

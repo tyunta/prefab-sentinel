@@ -385,6 +385,55 @@ namespace PrefabSentinel
             }
             return true;
         }
+        /// <summary>
+        /// Issue #37: resolve the component within <paramref name="root"/>
+        /// whose Unity local fileID equals <paramref name="rawFileId"/>.
+        /// The local fileID is read through Unity's global-object-id
+        /// facility (<see cref="GlobalObjectId.targetObjectId"/>), so a
+        /// same-type sibling on a single GameObject — which a type-name
+        /// selector cannot disambiguate — is uniquely addressable.
+        /// Reports a fail-fast failure reason when no component matches.
+        /// </summary>
+        private static bool TryResolveComponentByFileId(
+            GameObject root,
+            string rawFileId,
+            out Component component,
+            out string error
+        )
+        {
+            component = null;
+            error = string.Empty;
+            string fileId = (rawFileId ?? string.Empty).Trim();
+            if (string.IsNullOrEmpty(fileId))
+            {
+                error = "file_id is empty";
+                return false;
+            }
+            if (!ulong.TryParse(fileId, out ulong targetFileId))
+            {
+                error = $"file_id '{rawFileId}' is not a valid fileID";
+                return false;
+            }
+
+            Component[] components = root.GetComponentsInChildren<Component>(true);
+            for (int i = 0; i < components.Length; i++)
+            {
+                Component candidate = components[i];
+                if (candidate == null)
+                {
+                    continue;
+                }
+                GlobalObjectId gid = GlobalObjectId.GetGlobalObjectIdSlow(candidate);
+                if (gid.targetObjectId == targetFileId)
+                {
+                    component = candidate;
+                    return true;
+                }
+            }
+
+            error = $"component with file_id '{fileId}' was not found in the asset";
+            return false;
+        }
         private static bool TryFindUniqueComponent(
             GameObject root,
             string selector,

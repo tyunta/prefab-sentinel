@@ -75,11 +75,12 @@ v0.4.0 で CLI (`prefab-sentinel` コマンド) は廃止され、MCP サーバ�
 
 | op | 必須フィールド | 説明 |
 |---|---|---|
-| `set` | `component`, `path`, `value` | コンポーネントのプロパティ値を設定 |
+| `set` | `component` または `file_id`, `path`, `value` | コンポーネントのプロパティ値を設定 |
 | `insert_array_element` | `component`, `path`, `index`, `value` | 配列に要素を挿入 |
 | `remove_array_element` | `component`, `path`, `index` | 配列から要素を削除 |
 
-- Prefab の `component` はクラス名（例: `"PlayerScript"`, `"UnityEngine.MeshRenderer"`）または階層修飾 selector `TypeName@/hierarchy/path`（例: `"MeshRenderer@/Body/Head"`）。offline write ツール（`set_property` / `set_properties`）は issue #37 以降、解決済み component の GameObject 祖先チェーンから後者を発行する（同型コンポーネントが複数あるアセットでも一意 component を指せる）
+- Prefab の `component` はクラス名（例: `"PlayerScript"`, `"UnityEngine.MeshRenderer"`）または階層修飾 selector `TypeName@/hierarchy/path`（例: `"MeshRenderer@/Body/Head"`）。
+- issue #37: `set` op は `component` selector の代わりに、対象 component の Unity local fileID を文字列で指定する任意フィールド `file_id` で対象を指定できる。`set` op は `component` と `file_id` の少なくとも一方を持つ（両方欠落はスキーマエラー; 両方指定時は `file_id` が優先）。fileID 経路は bridge が `GlobalObjectId` でアセット内の component を一意に解決するため、1 つの GameObject に同型 component が複数あっても確実に目的の component を指せる。offline write ツール（`set_property` / `set_properties`）は issue #37 以降、解決済み symbol node の `file_id` を `set` op の `file_id` として発行する。`file_id` がアセット内のどの component にも解決しない場合は `apply_error` diagnostic（`SER_APPLY_REJECTED`）で fail-fast し、op は一切適用されない。`insert_array_element` / `remove_array_element` は従来どおり `component` selector を必須とする。
 - Material / ScriptableObject の open mode では `component` の代わりに `"target": "$asset"` でルートを指定
 
 **create mode（新規アセット作成）:**
@@ -307,7 +308,7 @@ issue #41 で `set_component_fields` から改名。`symbol_path` は GameObject
 | `change_reason` | string | — | `null` | 変更理由（監査証跡用）。`confirm=true` 時は必須 |
 | `out_report` | string | — | `null` | 結果 JSON を書き出すファイルパス。`confirm=true` 時は必須 |
 
-**未解決時の挙動**: `symbol_path` がコンポーネントに解決できない場合は `SYMBOL_NOT_FOUND` / `SYMBOL_AMBIGUOUS` / `SYMBOL_NOT_COMPONENT` を返す。dry-run 段階で `properties` 内の property path がチェーン上に見つからない場合、`SER003`（severity=`error`）の error envelope を返す。`data.suggestions` に近似候補（最大 5 件）、`diagnostics[].detail` に `property_not_found` を載せる（issue #109）。発行する patch op は階層修飾 selector `TypeName@/hierarchy/path` を用いる（issue #37）。祖先名に `#` を含む等で selector が表現不能なら `SELECTOR_NOT_EXPRESSIBLE` で fail-fast。
+**未解決時の挙動**: `symbol_path` がコンポーネントに解決できない場合は `SYMBOL_NOT_FOUND` / `SYMBOL_AMBIGUOUS` / `SYMBOL_NOT_COMPONENT` を返す。dry-run 段階で `properties` 内の property path がチェーン上に見つからない場合、`SER003`（severity=`error`）の error envelope を返す。`data.suggestions` に近似候補（最大 5 件）、`diagnostics[].detail` に `property_not_found` を載せる（issue #109）。発行する patch op は解決済み symbol node の `file_id` を `set` op の `file_id` ターゲットとして用いる（issue #37）。
 
 **使用例（dry-run）:**
 

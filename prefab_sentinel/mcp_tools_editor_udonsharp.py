@@ -211,7 +211,7 @@ def register_editor_udonsharp_tools(server: FastMCP) -> None:
     @server.tool()
     def editor_wire_persistent_listener(
         hierarchy_path: str,
-        event_path: str,
+        property_name: str,
         target_hierarchy_path: str,
         method: str,
         arg: str,
@@ -235,7 +235,7 @@ def register_editor_udonsharp_tools(server: FastMCP) -> None:
 
             editor_wire_persistent_listener(
                 hierarchy_path="/UI/Slider",
-                event_path="onValueChanged",
+                property_name="onValueChanged",
                 target_hierarchy_path="/Logic/UdonController",
                 method="SendCustomEvent",
                 arg="OnSliderChanged",
@@ -248,7 +248,7 @@ def register_editor_udonsharp_tools(server: FastMCP) -> None:
         Args:
             hierarchy_path: Hierarchy path of the source GameObject
                 (the one whose UnityEvent is being wired *from*).
-            event_path: Name of the UnityEvent field/property on a
+            property_name: Name of the UnityEvent field/property on a
                 component of the source GameObject (e.g.
                 ``"onValueChanged"``).
             target_hierarchy_path: Hierarchy path of the target
@@ -262,13 +262,15 @@ def register_editor_udonsharp_tools(server: FastMCP) -> None:
         Returns:
             The bridge envelope.
         """
-        # The bridge DTO names the target field ``target_path`` (wire
-        # contract unchanged); the MCP-facing argument is renamed to
-        # ``target_hierarchy_path`` for naming-convention conformance (#53).
+        # The bridge DTO names the event field ``event_path`` and the
+        # target field ``target_path`` (wire contract unchanged); the
+        # MCP-facing arguments are renamed to ``property_name`` and
+        # ``target_hierarchy_path`` for naming-convention conformance
+        # (#53/#58).
         return send_action(
             action="editor_wire_persistent_listener",
             hierarchy_path=hierarchy_path,
-            event_path=event_path,
+            event_path=property_name,
             target_path=target_hierarchy_path,
             method=method,
             arg=arg,

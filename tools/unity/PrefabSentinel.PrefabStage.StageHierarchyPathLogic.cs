@@ -1,7 +1,7 @@
 using System;
 
 // Stage hierarchy path normalization — Unity-free decision extracted from
-// the active-stage branch of ResolveGameObjectInActiveStage (PrefabStage.cs,
+// the active-stage branch of TryResolveGameObjectInActiveStage (PrefabStage.cs,
 // issue #18 / H-10 T1). The resolver reads the request path, delegates
 // leading-slash normalization here, and resolves the result against the
 // active Prefab Stage root.

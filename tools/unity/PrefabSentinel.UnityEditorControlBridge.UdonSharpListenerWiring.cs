@@ -36,11 +36,14 @@ namespace PrefabSentinel
                     "EDITOR_CTRL_UDON_WIRE_METHOD_NOT_FOUND",
                     "method is required.");
 
-            GameObject sourceGo = ResolveGameObjectInActiveStage(request.hierarchy_path);
-            if (sourceGo == null)
+            if (!TryResolveGameObjectInActiveStage(
+                request.hierarchy_path, out GameObject sourceGo, out var ambiguity))
+            {
+                if (ambiguity != null) return ambiguity;
                 return BuildError(
                     "EDITOR_CTRL_UDON_WIRE_EVENT_NOT_FOUND",
                     $"Source GameObject not found: {request.hierarchy_path}");
+            }
 
             Component sourceComp;
             UnityEventBase eventBase;
@@ -51,11 +54,14 @@ namespace PrefabSentinel
                     "EDITOR_CTRL_UDON_WIRE_EVENT_NOT_FOUND",
                     eventResolveError);
 
-            GameObject targetGo = ResolveGameObjectInActiveStage(request.target_path);
-            if (targetGo == null)
+            if (!TryResolveGameObjectInActiveStage(
+                request.target_path, out GameObject targetGo, out var ambiguity2))
+            {
+                if (ambiguity2 != null) return ambiguity2;
                 return BuildError(
                     "EDITOR_CTRL_UDON_WIRE_TARGET_NOT_FOUND",
                     $"Target GameObject not found: {request.target_path}");
+            }
 
             Component targetComp;
             MethodInfo methodInfo;

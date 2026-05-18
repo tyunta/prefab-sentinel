@@ -152,10 +152,13 @@ namespace PrefabSentinel
             }
 
             // Scene mode: search scene hierarchy
-            GameObject go = ResolveGameObjectInActiveStage(request.hierarchy_path);
-            if (go == null)
+            if (!TryResolveGameObjectInActiveStage(
+                request.hierarchy_path, out GameObject go, out var ambiguity))
+            {
+                if (ambiguity != null) return ambiguity;
                 return BuildError("EDITOR_CTRL_OBJECT_NOT_FOUND",
                     $"GameObject not found: {request.hierarchy_path}");
+            }
 
             Selection.activeGameObject = go;
             EditorApplication.delayCall += () =>

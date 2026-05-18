@@ -257,5 +257,5 @@ def register_editor_ops_tools(server: FastMCP) -> None:
         return send_action(
             action="editor_set_parent",
             hierarchy_path=hierarchy_path,
-            new_name=parent_hierarchy_path,
+            parent_hierarchy_path=parent_hierarchy_path,
         )

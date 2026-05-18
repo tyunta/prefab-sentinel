@@ -3322,9 +3322,8 @@ class EditorControlBridgeRequestSchemaTests(unittest.TestCase):
         # Async submit/poll (issue #233).
         "request_id",
         "cleanup_on_timeout",
-        # Animation-clip primitives (issue #243).
-        "target_dir",
-        "animation_clip_name",
+        # Animation-clip primitives (issue #243; issue #53 consolidated
+        # the directory/stem fields into the reused asset_path field).
         "curves_json",
         # Prefab Stage save flag (issue #236).
         "save_on_close",
@@ -3986,6 +3985,51 @@ class TestSetPropertyAmbiguityPropagation(unittest.TestCase):
             ),
         )
 
+    def test_discarding_resolver_has_no_call_sites_and_no_definition(self) -> None:
+        """Issue #59: the ambiguity-discarding ResolveGameObjectInActiveStage
+        wrapper is fully removed — every hierarchy-bound handler now routes
+        through the ambiguity-aware TryResolveGameObjectInActiveStage."""
+        bare_name = re.compile(r"\bResolveGameObjectInActiveStage")
+        offenders: list[str] = []
+        for cs_file in sorted(TOOLS_DIR.glob("*.cs")):
+            text = _strip_cs_comments(cs_file.read_text(encoding="utf-8"))
+            if bare_name.search(text):
+                offenders.append(cs_file.name)
+        self.assertEqual(
+            [],
+            offenders,
+            msg=(
+                "the discarding ResolveGameObjectInActiveStage wrapper "
+                "must have zero call sites and no definition (issue #59); "
+                f"still referenced in: {offenders}"
+            ),
+        )
+
+    def test_representative_handlers_route_through_ambiguity_aware_resolver(
+        self,
+    ) -> None:
+        """Issue #59: the delete / rename / reparent write handlers and a
+        representative read handler each route through the ambiguity-aware
+        resolver so an ambiguous hierarchy_path is rejected uniformly."""
+        source = _read(BRIDGE)
+        for handler in (
+            "HandleDeleteObject",
+            "HandleEditorRename",
+            "HandleEditorSetParent",
+            "HandleListChildren",
+        ):
+            body = _extract_method(source, handler)
+            self.assertIn(
+                "TryResolveGameObjectInActiveStage",
+                body,
+                msg=(
+                    f"{handler} must resolve hierarchy paths through "
+                    "TryResolveGameObjectInActiveStage so an ambiguous "
+                    "path surfaces EDITOR_CTRL_HIERARCHY_PATH_AMBIGUOUS "
+                    "(issue #59)."
+                ),
+            )
+
 
 class MenuScriptWatchSplitSourceInvariantTests(unittest.TestCase):
     """Issue #262 — the editor-script mtime detector and its three
@@ -4244,6 +4288,178 @@ class TestAddComponentInitialPropertyDiagnostics(unittest.TestCase):
             'evidence = "properties_json"',
             catch_body,
             "parse-failure diagnostic does not carry the properties_json evidence tag",
+        )
+
+
+def _extract_class_body(source: str, class_name: str) -> str:
+    """Return the brace-delimited body of a named C# class."""
+    match = re.search(
+        rf"class\s+{re.escape(class_name)}\b[^{{]*{{", source
+    )
+    if match is None:
+        raise AssertionError(f"class {class_name} not found in source")
+    return _extract_braced_block(source, match.end(), f"class {class_name}")
+
+
+class TestReparentDedicatedWireField(unittest.TestCase):
+    """Issue #56 — the reparent argument travels on a dedicated
+    EditorControlRequest field, not the rename field.
+
+    Tier 3: HandleEditorSetParent and the request DTO are Unity-runtime
+    types not compiled by CI or the xUnit harness; this comment-stripped
+    source scan pins the field rename. Runtime reparent behaviour is
+    verified by the mandatory deploy_bridge pass (observations.md).
+    """
+
+    def test_request_declares_parent_hierarchy_path_field(self) -> None:
+        source = _strip_cs_comments(
+            EDITOR_CONTROL_REQUEST.read_text(encoding="utf-8")
+        )
+        self.assertRegex(
+            source,
+            r"public\s+string\s+parent_hierarchy_path\s*=",
+            msg=(
+                "EditorControlRequest must declare a dedicated "
+                "parent_hierarchy_path field for the reparent address "
+                "(issue #56)."
+            ),
+        )
+
+    def test_set_parent_handler_reads_dedicated_field(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleEditorSetParent")
+        self.assertIn(
+            "request.parent_hierarchy_path",
+            body,
+            msg=(
+                "HandleEditorSetParent must read the parent address from "
+                "request.parent_hierarchy_path (issue #56)."
+            ),
+        )
+
+    def test_set_parent_handler_does_not_read_rename_field(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleEditorSetParent")
+        self.assertNotIn(
+            "request.new_name",
+            body,
+            msg=(
+                "HandleEditorSetParent must not fall back to the rename "
+                "field request.new_name for the parent address "
+                "(issue #56 Non-Goal)."
+            ),
+        )
+
+
+class TestDispatchExceptionActionField(unittest.TestCase):
+    """Issue #51 — the EDITOR_CTRL_HANDLER_EXCEPTION envelope carries the
+    dispatched action as a structured response-payload field.
+
+    Tier 3: the dispatch boundary runs inside the Unity Editor process
+    and is not xUnit-compiled; this comment-stripped scan pins the field
+    declaration and the catch-path population. Runtime serialization is
+    verified by the mandatory deploy_bridge pass (observations.md).
+    """
+
+    def test_response_payload_declares_action_field(self) -> None:
+        body = _extract_class_body(_read(BRIDGE), "EditorControlData")
+        self.assertRegex(
+            body,
+            r"public\s+string\s+action\s*=",
+            msg=(
+                "EditorControlData must declare a structured action "
+                "field so the dispatch-boundary catch can populate it "
+                "(issue #51)."
+            ),
+        )
+
+    def test_dispatch_catch_populates_action_field(self) -> None:
+        body = _extract_method(_read(BRIDGE), "RunFromPaths")
+        self.assertIn(
+            "EDITOR_CTRL_HANDLER_EXCEPTION",
+            body,
+            msg="RunFromPaths must build the handler-exception envelope.",
+        )
+        self.assertIn(
+            "action = request.action",
+            body,
+            msg=(
+                "the dispatch-boundary catch must set the response "
+                "payload's action field to the dispatched action so "
+                "callers can branch on it (issue #51)."
+            ),
+        )
+
+
+class TestCreateAnimationClipSinglePath(unittest.TestCase):
+    """Issue #53 — editor_create_animation_clip takes one asset path and
+    the bridge derives directory and filename; the request DTO no longer
+    declares the directory/stem fields.
+
+    Tier 3: HandleCreateAnimationClip and the request DTO are
+    Unity-runtime types; this comment-stripped scan pins the wire shape.
+    Runtime path-split and .anim enforcement are verified by the
+    mandatory deploy_bridge pass (observations.md).
+    """
+
+    def test_request_drops_directory_and_stem_clip_fields(self) -> None:
+        source = _strip_cs_comments(
+            EDITOR_CONTROL_REQUEST.read_text(encoding="utf-8")
+        )
+        self.assertNotRegex(
+            source,
+            r"public\s+string\s+target_dir\s*=",
+            msg=(
+                "EditorControlRequest must no longer declare the "
+                "directory-form target_dir clip field (issue #53)."
+            ),
+        )
+        self.assertNotRegex(
+            source,
+            r"public\s+string\s+animation_clip_name\s*=",
+            msg=(
+                "EditorControlRequest must no longer declare the "
+                "stem-form animation_clip_name clip field (issue #53)."
+            ),
+        )
+
+    def test_clip_handler_reads_single_asset_path(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleCreateAnimationClip")
+        self.assertIn(
+            "request.asset_path",
+            body,
+            msg=(
+                "HandleCreateAnimationClip must read the single "
+                "request.asset_path field (issue #53)."
+            ),
+        )
+
+    def test_clip_handler_does_not_read_directory_or_stem_fields(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleCreateAnimationClip")
+        self.assertNotIn(
+            "request.target_dir",
+            body,
+            msg=(
+                "HandleCreateAnimationClip must not read the removed "
+                "request.target_dir field (issue #53)."
+            ),
+        )
+        self.assertNotIn(
+            "request.animation_clip_name",
+            body,
+            msg=(
+                "HandleCreateAnimationClip must not read the removed "
+                "request.animation_clip_name field (issue #53)."
+            ),
+        )
+
+    def test_clip_handler_enforces_anim_extension(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleCreateAnimationClip")
+        self.assertIn(
+            ".anim",
+            body,
+            msg=(
+                "HandleCreateAnimationClip must enforce the .anim "
+                "extension on the supplied asset path (issue #53)."
+            ),
         )
 
 
