@@ -69,11 +69,15 @@ namespace PrefabSentinel
             public string phase = string.Empty;
         }
 
-        // Issue #239: editor-state snapshot returned by the dedicated
-        // ``get_editor_state`` action.  Carries exactly the four live
+        // Issue #239 / #40: editor-state snapshot returned by the dedicated
+        // ``get_editor_state`` action.  Carries exactly the five live
         // editor flags surfaced by the ``get_project_status`` MCP tool's
         // ``editor_state`` field — adding a flag here is a contract
-        // change for both the Python tool and the C# bridge.
+        // change for both the Python tool and the C# bridge.  The fifth
+        // flag ``has_unsaved_changes`` (issue #40) reports whether the
+        // open scene or the active Prefab Stage holds unsaved edits; the
+        // offline symbol-reference tools consult it to attach a freshness
+        // marker noting the offline tree reflects last-saved disk.
         [Serializable]
         public sealed class EditorStateSnapshot
         {
@@ -81,6 +85,7 @@ namespace PrefabSentinel
             public bool is_will_change_playmode = false;
             public bool is_compiling = false;
             public bool is_building_player = false;
+            public bool has_unsaved_changes = false;
         }
 
         [Serializable]
@@ -428,6 +433,45 @@ namespace PrefabSentinel
                 return;
             }
 
+            // Issue #51: the whole action switch runs inside a dispatch-level
+            // exception boundary. Any handler exception not caught internally
+            // yields a typed ``EDITOR_CTRL_HANDLER_EXCEPTION`` envelope naming
+            // the dispatched action, with the exception redacted to its type
+            // name only — no stack trace crosses the MCP boundary. The full
+            // detail is mirrored to the Unity console for local triage. The
+            // watch-loop generic catch is no longer the sink for handler
+            // exceptions; ``EDITOR_BRIDGE_ERROR`` remains only for genuine
+            // watch-loop / pre-dispatch failures.
+            EditorControlResponse response;
+            try
+            {
+                response = DispatchAction(request, requestPath, responsePath);
+            }
+            catch (Exception handlerEx)
+            {
+                Debug.LogWarning(
+                    $"[PrefabSentinel] RunFromPaths: handler for action "
+                    + $"'{request.action}' threw: {handlerEx}");
+                response = BuildError(
+                    "EDITOR_CTRL_HANDLER_EXCEPTION",
+                    $"editor_control action '{request.action}' failed: the "
+                    + $"handler raised {handlerEx.GetType().Name}. "
+                    + "Inspect the Unity console for the full exception detail "
+                    + "and retry once the underlying cause is resolved.");
+            }
+
+            if (response != null)
+                WriteResponse(responsePath, response);
+        }
+
+        // Issue #51: the action dispatch switch, extracted so the
+        // ``RunFromPaths`` exception boundary wraps every handler call in a
+        // single try/catch. Returns ``null`` for handlers that write their
+        // response file asynchronously (the dispatcher then skips the
+        // synchronous WriteResponse).
+        private static EditorControlResponse DispatchAction(
+            EditorControlRequest request, string requestPath, string responsePath)
+        {
             EditorControlResponse response;
             switch (request.action)
             {
@@ -616,8 +660,7 @@ namespace PrefabSentinel
                     break;
             }
 
-            if (response != null)
-                WriteResponse(responsePath, response);
+            return response;
         }
 
         // ── Non-fatal exception classifier (issue #117) ──
@@ -949,6 +992,11 @@ namespace PrefabSentinel
             public string component_type = string.Empty;
             public string property_name = string.Empty;
             public string value = string.Empty;
+            // Issue #52: per-op value-present marker.  ``value`` alone
+            // cannot tell an empty-string op value from an absent one;
+            // when ``value_present`` is true the handler writes ``value``
+            // even when empty, when false the op supplies no value.
+            public bool value_present = false;
             public string object_reference = string.Empty;
         }
 
@@ -1180,7 +1228,7 @@ namespace PrefabSentinel
         // ── Editor state snapshot (#239) ──
 
         /// <summary>
-        /// Snapshot the four editor-state flags surfaced by the
+        /// Snapshot the five editor-state flags surfaced by the
         /// ``get_project_status`` MCP tool.  Pure read of editor APIs;
         /// no side effects.  Adding a field here is a contract change
         /// shared with ``EditorStateSnapshot`` and the Python tool's
@@ -1194,6 +1242,7 @@ namespace PrefabSentinel
                 is_will_change_playmode = EditorApplication.isPlayingOrWillChangePlaymode,
                 is_compiling = EditorApplication.isCompiling,
                 is_building_player = BuildPipeline.isBuildingPlayer,
+                has_unsaved_changes = HasUnsavedEditorChanges(),
             };
             return BuildSuccess(
                 "EDITOR_CTRL_EDITOR_STATE_OK",
@@ -1203,6 +1252,28 @@ namespace PrefabSentinel
                     executed = true,
                     editor_state = snapshot,
                 });
+        }
+
+        /// <summary>
+        /// Issue #40: report whether the editor holds unsaved scene or
+        /// Prefab Stage edits.  When a Prefab Stage is active, its preview
+        /// scene's ``isDirty`` flag is authoritative — the open background
+        /// scene is irrelevant while staging.  Otherwise every loaded
+        /// scene is inspected and the result is the OR of their ``isDirty``
+        /// flags.  Pure read; no side effects.
+        /// </summary>
+        private static bool HasUnsavedEditorChanges()
+        {
+            var stage = PrefabStageUtility.GetCurrentPrefabStage();
+            if (stage != null)
+                return stage.scene.isDirty;
+
+            for (int i = 0; i < EditorSceneManager.sceneCount; i++)
+            {
+                if (EditorSceneManager.GetSceneAt(i).isDirty)
+                    return true;
+            }
+            return false;
         }
 
         // ── Response Builders ──

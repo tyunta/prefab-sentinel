@@ -8,8 +8,9 @@ Three wrappers:
   audit pair (``confirm=True`` AND a non-empty ``change_reason``).
 * ``editor_apply_animation_clip`` — preview-apply an existing clip
   against a live hierarchy target through Unity's animation-mode
-  preview API, recorded as a single Undo group. Requires the writer
-  audit pair.
+  preview API, recorded as a single Undo group. Issue #49: this is an
+  Undo-reversible live preview, so the inverse-irreversibility audit
+  principle does not gate it; it carries no audit pair.
 """
 
 from __future__ import annotations
@@ -152,29 +153,22 @@ def editor_create_animation_clip(
 def editor_apply_animation_clip(
     asset_path: str,
     target_hierarchy_path: str,
-    confirm: bool = False,
-    change_reason: str = "",
 ) -> dict[str, Any]:
     """Preview-apply an AnimationClip against a live target (issue #243).
 
     The bridge resolves ``target_hierarchy_path`` through the Prefab
     Stage-aware resolver helper and samples the clip in animation-mode
     so the resulting state is recorded as a single Undo group that
-    reverts the entire preview in one undo step. Requires the writer
-    audit pair; whitespace-only audit reason is treated as missing.
+    reverts the entire preview in one undo step.
+
+    Issue #49: the preview is an Undo-reversible live scene change, so
+    the inverse-irreversibility audit principle does not gate this tool;
+    it carries no ``confirm`` / ``change_reason`` parameters.
     """
-    audit_err = require_write_audit(
-        "editor_apply_animation_clip", confirm, change_reason,
-    )
-    if audit_err is not None:
-        return audit_err
-    normalized_reason = change_reason.strip()
     return send_action(
         action="apply_animation_clip",
         asset_path=asset_path,
         target_hierarchy_path=target_hierarchy_path,
-        confirm=True,
-        change_reason=normalized_reason,
     )
 
 
@@ -220,20 +214,17 @@ def register_editor_animation_tools(server: FastMCP) -> None:
     def _editor_apply_animation_clip(
         asset_path: str,
         target_hierarchy_path: str,
-        confirm: bool = False,
-        change_reason: str = "",
     ) -> dict[str, Any]:
         """Preview-apply an AnimationClip against a live target (issue #243).
+
+        Issue #49: Undo-reversible live preview — no audit pair.
 
         Args:
             asset_path: Asset path to the ``.anim`` file to preview.
             target_hierarchy_path: Hierarchy path of the GameObject to
                 drive (resolved through the Prefab Stage-aware helper).
-            confirm: Required ``True`` (writer audit gate).
-            change_reason: Required non-empty audit reason.
         """
         return editor_apply_animation_clip(
             asset_path=asset_path,
             target_hierarchy_path=target_hierarchy_path,
-            confirm=confirm, change_reason=change_reason,
         )

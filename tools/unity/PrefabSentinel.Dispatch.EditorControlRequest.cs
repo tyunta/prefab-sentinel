@@ -67,8 +67,17 @@ namespace PrefabSentinel
         // get_material_property
         public string property_name = string.Empty; // empty = list all properties
 
-        // set_material_property
+        // set_material_property; also the value carrier for
+        // editor_set_property / editor_set_udonsharp_field.
         public string property_value = string.Empty;  // raw JSON string, manually parsed by handler
+
+        // Issue #52: value-present marker for editor_set_property /
+        // editor_set_udonsharp_field.  ``property_value`` cannot itself
+        // distinguish "write the empty string" from "no value supplied"
+        // — an empty string is a legal write.  When ``property_value_present``
+        // is true the handler writes ``property_value`` even when empty;
+        // when false ``property_value`` is treated as no value supplied.
+        public bool property_value_present = false;
 
         // vrcsdk_upload
         public string target_type = string.Empty;    // "avatar" or "world"
@@ -133,12 +142,16 @@ namespace PrefabSentinel
         public string change_reason = string.Empty;
         public string temp_id = string.Empty;  // optional; handler generates one when empty
 
-        // Phase 10: Force re-import on recompile (#106)
-        // When set, HandleRecompileScripts runs ImportAsset with
-        // ForceUpdate | ForceSynchronousImport on each editor script
-        // before scheduling compilation, so externally edited files
-        // under Assets/Editor are picked up reliably.
-        public bool force_reimport = false;
+        // Issue #45: caller-supplied reimport-target paths for the
+        // fire-and-return recompile (``recompile_scripts``).  When
+        // non-empty, HandleRecompileScripts force-reimports each listed
+        // asset path with ImportAssetOptions.ForceUpdate before scheduling
+        // compilation, so an externally edited script the caller names —
+        // including scripts outside Assets/Editor — round-trips through
+        // Unity's import pipeline reliably.  A null / empty array means
+        // "no targeted reimport"; this replaces the old blanket
+        // ``force_reimport`` bool (#106) which only covered Assets/Editor.
+        public string[] reimport_paths = null;
 
         // Phase 10: Caller-supplied compile-poll budget (#102)
         // When > 0, HandleRunScript uses this as the bounded compile

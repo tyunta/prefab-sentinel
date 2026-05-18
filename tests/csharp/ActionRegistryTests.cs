@@ -65,7 +65,10 @@ public class EditorControlRequestTests
         Assert.Equal(-1, request.camera_orthographic);
         Assert.False(request.confirm);
         Assert.False(request.assume_compiled);
-        Assert.False(request.force_reimport);
+        // Issue #45: the fire-and-return recompile carries a caller-supplied
+        // reimport-target path array (replaces the old force_reimport bool);
+        // a default-constructed request supplies none.
+        Assert.Null(request.reimport_paths);
         Assert.Equal(0, request.compile_timeout);
         Assert.Equal(0f, request.timeout_sec);
         Assert.Equal("all", request.classification_filter);

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using UnityEditor;
 using UnityEngine;
 
@@ -40,6 +41,17 @@ namespace PrefabSentinel
                     $"component_type {compType.FullName} is not an " +
                     "UdonSharpBehaviour subclass; use editor_add_component " +
                     "for non-UdonSharp components.");
+
+            // Issue #46: confirm the target type's UdonSharp program asset
+            // exists and is compiled before any scene mutation. Adding the
+            // component without a program asset silently attaches a plain
+            // MonoBehaviour rather than an UdonBehaviour, and an uncompiled
+            // program asset cannot back a working UdonBehaviour. Both are
+            // surfaced as actionable envelopes naming the corrective step
+            // instead of letting the add proceed into a broken state.
+            EditorControlResponse programAssetErr =
+                CheckUdonProgramAssetReady(compType);
+            if (programAssetErr != null) return programAssetErr;
 
             // Pre-validate the field map so a malformed payload aborts
             // before any scene mutation happens.
@@ -216,6 +228,87 @@ namespace PrefabSentinel
             while (i < s.Length && s[i] != ',' && s[i] != '}' && !char.IsWhiteSpace(s[i])) i++;
             if (i == start) { value = null; return $"empty value at position {i}."; }
             value = s.Substring(start, i - start);
+            return null;
+        }
+
+        /// <summary>
+        /// Issue #46: pre-check that <paramref name="compType"/> has a
+        /// compiled UdonSharp program asset. Returns <c>null</c> when the
+        /// type is ready to add, an actionable error envelope otherwise.
+        ///
+        /// The program asset is located by walking
+        /// ``UdonSharpProgramAsset.GetAllUdonSharpPrograms()`` and
+        /// matching ``sourceCsScript.GetClass()`` against the target
+        /// type — the same lookup ``editor_add_component`` uses to flag a
+        /// missing program asset. Compiled state is read from the
+        /// asset's ``SerializedProgramAsset`` property, which UdonSharp
+        /// leaves null until the program is compiled.
+        /// </summary>
+        private static EditorControlResponse CheckUdonProgramAssetReady(
+            Type compType)
+        {
+            Type programAssetType = null;
+            foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                programAssetType = assembly.GetType(
+                    "UdonSharp.UdonSharpProgramAsset", false);
+                if (programAssetType != null) break;
+            }
+            // UdonSharp not loaded — the later UdonSharpEditorUtility check
+            // owns that failure; treat the program-asset pre-check as
+            // inconclusive and let dispatch continue.
+            if (programAssetType == null) return null;
+
+            MethodInfo getAllPrograms = programAssetType.GetMethod(
+                "GetAllUdonSharpPrograms",
+                BindingFlags.Public | BindingFlags.Static);
+            PropertyInfo csScriptProp = programAssetType.GetProperty(
+                "sourceCsScript",
+                BindingFlags.Public | BindingFlags.Instance);
+            if (getAllPrograms == null || csScriptProp == null) return null;
+
+            Array programs = getAllPrograms.Invoke(null, null) as Array;
+            object matched = null;
+            if (programs != null)
+            {
+                foreach (object program in programs)
+                {
+                    MonoScript script = csScriptProp.GetValue(program) as MonoScript;
+                    if (script != null && script.GetClass() == compType)
+                    {
+                        matched = program;
+                        break;
+                    }
+                }
+            }
+
+            if (matched == null)
+                return BuildError(
+                    "EDITOR_CTRL_UDON_ADD_NO_PROGRAM_ASSET",
+                    $"No UdonSharp program asset exists for {compType.Name}. " +
+                    "Create one with editor_create_udon_program_asset, then " +
+                    "run editor_recompile, and retry editor_add_udonsharp_component.");
+
+            // ``SerializedProgramAsset`` is null until the program is
+            // compiled; a present-but-uncompiled asset cannot back a
+            // working UdonBehaviour.
+            PropertyInfo serializedProp = programAssetType.GetProperty(
+                "SerializedProgramAsset",
+                BindingFlags.Public | BindingFlags.Instance);
+            if (serializedProp != null)
+            {
+                object serialized = serializedProp.GetValue(matched);
+                if (serialized == null
+                    || (serialized is UnityEngine.Object uo && uo == null))
+                {
+                    return BuildError(
+                        "EDITOR_CTRL_UDON_ADD_PROGRAM_NOT_COMPILED",
+                        $"The UdonSharp program asset for {compType.Name} " +
+                        "exists but is not compiled. Run editor_recompile, " +
+                        "then retry editor_add_udonsharp_component.");
+                }
+            }
+
             return null;
         }
 

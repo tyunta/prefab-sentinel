@@ -70,12 +70,14 @@ set_property(
 全 MCP ツールの正本カタログは [docs/tools.md](../../docs/tools.md)、応答エンベロープ（`success / severity / code / message / data / diagnostics`）とエラーコードの正本は [docs/api-reference.md](../../docs/api-reference.md)。各ツールの引数・戻り値は MCP ツールスキーマに記述されている。主なカテゴリ:
 
 - **検査（read-only・Unity 不要）** — `validate_refs` / `validate_structure` / `inspect_wiring` / `inspect_variant` / `inspect_hierarchy` / `inspect_materials` / `find_referencing_assets` / `get_unity_symbols` / `find_unity_symbol` / `diff_unity_symbols` / `list_serialized_fields` / `validate_field_rename` / `check_field_coverage`
-- **編集（write・dry-run/confirm ゲート）** — `set_property` / `add_component` / `remove_component` / `patch_apply` / `revert_overrides` / `set_material_property` / `copy_asset` / `rename_asset`
+- **編集（write・dry-run/confirm ゲート）** — `set_property` / `set_properties` / `add_component` / `remove_component` / `patch_apply` / `revert_overrides` / `set_material_property` / `copy_asset` / `rename_asset`
 - **実行検証** — `validate_runtime`（UdonSharp compile + ClientSim、Editor Bridge 常駐が必須）
-- **Editor 操作（Editor Bridge 常駐が必須）** — `editor_*` 系。Scene / Hierarchy / Component / Material / BlendShape / Animation / Console / Prefab Stage の検査・編集（`editor_screenshot` / `editor_open_prefab` / `editor_close_prefab` / `editor_safe_save_prefab` / `editor_execute_menu_item` / `editor_recompile_and_wait` 等）。完全な一覧は docs/tools.md の `editor_*` カテゴリ群を参照
+- **Editor 操作（Editor Bridge 常駐が必須）** — `editor_*` 系。Scene / Hierarchy / Component / Material / BlendShape / Animation / Console / Prefab Stage の検査・編集（`editor_screenshot` / `editor_open_prefab` / `editor_close_prefab` / `editor_safe_save_prefab` / `editor_execute_menu_item` / `editor_recompile`（同期）/ `editor_recompile_async`（fire-and-return）等）。完全な一覧は docs/tools.md の `editor_*` カテゴリ群を参照
 - **セッション** — `activate_project`（スコープ宣言 + キャッシュ warm）/ `get_project_status` / `deploy_bridge`（Bridge C# / `.asmdef` を Unity プロジェクトへ同期）
 
-書き込み系ツールは `confirm=True` + 非空 `change_reason` の監査ペアを必須とする（`patch_apply` / `set_component_fields` は `out_report` も必須）。
+**offline / live の権威境界**: offline 系（`get_unity_symbols` / `find_unity_symbol` / `set_property` / `set_properties` 等、`symbol_path` で住所する）は last-saved disk YAML を権威とし Unity 不要で動く。live 系（`editor_*`、`hierarchy_path` で住所する）は live editor / Prefab Stage を権威とする。Editor Bridge 接続中かつ live に未保存変更がある間、offline symbol-reference ツールはペイロードに freshness マーカーを付け、ツリーが last-saved disk を反映し live と乖離しうることを通知する（issue #40）。
+
+書き込み系ツールは `confirm=True` + 非空 `change_reason` の監査ペアを必須とする（`patch_apply` / `set_properties` は `out_report` も必須）。
 
 ## パッチ計画 JSON
 
@@ -161,7 +163,7 @@ read-only 検査（`validate_*` / `inspect_*` / `find_*`、および patch の d
    - `target_dir` 省略時の既定は `<project_root>/Assets/Editor/PrefabSentinel/`。明示する場合もプロジェクト内に限る（外側は `DEPLOY_OUTSIDE_PROJECT`）。
    - Bridge C#（partial 分割された全ファイル）と `.asmdef` をコピーし、配置先の親ディレクトリに残った旧 `PrefabSentinel.*.cs` を除去して CS0101 重複定義エラーを防ぐ。手動 `cp` は partial 分割ファイル群を取りこぼすため使わない。
 
-2. **Unity でコンパイル完了を待つ（ユーザー手動）** — ユーザーに Unity Editor へ切り替えてもらい、配置された C# のコンパイル完了を待つ。**この時点では Editor Bridge がまだ起動していないため、`editor_recompile_and_wait` / `editor_console` は使えない**（chicken-and-egg）。ユーザーが Unity Console を目視し、コンパイルエラーが無いことを確認する。エラーがある場合: `CS0101`（重複定義）なら配置先や親ディレクトリに旧 Bridge ファイルが残存、`CS0246` 等の型未解決なら VRChat SDK / UdonSharp の未導入・バージョン不整合を疑う。
+2. **Unity でコンパイル完了を待つ（ユーザー手動）** — ユーザーに Unity Editor へ切り替えてもらい、配置された C# のコンパイル完了を待つ。**この時点では Editor Bridge がまだ起動していないため、`editor_recompile` / `editor_console` は使えない**（chicken-and-egg）。ユーザーが Unity Console を目視し、コンパイルエラーが無いことを確認する。エラーがある場合: `CS0101`（重複定義）なら配置先や親ディレクトリに旧 Bridge ファイルが残存、`CS0246` 等の型未解決なら VRChat SDK / UdonSharp の未導入・バージョン不整合を疑う。
 
 3. **Editor Bridge ウィンドウを開く（ユーザー手動）** — Unity Editor の `PrefabSentinel > Editor Bridge` メニューからウィンドウを開き、watch ディレクトリ（例: `<project_root>/Temp/PrefabSentinelBridge`）を入力して有効化する。
 

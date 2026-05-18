@@ -7,12 +7,52 @@ from typing import Any, Literal
 
 from mcp.server.fastmcp import FastMCP
 
+from prefab_sentinel.editor_bridge import bridge_status, send_action
 from prefab_sentinel.mcp_helpers import read_asset
 from prefab_sentinel.session import ProjectSession
 
 __all__ = ["register_symbol_tools"]
 
 logger = logging.getLogger(__name__)
+
+# Issue #40: marker attached to offline symbol-reference payloads when
+# the Editor Bridge is connected and reports unsaved live changes. The
+# offline symbol tree is built from last-saved disk YAML, so a connected
+# Editor with unsaved edits means the payload may diverge from live
+# state. With no Bridge connection no marker is attached, preserving the
+# offline path's no-Unity-required property.
+_FRESHNESS_MARKER = {
+    "source": "last_saved_disk",
+    "note": (
+        "The Editor Bridge is connected and reports unsaved live "
+        "changes. This symbol tree reflects the last-saved disk YAML "
+        "and may diverge from the live editor state. Save the scene or "
+        "Prefab Stage in Unity to reconcile."
+    ),
+}
+
+
+def _offline_freshness_marker() -> dict[str, Any] | None:
+    """Return the issue #40 freshness marker, or ``None``.
+
+    The marker is attached only when the Editor Bridge is connected
+    *and* its editor-state snapshot reports unsaved changes. A
+    disconnected bridge, a failed bridge action, or a clean editor
+    yields ``None`` so the marker never becomes a constant false alarm.
+    """
+    if not bridge_status().get("connected"):
+        return None
+    try:
+        resp = send_action(action="get_editor_state")
+    except Exception:
+        logger.debug("get_editor_state failed for freshness marker", exc_info=True)
+        return None
+    if not resp.get("success"):
+        return None
+    editor_state = resp.get("data", {}).get("editor_state") or {}
+    if editor_state.get("has_unsaved_changes"):
+        return dict(_FRESHNESS_MARKER)
+    return None
 
 
 def register_symbol_tools(server: FastMCP, session: ProjectSession) -> None:
@@ -86,12 +126,16 @@ def register_symbol_tools(server: FastMCP, session: ProjectSession) -> None:
             expand_nested=expand_nested,
             guid_to_asset_path=guid_to_asset_path,
         )
-        return {
+        payload: dict[str, Any] = {
             "asset_path": asset_path,
             "depth": depth,
             "detail": detail,
             "symbols": tree.to_overview(depth=depth, detail=detail),
         }
+        marker = _offline_freshness_marker()
+        if marker is not None:
+            payload["freshness"] = marker
+        return payload
 
     @server.tool()
     def find_unity_symbol(
@@ -132,4 +176,7 @@ def register_symbol_tools(server: FastMCP, session: ProjectSession) -> None:
         }
         if show_origin:
             response["show_origin"] = True
+        marker = _offline_freshness_marker()
+        if marker is not None:
+            response["freshness"] = marker
         return response

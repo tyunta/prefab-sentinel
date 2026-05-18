@@ -132,8 +132,8 @@ def register_editor_udonsharp_tools(server: FastMCP) -> None:
     @server.tool()
     def editor_set_udonsharp_field(
         hierarchy_path: str,
-        field_name: str,
-        value: str = "",
+        property_name: str,
+        value: str | None = None,
         object_reference: str = "",
     ) -> dict[str, Any]:
         """Write a single serialized field on the unique UdonSharp
@@ -156,20 +156,29 @@ def register_editor_udonsharp_tools(server: FastMCP) -> None:
         * the field is a ``VRCUrl`` (so the bridge writes the inner
           string instead of constructing a wrapper instance).
 
+        Issue #52: ``value`` is typed ``str | None``. An empty-string
+        write (``value=""``) is a deliberate, valid write distinct from
+        an unspecified value (``value=None``); the bridge request carries
+        a value-present marker. ``EDITOR_CTRL_UDON_SET_FIELD_NO_VALUE``
+        is returned only when ``value`` is unspecified AND
+        ``object_reference`` is empty.
+
         Example::
 
             editor_set_udonsharp_field(
                 hierarchy_path="/UI/PlayButton",
-                field_name="defaultUrl",
+                property_name="defaultUrl",
                 value="https://example.com/clip.m3u8",
             )
 
         Args:
             hierarchy_path: Hierarchy path of the target GameObject.
-            field_name: Serialized field name (matches what
+            property_name: Serialized field name (matches what
                 SerializedObject.FindProperty resolves).
             value: String-encoded value for primitive / enum / VRCUrl
-                fields.  Mutually exclusive with ``object_reference``.
+                fields. ``None`` (default) = unspecified; ``""`` = a
+                deliberate empty-string write. Mutually exclusive with
+                ``object_reference``.
             object_reference: Hierarchy path or asset path for
                 ObjectReference fields (e.g. ``"/ToggleTarget"``).
                 Mutually exclusive with ``value``.
@@ -177,29 +186,33 @@ def register_editor_udonsharp_tools(server: FastMCP) -> None:
         Returns:
             The bridge envelope.  Conflicting inputs return
             ``EDITOR_CTRL_SET_PROP_BOTH_VALUE`` from the client
-            without contacting the bridge; both empty returns
-            ``EDITOR_CTRL_UDON_SET_FIELD_NO_VALUE``.
+            without contacting the bridge; an unspecified value with no
+            object reference returns ``EDITOR_CTRL_UDON_SET_FIELD_NO_VALUE``.
         """
-        if value and object_reference:
+        if value is not None and object_reference:
             return _both_value_envelope()
-        if not value and not object_reference:
+        if value is None and not object_reference:
             return _no_value_envelope()
 
+        # The bridge DTO names this field ``field_name`` (the wire
+        # contract is unchanged); the MCP-facing argument is renamed to
+        # ``property_name`` for naming-convention conformance (#53).
         kwargs: dict[str, Any] = {
             "hierarchy_path": hierarchy_path,
-            "field_name": field_name,
+            "field_name": property_name,
         }
         if object_reference:
             kwargs["object_reference"] = object_reference
         else:
             kwargs["property_value"] = value
+            kwargs["property_value_present"] = True
         return send_action(action="editor_set_udonsharp_field", **kwargs)
 
     @server.tool()
     def editor_wire_persistent_listener(
         hierarchy_path: str,
         event_path: str,
-        target_path: str,
+        target_hierarchy_path: str,
         method: str,
         arg: str,
     ) -> dict[str, Any]:
@@ -209,10 +222,10 @@ def register_editor_udonsharp_tools(server: FastMCP) -> None:
         Wraps the published ``UnityEventTools.AddStringPersistentListener``
         entry point.  The bridge resolves the source component carrying
         the named event field on *hierarchy_path*, the target component
-        on *target_path* with a void ``method(string)`` overload, and
-        adds a string-mode listener bound to *arg*.  Idempotent: an
-        existing listener with matching target / method / mode / arg
-        results in a no-op success response.
+        on *target_hierarchy_path* with a void ``method(string)``
+        overload, and adds a string-mode listener bound to *arg*.
+        Idempotent: an existing listener with matching target / method /
+        mode / arg results in a no-op success response.
 
         The canonical use case is wiring a UI control's event to
         ``UdonBehaviour.SendCustomEvent`` so a string event name fires
@@ -223,7 +236,7 @@ def register_editor_udonsharp_tools(server: FastMCP) -> None:
             editor_wire_persistent_listener(
                 hierarchy_path="/UI/Slider",
                 event_path="onValueChanged",
-                target_path="/Logic/UdonController",
+                target_hierarchy_path="/Logic/UdonController",
                 method="SendCustomEvent",
                 arg="OnSliderChanged",
             )
@@ -238,8 +251,8 @@ def register_editor_udonsharp_tools(server: FastMCP) -> None:
             event_path: Name of the UnityEvent field/property on a
                 component of the source GameObject (e.g.
                 ``"onValueChanged"``).
-            target_path: Hierarchy path of the target GameObject (the
-                component whose method gets invoked).
+            target_hierarchy_path: Hierarchy path of the target
+                GameObject (the component whose method gets invoked).
             method: Method name on a component of the target with a
                 ``void method(string)`` signature (e.g.
                 ``"SendCustomEvent"`` on ``UdonBehaviour``).
@@ -249,11 +262,14 @@ def register_editor_udonsharp_tools(server: FastMCP) -> None:
         Returns:
             The bridge envelope.
         """
+        # The bridge DTO names the target field ``target_path`` (wire
+        # contract unchanged); the MCP-facing argument is renamed to
+        # ``target_hierarchy_path`` for naming-convention conformance (#53).
         return send_action(
             action="editor_wire_persistent_listener",
             hierarchy_path=hierarchy_path,
             event_path=event_path,
-            target_path=target_path,
+            target_path=target_hierarchy_path,
             method=method,
             arg=arg,
         )

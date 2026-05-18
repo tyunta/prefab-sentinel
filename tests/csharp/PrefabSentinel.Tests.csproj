@@ -96,6 +96,17 @@
     <Compile Include="..\..\tools\unity\PrefabSentinel.PrefabStage.StageHierarchyPathLogic.cs">
       <Link>Bridge\PrefabSentinel.PrefabStage.StageHierarchyPathLogic.cs</Link>
     </Compile>
+    <!--
+      Issue #38 / #45: the #N-disambiguating symbol-path resolver and the
+      AssetDatabase importer-error line predicate. Both are Unity-free
+      extractions exercised by SymbolPathResolverTests / ImporterErrorClassifierTests.
+    -->
+    <Compile Include="..\..\tools\unity\PrefabSentinel.SymbolPathResolver.cs">
+      <Link>Bridge\PrefabSentinel.SymbolPathResolver.cs</Link>
+    </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.RunScriptCompile.ImporterErrorClassifier.cs">
+      <Link>Bridge\PrefabSentinel.RunScriptCompile.ImporterErrorClassifier.cs</Link>
+    </Compile>
   </ItemGroup>
 
 </Project>

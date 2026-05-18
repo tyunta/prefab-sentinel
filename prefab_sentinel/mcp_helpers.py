@@ -24,9 +24,9 @@ from prefab_sentinel.unity_yaml_parser import (
 __all__ = [
     "COPY_SKIP_FIELDS",
     "KNOWLEDGE_URI_PREFIX",
+    "build_component_selector",
     "collect_symbol_paths",
     "find_block_by_file_id",
-    "find_component_on_go",
     "normalize_material_value",
     "read_asset",
     "resolve_component_name",
@@ -224,75 +224,123 @@ def find_block_by_file_id(text: str, file_id: str) -> str:
     raise ValueError(msg)
 
 
-def find_component_on_go(
-    go_node: SymbolNode,
-    component: str,
-    asset_path: str,
-) -> tuple[SymbolNode, str, None] | tuple[None, None, dict[str, Any]]:
-    """Find a uniquely-named component on a GameObject node."""
-    component_children = [
-        child for child in go_node.children
-        if child.kind == SymbolKind.COMPONENT
-    ]
-    available = [
-        child.script_name if child.script_name else child.name
-        for child in component_children
-    ]
+def _game_object_ancestor_chain(
+    tree: SymbolTree, component_node: SymbolNode,
+) -> list[SymbolNode] | None:
+    """Return the GameObject ancestor chain that owns *component_node*.
 
-    def _matches(child: SymbolNode) -> bool:
-        if child.script_name:
-            return child.script_name == component
-        return child.name == component
+    The chain is root-first and ends with the GameObject that directly
+    owns the component (issue #37 selector emission). Returns ``None``
+    when the component node is not reachable from any tree root.
 
-    matches = [child for child in component_children if _matches(child)]
+    The symbol tree stores only forward (child) links, so this walks
+    from ``tree.roots`` recording the GameObject path that reaches the
+    component's ``file_id``.
+    """
 
-    if not matches:
-        return None, None, {
+    def _walk(
+        node: SymbolNode, trail: list[SymbolNode],
+    ) -> list[SymbolNode] | None:
+        if node.kind == SymbolKind.GAME_OBJECT:
+            here = [*trail, node]
+            for child in node.children:
+                if (
+                    child.kind == SymbolKind.COMPONENT
+                    and child.file_id == component_node.file_id
+                ):
+                    return here
+            for child in node.children:
+                found = _walk(child, here)
+                if found is not None:
+                    return found
+            return None
+        # PrefabInstance / other container: descend without recording.
+        for child in node.children:
+            found = _walk(child, trail)
+            if found is not None:
+                return found
+        return None
+
+    for root in tree.roots:
+        chain = _walk(root, [])
+        if chain is not None:
+            return chain
+    return None
+
+
+def build_component_selector(
+    tree: SymbolTree, component_node: SymbolNode, component_name: str,
+) -> tuple[str, None] | tuple[None, dict[str, Any]]:
+    """Build a ``TypeName@/hierarchy/path`` patch component selector.
+
+    Derives *component_node*'s GameObject ancestor chain and emits a
+    hierarchy-qualified selector so an asset containing several
+    same-type components still resolves to the intended one (issue #37).
+    Ancestors that have a same-named GameObject sibling are emitted with
+    a ``#N`` (0-based, child order) occurrence token.
+
+    Returns ``(selector, None)`` on success, or ``(None, envelope)``
+    with a ``SELECTOR_NOT_EXPRESSIBLE`` error envelope when the ancestor
+    chain cannot be expressed unambiguously — currently when an ancestor
+    GameObject name literally contains ``#`` (the disambiguation
+    metacharacter), which would make the emitted selector unparseable.
+    """
+    chain = _game_object_ancestor_chain(tree, component_node)
+    if chain is None:
+        # The component resolved through the tree but its owning
+        # GameObject path could not be reconstructed. Fail fast rather
+        # than emit a bare type name that drops the hierarchy qualifier.
+        return None, {
             "success": False,
             "severity": "error",
-            "code": "COMPONENT_NOT_FOUND",
+            "code": "SELECTOR_NOT_EXPRESSIBLE",
             "message": (
-                f"No component {component!r} found on "
-                f"GameObject {go_node.name!r}."
+                f"Cannot derive a GameObject ancestor chain for "
+                f"component {component_name!r}; the resolved component "
+                f"is not reachable from any asset root."
             ),
             "data": {
-                "asset_path": asset_path,
-                "component": component,
-                "available_components": available,
+                "component": component_name,
+                "file_id": component_node.file_id,
             },
             "diagnostics": [],
         }
 
-    if len(matches) > 1:
-        return None, None, {
-            "success": False,
-            "severity": "error",
-            "code": "COMPONENT_AMBIGUOUS",
-            "message": (
-                f"Multiple {component!r} components found on "
-                f"GameObject {go_node.name!r}. Cannot resolve uniquely."
-            ),
-            "data": {
-                "asset_path": asset_path,
-                "component": component,
-                "available_components": [
-                    child.script_name if child.script_name else child.name
-                    for child in matches
-                ],
-            },
-            "diagnostics": [],
-        }
+    # Build sibling-aware segments root-first. For each GameObject in the
+    # chain, count its same-named GameObject siblings to decide whether a
+    # ``#N`` occurrence token is required.
+    segments: list[str] = []
+    parent_children: list[SymbolNode] = list(tree.roots)
+    for go_node in chain:
+        if "#" in go_node.name:
+            return None, {
+                "success": False,
+                "severity": "error",
+                "code": "SELECTOR_NOT_EXPRESSIBLE",
+                "message": (
+                    f"GameObject name {go_node.name!r} contains '#', the "
+                    f"sibling-disambiguation metacharacter; the ancestor "
+                    f"chain cannot be expressed as an unambiguous "
+                    f"'TypeName@/path' selector."
+                ),
+                "data": {
+                    "component": component_name,
+                    "offending_name": go_node.name,
+                },
+                "diagnostics": [],
+            }
+        go_siblings = [
+            n for n in parent_children if n.kind == SymbolKind.GAME_OBJECT
+        ]
+        same_named = [n for n in go_siblings if n.name == go_node.name]
+        if len(same_named) > 1:
+            occurrence = next(
+                i for i, n in enumerate(same_named) if n is go_node
+            )
+            segments.append(f"{go_node.name}#{occurrence}")
+        else:
+            segments.append(go_node.name)
+        parent_children = go_node.children
 
-    node = matches[0]
-    try:
-        component_name = resolve_component_name(node)
-    except ValueError as exc:
-        return None, None, {
-            "success": False,
-            "severity": "error",
-            "code": "SYMBOL_UNRESOLVABLE",
-            "message": str(exc),
-            "data": {"asset_path": asset_path, "component": component},
-            "diagnostics": [],
-        }
-    return node, component_name, None
+    selector = f"{component_name}@/" + "/".join(segments)
+    return selector, None

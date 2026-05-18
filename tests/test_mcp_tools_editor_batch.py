@@ -151,7 +151,7 @@ class EditorBatchRoutingTests(unittest.TestCase):
 
     def test_create_empty_forwards_optional_fields(self) -> None:
         self.server.registered["editor_create_empty"](
-            name="Child", parent_path="Parent", position="1,2,3"
+            name="Child", parent_hierarchy_path="Parent", position="1,2,3"
         )
         kwargs = self.mock_send.call_args.kwargs
         self.assertEqual("Parent", kwargs["hierarchy_path"])
@@ -171,7 +171,7 @@ class EditorBatchRoutingTests(unittest.TestCase):
         self.server.registered["editor_create_primitive"](
             primitive_type="Sphere",
             name="S",
-            parent_path="Root",
+            parent_hierarchy_path="Root",
             position="0,1,0",
             scale="2,2,2",
             rotation="0,90,0",
@@ -199,7 +199,11 @@ class EditorBatchRoutingTests(unittest.TestCase):
         self.server.registered["editor_batch_set_property"](operations=ops)
         kwargs = self.mock_send.call_args.kwargs
         self.assertEqual("editor_batch_set_property", kwargs["action"])
-        self.assertEqual(ops, json.loads(kwargs["batch_operations_json"]))
+        # Issue #52: each op is stamped with a value-present marker.
+        sent = json.loads(kwargs["batch_operations_json"])
+        self.assertEqual(1, len(sent))
+        self.assertTrue(sent[0]["value_present"])
+        self.assertEqual("1,1,1", sent[0]["value"])
 
     # --- editor_batch_set_material_property: three target shapes -----------
 
@@ -223,7 +227,7 @@ class EditorBatchRoutingTests(unittest.TestCase):
     def test_material_property_routing_by_path(self) -> None:
         self.server.registered["editor_batch_set_material_property"](
             properties=self._material_props(),
-            material_path="Assets/Mat.mat",
+            material_asset_path="Assets/Mat.mat",
         )
         kwargs = self.mock_send.call_args.kwargs
         self.assertEqual("Assets/Mat.mat", kwargs["material_path"])
@@ -234,7 +238,7 @@ class EditorBatchRoutingTests(unittest.TestCase):
         guid = "a" * 32
         self.server.registered["editor_batch_set_material_property"](
             properties=self._material_props(),
-            material_guid=guid,
+            material_asset_guid=guid,
         )
         kwargs = self.mock_send.call_args.kwargs
         self.assertEqual(guid, kwargs["material_guid"])
@@ -244,7 +248,7 @@ class EditorBatchRoutingTests(unittest.TestCase):
     def test_material_property_normalizes_list_value_to_json(self) -> None:
         self.server.registered["editor_batch_set_material_property"](
             properties=[{"name": "_Vec", "value": [1, 2, 3]}],
-            material_path="Assets/Mat.mat",
+            material_asset_path="Assets/Mat.mat",
         )
         kwargs = self.mock_send.call_args.kwargs
         normalized = json.loads(kwargs["batch_operations_json"])
@@ -293,7 +297,7 @@ class EditorBatchRoutingTests(unittest.TestCase):
 
     def test_open_scene_forwards_mode(self) -> None:
         self.server.registered["editor_open_scene"](
-            scene_path="Assets/Scenes/Main.unity", mode="additive"
+            asset_path="Assets/Scenes/Main.unity", mode="additive"
         )
         kwargs = self.mock_send.call_args.kwargs
         self.assertEqual("editor_open_scene", kwargs["action"])
@@ -303,25 +307,45 @@ class EditorBatchRoutingTests(unittest.TestCase):
     # --- editor_save_scene --------------------------------------------------
 
     def test_save_scene_omits_path_when_blank(self) -> None:
-        self.server.registered["editor_save_scene"]()
+        self.server.registered["editor_save_scene"](
+            confirm=True, change_reason="save scene",
+        )
         kwargs = self.mock_send.call_args.kwargs
         self.assertEqual("editor_save_scene", kwargs["action"])
         self.assertNotIn("asset_path", kwargs)
 
     def test_save_scene_forwards_path_when_supplied(self) -> None:
-        self.server.registered["editor_save_scene"](path="Assets/Scenes/Other.unity")
+        self.server.registered["editor_save_scene"](
+            asset_path="Assets/Scenes/Other.unity",
+            confirm=True, change_reason="save scene",
+        )
         kwargs = self.mock_send.call_args.kwargs
         self.assertEqual("Assets/Scenes/Other.unity", kwargs["asset_path"])
+
+    def test_save_scene_without_audit_pair_rejected(self) -> None:
+        # Issue #49: editor_save_scene gates on the audit pair.
+        response = self.server.registered["editor_save_scene"]()
+        self.assertEqual("CHANGE_REASON_REQUIRED", response["code"])
+        self.mock_send.assert_not_called()
 
     # --- editor_create_scene ------------------------------------------------
 
     def test_create_scene_forwards_path(self) -> None:
         self.server.registered["editor_create_scene"](
-            scene_path="Assets/Scenes/New.unity"
+            asset_path="Assets/Scenes/New.unity",
+            confirm=True, change_reason="create scene",
         )
         kwargs = self.mock_send.call_args.kwargs
         self.assertEqual("editor_create_scene", kwargs["action"])
         self.assertEqual("Assets/Scenes/New.unity", kwargs["asset_path"])
+
+    def test_create_scene_without_audit_pair_rejected(self) -> None:
+        # Issue #49: editor_create_scene gates on the audit pair.
+        response = self.server.registered["editor_create_scene"](
+            asset_path="Assets/Scenes/New.unity",
+        )
+        self.assertEqual("CHANGE_REASON_REQUIRED", response["code"])
+        self.mock_send.assert_not_called()
 
     # --- editor_create_ui_element (issue #195) -----------------------------
 
@@ -334,7 +358,7 @@ class EditorBatchRoutingTests(unittest.TestCase):
         self.server.registered["editor_create_ui_element"](
             name="MyImage",
             type="Image",
-            parent_path="Canvas",
+            parent_hierarchy_path="Canvas",
             rect={
                 "anchorMin": [0.0, 0.0],
                 "anchorMax": [1.0, 1.0],
@@ -372,55 +396,28 @@ class EditorBatchRoutingTests(unittest.TestCase):
         )
 
 
-class EditorBatchSetBlendShapeAuditGateTests(unittest.TestCase):
-    """Issue #240 — ``editor_batch_set_blend_shape`` audit gating.
+class EditorBatchSetBlendShapeNoAuditTests(unittest.TestCase):
+    """Issue #49 — ``editor_batch_set_blend_shape`` carries no audit pair.
 
-    The wrapper must reject any call missing ``confirm=True`` AND a
-    non-empty ``change_reason`` pre-bridge with the canonical
-    ``CHANGE_REASON_REQUIRED`` envelope; the bridge mock is not called.
+    Blend-shape weight changes are Undo-reversible live scene edits, so
+    the inverse-irreversibility principle does not gate the tool;
+    passing a ``confirm`` argument is a ``TypeError``.
     """
 
-    def setUp(self) -> None:
-        self.send_patcher = mock.patch.object(
-            mcp_tools_editor_batch, "send_action",
-            return_value={"success": True},
-        )
-        self.mock_send = self.send_patcher.start()
-        self.addCleanup(self.send_patcher.stop)
-
-    def test_confirm_false_rejected_pre_bridge(self) -> None:
-        response = mcp_tools_editor_batch.editor_batch_set_blend_shape(
-            hierarchy_path="/Avatar/Body",
-            shapes=[{"name": "Smile", "weight": 50.0}],
-            confirm=False,
-            change_reason="ship smile",
-        )
-        self.mock_send.assert_not_called()
-        self.assertEqual(
-            ("CHANGE_REASON_REQUIRED", "error", False),
-            (response["code"], response["severity"], response["success"]),
-            msg=(
-                "Batch blend-shape write must short-circuit pre-bridge "
-                "with CHANGE_REASON_REQUIRED when confirm is False."
-            ),
-        )
-
-    def test_blank_change_reason_rejected_pre_bridge(self) -> None:
-        response = mcp_tools_editor_batch.editor_batch_set_blend_shape(
-            hierarchy_path="/Avatar/Body",
-            shapes=[{"name": "Smile", "weight": 50.0}],
-            confirm=True,
-            change_reason="   \t  ",
-        )
-        self.mock_send.assert_not_called()
-        self.assertEqual(
-            "CHANGE_REASON_REQUIRED", response["code"],
-            msg="Whitespace-only change_reason must be treated as missing.",
-        )
+    def test_confirm_argument_raises_type_error(self) -> None:
+        with self.assertRaises(TypeError) as cm:
+            mcp_tools_editor_batch.editor_batch_set_blend_shape(
+                hierarchy_path="/Avatar/Body",
+                shapes=[{"name": "Smile", "weight": 50.0}],
+                confirm=True,
+                change_reason="ship smile",
+            )
+        self.assertIn("confirm", str(cm.exception))
 
 
 class EditorBatchSetBlendShapeForwardingTests(unittest.TestCase):
-    """Issue #240 — ``editor_batch_set_blend_shape`` forwards every input."""
+    """Issue #240 / #49 — ``editor_batch_set_blend_shape`` forwards every
+    input (no audit pair after #49)."""
 
     def setUp(self) -> None:
         self.send_patcher = mock.patch.object(
@@ -430,45 +427,36 @@ class EditorBatchSetBlendShapeForwardingTests(unittest.TestCase):
         self.mock_send = self.send_patcher.start()
         self.addCleanup(self.send_patcher.stop)
 
-    def test_two_entry_list_forwards_audit_pair_and_parseable_payload(self) -> None:
+    def test_two_entry_list_forwards_parseable_payload(self) -> None:
         mcp_tools_editor_batch.editor_batch_set_blend_shape(
             hierarchy_path="/Avatar/Body",
             shapes=[
                 {"name": "Smile", "weight": 50.0},
                 {"name": "Frown", "weight": 0.0},
             ],
-            confirm=True,
-            change_reason="ship smile + frown defaults",
         )
         self.mock_send.assert_called_once()
         kwargs = self.mock_send.call_args.kwargs
         decoded = json.loads(kwargs["shapes_json"])
-        # Value-pin the action, hierarchy path, decoded payload length,
-        # confirm flag, and audit reason together so a regression in
-        # any single forwarded field surfaces alongside the rest.
+        # Value-pin the action, hierarchy path, and decoded payload
+        # length together so a regression in any single forwarded field
+        # surfaces alongside the rest. Issue #49 removed the audit pair.
         self.assertEqual(
-            (
-                "batch_set_blend_shape", "/Avatar/Body", 2, True,
-                "ship smile + frown defaults",
-            ),
-            (
-                kwargs["action"], kwargs["hierarchy_path"], len(decoded),
-                kwargs["confirm"], kwargs["change_reason"],
-            ),
+            ("batch_set_blend_shape", "/Avatar/Body", 2),
+            (kwargs["action"], kwargs["hierarchy_path"], len(decoded)),
             msg=(
                 "Batch blend-shape write must forward the batch action, "
-                "the hierarchy path, a JSON payload whose decoded "
-                "length equals the input list length, confirm=True, "
-                "and the audit reason verbatim."
+                "the hierarchy path, and a JSON payload whose decoded "
+                "length equals the input list length."
             ),
         )
+        self.assertNotIn("confirm", kwargs)
+        self.assertNotIn("change_reason", kwargs)
 
     def test_empty_list_still_calls_bridge(self) -> None:
         mcp_tools_editor_batch.editor_batch_set_blend_shape(
             hierarchy_path="/Avatar/Body",
             shapes=[],
-            confirm=True,
-            change_reason="no-op smoke test",
         )
         self.mock_send.assert_called_once()
         kwargs = self.mock_send.call_args.kwargs

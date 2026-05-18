@@ -51,7 +51,7 @@
 | `add_component` | ✅ | — |
 | `remove_component` | ✅ | — |
 | `copy_component_fields` | ✅ | — |
-| `set_component_fields` | ✅ | ✅ |
+| `set_properties` | ✅ | ✅ |
 | `set_material_property` | ✅ | — |
 | `copy_asset` | ✅ | — |
 | `rename_asset` | ✅ | — |
@@ -61,5 +61,11 @@
 | `editor_run_script` | ✅ | — |
 | `editor_run_script_submit` | ✅ | — |
 | `editor_create_animation_clip` | ✅ | — |
-| `editor_apply_animation_clip` | ✅ | — |
+| `editor_execute_menu_item` | ✅ | — |
+| `editor_safe_save_prefab` | ✅ | — |
+| `editor_create_udon_program_asset` | ✅ | — |
+| `editor_create_scene` | ✅ | — |
+| `editor_save_scene` | ✅ | — |
 | `editor_close_prefab` | ✅ | — |
+
+issue #49 で `editor_execute_menu_item` / `editor_safe_save_prefab` / `editor_create_udon_program_asset` / `editor_create_scene` / `editor_save_scene` が監査ペア対象へ追加された（逆不可逆性原理: arbitrary code 実行・非 Undo の asset 改変）。`editor_batch_set_blend_shape` / `editor_apply_animation_clip` は Undo 可能な scene 変更のため監査ペア対象外（`confirm` / `change_reason` を渡すと `TypeError`）。

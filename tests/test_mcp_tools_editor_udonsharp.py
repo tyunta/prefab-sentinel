@@ -124,18 +124,21 @@ class SetUdonSharpFieldForwardingTests(_UdonSharpToolHarness):
             send.return_value = _BRIDGE_OK
             self.set_tool(
                 hierarchy_path="/UI/Play",
-                field_name="defaultUrl",
+                property_name="defaultUrl",
                 value="https://example.com/clip.m3u8",
             )
         send.assert_called_once()
         kwargs = send.call_args.kwargs
         self.assertEqual("editor_set_udonsharp_field", kwargs["action"])
         self.assertEqual("/UI/Play", kwargs["hierarchy_path"])
+        # Wire DTO field stays ``field_name``; MCP arg is property_name.
         self.assertEqual("defaultUrl", kwargs["field_name"])
         self.assertEqual(
             "https://example.com/clip.m3u8",
             kwargs["property_value"],
         )
+        # Issue #52: the value-present marker accompanies the value.
+        self.assertTrue(kwargs["property_value_present"])
         self.assertNotIn("object_reference", kwargs)
 
     def test_reference_branch_forwards_object_reference(self) -> None:
@@ -143,7 +146,7 @@ class SetUdonSharpFieldForwardingTests(_UdonSharpToolHarness):
             send.return_value = _BRIDGE_OK
             self.set_tool(
                 hierarchy_path="/UI/Play",
-                field_name="targetUdon",
+                property_name="targetUdon",
                 object_reference="/Logic/UdonController",
             )
         send.assert_called_once()
@@ -159,7 +162,7 @@ class SetUdonSharpFieldValidationTests(_UdonSharpToolHarness):
         with patch.object(mcp_tools_editor_udonsharp, "send_action") as send:
             resp = self.set_tool(
                 hierarchy_path="/UI/Play",
-                field_name="defaultUrl",
+                property_name="defaultUrl",
                 value="x",
                 object_reference="/Logic/UdonController",
             )
@@ -172,7 +175,7 @@ class SetUdonSharpFieldValidationTests(_UdonSharpToolHarness):
         with patch.object(mcp_tools_editor_udonsharp, "send_action") as send:
             resp = self.set_tool(
                 hierarchy_path="/UI/Play",
-                field_name="defaultUrl",
+                property_name="defaultUrl",
             )
         self.assertFalse(resp["success"])
         self.assertEqual("error", resp["severity"])
@@ -189,7 +192,7 @@ class WirePersistentListenerForwardingTests(_UdonSharpToolHarness):
             self.wire_tool(
                 hierarchy_path="/UI/Slider",
                 event_path="onValueChanged",
-                target_path="/Logic/UdonController",
+                target_hierarchy_path="/Logic/UdonController",
                 method="SendCustomEvent",
                 arg="OnSliderChanged",
             )

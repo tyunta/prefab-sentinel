@@ -24,7 +24,7 @@
 
 ## 全ツール一覧（カテゴリ別）
 
-各カテゴリ表のカラム: ツール / 区分 / 簡潔説明 / 関連 issue / 種別（read-only / write）。`write` はプロジェクト / Editor / アセット状態に副作用を持つことを示す表示で、`confirm=True` + 非空 `change_reason` を引数として要求する audit-pair 対象はこの中の部分集合（`patch` / `components` / `set_property` の各カテゴリ全体と、`vrcsdk_upload` / `editor_run_script` / `editor_run_script_submit` / `editor_create_animation_clip` / `editor_apply_animation_clip` / `editor_close_prefab`）に限られる。正本一覧は [CONFIGURATION.md](../CONFIGURATION.md#confirm--change_reason-必須対象一覧)。それ以外の `write` ツール（例: `editor_select` / `editor_rename` / `editor_set_blend_shape` / `editor_set_property` / `editor_safe_save_prefab` / `editor_batch_*` 等）は audit-pair なしで呼び出す（`confirm` / `change_reason` を引数に渡すと `TypeError` で拒否される）。
+各カテゴリ表のカラム: ツール / 区分 / 簡潔説明 / 関連 issue / 種別（read-only / write）。`write` はプロジェクト / Editor / アセット状態に副作用を持つことを示す表示で、`confirm=True` + 非空 `change_reason` を引数として要求する audit-pair 対象はこの中の部分集合（`patch` / `components` / `set_property` の各カテゴリ全体と、`vrcsdk_upload` / `editor_run_script` / `editor_run_script_submit` / `editor_create_animation_clip` / `editor_execute_menu_item` / `editor_safe_save_prefab` / `editor_create_udon_program_asset` / `editor_create_scene` / `editor_save_scene` / `editor_close_prefab`）に限られる。正本一覧は [CONFIGURATION.md](../CONFIGURATION.md#confirm--change_reason-必須対象一覧)。それ以外の `write` ツール（例: `editor_select` / `editor_rename` / `editor_set_blend_shape` / `editor_set_property` / `editor_batch_*` / `editor_batch_set_blend_shape` / `editor_apply_animation_clip` 等）は audit-pair なしで呼び出す（`confirm` / `change_reason` を引数に渡すと `TypeError` で拒否される）。issue #49 で `editor_execute_menu_item` / `editor_safe_save_prefab` / `editor_create_udon_program_asset` / `editor_create_scene` / `editor_save_scene` が audit-pair 側へ、`editor_batch_set_blend_shape` / `editor_apply_animation_clip` が非 audit 側へ再分類された（逆不可逆性原理の適用）。
 
 ### components
 
@@ -54,8 +54,8 @@
 
 | ツール | 区分 | 簡潔説明 | 関連 issue | 種別 |
 |--------|------|----------|-----------|------|
-| `set_property` | set_property | シンボルパスでコンポーネントのフィールド値を設定 | — | write |
-| `set_component_fields` | set_property | GameObject シンボルパス + コンポーネント型名で複数フィールドを一括設定。`change_reason` + `out_report` 必須 | #109 | write |
+| `set_property` | set_property | シンボルパスでコンポーネントのフィールド値を設定。patch op は `TypeName@/hierarchy/path` selector を発行 | #37 | write |
+| `set_properties` | set_property | コンポーネントを指す `symbol_path`（component 引数なし）で複数プロパティを一括設定。`change_reason` + `out_report` 必須 | #41, #109 | write |
 
 ### validation
 
@@ -101,6 +101,8 @@
 
 `prefab_sentinel/mcp_tools_editor_view.py`。Editor Bridge 経由の read 系（Scene/Game ビュー・カメラ・Console）。
 
+> editor_* ツールの `hierarchy_path` セグメントは同名兄弟を `name#N`（0 始まりの出現順、`m_Children` 順）で一意化できる。`#N` を欠く曖昧な住所は first-sibling を勝手に選ばず `EDITOR_CTRL_HIERARCHY_PATH_AMBIGUOUS` で停止する（issue #38）。
+
 | ツール | 区分 | 簡潔説明 | 関連 issue | 種別 |
 |--------|------|----------|-----------|------|
 | `editor_screenshot` | editor_view | Scene / Game ビューのスクリーンショット取得。`view` allowlist / `crop_roi` preset 対応 | #249, #259 | read-only |
@@ -116,8 +118,8 @@
 | `editor_set_material_property` | editor_view | ランタイムでシェーダープロパティを設定（型はシェーダー定義から自動判定、Undo 対応） | — | write |
 | `editor_console` | editor_view | Unity Console ログを構造化データとして取得。`phase_filter` / `classification_filter` / pagination 対応 | #113, #117, #131, #239 | read-only |
 | `editor_refresh` | editor_view | `AssetDatabase.Refresh()` のトリガー | — | write |
-| `editor_recompile` | editor_view | C# スクリプト再コンパイルのトリガー（fire-and-return） | — | write |
-| `editor_recompile_and_wait` | editor_view | スクリプト再コンパイルを発行し `CompilationPipeline.compilationFinished` で完了を観測 | #118, #134, #203, #213, #235 | write |
+| `editor_recompile` | editor_view | スクリプト再コンパイルを発行し `CompilationPipeline.compilationFinished` で完了を観測（同期 / ブロッキング） | #54, #118, #134, #203, #213, #235 | write |
+| `editor_recompile_async` | editor_view | C# スクリプト再コンパイルのトリガー（fire-and-return）。`reimport_paths` で外部編集スクリプトを `ForceUpdate` 再インポート | #45, #54 | write |
 | `editor_run_tests` | editor_view | Editor Bridge 経由で Unity 統合テストを実行 | — | read-only |
 
 ### editor_write
@@ -132,12 +134,12 @@
 | `editor_rename` | editor_write | GameObject をリネーム（Undo 対応） | — | write |
 | `editor_add_component` | editor_write | ランタイムで GameObject にコンポーネントを追加（UdonSharp 自動 backing 対応） | #103 | write |
 | `editor_remove_component` | editor_write | ランタイムで GameObject からコンポーネントを削除（Undo 対応、同型複数時は index 必須） | — | write |
-| `editor_create_udon_program_asset` | editor_write | UdonSharp Program asset（`.asset`）を新規生成 | — | write |
+| `editor_create_udon_program_asset` | editor_write | UdonSharp Program asset（`.asset`）を新規生成。`confirm` + `change_reason` 必須 | #49 | write |
 | `editor_delete` | editor_write | Hierarchy から GameObject を削除（Undo 対応） | — | write |
 | `editor_get_blend_shapes` | editor_write | SkinnedMeshRenderer の BlendShape 名とウェイト一覧を取得（pagination 対応） | #241 | read-only |
 | `editor_set_blend_shape` | editor_write | BlendShape ウェイトを名前で設定（Undo 対応） | — | write |
 | `editor_list_menu_items` | editor_write | リフレクション経由で `[MenuItem]` エントリを一覧表示 | — | read-only |
-| `editor_execute_menu_item` | editor_write | メニューアイテムをパスで実行（deny-list + implicit recompile barrier 付き） | #225, #248 | write |
+| `editor_execute_menu_item` | editor_write | メニューアイテムをパスで実行（deny-list + implicit recompile barrier 付き）。`confirm` + `change_reason` 必須 | #49, #225, #248 | write |
 
 ### editor_ops
 
@@ -146,7 +148,7 @@
 | ツール | 区分 | 簡潔説明 | 関連 issue | 種別 |
 |--------|------|----------|-----------|------|
 | `editor_set_property` | editor_ops | SerializedObject API 経由でコンポーネントのプロパティを設定（UdonSharp / Quaternion 対応） | #111 | write |
-| `editor_set_component_fields` | editor_ops | 単一コンポーネントの複数フィールドを 1 リクエストで一括設定（Undo グループ） | — | write |
+| `editor_set_properties` | editor_ops | 単一コンポーネントの複数プロパティを 1 リクエストで一括設定（Undo グループ）。各 entry は `property_name` キー + `value_present` マーカーを持つ | #41, #52 | write |
 | `editor_safe_save_prefab` | editor_ops | シーン上の GameObject を Prefab / Variant として保存。`protect_components` / raw-save mode 対応 | #193, #228 | write |
 | `editor_set_parent` | editor_ops | 既存 GameObject の親子関係を変更（Undo 対応） | — | write |
 
