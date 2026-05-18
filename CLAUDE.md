@@ -61,6 +61,7 @@
 - Unit: propertyPath 解決、配列境界、参照逆引き。
 - Integration: Base / Variant / Scene 三層編集の E2E。
 - Regression: Broken PPtr / Udon nullref の既知再現ケース固定。
+- Bridge C# コンパイル検証: `tools/unity/` の Unity 依存ファイル（`UnityEditor` / VRChat SDK 参照、55 中 40 ファイル）は CI でも xUnit ハーネスでもコンパイルされない。これらを変更したら `deploy_bridge` で実 Unity プロジェクトに配置しコンパイル 0 件を手動確認する。CI ゲートを入れない理由（reference assembly 調達に Unity install が不可避 = issue #43）と検証プロトコルの正本は [`TESTING.md` の「Unity 依存 Bridge C# のコンパイル検証」節](./TESTING.md#unity-依存-bridge-c-のコンパイル検証)。
 
 ## ドキュメント運用
 - `README.md` はエントリポイント兼ルーター。「やること / やる内容 / やらないこと」とドキュメントマップ（各専門ドキュメントへの導線）を維持し、仕様本文は持たない。
