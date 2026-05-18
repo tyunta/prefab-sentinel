@@ -143,7 +143,7 @@ namespace PrefabSentinel
                     $"Property '{request.property_name}' not found on shader '{shader.name}'.",
                     new EditorControlData
                     {
-                        suggestions = SuggestSimilar(request.property_name, CollectShaderPropertyNames(shader)),
+                        suggestions = SuggestionRanker.SuggestSimilar(request.property_name, CollectShaderPropertyNames(shader)),
                     });
 
             return BuildSuccess("EDITOR_CTRL_GET_MATERIAL_PROPERTY_OK",

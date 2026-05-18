@@ -90,7 +90,7 @@ namespace PrefabSentinel
                     new EditorControlData
                     {
                         selected_object = request.hierarchy_path,
-                        suggestions = SuggestSimilar(
+                        suggestions = SuggestionRanker.SuggestSimilar(
                             request.field_name, available, 5),
                     });
             }
