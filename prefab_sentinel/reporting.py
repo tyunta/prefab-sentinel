@@ -7,8 +7,15 @@ from typing import Any
 
 from prefab_sentinel.json_io import dump_json
 
+__all__ = [
+    "extract_ref_scan_data",
+    "extract_runtime_validation_data",
+    "render_csv_report",
+    "export_report",
+]
 
-def _extract_ref_scan_data(payload_data: dict[str, Any]) -> dict[str, Any]:
+
+def extract_ref_scan_data(payload_data: dict[str, Any]) -> dict[str, Any]:
     if "categories_occurrences" in payload_data or "top_missing_asset_guids" in payload_data:
         return payload_data
 
@@ -30,7 +37,7 @@ def _extract_ref_scan_data(payload_data: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
-def _extract_runtime_validation_data(payload_data: dict[str, Any]) -> dict[str, Any]:
+def extract_runtime_validation_data(payload_data: dict[str, Any]) -> dict[str, Any]:
     steps = payload_data.get("steps", [])
     if not isinstance(steps, list):
         return {}

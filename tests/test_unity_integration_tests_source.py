@@ -9,6 +9,7 @@ reading the un-mutated source tree.
 
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path
 
@@ -28,6 +29,17 @@ INTEGRATION_TESTS = (
     / "PrefabSentinel.UnityIntegrationTests.cs"
 )
 
+_CS_BLOCK_COMMENT_RE = re.compile(r"/\*[\s\S]*?\*/")
+_CS_LINE_COMMENT_RE = re.compile(r"//[^\n]*")
+
+
+def _read_integration_source() -> str:
+    # Issue #5/#358: strip C# comments before the source greps so a
+    # literal surviving only inside a ``//`` or ``/* ... */`` comment
+    # cannot produce a false-green assertion.
+    text = INTEGRATION_TESTS.read_text(encoding="utf-8")
+    return _CS_LINE_COMMENT_RE.sub("", _CS_BLOCK_COMMENT_RE.sub("", text))
+
 
 class TestNonFatalClassificationCallsSafeSave(unittest.TestCase):
     """Issue #193 — the non-fatal-classification integration test must
@@ -36,7 +48,7 @@ class TestNonFatalClassificationCallsSafeSave(unittest.TestCase):
     """
 
     def test_action_name_is_safe_save_prefab(self) -> None:
-        text = INTEGRATION_TESTS.read_text(encoding="utf-8")
+        text = _read_integration_source()
         # The non-fatal-classification scenario is the only place the
         # integration tests issue a prefab-save request, so any
         # ``RunEditorControlBridge(BuildEditorControlRequest("…", …))``
@@ -54,7 +66,7 @@ class TestNonFatalClassificationCallsSafeSave(unittest.TestCase):
         )
 
     def test_payload_carries_non_empty_protect_components_json(self) -> None:
-        text = INTEGRATION_TESTS.read_text(encoding="utf-8")
+        text = _read_integration_source()
         # The payload must include the protect_components_json field
         # name; pinning the field name ensures the bridge handler's
         # required-argument contract is exercised.

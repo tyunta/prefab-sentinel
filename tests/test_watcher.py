@@ -7,25 +7,25 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from prefab_sentinel.watcher import _has_watchfiles, dispatch_changes
+from prefab_sentinel.watcher import dispatch_changes, has_watchfiles
 
 
 class TestHasWatchfiles(unittest.TestCase):
-    """_has_watchfiles returns True only when watchfiles is importable."""
+    """has_watchfiles returns True only when watchfiles is importable."""
 
     @patch.dict("sys.modules", {"watchfiles": MagicMock()})
     def test_returns_true_when_installed(self) -> None:
-        self.assertTrue(_has_watchfiles())
+        self.assertTrue(has_watchfiles())
 
     @patch.dict("sys.modules", {"watchfiles": None})
     def test_returns_false_when_missing(self) -> None:
-        self.assertFalse(_has_watchfiles())
+        self.assertFalse(has_watchfiles())
 
 
 class TestStartWatcherNoWatchfiles(unittest.TestCase):
     """start_watcher returns immediately when watchfiles is missing."""
 
-    @patch("prefab_sentinel.watcher._has_watchfiles", return_value=False)
+    @patch("prefab_sentinel.watcher.has_watchfiles", return_value=False)
     def test_noop_without_watchfiles(self, _mock: MagicMock) -> None:
         from prefab_sentinel.watcher import start_watcher
 

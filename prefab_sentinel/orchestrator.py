@@ -93,26 +93,26 @@ class Phase1Orchestrator:
     # ------------------------------------------------------------------
 
     def _read_target_file(self, target_path: str, code_prefix: str) -> ToolResponse | str:
-        return orchestrator_variant._read_target_file(self.prefab_variant, target_path, code_prefix)
+        return orchestrator_variant.read_target_file(self.prefab_variant, target_path, code_prefix)
 
     def _resolve_variant_base(
         self, text: str, target_path: str, code_prefix: str,
     ) -> tuple[str, bool, str | None, list]:
-        return orchestrator_variant._resolve_variant_base(
+        return orchestrator_variant.resolve_variant_base(
             self.prefab_variant, text, target_path, code_prefix,
         )
 
     def _validate_postcondition_schema(
         self, postcondition: object, *, resource_ids: set[str],
     ) -> ToolResponse:
-        return orchestrator_postcondition._validate_postcondition_schema(
+        return orchestrator_postcondition.validate_postcondition_schema(
             postcondition, resource_ids=resource_ids,
         )
 
     def _evaluate_postcondition(
         self, postcondition: dict[str, Any], *, resource_map: dict[str, dict[str, Any]],
     ) -> ToolResponse:
-        return orchestrator_postcondition._evaluate_postcondition(
+        return orchestrator_postcondition.evaluate_postcondition(
             self.serialized_object, self.reference_resolver,
             postcondition, resource_map=resource_map,
         )

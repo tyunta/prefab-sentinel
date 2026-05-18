@@ -16,11 +16,11 @@ from prefab_sentinel.services.serialized_object.handles import (
     require_handle_ref,
     validate_result_handle,
 )
-from prefab_sentinel.services.serialized_object.scene_dispatch import _SceneContext
+from prefab_sentinel.services.serialized_object.scene_dispatch import SceneContext
 
 
 def validate_scene_init_op(
-    ctx: _SceneContext,
+    ctx: SceneContext,
     index: int,
     op: dict[str, Any],
     op_name: str,
@@ -46,7 +46,7 @@ def validate_scene_init_op(
 
 
 def validate_scene_duplicate_init_op(
-    ctx: _SceneContext,
+    ctx: SceneContext,
     index: int,
     op: dict[str, Any],
     op_name: str,
@@ -62,7 +62,7 @@ def validate_scene_duplicate_init_op(
 
 
 def validate_scene_create_game_object_op(
-    ctx: _SceneContext,
+    ctx: SceneContext,
     index: int,
     op: dict[str, Any],
 ) -> None:
@@ -122,7 +122,7 @@ def validate_scene_create_game_object_op(
 
 
 def validate_scene_instantiate_prefab_op(
-    ctx: _SceneContext,
+    ctx: SceneContext,
     index: int,
     op: dict[str, Any],
 ) -> None:
@@ -182,7 +182,7 @@ def validate_scene_instantiate_prefab_op(
 
 
 def validate_scene_rename_object_op(
-    ctx: _SceneContext,
+    ctx: SceneContext,
     index: int,
     op: dict[str, Any],
 ) -> None:
@@ -218,7 +218,7 @@ def validate_scene_rename_object_op(
 
 
 def validate_scene_reparent_op(
-    ctx: _SceneContext,
+    ctx: SceneContext,
     index: int,
     op: dict[str, Any],
 ) -> None:

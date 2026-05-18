@@ -17,11 +17,11 @@ from prefab_sentinel.material_inspector import (
     MaterialInspectionResult,
     MaterialSlot,
     RendererMaterials,
-    _has_renderer_blocks,
-    _inspect_base_materials,
-    _parse_renderer_game_object_fid,
-    _parse_renderer_materials,
-    _resolve_material_name,
+    has_renderer_blocks,
+    inspect_base_materials,
+    parse_renderer_game_object_fid,
+    parse_renderer_materials,
+    resolve_material_name,
 )
 from prefab_sentinel.unity_assets import (
     SOURCE_PREFAB_PATTERN,
@@ -190,7 +190,7 @@ def _build_stripped_renderer_materials(
     renderers: list[RendererMaterials] = []
     for block in stripped_renderers:
         # Find GO name: check if a parent GO's name was set via m_Modifications
-        go_fid = _parse_renderer_game_object_fid(block)
+        go_fid = parse_renderer_game_object_fid(block)
         go_name = name_overrides.get(go_fid, f"fileID:{go_fid}") if go_fid else f"(renderer fileID:{block.file_id})"
 
         # Collect base material slots for this renderer from m_Modifications
@@ -214,7 +214,7 @@ def _build_stripped_renderer_materials(
             is_overridden = idx in variant_slots
             effective_guid = variant_slots[idx] if is_overridden else base_slots.get(idx, "")
 
-            name, mat_path = _resolve_material_name(
+            name, mat_path = resolve_material_name(
                 effective_guid, guid_index, project_root,
             )
             slots.append(MaterialSlot(
@@ -236,7 +236,7 @@ def _build_stripped_renderer_materials(
     return renderers
 
 
-def _collect_nested_renderers(
+def collect_nested_renderers(
     base_text: str,
     guid_index: dict[str, Path],
     project_root: Path,
@@ -248,7 +248,7 @@ def _collect_nested_renderers(
     renderers: list[RendererMaterials] = []
 
     for child in iter_nested_prefab_children(base_text, guid_index, project_root):
-        child_result = _inspect_base_materials(
+        child_result = inspect_base_materials(
             str(child.path), child.text, project_root, guid_index,
         )
         for r in child_result.renderers:
@@ -263,7 +263,7 @@ def _collect_nested_renderers(
     return renderers, diagnostics
 
 
-def _inspect_variant_materials(
+def inspect_variant_materials(
     target_path: str,
     variant_path: Path,
     variant_text: str,
@@ -313,7 +313,7 @@ def _inspect_variant_materials(
             break
         base_prefab_path_str = parent_rel
         base_text = parent_text
-        if _has_renderer_blocks(parent_text):
+        if has_renderer_blocks(parent_text):
             break
         # Stop if parent is a base prefab (has real GameObjects).
         # Only continue walking variant→variant chains.
@@ -346,18 +346,18 @@ def _inspect_variant_materials(
         if block.is_stripped:
             continue
 
-        go_fid = _parse_renderer_game_object_fid(block)
+        go_fid = parse_renderer_game_object_fid(block)
         go = base_game_objects.get(go_fid)
         go_name = go.name if go and go.name else f"fileID:{go_fid}"
 
-        base_mat_refs = _parse_renderer_materials(block)
+        base_mat_refs = parse_renderer_materials(block)
         slots: list[MaterialSlot] = []
         for idx, (_file_id, guid) in enumerate(base_mat_refs):
             override_key = (block.file_id, idx)
             is_overridden = override_key in material_overrides
             effective_guid = material_overrides[override_key] if is_overridden else guid
 
-            name, mat_path = _resolve_material_name(
+            name, mat_path = resolve_material_name(
                 effective_guid, guid_index, project_root,
             )
             slots.append(MaterialSlot(
@@ -387,7 +387,7 @@ def _inspect_variant_materials(
     # Nested Prefab expansion — renderer in a child prefab
     diagnostics: list[str] = []
     if base_text is not None:
-        nested, nested_diags = _collect_nested_renderers(
+        nested, nested_diags = collect_nested_renderers(
             base_text, guid_index, project_root,
         )
         renderers.extend(nested)

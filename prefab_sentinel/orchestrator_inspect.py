@@ -21,7 +21,7 @@ from prefab_sentinel.material_inspector import (
     format_materials,
     inspect_materials as _inspect_materials,
 )
-from prefab_sentinel.orchestrator_variant import _read_target_file, _resolve_variant_base
+from prefab_sentinel.orchestrator_variant import read_target_file, resolve_variant_base
 from prefab_sentinel.services.prefab_variant import PrefabVariantService
 from prefab_sentinel.unity_assets import GAMEOBJECT_BEARING_SUFFIXES, collect_project_guid_index
 
@@ -56,7 +56,7 @@ def inspect_hierarchy(
     show_components: bool = True,
     expand_monobehaviour: bool = False,
 ) -> ToolResponse:
-    text_or_error = _read_target_file(prefab_variant, target_path, "INSPECT_HIERARCHY")
+    text_or_error = read_target_file(prefab_variant, target_path, "INSPECT_HIERARCHY")
     if isinstance(text_or_error, ToolResponse):
         return text_or_error
     text = text_or_error
@@ -72,7 +72,7 @@ def inspect_hierarchy(
             data={"target_path": target_path, "file_type": suffix, "read_only": True},
         )
 
-    text, is_variant, base_prefab_path, chain_diags = _resolve_variant_base(
+    text, is_variant, base_prefab_path, chain_diags = resolve_variant_base(
         prefab_variant, text, target_path, "INSPECT_HIERARCHY",
     )
     override_counts: dict[str, int] | None = None
@@ -254,7 +254,7 @@ def inspect_materials(
     prefab_variant: PrefabVariantService,
     target_path: str,
 ) -> ToolResponse:
-    text_or_error = _read_target_file(prefab_variant, target_path, "INSPECT_MATERIALS")
+    text_or_error = read_target_file(prefab_variant, target_path, "INSPECT_MATERIALS")
     if isinstance(text_or_error, ToolResponse):
         return text_or_error
 
@@ -331,7 +331,7 @@ def inspect_material_asset(
     prefab_variant: PrefabVariantService,
     target_path: str,
 ) -> ToolResponse:
-    text_or_error = _read_target_file(prefab_variant, target_path, "INSPECT_MATERIAL_ASSET")
+    text_or_error = read_target_file(prefab_variant, target_path, "INSPECT_MATERIAL_ASSET")
     if isinstance(text_or_error, ToolResponse):
         return text_or_error
 

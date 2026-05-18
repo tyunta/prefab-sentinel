@@ -19,7 +19,7 @@ from prefab_sentinel.unity_yaml_parser import (
 if TYPE_CHECKING:
     from prefab_sentinel.udon_wiring import ComponentWiring
 
-__all__ = ["UDON_BEHAVIOUR_GUID", "_parse_monobehaviour_fields"]
+__all__ = ["UDON_BEHAVIOUR_GUID", "parse_monobehaviour_fields"]
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -34,7 +34,7 @@ UDON_BEHAVIOUR_GUID = "45115577ef41a5b4ca741ed302693907"
 # ---------------------------------------------------------------------------
 
 
-def _parse_monobehaviour_fields(block: YamlBlock) -> ComponentWiring | None:
+def parse_monobehaviour_fields(block: YamlBlock) -> ComponentWiring | None:
     """Extract fields from a MonoBehaviour block.
 
     Returns None for non-MonoBehaviour blocks and for UdonBehaviour blocks

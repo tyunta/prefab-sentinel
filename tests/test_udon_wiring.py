@@ -12,7 +12,7 @@ from prefab_sentinel.udon_wiring import (
 )
 from prefab_sentinel.udon_wiring_parser import (
     UDON_BEHAVIOUR_GUID,
-    _parse_monobehaviour_fields,
+    parse_monobehaviour_fields,
 )
 from prefab_sentinel.unity_yaml_parser import (
     YamlBlock,
@@ -343,7 +343,7 @@ class SplitYamlBlocksTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# _parse_monobehaviour_fields tests
+# parse_monobehaviour_fields tests
 # ---------------------------------------------------------------------------
 
 
@@ -357,7 +357,7 @@ class ParseMonoBehaviourFieldsTests(unittest.TestCase):
 
     def test_extracts_user_fields(self) -> None:
         block = self._get_mono_block(BASIC_MONOBEHAVIOUR)
-        comp = _parse_monobehaviour_fields(block)
+        comp = parse_monobehaviour_fields(block)
         self.assertIsNotNone(comp)
         assert comp is not None
         field_names = {f.name for f in comp.fields}
@@ -368,7 +368,7 @@ class ParseMonoBehaviourFieldsTests(unittest.TestCase):
 
     def test_skip_fields_excluded(self) -> None:
         block = self._get_mono_block(BASIC_MONOBEHAVIOUR)
-        comp = _parse_monobehaviour_fields(block)
+        comp = parse_monobehaviour_fields(block)
         assert comp is not None
         field_names = {f.name for f in comp.fields}
         for skip in SKIP_FIELDS:
@@ -376,20 +376,20 @@ class ParseMonoBehaviourFieldsTests(unittest.TestCase):
 
     def test_game_object_file_id(self) -> None:
         block = self._get_mono_block(BASIC_MONOBEHAVIOUR)
-        comp = _parse_monobehaviour_fields(block)
+        comp = parse_monobehaviour_fields(block)
         assert comp is not None
         self.assertEqual(comp.game_object_file_id, "100000")
 
     def test_script_guid(self) -> None:
         block = self._get_mono_block(BASIC_MONOBEHAVIOUR)
-        comp = _parse_monobehaviour_fields(block)
+        comp = parse_monobehaviour_fields(block)
         assert comp is not None
         self.assertEqual(comp.script_guid, "aabbccdd11223344aabbccdd11223344")
 
     def test_udon_sharp_detected(self) -> None:
         blocks = split_yaml_blocks(UDON_SHARP_BLOCK)
         mono_blocks = [b for b in blocks if b.class_id == "114"]
-        results = [_parse_monobehaviour_fields(b) for b in mono_blocks]
+        results = [parse_monobehaviour_fields(b) for b in mono_blocks]
         parsed = [r for r in results if r is not None]
         # UdonBehaviour block (GUID match) should be excluded
         self.assertEqual(len(parsed), 1)
@@ -401,18 +401,18 @@ class ParseMonoBehaviourFieldsTests(unittest.TestCase):
         blocks = split_yaml_blocks(UDON_SHARP_BLOCK)
         mono_blocks = [b for b in blocks if b.class_id == "114"]
         for b in mono_blocks:
-            comp = _parse_monobehaviour_fields(b)
+            comp = parse_monobehaviour_fields(b)
             if comp is not None:
                 self.assertNotEqual(comp.script_guid, UDON_BEHAVIOUR_GUID)
 
     def test_non_monobehaviour_returns_none(self) -> None:
         blocks = split_yaml_blocks(BASIC_MONOBEHAVIOUR)
         go_block = next(b for b in blocks if b.class_id == "1")
-        self.assertIsNone(_parse_monobehaviour_fields(go_block))
+        self.assertIsNone(parse_monobehaviour_fields(go_block))
 
     def test_serialization_data_skipped(self) -> None:
         block = self._get_mono_block(SERIALIZATION_DATA_BLOCK)
-        comp = _parse_monobehaviour_fields(block)
+        comp = parse_monobehaviour_fields(block)
         assert comp is not None
         field_names = {f.name for f in comp.fields}
         self.assertNotIn("shouldBeIgnored", field_names)
@@ -429,14 +429,14 @@ class ParseMonoBehaviourFieldsTests(unittest.TestCase):
             "  myRef: {fileID: 0}\n"
         )
         block = split_yaml_blocks(text)[0]
-        comp = _parse_monobehaviour_fields(block)
+        comp = parse_monobehaviour_fields(block)
         assert comp is not None
         self.assertEqual(comp.game_object_file_id, "")
 
     def test_nested_struct_children_excluded(self) -> None:
         """Nested YAML keys under a struct field must not appear as top-level fields."""
         block = self._get_mono_block(NESTED_STRUCT)
-        comp = _parse_monobehaviour_fields(block)
+        comp = parse_monobehaviour_fields(block)
         assert comp is not None
         field_names = {f.name for f in comp.fields}
         self.assertIn("topRef", field_names)
@@ -456,13 +456,13 @@ class ParseMonoBehaviourFieldsTests(unittest.TestCase):
             "  myRef: {fileID: 800000}\n"
         )
         block = split_yaml_blocks(text)[0]
-        comp = _parse_monobehaviour_fields(block)
+        comp = parse_monobehaviour_fields(block)
         assert comp is not None
         self.assertEqual(comp.script_guid, "")
 
     def test_array_fields(self) -> None:
         block = self._get_mono_block(ARRAY_FIELDS)
-        comp = _parse_monobehaviour_fields(block)
+        comp = parse_monobehaviour_fields(block)
         assert comp is not None
         targets_fields = [f for f in comp.fields if f.name == "targets"]
         self.assertEqual(len(targets_fields), 3)
@@ -600,7 +600,7 @@ class TestExtractMonoBehaviourFieldNames(unittest.TestCase):
     """Test extract_monobehaviour_field_names for all-field extraction."""
 
     def test_extracts_scalar_fields(self) -> None:
-        """Captures plain scalar fields that _parse_monobehaviour_fields skips."""
+        """Captures plain scalar fields that parse_monobehaviour_fields skips."""
         block = YamlBlock(
             file_id="100",
             class_id="114",

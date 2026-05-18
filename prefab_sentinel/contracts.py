@@ -34,6 +34,11 @@ class Diagnostic:
     location: str   # Location within the asset (e.g., "114:42" for line:column)
     detail: str     # Machine-readable category (e.g., "broken_ref", "schema_error")
     evidence: str   # Human-readable description with context
+    # Issue #4: optional per-item severity.  When set, it is the wire
+    # severity for this diagnostic; when ``None`` the envelope severity
+    # is inherited.  Not validated against the ``Severity`` vocabulary —
+    # an optional free string distinct from the envelope enum.
+    severity: str | None = None
 
 
 @dataclass(slots=True)
@@ -92,8 +97,12 @@ def _diagnostic_to_wire(
     * ``path``     → ``data["path"]`` when non-empty (omitted otherwise)
     * ``location`` → ``data["location"]`` when non-empty (omitted otherwise)
 
-    The internal ``Diagnostic`` dataclass field inventory is
-    unchanged; this adapter is an output-side normalization only.
+    Issue #4: a diagnostic's own ``severity`` takes precedence over
+    ``default_severity`` (the envelope severity); the envelope severity
+    is stamped only when the per-item severity is ``None`` — an
+    explicitly set value (including an empty string) is a present
+    severity and surfaces verbatim. A response whose diagnostics all
+    leave severity unset serialises exactly as before.
     """
     data: dict[str, Any] = {}
     if diag.path:
@@ -102,7 +111,9 @@ def _diagnostic_to_wire(
         data["location"] = diag.location
     message = diag.evidence if diag.evidence else diag.detail
     return {
-        "severity": default_severity.value,
+        "severity": (
+            diag.severity if diag.severity is not None else default_severity.value
+        ),
         "code": diag.detail,
         "message": message,
         "data": data,

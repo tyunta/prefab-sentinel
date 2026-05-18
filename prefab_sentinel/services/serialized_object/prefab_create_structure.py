@@ -18,11 +18,11 @@ from prefab_sentinel.services.serialized_object.handles import (
     validate_result_handle,
 )
 from prefab_sentinel.services.serialized_object.prefab_create_dispatch import (
-    _PrefabCreateContext,
+    PrefabCreateContext,
 )
 
 
-def _schema_error(ctx: _PrefabCreateContext, location: str, evidence: str) -> None:
+def _schema_error(ctx: PrefabCreateContext, location: str, evidence: str) -> None:
     """Append a ``schema_error`` diagnostic anchored at ``ctx.target``."""
     ctx.diagnostics.append(
         Diagnostic(
@@ -35,7 +35,7 @@ def _schema_error(ctx: _PrefabCreateContext, location: str, evidence: str) -> No
 
 
 def validate_pcreate_root_op(
-    ctx: _PrefabCreateContext,
+    ctx: PrefabCreateContext,
     index: int,
     op: dict[str, Any],
     op_name: str,
@@ -84,7 +84,7 @@ def validate_pcreate_root_op(
 
 
 def validate_pcreate_game_object_op(
-    ctx: _PrefabCreateContext,
+    ctx: PrefabCreateContext,
     index: int,
     op: dict[str, Any],
 ) -> None:
@@ -132,7 +132,7 @@ def validate_pcreate_game_object_op(
 
 
 def validate_pcreate_rename_object_op(
-    ctx: _PrefabCreateContext,
+    ctx: PrefabCreateContext,
     index: int,
     op: dict[str, Any],
 ) -> None:
@@ -161,7 +161,7 @@ def validate_pcreate_rename_object_op(
 
 
 def validate_pcreate_reparent_op(
-    ctx: _PrefabCreateContext,
+    ctx: PrefabCreateContext,
     index: int,
     op: dict[str, Any],
 ) -> None:
@@ -201,7 +201,7 @@ def validate_pcreate_reparent_op(
 
 
 def validate_pcreate_add_component_op(
-    ctx: _PrefabCreateContext,
+    ctx: PrefabCreateContext,
     index: int,
     op: dict[str, Any],
     op_name: str,
@@ -250,7 +250,7 @@ def validate_pcreate_add_component_op(
 
 
 def validate_pcreate_remove_component_op(
-    ctx: _PrefabCreateContext,
+    ctx: PrefabCreateContext,
     index: int,
     op: dict[str, Any],
 ) -> None:

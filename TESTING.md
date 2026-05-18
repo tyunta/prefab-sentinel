@@ -76,7 +76,9 @@ D3 オーケストレータのスナップショット試験（issue #148）は�
 
 ## Mutation testing
 
-[mutmut](https://github.com/boxed/mutmut) 3.5+ による mutation testing は **四半期ごとに 1 回フル走行する**。CI には組み込まない。設定は `pyproject.toml` の `[tool.mutmut]` テーブルが正本（audited path = `prefab_sentinel/`、`do_not_mutate` パターン、`also_copy` リスト、`pytest_add_cli_args_test_selection` のマーカーフィルタ）。
+[mutmut](https://github.com/boxed/mutmut) による mutation testing は **四半期ごとに 1 回フル走行する**（対象 mutmut バージョン: **3.5.0**）。CI には組み込まない。設定は `pyproject.toml` の `[tool.mutmut]` テーブルが正本（audited path = `prefab_sentinel/`、`do_not_mutate`、`also_copy` リスト、`pytest_add_cli_args_test_selection` のマーカーフィルタ）。
+
+`do_not_mutate` は mutmut 3.5.0 では **ソースファイルパスに対する `fnmatch` グロブ**として評価される除外リストである（`Config.should_ignore_for_mutation` がファイルパスを `fnmatch` するだけで、コード構造・式・mutant 名にはマッチしない）。構造単位（`*logger.*` のようなコード式パターン）の抑制には使えず、現状は **空** で運用する — ファイルパスを列挙すれば campaign が mutate する path を狭めてしまい、これは Non-Goal（監査対象 path・モジュール集合を狭めない）に反するため。trivial な構造単位 survivor は `do_not_mutate` ではなく四半期 survivor 分類で扱う（下記）。
 
 監査対象モジュール（P0/P1、6 件）:
 
@@ -91,8 +93,11 @@ D3 オーケストレータのスナップショット試験（issue #148）は�
 # パッケージ全体に対してフル走行（[tool.mutmut].paths_to_mutate を使用）
 uv run mutmut run --max-children 180
 
-# 1 モジュールだけ走行（六モジュールそれぞれをこの形で個別に走らせる）
-uv run mutmut run prefab_sentinel/services/reference_resolver.py --max-children 180
+# 1 モジュールだけ走行（mutmut 3.5 の positional 引数は mutant 名フィルタであり
+# ファイルパスではない。ファイルパスを渡すと clean tree 上で
+# `AssertionError: Filtered for specific mutants, but nothing matches` で停止する。
+# dotted モジュール名のグロブを渡す — 生成は package 全体、実行をそのモジュールに絞る）
+uv run mutmut run 'prefab_sentinel.services.reference_resolver.*' --max-children 180
 
 # 走行直後に killed / survived を集計（CI 永続化なし、次の `mutmut run` で前回状態は失われる）
 uv run mutmut results
@@ -101,7 +106,7 @@ uv run mutmut results
 uv run python scripts/mutmut_score_report.py --audited-only --format markdown
 ```
 
-`mutants/` は mutmut の作業ツリーで、`.gitignore` と `[tool.ruff].extend-exclude` で除外済み（走行後の `git status` / `ruff check` には現れない）。survived は critical / trivial / equivalent の三分類で記録する：critical はテストでキル、trivial は `[tool.mutmut].do_not_mutate` に追加、equivalent は四半期レポートで証跡を残す。詳細運用カデンスは [CLAUDE.md の Mutation testing 運用](./CLAUDE.md#mutation-testing-運用) を参照。
+`mutants/` は mutmut の作業ツリーで、`.gitignore` と `[tool.ruff].extend-exclude` で除外済み（走行後の `git status` / `ruff check` には現れない）。survived は critical / trivial / equivalent の三分類で四半期レポートに記録する：critical はテストでキル、trivial は四半期 survivor 分類に証跡を残すにとどめる（`do_not_mutate` はファイルパスグロブで構造単位の trivial mutant を抑制できないため追加しない）、equivalent も四半期レポートで証跡を残す。詳細運用カデンスは [CLAUDE.md の Mutation testing 運用](./CLAUDE.md#mutation-testing-運用) を参照。
 
 並列ワーカー数 `--max-children 180` は固定値で運用する：開発機の物理コア数（最大 64 想定）の約 3 倍に取り、CPU バウンド・I/O 待ち混在の走行で待ち時間を埋めつつ、ワーカー間で `pytest` プロセスがスラッシングしない値として実測で選定した。`mutmut` の走行状態は実行間で永続化されないため、集計は `mutmut results` を同じ走行直後に呼ぶ。
 
@@ -126,15 +131,17 @@ uv run python scripts/mutmut_score_report.py --audited-only --format markdown
    `uv run python scripts/mutmut_score_report.py --audited-only --format csv` で監査対象 6
    モジュールのスコアを集計する（`mutmut` の走行状態は run 間で永続化されないため集計は同一
    run 直後に行う）。
-2. **`do_not_mutate` 実効性の再検証**（旧 issue #210） — `[tool.mutmut].do_not_mutate` の各
-   パターンについて、当該パターンを 1 つだけ一時的に外した並行 run を行い survivor 数の
-   delta（`without − with`）を測る。delta が正かつ分類が `critical`（抑制が本来 kill され得る
-   非等価ミュータントを隠している）なら、そのパターンを削除し value-pinning テストで置き換える。
-   結果は四半期レポート §3 の suppression-impact 表に記録する。
+2. **`do_not_mutate` の検査**（旧 issue #210 / issue #28） — `[tool.mutmut].do_not_mutate` が
+   **空のまま**であることを確認する。mutmut 3.5.0 の `do_not_mutate` はソースファイルパスへの
+   `fnmatch` グロブであり、コード構造・式パターンには 1 件もマッチしない（過去の `*logger.*`
+   等の構造グロブは完全に inert だった）。ファイルパスを列挙すれば campaign が mutate する
+   path を狭めるため（Non-Goal 違反）、このリストにはエントリを追加しない。結果は四半期
+   レポート §3 に記録する。
 3. **survived ミュータントの三分類**（旧 issue #211） — 監査対象 6 モジュールに加え、非監査
    low-score モジュール（`prefab_sentinel.watcher` / `prefab_sentinel.editor_bridge`）の
    survived を critical / trivial / equivalent に分類する。critical はテストでキル、trivial は
-   `do_not_mutate` へ追加、equivalent はレポートに証跡を残す。
+   本ステップの分類記録（四半期レポート §3）に証跡を残すにとどめる（`do_not_mutate` には
+   追加しない — 上記 2 参照）、equivalent はレポートに証跡を残す。
 4. **orphan-test の棚卸し**（旧 issue #272） — 同一 run の mutmut キャッシュに対し
    `uv run python scripts/find_orphan_tests.py` を走らせ、`mutmut_orphan_tests.json` の
    0-kill テスト候補を確認する。各候補は削除・補強・据え置きのいずれかを判断し、根拠を
@@ -155,6 +162,10 @@ pytestmark = pytest.mark.source_text_invariant
 ```
 
 宣言だけで `[tool.mutmut].pytest_add_cli_args_test_selection` の `-m "not source_text_invariant"` 単一フィルタから一括除外される。per-file の `--ignore=` を増やす必要はない。新規のリポジトリ同期テスト（CLAUDE.md inventory との drift 検出など）を追加する際もこのマーカーで対応する。
+
+### Tier 3 — 構造不変条件のみ
+
+`source_text_invariant` マーカー付きの source-text テスト（`tests/test_*_source.py`）は **Tier 3 = 構造不変条件のみ**を pin する。C# Bridge の*振る舞い*検証は `tests/csharp/` の xUnit ハーネスへ移行済みであり（clean-win concern は H-2…H-8 / H-11 で完了。per-concern Tier 分類の正本は [`docs/csharp_bridge_tier_migration.md`](./docs/csharp_bridge_tier_migration.md)）、source-text テストに残るのは partial 構成・定義の唯一性・命名規約・定数ドリフト・xUnit クラスへの委譲配線といった、実行では検証できない構造事実のみである。各 source-text grep は照合前に C# コメント（`//` / `/* ... */`）を除去し、コメント中のリテラルが false-green を生まないようにする（issue #5 / #358）。新しい振る舞いアサーションは source-text テストではなく xUnit ハーネスへ書く。
 
 ## skip-reason の検証
 

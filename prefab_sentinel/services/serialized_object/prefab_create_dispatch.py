@@ -7,7 +7,7 @@ asserts the create-mode invariants (single root op, single trailing
 ``save``).
 
 Shared types and helpers used by the validators
-(``_PrefabCreateContext``, ``_check_handle_value``) live here because
+(``PrefabCreateContext``, ``check_handle_value``) live here because
 both the structure and value modules import them.
 """
 
@@ -22,7 +22,7 @@ from prefab_sentinel.services.serialized_object.handles import VALUE_OPS
 
 
 @dataclass
-class _PrefabCreateContext:
+class PrefabCreateContext:
     target: str
     diagnostics: list[Diagnostic]
     preview: list[dict[str, Any]]
@@ -33,7 +33,7 @@ class _PrefabCreateContext:
     root_name: str = ""
 
 
-def _check_handle_value(
+def check_handle_value(
     value: object,
     known_handles: dict[str, str],
     target: str,
@@ -109,7 +109,7 @@ def validate_prefab_create_ops(
         )
         return diagnostics, preview
 
-    ctx = _PrefabCreateContext(
+    ctx = PrefabCreateContext(
         target=target,
         diagnostics=diagnostics,
         preview=preview,
@@ -180,4 +180,6 @@ def validate_prefab_create_ops(
 
 __all__ = [
     "validate_prefab_create_ops",
+    "PrefabCreateContext",
+    "check_handle_value",
 ]

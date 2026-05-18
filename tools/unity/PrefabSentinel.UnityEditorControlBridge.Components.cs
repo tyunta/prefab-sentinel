@@ -147,20 +147,25 @@ namespace PrefabSentinel
                         foreach (var entry in propWrapper.items)
                         {
                             var prop = so.FindProperty(entry.name);
-                            if (prop == null) continue;
+                            if (prop == null)
+                            {
+                                diagList.Add(InitialPropertyFailure(request.hierarchy_path, entry.name,
+                                    $"Property not found on {compType.Name}: {entry.name}.", "SerializedObject.FindProperty returned null"));
+                                continue;
+                            }
                             if (!string.IsNullOrEmpty(entry.object_reference))
                             {
-                                var (obj, _) = ResolveObjectReference(entry.object_reference);
+                                var (obj, refError) = ResolveObjectReference(entry.object_reference);
                                 if (obj != null) prop.objectReferenceValue = obj;
+                                else diagList.Add(InitialPropertyFailure(request.hierarchy_path, entry.name,
+                                    $"Object reference could not be resolved: {entry.object_reference}.", refError));
                             }
                             else if (!string.IsNullOrEmpty(entry.value))
                             {
-                                // Issue #24: value application goes through the
-                                // unified property-write layer; the structured
-                                // outcome is intentionally not surfaced here so
-                                // the add-component initial-property failure
-                                // handling stays as before.
-                                WritePropertyValue(prop, entry.value);
+                                PropertyWriteResult writeResult = WritePropertyValue(prop, entry.value);
+                                if (!writeResult.Success)
+                                    diagList.Add(InitialPropertyFailure(request.hierarchy_path, entry.name,
+                                        writeResult.ErrorMessage, writeResult.ErrorCode));
                             }
                         }
                         so.ApplyModifiedProperties();
@@ -231,6 +236,8 @@ namespace PrefabSentinel
                     executed = true,
                     read_only = false,
                 });
+            // Issue #27: ``diagList`` here holds only initial-property / parse failures (runtime-mod note appended below); escalate severity.
+            if (diagList.Count > 0) resp.severity = "warning";
             diagList.Add(new EditorControlDiagnostic
             {
                 detail = "Runtime modification — save the scene (File > Save) to persist.",
@@ -248,6 +255,10 @@ namespace PrefabSentinel
             resp.diagnostics = diagList.ToArray();
             return resp;
         }
+
+        // Issue #27: per-entry diagnostic for a failed add-component initial property.
+        private static EditorControlDiagnostic InitialPropertyFailure(string hierarchyPath, string entryName, string detail, string evidence) =>
+            new EditorControlDiagnostic { path = hierarchyPath, location = $"properties_json[{entryName}]", detail = detail, evidence = evidence };
 
         private static EditorControlResponse HandleEditorRemoveComponent(EditorControlRequest request)
         {

@@ -942,10 +942,10 @@ class PostconditionSchemaValidationTests(unittest.TestCase):
 
     def _validate(self, postcondition: object, resource_ids: set[str] | None = None):
         from prefab_sentinel.orchestrator_postcondition import (  # noqa: PLC0415
-            _validate_postcondition_schema,
+            validate_postcondition_schema,
         )
 
-        return _validate_postcondition_schema(
+        return validate_postcondition_schema(
             postcondition, resource_ids=resource_ids or set()
         )
 
@@ -1249,7 +1249,7 @@ class PostconditionEvaluatorTests(unittest.TestCase):
         target_exists: bool = True,
     ):
         from prefab_sentinel.orchestrator_postcondition import (  # noqa: PLC0415
-            _evaluate_postcondition,
+            evaluate_postcondition,
         )
 
         serialized_object = MagicMock()
@@ -1258,7 +1258,7 @@ class PostconditionEvaluatorTests(unittest.TestCase):
         if scan_response is not None:
             reference_resolver.scan_broken_references.return_value = scan_response
         with patch.object(Path, "exists", return_value=target_exists):
-            return _evaluate_postcondition(
+            return evaluate_postcondition(
                 serialized_object,
                 reference_resolver,
                 postcondition,

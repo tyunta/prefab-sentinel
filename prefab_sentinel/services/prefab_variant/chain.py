@@ -37,9 +37,16 @@ if TYPE_CHECKING:
 
 CHAIN_DEPTH_LIMIT = 12
 
+__all__ = [
+    "CHAIN_DEPTH_LIMIT",
+    "ChainLevel",
+    "ChainValue",
+    "walk_chain_levels",
+]
+
 
 @dataclass(slots=True)
-class _ChainLevel:
+class ChainLevel:
     """One level in the Variant chain walk."""
 
     entries: list[OverrideEntry]
@@ -90,8 +97,8 @@ def walk_chain_levels(
     guid_map: dict[str, Path],
     relative_fn: Callable[[Path], str],
     diagnostics: list[Diagnostic],
-) -> Iterator[_ChainLevel]:
-    """Yield :class:`_ChainLevel` for each level from variant to base.
+) -> Iterator[ChainLevel]:
+    """Yield :class:`ChainLevel` for each level from variant to base.
 
     Appends one ``Diagnostic`` to *diagnostics* for each referenced asset
     that cannot be resolved or decoded:
@@ -120,7 +127,7 @@ def walk_chain_levels(
         source = SOURCE_PREFAB_PATTERN.search(current_text)
         is_base = source is None
 
-        yield _ChainLevel(
+        yield ChainLevel(
             entries=entries,
             path=current_path,
             depth=depth,

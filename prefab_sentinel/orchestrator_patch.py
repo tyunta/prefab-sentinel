@@ -14,8 +14,8 @@ from prefab_sentinel.contracts import (
     max_severity,
 )
 from prefab_sentinel.orchestrator_postcondition import (
-    _evaluate_postcondition,
-    _validate_postcondition_schema,
+    evaluate_postcondition,
+    validate_postcondition_schema,
 )
 from prefab_sentinel.patch_plan import count_plan_ops, iter_resource_batches, normalize_patch_plan
 
@@ -128,7 +128,7 @@ def patch_apply(
 
     resource_ids = set(resource_map)
     for index, postcondition in enumerate(postconditions):
-        schema_step = _validate_postcondition_schema(
+        schema_step = validate_postcondition_schema(
             postcondition,
             resource_ids=resource_ids,
         )
@@ -273,7 +273,7 @@ def patch_apply(
             )
 
     for index, postcondition in enumerate(postconditions):
-        evaluated = _evaluate_postcondition(
+        evaluated = evaluate_postcondition(
             orch.serialized_object,
             orch.reference_resolver,
             postcondition,

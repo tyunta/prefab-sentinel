@@ -12,7 +12,7 @@ from prefab_sentinel.contracts import (
     error_response,
     success_response,
 )
-from prefab_sentinel.orchestrator_variant import _read_target_file, _resolve_variant_base
+from prefab_sentinel.orchestrator_variant import read_target_file, resolve_variant_base
 from prefab_sentinel.services.prefab_variant import PrefabVariantService
 from prefab_sentinel.services.reference_resolver import ReferenceResolverService
 from prefab_sentinel.udon_wiring import ComponentWiring, WiringResult, analyze_wiring
@@ -244,7 +244,7 @@ def inspect_wiring(
             f"{INSPECT_WIRING_PAGE_SIZE_MAX}].",
         )
 
-    text_or_error = _read_target_file(prefab_variant, target_path, "INSPECT_WIRING")
+    text_or_error = read_target_file(prefab_variant, target_path, "INSPECT_WIRING")
     if isinstance(text_or_error, ToolResponse):
         return text_or_error
     text = text_or_error
@@ -260,7 +260,7 @@ def inspect_wiring(
             data={"target_path": target_path, "file_type": suffix, "read_only": True},
         )
 
-    text, is_variant, base_prefab_path, chain_diags = _resolve_variant_base(
+    text, is_variant, base_prefab_path, chain_diags = resolve_variant_base(
         prefab_variant, text, target_path, "INSPECT_WIRING",
     )
     override_map: dict[str, set[str]] | None = None

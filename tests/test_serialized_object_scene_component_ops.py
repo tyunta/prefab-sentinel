@@ -20,18 +20,18 @@ from prefab_sentinel.services.serialized_object.scene_component_ops import (
     validate_scene_add_component_op,
     validate_scene_remove_component_op,
 )
-from prefab_sentinel.services.serialized_object.scene_dispatch import _SceneContext
+from prefab_sentinel.services.serialized_object.scene_dispatch import SceneContext
 
 
 def _make_ctx(
     *,
     scene_initialized: bool = True,
     extra_handles: dict[str, str] | None = None,
-) -> _SceneContext:
+) -> SceneContext:
     handles: dict[str, str] = {SCENE_HANDLE: "scene"}
     if extra_handles:
         handles.update(extra_handles)
-    return _SceneContext(
+    return SceneContext(
         target="Assets/Scene.unity",
         mode="open",
         diagnostics=[],

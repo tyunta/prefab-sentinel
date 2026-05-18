@@ -10,7 +10,7 @@ from prefab_sentinel.contracts import (
     ToolResponse,
     max_severity,
 )
-from prefab_sentinel.orchestrator_variant import _read_target_file
+from prefab_sentinel.orchestrator_variant import read_target_file
 from prefab_sentinel.services.prefab_variant import PrefabVariantService
 from prefab_sentinel.services.reference_resolver import ReferenceResolverService
 from prefab_sentinel.services.reference_resolver_snapshots import (
@@ -39,7 +39,7 @@ def inspect_structure(
     prefab_variant: PrefabVariantService,
     target_path: str,
 ) -> ToolResponse:
-    text_or_error = _read_target_file(prefab_variant, target_path, "VALIDATE_STRUCTURE")
+    text_or_error = read_target_file(prefab_variant, target_path, "VALIDATE_STRUCTURE")
     if isinstance(text_or_error, ToolResponse):
         return text_or_error
     text = text_or_error

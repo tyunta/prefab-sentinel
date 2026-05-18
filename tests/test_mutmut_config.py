@@ -9,8 +9,10 @@ the operational contract documented in ``TESTING.md`` Mutation testing section:
   ``--ignore`` entries (issue #167) and no legacy ``-k`` filters
   (issues #154/#156/#157 retired them).
 * The audited path targets the ``prefab_sentinel`` package source root.
-* ``do_not_mutate`` covers logger-style calls and both triple-quoted
-  string forms (issue #149).
+* ``do_not_mutate`` carries no entries (issue #28): mutmut 3.5.0
+  evaluates it as a file-path ``fnmatch`` glob, so construct-style
+  patterns are inert and a file-path entry would narrow the audited
+  surface.
 * The pytest selection list contains a single
   ``-m not source_text_invariant`` marker filter and no per-file
   ignore entries (issue #167).
@@ -18,11 +20,13 @@ the operational contract documented in ``TESTING.md`` Mutation testing section:
   directory (issue #166), and the ruff lint config carries the same
   exclusion via ``[tool.ruff].extend-exclude``.
 * When mutmut is available in the runtime, a per-module sanity
-  invocation in the supported single-target form (the only form the
-  installed CLI accepts in 3.5+) exits with ``returncode == 0`` and
-  produces output that contains none of the four documented historical
-  regression strings (issue #165).  When mutmut is not installed the
-  configuration checks alone run.
+  invocation in the supported single-target form — a dotted
+  mutant-name glob, the only form mutmut 3.5.0 accepts (issue #29) —
+  exits with ``returncode == 0`` and produces output that contains
+  none of the documented forbidden strings: the four historical
+  regression strings (issue #165) plus the ``AssertionError`` signature
+  the broken file-path-positional form raises.  When mutmut is not
+  installed the configuration checks alone run.
 """
 
 from __future__ import annotations
@@ -53,15 +57,6 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from mutmut_score_report import AUDITED_MODULES as AUDITED_MODULES_FOR_HISTORY  # noqa: E402
-
-# Issue #182 — exact suppression-pattern strings validated in PR #186.
-# The configuration test below pins these by literal string comparison so
-# any rename, duplicate, or accidental drift surfaces as a test failure.
-PR186_SUPPRESSION_PATTERNS: tuple[str, ...] = (
-    "*_text_cache.get*",
-    "*_guid_map*",
-    "*invalidate_*_cache*",
-)
 
 
 def _load_pyproject() -> dict:
@@ -122,44 +117,19 @@ class MutmutConfigShapeTests(unittest.TestCase):
         section = _load_mutmut_section()
         self.assertEqual(["prefab_sentinel/"], section["paths_to_mutate"])
 
-    def test_do_not_mutate_covers_logger_and_triple_quote_forms(self) -> None:
-        # Issue #222 Phase 1: the previous ``assertTrue(any(substring in
-        # pattern ...))`` form trivially passed against any pattern that
-        # happened to contain a matching substring (e.g. ``*log.error*``
-        # contains the substring ``"log"`` but not the catch-all
-        # ``"*logger.*"`` pattern). Concretise to exact-membership so a
-        # rename or removal of the documented catch-all trips the row.
+    def test_do_not_mutate_carries_no_entries(self) -> None:
+        # Issue #28: mutmut 3.5.0 evaluates ``do_not_mutate`` with
+        # ``fnmatch`` against source *file paths*, never against code
+        # structure or mutant names. The previous construct-style globs
+        # (``*logger.*``, ``*"""*`` …) matched no ``.py`` path and were
+        # entirely inert; a file-path entry would instead exclude a whole
+        # audited module (a Non-Goal). The list is therefore empty.
         section = _load_mutmut_section()
-        patterns = section["do_not_mutate"]
-        for required in ("*logger.*", '*"""*', "*'''*"):
-            self.assertIn(required, patterns)
-
-    def test_do_not_mutate_extends_with_documented_equivalent_patterns(
-        self,
-    ) -> None:
-        """Issue #182 — four documented equivalent-mutation patterns
-        appear verbatim in ``[tool.mutmut].do_not_mutate``.  Three target
-        internal cache state in ``ReferenceResolverService`` whose
-        mutations are semantically equivalent (cache hit/miss skip,
-        guid-index re-read, cache invalidation); the fourth covers the
-        empty-string ``dict.get`` default-equivalence pattern (``.get("k", "")``)
-        whose mutation to ``.get("k", "XX")`` rarely changes behavior in
-        an empty-string-fallback caller and produces equivalent mutants
-        that would not strengthen the suite.
-        """
-        section = _load_mutmut_section()
-        patterns = section["do_not_mutate"]
-        for required in (
-            "*_text_cache.get*",
-            "*_guid_map*",
-            "*invalidate_*_cache*",
-            '*.get("*", "")*',
-        ):
-            self.assertIn(
-                required,
-                patterns,
-                f"missing equivalent-mutation pattern '{required}': {patterns}",
-            )
+        self.assertEqual(
+            [],
+            section["do_not_mutate"],
+            f"do_not_mutate must carry no entries; found: {section['do_not_mutate']}",
+        )
 
     def test_pytest_selection_uses_single_marker_filter(self) -> None:
         # The selection list must consist of the test root, a ``-m``
@@ -257,10 +227,12 @@ class QuarterlyTemplateTests(unittest.TestCase):
             text,
             "missing suppression-impact section heading",
         )
-        # The per-pattern table header ("Suppression pattern ... Delta")
-        # must be present so the section is structurally complete.
-        self.assertIn("| Suppression pattern |", text)
-        self.assertIn("Delta", text)
+        # Issue #28: the section documents ``do_not_mutate`` as a
+        # file-path exclusion list and carries the survivor-classification
+        # subsection that records trivial construct-level survivors (the
+        # mechanism that replaced the inert construct-glob suppression).
+        self.assertIn("| do_not_mutate entry (file-path glob) |", text)
+        self.assertIn("### 3.1 Survivor classification", text)
 
     def test_quarterly_template_has_per_audited_module_history_section(
         self,
@@ -291,107 +263,16 @@ class QuarterlyTemplateTests(unittest.TestCase):
         )
 
 
-@pytest.mark.source_text_invariant
-class TestDoNotMutateEvidenceAnnotations(unittest.TestCase):
-    """Issue #210 — every ``do_not_mutate`` pattern is paired with an
-    inline comment naming its verification basis (issue reference,
-    audit-status note, or documentation URL). A reader of the config
-    can see why each entry is suppressed without consulting external
-    memory; an undocumented pattern surfaces as a test failure rather
-    than as a silent skip on the next quarterly mutmut run.
-    """
-
-    _PYPROJECT_TEXT = PYPROJECT_PATH.read_text(encoding="utf-8")
-
-    def _do_not_mutate_block(self) -> list[str]:
-        """Return the verbatim lines between ``do_not_mutate = [`` and
-        the matching closing ``]``.
-        """
-        lines = self._PYPROJECT_TEXT.splitlines()
-        start = None
-        for index, line in enumerate(lines):
-            if line.strip().startswith("do_not_mutate") and "[" in line:
-                start = index + 1
-                break
-        if start is None:
-            raise AssertionError(
-                "do_not_mutate block not found in pyproject.toml"
-            )
-        body: list[str] = []
-        for line in lines[start:]:
-            if line.strip() == "]":
-                return body
-            body.append(line)
-        raise AssertionError("do_not_mutate block did not terminate with `]`")
-
-    def test_every_pattern_entry_has_adjacent_evidence_comment(self) -> None:
-        body = self._do_not_mutate_block()
-        # A "pattern entry" is any non-blank line that does NOT start
-        # with a Python-style ``#`` comment. Each such line must be
-        # preceded by at least one non-empty comment line within the
-        # same do_not_mutate block (no blank lines between the
-        # comment and the pattern). The comment can be shared across
-        # multiple consecutive pattern lines provided no blank line
-        # breaks the grouping.
-        accumulated_comments: list[str] = []
-        for line in body:
-            stripped = line.strip()
-            if not stripped:
-                # Blank line resets the comment accumulator so a
-                # later pattern is not falsely associated with an
-                # earlier comment.
-                accumulated_comments = []
-                continue
-            if stripped.startswith("#"):
-                accumulated_comments.append(stripped.lstrip("#").strip())
-                continue
-            # ``stripped`` is now a pattern entry line.
-            self.assertGreater(
-                len(accumulated_comments),
-                0,
-                f"do_not_mutate pattern lacks an inline evidence "
-                f"comment: {stripped!r}",
-            )
-
-
-@pytest.mark.source_text_invariant
-class SuppressionPatternPinTests(unittest.TestCase):
-    """Issue #182 — the three documented equivalent-mutation patterns
-    appear verbatim in ``[tool.mutmut].do_not_mutate``.  This pins the
-    strings by literal equality so a future rename / duplicate / accidental
-    deletion surfaces as a test failure rather than as silent drift.
-
-    Marked ``source_text_invariant`` because the assertions read
-    ``pyproject.toml`` from the un-mutated tree (issue #167 / #222).
-    """
-
-    def test_each_pr186_suppression_pattern_is_pinned_by_literal_string(
-        self,
-    ) -> None:
-        section = _load_mutmut_section()
-        patterns = section["do_not_mutate"]
-        # Each documented pattern appears at least once, by exact string.
-        for required in PR186_SUPPRESSION_PATTERNS:
-            self.assertIn(
-                required,
-                patterns,
-                f"missing PR-#186 suppression pattern {required!r}: {patterns}",
-            )
-        # No duplicates of the documented patterns (drift catcher).
-        for required in PR186_SUPPRESSION_PATTERNS:
-            self.assertEqual(
-                1,
-                patterns.count(required),
-                f"PR-#186 suppression pattern {required!r} appears more than once: {patterns}",
-            )
-
-
 class MutmutSanityInvocationTests(unittest.TestCase):
     """Per-module mutmut sanity invocation against ``contracts.py``.
 
-    The test calls ``mutmut run`` on the smallest audited leaf module
-    and asserts that none of the four documented historical regression
-    strings (issue #165) appears in the combined stdout/stderr capture.
+    The test calls ``mutmut run`` on the smallest audited leaf module —
+    using the dotted mutant-name-glob form mutmut 3.5.0 accepts — and
+    asserts that none of the documented forbidden strings appears in the
+    combined stdout/stderr capture: the four historical regression
+    strings (issue #165) plus the ``AssertionError`` "nothing matches"
+    signature that the broken file-path-positional invocation raises
+    (issue #29).
 
     Skip conditions (issue #144 — these are the conditions a developer
     reading a ``pytest --skipped`` summary can map back here without
@@ -415,7 +296,8 @@ class MutmutSanityInvocationTests(unittest.TestCase):
        runtime to drive.
     """
 
-    # Four documented historical regression strings (issue #165):
+    # Forbidden strings — any appearance in combined output fails the test.
+    # Four historical regression strings (issue #165):
     # * ``MUTANT_UNDER_TEST`` — the missing-state-variable identifier
     #   that mutmut's runtime raises when the test environment is not
     #   prepared (foundation-side symptom).
@@ -427,20 +309,28 @@ class MutmutSanityInvocationTests(unittest.TestCase):
     #   to the legacy invocation path.
     # * ``no such option`` — any usage-error string indicating an
     #   invalid invocation form (mutmut 3.5+ surfaces "No such option:
-    #   --foo" on click usage errors).  Matching is case-insensitive
-    #   to absorb capitalisation drift across click versions.
+    #   --foo" on click usage errors).
+    # Plus the issue #29 signature:
+    # * ``Filtered for specific mutants, but nothing matches`` — the
+    #   ``AssertionError`` mutmut 3.5.0 raises when a positional argument
+    #   matches no mutant. A file-path positional (the pre-#29 broken
+    #   form) never matches a dotted mutant name, so this string appears
+    #   if and only if the broken invocation form is reintroduced.
+    # Matching is case-insensitive to absorb capitalisation drift.
     _FORBIDDEN_REGRESSION_STRINGS = (
         "MUTANT_UNDER_TEST",
         "KeyError",
         "--no-input",
         "no such option",
+        "Filtered for specific mutants, but nothing matches",
     )
 
-    # Single-target sanity invocation.  ``prefab_sentinel/contracts.py``
-    # is the smallest leaf module audited by the project and produces
-    # the lowest mutant count, so the per-module form completes within
-    # the timeout in any reasonable environment.
-    _SANITY_TARGET = "prefab_sentinel/contracts.py"
+    # Single-module sanity invocation.  mutmut 3.5.0's positional argument
+    # is a mutant-name glob, not a file path; ``prefab_sentinel.contracts.*``
+    # selects every mutant of the smallest audited leaf module.  A file-path
+    # positional (``prefab_sentinel/contracts.py``) matches no mutant name
+    # and aborts with the issue #29 ``AssertionError``.
+    _SANITY_TARGET = "prefab_sentinel.contracts.*"
     _TIMEOUT_SECONDS = 300
 
     def test_single_module_invocation_does_not_raise_missing_state_variable(self) -> None:
@@ -485,13 +375,12 @@ class MutmutSanityInvocationTests(unittest.TestCase):
             shutil.rmtree, str(PROJECT_ROOT / "mutants"), ignore_errors=True
         )
 
-        # mutmut 3.5+ accepts only the positional ``MUTANT_NAMES`` form;
-        # the legacy ``--paths-to-mutate`` flag is rejected by ``click``
-        # with a usage error.  The ``[tool.mutmut].paths_to_mutate``
-        # configuration entry is honoured by the runtime when the
-        # positional form is omitted, but the per-module sanity
-        # invocation explicitly names a single audited file so the
-        # runtime narrows mutation generation immediately.
+        # mutmut 3.5.0's positional ``MUTANT_NAMES`` argument is a glob
+        # matched against dotted mutant names (``<module>.<func>__mutmut_N``),
+        # not a file path.  The single-module sanity invocation passes the
+        # dotted module-name glob ``prefab_sentinel.contracts.*`` so the
+        # run filters to that module's mutants; passing a file path here
+        # would abort with the issue #29 ``AssertionError``.
         result = subprocess.run(
             [
                 sys.executable,

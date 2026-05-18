@@ -65,19 +65,29 @@ def _strip_cs_comments(source: str) -> str:
 
 
 def _read(path: Path) -> str:
-    """Read the bridge source.
+    """Read the bridge source, C# comments stripped.
 
     When ``path`` resolves to the canonical bridge file, return every
     bridge partial concatenated so the regex-based extractors see the
-    full class body.  Other paths are returned verbatim so unrelated
-    callers (tests for VRC-SDK / patch-bridge / etc.) keep working.
+    full class body.  Other paths are read as the single file.
+
+    Issue #5/#358: the returned text always has ``//`` and ``/* ... */``
+    comments stripped so every retained source-text grep matches code
+    only — a literal surviving in a comment cannot produce a false-green
+    assertion. A test that deliberately verifies comment content must
+    read the raw source directly instead of through this helper.
+
+    This helper exists for the bridge-concatenation case; tests that
+    grep a single named-constant ``.cs`` path call
+    ``_strip_cs_comments(path.read_text(...))`` directly — the
+    equivalent single-file form — rather than routing through here.
     """
     if path == BRIDGE:
         parts: list[str] = []
         for cs_file in sorted(TOOLS_DIR.glob(_BRIDGE_GLOB)):
             parts.append(cs_file.read_text(encoding="utf-8"))
-        return "\n".join(parts)
-    return path.read_text(encoding="utf-8")
+        return _strip_cs_comments("\n".join(parts))
+    return _strip_cs_comments(path.read_text(encoding="utf-8"))
 
 
 def _extract_method(source: str, method_name: str) -> str:
@@ -182,7 +192,7 @@ class TestApplyPropertyValueTypes(unittest.TestCase):
     """
 
     def test_unified_writer_delegates_parsing_to_property_value_parser(self) -> None:
-        source = _strip_cs_comments(_read(BRIDGE))
+        source = _read(BRIDGE)
         body = _extract_method(source, "WritePropertyValue")
         self.assertIn(
             "PropertyValueParser.TryParse",
@@ -198,7 +208,7 @@ class TestApplyPropertyValueTypes(unittest.TestCase):
         # Tier 3 Justification (spec): exactly one property-write layer
         # may exist. The former boolean ``ApplyPropertyValue`` helper
         # must be fully removed — no parallel implementation or alias.
-        source = _strip_cs_comments(_read(BRIDGE))
+        source = _read(BRIDGE)
         self.assertEqual(
             [],
             re.findall(r"\bApplyPropertyValue\b", source),
@@ -213,7 +223,7 @@ class TestApplyPropertyValueTypes(unittest.TestCase):
         # The per-type ``switch (prop.propertyType)`` block must live
         # only in the unified layer; the set-property handler obtains
         # its write outcome from WritePropertyValue.
-        source = _strip_cs_comments(_read(BRIDGE))
+        source = _read(BRIDGE)
         body = _extract_method(source, "HandleEditorSetProperty")
         self.assertIn(
             "WritePropertyValue",
@@ -247,7 +257,7 @@ class TestHandleEditorSetPropertyQuaternion(unittest.TestCase):
     """
 
     def test_unified_writer_dispatches_quaternion_type(self) -> None:
-        source = _strip_cs_comments(_read(BRIDGE))
+        source = _read(BRIDGE)
         body = _extract_method(source, "WritePropertyValue")
         self.assertIn(
             "SerializedPropertyType.Quaternion",
@@ -260,7 +270,7 @@ class TestHandleEditorSetPropertyQuaternion(unittest.TestCase):
         )
 
     def test_unified_writer_delegates_quaternion_to_validator(self) -> None:
-        source = _strip_cs_comments(_read(BRIDGE))
+        source = _read(BRIDGE)
         body = _extract_method(source, "WriteQuaternionValue")
         self.assertIn(
             "QuaternionInputValidator.Validate",
@@ -272,7 +282,7 @@ class TestHandleEditorSetPropertyQuaternion(unittest.TestCase):
         )
 
     def test_unified_writer_quaternion_surfaces_unit_norm_code(self) -> None:
-        source = _strip_cs_comments(_read(BRIDGE))
+        source = _read(BRIDGE)
         body = _extract_method(source, "WriteQuaternionValue")
         # Non-unit norm rejection must surface the dedicated code.
         self.assertIn(
@@ -287,7 +297,7 @@ class TestHandleEditorSetPropertyQuaternion(unittest.TestCase):
     def test_handle_editor_set_property_quaternion_tolerance_constant(self) -> None:
         # Constant-value pin: the norm tolerance literal (1e-4f) lives
         # on QuaternionInputValidator; a regression must keep that value.
-        source = INPUT_VALIDATORS.read_text(encoding="utf-8")
+        source = _strip_cs_comments(INPUT_VALIDATORS.read_text(encoding="utf-8"))
         self.assertIn("internal const float NormTolerance = 1e-4f;", source)
 
 
@@ -458,7 +468,7 @@ class TestSetPropertyGameObject(unittest.TestCase):
 
     def test_allowlist_names_pinned_on_allowlist_class(self) -> None:
         # Constant-value pin on the relocated allowlist membership.
-        source = INPUT_VALIDATORS.read_text(encoding="utf-8")
+        source = _strip_cs_comments(INPUT_VALIDATORS.read_text(encoding="utf-8"))
         for name in ("m_IsActive", "m_Layer", "m_Name", "m_TagString"):
             self.assertIn(f'"{name}"', source, f"missing allowlist name: {name}")
 
@@ -494,7 +504,7 @@ def _extract_editor_control_request_body() -> str:
     the relocated file is read directly so request-schema invariants stay
     pinned to the new home.
     """
-    source = EDITOR_CONTROL_REQUEST.read_text(encoding="utf-8")
+    source = _strip_cs_comments(EDITOR_CONTROL_REQUEST.read_text(encoding="utf-8"))
     start = source.find("public sealed class EditorControlRequest")
     if start == -1:
         raise AssertionError("EditorControlRequest class not found")
@@ -522,7 +532,7 @@ def _action_registry_hashset(field: str) -> str:
     pinned there now, so the dispatch/wiring source-text tests read it from
     the registry file.
     """
-    source = ACTION_REGISTRY.read_text(encoding="utf-8")
+    source = _strip_cs_comments(ACTION_REGISTRY.read_text(encoding="utf-8"))
     match = re.search(
         rf"\b{re.escape(field)}\s*=\s*new\s+HashSet<string>\s*\{{",
         source,
@@ -642,7 +652,7 @@ class TestHandleCaptureConsoleLogsBoundCheck(unittest.TestCase):
         self.assertIn("ConsoleCaptureRequestValidator.Validate", body)
 
     def test_out_of_range_code_pinned_on_validator(self) -> None:
-        source = CONSOLE_REQUEST_VALIDATOR.read_text(encoding="utf-8")
+        source = _strip_cs_comments(CONSOLE_REQUEST_VALIDATOR.read_text(encoding="utf-8"))
         self.assertIn(
             'MaxEntriesOutOfRangeCode =', source
         )
@@ -743,11 +753,11 @@ class TestRecompileAndWaitTimeoutBoundCheck(unittest.TestCase):
         # The upper-bound literal must equal the Python mirror value
         # (1800 seconds); drift between the two would let an oversized
         # budget slip past one side and trip the other.
-        source = RUN_SCRIPT_COMPILE_VALIDATORS.read_text(encoding="utf-8")
+        source = _strip_cs_comments(RUN_SCRIPT_COMPILE_VALIDATORS.read_text(encoding="utf-8"))
         self.assertRegex(source, r"MaxTimeoutSec\s*=\s*1800f")
 
     def test_out_of_range_code_pinned_on_validator(self) -> None:
-        source = RUN_SCRIPT_COMPILE_VALIDATORS.read_text(encoding="utf-8")
+        source = _strip_cs_comments(RUN_SCRIPT_COMPILE_VALIDATORS.read_text(encoding="utf-8"))
         self.assertIn(
             'OutOfRangeCode = "EDITOR_CTRL_COMPILE_TIMEOUT_OUT_OF_RANGE"', source
         )
@@ -895,7 +905,7 @@ class TestCreateUiElementSource(unittest.TestCase):
 
     def test_handler_pins_canonical_allowed_type_set(self) -> None:
         # Constant-value pin on the relocated allowlist membership.
-        source = UI_ELEMENT_ALLOWLIST.read_text(encoding="utf-8")
+        source = _strip_cs_comments(UI_ELEMENT_ALLOWLIST.read_text(encoding="utf-8"))
         for token in (
             '"Image"', '"TextMeshProUGUI"', '"Button"', '"Slider"', '"Toggle"',
         ):
@@ -1200,7 +1210,7 @@ class TestBridgePartialLayout(unittest.TestCase):
         # CLR sees the bridge as a single class spread across files.
         for name in self._on_disk():
             with self.subTest(name=name):
-                text = (TOOLS_DIR / name).read_text(encoding="utf-8")
+                text = _strip_cs_comments((TOOLS_DIR / name).read_text(encoding="utf-8"))
                 hits = re.findall(
                     r"public\s+static\s+partial\s+class\s+UnityEditorControlBridge\b",
                     text,
@@ -1217,7 +1227,7 @@ class TestBridgePartialLayout(unittest.TestCase):
         # that drift before the editor recompile does.
         for name in self._on_disk():
             with self.subTest(name=name):
-                text = (TOOLS_DIR / name).read_text(encoding="utf-8")
+                text = _strip_cs_comments((TOOLS_DIR / name).read_text(encoding="utf-8"))
                 self.assertNotRegex(
                     text,
                     r"public\s+static\s+class\s+UnityEditorControlBridge\b",
@@ -1568,7 +1578,7 @@ class TestSetUdonSharpFieldHandler(unittest.TestCase):
         surfacing the writer's error code (Non-Goal: the UdonSharp
         field-write envelope code is unchanged).
         """
-        source = _strip_cs_comments(_read(BRIDGE))
+        source = _read(BRIDGE)
         body = _extract_method(source, "HandleSetUdonSharpField")
         self.assertIn(
             "WritePropertyValue",
@@ -1722,7 +1732,9 @@ class TestBestEffortCatchWarnings(unittest.TestCase):
     def test_every_site_emits_typed_catch_with_mandated_warning(self) -> None:
         for file_name, method_name, min_typed in self._SITES:
             with self.subTest(file=file_name, method=method_name):
-                text = (TOOLS_DIR / file_name).read_text(encoding="utf-8")
+                text = _strip_cs_comments(
+                    (TOOLS_DIR / file_name).read_text(encoding="utf-8")
+                )
                 body = self._read_method_body(text, method_name)
                 # The mandated warning string anchors on the enclosing
                 # method name plus ``ex.GetType().Name`` and
@@ -1851,7 +1863,9 @@ class TestBestEffortCatchWarnings(unittest.TestCase):
             ("PrefabSentinel.UnityPatchBridge.Diagnostics.cs", "WriteResponseSafe"),
         ):
             with self.subTest(file=file_name, method=method_name):
-                text = (TOOLS_DIR / file_name).read_text(encoding="utf-8")
+                text = _strip_cs_comments(
+                    (TOOLS_DIR / file_name).read_text(encoding="utf-8")
+                )
                 body = _extract_method(text, method_name)
                 outer_catch = self._extract_outer_catch_block(body)
                 self.assertTrue(
@@ -2081,7 +2095,7 @@ class RecompileScheduleFailedSanitization(unittest.TestCase):
         body = _extract_method(_read(BRIDGE), "HandleRecompileAndWait")
         catch_body = _schedule_catch_body(body)
         self.assertIn("ScheduleFailureEnvelope.RedactedMessage()", catch_body)
-        redaction = RUN_SCRIPT_COMPILE_REDACTION.read_text(encoding="utf-8")
+        redaction = _strip_cs_comments(RUN_SCRIPT_COMPILE_REDACTION.read_text(encoding="utf-8"))
         self.assertIn(
             "editor_recompile_and_wait: failed to schedule compilation.",
             redaction,
@@ -2779,7 +2793,7 @@ class TestRunScriptCompilePendingResponseDeadlinePath(unittest.TestCase):
         self.assertNotIn("EDITOR_CTRL_RUN_SCRIPT_COMPILE", body)
 
     def test_pending_codes_pinned_on_selector(self) -> None:
-        source = RUN_SCRIPT_COMPILE_VALIDATORS.read_text(encoding="utf-8")
+        source = _strip_cs_comments(RUN_SCRIPT_COMPILE_VALIDATORS.read_text(encoding="utf-8"))
         self.assertIn(
             'RecoveryCode = "EDITOR_CTRL_RUN_SCRIPT_RECOVERY"', source
         )
@@ -2847,7 +2861,7 @@ class TestHasEditorScriptChangedSinceScopeExpanded(unittest.TestCase):
     def test_classifier_segment_constants_pinned(self) -> None:
         # Constant-value pin: the Editor-segment and run-script temp-area
         # segment literals moved into EditorScriptPathClassifier.
-        source = EDITOR_SCRIPT_PATH_CLASSIFIER.read_text(encoding="utf-8")
+        source = _strip_cs_comments(EDITOR_SCRIPT_PATH_CLASSIFIER.read_text(encoding="utf-8"))
         self.assertIn('EditorSegment = "Editor"', source)
         self.assertIn('RunScriptTempSegment = "_PrefabSentinelTemp"', source)
 
@@ -3060,7 +3074,7 @@ class MenuHasEditorScriptChangedSinceSegmentExclusionTests(unittest.TestCase):
         # (CLAUDE.md / README.md); a rename would silently break the
         # temp-exclusion contract with the run-script handler that writes
         # there. The literal now lives on EditorScriptPathClassifier.
-        source = EDITOR_SCRIPT_PATH_CLASSIFIER.read_text(encoding="utf-8")
+        source = _strip_cs_comments(EDITOR_SCRIPT_PATH_CLASSIFIER.read_text(encoding="utf-8"))
         self.assertRegex(
             source,
             r'RunScriptTempSegment\s*=\s*"_PrefabSentinelTemp"',
@@ -3632,7 +3646,9 @@ class MenuScriptWatchSplitSourceInvariantTests(unittest.TestCase):
                 "path (issue #262)."
             ),
         )
-        text = self._MENU_SCRIPT_WATCH_PARTIAL.read_text(encoding="utf-8")
+        text = _strip_cs_comments(
+            self._MENU_SCRIPT_WATCH_PARTIAL.read_text(encoding="utf-8")
+        )
         self.assertRegex(
             text,
             r"private\s+static\s+bool\s+HasEditorScriptChangedSince\(\s*long\s+sinceUnixMs\s*\)",
@@ -3644,7 +3660,7 @@ class MenuScriptWatchSplitSourceInvariantTests(unittest.TestCase):
         )
 
     def test_menu_partial_does_not_redeclare_detector(self) -> None:
-        text = self._MENU_PARTIAL.read_text(encoding="utf-8")
+        text = _strip_cs_comments(self._MENU_PARTIAL.read_text(encoding="utf-8"))
         # Pin: no declaration in Menu.cs.  A call site is fine; only
         # the method body's declaration form is forbidden.
         self.assertNotRegex(
@@ -3662,7 +3678,7 @@ class MenuScriptWatchSplitSourceInvariantTests(unittest.TestCase):
         relies on the detector; the call site must reference the
         moved method by name so the cross-partial wiring survives.
         """
-        text = self._MENU_PARTIAL.read_text(encoding="utf-8")
+        text = _strip_cs_comments(self._MENU_PARTIAL.read_text(encoding="utf-8"))
         self.assertIn(
             "HasEditorScriptChangedSince(",
             text,
@@ -3682,14 +3698,16 @@ class MenuScriptWatchSplitSourceInvariantTests(unittest.TestCase):
         ``EditorScriptPathClassifier`` (as ``EditorSegment`` /
         ``RunScriptTempSegment``).
         """
-        text = self._MENU_SCRIPT_WATCH_PARTIAL.read_text(encoding="utf-8")
+        text = _strip_cs_comments(
+            self._MENU_SCRIPT_WATCH_PARTIAL.read_text(encoding="utf-8")
+        )
         self.assertIn("MenuExecuteAssetsRoot", text)
         # The two relocated constants must no longer be declared here.
         self.assertNotIn("MenuExecuteEditorSegment", text)
         self.assertNotIn("MenuExecuteRunScriptTempExclusion", text)
 
     def test_relocated_segment_constants_live_on_path_classifier(self) -> None:
-        text = EDITOR_SCRIPT_PATH_CLASSIFIER.read_text(encoding="utf-8")
+        text = _strip_cs_comments(EDITOR_SCRIPT_PATH_CLASSIFIER.read_text(encoding="utf-8"))
         for constant in ("EditorSegment", "RunScriptTempSegment"):
             with self.subTest(constant=constant):
                 self.assertIn(constant, text)
@@ -3762,6 +3780,101 @@ class TestScreenshotRoutingUsesClassifier(unittest.TestCase):
                 "ScreenshotViewAllowlistClassifier.IsSceneView instead "
                 "(issue #310)."
             ),
+        )
+
+
+class TestAddComponentInitialPropertyDiagnostics(unittest.TestCase):
+    """Issue #27 — ``HandleEditorAddComponent`` no longer silently
+    discards initial-property application failures. Each ``properties_json``
+    entry that fails name resolution, object-reference resolution, or the
+    unified value write contributes a diagnostic, and any property failure
+    (or a ``properties_json`` parse failure) escalates the response
+    severity to ``warning`` while ``success`` stays ``true``.
+
+    Tier 3: ``HandleEditorAddComponent`` operates on a live Unity
+    ``SerializedObject`` creatable only inside the Unity Editor; the
+    repository has no EditMode harness and the migration table
+    classifies the entire Components concern as Tier-3-only. These
+    assertions read the comment-stripped bridge source so a literal
+    surviving only inside a ``//`` comment cannot mask a reverted fix.
+    """
+
+    def _handler_body(self) -> str:
+        source = _read(BRIDGE)
+        return _extract_method(source, "HandleEditorAddComponent")
+
+    def test_value_write_branch_inspects_the_property_write_outcome(self) -> None:
+        body = self._handler_body()
+        # The unified write layer returns a ``PropertyWriteResult``; the
+        # add-component loop must capture and inspect it rather than
+        # discard the call's return value (issue #27 case ③).
+        self.assertIn(
+            "PropertyWriteResult",
+            body,
+            "value-write branch does not capture the WritePropertyValue outcome",
+        )
+        self.assertIn(
+            ".Success",
+            body,
+            "value-write branch does not inspect the PropertyWriteResult success flag",
+        )
+        self.assertIn(
+            "ErrorMessage",
+            body,
+            "value-write failure diagnostic does not carry the write layer's error text",
+        )
+
+    def test_failed_entry_emits_a_per_entry_diagnostic(self) -> None:
+        source = _read(BRIDGE)
+        # All three failure causes funnel into a diagnostic whose
+        # ``location`` names the offending ``properties_json`` entry
+        # (``properties_json[<name>]``).
+        self.assertIn(
+            "properties_json[",
+            source,
+            "a failed initial-property entry is not surfaced with a per-entry diagnostic location",
+        )
+
+    def test_property_failure_escalates_response_severity_to_warning(self) -> None:
+        body = self._handler_body()
+        # A property or parse failure escalates the response severity to
+        # the warning level; the escalation is gated on the collected
+        # per-entry/parse diagnostics, and ``success`` is left unchanged.
+        self.assertIn(
+            'severity = "warning"',
+            body,
+            "a failed initial-property entry does not escalate response severity to warning",
+        )
+        self.assertIn(
+            "diagList.Count",
+            body,
+            "severity escalation is not gated on the collected-diagnostics count",
+        )
+
+    def test_parse_failure_diagnostic_feeds_the_severity_gate(self) -> None:
+        body = self._handler_body()
+        # Issue #27 case ④: a malformed ``properties_json`` payload is
+        # caught and must add a diagnostic to the same ``diagList`` the
+        # ``diagList.Count > 0`` severity gate inspects, so the parse
+        # failure escalates the response severity to ``warning`` rather
+        # than being discarded silently.
+        match = re.search(r"catch\s*\(\s*System\.Exception\s+ex\s*\)\s*\{", body)
+        self.assertIsNotNone(
+            match,
+            "properties_json parse catch block not found in HandleEditorAddComponent",
+        )
+        catch_body = _extract_braced_block(
+            body, match.end(), "properties_json parse catch block"
+        )
+        self.assertIn(
+            "diagList.Add",
+            catch_body,
+            "parse catch does not append to diagList; the parse failure is discarded",
+        )
+        self.assertIn(
+            'evidence = "properties_json"',
+            catch_body,
+            "parse-failure diagnostic does not carry the properties_json evidence tag",
         )
 
 

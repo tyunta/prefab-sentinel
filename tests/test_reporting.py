@@ -4,7 +4,7 @@ import csv
 import io
 import unittest
 
-from prefab_sentinel.reporting import _extract_runtime_validation_data, render_csv_report
+from prefab_sentinel.reporting import extract_runtime_validation_data, render_csv_report
 from prefab_sentinel.reporting_markdown import render_markdown_report
 
 
@@ -308,7 +308,7 @@ class CsvReportTests(unittest.TestCase):
 
 
 class ReportingRuntimeValidationTests(unittest.TestCase):
-    """T64: ``_extract_runtime_validation_data`` must surface the renamed
+    """T64: ``extract_runtime_validation_data`` must surface the renamed
     ``count_total`` / ``count_by_category`` keys (issue #89).
     """
 
@@ -339,7 +339,7 @@ class ReportingRuntimeValidationTests(unittest.TestCase):
             ],
         }
 
-        runtime = _extract_runtime_validation_data(payload_data)
+        runtime = extract_runtime_validation_data(payload_data)
         classification = runtime.get("classification", {})
 
         self.assertIn("count_total", classification)

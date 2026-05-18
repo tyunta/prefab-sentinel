@@ -110,7 +110,9 @@ class TestPatchBridgePartialDeclaresPartialClass(unittest.TestCase):
     def test_every_partial_declares_exactly_one_partial_class(self) -> None:
         for name in _EXPECTED_PARTIAL_NAMES:
             with self.subTest(name=name):
-                text = (_TOOLS_DIR / name).read_text(encoding="utf-8")
+                text = _strip_cs_comments(
+                    (_TOOLS_DIR / name).read_text(encoding="utf-8")
+                )
                 hits = re.findall(
                     r"public\s+static\s+partial\s+class\s+UnityPatchBridge\b",
                     text,
@@ -125,7 +127,9 @@ class TestPatchBridgePartialDeclaresPartialClass(unittest.TestCase):
     def test_no_partial_declares_the_class_as_non_partial(self) -> None:
         for name in _EXPECTED_PARTIAL_NAMES:
             with self.subTest(name=name):
-                text = (_TOOLS_DIR / name).read_text(encoding="utf-8")
+                text = _strip_cs_comments(
+                    (_TOOLS_DIR / name).read_text(encoding="utf-8")
+                )
                 self.assertNotRegex(
                     text,
                     r"public\s+static\s+class\s+UnityPatchBridge\b",
@@ -144,7 +148,10 @@ class TestPatchBridgeCoreConstantsPresent(unittest.TestCase):
     """
 
     def _core_text(self) -> str:
-        return (_TOOLS_DIR / _CORE).read_text(encoding="utf-8")
+        # Issue #5/#358: strip C# comments before the source greps below
+        # so a quoted anchor in a ``//`` comment cannot satisfy a
+        # declaration-site assertion.
+        return _strip_cs_comments((_TOOLS_DIR / _CORE).read_text(encoding="utf-8"))
 
     def test_protocol_version_constant_declared_in_canonical_core(self) -> None:
         text = self._core_text()

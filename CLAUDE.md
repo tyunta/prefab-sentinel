@@ -122,7 +122,7 @@
   - `prefab_sentinel.services.runtime_validation.classification`
   - `prefab_sentinel.orchestrator_postcondition`
   - `prefab_sentinel.orchestrator_validation`
-- survived は critical / trivial / equivalent の三分類で記録する。trivial は `[tool.mutmut].do_not_mutate` に追加し、critical はテストでキルする。
+- survived は critical / trivial / equivalent の三分類で四半期 survivor 分類（四半期レポート）に記録する。critical はテストでキルする。trivial は survivor 分類に証跡を残すにとどめ、`[tool.mutmut].do_not_mutate` には追加しない — mutmut 3.5.0 の `do_not_mutate` はソースファイルパスへの `fnmatch` グロブであり、構造単位（コード式）の trivial mutant を抑制できない（ファイルパスを足せば campaign の mutate 対象を狭め Non-Goal に反する）。`do_not_mutate` は空で運用する（issue #28）。
 - 新規テストは `tests._assertion_helpers.assert_error_envelope` で code / severity / field / message を値で固定する。例外発生のみのアサートは禁止。
 - `assertRaises` 値固定ルール（issue #180）: 全ての `with assertRaises(...)` ブロックは、同じテストメソッド内に value-pin（`as cm:` で捕捉した例外への参照、または `assertEqual` / `assertIn` / `assertRegex` / `assertNotEqual` 等の値比較系アサーション、または `assertRaisesRegex` 形式そのもの）を必ず伴うこと（受理される value-pin アサーション全集合は `tests/test_assertion_density.py` の `_VALUE_PIN_ASSERTIONS` 定数を正本とする）。例外型のみが契約として意味を持つインフラ系例外（`FileNotFoundError` / `OSError` / `SystemExit` / `JSONDecodeError` / `UnicodeDecodeError` 等）を直接 `assertRaises` で受ける場合のみ、value-pin を省略してよい。`tests/test_assertion_density.py` がリポジトリ全体の AST を歩いてこのルールを meta-test として強制するので、新規テストもこの基準を満たす必要がある（infra 例外の正式な許可リストは同テスト内の `INFRA_EXCEPTION_ALLOWLIST` 定数）。
 - 新規のリポジトリ同期テスト（`tools/unity/` や `knowledge/` の un-mutated tree を読むだけで `prefab_sentinel/` のミューテーションを観測できないテスト）は、`@pytest.mark.source_text_invariant` をモジュールスコープで宣言する。これが mutmut のテスト選択（`-m "not source_text_invariant"` 単一フィルタ）からの除外メカニズム。

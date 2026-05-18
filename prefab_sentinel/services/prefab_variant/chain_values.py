@@ -19,7 +19,7 @@ from pathlib import Path
 
 from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse, error_response, success_response
 from prefab_sentinel.hierarchy import CLASS_NAMES
-from prefab_sentinel.services.prefab_variant.chain import ChainValue, _ChainLevel, walk_chain_levels
+from prefab_sentinel.services.prefab_variant.chain import ChainLevel, ChainValue, walk_chain_levels
 from prefab_sentinel.services.prefab_variant.overrides import effective_value, iter_base_property_values
 from prefab_sentinel.unity_assets import decode_text_file, is_variant_prefab
 from prefab_sentinel.unity_yaml_parser import (
@@ -224,7 +224,7 @@ def resolve_chain_values_with_origin(
 
 
 def _accumulate_level_class_names(
-    level: _ChainLevel,
+    level: ChainLevel,
     script_name_by_guid: dict[str, str],
     result: dict[str, str],
 ) -> None:
@@ -251,7 +251,7 @@ def _accumulate_level_class_names(
         result[fid] = name
 
 
-def _accumulate_level_values(level: _ChainLevel, result: dict[str, str]) -> None:
+def _accumulate_level_values(level: ChainLevel, result: dict[str, str]) -> None:
     for entry in level.entries:
         if not entry.property_path:
             continue
@@ -267,7 +267,7 @@ def _accumulate_level_values(level: _ChainLevel, result: dict[str, str]) -> None
 
 
 def _accumulate_level_chain_values(
-    level: _ChainLevel,
+    level: ChainLevel,
     rel: str,
     result: dict[str, ChainValue],
 ) -> None:

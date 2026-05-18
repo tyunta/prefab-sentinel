@@ -12,11 +12,11 @@ from prefab_sentinel.services.serialized_object.handles import (
     require_handle_ref,
     validate_result_handle,
 )
-from prefab_sentinel.services.serialized_object.scene_dispatch import _SceneContext
+from prefab_sentinel.services.serialized_object.scene_dispatch import SceneContext
 
 
 def validate_scene_add_component_op(
-    ctx: _SceneContext,
+    ctx: SceneContext,
     index: int,
     op: dict[str, Any],
     op_name: str,
@@ -82,7 +82,7 @@ def validate_scene_add_component_op(
 
 
 def validate_scene_remove_component_op(
-    ctx: _SceneContext,
+    ctx: SceneContext,
     index: int,
     op: dict[str, Any],
 ) -> None:

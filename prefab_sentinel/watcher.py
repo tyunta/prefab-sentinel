@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from prefab_sentinel.session import ProjectSession
 
-__all__ = ["start_watcher"]
+__all__ = ["start_watcher", "has_watchfiles"]
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ _ASSET_SUFFIXES = frozenset({
 })
 
 
-def _has_watchfiles() -> bool:
+def has_watchfiles() -> bool:
     """Return True if the ``watchfiles`` package is importable."""
     try:
         import watchfiles  # noqa: F401
@@ -50,7 +50,7 @@ async def start_watcher(
     Runs until *stop_event* is set.  If ``watchfiles`` is not installed
     the function logs a message and returns immediately.
     """
-    if not _has_watchfiles():
+    if not has_watchfiles():
         logger.info("watchfiles not installed — file watcher disabled")
         return
 

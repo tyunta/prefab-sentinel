@@ -75,7 +75,7 @@ class MaterialInspectionResult:
     diagnostics: list[str] = field(default_factory=list)
 
 
-def _parse_renderer_materials(block: YamlBlock) -> list[tuple[str, str]]:
+def parse_renderer_materials(block: YamlBlock) -> list[tuple[str, str]]:
     """Extract material references from a renderer block.
 
     Returns list of (file_id, guid) tuples for each material slot.
@@ -109,7 +109,7 @@ def _parse_renderer_materials(block: YamlBlock) -> list[tuple[str, str]]:
     return materials
 
 
-def _parse_renderer_game_object_fid(block: YamlBlock) -> str:
+def parse_renderer_game_object_fid(block: YamlBlock) -> str:
     """Extract the m_GameObject fileID from a renderer block."""
     for line in block.text.split("\n"):
         go_match = re.match(r"\s+m_GameObject:\s*\{fileID:\s*(-?\d+)", line)
@@ -118,7 +118,7 @@ def _parse_renderer_game_object_fid(block: YamlBlock) -> str:
     return ""
 
 
-def _resolve_material_name(
+def resolve_material_name(
     guid: str,
     guid_index: dict[str, Path],
     project_root: Path,
@@ -153,8 +153,8 @@ def inspect_materials(
     """
     # Import here to avoid circular dependency at module load time
     from prefab_sentinel.material_inspector_variant import (  # noqa: PLC0415
-        _collect_nested_renderers,
-        _inspect_variant_materials,
+        collect_nested_renderers,
+        inspect_variant_materials,
     )
 
     proj_root = project_root or find_project_root(Path(target_path))
@@ -174,14 +174,14 @@ def inspect_materials(
     # 1. Load the base prefab to get renderer blocks with materials
     # 2. Parse m_Modifications to find material overrides
     if is_variant:
-        return _inspect_variant_materials(
+        return inspect_variant_materials(
             target_path, path, text, proj_root, guid_index,
         )
     else:
-        result = _inspect_base_materials(
+        result = inspect_base_materials(
             target_path, text, proj_root, guid_index,
         )
-        nested, nested_diags = _collect_nested_renderers(
+        nested, nested_diags = collect_nested_renderers(
             text, guid_index, proj_root,
         )
         result.renderers.extend(nested)
@@ -189,7 +189,7 @@ def inspect_materials(
         return result
 
 
-def _inspect_base_materials(
+def inspect_base_materials(
     target_path: str,
     text: str,
     project_root: Path,
@@ -206,14 +206,14 @@ def _inspect_base_materials(
         if block.is_stripped:
             continue
 
-        go_fid = _parse_renderer_game_object_fid(block)
+        go_fid = parse_renderer_game_object_fid(block)
         go = game_objects.get(go_fid)
         go_name = go.name if go and go.name else f"fileID:{go_fid}"
 
-        mat_refs = _parse_renderer_materials(block)
+        mat_refs = parse_renderer_materials(block)
         slots: list[MaterialSlot] = []
         for idx, (_file_id, guid) in enumerate(mat_refs):
-            name, mat_path = _resolve_material_name(guid, guid_index, project_root)
+            name, mat_path = resolve_material_name(guid, guid_index, project_root)
             slots.append(MaterialSlot(
                 index=idx,
                 material_name=name,
@@ -238,7 +238,7 @@ def _inspect_base_materials(
     )
 
 
-def _has_renderer_blocks(text: str) -> bool:
+def has_renderer_blocks(text: str) -> bool:
     """Return True if *text* contains non-stripped renderer YAML blocks."""
     blocks = split_yaml_blocks(text)
     return any(

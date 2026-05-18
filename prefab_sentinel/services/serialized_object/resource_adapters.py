@@ -4,7 +4,7 @@ One adapter per ``resource.kind``; each adapter dispatches on
 ``resource.mode`` to either a pre-existing validator (open mode), a
 create-mode validator chain, or a Unity bridge invocation (for apply).
 Adapters carry no state — they receive a ``SerializedObjectService``
-instance plus a ``_ResourcePlanContext`` on each call.
+instance plus a ``ResourcePlanContext`` on each call.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from prefab_sentinel.services.serialized_object.prefab_create_dispatch import (
     validate_prefab_create_ops,
 )
 from prefab_sentinel.services.serialized_object.resource_plan import (
-    _ResourcePlanContext,
+    ResourcePlanContext,
     resource_plan_apply_invalid_response,
     resource_plan_invalid_response,
     resource_plan_preview_response,
@@ -35,11 +35,11 @@ if TYPE_CHECKING:
     )
 
 
-class _ResourceAdapter:
+class ResourceAdapter:
     supported_kind = ""
     supported_modes: frozenset[str] = frozenset({"open"})
 
-    def supports(self, context: _ResourcePlanContext) -> bool:
+    def supports(self, context: ResourcePlanContext) -> bool:
         return (
             context.kind == self.supported_kind
             and context.mode in self.supported_modes
@@ -48,19 +48,19 @@ class _ResourceAdapter:
     def dry_run(
         self,
         service: SerializedObjectService,
-        context: _ResourcePlanContext,
+        context: ResourcePlanContext,
     ) -> ToolResponse:
         raise NotImplementedError
 
     def apply(
         self,
         service: SerializedObjectService,
-        context: _ResourcePlanContext,
+        context: ResourcePlanContext,
     ) -> ToolResponse:
         raise NotImplementedError
 
 
-class _BridgeBackedAdapter(_ResourceAdapter):
+class _BridgeBackedAdapter(ResourceAdapter):
     """Adapters whose ``apply`` delegates to ``resource_bridge.apply_with_unity_bridge``.
 
     Concrete subclasses implement ``dry_run``; ``apply`` is shared because
@@ -83,7 +83,7 @@ class _BridgeBackedAdapter(_ResourceAdapter):
         )
 
 
-class _JsonResourceAdapter(_ResourceAdapter):
+class _JsonResourceAdapter(ResourceAdapter):
     supported_kind = "json"
 
     def dry_run(self, service, context):  # type: ignore[override]
@@ -149,7 +149,7 @@ class _SceneResourceAdapter(_BridgeBackedAdapter):
         return resource_plan_preview_response(context=context, preview=preview)
 
 
-def build_default_adapters() -> tuple[_ResourceAdapter, ...]:
+def build_default_adapters() -> tuple[ResourceAdapter, ...]:
     return (
         _JsonResourceAdapter(),
         _PrefabResourceAdapter(),
@@ -159,4 +159,4 @@ def build_default_adapters() -> tuple[_ResourceAdapter, ...]:
     )
 
 
-__all__ = ["build_default_adapters"]
+__all__ = ["build_default_adapters", "ResourceAdapter"]

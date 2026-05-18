@@ -31,7 +31,7 @@ Unity-free な `PrefabSentinel.Screenshot.ViewAllowlistClassifier.cs` 1 ファ�
 | **T1** | `System.IO` / `string` / `bool` / JSON のみ依存の純ロジック。Unity 型に一切触れない。 | `internal static class *Logic / *Predicate` へ抽出し、`<Compile Include>` で xUnit harness に取り込んで直接テスト。`ViewAllowlistClassifier` と同じパターン。**無条件の勝ち。** |
 | **T2a** | Unity 型に触れるが、ハンドラが Unity の値（`bool`/`int`/`string`/enum）を読んで純関数に**引数で渡す**だけで核を切り出せる。production に新しいインターフェースを追加しない。 | 純関数 / 値オブジェクトを抽出。実質 T1 と同コスト・同じく**無条件の勝ち（clean-win）**。 |
 | **T2b** | Unity オブジェクトを運ぶメソッドを持つ**インターフェースを production コードに新設**しないと核を切り出せない。production の構造を変える設計判断を伴う。 | seam（インターフェース）を導入。**opportunistic** — standalone の移行 PR にはしない。次にその concern の `.cs` を実機能・実バグ修正で触る PR の一部として seam を入れる（根拠・方式は §6.1）。 |
-| **T3** | 定義の唯一性・命名規約・asmdef 曖昧性排除・partial 構成・定数ドリフトなど、実行では検証できない構造不変条件。 | source-text テストに恒久的に残す。#358 cleanup で「構造不変条件のみ」に純化される。 |
+| **T3** | 定義の唯一性・命名規約・asmdef 曖昧性排除・partial 構成・定数ドリフトなど、実行では検証できない構造不変条件。 | source-text テストに恒久的に残す。#358 cleanup（#5）で「構造不変条件のみ」へ純化済み — 振る舞いアサーションは xUnit ハーネスへ移行済で、全 source-text grep は照合前に C# コメントを除去する。 |
 
 > **T2a/T2b の線引き**: 「ハンドラが Unity static を読んで `Classify(bool, bool)` に値を渡す」は
 > T2a — seam とは名ばかりで実質は引数渡し。「`interface IUploadWorkflow { Task<…> RunAsync(…); }`
@@ -50,9 +50,19 @@ screenshot ハンドラがその `IsAccepted` / `IsSceneView` に委譲する。
 
 旧 #222 の 2026-05-13 観測: source-text テストが `assertIn(literal, body)` で C# メソッド
 ボディを grep しているため、コメント行に literal が含まれると誤 green になる潜在リスクがある。
-T3 として残す全構造テストは、grep 前に `re.sub(r"//.*$", source, flags=re.M)` 相当の
-コメント除去を施す。#358 cleanup はこれを純化の必須前提として実施する
-（一部の T3 テストは既にコメント除去を実装済み — 例 `TestScreenshotRoutingUsesClassifier`）。
+T3 として残す全構造テストは、grep 前に `//` 行コメントと `/* ... */` ブロックコメントを
+除去する。#358 cleanup（issue #5）でこのコメント除去を 4 つの source-text テストファイル
+（`test_editor_control_bridge_source.py` / `test_unity_patch_bridge_source.py` /
+`test_unity_integration_tests_source.py` / `test_vrcsdk_upload_handler_source.py`）の
+retained grep 全件へ適用済み。コメント内容そのものを検証するテスト（例: `#endif` 行末の
+シンボル参照コメント）のみ raw source を読む。
+
+#5 cleanup 適用後の `source_text_invariant` マーカー付きテストの集計（after）は
+**22 ファイル / 9,179 行**（§1 の H-1 era ベースライン before 約 8,920 行と対）。
+本 run の #5 は retained grep へのコメント除去適用が主で、behavioral アサーション
+削除は先行 H-bundle で landed 済のため line 数の減少は生じない。before/after が
+ほぼ同水準なのはこのため（同 bundle が `test_import_structure.py` 等の新規テストを
+追加した分は加算側に乗る）。editor-control source-text ファイル単体は 3,882 行。
 
 ## 3. 棚卸しの網羅範囲
 
@@ -264,15 +274,21 @@ Tier 列の `(+T3)` 表記は「クラス内に移行するアサーションと
 > T1（4）/ T2a（20）に計上されていた 24 クラスのうち、これら 9 concern に属する **24 クラスの
 > behavioral アサーションは `tests/csharp/` の xUnit へ移行済**。Python source-text テストには
 > delegation-invariant + constant/field pin の T3 残骸のみが残る（§4.2–§4.7 / §4.11 / §4.12 の
-> 各行参照）。H-9 / H-10 / H-12（T2b 6 クラス）は §6.1 の通り opportunistic で未着手。
+> 各行参照）。H-9 / H-12 と H-10 の T2b port 部（interface seam）は §6.1 の通り
+> opportunistic で未着手。H-10 の T1 部（`StageHierarchyPathLogic`、`PrefabStagePersist`
+> `FixSourceInvariantTests` の T1 アサーション）のみ issue #18 で landed 済 — §4.10 (a) /
+> §6 の H-10 注を参照。下表の `テストクラス数` は §3 の source-text テストクラス棚卸し
+> （計 85）に anchor しており、xUnit ファイル数ではない。H-10 の T1 抽出は T2b 計上クラス
+> `PrefabStagePersistFixSourceInvariantTests` の部分純化であってクラスを 1 件減らさないため、
+> 下表の 4 / 20 / 6 / 55 と総計 85 はいずれも不変。
 
 | Tier | テストクラス数 | 備考 |
 |------|---------------|------|
 | **T1**（純抽出 — Unity 型に一切触れない） | 4（**4 移行済**） | `ConsoleLogEntryPredicate`（`TestConsoleLogBufferRetrievalAppliesPhaseFilter`）/ `SuggestionRanker`（`TestSetPropertySuggestions`）/ `UiFontMissingMessage`（`TmpFontMissingMessageBranching`）/ `EditorScriptPathClassifier`（`TestMenuExecuteBarrierSource` detector 部）。全 4 件 2026-05-17 bundle で移行済 — Python 側は T3 残骸のみ。 |
 | **T2a**（値 seam — 無条件の勝ち） | 20（**20 移行済**） | Unity の値を引数で渡すだけ。新インターフェースを production に追加しない。実質 T1 と同コスト。`QuaternionInputValidator`・`GameObjectPropertyAllowlist`・`UiElementTypeAllowlist` は `Math` 置換等で完全 T1 に落ちた。全 20 件 2026-05-17 bundle（H-2…H-8 / H-11）で移行済 — Python 側は delegation-invariant + 定数 pin の T3 残骸のみ。 |
-| **T2b**（interface seam — opportunistic） | 6（**0 移行済**） | `ICameraStatePort`（`EditorControlBridgeScreenshotCameraStateRestoreTests`）/ `IPrefabStagePersistencePort`（`PrefabStagePersistFixSourceInvariantTests`）/ `IUploadWorkflow`（`TestHandleAsyncFullProtection`, `TestLoginPollingInsideTryCatch`）/ `ILoginGate`（`TestLoginPollingInHandleAsync`）/ `IBuilderProbe`（`TestResolveBuilderAsyncRetry`）。production に interface を新設する設計判断を伴う → §6.1 の通り opportunistic（standalone 移行 PR にしない）。 |
+| **T2b**（interface seam — opportunistic） | 6（**interface seam 0 移行済**） | `ICameraStatePort`（`EditorControlBridgeScreenshotCameraStateRestoreTests`）/ `IPrefabStagePersistencePort`（`PrefabStagePersistFixSourceInvariantTests` — 同クラスの T1 部 `StageHierarchyPathLogic` は issue #18 で別途 landed 済、§4.10 (a) 参照）/ `IUploadWorkflow`（`TestHandleAsyncFullProtection`, `TestLoginPollingInsideTryCatch`）/ `ILoginGate`（`TestLoginPollingInHandleAsync`）/ `IBuilderProbe`（`TestResolveBuilderAsyncRetry`）。production に interface を新設する設計判断を伴う → §6.1 の通り opportunistic（standalone 移行 PR にしない）。 |
 | **T3**（source-text 恒久） | 55 | 内訳: 純構造/layout 不変条件、concern 固有の Unity 結合ハンドラ本体 grep、forbidden-token negative grep、定数ドリフト、Python ツールテスト 7 件。移行済 24 クラスが残す T3 残骸はこの 55 には計上しない（残骸は移行元クラスの一部として既存行に内包）。 |
-| 計 | 85（**移行済 24 / T2b 未着手 6 / T3 恒久 55**） | — |
+| 計 | 85（**移行済 24 / T2b interface seam 未着手 6 / T3 恒久 55**） | — |
 
 T1/T2 を持つ concern: ConsoleCapture, Properties, UiElement, MenuScriptWatch, RunScriptCompile,
 Screenshot, PrefabStage, core(dispatch/DTO), Prefab(patch bridge), VRCSDKUploadHandler。

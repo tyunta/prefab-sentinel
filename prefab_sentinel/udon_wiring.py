@@ -10,7 +10,7 @@ import re
 from dataclasses import dataclass, field
 
 from prefab_sentinel.contracts import Diagnostic, Severity, max_severity
-from prefab_sentinel.udon_wiring_parser import _parse_monobehaviour_fields
+from prefab_sentinel.udon_wiring_parser import parse_monobehaviour_fields
 from prefab_sentinel.unity_yaml_parser import (
     CLASS_ID_MONOBEHAVIOUR,
     GameObjectInfo,
@@ -116,7 +116,7 @@ class WiringResult:
 def extract_monobehaviour_field_names(block: YamlBlock) -> list[str]:
     """Extract all top-level field names from a MonoBehaviour YAML block.
 
-    Unlike :func:`_parse_monobehaviour_fields` which only captures reference
+    Unlike :func:`parse_monobehaviour_fields` which only captures reference
     fields (fileID/GUID patterns), this returns ALL field names including
     plain scalar values like ``speed: 5.0``.
 
@@ -185,7 +185,7 @@ def analyze_wiring(
 
     components: list[ComponentWiring] = []
     for block in blocks:
-        parsed = _parse_monobehaviour_fields(block)
+        parsed = parse_monobehaviour_fields(block)
         if parsed is None:
             continue
         if udon_only and not parsed.is_udon_sharp:

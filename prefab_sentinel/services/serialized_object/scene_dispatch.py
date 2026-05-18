@@ -21,7 +21,7 @@ from prefab_sentinel.services.serialized_object.handles import (
 
 
 @dataclass
-class _SceneContext:
+class SceneContext:
     target: str
     mode: str
     diagnostics: list[Diagnostic]
@@ -95,7 +95,7 @@ def validate_scene_ops(
         )
         return diagnostics, preview
 
-    ctx = _SceneContext(
+    ctx = SceneContext(
         target=target,
         mode=mode,
         diagnostics=diagnostics,
@@ -169,4 +169,4 @@ def validate_scene_ops(
     return ctx.diagnostics, ctx.preview
 
 
-__all__ = ["_SceneContext", "validate_scene_ops"]
+__all__ = ["SceneContext", "validate_scene_ops"]

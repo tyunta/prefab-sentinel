@@ -31,6 +31,19 @@ class DiagnosticTests(unittest.TestCase):
         self.assertEqual(d.detail, "broken_ref")
         self.assertEqual(d.evidence, "guid abc not found")
 
+    def test_construction_without_severity_leaves_per_item_severity_unset(self) -> None:
+        # Issue #4: the per-item severity is optional; a diagnostic built
+        # from the four legacy fields alone carries no severity of its own
+        # and serialises exactly as it did before the field was added.
+        d = Diagnostic(path="/a.prefab", location="114:42", detail="broken_ref", evidence="guid abc not found")
+        self.assertIsNone(d.severity)
+
+    def test_construction_with_explicit_per_item_severity(self) -> None:
+        # Issue #4: a diagnostic may carry its own severity, stored as an
+        # optional string distinct from the envelope ``Severity`` enum.
+        d = Diagnostic(path="p", location="l", detail="d", evidence="e", severity="warning")
+        self.assertEqual("warning", d.severity)
+
 
 class ToolResponseTests(unittest.TestCase):
     def test_to_dict_serializes_severity_as_string(self) -> None:
@@ -150,6 +163,16 @@ class TestDiagnosticWireAdapter(unittest.TestCase):
         # always observe a non-empty message field.
         self.assertEqual("missing_asset", wire["message"])
 
+    def test_adapter_preserves_explicit_empty_severity_string(self) -> None:
+        # Issue #4: the adapter inherits the envelope severity only when
+        # the per-item severity is ``None``, not merely falsy. A
+        # diagnostic that explicitly sets ``severity=""`` has a present
+        # severity, so the empty string surfaces verbatim rather than
+        # being replaced by the envelope severity.
+        diag = Diagnostic(path="p", location="l", detail="d", evidence="e", severity="")
+        wire = _diagnostic_to_wire(diag, default_severity=Severity.ERROR)
+        self.assertEqual("", wire["severity"])
+
     def test_adapter_omits_empty_locator_keys_from_data_payload(self) -> None:
         diag = Diagnostic(path="", location="", detail="schema_error", evidence="bad")
         wire = _diagnostic_to_wire(diag, default_severity=Severity.WARNING)
@@ -184,6 +207,42 @@ class TestToolResponseWireShape(unittest.TestCase):
             {"severity", "code", "message", "data"},
             set(entry.keys()),
             f"legacy diagnostic keys leaked onto the wire: {entry!r}",
+        )
+
+    def test_diagnostic_with_own_severity_overrides_envelope_on_the_wire(self) -> None:
+        # Issue #4: a diagnostic carrying its own severity surfaces that
+        # value on the wire even when the envelope severity is more severe.
+        diag = Diagnostic(path="p", location="l", detail="d", evidence="e", severity="warning")
+        envelope = ToolResponse(
+            success=False, severity=Severity.ERROR, code="E", message="err", diagnostics=[diag],
+        )
+        self.assertEqual("warning", envelope.to_dict()["diagnostics"][0]["severity"])
+
+    def test_diagnostic_without_own_severity_serialises_byte_identically(self) -> None:
+        # Issue #4: a diagnostic that leaves severity unset inherits the
+        # envelope severity; the whole serialised dict is identical to the
+        # pre-change output (no observable wire change for existing sites).
+        diag = Diagnostic(path="p", location="l", detail="d", evidence="e")
+        envelope = ToolResponse(
+            success=False, severity=Severity.ERROR, code="E", message="err", diagnostics=[diag],
+        )
+        self.assertEqual(
+            {
+                "success": False,
+                "severity": "error",
+                "code": "E",
+                "message": "err",
+                "data": {},
+                "diagnostics": [
+                    {
+                        "severity": "error",
+                        "code": "d",
+                        "message": "e",
+                        "data": {"path": "p", "location": "l"},
+                    }
+                ],
+            },
+            envelope.to_dict(),
         )
 
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from prefab_sentinel.json_io import dump_json
-from prefab_sentinel.reporting import _extract_ref_scan_data, _extract_runtime_validation_data
+from prefab_sentinel.reporting import extract_ref_scan_data, extract_runtime_validation_data
 
 __all__ = ["render_markdown_report"]
 
@@ -41,7 +41,7 @@ def render_markdown_report(
     if md_max_steps is not None:
         payload_data = _limit_list_field_for_markdown(payload_data, "steps", max(0, md_max_steps))
 
-    ref_scan = _extract_ref_scan_data(payload_data)
+    ref_scan = extract_ref_scan_data(payload_data)
     categories_occ = ref_scan.get("categories_occurrences", {})
     if not isinstance(categories_occ, dict):
         categories_occ = {}
@@ -51,7 +51,7 @@ def render_markdown_report(
     top_ignored = ref_scan.get("top_ignored_missing_asset_guids", [])
     if not isinstance(top_ignored, list):
         top_ignored = []
-    runtime = _extract_runtime_validation_data(payload_data)
+    runtime = extract_runtime_validation_data(payload_data)
 
     lines = [
         "# Prefab Sentinel Validation Report",

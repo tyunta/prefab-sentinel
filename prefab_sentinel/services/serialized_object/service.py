@@ -26,7 +26,7 @@ from prefab_sentinel.services.serialized_object import (
 )
 from prefab_sentinel.services.serialized_object.before_cache import UnresolvedReason
 from prefab_sentinel.services.serialized_object.resource_adapters import (
-    _ResourceAdapter,
+    ResourceAdapter,
     build_default_adapters,
 )
 from prefab_sentinel.unity_assets import find_project_root
@@ -59,7 +59,7 @@ class SerializedObjectService:
         # variant target as ``_before_cache``. Lifecycle-bound to it: any
         # cache invalidation clears both.
         self._before_class_map: dict[str, str] | None = None
-        self._resource_adapters: tuple[_ResourceAdapter, ...] = build_default_adapters()
+        self._resource_adapters: tuple[ResourceAdapter, ...] = build_default_adapters()
 
     def invalidate_before_cache(self) -> None:
         """Reset the before-value cache used by JSON-target dry-run previews."""

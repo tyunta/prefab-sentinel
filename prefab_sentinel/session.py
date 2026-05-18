@@ -266,11 +266,11 @@ class ProjectSession:
         if self._scope is None:
             return
         try:
-            from prefab_sentinel.watcher import _has_watchfiles, start_watcher
+            from prefab_sentinel.watcher import has_watchfiles, start_watcher
         except ImportError:
             return
 
-        if not _has_watchfiles():
+        if not has_watchfiles():
             return
         try:
             loop = asyncio.get_running_loop()

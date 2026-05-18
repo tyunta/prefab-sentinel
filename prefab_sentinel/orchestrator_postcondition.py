@@ -13,7 +13,7 @@ from prefab_sentinel.services.reference_resolver import ReferenceResolverService
 from prefab_sentinel.services.serialized_object import SerializedObjectService
 
 
-def _validate_postcondition_schema(
+def validate_postcondition_schema(
     postcondition: object,
     *,
     resource_ids: set[str],
@@ -123,7 +123,7 @@ def _validate_postcondition_schema(
     )
 
 
-def _evaluate_postcondition(
+def evaluate_postcondition(
     serialized_object: SerializedObjectService,
     reference_resolver: ReferenceResolverService,
     postcondition: dict[str, Any],

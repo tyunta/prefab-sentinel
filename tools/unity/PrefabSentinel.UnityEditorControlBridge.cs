@@ -63,8 +63,9 @@ namespace PrefabSentinel
             // the same capture lock.  Values come from
             // ``ConsoleLogEntryPredicate.SupportedPhaseFilters`` minus ``all``:
             // ``edit`` / ``play`` / ``build``.  The priority order
-            // ``build > play > edit`` is locked in
-            // ``ConsoleLogBuffer.OnLogMessage``.
+            // ``build > play > edit`` is implemented in
+            // ``ConsoleLogPhaseClassifier.Classify``; ``OnLogMessage``
+            // only calls it to snapshot the phase at ingestion.
             public string phase = string.Empty;
         }
 

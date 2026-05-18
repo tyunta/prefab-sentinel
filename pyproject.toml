@@ -101,73 +101,16 @@ replace = 'BridgeVersion = "{new_version}"'
 # by this configuration file.  See README.md "Mutation testing" for the
 # `uv run mutmut run --max-children 180` invocation form.
 paths_to_mutate = ["prefab_sentinel/"]
-# Do-not-mutate pattern list: structural noise whose mutations would not
-# strengthen the test suite.  Logger-style calls (`logger.info(...)` etc.)
-# and triple-quoted-string forms produce equivalent or trivially-killed
-# mutants without informing the production-code contract under test.
-do_not_mutate = [
-    # Issue #149: logger-style calls are structural noise — mutating
-    # the argument list or method name does not change production
-    # behaviour observed by the test suite; the suite asserts on
-    # side-effecting calls, not on log output.
-    "*logger.*",
-    # Issue #149: ``log.<level>`` family — same rationale as
-    # ``*logger.*`` above; explicit per-level entries cover the
-    # ``log = logging.getLogger(__name__)`` import alias used in
-    # several modules.
-    "*log.debug*",
-    "*log.info*",
-    "*log.warning*",
-    "*log.error*",
-    "*log.critical*",
-    # Issue #149: triple-quoted-string forms are docstring boundaries
-    # and embedded multiline literals — mutmut's character-level
-    # mutations on the delimiter would either break parsing or
-    # produce equivalent docstrings (no behaviour change).
-    '*"""*',
-    "*'''*",
-    # Issue #182: three semantically-equivalent mutation patterns over
-    # ``ReferenceResolverService`` internal cache state.  Skipping the
-    # cache fetch (``_text_cache.get`` returning None instead of the
-    # cached value) re-enters the slow path; mutating the GUID-index
-    # cache backing field triggers a fresh ``collect_project_guid_index``
-    # walk; mutating the cache-invalidation helpers leaves stale entries
-    # the next read clears anyway — none of these strengthen the suite.
-    "*_text_cache.get*",
-    "*_guid_map*",
-    "*invalidate_*_cache*",
-    # Issue #182: empty-string ``dict.get`` default-equivalence pattern.
-    # ``mapping.get("key", "")`` callers commonly chain straight into a
-    # ``str`` consumer that treats absent keys and empty values
-    # identically, so mutating the empty-string sentinel to a non-empty
-    # marker either reproduces the same downstream behaviour (equivalent
-    # mutant) or surfaces a contrived sentinel-string difference that
-    # does not strengthen the production-code contract under test.
-    '*.get("*", "")*',
-    # Issue #209: ``patch_revert._remove_lines`` sort-key equivalence.
-    # The helper's docstring requires the input ranges to be
-    # non-overlapping; under that invariant the natural tuple ordering
-    # on ``(start, end)`` and the first-element ordering coincide on
-    # every input the public surface accepts (sorted from largest start
-    # downward, both keys agree because ``end_i <= start_{i+1}`` holds
-    # for non-overlapping ranges sharing a common ``reverse=True``
-    # direction). The pattern is anchored to ``key=lambda`` inside a
-    # ``sorted(`` call which appears exactly once in the codebase
-    # (``patch_revert.py``), so the rule cannot over-match.
-    "*sorted(*key=lambda*",
-    # Issue #209: ``patch_revert._collect_referenced_guids`` inner
-    # falsy-fallback equivalence. ``_maybe_add`` is reachable only from
-    # two call sites: (1) ``_maybe_add(source_match.group(1))`` after a
-    # 32-hex regex match (the captured group is always non-empty) and
-    # (2) inside ``for entry in entries: if entry.target_guid:
-    # _maybe_add(entry.target_guid)`` (gated by the outer truthy-guard).
-    # No public-surface input drives a falsy GUID into the inner
-    # ``(guid or "")`` fallback, so the mutated ``or "XXXX"`` sentinel
-    # is unreachable and the mutant is equivalent. The pattern targets
-    # the literal ``(guid or "")`` token which appears exactly once in
-    # the codebase, so the rule cannot over-match.
-    '*(guid or "")*',
-]
+# Issue #28: ``do_not_mutate`` is, in mutmut 3.5.0, a file-path exclusion
+# list — ``Config.should_ignore_for_mutation`` evaluates each entry with
+# ``fnmatch`` against the source *file path*, never against code structure,
+# expressions, or mutant names.  The list is kept empty: a file-path entry
+# would exclude a whole module the campaign is meant to mutate (a Non-Goal),
+# and the previous construct-style globs (``*logger.*``, ``*"""*`` …) matched
+# no ``.py`` path and were entirely inert.  Trivial construct-level survivors
+# are handled by the quarterly survivor classification, not here — see the
+# TESTING.md "Mutation testing" section.
+do_not_mutate = []
 # Test collection in the mutated working directory imports modules from
 # ``scripts/`` and ``tools/``; without ``also_copy`` mutmut runs with only
 # ``prefab_sentinel/`` available and ``mutmut run`` aborts at collection

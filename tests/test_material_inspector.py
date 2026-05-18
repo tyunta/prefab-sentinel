@@ -12,14 +12,14 @@ from prefab_sentinel.material_inspector import (
     MaterialInspectionResult,
     MaterialSlot,
     RendererMaterials,
-    _inspect_base_materials,
-    _parse_renderer_materials,
     format_materials,
+    inspect_base_materials,
     inspect_materials,
+    parse_renderer_materials,
 )
 from prefab_sentinel.material_inspector_variant import (
-    _collect_nested_renderers,
     _parse_material_overrides,
+    collect_nested_renderers,
 )
 from prefab_sentinel.unity_yaml_parser import YamlBlock
 from tests.yaml_helpers import (
@@ -44,7 +44,7 @@ MID_VARIANT_GUID = "cccccccccccccccccccccccccccccccc"
 
 
 # ---------------------------------------------------------------------------
-# _parse_renderer_materials tests
+# parse_renderer_materials tests
 # ---------------------------------------------------------------------------
 
 
@@ -61,7 +61,7 @@ class TestParseRendererMaterials(unittest.TestCase):
             ),
             start_line=1,
         )
-        result = _parse_renderer_materials(block)
+        result = parse_renderer_materials(block)
         self.assertEqual(result, [])
 
     def test_single_material(self) -> None:
@@ -78,7 +78,7 @@ class TestParseRendererMaterials(unittest.TestCase):
             ),
             start_line=1,
         )
-        result = _parse_renderer_materials(block)
+        result = parse_renderer_materials(block)
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0], ("2100000", MAT_GUID_A.lower()))
 
@@ -97,7 +97,7 @@ class TestParseRendererMaterials(unittest.TestCase):
             ),
             start_line=1,
         )
-        result = _parse_renderer_materials(block)
+        result = parse_renderer_materials(block)
         self.assertEqual(len(result), 2)
         self.assertEqual(result[0][1], MAT_GUID_A.lower())
         self.assertEqual(result[1][1], MAT_GUID_B.lower())
@@ -182,7 +182,7 @@ class TestParseMaterialOverrides(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# _inspect_base_materials tests
+# inspect_base_materials tests
 # ---------------------------------------------------------------------------
 
 
@@ -194,7 +194,7 @@ class TestInspectBaseMaterials(unittest.TestCase):
             + make_transform("2", "1")
             + make_skinned_mesh_renderer("3", "1", [MAT_GUID_A, MAT_GUID_B])
         )
-        result = _inspect_base_materials("Assets/test.prefab", text, Path("/tmp"), {})
+        result = inspect_base_materials("Assets/test.prefab", text, Path("/tmp"), {})
         self.assertEqual(len(result.renderers), 1)
         r = result.renderers[0]
         self.assertEqual(r.game_object_name, "Hair_Base")
@@ -213,7 +213,7 @@ class TestInspectBaseMaterials(unittest.TestCase):
             + make_transform("2", "1")
             + make_meshrenderer_with_materials("3", "1", [MAT_GUID_A])
         )
-        result = _inspect_base_materials("Assets/test.prefab", text, Path("/tmp"), {})
+        result = inspect_base_materials("Assets/test.prefab", text, Path("/tmp"), {})
         self.assertEqual(len(result.renderers), 1)
         self.assertEqual(result.renderers[0].renderer_type, "MeshRenderer")
 
@@ -223,7 +223,7 @@ class TestInspectBaseMaterials(unittest.TestCase):
             + make_gameobject("1", "Empty", ["2"])
             + make_transform("2", "1")
         )
-        result = _inspect_base_materials("Assets/test.prefab", text, Path("/tmp"), {})
+        result = inspect_base_materials("Assets/test.prefab", text, Path("/tmp"), {})
         self.assertEqual(result.renderers, [])
 
     def test_multiple_renderers(self) -> None:
@@ -236,7 +236,7 @@ class TestInspectBaseMaterials(unittest.TestCase):
             + make_transform("6", "5", father_file_id="2")
             + make_skinned_mesh_renderer("7", "5", [MAT_GUID_B, MAT_GUID_C])
         )
-        result = _inspect_base_materials("Assets/test.prefab", text, Path("/tmp"), {})
+        result = inspect_base_materials("Assets/test.prefab", text, Path("/tmp"), {})
         self.assertEqual(len(result.renderers), 2)
         names = [r.game_object_name for r in result.renderers]
         self.assertIn("Hair", names)
@@ -1054,7 +1054,7 @@ class TestNestedRecursiveTraversal(unittest.TestCase):
                 guids[i]: assets_dir / f"level_{i}.prefab" for i in range(12)
             }
 
-            renderers, _diags = _collect_nested_renderers(
+            renderers, _diags = collect_nested_renderers(
                 top_text, guid_index, tmp_path,
             )
             renderer_names = [r.game_object_name for r in renderers]
@@ -1070,7 +1070,7 @@ class TestNestedRecursiveTraversal(unittest.TestCase):
             )
 
     def test_collect_nested_renderers_recurses_into_children(self) -> None:
-        """_collect_nested_renderers should recurse: Base → Mid → Leaf.
+        """collect_nested_renderers should recurse: Base → Mid → Leaf.
 
         Currently it only goes 1 level deep. After the fix it should find
         Leaf's renderer through Mid's PrefabInstance.
@@ -1111,7 +1111,7 @@ class TestNestedRecursiveTraversal(unittest.TestCase):
                 _MID_GUID: assets_dir / "Mid.prefab",
             }
 
-            renderers, _diags = _collect_nested_renderers(
+            renderers, _diags = collect_nested_renderers(
                 base_text, guid_index, tmp_path,
             )
             # Should find Leaf's renderer through recursive traversal

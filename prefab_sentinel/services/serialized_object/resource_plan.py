@@ -1,6 +1,6 @@
 """Resource-level plan context, formatters, and entry points.
 
-Carries the ``_ResourcePlanContext`` dataclass shared by all adapters,
+Carries the ``ResourcePlanContext`` dataclass shared by all adapters,
 the four envelope composers used for plan responses, and the
 ``dry_run_resource_plan`` / ``apply_resource_plan`` entry points driven
 by ``SerializedObjectService``.  Adapter classes live in
@@ -18,7 +18,7 @@ from prefab_sentinel.services.serialized_object import resource_bridge
 
 if TYPE_CHECKING:
     from prefab_sentinel.services.serialized_object.resource_adapters import (
-        _ResourceAdapter,
+        ResourceAdapter,
     )
     from prefab_sentinel.services.serialized_object.service import (
         SerializedObjectService,
@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
-class _ResourcePlanContext:
+class ResourcePlanContext:
     target: str
     kind: str
     mode: str
@@ -36,7 +36,7 @@ class _ResourcePlanContext:
 
 def resource_plan_invalid_response(
     *,
-    context: _ResourcePlanContext,
+    context: ResourcePlanContext,
     diagnostics: list[Diagnostic],
     read_only: bool,
 ) -> ToolResponse:
@@ -56,7 +56,7 @@ def resource_plan_invalid_response(
 
 def resource_plan_apply_invalid_response(
     *,
-    context: _ResourcePlanContext,
+    context: ResourcePlanContext,
     diagnostics: list[Diagnostic],
 ) -> ToolResponse:
     return error_response(
@@ -77,7 +77,7 @@ def resource_plan_apply_invalid_response(
 
 def resource_plan_preview_response(
     *,
-    context: _ResourcePlanContext,
+    context: ResourcePlanContext,
     preview: list[dict[str, Any]],
 ) -> ToolResponse:
     return success_response(
@@ -98,7 +98,7 @@ def resource_plan_preview_response(
 def unsupported_resource_plan_response(
     *,
     service: SerializedObjectService,
-    context: _ResourcePlanContext,
+    context: ResourcePlanContext,
     read_only: bool,
 ) -> ToolResponse:
     target_value = context.target
@@ -123,14 +123,14 @@ def unsupported_resource_plan_response(
 def _resolve_resource_context(
     resource: dict[str, Any],
     ops: list[dict[str, Any]],
-) -> _ResourcePlanContext:
+) -> ResourcePlanContext:
     target = str(resource.get("path", "")).strip()
     kind = str(resource.get("kind", "")).strip().lower()
     target_path = Path(target) if target else Path()
     if not kind and target:
         kind = resource_bridge.infer_resource_kind(target_path)
     mode = str(resource.get("mode", "open")).strip().lower() or "open"
-    return _ResourcePlanContext(
+    return ResourcePlanContext(
         target=target,
         kind=kind,
         mode=mode,
@@ -140,9 +140,9 @@ def _resolve_resource_context(
 
 
 def _select_adapter(
-    adapters: tuple[_ResourceAdapter, ...],
-    context: _ResourcePlanContext,
-) -> _ResourceAdapter | None:
+    adapters: tuple[ResourceAdapter, ...],
+    context: ResourcePlanContext,
+) -> ResourceAdapter | None:
     for adapter in adapters:
         if adapter.supports(context):
             return adapter
@@ -170,7 +170,7 @@ def apply_resource_plan(
 ) -> ToolResponse:
     context = _resolve_resource_context(resource, ops)
     if context.target:
-        context = _ResourcePlanContext(
+        context = ResourcePlanContext(
             target=context.target,
             kind=context.kind,
             mode=context.mode,
@@ -192,4 +192,5 @@ __all__ = [
     "resource_plan_apply_invalid_response",
     "resource_plan_preview_response",
     "unsupported_resource_plan_response",
+    "ResourcePlanContext",
 ]

@@ -24,8 +24,19 @@ UPLOAD_HANDLER = TOOLS_DIR / "PrefabSentinel.VRCSDKUploadHandler.cs"
 BRIDGE = TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.cs"
 
 
+_CS_BLOCK_COMMENT_RE = re.compile(r"/\*[\s\S]*?\*/")
+_CS_LINE_COMMENT_RE = re.compile(r"//[^\n]*")
+
+
+def _strip_cs_comments(source: str) -> str:
+    return _CS_LINE_COMMENT_RE.sub("", _CS_BLOCK_COMMENT_RE.sub("", source))
+
+
 def _read(path: Path) -> str:
-    return path.read_text(encoding="utf-8")
+    # Issue #5/#358: every retained source-text grep matches against
+    # comment-stripped C# so a literal surviving only inside a ``//`` or
+    # ``/* ... */`` comment cannot produce a false-green assertion.
+    return _strip_cs_comments(path.read_text(encoding="utf-8"))
 
 
 class TestCS0117GetBuildTargetGroup(unittest.TestCase):
@@ -279,7 +290,10 @@ class TestPreprocessorGuardVersionSpecific(unittest.TestCase):
 
     def test_file_ends_with_matching_endif(self) -> None:
         """Last non-empty line must be '#endif' with a comment referencing both symbols."""
-        source = _read(UPLOAD_HANDLER)
+        # This assertion deliberately verifies the trailing ``// ...``
+        # comment on the ``#endif`` line, so it reads the raw source
+        # rather than the comment-stripped form (issue #5).
+        source = UPLOAD_HANDLER.read_text(encoding="utf-8")
         lines = [line for line in source.splitlines() if line.strip()]
         last_line = lines[-1]
         self.assertTrue(

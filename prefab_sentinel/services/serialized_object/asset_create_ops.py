@@ -19,7 +19,7 @@ from prefab_sentinel.services.serialized_object.handles import VALUE_OPS
 
 
 @dataclass
-class _AssetCreateContext:
+class AssetCreateContext:
     target: str
     kind: str
     diagnostics: list[Diagnostic]
@@ -82,7 +82,7 @@ def validate_asset_create_ops(
         )
         return diagnostics, preview
 
-    ctx = _AssetCreateContext(
+    ctx = AssetCreateContext(
         target=target,
         kind=kind,
         diagnostics=diagnostics,
@@ -141,4 +141,4 @@ def validate_asset_create_ops(
     return ctx.diagnostics, ctx.preview
 
 
-__all__ = ["_AssetCreateContext", "validate_asset_create_ops"]
+__all__ = ["AssetCreateContext", "validate_asset_create_ops"]

@@ -1,6 +1,6 @@
 """Variant inspection functions extracted from Phase1Orchestrator.
 
-Also provides ``_read_target_file`` and ``_resolve_variant_base`` helpers
+Also provides ``read_target_file`` and ``resolve_variant_base`` helpers
 shared by orchestrator_wiring, orchestrator_inspect, and
 orchestrator_validation.
 """
@@ -24,12 +24,19 @@ from prefab_sentinel.unity_assets import (
 )
 from prefab_sentinel.unity_assets_path import resolve_scope_path
 
+__all__ = [
+    "read_target_file",
+    "resolve_variant_base",
+    "inspect_variant",
+    "diff_variant",
+]
+
 # ------------------------------------------------------------------
 # Shared helpers
 # ------------------------------------------------------------------
 
 
-def _read_target_file(
+def read_target_file(
     prefab_variant: PrefabVariantService,
     target_path: str,
     code_prefix: str,
@@ -52,7 +59,7 @@ def _read_target_file(
         )
 
 
-def _resolve_variant_base(
+def resolve_variant_base(
     prefab_variant: PrefabVariantService,
     text: str,
     target_path: str,
@@ -77,7 +84,7 @@ def _resolve_variant_base(
             break
 
     if base_path:
-        base_text_or_error = _read_target_file(prefab_variant, base_path, code_prefix)
+        base_text_or_error = read_target_file(prefab_variant, base_path, code_prefix)
         if not isinstance(base_text_or_error, ToolResponse):
             return base_text_or_error, True, base_path, chain_diagnostics
 

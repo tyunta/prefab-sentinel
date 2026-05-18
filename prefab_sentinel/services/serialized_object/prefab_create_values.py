@@ -14,13 +14,13 @@ from typing import Any
 from prefab_sentinel.contracts import Diagnostic
 from prefab_sentinel.services.serialized_object.handles import require_handle_ref
 from prefab_sentinel.services.serialized_object.prefab_create_dispatch import (
-    _check_handle_value,
-    _PrefabCreateContext,
+    PrefabCreateContext,
+    check_handle_value,
 )
 
 
 def validate_pcreate_set_op(
-    ctx: _PrefabCreateContext,
+    ctx: PrefabCreateContext,
     index: int,
     op: dict[str, Any],
     op_name: str,
@@ -59,7 +59,7 @@ def validate_pcreate_set_op(
             )
             return
         value = op.get("value")
-        bad_handle = _check_handle_value(value, ctx.known_handles, ctx.target, index)
+        bad_handle = check_handle_value(value, ctx.known_handles, ctx.target, index)
         if bad_handle is not None:
             ctx.diagnostics.append(bad_handle)
             return
@@ -102,7 +102,7 @@ def validate_pcreate_set_op(
     }
     if op_name == "insert_array_element" and "value" in op:
         arr_value = op.get("value")
-        bad_handle = _check_handle_value(arr_value, ctx.known_handles, ctx.target, index)
+        bad_handle = check_handle_value(arr_value, ctx.known_handles, ctx.target, index)
         if bad_handle is not None:
             ctx.diagnostics.append(bad_handle)
             return
@@ -111,7 +111,7 @@ def validate_pcreate_set_op(
 
 
 def validate_pcreate_save_op(
-    ctx: _PrefabCreateContext,
+    ctx: PrefabCreateContext,
     index: int,
     op: dict[str, Any],
 ) -> None:

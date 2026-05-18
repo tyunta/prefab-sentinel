@@ -3,9 +3,9 @@
 The module exposes two underscored functions consumed cross-module by the
 orchestrator and the patch orchestrator:
 
-* ``_validate_postcondition_schema(postcondition, *, resource_ids)`` —
+* ``validate_postcondition_schema(postcondition, *, resource_ids)`` —
   shape-only validation; never evaluates resources.
-* ``_evaluate_postcondition(serialized_object, reference_resolver,
+* ``evaluate_postcondition(serialized_object, reference_resolver,
   postcondition, *, resource_map)`` — evaluates an asset-exists or
   broken-refs postcondition against the live services.
 
@@ -16,7 +16,7 @@ the success-shape envelopes against drift.
 Mocking model: the asset-exists rows mock ``SerializedObjectService``'s
 target-path resolver via ``unittest.mock.patch.object``; the
 broken-refs rows mock ``ReferenceResolverService.scan_broken_references``
-the same way.  The schema rows call ``_validate_postcondition_schema``
+the same way.  The schema rows call ``validate_postcondition_schema``
 directly with no service objects.
 """
 
@@ -36,8 +36,8 @@ from prefab_sentinel.contracts import (
     success_response,
 )
 from prefab_sentinel.orchestrator_postcondition import (
-    _evaluate_postcondition,
-    _validate_postcondition_schema,
+    evaluate_postcondition,
+    validate_postcondition_schema,
 )
 from prefab_sentinel.services.reference_resolver import ReferenceResolverService
 from prefab_sentinel.services.serialized_object import SerializedObjectService
@@ -73,7 +73,7 @@ class PostconditionSchemaErrorRowsTests(unittest.TestCase):
     """
 
     def test_postcondition_not_object_returns_post_schema_error(self) -> None:
-        response = _validate_postcondition_schema("not-a-dict", resource_ids=set())
+        response = validate_postcondition_schema("not-a-dict", resource_ids=set())
         assert_error_envelope(
             response,
             code="POST_SCHEMA_ERROR",
@@ -82,7 +82,7 @@ class PostconditionSchemaErrorRowsTests(unittest.TestCase):
         )
 
     def test_missing_type_returns_post_schema_error(self) -> None:
-        response = _validate_postcondition_schema({}, resource_ids=set())
+        response = validate_postcondition_schema({}, resource_ids=set())
         assert_error_envelope(
             response,
             code="POST_SCHEMA_ERROR",
@@ -93,7 +93,7 @@ class PostconditionSchemaErrorRowsTests(unittest.TestCase):
     def test_asset_exists_with_both_resource_and_path_returns_post_schema_error(
         self,
     ) -> None:
-        response = _validate_postcondition_schema(
+        response = validate_postcondition_schema(
             {"type": "asset_exists", "resource": "r1", "path": "Assets/Foo"},
             resource_ids={"r1"},
         )
@@ -107,7 +107,7 @@ class PostconditionSchemaErrorRowsTests(unittest.TestCase):
     def test_asset_exists_with_neither_resource_nor_path_returns_post_schema_error(
         self,
     ) -> None:
-        response = _validate_postcondition_schema(
+        response = validate_postcondition_schema(
             {"type": "asset_exists"}, resource_ids=set()
         )
         assert_error_envelope(
@@ -118,7 +118,7 @@ class PostconditionSchemaErrorRowsTests(unittest.TestCase):
         )
 
     def test_asset_exists_unknown_resource_returns_post_schema_error(self) -> None:
-        response = _validate_postcondition_schema(
+        response = validate_postcondition_schema(
             {"type": "asset_exists", "resource": "unknown"},
             resource_ids={"r1"},
         )
@@ -132,7 +132,7 @@ class PostconditionSchemaErrorRowsTests(unittest.TestCase):
         )
 
     def test_broken_refs_missing_scope_returns_post_schema_error(self) -> None:
-        response = _validate_postcondition_schema(
+        response = validate_postcondition_schema(
             {"type": "broken_refs"}, resource_ids=set()
         )
         assert_error_envelope(
@@ -145,7 +145,7 @@ class PostconditionSchemaErrorRowsTests(unittest.TestCase):
     def test_broken_refs_negative_expected_count_returns_post_schema_error(
         self,
     ) -> None:
-        response = _validate_postcondition_schema(
+        response = validate_postcondition_schema(
             {"type": "broken_refs", "scope": "Assets", "expected_count": -1},
             resource_ids=set(),
         )
@@ -161,7 +161,7 @@ class PostconditionSchemaErrorRowsTests(unittest.TestCase):
     def test_broken_refs_non_integer_expected_count_returns_post_schema_error(
         self,
     ) -> None:
-        response = _validate_postcondition_schema(
+        response = validate_postcondition_schema(
             {"type": "broken_refs", "scope": "Assets", "expected_count": "many"},
             resource_ids=set(),
         )
@@ -177,7 +177,7 @@ class PostconditionSchemaErrorRowsTests(unittest.TestCase):
     def test_broken_refs_non_list_exclude_patterns_returns_post_schema_error(
         self,
     ) -> None:
-        response = _validate_postcondition_schema(
+        response = validate_postcondition_schema(
             {
                 "type": "broken_refs",
                 "scope": "Assets",
@@ -197,7 +197,7 @@ class PostconditionSchemaErrorRowsTests(unittest.TestCase):
     def test_broken_refs_non_string_exclude_pattern_returns_post_schema_error(
         self,
     ) -> None:
-        response = _validate_postcondition_schema(
+        response = validate_postcondition_schema(
             {
                 "type": "broken_refs",
                 "scope": "Assets",
@@ -217,7 +217,7 @@ class PostconditionSchemaErrorRowsTests(unittest.TestCase):
     def test_broken_refs_non_list_ignore_asset_guids_returns_post_schema_error(
         self,
     ) -> None:
-        response = _validate_postcondition_schema(
+        response = validate_postcondition_schema(
             {
                 "type": "broken_refs",
                 "scope": "Assets",
@@ -237,7 +237,7 @@ class PostconditionSchemaErrorRowsTests(unittest.TestCase):
     def test_broken_refs_non_string_ignore_asset_guid_returns_post_schema_error(
         self,
     ) -> None:
-        response = _validate_postcondition_schema(
+        response = validate_postcondition_schema(
             {
                 "type": "broken_refs",
                 "scope": "Assets",
@@ -257,7 +257,7 @@ class PostconditionSchemaErrorRowsTests(unittest.TestCase):
     def test_broken_refs_negative_max_diagnostics_returns_post_schema_error(
         self,
     ) -> None:
-        response = _validate_postcondition_schema(
+        response = validate_postcondition_schema(
             {
                 "type": "broken_refs",
                 "scope": "Assets",
@@ -275,7 +275,7 @@ class PostconditionSchemaErrorRowsTests(unittest.TestCase):
         )
 
     def test_unknown_postcondition_type_returns_post_schema_error(self) -> None:
-        response = _validate_postcondition_schema(
+        response = validate_postcondition_schema(
             {"type": "WhoKnows"}, resource_ids=set()
         )
         assert_error_envelope(
@@ -290,7 +290,7 @@ class PostconditionSchemaSuccessRowsTests(unittest.TestCase):
     """Schema-OK envelopes for the documented success scenarios."""
 
     def test_asset_exists_by_resource_returns_post_schema_ok(self) -> None:
-        response = _validate_postcondition_schema(
+        response = validate_postcondition_schema(
             {"type": "asset_exists", "resource": "r1"},
             resource_ids={"r1"},
         )
@@ -309,7 +309,7 @@ class PostconditionSchemaSuccessRowsTests(unittest.TestCase):
         )
 
     def test_asset_exists_by_path_returns_post_schema_ok(self) -> None:
-        response = _validate_postcondition_schema(
+        response = validate_postcondition_schema(
             {"type": "asset_exists", "path": "Assets/Foo"},
             resource_ids=set(),
         )
@@ -325,7 +325,7 @@ class PostconditionSchemaSuccessRowsTests(unittest.TestCase):
         )
 
     def test_broken_refs_returns_post_schema_ok(self) -> None:
-        response = _validate_postcondition_schema(
+        response = validate_postcondition_schema(
             {
                 "type": "broken_refs",
                 "scope": "Assets",
@@ -351,7 +351,7 @@ class PostconditionSchemaSuccessRowsTests(unittest.TestCase):
 
 
 class PostconditionEvaluateAssetExistsTests(unittest.TestCase):
-    """``_evaluate_postcondition`` ``asset_exists`` evaluation rows.
+    """``evaluate_postcondition`` ``asset_exists`` evaluation rows.
     The serialized-object service's path resolver is mocked at the
     module's import site so the test does not require a live project
     tree.
@@ -369,7 +369,7 @@ class PostconditionEvaluateAssetExistsTests(unittest.TestCase):
                 "_resolve_target_path",
                 return_value=present,
             ):
-                response = _evaluate_postcondition(
+                response = evaluate_postcondition(
                     so_svc,
                     ref_svc,
                     {"type": "asset_exists", "path": "Assets/Created.asset"},
@@ -404,7 +404,7 @@ class PostconditionEvaluateAssetExistsTests(unittest.TestCase):
                 "_resolve_target_path",
                 return_value=absent,
             ):
-                response = _evaluate_postcondition(
+                response = evaluate_postcondition(
                     so_svc,
                     ref_svc,
                     {"type": "asset_exists", "path": "Assets/NeverCreated.asset"},
@@ -426,7 +426,7 @@ class PostconditionEvaluateAssetExistsTests(unittest.TestCase):
 
 
 class PostconditionEvaluateBrokenRefsTests(unittest.TestCase):
-    """``_evaluate_postcondition`` ``broken_refs`` evaluation rows.
+    """``evaluate_postcondition`` ``broken_refs`` evaluation rows.
     The reference resolver's scan is mocked at the module's import site.
     """
 
@@ -453,7 +453,7 @@ class PostconditionEvaluateBrokenRefsTests(unittest.TestCase):
                 "scan_broken_references",
                 return_value=upstream,
             ):
-                response = _evaluate_postcondition(
+                response = evaluate_postcondition(
                     so_svc,
                     ref_svc,
                     {
@@ -495,7 +495,7 @@ class PostconditionEvaluateBrokenRefsTests(unittest.TestCase):
                 "scan_broken_references",
                 return_value=upstream,
             ):
-                response = _evaluate_postcondition(
+                response = evaluate_postcondition(
                     so_svc,
                     ref_svc,
                     {
@@ -535,7 +535,7 @@ class PostconditionEvaluateBrokenRefsTests(unittest.TestCase):
                 "scan_broken_references",
                 return_value=upstream,
             ):
-                response = _evaluate_postcondition(
+                response = evaluate_postcondition(
                     so_svc,
                     ref_svc,
                     {
@@ -595,7 +595,7 @@ class PostconditionSnapshotAnchorTests(unittest.TestCase):
                 "_resolve_target_path",
                 return_value=present,
             ):
-                response = _evaluate_postcondition(
+                response = evaluate_postcondition(
                     so_svc,
                     ref_svc,
                     {"type": "asset_exists", "path": "Assets/Created.asset"},
@@ -625,7 +625,7 @@ class PostconditionSnapshotAnchorTests(unittest.TestCase):
                 "scan_broken_references",
                 return_value=upstream,
             ):
-                response = _evaluate_postcondition(
+                response = evaluate_postcondition(
                     so_svc,
                     ref_svc,
                     {

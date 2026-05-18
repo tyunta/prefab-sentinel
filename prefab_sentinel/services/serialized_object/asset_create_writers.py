@@ -1,7 +1,7 @@
 """Per-op preview writers for asset / material create-mode plans.
 
 Each handler validates a single ``op_name`` against the running
-``_AssetCreateContext`` and, on success, appends the matching
+``AssetCreateContext`` and, on success, appends the matching
 before/after preview row.  Called from ``asset_create_ops`` which owns
 the state machine.
 """
@@ -14,7 +14,7 @@ from typing import Any
 
 from prefab_sentinel.contracts import Diagnostic
 from prefab_sentinel.services.serialized_object.asset_create_ops import (
-    _AssetCreateContext,
+    AssetCreateContext,
 )
 from prefab_sentinel.services.serialized_object.handles import (
     ASSET_HANDLE,
@@ -24,7 +24,7 @@ from prefab_sentinel.services.serialized_object.handles import (
 
 
 def validate_acreate_create_asset_op(
-    ctx: _AssetCreateContext,
+    ctx: AssetCreateContext,
     index: int,
     op: dict[str, Any],
 ) -> None:
@@ -138,7 +138,7 @@ def validate_acreate_create_asset_op(
 
 
 def validate_acreate_set_op(
-    ctx: _AssetCreateContext,
+    ctx: AssetCreateContext,
     index: int,
     op: dict[str, Any],
     op_name: str,
@@ -229,7 +229,7 @@ def validate_acreate_set_op(
 
 
 def validate_acreate_save_op(
-    ctx: _AssetCreateContext,
+    ctx: AssetCreateContext,
     index: int,
     op: dict[str, Any],
 ) -> None:
