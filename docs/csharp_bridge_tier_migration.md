@@ -133,14 +133,19 @@ Tier 列の `(+T3)` 表記は「クラス内に移行するアサーションと
 > #24 で `ApplyPropertyValue` と `HandleEditorSetProperty` の per-type switch を単一の
 > `WritePropertyValue` レイヤーへ統合した。テキスト解析・Quaternion 検証のサブロジックは T1
 > （`PropertyValueParser` / `QuaternionInputValidator`、`PropertiesPureLogicTests.cs`）でカバー済。
-> 残る per-type dispatch 本体——live `SerializedProperty` への `prop.<type>Value =` 代入——と
-> `HandleSetUdonSharpField` の SerializedField 解決は、`SerializedProperty` が `UnityEditor`
+> 残る per-type dispatch 本体——live `SerializedProperty` への `prop.<type>Value =` 代入——、
+> `HandleSetUdonSharpField` の SerializedField 解決、および `HandleEditorAddComponent` の
+> 初期プロパティ適用ループの診断パス（issue #27 で null prop / 参照解決失敗 / 書き込み失敗の
+> 3 種の無音破棄を診断化）は、いずれも `SerializedProperty` / `SerializedObject` が `UnityEditor`
 > namespace に属し Unity Editor 上でしか生成できないため自動実行不能。H-series の T1/T2 抽出では
 > これ以上落とせない irreducible な Unity 結合部であり、**T3 恒久**として受容する。実行検証には
 > Unity-loadable な serialized-property ハーネス（Unity Test Framework の EditMode テスト基盤）の
-> 新設が前提となるが、未カバー面が dispatch 代入文に限られ本体ロジックは T1 で守られているため、
-> ハーネス新設には見合わない（#30 でこの判断を確定・close）。将来 EditMode ハーネスが別動機で
-> 整備された時点で相乗り移行する（§6.1 の opportunistic 運用と同型）。
+> 新設が前提となるが、未カバー面が dispatch 代入文・診断配線に限られ本体ロジック
+> （`PropertyValueParser` / `QuaternionInputValidator` / `PropertyWriteResult` 分類）は T1 で
+> 守られているため、ハーネス新設には見合わない（#30 / #34 でこの判断を確定・close）。`HandleEditor`
+> `AddComponent` の診断配線は source-text テスト `TestAddComponentInitialPropertyDiagnostics` で
+> pin する。将来 EditMode ハーネスが別動機で整備された時点で相乗り移行する（§6.1 の opportunistic
+> 運用と同型）。
 
 ### 4.4 UiElement
 
