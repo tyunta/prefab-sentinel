@@ -223,6 +223,7 @@ def _normalize_bridge_op(op: object) -> object:
     for key in (
         "op",
         "component",
+        "file_id",
         "path",
         "index",
         "name",
@@ -403,12 +404,26 @@ def _validate_bridge_ops(
 
         component = op.get("component")
         target = op.get("target")
+        file_id = op.get("file_id")
         has_component = isinstance(component, str) and bool(component.strip())
         has_target = isinstance(target, str) and bool(target.strip())
-        if not has_component and not has_target:
+        # Issue #37: a ``set`` op may identify its target component by an
+        # exact 'file_id' instead of a 'component' selector.
+        has_file_id = isinstance(file_id, str) and bool(file_id.strip())
+        if (
+            not has_component
+            and not has_target
+            and not (op_name == "set" and has_file_id)
+        ):
             return {
                 "location": location,
-                "error": "mutation op requires a non-empty 'component' or 'target'",
+                "error": (
+                    "set op requires a non-empty 'component', 'target', "
+                    "or 'file_id'"
+                    if op_name == "set"
+                    else "mutation op requires a non-empty 'component' or "
+                    "'target'"
+                ),
             }
 
         path = op.get("path")

@@ -20,11 +20,14 @@ namespace PrefabSentinel
                     "EDITOR_CTRL_UDON_ADD_NO_TYPE",
                     "component_type is required for editor_add_udonsharp_component.");
 
-            GameObject go = ResolveGameObjectInActiveStage(request.hierarchy_path);
-            if (go == null)
+            if (!TryResolveGameObjectInActiveStage(
+                request.hierarchy_path, out GameObject go, out var ambiguity))
+            {
+                if (ambiguity != null) return ambiguity;
                 return BuildError(
                     "EDITOR_CTRL_UDON_ADD_NOT_FOUND",
                     $"GameObject not found at hierarchy_path: {request.hierarchy_path}");
+            }
 
             Type compType = ResolveComponentType(request.component_type);
             if (compType == null)

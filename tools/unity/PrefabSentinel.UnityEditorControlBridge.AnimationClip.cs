@@ -77,36 +77,41 @@ namespace PrefabSentinel
 
         private static EditorControlResponse HandleCreateAnimationClip(EditorControlRequest request)
         {
-            if (string.IsNullOrEmpty(request.target_dir) || string.IsNullOrEmpty(request.animation_clip_name))
+            // Issue #53: the caller supplies a single full asset path;
+            // the bridge derives the destination directory and clip
+            // filename from it.
+            if (string.IsNullOrEmpty(request.asset_path))
                 return BuildError(
                     "EDITOR_CTRL_ANIMATION_CLIP_WRITE_FAILED",
-                    "create_animation_clip requires target_dir and animation_clip_name.");
-            if (!request.target_dir.StartsWith("Assets/", StringComparison.Ordinal))
+                    "create_animation_clip requires asset_path.");
+            string assetPath = request.asset_path.Replace('\\', '/');
+            if (!assetPath.StartsWith("Assets/", StringComparison.Ordinal))
                 return BuildError(
                     "EDITOR_CTRL_ANIMATION_CLIP_WRITE_FAILED",
-                    $"target_dir must be under Assets/: {request.target_dir}");
+                    $"asset_path must be under Assets/: {request.asset_path}");
+            if (!assetPath.EndsWith(".anim", StringComparison.OrdinalIgnoreCase))
+                return BuildError(
+                    "EDITOR_CTRL_ANIMATION_CLIP_WRITE_FAILED",
+                    $"asset_path must end with the .anim extension: {request.asset_path}");
             // Issue #243 / security: defence-in-depth path traversal gate.
             // ``StartsWith("Assets/")`` permits ``Assets/../etc`` which
-            // resolves outside the project assets root, and the asset name
-            // is otherwise unvalidated. Reject any value whose canonical
-            // path escapes the assets root or whose filename component
-            // contains path separators or traversal segments before we
-            // touch the asset database.
-            if (HasUnsafePathSegment(request.target_dir)
-                || HasUnsafePathSegment(request.animation_clip_name))
+            // resolves outside the project assets root. Reject any value
+            // carrying traversal segments or backslash separators before
+            // we touch the asset database.
+            if (HasUnsafePathSegment(request.asset_path))
                 return BuildError(
                     "EDITOR_CTRL_ANIMATION_CLIP_WRITE_FAILED",
-                    "create_animation_clip rejects '..' segments or path separators "
-                    + "in animation_clip_name; target_dir must not escape Assets/.");
+                    "create_animation_clip rejects '..' segments or backslash "
+                    + "separators in asset_path.");
             string projectRoot = Directory.GetCurrentDirectory();
             string assetsRootAbs = Path.GetFullPath(Path.Combine(projectRoot, "Assets"));
-            string targetDirAbs = Path.GetFullPath(Path.Combine(projectRoot, request.target_dir));
+            string targetDir = Path.GetDirectoryName(assetPath) ?? string.Empty;
+            string targetDirAbs = Path.GetFullPath(Path.Combine(projectRoot, targetDir));
             if (!IsPathUnder(assetsRootAbs, targetDirAbs))
                 return BuildError(
                     "EDITOR_CTRL_ANIMATION_CLIP_WRITE_FAILED",
-                    $"target_dir canonical path escapes Assets/: {request.target_dir}");
-            string path = Path.Combine(request.target_dir, request.animation_clip_name + ".anim")
-                .Replace('\\', '/');
+                    $"asset_path canonical directory escapes Assets/: {request.asset_path}");
+            string path = assetPath;
             try
             {
                 var clip = new AnimationClip();
@@ -218,11 +223,14 @@ namespace PrefabSentinel
                 return BuildError(
                     "EDITOR_CTRL_ANIMATION_CLIP_NOT_FOUND",
                     $"AnimationClip not found at {request.asset_path}.");
-            var go = ResolveGameObjectInActiveStage(request.target_hierarchy_path);
-            if (go == null)
+            if (!TryResolveGameObjectInActiveStage(
+                request.target_hierarchy_path, out GameObject go, out var ambiguity))
+            {
+                if (ambiguity != null) return ambiguity;
                 return BuildError(
                     "EDITOR_CTRL_ANIMATION_CLIP_TARGET_NOT_FOUND",
                     $"Apply target not found: {request.target_hierarchy_path}");
+            }
             try
             {
                 int undoGroup = Undo.GetCurrentGroup();

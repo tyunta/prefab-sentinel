@@ -191,7 +191,7 @@ class WirePersistentListenerForwardingTests(_UdonSharpToolHarness):
             send.return_value = _BRIDGE_OK
             self.wire_tool(
                 hierarchy_path="/UI/Slider",
-                event_path="onValueChanged",
+                property_name="onValueChanged",
                 target_hierarchy_path="/Logic/UdonController",
                 method="SendCustomEvent",
                 arg="OnSliderChanged",

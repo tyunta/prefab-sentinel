@@ -108,13 +108,15 @@ def editor_inspect_animation_clip(asset_path: str) -> dict[str, Any]:
 
 
 def editor_create_animation_clip(
-    target_dir: str,
-    name: str,
+    asset_path: str,
     curves: list[dict[str, Any]],
     confirm: bool = False,
     change_reason: str = "",
 ) -> dict[str, Any]:
-    """Write a new AnimationClip asset (issue #243).
+    """Write a new AnimationClip asset (issue #243, issue #53).
+
+    ``asset_path`` is the full ``Assets/…/Name.anim`` path; the bridge
+    derives the destination directory and clip filename from it.
 
     Each curve entry carries ``relative_path``, ``type``, ``property``,
     and ``value`` (a scalar for a single-keyframe curve or a list for a
@@ -126,24 +128,16 @@ def editor_create_animation_clip(
     )
     if audit_err is not None:
         return audit_err
-    if _has_unsafe_path_segment(target_dir):
+    if _has_unsafe_path_segment(asset_path):
         return _animation_clip_path_invalid_envelope(
-            f"target_dir={target_dir!r} contains '..' or '\\\\'."
-        )
-    if _has_unsafe_path_segment(name) or "/" in name:
-        return _animation_clip_path_invalid_envelope(
-            f"name={name!r} must not contain '/', '\\\\', or '..' segments."
+            f"asset_path={asset_path!r} contains '..' or '\\\\'."
         )
     normalized_reason = change_reason.strip()
-    # Bridge DTO names the asset stem ``animation_clip_name`` and the
-    # curve payload ``curves_json`` so the wire format aligns with the
-    # spec_review surface-area schema; the Python keyword stays ``name``
-    # for caller ergonomics. Curves are normalised so the bridge's
-    # ``JsonUtility`` sees a stable ``values: list[float]`` shape.
+    # Curves are normalised so the bridge's ``JsonUtility`` sees a stable
+    # ``values: list[float]`` shape.
     return send_action(
         action="create_animation_clip",
-        target_dir=target_dir,
-        animation_clip_name=name,
+        asset_path=asset_path,
         curves_json=dump_json(_normalize_curves_payload(curves), indent=None),
         confirm=True,
         change_reason=normalized_reason,
@@ -187,18 +181,17 @@ def register_editor_animation_tools(server: FastMCP) -> None:
 
     @server.tool(name="editor_create_animation_clip")
     def _editor_create_animation_clip(
-        target_dir: str,
-        name: str,
+        asset_path: str,
         curves: list[dict[str, Any]],
         confirm: bool = False,
         change_reason: str = "",
     ) -> dict[str, Any]:
-        """Write a new AnimationClip (issue #243).
+        """Write a new AnimationClip (issue #243, issue #53).
 
         Args:
-            target_dir: Directory under ``Assets/`` where the clip is
-                written (e.g. ``Assets/Animations``).
-            name: Asset stem; the bridge appends ``.anim``.
+            asset_path: Full ``.anim`` asset path under ``Assets/``
+                (e.g. ``Assets/Animations/Wink.anim``); the bridge
+                derives the destination directory and clip filename.
             curves: List of ``{"relative_path", "type", "property",
                 "value"}`` entries. ``value`` is a scalar (single
                 keyframe) or list (multi-keyframe).
@@ -206,7 +199,7 @@ def register_editor_animation_tools(server: FastMCP) -> None:
             change_reason: Required non-empty audit reason.
         """
         return editor_create_animation_clip(
-            target_dir=target_dir, name=name, curves=curves,
+            asset_path=asset_path, curves=curves,
             confirm=confirm, change_reason=change_reason,
         )
 

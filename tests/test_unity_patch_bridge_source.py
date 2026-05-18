@@ -400,3 +400,72 @@ class TestPrefabApplyRejectionEnvelopeSource(unittest.TestCase):
                 "under the `attempted_value` payload key (issue #298)."
             ),
         )
+
+
+class TestFileIdTargetedSetOp(unittest.TestCase):
+    """Issue #37 — a patch v2 ``set`` op may identify its target
+    component by an exact fileID, resolved through Unity's
+    global-object-id facility.
+
+    Tier 3: the patch bridge runs inside the Unity Editor runtime and is
+    not xUnit-compiled; this comment-stripped scan pins the resolver and
+    the op-target branching. Runtime fileID resolution is verified by
+    the mandatory deploy_bridge pass (observations.md).
+    """
+
+    _RESOLVE = _TOOLS_DIR / "PrefabSentinel.UnityPatchBridge.Resolve.cs"
+    _MUTATION = _TOOLS_DIR / "PrefabSentinel.UnityPatchBridge.Mutation.cs"
+    _CORE_PATH = _TOOLS_DIR / _CORE
+
+    def test_patch_op_declares_file_id_field(self) -> None:
+        text = _strip_cs_comments(self._CORE_PATH.read_text(encoding="utf-8"))
+        self.assertRegex(
+            text,
+            r"public\s+string\s+file_id\s*=",
+            msg=(
+                "the PatchOp DTO must declare a file_id target field so "
+                "a set op can carry an exact fileID (issue #37)."
+            ),
+        )
+
+    def test_resolve_partial_has_fileid_resolver_using_global_object_id(
+        self,
+    ) -> None:
+        text = _strip_cs_comments(self._RESOLVE.read_text(encoding="utf-8"))
+        self.assertIn(
+            "TryResolveComponentByFileId",
+            text,
+            msg=(
+                "Resolve.cs must declare a fileID-based component "
+                "resolver (issue #37)."
+            ),
+        )
+        self.assertIn(
+            "GlobalObjectId",
+            text,
+            msg=(
+                "the fileID component resolver must match a component by "
+                "its Unity local fileID via the GlobalObjectId facility "
+                "(issue #37)."
+            ),
+        )
+
+    def test_set_op_target_resolution_branches_on_file_id(self) -> None:
+        text = _strip_cs_comments(self._MUTATION.read_text(encoding="utf-8"))
+        self.assertIn(
+            "op.file_id",
+            text,
+            msg=(
+                "the set-op target resolution must branch on op.file_id "
+                "so a fileID target takes the exact-resolution path "
+                "(issue #37)."
+            ),
+        )
+        self.assertIn(
+            "TryResolveComponentByFileId",
+            text,
+            msg=(
+                "the set-op fileID branch must resolve through "
+                "TryResolveComponentByFileId (issue #37)."
+            ),
+        )

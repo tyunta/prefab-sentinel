@@ -27,10 +27,13 @@ namespace PrefabSentinel
                 return BuildError("EDITOR_CTRL_SET_MATERIAL_NO_GUID",
                     "material_guid or material_path is required.");
 
-            var go = ResolveGameObjectInActiveStage(request.hierarchy_path);
-            if (go == null)
+            if (!TryResolveGameObjectInActiveStage(
+                request.hierarchy_path, out GameObject go, out var ambiguity))
+            {
+                if (ambiguity != null) return ambiguity;
                 return BuildError("EDITOR_CTRL_SET_MATERIAL_NOT_FOUND",
                     $"GameObject not found: {request.hierarchy_path}");
+            }
 
             var renderer = go.GetComponent<Renderer>();
             if (renderer == null)
@@ -78,10 +81,13 @@ namespace PrefabSentinel
             if (string.IsNullOrEmpty(request.property_value))
                 return BuildError("EDITOR_CTRL_MISSING_VALUE", "property_value is required.");
 
-            var go = ResolveGameObjectInActiveStage(request.hierarchy_path);
-            if (go == null)
+            if (!TryResolveGameObjectInActiveStage(
+                request.hierarchy_path, out GameObject go, out var ambiguity))
+            {
+                if (ambiguity != null) return ambiguity;
                 return BuildError("EDITOR_CTRL_OBJECT_NOT_FOUND",
                     $"GameObject not found: {request.hierarchy_path}");
+            }
 
             var renderer = go.GetComponent<Renderer>();
             if (renderer == null)

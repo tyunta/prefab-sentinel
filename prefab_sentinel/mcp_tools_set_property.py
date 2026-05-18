@@ -9,7 +9,6 @@ from mcp.server.fastmcp import FastMCP
 
 from prefab_sentinel.json_io import dump_json
 from prefab_sentinel.mcp_helpers import (
-    build_component_selector,
     read_asset,
     resolve_component_with_type,
 )
@@ -107,14 +106,9 @@ def register_set_property_tools(server: FastMCP, session: ProjectSession) -> Non
         assert node is not None
         assert component_name is not None
 
-        # Issue #37: emit a hierarchy-qualified ``TypeName@/path`` selector
-        # so an asset with several same-type components resolves to the
-        # intended one. An inexpressible ancestor chain fails fast.
-        selector, sel_err = build_component_selector(tree, node, component_name)
-        if sel_err is not None:
-            return sel_err
-        assert selector is not None
-
+        # Issue #37: the set op identifies its target by the resolved
+        # symbol node's exact fileID, so an asset with several same-type
+        # components on one GameObject resolves to the intended one.
         plan: dict[str, object] = {
             "plan_version": PLAN_VERSION,
             "resources": [{"id": "target", "path": asset_path, "mode": "open"}],
@@ -122,7 +116,7 @@ def register_set_property_tools(server: FastMCP, session: ProjectSession) -> Non
                 {
                     "resource": "target",
                     "op": "set",
-                    "component": selector,
+                    "file_id": node.file_id,
                     "path": property_path,
                     "value": value,
                 },
@@ -247,14 +241,6 @@ def register_set_property_tools(server: FastMCP, session: ProjectSession) -> Non
         assert node is not None
         assert component_name is not None
 
-        # Issue #37: emit a hierarchy-qualified ``TypeName@/path`` selector
-        # so an asset with several same-type components resolves to the
-        # intended one. An inexpressible ancestor chain fails fast.
-        selector, sel_err = build_component_selector(tree, node, component_name)
-        if sel_err is not None:
-            return sel_err
-        assert selector is not None
-
         known_paths = _collect_known_property_paths(text, node.file_id)
         for field_path in properties:
             if field_path not in known_paths:
@@ -265,11 +251,14 @@ def register_set_property_tools(server: FastMCP, session: ProjectSession) -> Non
                     known_paths,
                 ).to_dict()
 
+        # Issue #37: each set op identifies its target by the resolved
+        # symbol node's exact fileID, so an asset with several same-type
+        # components on one GameObject resolves to the intended one.
         ops = [
             {
                 "resource": "target",
                 "op": "set",
-                "component": selector,
+                "file_id": node.file_id,
                 "path": field_path,
                 "value": field_value,
             }

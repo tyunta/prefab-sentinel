@@ -1,6 +1,6 @@
 # MCP ツール一覧
 
-`prefab-sentinel-mcp` が公開する全 MCP ツール（現在 84 件 / 15 カテゴリ）の正本カタログ。各カテゴリは `prefab_sentinel/mcp_tools_*.py` の 1 モジュールに対応する。エンベロープ仕様は [api-reference.md「レスポンスフォーマット」](./api-reference.md#レスポンスフォーマット)、エラーコードの正本は [api-reference.md「エラーコード規約」](./api-reference.md#エラーコード規約) を参照。
+`prefab-sentinel-mcp` が公開する全 MCP ツール（現在 85 件 / 15 カテゴリ）の正本カタログ。各カテゴリは `prefab_sentinel/mcp_tools_*.py` の 1 モジュールに対応する。エンベロープ仕様は [api-reference.md「レスポンスフォーマット」](./api-reference.md#レスポンスフォーマット)、エラーコードの正本は [api-reference.md「エラーコード規約」](./api-reference.md#エラーコード規約) を参照。
 
 ## 用途索引
 
@@ -184,6 +184,7 @@
 | `editor_batch_set_property` | editor_batch | 複数プロパティを 1 リクエストで一括設定（Undo グループ） | — | write |
 | `editor_batch_set_material_property` | editor_batch | 同一マテリアルの複数シェーダープロパティを 1 リクエストで一括設定（Undo グループ） | — | write |
 | `editor_batch_add_component` | editor_batch | 複数オブジェクトにコンポーネントを一括追加（初期値対応） | — | write |
+| `editor_batch_set_blend_shape` | editor_batch | 同一 SkinnedMeshRenderer の複数 blend shape を 1 リクエストで一括設定（Undo グループ） | #240 | write |
 | `editor_open_scene` | editor_batch | シーンを開く（single / additive） | — | write |
 | `editor_save_scene` | editor_batch | シーンを保存 | — | write |
 | `editor_create_scene` | editor_batch | 新規空シーンを作成して保存 | — | write |

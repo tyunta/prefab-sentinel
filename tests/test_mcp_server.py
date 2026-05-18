@@ -213,6 +213,62 @@ class TestToolRegistration(unittest.TestCase):
         self.assertEqual(85, len(tools))
 
 
+class TestToolsCatalogDoc(unittest.TestCase):
+    """Issue #48 — ``docs/tools.md`` is the canonical MCP tool catalog.
+
+    The catalog must list every registered tool and its header count
+    must equal the registered surface.  Both assertions compare the doc
+    against an executable anchor (the registered tool list), so a drift
+    between catalog and code is caught.
+    """
+
+    _TOOLS_MD = Path(__file__).resolve().parent.parent / "docs" / "tools.md"
+
+    def test_editor_batch_table_lists_blend_shape_batch_tool(self) -> None:
+        text = self._TOOLS_MD.read_text(encoding="utf-8")
+        rows = [
+            line
+            for line in text.splitlines()
+            if "`editor_batch_set_blend_shape`" in line and line.startswith("|")
+        ]
+        self.assertEqual(
+            1,
+            len(rows),
+            msg=(
+                "docs/tools.md must contain exactly one catalog row for "
+                "editor_batch_set_blend_shape (issue #48)."
+            ),
+        )
+        cells = [cell.strip() for cell in rows[0].strip("|").split("|")]
+        self.assertEqual(
+            ("editor_batch", "write"),
+            (cells[1], cells[4]),
+            msg=(
+                "editor_batch_set_blend_shape must be cataloged under the "
+                "editor_batch category as a write tool (issue #48)."
+            ),
+        )
+
+    def test_catalog_header_count_equals_registered_surface(self) -> None:
+        import re
+
+        registered = len(_run(create_server().list_tools()))
+        header = self._TOOLS_MD.read_text(encoding="utf-8").splitlines()[2]
+        match = re.search(r"現在 (\d+) 件", header)
+        self.assertIsNotNone(
+            match,
+            msg="docs/tools.md header must state the tool count as '現在 N 件'.",
+        )
+        self.assertEqual(
+            registered,
+            int(match.group(1)),
+            msg=(
+                "docs/tools.md header count must equal the registered MCP "
+                "tool surface (issue #48)."
+            ),
+        )
+
+
 class TestSymbolTools(unittest.TestCase):
     """Test get_unity_symbols and find_unity_symbol with synthetic YAML."""
 
@@ -1141,15 +1197,17 @@ class TestSetPropertyTool(unittest.TestCase):
                     },
                 ))
 
-        # Issue #37: the plan's component field carries the
-        # hierarchy-qualified ``TypeName@/path`` selector.
+        # Issue #37: the plan's set op identifies its target by the
+        # resolved fileID, not a type-name selector.
         plan = mock_orch.patch_apply.call_args[1]["plan"]
-        self.assertEqual("MeshRenderer@/Cube", plan["ops"][0]["component"])
+        op = plan["ops"][0]
+        self.assertEqual("300", op["file_id"])
+        self.assertNotIn("component", op)
         # Verify symbol_resolution metadata
         self.assertEqual("MeshRenderer", result["symbol_resolution"]["resolved_component"])
 
     def test_set_property_monobehaviour_script_name(self) -> None:
-        """MonoBehaviour resolves to its script name for the component field."""
+        """MonoBehaviour resolves to its script name in symbol_resolution."""
         text = self._prefab_with_monobehaviour()
         mock_resp = self._mock_patch_apply_response()
 
@@ -1186,7 +1244,7 @@ class TestSetPropertyTool(unittest.TestCase):
                 ))
 
         plan = mock_orch.patch_apply.call_args[1]["plan"]
-        self.assertEqual("PlayerScript@/Player", plan["ops"][0]["component"])
+        self.assertEqual("300", plan["ops"][0]["file_id"])
         self.assertEqual("PlayerScript", result["symbol_resolution"]["resolved_component"])
 
     def test_set_property_monobehaviour_no_script_name(self) -> None:
@@ -2913,7 +2971,7 @@ class TestEditorArgumentNaming(unittest.TestCase):
             return_value={"success": True},
         ) as send:
             self._tool_fn("editor_wire_persistent_listener")(
-                hierarchy_path="/A", event_path="onValueChanged",
+                hierarchy_path="/A", property_name="onValueChanged",
                 target_hierarchy_path="/B", method="M", arg="x",
             )
         send.assert_called_once()
@@ -2940,10 +2998,96 @@ class TestEditorArgumentNaming(unittest.TestCase):
         fn = self._tool_fn("editor_wire_persistent_listener")
         with self.assertRaises(TypeError) as cm:
             fn(
-                hierarchy_path="/A", event_path="onValueChanged",
+                hierarchy_path="/A", property_name="onValueChanged",
                 target_path="/B", method="M", arg="x",
             )
         self.assertIn("target_path", str(cm.exception))
+
+    def test_legacy_event_path_argument_raises_type_error(self) -> None:
+        """Issue #53/#58: the former event_path argument no longer binds."""
+        fn = self._tool_fn("editor_wire_persistent_listener")
+        with self.assertRaises(TypeError) as cm:
+            fn(
+                hierarchy_path="/A", event_path="onValueChanged",
+                target_hierarchy_path="/B", method="M", arg="x",
+            )
+        self.assertIn("event_path", str(cm.exception))
+
+    def test_listener_property_name_travels_on_event_wire_field(self) -> None:
+        """Issue #58: the renamed property_name argument is forwarded on
+        the unchanged event_path wire field."""
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_udonsharp.send_action",
+            return_value={"success": True},
+        ) as send:
+            self._tool_fn("editor_wire_persistent_listener")(
+                hierarchy_path="/A", property_name="OnX",
+                target_hierarchy_path="/B", method="M", arg="x",
+            )
+        kwargs = send.call_args.kwargs
+        self.assertEqual(
+            ("editor_wire_persistent_listener", "OnX"),
+            (kwargs["action"], kwargs["event_path"]),
+            msg=(
+                "editor_wire_persistent_listener must forward the "
+                "property_name argument on the event_path wire field "
+                "(issue #58)."
+            ),
+        )
+
+
+class TestEditorSetParentWireField(unittest.TestCase):
+    """Issue #56 — editor_set_parent transmits the parent address on the
+    dedicated parent_hierarchy_path wire field, not the rename field."""
+
+    def setUp(self) -> None:
+        os.environ.pop("UNITYTOOL_BRIDGE_WATCH_DIR", None)
+
+    def _tool_fn(self, name: str):
+        return create_server()._tool_manager._tools[name].fn
+
+    def test_parent_address_travels_on_dedicated_field(self) -> None:
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_ops.send_action",
+            return_value={"success": True},
+        ) as send:
+            self._tool_fn("editor_set_parent")(
+                hierarchy_path="/A", parent_hierarchy_path="/B",
+            )
+        kwargs = send.call_args.kwargs
+        self.assertEqual(
+            ("editor_set_parent", "/B"),
+            (kwargs["action"], kwargs["parent_hierarchy_path"]),
+            msg=(
+                "editor_set_parent must send the parent address on the "
+                "dedicated parent_hierarchy_path wire field (issue #56)."
+            ),
+        )
+        self.assertNotIn(
+            "new_name",
+            kwargs,
+            msg=(
+                "editor_set_parent must not reuse the rename field "
+                "new_name for the parent address (issue #56)."
+            ),
+        )
+
+    def test_empty_parent_forwards_scene_root_intent(self) -> None:
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_ops.send_action",
+            return_value={"success": True},
+        ) as send:
+            self._tool_fn("editor_set_parent")(hierarchy_path="/A")
+        kwargs = send.call_args.kwargs
+        self.assertEqual(
+            ("editor_set_parent", ""),
+            (kwargs["action"], kwargs["parent_hierarchy_path"]),
+            msg=(
+                "editor_set_parent with no parent must still forward a "
+                "well-formed payload with an empty parent_hierarchy_path "
+                "carrying scene-root intent (issue #56)."
+            ),
+        )
 
 
 class TestEditorWriteTools(unittest.TestCase):
@@ -5142,16 +5286,19 @@ class TestSetPropertiesTool(unittest.TestCase):
         self.assertIn("m_Enabled", op_paths)
         self.assertIn("m_CastShadows", op_paths)
         self.assertEqual(2, len(plan["ops"]))
-        # Issue #37: both ops carry the hierarchy-qualified selector.
+        # Issue #37: every set op identifies its target by the resolved
+        # fileID, not a type-name selector.
         for op in plan["ops"]:
-            self.assertEqual("MeshRenderer@/Cube", op["component"])
+            self.assertEqual("300", op["file_id"])
+            self.assertNotIn("component", op)
         sr = result["symbol_resolution"]
         self.assertEqual("MeshRenderer", sr["resolved_component"])
         self.assertIn("m_Enabled", sr["fields"])
         self.assertIn("m_CastShadows", sr["fields"])
 
-    def test_uniquely_addressed_component_resolves_despite_siblings(self) -> None:
-        """T-37-2: a unique symbol_path resolves despite same-type siblings."""
+    def test_set_properties_emits_fileid_targeted_ops_for_siblings(self) -> None:
+        """Issue #37: with two same-type components on one GameObject, the
+        ops target the resolved fileID so the intended sibling is hit."""
         text = self._double_meshrenderer_prefab()
         server = create_server()
         mock_resp = self._mock_patch_apply_response(dry_run=True)
@@ -5168,9 +5315,8 @@ class TestSetPropertiesTool(unittest.TestCase):
                 mock_cls.default.return_value = mock_orch
 
                 # Two MeshRenderers on one GameObject — addressing the
-                # first by #0 must resolve uniquely (not raise ambiguity).
-                # ``m_GameObject`` is the property present on the bare
-                # synthetic MeshRenderer fixture.
+                # first by #0 must resolve uniquely. ``m_GameObject`` is
+                # the property present on the bare synthetic fixture.
                 _, result = _run(server.call_tool(
                     "set_properties",
                     {
@@ -5181,6 +5327,10 @@ class TestSetPropertiesTool(unittest.TestCase):
                 ))
 
         self.assertTrue(result["success"])
+        plan = mock_orch.patch_apply.call_args[1]["plan"]
+        op = plan["ops"][0]
+        self.assertEqual("300", op["file_id"])
+        self.assertNotIn("component", op)
         self.assertEqual("300", result["symbol_resolution"]["file_id"])
 
     def test_confirm_multiple_properties(self) -> None:
@@ -5683,7 +5833,7 @@ class TestSetPropertiesTool(unittest.TestCase):
 
 
 class TestSetPropertyTool37(unittest.TestCase):
-    """Issue #37 selector emission for the single-property ``set_property``."""
+    """Issue #37 fileID-targeted op emission for ``set_property``."""
 
     def _mock_patch_apply_response(self) -> MagicMock:
         resp = MagicMock()
@@ -5698,8 +5848,9 @@ class TestSetPropertyTool37(unittest.TestCase):
         }
         return resp
 
-    def test_emits_hierarchy_qualified_selector(self) -> None:
-        """T-37-1: a nested component emits a ``TypeName@/Body/Head`` selector."""
+    def test_emits_fileid_targeted_op(self) -> None:
+        """Issue #37: a nested component emits a set op whose target is
+        the resolved symbol node's fileID, with no type-name selector."""
         text = YAML_HEADER + "\n".join([
             make_gameobject("100", "Body", ["110"]),
             make_transform("110", "100", "0", ["210"]),
@@ -5732,12 +5883,15 @@ class TestSetPropertyTool37(unittest.TestCase):
                 ))
 
         plan = mock_orch.patch_apply.call_args[1]["plan"]
-        self.assertEqual("MeshRenderer@/Body/Head", plan["ops"][0]["component"])
+        op = plan["ops"][0]
+        self.assertEqual("300", op["file_id"])
+        self.assertNotIn("component", op)
 
-    def test_inexpressible_ancestor_chain_fails_fast(self) -> None:
-        """T-37-3: an ancestor name containing '#' fails fast with SELECTOR_NOT_EXPRESSIBLE."""
+    def test_symbol_resolution_failure_returns_typed_envelope(self) -> None:
+        """Issue #37: a non-resolvable symbol_path still returns a typed
+        SYMBOL_* envelope and emits no patch."""
         text = YAML_HEADER + "\n".join([
-            make_gameobject("100", "Bad#Name", ["200", "300"]),
+            make_gameobject("100", "Body", ["200", "300"]),
             make_transform("200", "100"),
             make_meshrenderer("300", "100"),
         ])
@@ -5759,17 +5913,16 @@ class TestSetPropertyTool37(unittest.TestCase):
                     "set_property",
                     {
                         "asset_path": str(p),
-                        "symbol_path": "Bad#Name/MeshRenderer",
+                        "symbol_path": "Body/NoSuchComponent",
                         "property_path": "m_Enabled",
                         "value": 0,
                     },
                 ))
 
-            # No patch is emitted when the selector is inexpressible.
             mock_orch.patch_apply.assert_not_called()
 
         assert_error_envelope(
-            result, code="SELECTOR_NOT_EXPRESSIBLE", severity="error",
+            result, code="SYMBOL_NOT_FOUND", severity="error",
         )
 
 
