@@ -36,7 +36,7 @@ validate_refs(scope="Assets/<feature>")
 **(2) Variant の override を可視化する** — `inspect_variant` で base からの差分のみを取り出す。
 
 ```text
-inspect_variant(path="Assets/<feature>/Variants/Foo.prefab", show_origin=true)
+inspect_variant(asset_path="Assets/<feature>/Variants/Foo.prefab", show_origin=True)
 ```
 
 各 override に `origin_path` / `origin_depth` が付き、どの prefab（Base / Mid / Leaf）が値を確定したかを追える。
@@ -45,15 +45,15 @@ inspect_variant(path="Assets/<feature>/Variants/Foo.prefab", show_origin=true)
 
 ```text
 set_property(
-  symbol_path="Assets/.../Foo.prefab::CharacterBody/Renderer",
-  component="MeshRenderer",
-  path="m_StaticBatchInfo.firstSubMesh",
+  asset_path="Assets/<feature>/Foo.prefab",
+  symbol_path="CharacterBody/MeshRenderer",
+  property_path="m_StaticBatchInfo.firstSubMesh",
   value=2,
   confirm=False,
 )
 ```
 
-`severity` と `data.diff` を読んで意図通りなら `confirm=True` + 非空 `change_reason` で再呼び出し。`change_reason` を欠くと `CHANGE_REASON_REQUIRED` で拒否される。
+`symbol_path` は GameObject パス + 末尾コンポーネント名でコンポーネント自体を指す（`asset_path` と `symbol_path` は常に別引数）。`severity` と `data.diff` を読んで意図通りなら `confirm=True` + 非空 `change_reason` で再呼び出し。`change_reason` を欠くと `CHANGE_REASON_REQUIRED` で拒否される。
 
 ## 最初に困ったらこの 3 ツール
 
