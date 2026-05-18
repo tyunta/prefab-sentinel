@@ -2,7 +2,7 @@
 
 - AI agent 初回参照: [AGENT_GUIDE.md](./AGENT_GUIDE.md)
 
-本ファイルは `prefab-sentinel` リポジトリの運用ルール正本。仕様の正本は専門ドキュメント（`docs/api-reference.md` / `docs/execution-reference.md` / `ARCHITECTURE.md` / `TESTING.md` / `CONFIGURATION.md`）に分かれて置かれ、`README.md` はそれらへの入口（エントリポイント兼ルーター）として機能する。
+本ファイルは `prefab-sentinel` リポジトリの運用ルール正本。仕様の正本は専門ドキュメント（`docs/api-reference.md` / `docs/tool-conventions.md` / `docs/execution-reference.md` / `ARCHITECTURE.md` / `TESTING.md` / `CONFIGURATION.md`）に分かれて置かれ、`README.md` はそれらへの入口（エントリポイント兼ルーター）として機能する。
 仕様に関わる変更を行う場合は、実装変更と同時に対応する専門ドキュメントの該当箇所を更新する。
 
 ## 設計原則
@@ -65,7 +65,7 @@
 
 ## ドキュメント運用
 - `README.md` はエントリポイント兼ルーター。「やること / やる内容 / やらないこと」とドキュメントマップ（各専門ドキュメントへの導線）を維持し、仕様本文は持たない。
-- 仕様の正本は専門ドキュメントに分割して置く: API エンベロープ / エラーコードは `docs/api-reference.md`、実行・CLI・patch スキーマは `docs/execution-reference.md`、構成・レイヤ責務・サービス仕様・データモデルは `ARCHITECTURE.md`、テスト戦略は `TESTING.md`、設定は `CONFIGURATION.md`。
+- 仕様の正本は専門ドキュメントに分割して置く: API エンベロープ / エラーコードは `docs/api-reference.md`、MCP ツールの住所表現・引数命名・監査ペア要否の規約は `docs/tool-conventions.md`、実行・CLI・patch スキーマは `docs/execution-reference.md`、構成・レイヤ責務・サービス仕様・データモデルは `ARCHITECTURE.md`、テスト戦略は `TESTING.md`、設定は `CONFIGURATION.md`。
 - 運用ルール変更時は本ファイルに追記し、理由を簡潔に残す。
 - 仕様との齟齬が出た場合は、対応する専門ドキュメントを優先して同期する。
 
