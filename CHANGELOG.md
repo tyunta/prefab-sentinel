@@ -12,12 +12,13 @@
 
 ### Changed
 
-- プロパティ書き込みを単一の `WritePropertyValue` レイヤーへ統一（issue #24）。`editor_set_property` / `editor_add_component` の初期プロパティ適用 / `editor_set_udonsharp_field` が同一の型別適用とエラー分類を共有する。これに伴い Quaternion 書き込みがコンポーネント生成と UdonSharp フィールド書き込みの経路でも受け付けられるようになった（従来は `editor_set_property` のみ）。
+- プロパティ書き込みを単一の `WritePropertyValue` レイヤーへ統一。`editor_set_property` / `editor_add_component` の初期プロパティ適用 / `editor_set_udonsharp_field` が同一の型別適用とエラー分類を共有する。これに伴い Quaternion 書き込みがコンポーネント生成と UdonSharp フィールド書き込みの経路でも受け付けられるようになった（従来は `editor_set_property` のみ）。
+- `editor_add_component` の `properties_json` 初期プロパティ適用が、失敗時に診断を返すよう変更。プロパティ名の不一致・オブジェクト参照の解決失敗・値のパース失敗のいずれも、従来は無音で握りつぶされ成功レスポンスが返っていた。今後はそれぞれ診断エントリ（`properties_json[<name>]` を location に持つ）として応答に乗り、失敗が 1 件でもあれば `severity` を `warning` に上げる（コンポーネント追加自体は成功するため `success` は `true` のまま）。
 - README の「VRChat エコシステムナレッジ」節を実態に合わせて修正。「通常作業中に自動で読み書きする」は本リポジトリの CLAUDE.md 規約による挙動でありプラグイン利用者には適用されないため、`guide` スキル経由でナレッジが供給される旨に書き換えた。あわせて「やること」にエコシステムナレッジ同梱を追記。
 
 ### Fixed
 
-- セッションの bridge バージョン検査が `BRIDGE_NOT_FOUND` 診断を統一 4 キー形 `{severity, code, message, data}` で返すよう修正（issue #2）。従来は `data` キーを欠き、`activate_project` 応答の診断リスト経由で MCP クライアントが観測するワイヤ形がセッション診断間で不整合だった。
+- セッションの bridge バージョン検査が `BRIDGE_NOT_FOUND` 診断を統一 4 キー形 `{severity, code, message, data}` で返すよう修正。従来は `data` キーを欠き、`activate_project` 応答の診断リスト経由で MCP クライアントが観測するワイヤ形がセッション診断間で不整合だった。
 
 ## [0.5.197] - 2026-05-16
 
