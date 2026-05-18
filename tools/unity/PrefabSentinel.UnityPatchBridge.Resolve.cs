@@ -402,6 +402,27 @@ namespace PrefabSentinel
                 return false;
             }
 
+            // Issue #38: when the selector carries a hierarchy part, the
+            // ``#N``-aware segment resolution is delegated to the
+            // Unity-free ``SymbolPathResolver`` — the same resolver the
+            // live stage resolver uses — so a same-named-sibling segment
+            // is disambiguated by ``#N`` and an ambiguous bare segment is
+            // rejected rather than first-picked.  The resolver narrows
+            // the candidate set to one GameObject; the type filter then
+            // selects the component on it.  With no hierarchy part the
+            // whole subtree is scanned by type alone (unchanged).
+            Transform hierarchyTarget = null;
+            if (!string.IsNullOrWhiteSpace(hierarchySelector))
+            {
+                if (!TryResolveHierarchyPathWithResolver(
+                        root, hierarchySelector, out hierarchyTarget,
+                        out string hierarchyError))
+                {
+                    error = hierarchyError;
+                    return false;
+                }
+            }
+
             Component[] components = root.GetComponentsInChildren<Component>(true);
             List<Component> matches = new List<Component>();
             List<Component> typeMatches = new List<Component>();
@@ -434,13 +455,9 @@ namespace PrefabSentinel
                 }
 
                 typeMatches.Add(candidate);
-                if (!string.IsNullOrWhiteSpace(hierarchySelector))
+                if (hierarchyTarget != null && candidate.transform != hierarchyTarget)
                 {
-                    string candidatePath = BuildHierarchyPath(candidate.transform).Replace('\\', '/');
-                    if (!string.Equals(candidatePath, hierarchySelector, StringComparison.OrdinalIgnoreCase))
-                    {
-                        continue;
-                    }
+                    continue;
                 }
                 matches.Add(candidate);
             }
@@ -474,6 +491,91 @@ namespace PrefabSentinel
                 : $"component selector is ambiguous: '{selector}' matched {matches.Count} components ({matchedCandidates})";
             return false;
         }
+        /// <summary>
+        /// Issue #38: resolve the hierarchy part of a ``TypeName@/path``
+        /// component selector to a single live ``Transform`` by delegating
+        /// ``#N`` segment resolution to the Unity-free
+        /// <see cref="SymbolPathResolver"/>.  The selector path is rooted
+        /// at <paramref name="root"/>; its first segment names
+        /// <paramref name="root"/> itself when present.  An ambiguous
+        /// segment (same-named siblings, no ``#N``) is reported as an
+        /// error rather than first-picked.
+        /// </summary>
+        private static bool TryResolveHierarchyPathWithResolver(
+            GameObject root,
+            string hierarchySelector,
+            out Transform target,
+            out string error
+        )
+        {
+            target = null;
+            error = string.Empty;
+
+            string normalized = hierarchySelector.Trim()
+                .Replace('\\', '/')
+                .TrimStart('/');
+            if (string.IsNullOrEmpty(normalized))
+            {
+                error = "component selector hierarchy path is empty";
+                return false;
+            }
+
+            var idToTransform = new Dictionary<string, Transform>();
+            SymbolPathNode rootNode = BuildSelectorNode(
+                root.transform, idToTransform);
+            string[] segments = normalized.Split('/');
+
+            SymbolPathResolution resolution = SymbolPathResolver.Resolve(
+                new[] { rootNode }, segments);
+
+            if (resolution.Outcome == SymbolPathOutcome.Ambiguous)
+            {
+                error = $"component selector hierarchy path '{hierarchySelector}' "
+                    + $"matched {resolution.MatchCount} same-named objects; "
+                    + "disambiguate a segment with a '#N' suffix "
+                    + "(0-based, child order)";
+                return false;
+            }
+            if (resolution.Outcome != SymbolPathOutcome.Unique)
+            {
+                error = $"component selector hierarchy path '{hierarchySelector}' "
+                    + "did not match any object";
+                return false;
+            }
+
+            if (!idToTransform.TryGetValue(resolution.Node.Id, out target)
+                || target == null)
+            {
+                error = $"component selector hierarchy path '{hierarchySelector}' "
+                    + "resolved to a stale object";
+                return false;
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// Build a <see cref="SymbolPathNode"/> tree mirroring a live
+        /// transform subtree for selector resolution.  Each node's
+        /// ``Id`` keys <paramref name="idToTransform"/> so a unique
+        /// resolution maps back to the live ``Transform``; children are
+        /// in ``Transform.GetChild`` order.
+        /// </summary>
+        private static SymbolPathNode BuildSelectorNode(
+            Transform transform,
+            Dictionary<string, Transform> idToTransform
+        )
+        {
+            string id = transform.GetInstanceID().ToString();
+            idToTransform[id] = transform;
+            var children = new List<SymbolPathNode>(transform.childCount);
+            for (int i = 0; i < transform.childCount; i++)
+            {
+                children.Add(BuildSelectorNode(
+                    transform.GetChild(i), idToTransform));
+            }
+            return new SymbolPathNode(id, transform.name, children);
+        }
+
         private static bool TryFindGameObjectByPath(
             GameObject root,
             string hierarchyPath,

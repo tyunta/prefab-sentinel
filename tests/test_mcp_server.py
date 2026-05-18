@@ -18,6 +18,7 @@ from prefab_sentinel.mcp_server import _resolve_knowledge_dir, create_server
 from prefab_sentinel.mcp_validation import require_change_reason
 from prefab_sentinel.session import ProjectSession
 from prefab_sentinel.symbol_tree_builder import build_symbol_tree
+from tests._assertion_helpers import assert_error_envelope
 from tests.yaml_helpers import (
     YAML_HEADER,
     make_gameobject,
@@ -148,7 +149,7 @@ class TestToolRegistration(unittest.TestCase):
             # Editor bridge tools
             "editor_screenshot", "editor_select", "editor_frame",
             "editor_get_camera", "editor_set_camera",
-            "editor_refresh", "editor_recompile", "editor_recompile_and_wait",
+            "editor_refresh", "editor_recompile", "editor_recompile_async",
             "editor_instantiate",
             "editor_set_material", "editor_delete",
             "editor_get_blend_shapes", "editor_set_blend_shape",
@@ -179,8 +180,8 @@ class TestToolRegistration(unittest.TestCase):
             "inspect_hierarchy", "validate_runtime", "validate_all_wiring",
             "patch_apply",
             "copy_component_fields",
-            "set_component_fields",
-            "editor_set_component_fields",
+            "set_properties",
+            "editor_set_properties",
             # Editor exec tool (#74)
             "editor_run_script",
             # Issue #119: high-level UdonSharp authoring tools.
@@ -1140,9 +1141,10 @@ class TestSetPropertyTool(unittest.TestCase):
                     },
                 ))
 
-        # Verify the plan passed to patch_apply uses type name
+        # Issue #37: the plan's component field carries the
+        # hierarchy-qualified ``TypeName@/path`` selector.
         plan = mock_orch.patch_apply.call_args[1]["plan"]
-        self.assertEqual("MeshRenderer", plan["ops"][0]["component"])
+        self.assertEqual("MeshRenderer@/Cube", plan["ops"][0]["component"])
         # Verify symbol_resolution metadata
         self.assertEqual("MeshRenderer", result["symbol_resolution"]["resolved_component"])
 
@@ -1184,7 +1186,7 @@ class TestSetPropertyTool(unittest.TestCase):
                 ))
 
         plan = mock_orch.patch_apply.call_args[1]["plan"]
-        self.assertEqual("PlayerScript", plan["ops"][0]["component"])
+        self.assertEqual("PlayerScript@/Player", plan["ops"][0]["component"])
         self.assertEqual("PlayerScript", result["symbol_resolution"]["resolved_component"])
 
     def test_set_property_monobehaviour_no_script_name(self) -> None:
@@ -2441,10 +2443,17 @@ class TestEditorSideEffectTools(unittest.TestCase):
         self.assertTrue(result["success"])
 
     def test_editor_recompile_delegates(self) -> None:
+        # Issue #54: the bare ``editor_recompile`` tool is the
+        # synchronous/blocking variant, driving the
+        # ``editor_recompile_and_wait`` bridge action.
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_recompile", {}))
-        mock_send.assert_called_once_with(action="recompile_scripts", force_reimport=False)
+        mock_send.assert_called_once_with(
+            action="editor_recompile_and_wait",
+            timeout_sec=65,
+            request_extras={"timeout_sec": 60.0},
+        )
 
     def test_editor_run_tests_delegates(self) -> None:
         server = create_server()
@@ -2457,6 +2466,484 @@ class TestEditorSideEffectTools(unittest.TestCase):
         with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_run_tests", {"timeout_sec": 600}))
         mock_send.assert_called_once_with(action="run_integration_tests", timeout_sec=600)
+
+
+class TestEditorRecompileNaming(unittest.TestCase):
+    """T-54-1: the recompile pair has consistent sync/async naming.
+
+    ``editor_recompile`` (bare) is the synchronous/blocking tool;
+    ``editor_recompile_async`` (suffixed) is the fire-and-return tool.
+    No legacy ``editor_recompile_and_wait`` tool remains registered.
+    """
+
+    def test_recompile_pair_has_sync_async_naming(self) -> None:
+        server = create_server()
+        tools = _run(server.list_tools())
+        names = {t.name for t in tools}
+        self.assertIn("editor_recompile", names)
+        self.assertIn("editor_recompile_async", names)
+        self.assertNotIn("editor_recompile_and_wait", names)
+
+    def test_bare_recompile_is_synchronous_blocking(self) -> None:
+        # The bare name drives the synchronous ``editor_recompile_and_wait``
+        # bridge action and forwards a timeout budget.
+        server = create_server()
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_view.send_action",
+            return_value={"success": True},
+        ) as mock_send:
+            _run(server.call_tool("editor_recompile", {"timeout_sec": 30.0}))
+        mock_send.assert_called_once_with(
+            action="editor_recompile_and_wait",
+            timeout_sec=35,
+            request_extras={"timeout_sec": 30.0},
+        )
+
+    def test_async_recompile_is_fire_and_return(self) -> None:
+        # The suffixed name drives the fire-and-return ``recompile_scripts``
+        # bridge action without a wait budget.
+        server = create_server()
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_view.send_action",
+            return_value={"success": True},
+        ) as mock_send:
+            _run(server.call_tool("editor_recompile_async", {}))
+        mock_send.assert_called_once_with(
+            action="recompile_scripts", reimport_paths=[],
+        )
+
+
+class TestEditorRecompileReimportPath(unittest.TestCase):
+    """T-45-3: the fire-and-return recompile forwards caller reimport paths."""
+
+    def setUp(self) -> None:
+        # Decouple from any host-exported watch dir (issues #88/#89/#270).
+        os.environ.pop("UNITYTOOL_BRIDGE_WATCH_DIR", None)
+
+    def test_reimport_paths_forwarded_as_list(self) -> None:
+        server = create_server()
+        targets = ["Assets/Scripts/External.cs", "Assets/Scripts/Other.cs"]
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_view.send_action",
+            return_value={"success": True},
+        ) as mock_send:
+            _run(server.call_tool(
+                "editor_recompile_async",
+                {"reimport_paths": targets},
+            ))
+        mock_send.assert_called_once_with(
+            action="recompile_scripts", reimport_paths=targets,
+        )
+        # The caller-supplied list must reach the bridge as a JSON array.
+        sent = mock_send.call_args[1]["reimport_paths"]
+        self.assertEqual(targets, sent)
+        self.assertIsInstance(sent, list)
+
+    def test_omitted_reimport_paths_send_empty_list(self) -> None:
+        server = create_server()
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_view.send_action",
+            return_value={"success": True},
+        ) as mock_send:
+            _run(server.call_tool("editor_recompile_async", {}))
+        self.assertEqual([], mock_send.call_args[1]["reimport_paths"])
+
+
+class TestEditorAuditReclassification(unittest.TestCase):
+    """T-49-1 / T-49-2: audit-pair reclassification (issue #49).
+
+    Five editor tools newly gate on the audit pair; two no longer do.
+    """
+
+    def setUp(self) -> None:
+        os.environ.pop("UNITYTOOL_BRIDGE_WATCH_DIR", None)
+
+    def _newly_audited_calls(self) -> list[tuple[str, dict[str, Any]]]:
+        """The five #49 newly-audited tools and a no-audit argument set."""
+        return [
+            ("editor_execute_menu_item", {"menu_path": "Tools/X"}),
+            (
+                "editor_safe_save_prefab",
+                {
+                    "hierarchy_path": "/Obj",
+                    "asset_path": "Assets/X.prefab",
+                    "protect_components": [],
+                },
+            ),
+            (
+                "editor_create_udon_program_asset",
+                {"asset_path": "Assets/Scripts/X.cs"},
+            ),
+            ("editor_create_scene", {"asset_path": "Assets/Scenes/X.unity"}),
+            ("editor_save_scene", {}),
+        ]
+
+    def test_newly_audited_tools_gate_on_audit_pair(self) -> None:
+        """T-49-1: each newly-audited tool returns CHANGE_REASON_REQUIRED
+        when called without the audit pair."""
+        server = create_server()
+        for tool_name, args in self._newly_audited_calls():
+            with self.subTest(tool=tool_name):
+                with patch(
+                    "prefab_sentinel.mcp_tools_editor_write.send_action",
+                ) as w, patch(
+                    "prefab_sentinel.mcp_tools_editor_ops.send_action",
+                ) as o, patch(
+                    "prefab_sentinel.mcp_tools_editor_batch.send_action",
+                ) as b:
+                    _, result = _run(server.call_tool(tool_name, args))
+                    w.assert_not_called()
+                    o.assert_not_called()
+                    b.assert_not_called()
+                assert_error_envelope(
+                    result, code="CHANGE_REASON_REQUIRED", severity="error",
+                )
+
+    def test_de_audited_tools_reject_confirm_argument(self) -> None:
+        """T-49-2: the two de-audited tools raise TypeError on a confirm arg."""
+        server = create_server()
+        tools = server._tool_manager._tools
+        for tool_name in (
+            "editor_batch_set_blend_shape", "editor_apply_animation_clip",
+        ):
+            with self.subTest(tool=tool_name):
+                fn = tools[tool_name].fn
+                with self.assertRaises(TypeError) as cm:
+                    if tool_name == "editor_batch_set_blend_shape":
+                        fn(
+                            hierarchy_path="/Obj", shapes=[],
+                            confirm=True, change_reason="x",
+                        )
+                    else:
+                        fn(
+                            asset_path="Assets/X.anim",
+                            target_hierarchy_path="/Obj",
+                            confirm=True, change_reason="x",
+                        )
+                self.assertIn("confirm", str(cm.exception))
+
+
+class TestEditorAddUdonSharpComponentTool(unittest.TestCase):
+    """T-46-1 / T-46-2: UdonSharp program-asset pre-check codes pass through.
+
+    The pre-check codes are emitted by the C# bridge; the Python wrapper
+    must surface the bridge envelope verbatim rather than mask it.
+    """
+
+    def setUp(self) -> None:
+        os.environ.pop("UNITYTOOL_BRIDGE_WATCH_DIR", None)
+
+    def test_absent_program_asset_yields_actionable_code(self) -> None:
+        """T-46-1: the no-program-asset bridge envelope passes through."""
+        bridge_envelope = {
+            "success": False,
+            "severity": "error",
+            "code": "EDITOR_CTRL_UDON_ADD_NO_PROGRAM_ASSET",
+            "message": (
+                "No UdonSharpProgramAsset for VVMW.PlayController; create "
+                "one with editor_create_udon_program_asset then recompile."
+            ),
+            "data": {},
+            "diagnostics": [],
+        }
+        server = create_server()
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_udonsharp.send_action",
+            return_value=bridge_envelope,
+        ):
+            _, result = _run(server.call_tool(
+                "editor_add_udonsharp_component",
+                {
+                    "hierarchy_path": "/UI/PlayButton",
+                    "type_full_name": "VVMW.PlayController",
+                },
+            ))
+        assert_error_envelope(
+            result,
+            code="EDITOR_CTRL_UDON_ADD_NO_PROGRAM_ASSET",
+            severity="error",
+            message_match=r"recompile",
+        )
+
+    def test_uncompiled_program_asset_yields_actionable_code(self) -> None:
+        """T-46-2: the not-compiled bridge envelope passes through."""
+        bridge_envelope = {
+            "success": False,
+            "severity": "error",
+            "code": "EDITOR_CTRL_UDON_ADD_PROGRAM_NOT_COMPILED",
+            "message": (
+                "UdonSharpProgramAsset for VVMW.PlayController is not "
+                "compiled; run editor_recompile then retry."
+            ),
+            "data": {},
+            "diagnostics": [],
+        }
+        server = create_server()
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_udonsharp.send_action",
+            return_value=bridge_envelope,
+        ):
+            _, result = _run(server.call_tool(
+                "editor_add_udonsharp_component",
+                {
+                    "hierarchy_path": "/UI/PlayButton",
+                    "type_full_name": "VVMW.PlayController",
+                },
+            ))
+        assert_error_envelope(
+            result,
+            code="EDITOR_CTRL_UDON_ADD_PROGRAM_NOT_COMPILED",
+            severity="error",
+        )
+
+
+class TestEditorSetPropertyValueSemantics(unittest.TestCase):
+    """T-52-1: editor_set_property distinguishes empty-string from unspecified."""
+
+    def setUp(self) -> None:
+        os.environ.pop("UNITYTOOL_BRIDGE_WATCH_DIR", None)
+
+    def test_empty_string_write_carries_value_present_marker(self) -> None:
+        server = create_server()
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_ops.send_action",
+            return_value={"success": True},
+        ) as mock_send:
+            _run(server.call_tool(
+                "editor_set_property",
+                {
+                    "hierarchy_path": "/Obj",
+                    "component_type": "MyComp",
+                    "property_name": "label",
+                    "value": "",
+                },
+            ))
+        kwargs = mock_send.call_args.kwargs
+        self.assertEqual("", kwargs["property_value"])
+        self.assertTrue(kwargs["property_value_present"])
+
+    def test_unspecified_value_carries_absent_marker(self) -> None:
+        server = create_server()
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_ops.send_action",
+            return_value={"success": True},
+        ) as mock_send:
+            _run(server.call_tool(
+                "editor_set_property",
+                {
+                    "hierarchy_path": "/Obj",
+                    "component_type": "MyComp",
+                    "property_name": "target",
+                    "object_reference": "/Other",
+                },
+            ))
+        kwargs = mock_send.call_args.kwargs
+        self.assertNotIn("property_value", kwargs)
+        self.assertEqual("/Other", kwargs["object_reference"])
+
+    def test_omitting_value_entirely_marks_value_not_present(self) -> None:
+        server = create_server()
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_ops.send_action",
+            return_value={"success": True},
+        ) as mock_send:
+            _run(server.call_tool(
+                "editor_set_property",
+                {
+                    "hierarchy_path": "/Obj",
+                    "component_type": "MyComp",
+                    "property_name": "label",
+                },
+            ))
+        kwargs = mock_send.call_args.kwargs
+        self.assertFalse(kwargs["property_value_present"])
+        self.assertNotIn("property_value", kwargs)
+
+
+class TestEditorSetUdonSharpFieldValueSemantics(unittest.TestCase):
+    """T-52-2: editor_set_udonsharp_field accepts an empty-string value."""
+
+    def setUp(self) -> None:
+        os.environ.pop("UNITYTOOL_BRIDGE_WATCH_DIR", None)
+
+    def test_empty_string_value_is_accepted(self) -> None:
+        server = create_server()
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_udonsharp.send_action",
+            return_value={"success": True},
+        ) as mock_send:
+            _, result = _run(server.call_tool(
+                "editor_set_udonsharp_field",
+                {
+                    "hierarchy_path": "/UI/PlayButton",
+                    "property_name": "label",
+                    "value": "",
+                },
+            ))
+        # No client-side NO_VALUE rejection for an empty-string write.
+        self.assertNotEqual(
+            "EDITOR_CTRL_UDON_SET_FIELD_NO_VALUE", result.get("code"),
+        )
+        kwargs = mock_send.call_args.kwargs
+        self.assertEqual("", kwargs["property_value"])
+        self.assertTrue(kwargs["property_value_present"])
+
+    def test_unspecified_value_with_empty_reference_is_rejected(self) -> None:
+        server = create_server()
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_udonsharp.send_action",
+        ) as mock_send:
+            _, result = _run(server.call_tool(
+                "editor_set_udonsharp_field",
+                {
+                    "hierarchy_path": "/UI/PlayButton",
+                    "property_name": "label",
+                },
+            ))
+            mock_send.assert_not_called()
+        assert_error_envelope(
+            result,
+            code="EDITOR_CTRL_UDON_SET_FIELD_NO_VALUE",
+            severity="error",
+        )
+
+
+class TestEditorDictPathValueSemantics(unittest.TestCase):
+    """T-52-3: dict-path tools keep an empty-string entry distinct from absent."""
+
+    def setUp(self) -> None:
+        os.environ.pop("UNITYTOOL_BRIDGE_WATCH_DIR", None)
+
+    def test_editor_set_properties_empty_string_entry_marked_present(self) -> None:
+        server = create_server()
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_ops.send_action",
+            return_value={"success": True},
+        ) as mock_send:
+            _run(server.call_tool(
+                "editor_set_properties",
+                {
+                    "hierarchy_path": "/Obj",
+                    "component_type": "MyComp",
+                    "properties": [
+                        {"property_name": "label", "value": ""},
+                        {"property_name": "target", "object_reference": "/Other"},
+                    ],
+                },
+            ))
+        ops = json.loads(mock_send.call_args.kwargs["batch_operations_json"])
+        # Empty-string entry: value present. object_reference entry: absent.
+        self.assertEqual("", ops[0]["value"])
+        self.assertTrue(ops[0]["value_present"])
+        self.assertFalse(ops[1]["value_present"])
+
+    def test_editor_batch_set_property_empty_string_op_marked_present(self) -> None:
+        server = create_server()
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_batch.send_action",
+            return_value={"success": True},
+        ) as mock_send:
+            _run(server.call_tool(
+                "editor_batch_set_property",
+                {
+                    "operations": [
+                        {
+                            "hierarchy_path": "/Obj",
+                            "component_type": "MyComp",
+                            "property_name": "label",
+                            "value": "",
+                        },
+                        {
+                            "hierarchy_path": "/Obj",
+                            "component_type": "MyComp",
+                            "property_name": "target",
+                            "object_reference": "/Other",
+                        },
+                    ],
+                },
+            ))
+        ops = json.loads(mock_send.call_args.kwargs["batch_operations_json"])
+        self.assertEqual("", ops[0]["value"])
+        self.assertTrue(ops[0]["value_present"])
+        self.assertFalse(ops[1]["value_present"])
+
+
+class TestEditorArgumentNaming(unittest.TestCase):
+    """T-53-1: editor_* address/property arguments conform to the conventions.
+
+    A conforming argument name is accepted; the legacy name raises TypeError.
+    """
+
+    def setUp(self) -> None:
+        os.environ.pop("UNITYTOOL_BRIDGE_WATCH_DIR", None)
+
+    def _tool_fn(self, name: str):
+        return create_server()._tool_manager._tools[name].fn
+
+    def test_conforming_argument_names_accepted(self) -> None:
+        # editor_set_parent: parent_hierarchy_path
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_ops.send_action",
+            return_value={"success": True},
+        ) as send:
+            self._tool_fn("editor_set_parent")(
+                hierarchy_path="/A", parent_hierarchy_path="/B",
+            )
+        send.assert_called_once()
+        # editor_open_scene: asset_path
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_batch.send_action",
+            return_value={"success": True},
+        ) as send:
+            self._tool_fn("editor_open_scene")(asset_path="Assets/X.unity")
+        send.assert_called_once()
+        # editor_set_material: material_asset_path
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_write.send_action",
+            return_value={"success": True},
+        ) as send:
+            self._tool_fn("editor_set_material")(
+                hierarchy_path="/A", material_index=0,
+                material_asset_path="Assets/M.mat",
+            )
+        send.assert_called_once()
+        # editor_wire_persistent_listener: target_hierarchy_path
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_udonsharp.send_action",
+            return_value={"success": True},
+        ) as send:
+            self._tool_fn("editor_wire_persistent_listener")(
+                hierarchy_path="/A", event_path="onValueChanged",
+                target_hierarchy_path="/B", method="M", arg="x",
+            )
+        send.assert_called_once()
+
+    def test_legacy_parent_path_argument_raises_type_error(self) -> None:
+        fn = self._tool_fn("editor_set_parent")
+        with self.assertRaises(TypeError) as cm:
+            fn(hierarchy_path="/A", parent_path="/B")
+        self.assertIn("parent_path", str(cm.exception))
+
+    def test_legacy_scene_path_argument_raises_type_error(self) -> None:
+        fn = self._tool_fn("editor_open_scene")
+        with self.assertRaises(TypeError) as cm:
+            fn(scene_path="Assets/X.unity")
+        self.assertIn("scene_path", str(cm.exception))
+
+    def test_legacy_material_path_argument_raises_type_error(self) -> None:
+        fn = self._tool_fn("editor_set_material")
+        with self.assertRaises(TypeError) as cm:
+            fn(hierarchy_path="/A", material_index=0, material_path="Assets/M.mat")
+        self.assertIn("material_path", str(cm.exception))
+
+    def test_legacy_target_path_argument_raises_type_error(self) -> None:
+        fn = self._tool_fn("editor_wire_persistent_listener")
+        with self.assertRaises(TypeError) as cm:
+            fn(
+                hierarchy_path="/A", event_path="onValueChanged",
+                target_path="/B", method="M", arg="x",
+            )
+        self.assertIn("target_path", str(cm.exception))
 
 
 class TestEditorWriteTools(unittest.TestCase):
@@ -2515,7 +3002,7 @@ class TestEditorWriteTools(unittest.TestCase):
             _run(server.call_tool("editor_set_material", {
                 "hierarchy_path": "/Body",
                 "material_index": 0,
-                "material_guid": "abc123def456",
+                "material_asset_guid": "abc123def456",
             }))
         mock_send.assert_called_once_with(
             action="set_material",
@@ -2565,7 +3052,7 @@ class TestEditorWriteTools(unittest.TestCase):
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_batch.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_batch_set_material_property", {
-                "material_path": "Assets/Materials/Hair.mat",
+                "material_asset_path": "Assets/Materials/Hair.mat",
                 "properties": [
                     {"name": "_Color", "value": "[1, 1, 1, 1]"},
                 ],
@@ -2580,7 +3067,7 @@ class TestEditorWriteTools(unittest.TestCase):
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_batch.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_batch_set_material_property", {
-                "material_guid": "abc123def456abc123def456abc123de",
+                "material_asset_guid": "abc123def456abc123def456abc123de",
                 "properties": [
                     {"name": "_Float", "value": 0.5},
                 ],
@@ -2897,11 +3384,15 @@ class TestEditorWriteTools(unittest.TestCase):
         with patch("prefab_sentinel.mcp_tools_editor_write.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_execute_menu_item", {
                 "menu_path": "Tools/NDMF/Manual Bake",
+                "confirm": True,
+                "change_reason": "run bake",
             }))
         mock_send.assert_called_once_with(
             action="execute_menu_item",
             menu_path="Tools/NDMF/Manual Bake",
             assume_compiled=False,
+            confirm=True,
+            change_reason="run bake",
         )
 
     def test_editor_execute_menu_item_forwards_assume_compiled_true(self) -> None:
@@ -2914,6 +3405,8 @@ class TestEditorWriteTools(unittest.TestCase):
             _run(server.call_tool("editor_execute_menu_item", {
                 "menu_path": "Tools/NDMF/Manual Bake",
                 "assume_compiled": True,
+                "confirm": True,
+                "change_reason": "run bake",
             }))
         kwargs = mock_send.call_args.kwargs
         self.assertEqual(True, kwargs["assume_compiled"])
@@ -2942,6 +3435,8 @@ class TestEditorWriteTools(unittest.TestCase):
         ):
             _, envelope = _run(server.call_tool("editor_execute_menu_item", {
                 "menu_path": "Tools/NDMF/Manual Bake",
+                "confirm": True,
+                "change_reason": "run bake",
             }))
         # Pin verbatim round-trip: the wrapper must not mutate any field
         # of the bridge envelope (per the docstring above and Method
@@ -4507,8 +5002,14 @@ class TestCopyComponentFieldsTool(unittest.TestCase):
         self.assertEqual("CHANGE_REASON_REQUIRED", result["code"])
 
 
-class TestSetComponentFieldsTool(unittest.TestCase):
-    """Test the set_component_fields MCP tool."""
+class TestSetPropertiesTool(unittest.TestCase):
+    """Test the set_properties MCP tool (issue #41 rename of
+    ``set_component_fields``).
+
+    ``symbol_path`` resolves directly to a component — there is no
+    separate ``component`` argument — and the multi-property dict is
+    named ``properties``.
+    """
 
     def _meshrenderer_prefab(self, go_name: str = "Cube") -> str:
         return _make_simple_meshrenderer_prefab(go_name)
@@ -4554,8 +5055,15 @@ class TestSetComponentFieldsTool(unittest.TestCase):
         }
         return resp
 
-    def test_dry_run_multiple_fields(self) -> None:
-        """Dry-run with 2 fields builds a 2-op plan and enriches symbol_resolution."""
+    def test_legacy_tool_name_not_registered(self) -> None:
+        """T-41-2: ``set_component_fields`` is not registered; ``set_properties`` is."""
+        server = create_server()
+        names = {t.name for t in _run(server.list_tools())}
+        self.assertIn("set_properties", names)
+        self.assertNotIn("set_component_fields", names)
+
+    def test_resolves_component_with_no_component_argument(self) -> None:
+        """T-41-1: a component-ending symbol_path resolves with no component arg."""
         text = self._meshrenderer_prefab()
         server = create_server()
         mock_resp = self._mock_patch_apply_response(dry_run=True)
@@ -4572,12 +5080,56 @@ class TestSetComponentFieldsTool(unittest.TestCase):
                 mock_cls.default.return_value = mock_orch
 
                 _, result = _run(server.call_tool(
-                    "set_component_fields",
+                    "set_properties",
                     {
                         "asset_path": str(p),
-                        "symbol_path": "Cube",
-                        "component": "MeshRenderer",
-                        "fields": {"m_Enabled": 0, "m_CastShadows": 0},
+                        "symbol_path": "Cube/MeshRenderer",
+                        "properties": {"m_Enabled": 0},
+                    },
+                ))
+
+        self.assertTrue(result["success"])
+        self.assertEqual(
+            "MeshRenderer", result["symbol_resolution"]["resolved_component"],
+        )
+
+    def test_component_keyword_argument_raises_type_error(self) -> None:
+        """T-41-1: passing a residual ``component`` keyword raises ``TypeError``."""
+        server = create_server()
+        registered = server._tool_manager._tools
+        fn = registered["set_properties"].fn
+        with self.assertRaises(TypeError) as cm:
+            fn(
+                asset_path="x.prefab",
+                symbol_path="Cube/MeshRenderer",
+                component="MeshRenderer",
+                properties={"m_Enabled": 0},
+            )
+        self.assertIn("component", str(cm.exception))
+
+    def test_dry_run_multiple_properties(self) -> None:
+        """Dry-run with 2 properties builds a 2-op plan and enriches symbol_resolution."""
+        text = self._meshrenderer_prefab()
+        server = create_server()
+        mock_resp = self._mock_patch_apply_response(dry_run=True)
+
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "test.prefab"
+            p.write_text(text, encoding="utf-8")
+
+            with patch(
+                "prefab_sentinel.session_cache.Phase1Orchestrator",
+            ) as mock_cls:
+                mock_orch = MagicMock()
+                mock_orch.patch_apply.return_value = mock_resp
+                mock_cls.default.return_value = mock_orch
+
+                _, result = _run(server.call_tool(
+                    "set_properties",
+                    {
+                        "asset_path": str(p),
+                        "symbol_path": "Cube/MeshRenderer",
+                        "properties": {"m_Enabled": 0, "m_CastShadows": 0},
                     },
                 ))
 
@@ -4590,12 +5142,48 @@ class TestSetComponentFieldsTool(unittest.TestCase):
         self.assertIn("m_Enabled", op_paths)
         self.assertIn("m_CastShadows", op_paths)
         self.assertEqual(2, len(plan["ops"]))
+        # Issue #37: both ops carry the hierarchy-qualified selector.
+        for op in plan["ops"]:
+            self.assertEqual("MeshRenderer@/Cube", op["component"])
         sr = result["symbol_resolution"]
         self.assertEqual("MeshRenderer", sr["resolved_component"])
         self.assertIn("m_Enabled", sr["fields"])
         self.assertIn("m_CastShadows", sr["fields"])
 
-    def test_confirm_multiple_fields(self) -> None:
+    def test_uniquely_addressed_component_resolves_despite_siblings(self) -> None:
+        """T-37-2: a unique symbol_path resolves despite same-type siblings."""
+        text = self._double_meshrenderer_prefab()
+        server = create_server()
+        mock_resp = self._mock_patch_apply_response(dry_run=True)
+
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "test.prefab"
+            p.write_text(text, encoding="utf-8")
+
+            with patch(
+                "prefab_sentinel.session_cache.Phase1Orchestrator",
+            ) as mock_cls:
+                mock_orch = MagicMock()
+                mock_orch.patch_apply.return_value = mock_resp
+                mock_cls.default.return_value = mock_orch
+
+                # Two MeshRenderers on one GameObject — addressing the
+                # first by #0 must resolve uniquely (not raise ambiguity).
+                # ``m_GameObject`` is the property present on the bare
+                # synthetic MeshRenderer fixture.
+                _, result = _run(server.call_tool(
+                    "set_properties",
+                    {
+                        "asset_path": str(p),
+                        "symbol_path": "Cube/MeshRenderer#0",
+                        "properties": {"m_GameObject": {"fileID": 100}},
+                    },
+                ))
+
+        self.assertTrue(result["success"])
+        self.assertEqual("300", result["symbol_resolution"]["file_id"])
+
+    def test_confirm_multiple_properties(self) -> None:
         """confirm=True applies the patch and includes auto_refresh in result."""
         text = self._meshrenderer_prefab()
         mock_resp = self._mock_patch_apply_response(dry_run=False)
@@ -4615,12 +5203,11 @@ class TestSetComponentFieldsTool(unittest.TestCase):
                 report_path = Path(td) / "report.json"
                 server = create_server(project_root=td)
                 _, result = _run(server.call_tool(
-                    "set_component_fields",
+                    "set_properties",
                     {
                         "asset_path": str(p),
-                        "symbol_path": "Cube",
-                        "component": "MeshRenderer",
-                        "fields": {"m_Enabled": 0},
+                        "symbol_path": "Cube/MeshRenderer",
+                        "properties": {"m_Enabled": 0},
                         "confirm": True,
                         "change_reason": "disable mesh renderer",
                         "out_report": str(report_path),
@@ -4664,12 +5251,11 @@ class TestSetComponentFieldsTool(unittest.TestCase):
 
                 server = create_server(project_root=td)
                 _, result = _run(server.call_tool(
-                    "set_component_fields",
+                    "set_properties",
                     {
                         "asset_path": str(p),
-                        "symbol_path": "Player",
-                        "component": "PlayerScript",
-                        "fields": {"speed": 10},
+                        "symbol_path": "Player/MonoBehaviour(PlayerScript)",
+                        "properties": {"speed": 10},
                     },
                 ))
 
@@ -4677,16 +5263,8 @@ class TestSetComponentFieldsTool(unittest.TestCase):
         sr = result["symbol_resolution"]
         self.assertEqual("PlayerScript", sr["resolved_component"])
 
-    def test_reference_value_in_fields(self) -> None:
-        """Reference dict values are passed through unchanged to the patch plan.
-
-        Targets the array container ``m_Materials`` so the test also locks
-        the property-existence guard's array-field handling: only the
-        per-element path (``m_Materials.Array.data[0]``) appears in the
-        prefab YAML, but ``_collect_known_property_paths`` must surface the
-        container name so the whole-array assignment is not a false SER003
-        (issue #109 follow-up).
-        """
+    def test_reference_value_in_properties(self) -> None:
+        """Reference dict values are passed through unchanged to the patch plan."""
         text = YAML_HEADER + "\n".join([
             make_gameobject("100", "Cube", ["200", "300"]),
             make_transform("200", "100"),
@@ -4708,12 +5286,11 @@ class TestSetComponentFieldsTool(unittest.TestCase):
                 mock_cls.default.return_value = mock_orch
 
                 _, result = _run(server.call_tool(
-                    "set_component_fields",
+                    "set_properties",
                     {
                         "asset_path": str(p),
-                        "symbol_path": "Cube",
-                        "component": "MeshRenderer",
-                        "fields": {"m_Materials": ref_value},
+                        "symbol_path": "Cube/MeshRenderer",
+                        "properties": {"m_Materials": ref_value},
                     },
                 ))
 
@@ -4732,21 +5309,21 @@ class TestSetComponentFieldsTool(unittest.TestCase):
             p.write_text(text, encoding="utf-8")
 
             _, result = _run(server.call_tool(
-                "set_component_fields",
+                "set_properties",
                 {
                     "asset_path": str(p),
-                    "symbol_path": "NonExistent",
-                    "component": "MeshRenderer",
-                    "fields": {"m_Enabled": 0},
+                    "symbol_path": "NonExistent/MeshRenderer",
+                    "properties": {"m_Enabled": 0},
                 },
             ))
 
-        self.assertFalse(result["success"])
-        self.assertEqual("SYMBOL_NOT_FOUND", result["code"])
+        assert_error_envelope(
+            result, code="SYMBOL_NOT_FOUND", severity="error",
+        )
         self.assertIn("suggestions", result["data"])
 
     def test_symbol_ambiguous(self) -> None:
-        """SYMBOL_AMBIGUOUS when symbol_path matches multiple GameObjects."""
+        """SYMBOL_AMBIGUOUS when symbol_path matches multiple components."""
         text = self._two_same_name_go_prefab()
         server = create_server()
 
@@ -4754,43 +5331,22 @@ class TestSetComponentFieldsTool(unittest.TestCase):
             p = Path(td) / "test.prefab"
             p.write_text(text, encoding="utf-8")
 
+            # Two root GameObjects named 'Cube', each with a MeshRenderer.
             _, result = _run(server.call_tool(
-                "set_component_fields",
-                {
-                    "asset_path": str(p),
-                    "symbol_path": "Cube",
-                    "component": "MeshRenderer",
-                    "fields": {"m_Enabled": 0},
-                },
-            ))
-
-        self.assertFalse(result["success"])
-        self.assertEqual("SYMBOL_AMBIGUOUS", result["code"])
-
-    def test_symbol_not_game_object(self) -> None:
-        """SYMBOL_NOT_GAME_OBJECT when symbol_path resolves to a component."""
-        text = self._meshrenderer_prefab()
-        server = create_server()
-
-        with tempfile.TemporaryDirectory() as td:
-            p = Path(td) / "test.prefab"
-            p.write_text(text, encoding="utf-8")
-
-            _, result = _run(server.call_tool(
-                "set_component_fields",
+                "set_properties",
                 {
                     "asset_path": str(p),
                     "symbol_path": "Cube/MeshRenderer",
-                    "component": "MeshRenderer",
-                    "fields": {"m_Enabled": 0},
+                    "properties": {"m_Enabled": 0},
                 },
             ))
 
-        self.assertFalse(result["success"])
-        self.assertEqual("SYMBOL_NOT_GAME_OBJECT", result["code"])
+        assert_error_envelope(
+            result, code="SYMBOL_AMBIGUOUS", severity="error",
+        )
 
-    def test_component_not_found(self) -> None:
-        """SER003 (component_not_found) when the named component is absent."""
+    def test_symbol_not_component(self) -> None:
+        """SYMBOL_NOT_COMPONENT when symbol_path resolves to a GameObject."""
         text = self._meshrenderer_prefab()
         server = create_server()
 
@@ -4799,29 +5355,21 @@ class TestSetComponentFieldsTool(unittest.TestCase):
             p.write_text(text, encoding="utf-8")
 
             _, result = _run(server.call_tool(
-                "set_component_fields",
+                "set_properties",
                 {
                     "asset_path": str(p),
                     "symbol_path": "Cube",
-                    "component": "BoxCollider",
-                    "fields": {"m_IsTrigger": True},
+                    "properties": {"m_Enabled": 0},
                 },
             ))
 
-        self.assertFalse(result["success"])
-        self.assertEqual("SER003", result["code"])
-        self.assertEqual("error", result["severity"])
-        diagnostics = result["diagnostics"]
-        self.assertEqual(1, len(diagnostics))
-        # Issue #304: the diagnostic surfaces on the wire in the
-        # unified ``{severity, code, message, data}`` shape; the
-        # ``component_not_found`` category lives under ``code``.
-        self.assertEqual("component_not_found", diagnostics[0]["code"])
-        self.assertIn("suggestions", result["data"])
+        assert_error_envelope(
+            result, code="SYMBOL_NOT_COMPONENT", severity="error",
+        )
 
-    def test_component_ambiguous(self) -> None:
-        """COMPONENT_AMBIGUOUS when multiple components of same type exist on the GO."""
-        text = self._double_meshrenderer_prefab()
+    def test_property_not_found(self) -> None:
+        """SER003 (property_not_found) when a named property is absent."""
+        text = self._meshrenderer_prefab()
         server = create_server()
 
         with tempfile.TemporaryDirectory() as td:
@@ -4829,126 +5377,111 @@ class TestSetComponentFieldsTool(unittest.TestCase):
             p.write_text(text, encoding="utf-8")
 
             _, result = _run(server.call_tool(
-                "set_component_fields",
+                "set_properties",
                 {
                     "asset_path": str(p),
-                    "symbol_path": "Cube",
-                    "component": "MeshRenderer",
-                    "fields": {"m_Enabled": 0},
+                    "symbol_path": "Cube/MeshRenderer",
+                    "properties": {"m_NonexistentProp": True},
                 },
             ))
 
-        self.assertFalse(result["success"])
-        self.assertEqual("COMPONENT_AMBIGUOUS", result["code"])
-        self.assertIn("available_components", result["data"])
+        assert_error_envelope(result, code="SER003", severity="error")
+        diagnostics = result["diagnostics"]
+        self.assertEqual(1, len(diagnostics))
+        self.assertEqual("property_not_found", diagnostics[0]["code"])
 
-    def test_empty_fields(self) -> None:
-        """EMPTY_FIELDS error returned before any file I/O when fields dict is empty."""
+    def test_empty_properties(self) -> None:
+        """EMPTY_FIELDS error returned before any file I/O when properties dict is empty."""
         server = create_server()
 
         _, result = _run(server.call_tool(
-            "set_component_fields",
+            "set_properties",
             {
                 "asset_path": "Assets/DoesNotExist.prefab",
-                "symbol_path": "Cube",
-                "component": "MeshRenderer",
-                "fields": {},
+                "symbol_path": "Cube/MeshRenderer",
+                "properties": {},
             },
         ))
 
-        self.assertFalse(result["success"])
-        self.assertEqual("EMPTY_FIELDS", result["code"])
+        assert_error_envelope(result, code="EMPTY_FIELDS", severity="error")
 
     def test_confirm_requires_change_reason(self) -> None:
-        """CHANGE_REASON_REQUIRED when confirm=True without change_reason.
-
-        Uses non-existent asset path to guarantee no file I/O occurs before validation.
-        """
+        """CHANGE_REASON_REQUIRED when confirm=True without change_reason."""
         server = create_server()
 
         _, result = _run(server.call_tool(
-            "set_component_fields",
+            "set_properties",
             {
                 "asset_path": "Assets/DoesNotExist.prefab",
-                "symbol_path": "Cube",
-                "component": "MeshRenderer",
-                "fields": {"m_Enabled": 0},
+                "symbol_path": "Cube/MeshRenderer",
+                "properties": {"m_Enabled": 0},
                 "confirm": True,
             },
         ))
 
-        self.assertFalse(result["success"])
-        self.assertEqual("CHANGE_REASON_REQUIRED", result["code"])
+        assert_error_envelope(
+            result, code="CHANGE_REASON_REQUIRED", severity="error",
+        )
 
     def test_confirm_requires_out_report(self) -> None:
-        """OUT_REPORT_REQUIRED when confirm=True with change_reason but no out_report.
-
-        Uses non-existent asset path to guarantee no file I/O occurs before validation.
-        """
+        """OUT_REPORT_REQUIRED when confirm=True with change_reason but no out_report."""
         server = create_server()
 
         _, result = _run(server.call_tool(
-            "set_component_fields",
+            "set_properties",
             {
                 "asset_path": "Assets/DoesNotExist.prefab",
-                "symbol_path": "Cube",
-                "component": "MeshRenderer",
-                "fields": {"m_Enabled": 0},
+                "symbol_path": "Cube/MeshRenderer",
+                "properties": {"m_Enabled": 0},
                 "confirm": True,
                 "change_reason": "test reason",
             },
         ))
 
-        self.assertFalse(result["success"])
-        self.assertEqual("OUT_REPORT_REQUIRED", result["code"])
+        assert_error_envelope(
+            result, code="OUT_REPORT_REQUIRED", severity="error",
+        )
 
     def test_out_report_outside_project_rejected(self) -> None:
-        """OUT_REPORT_OUTSIDE_PROJECT when out_report resolves outside project_root.
-
-        Uses non-existent asset path to guarantee no file I/O occurs before validation.
-        """
+        """OUT_REPORT_OUTSIDE_PROJECT when out_report resolves outside project_root."""
         with tempfile.TemporaryDirectory() as td:
             server = create_server(project_root=td)
             _, result = _run(server.call_tool(
-                "set_component_fields",
+                "set_properties",
                 {
                     "asset_path": "Assets/DoesNotExist.prefab",
-                    "symbol_path": "Cube",
-                    "component": "MeshRenderer",
-                    "fields": {"m_Enabled": 0},
+                    "symbol_path": "Cube/MeshRenderer",
+                    "properties": {"m_Enabled": 0},
                     "confirm": True,
                     "change_reason": "test reason",
                     "out_report": "/tmp/outside_project.json",
                 },
             ))
 
-        self.assertFalse(result["success"])
-        self.assertEqual("OUT_REPORT_OUTSIDE_PROJECT", result["code"])
+        assert_error_envelope(
+            result, code="OUT_REPORT_OUTSIDE_PROJECT", severity="error",
+        )
         self.assertFalse(Path("/tmp/outside_project.json").exists())
 
     def test_out_report_rejected_when_no_project_root(self) -> None:
-        """PROJECT_ROOT_REQUIRED when out_report is supplied but session has no project_root.
-
-        Without project_root the containment boundary is unavailable; write must be
-        rejected (fail-safe) rather than silently unconstrained (fail-open).
-        """
+        """PROJECT_ROOT_REQUIRED when out_report is supplied but session has no project_root."""
         with tempfile.TemporaryDirectory() as td:
             out_path = Path(td) / "report.json"
             server = create_server()  # no project_root
             _, result = _run(server.call_tool(
-                "set_component_fields",
+                "set_properties",
                 {
                     "asset_path": "Assets/DoesNotExist.prefab",
-                    "symbol_path": "Cube",
-                    "component": "MeshRenderer",
-                    "fields": {"m_Enabled": 0},
+                    "symbol_path": "Cube/MeshRenderer",
+                    "properties": {"m_Enabled": 0},
                     "confirm": True,
                     "change_reason": "test reason",
                     "out_report": str(out_path),
                 },
             ))
-            self.assertFalse(result["success"])
-            self.assertEqual("PROJECT_ROOT_REQUIRED", result["code"])
+            assert_error_envelope(
+                result, code="PROJECT_ROOT_REQUIRED", severity="error",
+            )
             self.assertFalse(out_path.exists())
 
     def test_dry_run_explicit_parameter(self) -> None:
@@ -4969,12 +5502,11 @@ class TestSetComponentFieldsTool(unittest.TestCase):
 
                 server = create_server(project_root=td)
                 _, result = _run(server.call_tool(
-                    "set_component_fields",
+                    "set_properties",
                     {
                         "asset_path": str(p),
-                        "symbol_path": "Cube",
-                        "component": "MeshRenderer",
-                        "fields": {"m_Enabled": 0},
+                        "symbol_path": "Cube/MeshRenderer",
+                        "properties": {"m_Enabled": 0},
                         "dry_run": True,
                     },
                 ))
@@ -5002,12 +5534,11 @@ class TestSetComponentFieldsTool(unittest.TestCase):
 
                 server = create_server(project_root=td)
                 _, result = _run(server.call_tool(
-                    "set_component_fields",
+                    "set_properties",
                     {
                         "asset_path": str(p),
-                        "symbol_path": "Cube",
-                        "component": "MeshRenderer",
-                        "fields": {"m_Enabled": 0},
+                        "symbol_path": "Cube/MeshRenderer",
+                        "properties": {"m_Enabled": 0},
                         "dry_run": True,
                         "confirm": True,
                     },
@@ -5036,12 +5567,11 @@ class TestSetComponentFieldsTool(unittest.TestCase):
 
                 server = create_server(project_root=td)
                 _, result = _run(server.call_tool(
-                    "set_component_fields",
+                    "set_properties",
                     {
                         "asset_path": str(p),
-                        "symbol_path": "Cube",
-                        "component": "MeshRenderer",
-                        "fields": {"m_Enabled": 0},
+                        "symbol_path": "Cube/MeshRenderer",
+                        "properties": {"m_Enabled": 0},
                         "dry_run": True,
                         "change_reason": "",
                     },
@@ -5071,12 +5601,11 @@ class TestSetComponentFieldsTool(unittest.TestCase):
 
                 server = create_server(project_root=td)
                 _, result = _run(server.call_tool(
-                    "set_component_fields",
+                    "set_properties",
                     {
                         "asset_path": str(p),
-                        "symbol_path": "Cube",
-                        "component": "MeshRenderer",
-                        "fields": {"m_Enabled": 0},
+                        "symbol_path": "Cube/MeshRenderer",
+                        "properties": {"m_Enabled": 0},
                         "confirm": True,
                         "change_reason": "test write report",
                         "out_report": str(report_path),
@@ -5089,7 +5618,7 @@ class TestSetComponentFieldsTool(unittest.TestCase):
                 self.assertEqual(result, written)
 
     def test_value_coercion_passthrough(self) -> None:
-        """Mixed field types (int, float, str, dict) are passed through unchanged to plan ops."""
+        """Mixed value types (int, float, str, dict) pass through unchanged to plan ops."""
         text = self._meshrenderer_prefab()
         mock_resp = self._mock_patch_apply_response(dry_run=True)
         ref_value = {"fileID": 100, "guid": "abc", "type": 2}
@@ -5107,16 +5636,11 @@ class TestSetComponentFieldsTool(unittest.TestCase):
 
                 server = create_server(project_root=td)
                 _, result = _run(server.call_tool(
-                    "set_component_fields",
+                    "set_properties",
                     {
                         "asset_path": str(p),
-                        "symbol_path": "Cube",
-                        "component": "MeshRenderer",
-                        # All four field paths exist on the synthetic fixture
-                        # so the property-existence guard does not fire; the
-                        # test asserts that each value reaches the plan op
-                        # unchanged regardless of its Python type.
-                        "fields": {
+                        "symbol_path": "Cube/MeshRenderer",
+                        "properties": {
                             "m_Enabled": 0,
                             "m_CastShadows": 3.14,
                             "m_ObjectHideFlags": "hello",
@@ -5134,12 +5658,7 @@ class TestSetComponentFieldsTool(unittest.TestCase):
         self.assertEqual(ref_value, ops_by_path["m_GameObject"])
 
     def test_component_unresolvable_no_project_root(self) -> None:
-        """SYMBOL_UNRESOLVABLE when MonoBehaviour matches by node name but has no script name.
-
-        Without a project root the symbol tree cannot resolve the script GUID to a class
-        name. The node is named "MonoBehaviour(guid:<prefix>)" and can be matched by that
-        name, but _resolve_component_name raises ValueError because script_name is empty.
-        """
+        """SYMBOL_UNRESOLVABLE when MonoBehaviour matches by name but has no script name."""
         guid = "aaaa1111bbbb2222cccc3333dddd4444"
         text = self._monobehaviour_prefab(guid=guid)
         server = create_server()  # no project_root
@@ -5148,41 +5667,145 @@ class TestSetComponentFieldsTool(unittest.TestCase):
             p = Path(td) / "test.prefab"
             p.write_text(text, encoding="utf-8")
 
-            component_name = f"MonoBehaviour(guid:{guid[:8]})"
             _, result = _run(server.call_tool(
-                "set_component_fields",
+                "set_properties",
                 {
                     "asset_path": str(p),
-                    "symbol_path": "Player",
-                    "component": component_name,
-                    "fields": {"speed": 10},
+                    "symbol_path": "Player/MonoBehaviour",
+                    "properties": {"speed": 10},
                 },
             ))
 
-        self.assertFalse(result["success"])
-        self.assertEqual("SYMBOL_UNRESOLVABLE", result["code"])
+        assert_error_envelope(
+            result, code="SYMBOL_UNRESOLVABLE", severity="error",
+        )
         self.assertIn("asset_path", result["data"])
-        self.assertIn("component", result["data"])
 
 
-class TestEditorSetComponentFieldsTool(unittest.TestCase):
-    """Test the editor_set_component_fields MCP tool."""
+class TestSetPropertyTool37(unittest.TestCase):
+    """Issue #37 selector emission for the single-property ``set_property``."""
 
-    def test_fields_with_values(self) -> None:
-        """Primitive value fields are delegated to editor_batch_set_property."""
+    def _mock_patch_apply_response(self) -> MagicMock:
+        resp = MagicMock()
+        resp.success = True
+        resp.to_dict.return_value = {
+            "success": True,
+            "severity": "info",
+            "code": "PATCH_APPLY_RESULT",
+            "message": "patch.apply dry-run completed.",
+            "data": {"dry_run": True, "confirm": False, "read_only": True},
+            "diagnostics": [],
+        }
+        return resp
+
+    def test_emits_hierarchy_qualified_selector(self) -> None:
+        """T-37-1: a nested component emits a ``TypeName@/Body/Head`` selector."""
+        text = YAML_HEADER + "\n".join([
+            make_gameobject("100", "Body", ["110"]),
+            make_transform("110", "100", "0", ["210"]),
+            make_gameobject("200", "Head", ["210", "300"]),
+            make_transform("210", "200", "110"),
+            make_meshrenderer("300", "200"),
+        ])
+        server = create_server()
+        mock_resp = self._mock_patch_apply_response()
+
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "test.prefab"
+            p.write_text(text, encoding="utf-8")
+
+            with patch(
+                "prefab_sentinel.session_cache.Phase1Orchestrator",
+            ) as mock_cls:
+                mock_orch = MagicMock()
+                mock_orch.patch_apply.return_value = mock_resp
+                mock_cls.default.return_value = mock_orch
+
+                _run(server.call_tool(
+                    "set_property",
+                    {
+                        "asset_path": str(p),
+                        "symbol_path": "Body/Head/MeshRenderer",
+                        "property_path": "m_Enabled",
+                        "value": 0,
+                    },
+                ))
+
+        plan = mock_orch.patch_apply.call_args[1]["plan"]
+        self.assertEqual("MeshRenderer@/Body/Head", plan["ops"][0]["component"])
+
+    def test_inexpressible_ancestor_chain_fails_fast(self) -> None:
+        """T-37-3: an ancestor name containing '#' fails fast with SELECTOR_NOT_EXPRESSIBLE."""
+        text = YAML_HEADER + "\n".join([
+            make_gameobject("100", "Bad#Name", ["200", "300"]),
+            make_transform("200", "100"),
+            make_meshrenderer("300", "100"),
+        ])
+        server = create_server()
+
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "test.prefab"
+            p.write_text(text, encoding="utf-8")
+
+            mock_resp = self._mock_patch_apply_response()
+            with patch(
+                "prefab_sentinel.session_cache.Phase1Orchestrator",
+            ) as mock_cls:
+                mock_orch = MagicMock()
+                mock_orch.patch_apply.return_value = mock_resp
+                mock_cls.default.return_value = mock_orch
+
+                _, result = _run(server.call_tool(
+                    "set_property",
+                    {
+                        "asset_path": str(p),
+                        "symbol_path": "Bad#Name/MeshRenderer",
+                        "property_path": "m_Enabled",
+                        "value": 0,
+                    },
+                ))
+
+            # No patch is emitted when the selector is inexpressible.
+            mock_orch.patch_apply.assert_not_called()
+
+        assert_error_envelope(
+            result, code="SELECTOR_NOT_EXPRESSIBLE", severity="error",
+        )
+
+
+class TestEditorSetPropertiesTool(unittest.TestCase):
+    """Test the editor_set_properties MCP tool (issue #41 rename of
+    ``editor_set_component_fields``).
+
+    Entries key ``property_name`` (issue #53) and carry a per-entry
+    ``value_present`` marker (issue #52).
+    """
+
+    def setUp(self) -> None:
+        os.environ.pop("UNITYTOOL_BRIDGE_WATCH_DIR", None)
+
+    def test_legacy_tool_name_not_registered(self) -> None:
+        """T-41-2: ``editor_set_component_fields`` is gone; ``editor_set_properties`` present."""
+        server = create_server()
+        names = {t.name for t in _run(server.list_tools())}
+        self.assertIn("editor_set_properties", names)
+        self.assertNotIn("editor_set_component_fields", names)
+
+    def test_properties_with_values(self) -> None:
+        """Primitive value entries are delegated to editor_batch_set_property."""
         server = create_server()
         with patch(
             "prefab_sentinel.mcp_tools_editor_ops.send_action",
             return_value={"success": True, "data": {}},
         ) as mock_send:
             _run(server.call_tool(
-                "editor_set_component_fields",
+                "editor_set_properties",
                 {
                     "hierarchy_path": "/Foo/Bar",
                     "component_type": "MyComponent",
-                    "fields": [
-                        {"name": "speed", "value": "60"},
-                        {"name": "health", "value": "100"},
+                    "properties": [
+                        {"property_name": "speed", "value": "60"},
+                        {"property_name": "health", "value": "100"},
                     ],
                 },
             ))
@@ -5196,21 +5819,24 @@ class TestEditorSetComponentFieldsTool(unittest.TestCase):
         self.assertEqual("MyComponent", ops[0]["component_type"])
         self.assertEqual("speed", ops[0]["property_name"])
         self.assertEqual("60", ops[0]["value"])
+        self.assertTrue(ops[0]["value_present"])
         self.assertNotIn("object_reference", ops[0])
 
-    def test_fields_with_object_reference(self) -> None:
-        """Object reference fields are delegated with object_reference key."""
+    def test_properties_with_object_reference(self) -> None:
+        """Object reference entries are delegated with object_reference key."""
         server = create_server()
         with patch(
             "prefab_sentinel.mcp_tools_editor_ops.send_action",
             return_value={"success": True, "data": {}},
         ) as mock_send:
             _run(server.call_tool(
-                "editor_set_component_fields",
+                "editor_set_properties",
                 {
                     "hierarchy_path": "/Obj",
                     "component_type": "Controller",
-                    "fields": [{"name": "target", "object_reference": "/SomeTarget"}],
+                    "properties": [
+                        {"property_name": "target", "object_reference": "/SomeTarget"},
+                    ],
                 },
             ))
 
@@ -5218,23 +5844,24 @@ class TestEditorSetComponentFieldsTool(unittest.TestCase):
         self.assertEqual(1, len(ops))
         self.assertEqual("target", ops[0]["property_name"])
         self.assertEqual("/SomeTarget", ops[0]["object_reference"])
+        self.assertFalse(ops[0]["value_present"])
         self.assertNotIn("value", ops[0])
 
-    def test_mixed_fields(self) -> None:
-        """Mix of value and object_reference fields are both mapped correctly."""
+    def test_mixed_properties(self) -> None:
+        """Mix of value and object_reference entries are both mapped correctly."""
         server = create_server()
         with patch(
             "prefab_sentinel.mcp_tools_editor_ops.send_action",
             return_value={"success": True, "data": {}},
         ) as mock_send:
             _run(server.call_tool(
-                "editor_set_component_fields",
+                "editor_set_properties",
                 {
                     "hierarchy_path": "/Ctrl",
                     "component_type": "DualCtrl",
-                    "fields": [
-                        {"name": "speed", "value": "10"},
-                        {"name": "target", "object_reference": "/Target"},
+                    "properties": [
+                        {"property_name": "speed", "value": "10"},
+                        {"property_name": "target", "object_reference": "/Target"},
                     ],
                 },
             ))
@@ -5242,84 +5869,94 @@ class TestEditorSetComponentFieldsTool(unittest.TestCase):
         ops = json.loads(mock_send.call_args.kwargs["batch_operations_json"])
         self.assertEqual(2, len(ops))
         self.assertIn("value", ops[0])
+        self.assertTrue(ops[0]["value_present"])
         self.assertNotIn("object_reference", ops[0])
         self.assertIn("object_reference", ops[1])
+        self.assertFalse(ops[1]["value_present"])
         self.assertNotIn("value", ops[1])
 
-    def test_empty_fields(self) -> None:
-        """EDITOR_SET_COMP_EMPTY_FIELDS returned for empty fields list."""
+    def test_empty_properties(self) -> None:
+        """EDITOR_SET_COMP_EMPTY_FIELDS returned for empty properties list."""
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_ops.send_action") as mock_send:
             _, result = _run(server.call_tool(
-                "editor_set_component_fields",
+                "editor_set_properties",
                 {
                     "hierarchy_path": "/Obj",
                     "component_type": "MyComp",
-                    "fields": [],
+                    "properties": [],
                 },
             ))
             mock_send.assert_not_called()
 
-        self.assertFalse(result["success"])
-        self.assertEqual("EDITOR_SET_COMP_EMPTY_FIELDS", result["code"])
+        assert_error_envelope(
+            result, code="EDITOR_SET_COMP_EMPTY_FIELDS", severity="error",
+        )
 
-    def test_field_missing_name(self) -> None:
-        """EDITOR_SET_COMP_INVALID_FIELD when a field dict has no 'name' key."""
+    def test_entry_missing_property_name(self) -> None:
+        """EDITOR_SET_COMP_INVALID_FIELD when an entry has no 'property_name' key."""
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_ops.send_action") as mock_send:
             _, result = _run(server.call_tool(
-                "editor_set_component_fields",
+                "editor_set_properties",
                 {
                     "hierarchy_path": "/Obj",
                     "component_type": "MyComp",
-                    "fields": [{"value": "60"}],
+                    "properties": [{"value": "60"}],
                 },
             ))
             mock_send.assert_not_called()
 
-        self.assertFalse(result["success"])
-        self.assertEqual("EDITOR_SET_COMP_INVALID_FIELD", result["code"])
+        assert_error_envelope(
+            result, code="EDITOR_SET_COMP_INVALID_FIELD", severity="error",
+        )
 
-    def test_field_missing_value_and_reference(self) -> None:
-        """EDITOR_SET_COMP_INVALID_FIELD when field has name but no value/object_reference."""
+    def test_entry_missing_value_and_reference(self) -> None:
+        """EDITOR_SET_COMP_INVALID_FIELD when entry has property_name but no value/ref."""
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_ops.send_action") as mock_send:
             _, result = _run(server.call_tool(
-                "editor_set_component_fields",
+                "editor_set_properties",
                 {
                     "hierarchy_path": "/Obj",
                     "component_type": "MyComp",
-                    "fields": [{"name": "foo"}],
+                    "properties": [{"property_name": "foo"}],
                 },
             ))
             mock_send.assert_not_called()
 
-        self.assertFalse(result["success"])
-        self.assertEqual("EDITOR_SET_COMP_INVALID_FIELD", result["code"])
+        assert_error_envelope(
+            result, code="EDITOR_SET_COMP_INVALID_FIELD", severity="error",
+        )
 
-    def test_field_has_both_value_and_object_reference(self) -> None:
-        """EDITOR_SET_COMP_INVALID_FIELD when field supplies both value and object_reference."""
+    def test_entry_has_both_value_and_object_reference(self) -> None:
+        """EDITOR_SET_COMP_INVALID_FIELD when entry supplies both value and object_reference."""
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_ops.send_action") as mock_send:
             _, result = _run(server.call_tool(
-                "editor_set_component_fields",
+                "editor_set_properties",
                 {
                     "hierarchy_path": "/Obj",
                     "component_type": "MyComp",
-                    "fields": [
-                        {"name": "target", "value": "1", "object_reference": "/Other"},
+                    "properties": [
+                        {
+                            "property_name": "target",
+                            "value": "1",
+                            "object_reference": "/Other",
+                        },
                     ],
                 },
             ))
             mock_send.assert_not_called()
 
-        self.assertFalse(result["success"])
-        self.assertEqual("EDITOR_SET_COMP_INVALID_FIELD", result["code"])
+        assert_error_envelope(
+            result, code="EDITOR_SET_COMP_INVALID_FIELD", severity="error",
+        )
         self.assertIn("not both", result["message"])
 
 
-class TestSetComponentFieldsIntegration(unittest.TestCase):
-    """Integration tests for set_component_fields without orchestrator mocking."""
+class TestSetPropertiesIntegration(unittest.TestCase):
+    """Integration tests for set_properties without orchestrator mocking."""
 
     def _meshrenderer_prefab(self) -> str:
         return _make_simple_meshrenderer_prefab()
@@ -5334,12 +5971,11 @@ class TestSetComponentFieldsIntegration(unittest.TestCase):
 
             server = create_server(project_root=td)
             _, result = _run(server.call_tool(
-                "set_component_fields",
+                "set_properties",
                 {
                     "asset_path": str(p),
-                    "symbol_path": "Cube",
-                    "component": "MeshRenderer",
-                    "fields": {"m_Enabled": 0},
+                    "symbol_path": "Cube/MeshRenderer",
+                    "properties": {"m_Enabled": 0},
                     "dry_run": True,
                 },
             ))
@@ -5364,12 +6000,11 @@ class TestSetComponentFieldsIntegration(unittest.TestCase):
 
             server = create_server(project_root=td)
             _, result = _run(server.call_tool(
-                "set_component_fields",
+                "set_properties",
                 {
                     "asset_path": str(p),
-                    "symbol_path": "Cube",
-                    "component": "MeshRenderer",
-                    "fields": {"m_Enabled": 0},
+                    "symbol_path": "Cube/MeshRenderer",
+                    "properties": {"m_Enabled": 0},
                     "confirm": True,
                     "change_reason": "integration test roundtrip",
                     "out_report": str(report_path),
@@ -5382,8 +6017,8 @@ class TestSetComponentFieldsIntegration(unittest.TestCase):
             self.assertEqual(result, written)
 
 
-class TestEditorSetComponentFieldsIntegration(unittest.TestCase):
-    """Integration tests for editor_set_component_fields with live Editor bridge."""
+class TestEditorSetPropertiesIntegration(unittest.TestCase):
+    """Integration tests for editor_set_properties with live Editor bridge."""
 
     @unittest.skipUnless(
         os.environ.get("UNITYTOOL_BRIDGE_E2E_LIVE") == "1",
@@ -5399,11 +6034,13 @@ class TestEditorSetComponentFieldsIntegration(unittest.TestCase):
         """
         server = create_server()
         _, result = _run(server.call_tool(
-            "editor_set_component_fields",
+            "editor_set_properties",
             {
                 "hierarchy_path": "/DualButtonController/Controller",
                 "component_type": "DualButtonController",
-                "fields": [{"name": "clearDelaySeconds", "value": "60"}],
+                "properties": [
+                    {"property_name": "clearDelaySeconds", "value": "60"},
+                ],
             },
         ))
 
@@ -5451,6 +6088,8 @@ class TestSafeSaveAsPrefabPython(unittest.TestCase):
                     "hierarchy_path": "/Obj",
                     "asset_path": "Assets/X.prefab",
                     "protect_components": [],
+                    "confirm": True,
+                    "change_reason": "save prefab for test",
                 },
             ))
         mock_send.assert_called_once()
@@ -5494,6 +6133,8 @@ class TestSafeSaveAsPrefabPython(unittest.TestCase):
                     "hierarchy_path": "/Obj",
                     "asset_path": "Assets/X.prefab",
                     "protect_components": [],
+                    "confirm": True,
+                    "change_reason": "save prefab for test",
                 },
             ))
         self.assertEqual(bridge_envelope, envelope)
@@ -5510,6 +6151,8 @@ class TestSafeSaveAsPrefabPython(unittest.TestCase):
                     "hierarchy_path": "/Obj",
                     "asset_path": "Assets/X.prefab",
                     "protect_components": ["VRC_UiShape", "OtherComp"],
+                    "confirm": True,
+                    "change_reason": "save prefab for test",
                 },
             ))
         mock_send.assert_called_once()
@@ -5532,6 +6175,8 @@ class TestSafeSaveAsPrefabPython(unittest.TestCase):
                     "asset_path": "Assets/X.prefab",
                     "protect_components": ["VRC_UiShape"],
                     "force_original": True,
+                    "confirm": True,
+                    "change_reason": "save prefab for test",
                 },
             ))
         mock_send.assert_called_once()
@@ -5551,6 +6196,8 @@ class TestSafeSaveAsPrefabPython(unittest.TestCase):
                     "hierarchy_path": "/Obj",
                     "asset_path": "Assets/X.prefab",
                     "protect_components": ["VRC_UiShape"],
+                    "confirm": True,
+                    "change_reason": "save prefab for test",
                 },
             ))
         mock_send.assert_called_once()

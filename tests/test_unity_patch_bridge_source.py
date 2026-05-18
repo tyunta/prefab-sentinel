@@ -246,6 +246,78 @@ class TestPatchBridgeOperationalRulesInventory(unittest.TestCase):
                 )
 
 
+class TestPatchSelectorNResolverDelegation(unittest.TestCase):
+    """Issue #38 (T-38-6): the ``TypeName@/hierarchy/path`` patch
+    selector routes ``#N`` token resolution through the shared Unity-free
+    ``SymbolPathResolver``.
+
+    Tier 3 (spec.md Tier 3 Justification T-38-6): the patch selector
+    matching runs against live ``Component`` collections inside the
+    Unity process and is not xUnit-compiled; the ``#N`` resolution rule
+    itself is Tier 1-covered through the shared Unity-free resolver
+    (T-38-c2 / T-38-3 / T-38-4).  This source-scan pins only the
+    delegation to the shared resolver — a third independent ``#N``
+    matcher drifting from the resolver is the failure mode caught.
+    """
+
+    _RESOLVE_PARTIAL = _TOOLS_DIR / "PrefabSentinel.UnityPatchBridge.Resolve.cs"
+
+    def _resolve_source(self) -> str:
+        return _strip_cs_comments(
+            self._RESOLVE_PARTIAL.read_text(encoding="utf-8")
+        )
+
+    def test_selector_resolution_delegates_to_shared_resolver(self) -> None:
+        source = self._resolve_source()
+        self.assertIn(
+            "SymbolPathResolver.Resolve",
+            source,
+            msg=(
+                "the patch selector hierarchy resolution must delegate "
+                "to the shared Unity-free SymbolPathResolver so the #N "
+                "rule does not drift from the offline / live tracks."
+            ),
+        )
+
+    def test_unique_component_finder_routes_hierarchy_through_resolver(
+        self,
+    ) -> None:
+        # ``TryFindUniqueComponent`` must call the resolver-backed
+        # hierarchy resolver rather than re-implementing a path-string
+        # equality match for the hierarchy part of the selector.
+        match = re.search(
+            r"bool\s+TryFindUniqueComponent\s*\(",
+            self._resolve_source(),
+        )
+        self.assertIsNotNone(
+            match, msg="TryFindUniqueComponent declaration not found"
+        )
+        source = self._resolve_source()
+        start = match.start()
+        depth = 0
+        opened = False
+        end = len(source)
+        for index in range(start, len(source)):
+            ch = source[index]
+            if ch == "{":
+                depth += 1
+                opened = True
+            elif ch == "}":
+                depth -= 1
+                if opened and depth == 0:
+                    end = index + 1
+                    break
+        body = source[start:end]
+        self.assertIn(
+            "TryResolveHierarchyPathWithResolver",
+            body,
+            msg=(
+                "TryFindUniqueComponent must resolve the selector's "
+                "hierarchy part through the resolver-backed helper."
+            ),
+        )
+
+
 class TestPrefabApplyRejectionEnvelopeSource(unittest.TestCase):
     """Issue #298 — the prefab apply rejection path declares the
     documented ``SER_APPLY_REJECTED`` code together with the diagnostic

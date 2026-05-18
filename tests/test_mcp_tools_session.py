@@ -12,6 +12,7 @@ Two blocks:
 from __future__ import annotations
 
 import asyncio
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -303,6 +304,122 @@ class StatusEditorStateBlock(unittest.TestCase):
             (None, 1),
             (response["data"]["editor_state"], len(warnings)),
         )
+
+
+class TestEditorStateFreshnessMarker(unittest.TestCase):
+    """T-40: the offline symbol-reference tools attach a freshness marker
+    only when the Editor Bridge is connected and reports unsaved changes
+    (issue #40).
+    """
+
+    def setUp(self) -> None:
+        # The watch-dir env var must not leak from the host shell so the
+        # bridge-status branch under test is exercised deterministically
+        # (issues #88 / #89 / #270).
+        os.environ.pop("UNITYTOOL_BRIDGE_WATCH_DIR", None)
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        # A minimal one-GameObject prefab so the symbol tools have an asset.
+        self.prefab = Path(self._tmp.name) / "fixture.prefab"
+        self.prefab.write_text(
+            "%YAML 1.1\n"
+            "%TAG !u! tag:unity3d.com,2011:\n"
+            "--- !u!1 &100\n"
+            "GameObject:\n"
+            "  m_Component:\n"
+            "  - component: {fileID: 200}\n"
+            "  m_Name: Cube\n"
+            "--- !u!4 &200\n"
+            "Transform:\n"
+            "  m_GameObject: {fileID: 100}\n"
+            "  m_Father: {fileID: 0}\n"
+            "  m_Children: []\n",
+            encoding="utf-8",
+        )
+
+    def _register(self) -> dict:
+        from prefab_sentinel import mcp_tools_symbols
+
+        registered: dict = {}
+
+        class _Server:
+            def tool(self_inner):  # noqa: N805
+                def deco(fn):
+                    registered[fn.__name__] = fn
+                    return fn
+
+                return deco
+
+        mcp_tools_symbols.register_symbol_tools(
+            _Server(), ProjectSession(project_root=None),
+        )
+        return registered
+
+    def _editor_state_envelope(self, *, unsaved: bool) -> dict:
+        return {
+            "success": True,
+            "severity": "info",
+            "code": "EDITOR_CTRL_EDITOR_STATE_OK",
+            "message": "ok",
+            "data": {
+                "editor_state": {
+                    "is_playing": False,
+                    "is_will_change_playmode": False,
+                    "is_compiling": False,
+                    "is_building_player": False,
+                    "has_unsaved_changes": unsaved,
+                },
+            },
+            "diagnostics": [],
+        }
+
+    def test_marker_present_when_connected_and_unsaved(self) -> None:
+        """T-40-1: get_unity_symbols carries the marker when live edits are unsaved."""
+        from prefab_sentinel import mcp_tools_symbols
+
+        get_unity_symbols = self._register()["get_unity_symbols"]
+        with patch.object(
+            mcp_tools_symbols, "bridge_status",
+            return_value={"connected": True, "watch_dir": "/tmp"},
+        ), patch.object(
+            mcp_tools_symbols, "send_action",
+            return_value=self._editor_state_envelope(unsaved=True),
+        ):
+            payload = get_unity_symbols(asset_path=str(self.prefab))
+        self.assertIn("freshness", payload)
+        self.assertEqual("last_saved_disk", payload["freshness"]["source"])
+
+    def test_no_marker_without_bridge_connection(self) -> None:
+        """T-40-2: find_unity_symbol carries no marker with no Bridge connection."""
+        from prefab_sentinel import mcp_tools_symbols
+
+        find_unity_symbol = self._register()["find_unity_symbol"]
+        with patch.object(
+            mcp_tools_symbols, "bridge_status",
+            return_value={"connected": False, "watch_dir": None},
+        ), patch.object(mcp_tools_symbols, "send_action") as send:
+            payload = find_unity_symbol(
+                asset_path=str(self.prefab), symbol_path="Cube",
+            )
+        # No Bridge round-trip and no marker — the offline no-Unity-required
+        # property is preserved.
+        send.assert_not_called()
+        self.assertNotIn("freshness", payload)
+
+    def test_no_marker_when_connected_and_clean(self) -> None:
+        """T-40-3: no marker when the connected Bridge reports no unsaved changes."""
+        from prefab_sentinel import mcp_tools_symbols
+
+        get_unity_symbols = self._register()["get_unity_symbols"]
+        with patch.object(
+            mcp_tools_symbols, "bridge_status",
+            return_value={"connected": True, "watch_dir": "/tmp"},
+        ), patch.object(
+            mcp_tools_symbols, "send_action",
+            return_value=self._editor_state_envelope(unsaved=False),
+        ):
+            payload = get_unity_symbols(asset_path=str(self.prefab))
+        self.assertNotIn("freshness", payload)
 
 
 if __name__ == "__main__":

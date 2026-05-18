@@ -8,6 +8,7 @@ from mcp.server.fastmcp import FastMCP
 
 from prefab_sentinel.editor_bridge import send_action
 from prefab_sentinel.json_io import dump_json
+from prefab_sentinel.mcp_validation import require_write_audit
 
 __all__ = [
     "editor_get_blend_shapes",
@@ -129,48 +130,48 @@ def register_editor_write_tools(server: FastMCP) -> None:
     def editor_set_material(
         hierarchy_path: str,
         material_index: int,
-        material_guid: str = "",
-        material_path: str = "",
+        material_asset_guid: str = "",
+        material_asset_path: str = "",
     ) -> dict[str, Any]:
         """Replace a material slot on a Renderer at runtime (Undo-able).
 
-        Specify either material_guid or material_path (not both).
+        Specify either material_asset_guid or material_asset_path (not both).
 
         Args:
             hierarchy_path: Hierarchy path to the GameObject with a Renderer.
             material_index: Material slot index (0-based).
-            material_guid: GUID of the replacement Material asset (32-char hex).
-            material_path: Asset path of the replacement Material (e.g. "Assets/Materials/Foo.mat").
+            material_asset_guid: GUID of the replacement Material asset (32-char hex).
+            material_asset_path: Asset path of the replacement Material (e.g. "Assets/Materials/Foo.mat").
         """
         kwargs: dict[str, Any] = {
             "hierarchy_path": hierarchy_path,
             "material_index": material_index,
         }
-        if material_guid:
-            kwargs["material_guid"] = material_guid
-        if material_path:
-            kwargs["material_path"] = material_path
+        if material_asset_guid:
+            kwargs["material_guid"] = material_asset_guid
+        if material_asset_path:
+            kwargs["material_path"] = material_asset_path
         return send_action(action="set_material", **kwargs)
 
     @server.tool()
     def editor_find_renderers_by_material(
-        material_guid: str = "",
-        material_path: str = "",
+        material_asset_guid: str = "",
+        material_asset_path: str = "",
     ) -> dict[str, Any]:
         """Find all renderers using a specific material in the current scene.
 
-        Returns renderer paths and slot indices. Specify either material_guid
-        or material_path (not both).
+        Returns renderer paths and slot indices. Specify either
+        material_asset_guid or material_asset_path (not both).
 
         Args:
-            material_guid: GUID of the material to search for.
-            material_path: Asset path of the material (e.g. "Assets/Materials/Foo.mat").
+            material_asset_guid: GUID of the material to search for.
+            material_asset_path: Asset path of the material (e.g. "Assets/Materials/Foo.mat").
         """
         kwargs: dict[str, Any] = {}
-        if material_guid:
-            kwargs["material_guid"] = material_guid
-        if material_path:
-            kwargs["material_path"] = material_path
+        if material_asset_guid:
+            kwargs["material_guid"] = material_asset_guid
+        if material_asset_path:
+            kwargs["material_path"] = material_asset_path
         return send_action(action="find_renderers_by_material", **kwargs)
 
     @server.tool()
@@ -245,20 +246,38 @@ def register_editor_write_tools(server: FastMCP) -> None:
 
     @server.tool()
     def editor_create_udon_program_asset(
-        script_path: str,
-        output_path: str = "",
+        asset_path: str,
+        output_asset_path: str = "",
+        confirm: bool = False,
+        change_reason: str = "",
     ) -> dict[str, Any]:
         """Create an UdonSharpProgramAsset (.asset) for an UdonSharp C# script.
 
         Requires UdonSharp to be installed in the Unity project.
 
+        Issue #49: creating a program asset writes a new ``.asset`` to
+        disk in a form Unity's Undo cannot reverse, so it requires the
+        writer audit pair (``confirm=True`` AND a non-empty
+        ``change_reason``).
+
         Args:
-            script_path: Asset path to the .cs file (e.g. "Assets/Scripts/MyBehaviour.cs").
-            output_path: Output .asset path. Defaults to same directory as script with .asset extension.
+            asset_path: Asset path to the .cs file (e.g. "Assets/Scripts/MyBehaviour.cs").
+            output_asset_path: Output .asset path. Defaults to same directory as script with .asset extension.
+            confirm: Required ``True`` to apply (writer audit gate).
+            change_reason: Required non-empty audit reason.
         """
-        kwargs: dict[str, Any] = {"asset_path": script_path}
-        if output_path:
-            kwargs["description"] = output_path
+        audit_err = require_write_audit(
+            "editor_create_udon_program_asset", confirm, change_reason,
+        )
+        if audit_err is not None:
+            return audit_err
+        kwargs: dict[str, Any] = {
+            "asset_path": asset_path,
+            "confirm": True,
+            "change_reason": change_reason.strip(),
+        }
+        if output_asset_path:
+            kwargs["description"] = output_asset_path
         return send_action(action="create_udon_program_asset", **kwargs)
 
     @server.tool()
@@ -334,11 +353,17 @@ def register_editor_write_tools(server: FastMCP) -> None:
     def editor_execute_menu_item(
         menu_path: str,
         assume_compiled: bool = False,
+        confirm: bool = False,
+        change_reason: str = "",
     ) -> dict[str, Any]:
         """Execute a Unity Editor menu item by path.
 
         Some menu items may display modal dialogs that block the Editor.
         Dangerous paths (File/New Scene, File/New Project, Assets/Delete) are denied.
+
+        Issue #49: a menu item runs caller-unverifiable arbitrary editor
+        code, so it requires the writer audit pair (``confirm=True`` AND
+        a non-empty ``change_reason``).
 
         Issue #225: when the caller has not asserted compile state, the
         bridge runs an implicit recompile barrier before invoking the
@@ -355,9 +380,18 @@ def register_editor_write_tools(server: FastMCP) -> None:
             assume_compiled: When ``True``, opt out of the implicit
                 recompile barrier (issue #225). Defaults to ``False`` so
                 accidental omission stays safe.
+            confirm: Required ``True`` to apply (writer audit gate).
+            change_reason: Required non-empty audit reason.
         """
+        audit_err = require_write_audit(
+            "editor_execute_menu_item", confirm, change_reason,
+        )
+        if audit_err is not None:
+            return audit_err
         return send_action(
             action="execute_menu_item",
             menu_path=menu_path,
             assume_compiled=assume_compiled,
+            confirm=True,
+            change_reason=change_reason.strip(),
         )

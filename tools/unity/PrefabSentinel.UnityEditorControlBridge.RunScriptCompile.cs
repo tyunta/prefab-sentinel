@@ -37,50 +37,44 @@ namespace PrefabSentinel
         {
             var diagnostics = new List<EditorControlDiagnostic>();
 
-            // When force_reimport is requested, synchronously re-import every
-            // C# file under Assets/Editor with ForceUpdate so externally
-            // edited scripts are guaranteed to round-trip through Unity's
-            // import pipeline before compilation is scheduled.
-            if (request.force_reimport)
+            // Issue #45: when reimport_paths are supplied, synchronously
+            // force-reimport each named asset with ForceUpdate so an
+            // externally edited script — including one outside
+            // Assets/Editor — is guaranteed to round-trip through Unity's
+            // import pipeline before compilation is scheduled. The caller
+            // names exactly the paths it edited; the bridge does not walk
+            // a directory tree.
+            string[] reimportPaths = request.reimport_paths
+                ?? Array.Empty<string>();
+            int reimportedCount = 0;
+            foreach (string rawPath in reimportPaths)
             {
-                string editorRoot = "Assets/Editor";
-                string editorRootAbs = Path.Combine(
-                    Directory.GetCurrentDirectory(),
-                    editorRoot.Replace('/', Path.DirectorySeparatorChar));
-                if (Directory.Exists(editorRootAbs))
+                if (string.IsNullOrWhiteSpace(rawPath)) continue;
+                string rel = rawPath.Trim().Replace('\\', '/');
+                try
                 {
-                    foreach (string csAbs in Directory.GetFiles(
-                        editorRootAbs, "*.cs", SearchOption.AllDirectories))
+                    AssetDatabase.ImportAsset(
+                        rel,
+                        ImportAssetOptions.ForceUpdate
+                        | ImportAssetOptions.ForceSynchronousImport);
+                    reimportedCount++;
+                }
+                catch (Exception ex)
+                {
+                    // Issue #214 / H-7: do not embed exception text in the
+                    // diagnostic evidence returned to the MCP client. The
+                    // redacted evidence (type name only) is owned by
+                    // ``ReimportDiagnostic``; the full detail is mirrored
+                    // to the Unity console below.
+                    Debug.LogWarning(
+                        $"[PrefabSentinel] HandleRecompileScripts: force-reimport of '{rel}' failed: {ex}");
+                    diagnostics.Add(new EditorControlDiagnostic
                     {
-                        string rel = csAbs
-                            .Substring(Directory.GetCurrentDirectory().Length)
-                            .TrimStart(Path.DirectorySeparatorChar, '/')
-                            .Replace(Path.DirectorySeparatorChar, '/');
-                        try
-                        {
-                            AssetDatabase.ImportAsset(
-                                rel,
-                                ImportAssetOptions.ForceUpdate
-                                | ImportAssetOptions.ForceSynchronousImport);
-                        }
-                        catch (Exception ex)
-                        {
-                            // Issue #214 / H-7: do not embed exception text
-                            // in the diagnostic evidence returned to the MCP
-                            // client. The redacted evidence (type name only)
-                            // is owned by ``ReimportDiagnostic``; the full
-                            // detail is mirrored to the Unity console below.
-                            Debug.LogWarning(
-                                $"[PrefabSentinel] HandleRecompileScripts: force-reimport of '{rel}' failed: {ex}");
-                            diagnostics.Add(new EditorControlDiagnostic
-                            {
-                                path = rel,
-                                location = "force_reimport",
-                                detail = "warning",
-                                evidence = ReimportDiagnostic.Evidence(ex),
-                            });
-                        }
-                    }
+                        path = rel,
+                        location = "reimport_paths",
+                        detail = "warning",
+                        evidence = ReimportDiagnostic.Evidence(ex),
+                    });
                 }
             }
 
@@ -92,8 +86,8 @@ namespace PrefabSentinel
                 CompilationPipeline.RequestScriptCompilation();
             };
             var response = BuildSuccess("EDITOR_CTRL_RECOMPILE_OK",
-                request.force_reimport
-                    ? "Force re-import of editor scripts completed; AssetDatabase.Refresh completed; script recompilation scheduled (domain reload will follow)"
+                reimportedCount > 0
+                    ? $"Force re-import of {reimportedCount} caller-supplied path(s) completed; AssetDatabase.Refresh completed; script recompilation scheduled (domain reload will follow)"
                     : "AssetDatabase.Refresh completed; script recompilation scheduled (domain reload will follow)",
                 data: new EditorControlData { executed = true });
             if (diagnostics.Count > 0)
@@ -233,6 +227,41 @@ namespace PrefabSentinel
             return poll;
         }
 
+        /// <summary>
+        /// Issue #45: scan the console log buffer for AssetDatabase
+        /// importer-error lines and return one warning diagnostic per
+        /// match. The match decision is owned by the Unity-free
+        /// ``ImporterErrorClassifier`` predicate; this method only
+        /// snapshots the buffer and maps matches into diagnostics. An
+        /// empty list means no importer error was observed.
+        /// </summary>
+        private static List<EditorControlDiagnostic> CollectImporterErrorDiagnostics()
+        {
+            var diagnostics = new List<EditorControlDiagnostic>();
+            // Snapshot the full buffer (oldest-first, no time / type /
+            // phase filter, no cursor) so every captured line is checked.
+            var snapshot = ConsoleLogBuffer.GetEntries(
+                ConsoleLogBuffer.DefaultCapacity,
+                "all",
+                0f,
+                "all",
+                "all",
+                newestFirst: false,
+                cursorAfterSequence: long.MinValue);
+            foreach (ConsoleLogEntry entry in snapshot.entries)
+            {
+                if (!ImporterErrorClassifier.IsImporterError(entry.message))
+                    continue;
+                diagnostics.Add(new EditorControlDiagnostic
+                {
+                    location = "importer_error",
+                    detail = "warning",
+                    evidence = entry.message,
+                });
+            }
+            return diagnostics;
+        }
+
         private static EditorControlResponse HandleRecompileAndWait(
             EditorControlRequest request, string responsePath)
         {
@@ -359,10 +388,39 @@ namespace PrefabSentinel
                     // No per-assembly finished event ever fired, which
                     // corresponds to every assembly having been reported
                     // as not requiring compilation. No domain reload will
-                    // follow, so synthesise the no-op success synchronously
+                    // follow, so synthesise the no-op outcome synchronously
                     // and skip the SessionState mirror — there is nothing
                     // to resume after a reload that never happens.
+                    //
+                    // Issue #45: a no-op compile can be masking an
+                    // AssetDatabase importer failure (the mtime-mismatch
+                    // "Build asset version error" / "Import Error Code"
+                    // shapes). Scan the console buffer through the
+                    // Unity-free ``ImporterErrorClassifier`` predicate;
+                    // when importer errors are present the response is
+                    // downgraded from a silent success to a
+                    // ``warning``-severity response carrying the offending
+                    // lines as diagnostics, so the failure is not lost.
                     PendingAsyncRunner.Complete(responsePath);
+                    var importerErrors = CollectImporterErrorDiagnostics();
+                    if (importerErrors.Count > 0)
+                    {
+                        WriteResponse(responsePath, new EditorControlResponse
+                        {
+                            protocol_version = ProtocolVersion,
+                            success = true,
+                            severity = "warning",
+                            code = RecompileOutcomeClassifier.NoopCode,
+                            message = "editor_recompile_and_wait: every assembly "
+                                + "was reported as not requiring compilation, but "
+                                + $"{importerErrors.Count} AssetDatabase importer "
+                                + "error(s) are present on the console — the "
+                                + "no-op may be masking an import failure.",
+                            data = new EditorControlData { executed = true },
+                            diagnostics = importerErrors.ToArray(),
+                        });
+                        return;
+                    }
                     WriteResponse(responsePath, BuildSuccess(
                         RecompileOutcomeClassifier.NoopCode,
                         "editor_recompile_and_wait: every assembly was reported "

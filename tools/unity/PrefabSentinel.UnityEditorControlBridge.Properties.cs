@@ -20,7 +20,13 @@ namespace PrefabSentinel
             if (string.IsNullOrEmpty(request.property_name))
                 return BuildError("EDITOR_CTRL_SET_PROP_NO_FIELD", "property_name is required.");
 
-            bool hasValue = !string.IsNullOrEmpty(request.property_value);
+            // Issue #52: an empty-string write is a deliberate value; the
+            // ``property_value_present`` marker — not the emptiness of
+            // ``property_value`` — is authoritative for whether a value was
+            // supplied.  ``property_value`` alone still counts so callers
+            // that omit the marker but send a non-empty value keep working.
+            bool hasValue = request.property_value_present
+                || !string.IsNullOrEmpty(request.property_value);
             bool hasRef = !string.IsNullOrEmpty(request.object_reference);
             if (!hasValue && !hasRef)
                 return BuildError("EDITOR_CTRL_SET_PROP_NO_VALUE",
@@ -30,10 +36,20 @@ namespace PrefabSentinel
                     "Provide property_value or object_reference, not both.");
 
             // ── Resolve target ──
-            var go = ResolveGameObjectInActiveStage(request.hierarchy_path);
-            if (go == null)
+            // Issue #38: an ambiguous hierarchy_path (same-named siblings
+            // with no #N) surfaces the dedicated
+            // EDITOR_CTRL_HIERARCHY_PATH_AMBIGUOUS envelope rather than a
+            // generic NOT_FOUND, so the caller can distinguish "add a #N
+            // disambiguator" from "the object does not exist".
+            if (!TryResolveGameObjectInActiveStage(
+                    request.hierarchy_path, out GameObject go,
+                    out EditorControlResponse ambiguity))
+            {
+                if (ambiguity != null)
+                    return ambiguity;
                 return BuildError("EDITOR_CTRL_SET_PROP_NOT_FOUND",
                     $"GameObject not found: {request.hierarchy_path}");
+            }
 
             // GameObject-as-target branch: when the caller addresses the
             // GameObject itself (not a component on it), the SerializedObject
@@ -163,6 +179,11 @@ namespace PrefabSentinel
                     component_type = op.component_type,
                     property_name = op.property_name,
                     property_value = op.value,
+                    // Issue #52: forward the per-op value-present marker so
+                    // an empty-string op value is applied by the delegated
+                    // HandleEditorSetProperty instead of rejected as "no
+                    // value".
+                    property_value_present = op.value_present,
                     object_reference = op.object_reference,
                 };
                 var subResp = HandleEditorSetProperty(subReq);

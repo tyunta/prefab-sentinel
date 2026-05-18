@@ -22,11 +22,20 @@ namespace PrefabSentinel
                     "EDITOR_CTRL_UDON_SET_FIELD_NO_NAME",
                     "field_name is required for editor_set_udonsharp_field.");
 
-            GameObject go = ResolveGameObjectInActiveStage(request.hierarchy_path);
-            if (go == null)
+            // Issue #38: an ambiguous hierarchy_path (same-named siblings
+            // with no #N) surfaces the dedicated
+            // EDITOR_CTRL_HIERARCHY_PATH_AMBIGUOUS envelope rather than a
+            // generic NOT_FOUND.
+            if (!TryResolveGameObjectInActiveStage(
+                    request.hierarchy_path, out GameObject go,
+                    out EditorControlResponse ambiguity))
+            {
+                if (ambiguity != null)
+                    return ambiguity;
                 return BuildError(
                     "EDITOR_CTRL_UDON_SET_FIELD_NOT_FOUND",
                     $"GameObject not found at hierarchy_path: {request.hierarchy_path}");
+            }
 
             Type usbType = ResolveUdonSharpBehaviourType();
             if (usbType == null)
@@ -98,7 +107,12 @@ namespace PrefabSentinel
             // Conflict / underspecification mirror the existing
             // editor_set_property surface so the client envelope codes
             // map 1:1.
-            bool hasValue = !string.IsNullOrEmpty(request.property_value);
+            // Issue #52: the ``property_value_present`` marker is
+            // authoritative — an empty-string value is a deliberate write,
+            // not the "no value" case.  A non-empty ``property_value`` still
+            // counts so a caller that omits the marker keeps working.
+            bool hasValue = request.property_value_present
+                || !string.IsNullOrEmpty(request.property_value);
             bool hasRef = !string.IsNullOrEmpty(request.object_reference);
             if (hasValue && hasRef)
                 return BuildError(

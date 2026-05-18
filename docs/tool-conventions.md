@@ -30,7 +30,7 @@ asset ファイルを 32 文字 hex の GUID で指す。asset-path の代替表
 
 ### 1.3 symbol-path
 
-offline symbol tree（YAML 直読みで構築する人間可読ツリー）上のオブジェクトを指す。GameObject パス + 末尾コンポーネントの形（例: `CharacterBody/MeshRenderer`、`Body/Head/MonoBehaviour(PlayerScript)`）。`get_unity_symbols` / `find_unity_symbol` / offline の `set_property` / `set_component_fields` 等が使う。権威は last-saved disk YAML — live editor の未保存編集は反映されない。
+offline symbol tree（YAML 直読みで構築する人間可読ツリー）上のオブジェクトを指す。GameObject パス + 末尾コンポーネントの形（例: `CharacterBody/MeshRenderer`、`Body/Head/MonoBehaviour(PlayerScript)`）。`get_unity_symbols` / `find_unity_symbol` / offline の `set_property` / `set_properties` 等が使う。権威は last-saved disk YAML — live editor の未保存編集は反映されない（Editor Bridge 接続中かつ未保存変更がある場合、`get_unity_symbols` / `find_unity_symbol` はペイロードに freshness マーカーを付与する — issue #40）。
 
 ### 1.4 hierarchy-path
 

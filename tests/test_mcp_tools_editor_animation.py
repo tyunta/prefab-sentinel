@@ -230,35 +230,26 @@ class EditorCreateAnimationClipPathTraversalTests(unittest.TestCase):
         )
 
 
-class EditorApplyAnimationClipAuditGateTests(unittest.TestCase):
-    """Apply surface audit gating; whitespace is treated as missing."""
+class EditorApplyAnimationClipNoAuditTests(unittest.TestCase):
+    """Issue #49: the preview-apply is an Undo-reversible live change, so
+    it carries no audit pair — passing a ``confirm`` argument is a
+    ``TypeError``."""
 
-    def test_whitespace_reason_treated_as_missing(self) -> None:
-        with patch.object(
-            mcp_tools_editor_animation, "send_action",
-            return_value=_success_envelope(),
-        ) as send:
-            response = mcp_tools_editor_animation.editor_apply_animation_clip(
+    def test_confirm_argument_raises_type_error(self) -> None:
+        with self.assertRaises(TypeError) as cm:
+            mcp_tools_editor_animation.editor_apply_animation_clip(
                 asset_path="Assets/Animations/Smile.anim",
                 target_hierarchy_path="/Avatar/Body",
                 confirm=True,
                 change_reason="\t  \n",
             )
-        send.assert_not_called()
-        self.assertEqual(
-            ("CHANGE_REASON_REQUIRED", "error", False),
-            (response["code"], response["severity"], response["success"]),
-            msg=(
-                "Whitespace-only change_reason on apply must short-"
-                "circuit pre-bridge with CHANGE_REASON_REQUIRED."
-            ),
-        )
+        self.assertIn("confirm", str(cm.exception))
 
 
 class EditorApplyAnimationClipForwardingTests(unittest.TestCase):
-    """Apply surface forwards every input verbatim."""
+    """Apply surface forwards every input verbatim (no audit pair, #49)."""
 
-    def test_valid_input_forwards_asset_target_and_audit_pair(self) -> None:
+    def test_valid_input_forwards_asset_and_target(self) -> None:
         with patch.object(
             mcp_tools_editor_animation, "send_action",
             return_value=_success_envelope(),
@@ -266,8 +257,6 @@ class EditorApplyAnimationClipForwardingTests(unittest.TestCase):
             mcp_tools_editor_animation.editor_apply_animation_clip(
                 asset_path="Assets/Animations/Smile.anim",
                 target_hierarchy_path="/Avatar/Body",
-                confirm=True,
-                change_reason="preview smile pose",
             )
         send.assert_called_once()
         kwargs = send.call_args.kwargs
@@ -276,19 +265,19 @@ class EditorApplyAnimationClipForwardingTests(unittest.TestCase):
                 "apply_animation_clip",
                 "Assets/Animations/Smile.anim",
                 "/Avatar/Body",
-                True,
-                "preview smile pose",
             ),
             (
                 kwargs["action"], kwargs["asset_path"],
                 kwargs["target_hierarchy_path"],
-                kwargs["confirm"], kwargs["change_reason"],
             ),
             msg=(
-                "Apply must forward the asset path, target hierarchy "
-                "path, confirm=True, and the audit reason verbatim."
+                "Apply must forward the asset path and target hierarchy "
+                "path; issue #49 removed the audit pair."
             ),
         )
+        # The de-audited tool no longer forwards confirm/change_reason.
+        self.assertNotIn("confirm", kwargs)
+        self.assertNotIn("change_reason", kwargs)
 
 
 if __name__ == "__main__":

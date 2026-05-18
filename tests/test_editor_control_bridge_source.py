@@ -545,16 +545,19 @@ def _action_registry_hashset(field: str) -> str:
 
 
 class TestForceReimportSupport(unittest.TestCase):
-    """Task 11: HandleRecompileScripts honors a force_reimport request flag."""
+    """Issue #45: HandleRecompileScripts force-reimports each caller-supplied
+    reimport-target path before scheduling compilation.  The blanket
+    ``force_reimport`` bool (#106, Assets/Editor-only) is replaced by the
+    targeted ``reimport_paths`` string array."""
 
-    def test_request_carries_force_reimport_field(self) -> None:
+    def test_request_carries_reimport_paths_field(self) -> None:
         body = _extract_editor_control_request_body()
-        self.assertIn("public bool force_reimport", body)
+        self.assertIn("public string[] reimport_paths", body)
 
-    def test_recompile_carries_force_reimport_plumbing(self) -> None:
+    def test_recompile_carries_reimport_plumbing(self) -> None:
         source = _read(BRIDGE)
         body = _extract_method(source, "HandleRecompileScripts")
-        self.assertIn("force_reimport", body)
+        self.assertIn("reimport_paths", body)
         self.assertIn("ImportAssetOptions.ForceUpdate", body)
         self.assertIn("ImportAssetOptions.ForceSynchronousImport", body)
 
@@ -1450,11 +1453,12 @@ class TestUdonSharpActionWiring(unittest.TestCase):
                 self.assertNotIn(f'"{action}"', block)
 
     def test_dispatcher_routes_each_new_action(self) -> None:
-        # ``RunFromPaths`` switches on ``request.action`` and assigns
-        # ``response = HandleX(...)``.  Each new action must route to
-        # its named handler.
+        # Issue #51: ``RunFromPaths`` wraps the action switch in an
+        # exception boundary and delegates the switch to ``DispatchAction``,
+        # which assigns ``response = HandleX(...)``.  Each new action must
+        # route to its named handler in that switch.
         source = _read(BRIDGE)
-        body = _extract_method(source, "RunFromPaths")
+        body = _extract_method(source, "DispatchAction")
         for action, handler in (
             ("editor_add_udonsharp_component", "HandleAddUdonSharpComponent"),
             ("editor_set_udonsharp_field", "HandleSetUdonSharpField"),
@@ -2184,8 +2188,12 @@ class RecompileForceReimportDiagnosticRedaction(unittest.TestCase):
         """Return the body of the per-file catch surrounding
         ``AssetDatabase.ImportAsset(rel, ...)``.
         """
+        # The try block runs ``AssetDatabase.ImportAsset`` and then a
+        # success-count increment before the closing brace; allow any
+        # non-brace statements between the ImportAsset call and the
+        # ``} catch`` so the regex still locates the per-file catch.
         match = re.search(
-            r"AssetDatabase\.ImportAsset\([^;]*;\s*\}\s*"
+            r"AssetDatabase\.ImportAsset\([^;]*;[^{}]*\}\s*"
             r"catch\s*\(\s*Exception\s+\w+\s*\)\s*\{",
             handler_body,
             flags=re.DOTALL,
@@ -2332,14 +2340,24 @@ class TestHandleCaptureConsoleLogsValidatesPhaseFilter(unittest.TestCase):
         self.assertIn("EDITOR_CTRL_INVALID_PHASE_FILTER", body)
 
 
-class TestHandleGetEditorStateReadsFourFlags(unittest.TestCase):
-    """Issue #239: the editor-state handler reads exactly four flags."""
+class TestHandleGetEditorStateReadsFiveFlags(unittest.TestCase):
+    """Issue #239 / #40 (T-40-4): the editor-state handler reads five
+    ``EditorStateSnapshot`` fields, the fifth being the unsaved-changes
+    flag.
 
-    def test_handler_assigns_four_named_flags(self) -> None:
+    Tier 3 (spec.md Tier 3 Justification T-40-4): the editor-state
+    handler reads live editor and scene-dirty state inside the Unity
+    process and is not xUnit-compiled; this source-scan pins the
+    flag-count contract and the live dirty-state read is verified via
+    ``deploy_bridge``.
+    """
+
+    def test_handler_assigns_five_named_flags(self) -> None:
         body = _extract_method(_read(BRIDGE), "HandleGetEditorState")
-        # Each of the four documented editor-API symbols must be present
-        # alongside the matching snapshot field name; a missing flag
-        # surfaces as a False in this tuple and names the gap.
+        # Each of the five documented snapshot fields must be assigned;
+        # a missing flag surfaces as a False in this tuple and names the
+        # gap.  The first four read editor-API symbols directly; the
+        # fifth (issue #40) reads the unsaved-changes helper.
         checks = (
             ("is_playing = EditorApplication.isPlaying" in body),
             (
@@ -2348,15 +2366,211 @@ class TestHandleGetEditorStateReadsFourFlags(unittest.TestCase):
             ) in body,
             ("is_compiling = EditorApplication.isCompiling" in body),
             ("is_building_player = BuildPipeline.isBuildingPlayer" in body),
+            ("has_unsaved_changes = HasUnsavedEditorChanges()" in body),
         )
         self.assertEqual(
-            (True, True, True, True),
+            (True, True, True, True, True),
             checks,
             msg=(
-                "HandleGetEditorState must read each of the four "
-                "documented editor-API symbols into the matching "
-                "EditorStateSnapshot field — checks="
+                "HandleGetEditorState must assign each of the five "
+                "documented EditorStateSnapshot fields, the fifth being "
+                "has_unsaved_changes — checks="
                 f"{checks}"
+            ),
+        )
+
+    def test_snapshot_class_declares_five_flag_fields(self) -> None:
+        # The EditorStateSnapshot DTO must declare exactly five bool
+        # flag fields; the unsaved-changes flag is additive on top of
+        # the original four.
+        body = _read(BRIDGE)
+        match = re.search(
+            r"class\s+EditorStateSnapshot\s*\{",
+            body,
+        )
+        self.assertIsNotNone(
+            match, msg="EditorStateSnapshot class declaration not found"
+        )
+        snapshot_body = _extract_braced_block(
+            body, match.end(), "EditorStateSnapshot body"
+        )
+        bool_fields = re.findall(r"public\s+bool\s+(\w+)\s*=", snapshot_body)
+        self.assertEqual(
+            5,
+            len(bool_fields),
+            msg=(
+                "EditorStateSnapshot must declare exactly five bool flag "
+                f"fields; found {bool_fields}"
+            ),
+        )
+        self.assertIn(
+            "has_unsaved_changes",
+            bool_fields,
+            msg=(
+                "EditorStateSnapshot must carry the unsaved-changes flag "
+                "(issue #40)."
+            ),
+        )
+
+
+class TestRunFromPathsExceptionBoundary(unittest.TestCase):
+    """Issue #51 (T-51-1): the bridge dispatch encloses its action switch
+    in an exception boundary that emits the
+    ``EDITOR_CTRL_HANDLER_EXCEPTION`` envelope.
+
+    Tier 3 (spec.md Tier 3 Justification T-51-1): the dispatch boundary
+    runs inside the Unity Editor process and is not xUnit-compiled; its
+    runtime behavior cannot be executed Python-side.  This source-scan
+    pins the structural invariant — the action switch is wrapped by a
+    try/catch that yields the typed envelope naming the action with the
+    exception redacted to its type name.
+    """
+
+    def _run_from_paths_body(self) -> str:
+        return _strip_cs_comments(
+            _extract_method(_read(BRIDGE), "RunFromPaths")
+        )
+
+    def test_action_switch_runs_inside_a_try_catch(self) -> None:
+        body = self._run_from_paths_body()
+        # The dispatch call must be inside a try block followed by a
+        # catch on Exception.
+        self.assertRegex(
+            body,
+            r"try\s*\{[^{}]*DispatchAction\([^;]*;[^{}]*\}\s*"
+            r"catch\s*\(\s*Exception\s+\w+\s*\)",
+            msg=(
+                "RunFromPaths must call the action dispatch inside a "
+                "try block guarded by a catch(Exception ...) boundary."
+            ),
+        )
+
+    def test_boundary_emits_handler_exception_envelope(self) -> None:
+        body = self._run_from_paths_body()
+        self.assertIn(
+            "EDITOR_CTRL_HANDLER_EXCEPTION",
+            body,
+            msg=(
+                "The dispatch exception boundary must emit the "
+                "EDITOR_CTRL_HANDLER_EXCEPTION envelope."
+            ),
+        )
+
+    def test_envelope_names_action_and_redacts_exception_type(self) -> None:
+        body = self._run_from_paths_body()
+        # The handler-exception catch is the one guarding the
+        # ``DispatchAction`` call — not the earlier request-read catch.
+        # Anchor the search on the DispatchAction try block.
+        catch_match = re.search(
+            r"DispatchAction\([^;]*;\s*\}\s*"
+            r"catch\s*\(\s*Exception\s+(\w+)\s*\)\s*\{",
+            body,
+        )
+        self.assertIsNotNone(
+            catch_match,
+            msg="handler-exception catch guarding DispatchAction not found",
+        )
+        catch_var = catch_match.group(1)
+        catch_body = _extract_braced_block(
+            body, catch_match.end(), "RunFromPaths handler-exception catch"
+        )
+        self.assertIn(
+            "request.action",
+            catch_body,
+            msg="the handler-exception envelope must name the action",
+        )
+        self.assertIn(
+            f"{catch_var}.GetType().Name",
+            catch_body,
+            msg=(
+                "the handler-exception envelope must redact the exception "
+                "to its type name"
+            ),
+        )
+        # No stack trace nor raw exception message may reach the envelope
+        # message; the only permitted exception-derived value is the type
+        # name.  The full detail is mirrored to the Unity console.
+        self.assertNotRegex(
+            catch_body,
+            rf"BuildError\([^)]*{catch_var}\.Message",
+            msg="the envelope message must not embed the raw exception message",
+        )
+        self.assertIn(
+            "Debug.LogWarning",
+            catch_body,
+            msg=(
+                "the full exception detail must be mirrored to the Unity "
+                "console"
+            ),
+        )
+
+
+class TestRecompileNoOpImporterWarning(unittest.TestCase):
+    """Issue #45 (T-45-2): the synchronous recompile handler's no-op
+    branch consults the importer-error predicate over the console buffer
+    and downgrades a masked importer failure to a ``warning``-severity
+    response.
+
+    Tier 3 (spec.md Tier 3 Justification T-45-2): the synchronous
+    recompile handler runs inside the Unity Editor process and is not
+    xUnit-compiled; the console buffer it scans is populated by live
+    Unity importer events.  The importer-error predicate is Tier
+    1-covered (T-45-1, ``ImporterErrorClassifierTests``); this
+    source-scan pins the handler wiring.
+    """
+
+    def test_noop_branch_consults_importer_error_predicate(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleRecompileAndWait")
+        # The no-op branch must route the console buffer through the
+        # Unity-free importer-error classifier.
+        self.assertIn(
+            "CollectImporterErrorDiagnostics",
+            body,
+            msg=(
+                "the no-op recompile branch must collect importer-error "
+                "diagnostics from the console buffer."
+            ),
+        )
+
+    def test_collector_uses_importer_error_classifier(self) -> None:
+        collector = _extract_method(
+            _read(BRIDGE), "CollectImporterErrorDiagnostics"
+        )
+        self.assertIn(
+            "ImporterErrorClassifier.IsImporterError",
+            collector,
+            msg=(
+                "the importer-error collector must delegate the line "
+                "predicate to the Unity-free ImporterErrorClassifier."
+            ),
+        )
+
+    def test_noop_importer_response_carries_warning_severity(self) -> None:
+        body = _strip_cs_comments(
+            _extract_method(_read(BRIDGE), "HandleRecompileAndWait")
+        )
+        # Locate the no-op branch and assert that when importer errors are
+        # present the response carries warning severity and the
+        # diagnostics list.
+        noop_idx = body.find("RecompileOutcomeClassifier.NoopCode")
+        self.assertNotEqual(
+            -1, noop_idx, msg="no-op branch marker not found"
+        )
+        noop_region = body[noop_idx:]
+        self.assertIn(
+            'severity = "warning"',
+            noop_region,
+            msg=(
+                "an importer failure in the no-op branch must yield a "
+                "warning-severity response, not a silent success."
+            ),
+        )
+        self.assertRegex(
+            noop_region,
+            r"diagnostics\s*=\s*importerErrors\.ToArray\(\)",
+            msg=(
+                "the warning response must list the detected importer "
+                "errors as diagnostics."
             ),
         )
 
@@ -3283,8 +3497,10 @@ class EditorControlBridgeDispatcherRoutingTests(unittest.TestCase):
                 self.assertIn(f'"{action}"', block)
 
     def test_dispatcher_routes_every_new_action(self) -> None:
+        # Issue #51: the action switch lives in ``DispatchAction``, which
+        # ``RunFromPaths`` calls inside its exception boundary.
         source = _read(BRIDGE)
-        body = _extract_method(source, "RunFromPaths")
+        body = _extract_method(source, "DispatchAction")
         for action, handler in self._NEW_HANDLER_NAMES.items():
             with self.subTest(action=action):
                 self.assertIn(
@@ -3337,9 +3553,13 @@ class PrefabStagePersistFixSourceInvariantTests(unittest.TestCase):
     )
 
     def _resolver_body(self) -> str:
+        # Issue #38: the resolution logic (normalization, stage walk,
+        # scene fallback) lives in ``TryResolveGameObjectInActiveStage``;
+        # ``ResolveGameObjectInActiveStage`` is a thin wrapper delegating
+        # to it.
         return _extract_method(
             self._PREFAB_STAGE_PARTIAL.read_text(encoding="utf-8"),
-            "ResolveGameObjectInActiveStage",
+            "TryResolveGameObjectInActiveStage",
         )
 
     def _close_handler_body(self) -> str:
@@ -3353,56 +3573,44 @@ class PrefabStagePersistFixSourceInvariantTests(unittest.TestCase):
         leading-slash normalization through the dedicated Unity-free
         ``StageHierarchyPathLogic.NormalizeStagePath`` component (whose
         behavior is exercised by ``StageHierarchyPathLogicTests`` in the
-        C# harness) rather than re-inlining the strip, and must descend
-        into the stage root via ``Transform.Find`` once a stage is
-        active.
+        C# harness) rather than re-inlining the strip.
         """
         body = _strip_cs_comments(self._resolver_body())
         self.assertIn(
             "StageHierarchyPathLogic.NormalizeStagePath",
             body,
             msg=(
-                "ResolveGameObjectInActiveStage must delegate "
+                "TryResolveGameObjectInActiveStage must delegate "
                 "active-stage path normalization to "
                 "StageHierarchyPathLogic.NormalizeStagePath; a "
                 "re-inlined StartsWith/Substring strip re-introduces "
                 "the duplicated normalization (issue #18)."
             ),
         )
-        self.assertIn(
-            "stageRoot.transform.Find",
-            body,
-            msg=(
-                "ResolveGameObjectInActiveStage must descend into the "
-                "stage root via Transform.Find when a stage is active."
-            ),
-        )
 
     def test_resolver_active_stage_branch_has_no_scene_find(self) -> None:
-        """Inside the ``stage != null`` branch, no ``GameObject.Find``
+        """Inside the active-stage branch (the code reached once the
+        ``stage == null`` early-return is passed), no ``GameObject.Find``
         call may appear; the scene-wide lookup is reserved for the
         terminal no-stage path.
         """
-        body = self._resolver_body()
-        # Extract the source between the ``if (stage != null)`` guard
-        # and its matching close-brace.  Find the guard, then walk
-        # braces.
-        guard_idx = body.find("if (stage != null)")
+        body = _strip_cs_comments(self._resolver_body())
+        # The no-stage path early-returns; everything after the
+        # ``if (stage == null)`` block's closing brace is the
+        # active-stage branch.
+        guard_idx = body.find("if (stage == null)")
         self.assertNotEqual(
             -1, guard_idx,
-            msg="active-stage guard ``if (stage != null)`` is missing",
+            msg="no-stage guard ``if (stage == null)`` is missing",
         )
         open_idx = body.find("{", guard_idx)
-        self.assertNotEqual(
-            -1, open_idx,
-            msg=(
-                "Opening brace for the active-stage guard block must "
-                "be present so the branch body can be extracted."
-            ),
+        self.assertNotEqual(-1, open_idx, msg="no-stage guard body missing")
+        no_stage_branch = _extract_braced_block(
+            body, open_idx + 1, "no-stage branch",
         )
-        active_branch = _extract_braced_block(
-            body, open_idx + 1, "active-stage branch",
-        )
+        # The active-stage branch is the source past the no-stage block.
+        block_end = body.index(no_stage_branch) + len(no_stage_branch)
+        active_branch = body[block_end:]
         self.assertNotIn(
             "GameObject.Find",
             active_branch,
@@ -3413,20 +3621,20 @@ class PrefabStagePersistFixSourceInvariantTests(unittest.TestCase):
         )
 
     def test_resolver_inactive_stage_terminal_uses_scene_find(self) -> None:
-        """The no-stage terminal path must consult the open scene via
+        """The no-stage path must consult the open scene via
         ``GameObject.Find`` so existing scene-edit workflows continue
         to work when no Prefab Stage is open.
         """
-        body = self._resolver_body()
+        body = _strip_cs_comments(self._resolver_body())
         self.assertIn(
-            "return GameObject.Find(hierarchyPath);",
+            "GameObject.Find(hierarchyPath)",
             body,
             msg=(
-                "ResolveGameObjectInActiveStage must consult the open "
-                "scene via ``GameObject.Find`` as its no-stage "
-                "terminal path."
+                "TryResolveGameObjectInActiveStage must consult the open "
+                "scene via ``GameObject.Find`` as its no-stage path."
             ),
         )
+
 
     def test_close_handler_persists_via_prefab_asset_api(self) -> None:
         body = self._close_handler_body()
@@ -3614,6 +3822,167 @@ class PrefabStagePersistFixSourceInvariantTests(unittest.TestCase):
             msg=(
                 "Close-handler exception path must emit the "
                 "documented error code."
+            ),
+        )
+
+
+class TestResolveGameObjectDelegation(unittest.TestCase):
+    """Issue #38 (T-38-5) — the live Prefab Stage resolver delegates
+    ``#N`` segment resolution to the shared Unity-free
+    ``SymbolPathResolver`` and maps the resolver's ambiguity signal to a
+    typed envelope.
+
+    Tier 3 (spec.md Tier 3 Justification T-38-5): the live stage
+    resolver builds its child-node view from live Unity ``Transform``
+    objects, which the xUnit harness cannot compile; the ``#N``
+    resolution rule itself is Tier 1-covered through the shared
+    Unity-free resolver (T-38-c2 / T-38-3 / T-38-4).  This source-scan
+    pins only the delegation structure: the live resolver routes
+    segment resolution through the shared resolver, carries no
+    independent first-pick path walk, and maps the ambiguity signal to
+    the ``EDITOR_CTRL_HIERARCHY_PATH_AMBIGUOUS`` envelope.
+    """
+
+    _PREFAB_STAGE_PARTIAL = (
+        TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.PrefabStage.cs"
+    )
+
+    def _resolver_body(self) -> str:
+        return _strip_cs_comments(
+            _extract_method(
+                self._PREFAB_STAGE_PARTIAL.read_text(encoding="utf-8"),
+                "TryResolveGameObjectInActiveStage",
+            )
+        )
+
+    def test_resolver_delegates_segment_resolution_to_shared_resolver(self) -> None:
+        body = self._resolver_body()
+        self.assertIn(
+            "SymbolPathResolver.Resolve",
+            body,
+            msg=(
+                "TryResolveGameObjectInActiveStage must delegate segment "
+                "resolution to the shared SymbolPathResolver."
+            ),
+        )
+
+    def test_resolver_has_no_independent_transform_find_walk(self) -> None:
+        # A re-inlined ``Transform.Find`` path walk would silently
+        # first-pick a same-named sibling, bypassing the resolver's
+        # ambiguity rejection.
+        body = self._resolver_body()
+        self.assertNotIn(
+            ".transform.Find(",
+            body,
+            msg=(
+                "The live stage resolver must not carry an independent "
+                "Transform.Find path walk; segment resolution belongs to "
+                "the shared SymbolPathResolver."
+            ),
+        )
+
+    def test_resolver_maps_ambiguity_signal_to_typed_envelope(self) -> None:
+        body = self._resolver_body()
+        self.assertIn(
+            "SymbolPathOutcome.Ambiguous",
+            body,
+            msg=(
+                "The resolver must branch on the SymbolPathResolver "
+                "ambiguity signal."
+            ),
+        )
+        self.assertIn(
+            "EDITOR_CTRL_HIERARCHY_PATH_AMBIGUOUS",
+            body,
+            msg=(
+                "An ambiguous live path must map to the "
+                "EDITOR_CTRL_HIERARCHY_PATH_AMBIGUOUS envelope."
+            ),
+        )
+
+
+class TestValuePresentMarkerConsumption(unittest.TestCase):
+    """Issue #52 — the bridge write handlers *consume* the value-present
+    marker so an empty-string write is applied rather than rejected as
+    "no value".
+
+    Tier 3: the handlers run inside the Unity Editor process and are not
+    xUnit-compiled.  The Python surface tests (T-52-1/2/3) pin only that
+    the marker is *sent* across the bridge boundary; they cannot observe
+    whether the C# handler *reads* it.  This source-scan pins the read
+    side — the wire contract the DTO field documents — for the three
+    #52 write handlers.
+    """
+
+    def test_set_property_handler_consults_value_present_marker(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleEditorSetProperty")
+        self.assertIn(
+            "request.property_value_present",
+            body,
+            msg=(
+                "HandleEditorSetProperty must consult "
+                "request.property_value_present so an empty-string write "
+                "is not rejected as 'no value'."
+            ),
+        )
+
+    def test_udonsharp_field_handler_consults_value_present_marker(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleSetUdonSharpField")
+        self.assertIn(
+            "request.property_value_present",
+            body,
+            msg=(
+                "HandleSetUdonSharpField must consult "
+                "request.property_value_present so an empty-string field "
+                "value is not rejected with EDITOR_CTRL_UDON_SET_FIELD_NO_VALUE."
+            ),
+        )
+
+    def test_batch_handler_forwards_op_value_present(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleEditorBatchSetProperty")
+        self.assertIn(
+            "property_value_present = op.value_present",
+            body,
+            msg=(
+                "HandleEditorBatchSetProperty must forward the per-op "
+                "value_present marker into the delegated sub-request."
+            ),
+        )
+
+
+class TestSetPropertyAmbiguityPropagation(unittest.TestCase):
+    """Issue #38 — the primary write handlers surface an ambiguous
+    hierarchy_path as the dedicated EDITOR_CTRL_HIERARCHY_PATH_AMBIGUOUS
+    envelope instead of swallowing it via ``ResolveGameObjectInActiveStage``.
+
+    Tier 3: the handlers run inside the Unity Editor process and are not
+    xUnit-compiled.  This source-scan pins that they route resolution
+    through ``TryResolveGameObjectInActiveStage`` — the variant that
+    yields the ambiguity envelope — rather than the discarding
+    ``ResolveGameObjectInActiveStage`` overload.
+    """
+
+    def test_set_property_handler_propagates_ambiguity_envelope(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleEditorSetProperty")
+        self.assertIn(
+            "TryResolveGameObjectInActiveStage",
+            body,
+            msg=(
+                "HandleEditorSetProperty must resolve via "
+                "TryResolveGameObjectInActiveStage so an ambiguous "
+                "hierarchy_path surfaces EDITOR_CTRL_HIERARCHY_PATH_AMBIGUOUS."
+            ),
+        )
+
+    def test_udonsharp_field_handler_propagates_ambiguity_envelope(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleSetUdonSharpField")
+        self.assertIn(
+            "TryResolveGameObjectInActiveStage",
+            body,
+            msg=(
+                "HandleSetUdonSharpField must resolve via "
+                "TryResolveGameObjectInActiveStage so an ambiguous "
+                "hierarchy_path surfaces EDITOR_CTRL_HIERARCHY_PATH_AMBIGUOUS."
             ),
         )
 

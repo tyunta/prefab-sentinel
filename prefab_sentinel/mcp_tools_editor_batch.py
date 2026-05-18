@@ -21,15 +21,17 @@ __all__ = [
 def editor_batch_set_blend_shape(
     hierarchy_path: str,
     shapes: list[dict[str, Any]],
-    confirm: bool = False,
-    change_reason: str = "",
 ) -> dict[str, Any]:
-    """Audit-gated batch blend-shape entry point (issue #240).
+    """Batch blend-shape entry point (issue #240).
 
     Single module-level callable: external callers and the registered
-    MCP tool (under the same external name) both end up here so
-    pre-bridge audit gating, payload serialisation, and the bridge
-    action label have one canonical home.
+    MCP tool (under the same external name) both end up here so payload
+    serialisation and the bridge action label have one canonical home.
+
+    Issue #49: blend-shape weight changes are Undo-reversible live scene
+    edits — the batch runs under one Undo group — so the
+    inverse-irreversibility audit principle does not gate this tool; it
+    carries no ``confirm`` / ``change_reason`` parameters.
 
     Args:
         hierarchy_path: Hierarchy path to the GameObject with a
@@ -38,20 +40,11 @@ def editor_batch_set_blend_shape(
             The bridge applies them in order under one Undo group;
             unknown shape names appear on the response's
             ``failed_shapes`` list and do not abort the batch.
-        confirm: Required ``True`` to apply (writer audit gate).
-        change_reason: Required non-empty audit reason.
     """
-    audit_err = require_write_audit(
-        "editor_batch_set_blend_shape", confirm, change_reason,
-    )
-    if audit_err is not None:
-        return audit_err
     return send_action(
         action="batch_set_blend_shape",
         hierarchy_path=hierarchy_path,
         shapes_json=dump_json(shapes, indent=None),
-        confirm=True,
-        change_reason=change_reason.strip(),
     )
 
 
@@ -61,26 +54,30 @@ def register_editor_batch_tools(server: FastMCP) -> None:
     @server.tool()
     def editor_create_empty(
         name: str,
-        parent_path: str = "",
+        parent_hierarchy_path: str = "",
         position: str = "",
     ) -> dict[str, Any]:
         """Create an empty GameObject with name, optional parent and position.
 
         Args:
             name: Name for the new GameObject.
-            parent_path: Hierarchy path to parent. Empty = scene root.
+            parent_hierarchy_path: Hierarchy path to parent. Empty = scene root.
             position: Local position as "x,y,z". Empty = origin.
         """
         return send_action(
             action="editor_create_empty",
-            **build_create_empty_kwargs(name=name, parent_path=parent_path, position=position),
+            **build_create_empty_kwargs(
+                name=name,
+                parent_path=parent_hierarchy_path,
+                position=position,
+            ),
         )
 
     @server.tool()
     def editor_create_primitive(
         primitive_type: str,
         name: str = "",
-        parent_path: str = "",
+        parent_hierarchy_path: str = "",
         position: str = "",
         scale: str = "",
         rotation: str = "",
@@ -90,7 +87,7 @@ def register_editor_batch_tools(server: FastMCP) -> None:
         Args:
             primitive_type: Primitive shape. One of: Cube, Sphere, Cylinder, Capsule, Plane, Quad.
             name: Name for the object. Empty = default Unity name.
-            parent_path: Hierarchy path to parent. Empty = scene root.
+            parent_hierarchy_path: Hierarchy path to parent. Empty = scene root.
             position: Local position as "x,y,z".
             scale: Local scale as "x,y,z".
             rotation: Euler angles as "x,y,z".
@@ -98,8 +95,8 @@ def register_editor_batch_tools(server: FastMCP) -> None:
         kwargs: dict[str, Any] = {"primitive_type": primitive_type}
         if name:
             kwargs["new_name"] = name
-        if parent_path:
-            kwargs["hierarchy_path"] = parent_path
+        if parent_hierarchy_path:
+            kwargs["hierarchy_path"] = parent_hierarchy_path
         if position:
             kwargs["property_value"] = position
         if scale:
@@ -112,7 +109,7 @@ def register_editor_batch_tools(server: FastMCP) -> None:
     def editor_create_ui_element(
         name: str,
         type: str,
-        parent_path: str = "",
+        parent_hierarchy_path: str = "",
         rect: dict[str, list[float]] | None = None,
         properties: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -141,7 +138,7 @@ def register_editor_batch_tools(server: FastMCP) -> None:
         Args:
             name: Name for the new GameObject. Empty rejected by Bridge.
             type: One of the canonical allowed type tokens.
-            parent_path: Hierarchy path to parent. Empty = scene root.
+            parent_hierarchy_path: Hierarchy path to parent. Empty = scene root.
             rect: Optional ``{"anchorMin": [x, y], "anchorMax": [x, y],
                 "sizeDelta": [x, y]}`` payload.
             properties: Optional graphic property payload.
@@ -150,8 +147,8 @@ def register_editor_batch_tools(server: FastMCP) -> None:
             "new_name": name,
             "component_type": type,
         }
-        if parent_path:
-            kwargs["hierarchy_path"] = parent_path
+        if parent_hierarchy_path:
+            kwargs["hierarchy_path"] = parent_hierarchy_path
         # Always forward the rect / properties payloads as JSON, even
         # when empty, so the Bridge sees a stable shape and can apply
         # the documented defaults uniformly.
@@ -179,19 +176,33 @@ def register_editor_batch_tools(server: FastMCP) -> None:
 
     @server.tool()
     def editor_batch_set_property(
-        operations: list[dict[str, str]],
+        operations: list[dict[str, Any]],
     ) -> dict[str, Any]:
         """Set multiple properties in a single request (Undo-grouped).
 
         Each operation dict must contain: hierarchy_path, component_type, property_name.
         Plus either value (for primitives) or object_reference (for ObjectReference).
 
+        Issue #52: each op carries a ``value_present`` marker across the
+        bridge boundary, so an op with an empty-string ``value`` is
+        distinct from one that omits ``value`` (and uses an
+        ``object_reference`` instead).
+
         Args:
             operations: List of set-property operations.
         """
+        # Issue #52: stamp the per-op value-present marker so an
+        # empty-string op value is not collapsed into "no value" at the
+        # bridge boundary. ``value_present`` reflects whether the op
+        # carried a ``value`` key, independent of the value's content.
+        marked_ops: list[dict[str, Any]] = []
+        for op in operations:
+            op_copy = dict(op)
+            op_copy["value_present"] = "value" in op
+            marked_ops.append(op_copy)
         return send_action(
             action="editor_batch_set_property",
-            batch_operations_json=dump_json(operations, indent=None),
+            batch_operations_json=dump_json(marked_ops, indent=None),
         )
 
     @server.tool()
@@ -199,22 +210,22 @@ def register_editor_batch_tools(server: FastMCP) -> None:
         properties: list[dict[str, str | list | int | float]],
         hierarchy_path: str = "",
         material_index: int = -1,
-        material_path: str = "",
-        material_guid: str = "",
+        material_asset_path: str = "",
+        material_asset_guid: str = "",
     ) -> dict[str, Any]:
         """Set multiple shader properties on one material in a single request (Undo-grouped).
 
         Target the material by ONE of:
         - Renderer: hierarchy_path + material_index
-        - Direct: material_path or material_guid
+        - Direct: material_asset_path or material_asset_guid
 
         Args:
             properties: List of property dicts, each with "name" and "value".
                 Value formats are the same as editor_set_material_property.
             hierarchy_path: Hierarchy path to the GameObject with a Renderer.
             material_index: Material slot index (0-based). Required with hierarchy_path.
-            material_path: Asset path to .mat file (e.g. "Assets/Materials/Hair.mat").
-            material_guid: GUID of the Material asset (32-char hex).
+            material_asset_path: Asset path to .mat file (e.g. "Assets/Materials/Hair.mat").
+            material_asset_guid: GUID of the Material asset (32-char hex).
         """
         normalized = [
             {"name": prop["name"], "value": normalize_material_value(prop["value"])}
@@ -227,10 +238,10 @@ def register_editor_batch_tools(server: FastMCP) -> None:
         if hierarchy_path:
             kwargs["hierarchy_path"] = hierarchy_path
             kwargs["material_index"] = material_index
-        if material_path:
-            kwargs["material_path"] = material_path
-        if material_guid:
-            kwargs["material_guid"] = material_guid
+        if material_asset_path:
+            kwargs["material_path"] = material_asset_path
+        if material_asset_guid:
+            kwargs["material_guid"] = material_asset_guid
 
         return send_action(
             action="editor_batch_set_material_property",
@@ -265,50 +276,81 @@ def register_editor_batch_tools(server: FastMCP) -> None:
 
     @server.tool()
     def editor_open_scene(
-        scene_path: str,
+        asset_path: str,
         mode: str = "single",
     ) -> dict[str, Any]:
         """Open a Unity scene by asset path.
 
         Args:
-            scene_path: Asset path to .unity file (e.g. "Assets/Scenes/Main.unity").
+            asset_path: Asset path to .unity file (e.g. "Assets/Scenes/Main.unity").
             mode: "single" (replace current) or "additive" (add to current).
         """
         return send_action(
             action="editor_open_scene",
-            asset_path=scene_path,
+            asset_path=asset_path,
             open_scene_mode=mode,
         )
 
     @server.tool()
     def editor_save_scene(
-        path: str = "",
+        asset_path: str = "",
+        confirm: bool = False,
+        change_reason: str = "",
     ) -> dict[str, Any]:
-        """Save the current scene. If path is empty, saves all open scenes in place.
+        """Save the current scene. If asset_path is empty, saves all open scenes in place.
+
+        Issue #49: saving a scene writes a ``.unity`` asset to disk in a
+        form Unity's Undo cannot reverse, so it requires the writer audit
+        pair (``confirm=True`` AND a non-empty ``change_reason``).
 
         Args:
-            path: Asset path to save to. Empty = save all open scenes.
+            asset_path: Asset path to save to. Empty = save all open scenes.
+            confirm: Required ``True`` to apply (writer audit gate).
+            change_reason: Required non-empty audit reason.
         """
-        kwargs: dict[str, Any] = {}
-        if path:
-            kwargs["asset_path"] = path
+        audit_err = require_write_audit(
+            "editor_save_scene", confirm, change_reason,
+        )
+        if audit_err is not None:
+            return audit_err
+        kwargs: dict[str, Any] = {
+            "confirm": True,
+            "change_reason": change_reason.strip(),
+        }
+        if asset_path:
+            kwargs["asset_path"] = asset_path
         return send_action(action="editor_save_scene", **kwargs)
 
     @server.tool()
     def editor_create_scene(
-        scene_path: str,
+        asset_path: str,
+        confirm: bool = False,
+        change_reason: str = "",
     ) -> dict[str, Any]:
         """Create a new empty Unity scene and save it to the specified path.
 
         Replaces the current scene with a new empty one. Use editor_save_scene
         first if you need to preserve the current scene.
 
+        Issue #49: creating a scene writes a new ``.unity`` asset to disk
+        in a form Unity's Undo cannot reverse, so it requires the writer
+        audit pair (``confirm=True`` AND a non-empty ``change_reason``).
+
         Args:
-            scene_path: Asset path for the new scene (e.g. "Assets/Scenes/NewScene.unity").
+            asset_path: Asset path for the new scene (e.g. "Assets/Scenes/NewScene.unity").
+            confirm: Required ``True`` to apply (writer audit gate).
+            change_reason: Required non-empty audit reason.
         """
+        audit_err = require_write_audit(
+            "editor_create_scene", confirm, change_reason,
+        )
+        if audit_err is not None:
+            return audit_err
         return send_action(
             action="editor_create_scene",
-            asset_path=scene_path,
+            asset_path=asset_path,
+            confirm=True,
+            change_reason=change_reason.strip(),
         )
 
     # Issue #240 (consolidation): the audit-gated entry point is a

@@ -79,7 +79,7 @@ v0.4.0 で CLI (`prefab-sentinel` コマンド) は廃止され、MCP サーバ�
 | `insert_array_element` | `component`, `path`, `index`, `value` | 配列に要素を挿入 |
 | `remove_array_element` | `component`, `path`, `index` | 配列から要素を削除 |
 
-- Prefab の `component` はクラス名（例: `"PlayerScript"`, `"UnityEngine.MeshRenderer"`）
+- Prefab の `component` はクラス名（例: `"PlayerScript"`, `"UnityEngine.MeshRenderer"`）または階層修飾 selector `TypeName@/hierarchy/path`（例: `"MeshRenderer@/Body/Head"`）。offline write ツール（`set_property` / `set_properties`）は issue #37 以降、解決済み component の GameObject 祖先チェーンから後者を発行する（同型コンポーネントが複数あるアセットでも一意 component を指せる）
 - Material / ScriptableObject の open mode では `component` の代わりに `"target": "$asset"` でルートを指定
 
 **create mode（新規アセット作成）:**
@@ -293,29 +293,29 @@ before / after diff + validation steps の抜粋:
 }
 ```
 
-## `set_component_fields` パラメータ
+## `set_properties` パラメータ
+
+issue #41 で `set_component_fields` から改名。`symbol_path` は GameObject ではなくコンポーネントを直接指す（独立した `component` 引数は廃止）。
 
 | パラメータ | 型 | 必須 | デフォルト | 説明 |
 |-----------|-----|------|-----------|------|
 | `asset_path` | string | ✅ | — | アセットファイルパス（.prefab, .unity, .asset） |
-| `symbol_path` | string | ✅ | — | 対象 GameObject の人間可読パス（例: `"Controller"`, `"Body/Head"`） |
-| `component` | string | ✅ | — | GameObject 上のコンポーネント型名（例: `"MeshRenderer"`, `"DualButtonController"`） |
-| `fields` | dict | ✅ | — | プロパティパス → 新しい値のマッピング（`{"propertyPath": value, ...}`） |
+| `symbol_path` | string | ✅ | — | 対象コンポーネントの人間可読パス（例: `"Controller/DualButtonController"`, `"Body/Head/MonoBehaviour(PlayerScript)"`） |
+| `properties` | dict | ✅ | — | プロパティパス → 新しい値のマッピング（`{"propertyPath": value, ...}`） |
 | `dry_run` | bool | — | `false` | `true` で変更を書き込まずプレビューする（`confirm=true` と同時に指定した場合は `dry_run` が優先） |
 | `confirm` | bool | — | `false` | `true` で変更を適用（`change_reason` と `out_report` が必須） |
 | `change_reason` | string | — | `null` | 変更理由（監査証跡用）。`confirm=true` 時は必須 |
 | `out_report` | string | — | `null` | 結果 JSON を書き出すファイルパス。`confirm=true` 時は必須 |
 
-**未解決時の挙動**: dry-run 段階でチェーン上に `component` 型または `fields` 内の property path が見つからない場合、Bridge / Python は `SER003`（severity=`error`）の error envelope を返す。`data.suggestions` に近似候補（最大 5 件）、`diagnostics[].detail` に `component_not_found` / `property_not_found` を載せる（issue #109）。
+**未解決時の挙動**: `symbol_path` がコンポーネントに解決できない場合は `SYMBOL_NOT_FOUND` / `SYMBOL_AMBIGUOUS` / `SYMBOL_NOT_COMPONENT` を返す。dry-run 段階で `properties` 内の property path がチェーン上に見つからない場合、`SER003`（severity=`error`）の error envelope を返す。`data.suggestions` に近似候補（最大 5 件）、`diagnostics[].detail` に `property_not_found` を載せる（issue #109）。発行する patch op は階層修飾 selector `TypeName@/hierarchy/path` を用いる（issue #37）。祖先名に `#` を含む等で selector が表現不能なら `SELECTOR_NOT_EXPRESSIBLE` で fail-fast。
 
 **使用例（dry-run）:**
 
 ```json
 {
   "asset_path": "Assets/Prefabs/Controller.prefab",
-  "symbol_path": "Controller",
-  "component": "DualButtonController",
-  "fields": {
+  "symbol_path": "Controller/DualButtonController",
+  "properties": {
     "clearDelaySeconds": 60.0,
     "buttonA": {"guid": "aabbccdd11223344aabbccdd11223344", "fileID": 12345, "type": 2}
   },
@@ -328,29 +328,32 @@ before / after diff + validation steps の抜粋:
 ```json
 {
   "asset_path": "Assets/Prefabs/Controller.prefab",
-  "symbol_path": "Controller",
-  "component": "DualButtonController",
-  "fields": {"clearDelaySeconds": 60.0},
+  "symbol_path": "Controller/DualButtonController",
+  "properties": {"clearDelaySeconds": 60.0},
   "confirm": true,
   "change_reason": "タイマー値を 30s から 60s に変更",
   "out_report": "reports/set_fields_result.json"
 }
 ```
 
-## `editor_set_component_fields` パラメータ
+## `editor_set_properties` パラメータ
+
+issue #41 で `editor_set_component_fields` から改名。
 
 | パラメータ | 型 | 必須 | デフォルト | 説明 |
 |-----------|-----|------|-----------|------|
 | `hierarchy_path` | string | ✅ | — | 対象 GameObject の Hierarchy パス（例: `"/DualButtonController/Controller"`） |
 | `component_type` | string | ✅ | — | コンポーネント型名（例: `"DualButtonController"`） |
-| `fields` | list[dict] | ✅ | — | フィールドディスクリプタのリスト（各要素は `name` + `value` または `name` + `object_reference`） |
+| `properties` | list[dict] | ✅ | — | プロパティエントリのリスト（各要素は `property_name` + `value` または `property_name` + `object_reference`） |
 
-**`fields` エントリ形式:**
+**`properties` エントリ形式:**
 
 | 形式 | フィールド | 説明 |
 |------|-----------|------|
-| プリミティブ値 | `{"name": "speed", "value": "60"}` | 数値・文字列・bool を文字列として渡す |
-| オブジェクト参照 | `{"name": "areaCollider", "object_reference": "/DualButtonController/AreaCollider:BoxCollider"}` | Hierarchy パス + オプションコンポーネント型 |
+| プリミティブ値 | `{"property_name": "speed", "value": "60"}` | 数値・文字列・bool を文字列として渡す |
+| オブジェクト参照 | `{"property_name": "areaCollider", "object_reference": "/DualButtonController/AreaCollider:BoxCollider"}` | Hierarchy パス + オプションコンポーネント型 |
+
+各エントリは bridge 境界を越えて `value_present` マーカー（bool）を運び、空文字列 `value` と `value` 不在を区別する（issue #52）。
 
 **使用例:**
 
@@ -358,14 +361,14 @@ before / after diff + validation steps の抜粋:
 {
   "hierarchy_path": "/DualButtonController/Controller",
   "component_type": "DualButtonController",
-  "fields": [
-    {"name": "clearDelaySeconds", "value": "60"},
-    {"name": "areaCollider", "object_reference": "/DualButtonController/AreaCollider:BoxCollider"}
+  "properties": [
+    {"property_name": "clearDelaySeconds", "value": "60"},
+    {"property_name": "areaCollider", "object_reference": "/DualButtonController/AreaCollider:BoxCollider"}
   ]
 }
 ```
 
-すべてのフィールド変更は単一 Undo グループにまとめられる。
+すべてのプロパティ変更は単一 Undo グループにまとめられる。
 
 ## Unity bridge / runtime
 
@@ -409,11 +412,11 @@ before / after diff + validation steps の抜粋:
 - ノイズ判定に使えるよう、`top_missing_asset_guids` に missing GUID 上位を返す。
 - `ignore_asset_guids` パラメータで missing GUID を一時的に無視でき、集計は `ignored_missing_asset_occurrences` / `top_ignored_missing_asset_guids` で確認できる。
 - `find_referencing_assets` も同じ既定除外を適用し、`Library` など非本番スコープを走査しない。
-- 書き込み操作は `patch_apply`（confirm モード）、`set_property`、`set_component_fields`、`copy_component_fields`、`add_component`、`remove_component`、`revert_overrides` の各 MCP ツールで利用可能。
+- 書き込み操作は `patch_apply`（confirm モード）、`set_property`、`set_properties`、`copy_component_fields`、`add_component`、`remove_component`、`revert_overrides` の各 MCP ツールで利用可能。
 
 ## エラーヒント ("Did you mean...?")
 
-- `SYMBOL_NOT_FOUND` エラー（`set_property`, `set_component_fields`, `copy_component_fields`, `add_component`, `remove_component`）は `data.suggestions` に類似 symbol_path のリスト（最大 3 件）を含む。
+- `SYMBOL_NOT_FOUND` エラー（`set_property`, `set_properties`, `copy_component_fields`, `add_component`, `remove_component`）は `data.suggestions` に類似 symbol_path のリスト（最大 3 件）を含む。
 - `MAT_PROP_NOT_FOUND` エラー（`inspect_material_asset` の書き込みモード）は `data.suggestions` に類似プロパティ名のリスト（最大 3 件）を含む。既存の `data.available_properties`（全プロパティ名リスト）も維持される。
 - `EDITOR_CTRL_PROPERTY_NOT_FOUND` エラー（`editor_get_material_property`, `editor_set_material_property`）は `data.suggestions` に類似シェーダープロパティ名のリスト（最大 3 件）を含む。
 - 候補なしの場合は `suggestions` は空配列 `[]`。

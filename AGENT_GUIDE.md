@@ -58,3 +58,12 @@ MCP ツールの正本一覧は [docs/tools.md](./docs/tools.md)、エラーコ�
 | [`/prefab-sentinel:knowledge-acquisition`](./skills/knowledge-acquisition/SKILL.md) | 新しい VRChat コミュニティツールに初めて遭遇したとき・既存ナレッジの confidence が low で作業に支障があるとき | `inspect_wiring` / `get_unity_symbols` / `inspect_hierarchy` / `inspect_materials` / `inspect_material_asset` + Web 検索 |
 
 迷ったらまず `/prefab-sentinel:guide` を呼ぶ。`guide` の冒頭にある「30 秒で動く 3 つの例」「最初に困ったらこの 3 ツール」を読めば、ほとんどの初手は決まる。
+
+## offline / live の権威境界
+
+MCP ツールには 2 つの権威系統がある。混同すると編集結果が観測とずれる。
+
+- **offline 系**（`get_unity_symbols` / `find_unity_symbol` / `set_property` / `set_properties` 等）— `symbol_path` で住所し、last-saved disk YAML を権威とする。Unity 起動不要。
+- **live 系**（`editor_*` 系）— `hierarchy_path` で住所し、live editor / 開いている Prefab Stage を権威とする。Editor Bridge 常駐が前提。
+- 引数名で側が判別できる: `*_symbol_path` / `*_asset_path` は project / offline、`*_hierarchy_path` は scene / live（規約の正本は [docs/tool-conventions.md](./docs/tool-conventions.md) §1）。
+- Editor Bridge 接続中かつ live に未保存変更がある間、offline symbol-reference ツールはペイロードに freshness マーカーを付け、結果が last-saved disk を反映し live と乖離しうることを通知する（issue #40）。マーカーが付いていたら live 編集を保存してから offline 結果を信頼する。

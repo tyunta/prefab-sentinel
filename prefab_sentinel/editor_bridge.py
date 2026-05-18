@@ -94,10 +94,13 @@ SUPPORTED_ACTIONS = frozenset(
         "editor_reflect",
         # Phase 9: Editor script exec (#74)
         "run_script",
-        # Issue #118: synchronous recompile-and-wait surface that returns
+        # Issue #118: synchronous recompile-and-wait action that returns
         # only after the Editor has finished compiling, the compiled
         # assembly's mtime has advanced, and the post-reload signal has
-        # fired.  ``editor_recompile`` retains its fire-and-return contract.
+        # fired.  Issue #54 renamed the MCP tool surface so the bare
+        # ``editor_recompile`` tool drives this action; the
+        # fire-and-return ``editor_recompile_async`` tool drives the
+        # ``recompile_scripts`` action.  Action strings are not renamed.
         "editor_recompile_and_wait",
         # Issue #119: high-level UdonSharp authoring surface — three
         # synchronous handlers (Add / SetField / WireListener) that wrap

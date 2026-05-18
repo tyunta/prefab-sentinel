@@ -31,7 +31,7 @@
 3. 変更は `dry_run_patch` で差分確認後に `apply_and_save` する。
 4. 適用後に `compile_udonsharp` と `run_clientsim` で実行検証する。
 5. `critical` / `error` が 1 件でもあれば停止し、修正または判断待ちへ回す。
-- 書き込み系ツール（`set_property`, `add_component`, `remove_component`, `copy_component_fields`, `set_component_fields`, `set_material_property`, `copy_asset`, `rename_asset`, `revert_overrides`, `patch_apply`）は `confirm=True` 時に `change_reason` を必須とする（監査ログのため）。`patch_apply` および `set_component_fields` はさらに `out_report` も必須。
+- 書き込み系ツール（`set_property`, `add_component`, `remove_component`, `copy_component_fields`, `set_properties`, `set_material_property`, `copy_asset`, `rename_asset`, `revert_overrides`, `patch_apply`）は `confirm=True` 時に `change_reason` を必須とする（監査ログのため）。`patch_apply` および `set_properties` はさらに `out_report` も必須。
 
 ## 意思決定ルール
 - 自動修復可能で根拠があるもののみ `safe_fix` として提案・適用する。
