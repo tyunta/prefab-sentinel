@@ -70,11 +70,14 @@ namespace PrefabSentinel
             Transform parentTransform = null;
             if (!string.IsNullOrEmpty(request.hierarchy_path))
             {
-                var parentGo = ResolveGameObjectInActiveStage(request.hierarchy_path);
-                if (parentGo == null)
+                if (!TryResolveGameObjectInActiveStage(
+                    request.hierarchy_path, out GameObject parentGo, out var ambiguity))
+                {
+                    if (ambiguity != null) return ambiguity;
                     return BuildError(
                         "EDITOR_CTRL_CREATE_UI_PARENT_NOT_FOUND",
                         $"Parent not found: {request.hierarchy_path}");
+                }
                 parentTransform = parentGo.transform;
             }
 

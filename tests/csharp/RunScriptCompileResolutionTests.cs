@@ -90,16 +90,4 @@ public class RunScriptCompileRedactionTests
         Assert.Equal(
             "editor_recompile_and_wait: failed to schedule compilation.", message);
     }
-
-    [Fact]
-    public void Reimport_Diagnostic_Evidence_Is_The_Type_Name_Without_The_Message_Body()
-    {
-        var ex = new InvalidOperationException(
-            "host path /home/secret/Library leaked into the message");
-
-        string evidence = ReimportDiagnostic.Evidence(ex);
-
-        Assert.Equal("InvalidOperationException", evidence);
-        Assert.DoesNotContain("secret", evidence);
-    }
 }

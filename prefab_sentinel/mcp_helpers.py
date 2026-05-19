@@ -26,7 +26,6 @@ __all__ = [
     "KNOWLEDGE_URI_PREFIX",
     "collect_symbol_paths",
     "find_block_by_file_id",
-    "find_component_on_go",
     "normalize_material_value",
     "read_asset",
     "resolve_component_name",
@@ -224,75 +223,3 @@ def find_block_by_file_id(text: str, file_id: str) -> str:
     raise ValueError(msg)
 
 
-def find_component_on_go(
-    go_node: SymbolNode,
-    component: str,
-    asset_path: str,
-) -> tuple[SymbolNode, str, None] | tuple[None, None, dict[str, Any]]:
-    """Find a uniquely-named component on a GameObject node."""
-    component_children = [
-        child for child in go_node.children
-        if child.kind == SymbolKind.COMPONENT
-    ]
-    available = [
-        child.script_name if child.script_name else child.name
-        for child in component_children
-    ]
-
-    def _matches(child: SymbolNode) -> bool:
-        if child.script_name:
-            return child.script_name == component
-        return child.name == component
-
-    matches = [child for child in component_children if _matches(child)]
-
-    if not matches:
-        return None, None, {
-            "success": False,
-            "severity": "error",
-            "code": "COMPONENT_NOT_FOUND",
-            "message": (
-                f"No component {component!r} found on "
-                f"GameObject {go_node.name!r}."
-            ),
-            "data": {
-                "asset_path": asset_path,
-                "component": component,
-                "available_components": available,
-            },
-            "diagnostics": [],
-        }
-
-    if len(matches) > 1:
-        return None, None, {
-            "success": False,
-            "severity": "error",
-            "code": "COMPONENT_AMBIGUOUS",
-            "message": (
-                f"Multiple {component!r} components found on "
-                f"GameObject {go_node.name!r}. Cannot resolve uniquely."
-            ),
-            "data": {
-                "asset_path": asset_path,
-                "component": component,
-                "available_components": [
-                    child.script_name if child.script_name else child.name
-                    for child in matches
-                ],
-            },
-            "diagnostics": [],
-        }
-
-    node = matches[0]
-    try:
-        component_name = resolve_component_name(node)
-    except ValueError as exc:
-        return None, None, {
-            "success": False,
-            "severity": "error",
-            "code": "SYMBOL_UNRESOLVABLE",
-            "message": str(exc),
-            "data": {"asset_path": asset_path, "component": component},
-            "diagnostics": [],
-        }
-    return node, component_name, None

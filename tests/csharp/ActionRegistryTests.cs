@@ -65,7 +65,9 @@ public class EditorControlRequestTests
         Assert.Equal(-1, request.camera_orthographic);
         Assert.False(request.confirm);
         Assert.False(request.assume_compiled);
-        Assert.False(request.force_reimport);
+        // Issue #70: the compile-awareness opt-in for editor_refresh
+        // defaults false so the fast synchronous refresh path is unchanged.
+        Assert.False(request.wait_for_compile);
         Assert.Equal(0, request.compile_timeout);
         Assert.Equal(0f, request.timeout_sec);
         Assert.Equal("all", request.classification_filter);

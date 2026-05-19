@@ -385,6 +385,55 @@ namespace PrefabSentinel
             }
             return true;
         }
+        /// <summary>
+        /// Issue #37: resolve the component within <paramref name="root"/>
+        /// whose Unity local fileID equals <paramref name="rawFileId"/>.
+        /// The local fileID is read through Unity's global-object-id
+        /// facility (<see cref="GlobalObjectId.targetObjectId"/>), so a
+        /// same-type sibling on a single GameObject — which a type-name
+        /// selector cannot disambiguate — is uniquely addressable.
+        /// Reports a fail-fast failure reason when no component matches.
+        /// </summary>
+        private static bool TryResolveComponentByFileId(
+            GameObject root,
+            string rawFileId,
+            out Component component,
+            out string error
+        )
+        {
+            component = null;
+            error = string.Empty;
+            string fileId = (rawFileId ?? string.Empty).Trim();
+            if (string.IsNullOrEmpty(fileId))
+            {
+                error = "file_id is empty";
+                return false;
+            }
+            if (!ulong.TryParse(fileId, out ulong targetFileId))
+            {
+                error = $"file_id '{rawFileId}' is not a valid fileID";
+                return false;
+            }
+
+            Component[] components = root.GetComponentsInChildren<Component>(true);
+            for (int i = 0; i < components.Length; i++)
+            {
+                Component candidate = components[i];
+                if (candidate == null)
+                {
+                    continue;
+                }
+                GlobalObjectId gid = GlobalObjectId.GetGlobalObjectIdSlow(candidate);
+                if (gid.targetObjectId == targetFileId)
+                {
+                    component = candidate;
+                    return true;
+                }
+            }
+
+            error = $"component with file_id '{fileId}' was not found in the asset";
+            return false;
+        }
         private static bool TryFindUniqueComponent(
             GameObject root,
             string selector,
@@ -400,6 +449,27 @@ namespace PrefabSentinel
             if (!TryParseComponentSelector(selector, out typeSelector, out hierarchySelector, out error))
             {
                 return false;
+            }
+
+            // Issue #38: when the selector carries a hierarchy part, the
+            // ``#N``-aware segment resolution is delegated to the
+            // Unity-free ``SymbolPathResolver`` — the same resolver the
+            // live stage resolver uses — so a same-named-sibling segment
+            // is disambiguated by ``#N`` and an ambiguous bare segment is
+            // rejected rather than first-picked.  The resolver narrows
+            // the candidate set to one GameObject; the type filter then
+            // selects the component on it.  With no hierarchy part the
+            // whole subtree is scanned by type alone (unchanged).
+            Transform hierarchyTarget = null;
+            if (!string.IsNullOrWhiteSpace(hierarchySelector))
+            {
+                if (!TryResolveHierarchyPathWithResolver(
+                        root, hierarchySelector, out hierarchyTarget,
+                        out string hierarchyError))
+                {
+                    error = hierarchyError;
+                    return false;
+                }
             }
 
             Component[] components = root.GetComponentsInChildren<Component>(true);
@@ -434,13 +504,9 @@ namespace PrefabSentinel
                 }
 
                 typeMatches.Add(candidate);
-                if (!string.IsNullOrWhiteSpace(hierarchySelector))
+                if (hierarchyTarget != null && candidate.transform != hierarchyTarget)
                 {
-                    string candidatePath = BuildHierarchyPath(candidate.transform).Replace('\\', '/');
-                    if (!string.Equals(candidatePath, hierarchySelector, StringComparison.OrdinalIgnoreCase))
-                    {
-                        continue;
-                    }
+                    continue;
                 }
                 matches.Add(candidate);
             }
@@ -474,6 +540,91 @@ namespace PrefabSentinel
                 : $"component selector is ambiguous: '{selector}' matched {matches.Count} components ({matchedCandidates})";
             return false;
         }
+        /// <summary>
+        /// Issue #38: resolve the hierarchy part of a ``TypeName@/path``
+        /// component selector to a single live ``Transform`` by delegating
+        /// ``#N`` segment resolution to the Unity-free
+        /// <see cref="SymbolPathResolver"/>.  The selector path is rooted
+        /// at <paramref name="root"/>; its first segment names
+        /// <paramref name="root"/> itself when present.  An ambiguous
+        /// segment (same-named siblings, no ``#N``) is reported as an
+        /// error rather than first-picked.
+        /// </summary>
+        private static bool TryResolveHierarchyPathWithResolver(
+            GameObject root,
+            string hierarchySelector,
+            out Transform target,
+            out string error
+        )
+        {
+            target = null;
+            error = string.Empty;
+
+            string normalized = hierarchySelector.Trim()
+                .Replace('\\', '/')
+                .TrimStart('/');
+            if (string.IsNullOrEmpty(normalized))
+            {
+                error = "component selector hierarchy path is empty";
+                return false;
+            }
+
+            var idToTransform = new Dictionary<string, Transform>();
+            SymbolPathNode rootNode = BuildSelectorNode(
+                root.transform, idToTransform);
+            string[] segments = normalized.Split('/');
+
+            SymbolPathResolution resolution = SymbolPathResolver.Resolve(
+                new[] { rootNode }, segments);
+
+            if (resolution.Outcome == SymbolPathOutcome.Ambiguous)
+            {
+                error = $"component selector hierarchy path '{hierarchySelector}' "
+                    + $"matched {resolution.MatchCount} same-named objects; "
+                    + "disambiguate a segment with a '#N' suffix "
+                    + "(0-based, child order)";
+                return false;
+            }
+            if (resolution.Outcome != SymbolPathOutcome.Unique)
+            {
+                error = $"component selector hierarchy path '{hierarchySelector}' "
+                    + "did not match any object";
+                return false;
+            }
+
+            if (!idToTransform.TryGetValue(resolution.Node.Id, out target)
+                || target == null)
+            {
+                error = $"component selector hierarchy path '{hierarchySelector}' "
+                    + "resolved to a stale object";
+                return false;
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// Build a <see cref="SymbolPathNode"/> tree mirroring a live
+        /// transform subtree for selector resolution.  Each node's
+        /// ``Id`` keys <paramref name="idToTransform"/> so a unique
+        /// resolution maps back to the live ``Transform``; children are
+        /// in ``Transform.GetChild`` order.
+        /// </summary>
+        private static SymbolPathNode BuildSelectorNode(
+            Transform transform,
+            Dictionary<string, Transform> idToTransform
+        )
+        {
+            string id = transform.GetInstanceID().ToString();
+            idToTransform[id] = transform;
+            var children = new List<SymbolPathNode>(transform.childCount);
+            for (int i = 0; i < transform.childCount; i++)
+            {
+                children.Add(BuildSelectorNode(
+                    transform.GetChild(i), idToTransform));
+            }
+            return new SymbolPathNode(id, transform.name, children);
+        }
+
         private static bool TryFindGameObjectByPath(
             GameObject root,
             string hierarchyPath,

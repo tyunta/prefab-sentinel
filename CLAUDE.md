@@ -2,7 +2,7 @@
 
 - AI agent 初回参照: [AGENT_GUIDE.md](./AGENT_GUIDE.md)
 
-本ファイルは `prefab-sentinel` リポジトリの運用ルール正本。仕様の正本は専門ドキュメント（`docs/api-reference.md` / `docs/execution-reference.md` / `ARCHITECTURE.md` / `TESTING.md` / `CONFIGURATION.md`）に分かれて置かれ、`README.md` はそれらへの入口（エントリポイント兼ルーター）として機能する。
+本ファイルは `prefab-sentinel` リポジトリの運用ルール正本。仕様の正本は専門ドキュメント（`docs/api-reference.md` / `docs/tool-conventions.md` / `docs/execution-reference.md` / `ARCHITECTURE.md` / `TESTING.md` / `CONFIGURATION.md`）に分かれて置かれ、`README.md` はそれらへの入口（エントリポイント兼ルーター）として機能する。
 仕様に関わる変更を行う場合は、実装変更と同時に対応する専門ドキュメントの該当箇所を更新する。
 
 ## 設計原則
@@ -12,7 +12,7 @@
 - 必須参照の欠落は補完せず `error` で停止する（fail-fast）。
 - ファイルサイズ目安（200〜400 行）は **partial 単位**で評価する。1 ファイル合計ではなく `partial class` ごとの責務単位で行数を判定する。partial 構成は disk 上のファイル名（`tools/unity/PrefabSentinel.Unity*Bridge.<Concern>.cs`）が正本で、test が CLAUDE.md inventory との drift を検出する（`tests/test_editor_control_bridge_source.py::TestOperationalRulesPartialInventory` / `tests/test_unity_patch_bridge_source.py::TestPatchBridgeOperationalRulesInventory`）。
 - 現在の per-concern token inventory（test 用、追加・削除時に同期）:
-  - `UnityEditorControlBridge`: AnimationClip / BlendShape / CameraView / Components / ConsoleCapture / Helpers / Hierarchy / MaterialBatch / MaterialQuery / MaterialWrite / Menu / MenuScriptWatch / PrefabStage / Properties / PropertyWrite / RunScriptAsync / RunScriptCompile / SaveInstantiate / Screenshot / UdonSharpAddComponent / UdonSharpFieldWrite / UdonSharpInvocation / UdonSharpListenerWiring / UiElement
+  - `UnityEditorControlBridge`: AnimationClip / BlendShape / CameraView / CompileBarrier / Components / ConsoleCapture / Helpers / Hierarchy / MaterialBatch / MaterialQuery / MaterialWrite / Menu / MenuScriptWatch / PrefabStage / Properties / PropertyWrite / RunScriptAsync / RunScriptCompile / SaveInstantiate / Screenshot / UdonSharpAddComponent / UdonSharpFieldWrite / UdonSharpInvocation / UdonSharpListenerWiring / UiElement
   - `UnityPatchBridge`: Payloads / Prefab / Asset / Scene / Resolve / Mutation / ManagedReference / Diagnostics
 - `Mutation` partial は value-kind dispatcher と各 `SerializedPropertyType` 用 reader が 1 つの cohesive concern を構成するため、200〜400 行ガイドラインも issue #129 暫定の 1,000 行上限も意図的に超過する（issue #129 spec.md "further sub-split" / Non-Goals 参照）。
 
@@ -31,7 +31,7 @@
 3. 変更は `dry_run_patch` で差分確認後に `apply_and_save` する。
 4. 適用後に `compile_udonsharp` と `run_clientsim` で実行検証する。
 5. `critical` / `error` が 1 件でもあれば停止し、修正または判断待ちへ回す。
-- 書き込み系ツール（`set_property`, `add_component`, `remove_component`, `copy_component_fields`, `set_component_fields`, `set_material_property`, `copy_asset`, `rename_asset`, `revert_overrides`, `patch_apply`）は `confirm=True` 時に `change_reason` を必須とする（監査ログのため）。`patch_apply` および `set_component_fields` はさらに `out_report` も必須。
+- 書き込み系ツール（`set_property`, `add_component`, `remove_component`, `copy_component_fields`, `set_properties`, `set_material_property`, `copy_asset`, `rename_asset`, `revert_overrides`, `patch_apply`）は `confirm=True` 時に `change_reason` を必須とする（監査ログのため）。`patch_apply` および `set_properties` はさらに `out_report` も必須。
 
 ## 意思決定ルール
 - 自動修復可能で根拠があるもののみ `safe_fix` として提案・適用する。
@@ -61,10 +61,11 @@
 - Unit: propertyPath 解決、配列境界、参照逆引き。
 - Integration: Base / Variant / Scene 三層編集の E2E。
 - Regression: Broken PPtr / Udon nullref の既知再現ケース固定。
+- Bridge C# コンパイル検証: `tools/unity/` の Unity 依存ファイル（`UnityEditor` / VRChat SDK 参照、55 中 40 ファイル）は CI でも xUnit ハーネスでもコンパイルされない。これらを変更したら `deploy_bridge` で実 Unity プロジェクトに配置しコンパイル 0 件を手動確認する。CI ゲートを入れない理由（reference assembly 調達に Unity install が不可避 = issue #43）と検証プロトコルの正本は [`TESTING.md` の「Unity 依存 Bridge C# のコンパイル検証」節](./TESTING.md#unity-依存-bridge-c-のコンパイル検証)。
 
 ## ドキュメント運用
 - `README.md` はエントリポイント兼ルーター。「やること / やる内容 / やらないこと」とドキュメントマップ（各専門ドキュメントへの導線）を維持し、仕様本文は持たない。
-- 仕様の正本は専門ドキュメントに分割して置く: API エンベロープ / エラーコードは `docs/api-reference.md`、実行・CLI・patch スキーマは `docs/execution-reference.md`、構成・レイヤ責務・サービス仕様・データモデルは `ARCHITECTURE.md`、テスト戦略は `TESTING.md`、設定は `CONFIGURATION.md`。
+- 仕様の正本は専門ドキュメントに分割して置く: API エンベロープ / エラーコードは `docs/api-reference.md`、MCP ツールの住所表現・引数命名・監査ペア要否の規約は `docs/tool-conventions.md`、実行・CLI・patch スキーマは `docs/execution-reference.md`、構成・レイヤ責務・サービス仕様・データモデルは `ARCHITECTURE.md`、テスト戦略は `TESTING.md`、設定は `CONFIGURATION.md`。
 - 運用ルール変更時は本ファイルに追記し、理由を簡潔に残す。
 - 仕様との齟齬が出た場合は、対応する専門ドキュメントを優先して同期する。
 

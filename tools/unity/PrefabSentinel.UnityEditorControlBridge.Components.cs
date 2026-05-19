@@ -103,9 +103,9 @@ namespace PrefabSentinel
             if (string.IsNullOrEmpty(request.component_type))
                 return BuildError("EDITOR_CTRL_ADD_COMP_NO_TYPE", "component_type is required.");
 
-            var go = ResolveGameObjectInActiveStage(request.hierarchy_path);
-            if (go == null)
-                return BuildError("EDITOR_CTRL_ADD_COMP_NOT_FOUND",
+            if (!TryResolveGameObjectInActiveStage(
+                    request.hierarchy_path, out GameObject go, out var ambiguity))
+                return ambiguity ?? BuildError("EDITOR_CTRL_ADD_COMP_NOT_FOUND",
                     $"GameObject not found: {request.hierarchy_path}");
 
             System.Type compType = ResolveComponentType(request.component_type);
@@ -267,9 +267,9 @@ namespace PrefabSentinel
             if (string.IsNullOrEmpty(request.component_type))
                 return BuildError("EDITOR_CTRL_REM_COMP_NO_TYPE", "component_type is required.");
 
-            var go = ResolveGameObjectInActiveStage(request.hierarchy_path);
-            if (go == null)
-                return BuildError("EDITOR_CTRL_REM_COMP_NOT_FOUND",
+            if (!TryResolveGameObjectInActiveStage(
+                    request.hierarchy_path, out GameObject go, out var ambiguity))
+                return ambiguity ?? BuildError("EDITOR_CTRL_REM_COMP_NOT_FOUND",
                     $"GameObject not found: {request.hierarchy_path}");
 
             System.Type compType = ResolveComponentType(request.component_type);

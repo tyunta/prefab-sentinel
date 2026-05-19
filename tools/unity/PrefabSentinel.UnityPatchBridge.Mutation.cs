@@ -186,7 +186,47 @@ namespace PrefabSentinel
                 );
                 return false;
             }
-            if (string.IsNullOrWhiteSpace(op.component))
+            // Issue #37: a ``set`` op may target its component by an exact
+            // fileID or a type-name selector; when both are present the
+            // fileID wins. Array ops continue to require the selector.
+            bool isSetOp = string.Equals(opName, "set", StringComparison.Ordinal);
+            Component component;
+            string componentError;
+            if (isSetOp && !string.IsNullOrWhiteSpace(op.file_id))
+            {
+                if (!TryResolveComponentByFileId(
+                        prefabRoot, op.file_id, out component, out componentError))
+                {
+                    diagnostics.Add(
+                        new BridgeDiagnostic
+                        {
+                            path = target,
+                            location = $"ops[{opIndex}].file_id",
+                            detail = "apply_error",
+                            evidence = componentError
+                        }
+                    );
+                    return false;
+                }
+            }
+            else if (!string.IsNullOrWhiteSpace(op.component))
+            {
+                if (!TryFindUniqueComponent(
+                        prefabRoot, op.component, out component, out componentError))
+                {
+                    diagnostics.Add(
+                        new BridgeDiagnostic
+                        {
+                            path = target,
+                            location = $"ops[{opIndex}].component",
+                            detail = "apply_error",
+                            evidence = componentError
+                        }
+                    );
+                    return false;
+                }
+            }
+            else
             {
                 diagnostics.Add(
                     new BridgeDiagnostic
@@ -194,23 +234,9 @@ namespace PrefabSentinel
                         path = target,
                         location = $"ops[{opIndex}].component",
                         detail = "schema_error",
-                        evidence = "component is required"
-                    }
-                );
-                return false;
-            }
-
-            Component component;
-            string componentError;
-            if (!TryFindUniqueComponent(prefabRoot, op.component, out component, out componentError))
-            {
-                diagnostics.Add(
-                    new BridgeDiagnostic
-                    {
-                        path = target,
-                        location = $"ops[{opIndex}].component",
-                        detail = "apply_error",
-                        evidence = componentError
+                        evidence = isSetOp
+                            ? "set op requires a 'component' selector or a 'file_id'"
+                            : "component is required"
                     }
                 );
                 return false;

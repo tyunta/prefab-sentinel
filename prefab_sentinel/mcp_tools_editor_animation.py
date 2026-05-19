@@ -8,8 +8,9 @@ Three wrappers:
   audit pair (``confirm=True`` AND a non-empty ``change_reason``).
 * ``editor_apply_animation_clip`` — preview-apply an existing clip
   against a live hierarchy target through Unity's animation-mode
-  preview API, recorded as a single Undo group. Requires the writer
-  audit pair.
+  preview API, recorded as a single Undo group. Issue #49: this is an
+  Undo-reversible live preview, so the inverse-irreversibility audit
+  principle does not gate it; it carries no audit pair.
 """
 
 from __future__ import annotations
@@ -107,13 +108,15 @@ def editor_inspect_animation_clip(asset_path: str) -> dict[str, Any]:
 
 
 def editor_create_animation_clip(
-    target_dir: str,
-    name: str,
+    asset_path: str,
     curves: list[dict[str, Any]],
     confirm: bool = False,
     change_reason: str = "",
 ) -> dict[str, Any]:
-    """Write a new AnimationClip asset (issue #243).
+    """Write a new AnimationClip asset (issue #243, issue #53).
+
+    ``asset_path`` is the full ``Assets/…/Name.anim`` path; the bridge
+    derives the destination directory and clip filename from it.
 
     Each curve entry carries ``relative_path``, ``type``, ``property``,
     and ``value`` (a scalar for a single-keyframe curve or a list for a
@@ -125,24 +128,16 @@ def editor_create_animation_clip(
     )
     if audit_err is not None:
         return audit_err
-    if _has_unsafe_path_segment(target_dir):
+    if _has_unsafe_path_segment(asset_path):
         return _animation_clip_path_invalid_envelope(
-            f"target_dir={target_dir!r} contains '..' or '\\\\'."
-        )
-    if _has_unsafe_path_segment(name) or "/" in name:
-        return _animation_clip_path_invalid_envelope(
-            f"name={name!r} must not contain '/', '\\\\', or '..' segments."
+            f"asset_path={asset_path!r} contains '..' or '\\\\'."
         )
     normalized_reason = change_reason.strip()
-    # Bridge DTO names the asset stem ``animation_clip_name`` and the
-    # curve payload ``curves_json`` so the wire format aligns with the
-    # spec_review surface-area schema; the Python keyword stays ``name``
-    # for caller ergonomics. Curves are normalised so the bridge's
-    # ``JsonUtility`` sees a stable ``values: list[float]`` shape.
+    # Curves are normalised so the bridge's ``JsonUtility`` sees a stable
+    # ``values: list[float]`` shape.
     return send_action(
         action="create_animation_clip",
-        target_dir=target_dir,
-        animation_clip_name=name,
+        asset_path=asset_path,
         curves_json=dump_json(_normalize_curves_payload(curves), indent=None),
         confirm=True,
         change_reason=normalized_reason,
@@ -152,29 +147,22 @@ def editor_create_animation_clip(
 def editor_apply_animation_clip(
     asset_path: str,
     target_hierarchy_path: str,
-    confirm: bool = False,
-    change_reason: str = "",
 ) -> dict[str, Any]:
     """Preview-apply an AnimationClip against a live target (issue #243).
 
     The bridge resolves ``target_hierarchy_path`` through the Prefab
     Stage-aware resolver helper and samples the clip in animation-mode
     so the resulting state is recorded as a single Undo group that
-    reverts the entire preview in one undo step. Requires the writer
-    audit pair; whitespace-only audit reason is treated as missing.
+    reverts the entire preview in one undo step.
+
+    Issue #49: the preview is an Undo-reversible live scene change, so
+    the inverse-irreversibility audit principle does not gate this tool;
+    it carries no ``confirm`` / ``change_reason`` parameters.
     """
-    audit_err = require_write_audit(
-        "editor_apply_animation_clip", confirm, change_reason,
-    )
-    if audit_err is not None:
-        return audit_err
-    normalized_reason = change_reason.strip()
     return send_action(
         action="apply_animation_clip",
         asset_path=asset_path,
         target_hierarchy_path=target_hierarchy_path,
-        confirm=True,
-        change_reason=normalized_reason,
     )
 
 
@@ -193,18 +181,17 @@ def register_editor_animation_tools(server: FastMCP) -> None:
 
     @server.tool(name="editor_create_animation_clip")
     def _editor_create_animation_clip(
-        target_dir: str,
-        name: str,
+        asset_path: str,
         curves: list[dict[str, Any]],
         confirm: bool = False,
         change_reason: str = "",
     ) -> dict[str, Any]:
-        """Write a new AnimationClip (issue #243).
+        """Write a new AnimationClip (issue #243, issue #53).
 
         Args:
-            target_dir: Directory under ``Assets/`` where the clip is
-                written (e.g. ``Assets/Animations``).
-            name: Asset stem; the bridge appends ``.anim``.
+            asset_path: Full ``.anim`` asset path under ``Assets/``
+                (e.g. ``Assets/Animations/Wink.anim``); the bridge
+                derives the destination directory and clip filename.
             curves: List of ``{"relative_path", "type", "property",
                 "value"}`` entries. ``value`` is a scalar (single
                 keyframe) or list (multi-keyframe).
@@ -212,7 +199,7 @@ def register_editor_animation_tools(server: FastMCP) -> None:
             change_reason: Required non-empty audit reason.
         """
         return editor_create_animation_clip(
-            target_dir=target_dir, name=name, curves=curves,
+            asset_path=asset_path, curves=curves,
             confirm=confirm, change_reason=change_reason,
         )
 
@@ -220,20 +207,17 @@ def register_editor_animation_tools(server: FastMCP) -> None:
     def _editor_apply_animation_clip(
         asset_path: str,
         target_hierarchy_path: str,
-        confirm: bool = False,
-        change_reason: str = "",
     ) -> dict[str, Any]:
         """Preview-apply an AnimationClip against a live target (issue #243).
+
+        Issue #49: Undo-reversible live preview — no audit pair.
 
         Args:
             asset_path: Asset path to the ``.anim`` file to preview.
             target_hierarchy_path: Hierarchy path of the GameObject to
                 drive (resolved through the Prefab Stage-aware helper).
-            confirm: Required ``True`` (writer audit gate).
-            change_reason: Required non-empty audit reason.
         """
         return editor_apply_animation_clip(
             asset_path=asset_path,
             target_hierarchy_path=target_hierarchy_path,
-            confirm=confirm, change_reason=change_reason,
         )

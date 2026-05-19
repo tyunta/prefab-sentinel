@@ -35,10 +35,13 @@ namespace PrefabSentinel
                     $"offset={request.offset} or limit={request.limit} is out of range " +
                     "(offset>=0, 1<=limit<=1000).");
 
-            var go = ResolveGameObjectInActiveStage(request.hierarchy_path);
-            if (go == null)
+            if (!TryResolveGameObjectInActiveStage(
+                request.hierarchy_path, out GameObject go, out var ambiguity))
+            {
+                if (ambiguity != null) return ambiguity;
                 return BuildError("EDITOR_CTRL_OBJECT_NOT_FOUND",
                     $"GameObject not found: {request.hierarchy_path}");
+            }
 
             var smr = go.GetComponent<SkinnedMeshRenderer>();
             if (smr == null)
@@ -108,10 +111,13 @@ namespace PrefabSentinel
                 return BuildError("EDITOR_CTRL_BATCH_BLEND_SHAPE_PARSE",
                     $"shapes_json parse failed: {ex.Message}");
             }
-            var go = ResolveGameObjectInActiveStage(request.hierarchy_path);
-            if (go == null)
+            if (!TryResolveGameObjectInActiveStage(
+                request.hierarchy_path, out GameObject go, out var ambiguity))
+            {
+                if (ambiguity != null) return ambiguity;
                 return BuildError("EDITOR_CTRL_OBJECT_NOT_FOUND",
                     $"GameObject not found: {request.hierarchy_path}");
+            }
             var smr = go.GetComponent<SkinnedMeshRenderer>();
             if (smr == null)
                 return BuildError("EDITOR_CTRL_NO_SMR",
@@ -177,10 +183,13 @@ namespace PrefabSentinel
             if (string.IsNullOrEmpty(request.blend_shape_name))
                 return BuildError("EDITOR_CTRL_MISSING_PROPERTY", "blend_shape_name is required for set_blend_shape");
 
-            var go = ResolveGameObjectInActiveStage(request.hierarchy_path);
-            if (go == null)
+            if (!TryResolveGameObjectInActiveStage(
+                request.hierarchy_path, out GameObject go, out var ambiguity))
+            {
+                if (ambiguity != null) return ambiguity;
                 return BuildError("EDITOR_CTRL_OBJECT_NOT_FOUND",
                     $"GameObject not found: {request.hierarchy_path}");
+            }
 
             var smr = go.GetComponent<SkinnedMeshRenderer>();
             if (smr == null)

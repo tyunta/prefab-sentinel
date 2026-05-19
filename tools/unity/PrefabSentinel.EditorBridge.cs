@@ -60,6 +60,12 @@ namespace PrefabSentinel
         private void OnGUI()
         {
             GUILayout.Label("Prefab Sentinel — Editor Bridge", EditorStyles.boldLabel);
+            // Issue #65: surface the running bridge version from the
+            // canonical version constant so an operator can confirm which
+            // build is resident without reading source.
+            GUILayout.Label(
+                $"Bridge version {UnityEditorControlBridge.BridgeVersion}",
+                EditorStyles.miniLabel);
             GUILayout.Space(4);
 
             EditorGUI.BeginChangeCheck();

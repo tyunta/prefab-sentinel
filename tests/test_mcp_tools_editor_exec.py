@@ -364,7 +364,7 @@ class EditorRecompileAndWaitTests(unittest.TestCase):
     def test_default_timeout_forwards_60s(self) -> None:
         with patch.object(mcp_tools_editor_view, "send_action") as send:
             send.return_value = self._BRIDGE_OK
-            mcp_tools_editor_view.editor_recompile_and_wait()
+            mcp_tools_editor_view.editor_recompile()
         send.assert_called_once()
         kwargs = send.call_args.kwargs
         self.assertEqual("editor_recompile_and_wait", kwargs["action"])
@@ -373,7 +373,7 @@ class EditorRecompileAndWaitTests(unittest.TestCase):
     def test_explicit_timeout_forwards(self) -> None:
         with patch.object(mcp_tools_editor_view, "send_action") as send:
             send.return_value = self._BRIDGE_OK
-            mcp_tools_editor_view.editor_recompile_and_wait(timeout_sec=42.0)
+            mcp_tools_editor_view.editor_recompile(timeout_sec=42.0)
         kwargs = send.call_args.kwargs
         self.assertEqual({"timeout_sec": 42.0}, kwargs["request_extras"])
 
@@ -398,7 +398,7 @@ class EditorRecompileAndWaitTimeoutRangeTests(unittest.TestCase):
 
     def test_zero_rejected(self) -> None:
         with patch.object(mcp_tools_editor_view, "send_action") as send:
-            resp = mcp_tools_editor_view.editor_recompile_and_wait(timeout_sec=0.0)
+            resp = mcp_tools_editor_view.editor_recompile(timeout_sec=0.0)
         self.assertFalse(resp["success"])
         self.assertEqual("error", resp["severity"])
         self.assertEqual("COMPILE_TIMEOUT_OUT_OF_RANGE", resp["code"])
@@ -406,14 +406,14 @@ class EditorRecompileAndWaitTimeoutRangeTests(unittest.TestCase):
 
     def test_negative_rejected(self) -> None:
         with patch.object(mcp_tools_editor_view, "send_action") as send:
-            resp = mcp_tools_editor_view.editor_recompile_and_wait(timeout_sec=-1.0)
+            resp = mcp_tools_editor_view.editor_recompile(timeout_sec=-1.0)
         self.assertEqual("COMPILE_TIMEOUT_OUT_OF_RANGE", resp["code"])
         send.assert_not_called()
 
     def test_above_maximum_rejected(self) -> None:
         far_out = 1801.0
         with patch.object(mcp_tools_editor_view, "send_action") as send:
-            resp = mcp_tools_editor_view.editor_recompile_and_wait(timeout_sec=far_out)
+            resp = mcp_tools_editor_view.editor_recompile(timeout_sec=far_out)
         self.assertFalse(resp["success"])
         self.assertEqual("error", resp["severity"])
         self.assertEqual("COMPILE_TIMEOUT_OUT_OF_RANGE", resp["code"])
@@ -424,7 +424,7 @@ class EditorRecompileAndWaitTimeoutRangeTests(unittest.TestCase):
 
     def test_far_above_maximum_rejected(self) -> None:
         with patch.object(mcp_tools_editor_view, "send_action") as send:
-            resp = mcp_tools_editor_view.editor_recompile_and_wait(timeout_sec=99999.0)
+            resp = mcp_tools_editor_view.editor_recompile(timeout_sec=99999.0)
         self.assertEqual("COMPILE_TIMEOUT_OUT_OF_RANGE", resp["code"])
         send.assert_not_called()
 
@@ -432,14 +432,14 @@ class EditorRecompileAndWaitTimeoutRangeTests(unittest.TestCase):
         """The lower bound is exclusive at zero; any positive float forwards."""
         with patch.object(mcp_tools_editor_view, "send_action") as send:
             send.return_value = self._BRIDGE_OK
-            mcp_tools_editor_view.editor_recompile_and_wait(timeout_sec=1.0)
+            mcp_tools_editor_view.editor_recompile(timeout_sec=1.0)
         send.assert_called_once()
         self.assertEqual({"timeout_sec": 1.0}, send.call_args.kwargs["request_extras"])
 
     def test_accepts_upper_boundary(self) -> None:
         with patch.object(mcp_tools_editor_view, "send_action") as send:
             send.return_value = self._BRIDGE_OK
-            mcp_tools_editor_view.editor_recompile_and_wait(
+            mcp_tools_editor_view.editor_recompile(
                 timeout_sec=mcp_tools_editor_view.RECOMPILE_AND_WAIT_TIMEOUT_MAX_SEC,
             )
         send.assert_called_once()
@@ -988,32 +988,52 @@ class EditorRunScriptPollTests(unittest.TestCase):
         )
 
 
-class TestEditorRecompileForceReimport(unittest.TestCase):
-    """Task 12: Python recompile wrapper forwards ``force_reimport`` to bridge."""
+class TestEditorRefreshRequestsCompileAwareness(unittest.TestCase):
+    """Issue #70: the ``editor_refresh`` wrapper asks the bridge to wait
+    for and report a refresh-triggered compile, and sizes its transport
+    poll budget to outlast a compile plus domain reload."""
 
     _BRIDGE_OK = {
         "success": True,
         "severity": "info",
-        "code": "EDITOR_CTRL_RECOMPILE_OK",
+        "code": "EDITOR_CTRL_REFRESH_OK",
         "message": "ok",
         "data": {"executed": True},
         "diagnostics": [],
     }
 
-    def test_default_forwards_false(self) -> None:
+    def test_refresh_requests_compile_awareness(self) -> None:
         with patch.object(mcp_tools_editor_view, "send_action") as send:
             send.return_value = self._BRIDGE_OK
-            mcp_tools_editor_view.editor_recompile()
-        send.assert_called_once_with(
-            action="recompile_scripts", force_reimport=False
+            mcp_tools_editor_view.editor_refresh()
+        kwargs = send.call_args.kwargs
+        self.assertEqual(
+            ("refresh_asset_database", True),
+            (kwargs["action"], kwargs["wait_for_compile"]),
+            msg=(
+                "editor_refresh must invoke the refresh_asset_database "
+                "action with wait_for_compile=True so the bridge observes "
+                "the triggered compile."
+            ),
         )
 
-    def test_explicit_true_forwards_true(self) -> None:
+    def test_refresh_transport_budget_covers_compile_and_reload(self) -> None:
         with patch.object(mcp_tools_editor_view, "send_action") as send:
             send.return_value = self._BRIDGE_OK
-            mcp_tools_editor_view.editor_recompile(force_reimport=True)
-        send.assert_called_once_with(
-            action="recompile_scripts", force_reimport=True
+            mcp_tools_editor_view.editor_refresh()
+        # The transport poll budget must outlast a compile + domain reload,
+        # matching the recompile-and-wait budget plus the dispatch margin.
+        expected = (
+            int(mcp_tools_editor_view.RECOMPILE_AND_WAIT_DEFAULT_TIMEOUT_SEC)
+            + 5
+        )
+        self.assertEqual(
+            expected,
+            send.call_args.kwargs["timeout_sec"],
+            msg=(
+                "editor_refresh transport budget must cover a compile plus "
+                "domain reload"
+            ),
         )
 
 

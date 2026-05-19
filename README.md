@@ -117,6 +117,7 @@ read-only 検査（`validate_*` / `inspect_*` / `find_*`）は Unity 不要、`e
 |--------------|------|
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | 構成概観・レイヤ責務・サービス仕様・データモデル・用語集 |
 | [docs/tools.md](./docs/tools.md) | 全 MCP ツールの正本カタログ |
+| [docs/tool-conventions.md](./docs/tool-conventions.md) | MCP ツールの住所表現・引数命名・監査ペア要否の規約 |
 | [docs/api-reference.md](./docs/api-reference.md) | MCP 応答エンベロープの形状とエラーコードの正本 |
 | [docs/execution-reference.md](./docs/execution-reference.md) | MCP サーバーの実行リファレンス / smoke-batch / ベンチマーク / patch スキーマ / レポート出力フォーマット |
 | [TESTING.md](./TESTING.md) | ユニット / 統合 / 回帰 / mutation テストの実行手順とテスト戦略 |

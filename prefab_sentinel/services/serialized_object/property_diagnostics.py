@@ -1,6 +1,6 @@
 """Structured ``SER003`` envelope helpers for unresolved property/component lookups.
 
-When ``set_component_fields`` (or any caller routed through the dry-run
+When ``set_properties`` (or any caller routed through the dry-run
 path) cannot resolve a referenced component type or property path on the
 chain, the response should be a structured fail-fast error instead of a
 soft warning. These helpers build that envelope, attaching did-you-mean

@@ -1,7 +1,7 @@
 ---
 tool: udonsharp
 version_tested: "VRC SDK 3.7+ / UdonSharp 1.x"
-last_updated: 2026-05-03
+last_updated: 2026-05-18
 confidence: high
 ---
 
@@ -274,3 +274,20 @@ public void SubmitUrl(VRCUrl pcUrl, ...)
 - **`::ComponentType` サフィックスの非対応**: `editor_set_component_fields` の `object_reference` は UdonSharp コンポーネントに対する `::<TypeName>` サフィックスを解決できない。GameObject パスのみ（`/Path/To/Object`）で指定する。
 - **nested prefab 内の UdonSharp class のパス**: nested prefab に含まれる UdonSharp class（例: VVMW の `Core`）を参照する場合、scene 上の実際のパス（`/Root/Child (Variant):Core` 形式）を使う。`inspect_hierarchy` が示す nominal path とは異なることがある。
 - **他コンポーネントの `[SerializeField] private` フィールド**: 外部 UdonSharp からは読めない。public プロパティ経由で参照するか、bootstrap 時に snapshot する。`private set` のプロパティへの書き込みも不可。
+
+### UdonSharp フィールド rename と dual storage
+
+UdonSharp の public フィールドの値は **2 箇所に独立して格納**される（実測: scene YAML を直読みで確認）。
+
+1. **proxy（`UdonSharpBehaviour` 派生コンポーネント）** — 通常の Unity シリアライズフィールド。YAML に素で出る（例: `spikeValue: 12345`）。
+2. **backing `UdonBehaviour`** — `serializedPublicVariablesBytesString`（Odin シリアライズの `UdonVariableTable` を base64 化した不透明 blob）。中身は `List<IUdonVariable>` で、各エントリが `SymbolName`（`System.String`）でキーされる。
+
+**proxy が source of truth。** publicVariables blob は派生物で、`UdonSharpEditorUtility.CopyProxyToUdon`（proxy→udon）が save / build / Play 進入時に proxy から再生成する。逆方向の `CopyUdonToProxy` は legacy 移行専用で、V1 behaviour の domain reload では走らない（`UdonSharpEditorManager.UpgradeSceneBehaviours` が `behaviourVersion >= V1` を `continue` でスキップする）。
+
+→ **フィールド rename の挙動は plain MonoBehaviour と同じ。** U# 固有のハザードは無い:
+
+- `[FormerlySerializedAs("oldName")]` を付けて rename すれば、proxy 側が Unity 標準の挙動で migrate し、次の `CopyProxyToUdon` が新名で blob を再生成する。値は保たれる（実測: `spikeValue` → `[FormerlySerializedAs("spikeValue")] renamedValue` で recompile 後、Inspector で `renamedValue = 12345` を確認。domain reload を跨いで値が保持されたので `CopyUdonToProxy` による clobber も起きていない）。
+- 属性なしで rename すると proxy フィールドが default に落ち、それが blob に伝播して値喪失（通常 Unity rename と同じ）。
+- publicVariables blob は base64 不透明 blob なので、YAML テキストを走査する rename 影響分析（`validate_field_rename` 等）には occurrence として現れない。ただし proxy occurrence さえ捉えれば足りる（blob は `CopyProxyToUdon` が自己修復する）ため、これは過少報告ではなく**正しい挙動**。
+
+検証経路: `UdonSharpEditorUtility.cs`（`CopyProxyToUdon` / `CopyUdonToProxy`）、`UdonSharpEditorManager.cs`（`UpgradeSceneBehaviours` の V1 skip）。

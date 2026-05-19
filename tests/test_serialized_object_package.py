@@ -5,7 +5,7 @@ invariant for files under the package is enforced by the CI-side static
 gate ``scripts/check_module_line_limits.py``.
 
 Also covers the SER003 envelope contract added by issue #109 — when
-``set_component_fields`` references a component or property that cannot be
+``set_properties`` references a property that cannot be
 resolved on the chain, the response is a ``SER003`` error envelope with
 did-you-mean suggestions and a typed diagnostic.
 
@@ -55,7 +55,7 @@ def _meshrenderer_prefab() -> str:
     """A minimal synthetic prefab with one GameObject + Transform + MeshRenderer.
 
     Field set was chosen to exercise both the property-found and
-    property-not-found branches of ``set_component_fields``.
+    property-not-found branches of ``set_properties``.
     """
     return (
         "%YAML 1.1\n"
@@ -110,10 +110,10 @@ class SerializedObjectPackageSurfaceTests(unittest.TestCase):
 
 
 class SetComponentFieldsSER003Tests(unittest.TestCase):
-    """Issue #109 — ``set_component_fields`` returns the structured SER003
-    envelope when a referenced property or component cannot be resolved on
-    the chain, and returns the dry-run preview envelope when the input is
-    valid.
+    """Issue #109 / #41 — ``set_properties`` returns the structured SER003
+    envelope when a referenced property cannot be resolved on the chain,
+    a ``SYMBOL_NOT_FOUND`` envelope when the component symbol path does
+    not resolve, and the dry-run preview envelope when the input is valid.
     """
 
     def _setup_server_and_prefab(self, td: Path) -> tuple[Any, Path]:
@@ -124,17 +124,16 @@ class SetComponentFieldsSER003Tests(unittest.TestCase):
         server = create_server()
         return server, prefab_path
 
-    def test_set_component_fields_returns_ser003_for_unknown_property(self) -> None:
+    def test_set_properties_returns_ser003_for_unknown_property(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             td = Path(raw)
             server, prefab_path = self._setup_server_and_prefab(td)
             result = _run_call_tool(server.call_tool(
-                "set_component_fields",
+                "set_properties",
                 {
                     "asset_path": str(prefab_path),
-                    "symbol_path": "Cube",
-                    "component": "MeshRenderer",
-                    "fields": {"m_NoSuchField": 0},
+                    "symbol_path": "Cube/MeshRenderer",
+                    "properties": {"m_NoSuchField": 0},
                 },
             ))
 
@@ -149,40 +148,45 @@ class SetComponentFieldsSER003Tests(unittest.TestCase):
         suggestions = result["data"]["suggestions"]
         self.assertIn("m_Enabled", suggestions)
 
-    def test_set_component_fields_returns_ser003_for_unknown_component(self) -> None:
+    def test_set_properties_returns_symbol_not_found_for_unknown_component(self) -> None:
+        # Issue #41: with no separate component argument, a component
+        # symbol path that does not resolve fails at symbol resolution.
         with tempfile.TemporaryDirectory() as raw:
             td = Path(raw)
             server, prefab_path = self._setup_server_and_prefab(td)
             result = _run_call_tool(server.call_tool(
-                "set_component_fields",
+                "set_properties",
                 {
                     "asset_path": str(prefab_path),
-                    "symbol_path": "Cube",
-                    "component": "MeshRendererr",
-                    "fields": {"m_Enabled": 0},
+                    "symbol_path": "Cube/MeshRendererr",
+                    "properties": {"m_Enabled": 0},
                 },
             ))
 
-        self.assertEqual("SER003", result["code"])
+        self.assertEqual("SYMBOL_NOT_FOUND", result["code"])
         self.assertEqual("error", result["severity"])
-        diagnostics = result["diagnostics"]
-        self.assertEqual(1, len(diagnostics))
-        # Issue #304: unified wire shape — category in ``code``.
-        self.assertEqual("component_not_found", diagnostics[0]["code"])
+        # The resolution failure must carry actionable did-you-mean
+        # candidates, not merely an empty ``suggestions`` key.
         suggestions = result["data"]["suggestions"]
-        self.assertIn("MeshRenderer", suggestions)
+        self.assertGreater(
+            len(suggestions), 0,
+            msg="SYMBOL_NOT_FOUND must carry at least one suggestion",
+        )
+        self.assertTrue(
+            any("MeshRenderer" in s for s in suggestions),
+            msg=f"suggestions {suggestions!r} should name the MeshRenderer path",
+        )
 
-    def test_set_component_fields_succeeds_for_real_property(self) -> None:
+    def test_set_properties_succeeds_for_real_property(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             td = Path(raw)
             server, prefab_path = self._setup_server_and_prefab(td)
             result = _run_call_tool(server.call_tool(
-                "set_component_fields",
+                "set_properties",
                 {
                     "asset_path": str(prefab_path),
-                    "symbol_path": "Cube",
-                    "component": "MeshRenderer",
-                    "fields": {"m_Enabled": 0},
+                    "symbol_path": "Cube/MeshRenderer",
+                    "properties": {"m_Enabled": 0},
                 },
             ))
 
@@ -192,7 +196,7 @@ class SetComponentFieldsSER003Tests(unittest.TestCase):
             self.assertNotEqual("property_not_found", diagnostic["code"])
             self.assertNotEqual("component_not_found", diagnostic["code"])
 
-    def test_set_component_fields_accepts_array_container_field(self) -> None:
+    def test_set_properties_accepts_array_container_field(self) -> None:
         """Whole-array assignment to ``m_Materials`` is not a false SER003.
 
         ``iter_base_property_values`` only emits the per-element path
@@ -204,12 +208,11 @@ class SetComponentFieldsSER003Tests(unittest.TestCase):
             td = Path(raw)
             server, prefab_path = self._setup_server_and_prefab(td)
             result = _run_call_tool(server.call_tool(
-                "set_component_fields",
+                "set_properties",
                 {
                     "asset_path": str(prefab_path),
-                    "symbol_path": "Cube",
-                    "component": "MeshRenderer",
-                    "fields": {
+                    "symbol_path": "Cube/MeshRenderer",
+                    "properties": {
                         "m_Materials": [
                             {
                                 "fileID": 2100000,

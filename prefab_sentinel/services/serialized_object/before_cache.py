@@ -115,14 +115,22 @@ def resolve_before_value(
     if not service._before_cache:
         return UnresolvedReason.EMPTY_CHAIN
 
+    # Issue #37: the offline write tools emit a hierarchy-qualified
+    # ``TypeName@/hierarchy/path`` component selector. The Variant chain
+    # class map keys on the bare Unity type name, so strip any ``@``
+    # hierarchy suffix before the type lookup — the C# patch bridge owns
+    # the full hierarchy-qualified match at apply time; this best-effort
+    # dry-run ``before`` resolver only needs the type.
+    type_part = component.split("@", 1)[0].strip()
+
     # Numeric file id → direct lookup. Component type name → resolve via
     # chain-class map first, then fall through to the same lookup table.
-    if component.lstrip("-").isdigit():
-        file_id = component
+    if type_part.lstrip("-").isdigit():
+        file_id = type_part
     else:
         class_map = service._before_class_map or {}
         matches = [
-            fid for fid, type_name in class_map.items() if type_name == component
+            fid for fid, type_name in class_map.items() if type_name == type_part
         ]
         if len(matches) == 0:
             return UnresolvedReason.TYPE_NOT_FOUND

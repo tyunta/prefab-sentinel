@@ -50,6 +50,9 @@ namespace PrefabSentinel
             public string shader = string.Empty;
             public string prefab = string.Empty;
             public string component = string.Empty;
+            // Issue #37: exact-fileID target for set ops; enables unique
+            // addressing of same-type siblings on one GameObject.
+            public string file_id = string.Empty;
             public string path = string.Empty;
             public int index = 0;
             public string value_kind = string.Empty;

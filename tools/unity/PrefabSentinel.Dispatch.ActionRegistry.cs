@@ -23,6 +23,9 @@ namespace PrefabSentinel
             "execute_menu_item",
             "run_script_submit",
             "run_script_poll",
+            // Issue #70: a compile-aware ``editor_refresh`` writes its
+            // response after the triggered compile + domain reload.
+            "refresh_asset_database",
         };
 
         /// <summary>All action strings handled by the editor-control bridge.</summary>
@@ -35,7 +38,6 @@ namespace PrefabSentinel
             "ping_object",
             "capture_console_logs",
             "refresh_asset_database",
-            "recompile_scripts",
             "set_material",
             "delete_object",
             "list_children",
