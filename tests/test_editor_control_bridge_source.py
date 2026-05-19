@@ -137,28 +137,6 @@ def _extract_braced_block(source: str, start: int, context: str) -> str:
     raise AssertionError(f"Could not find closing brace of {context}")
 
 
-def _schedule_catch_body(handler_body: str) -> str:
-    """Return the body of the catch block surrounding
-    ``CompilationPipeline.RequestScriptCompilation()``.
-
-    Shared by the schedule-failure code-pin tests (issue #204) and the
-    schedule-failure sanitization tests (issue #214) so the regex that
-    locates the catch arm has a single source of truth.
-    """
-    match = re.search(
-        r"CompilationPipeline\.RequestScriptCompilation\(\)\s*;\s*\}\s*"
-        r"catch\s*\(\s*Exception\s+\w+\s*\)\s*\{",
-        handler_body,
-    )
-    if match is None:
-        raise AssertionError(
-            "catch block surrounding RequestScriptCompilation not found"
-        )
-    return _extract_braced_block(
-        handler_body, match.end(), "RequestScriptCompilation schedule-failure catch"
-    )
-
-
 class TestGetHierarchyPathDedup(unittest.TestCase):
     """S1: Only one GetHierarchyPath definition should remain."""
 
@@ -468,32 +446,25 @@ class TestRunScriptShortPoll(unittest.TestCase):
             ),
         )
 
-    def test_pre_reload_watchdog_is_deadline_only(self) -> None:
-        """Issue #64 — the pre-reload watchdog enforces only the
-        compile-pending deadline.  It must not resolve the temp type:
-        the only type resolvable before the domain reload is a stale one
-        from the previous AppDomain.
+    def test_deadline_only_pre_reload_watchdog_is_absent(self) -> None:
+        """Issue #68 — the deadline-only ``RunScriptPreReloadWatchdog`` is
+        replaced by the shared compile-watch barrier's deadline watchdog
+        and must be absent from the bridge source.
         """
-        body = _extract_method(_read(BRIDGE), "RunScriptPreReloadWatchdog")
-        self.assertEqual(
-            (True, True, False),
-            (
-                "deadlineUnixMs" in body,
-                "RunScriptCompilePendingResponse" in body,
-                "FindTempScriptType" in body,
-            ),
+        source = _read(BRIDGE)
+        self.assertNotIn(
+            "RunScriptPreReloadWatchdog", source,
             msg=(
-                "RunScriptPreReloadWatchdog must reference the deadline "
-                "(deadlineUnixMs) and the compile-pending response "
-                "(RunScriptCompilePendingResponse) and must not call the "
-                "temp-type resolver (FindTempScriptType)."
+                "the deadline-only pre-reload run-script watchdog must be "
+                "removed once the shared compile barrier owns the deadline."
             ),
         )
 
-    def test_run_script_handlers_register_pre_reload_watchdog(self) -> None:
-        """Issue #64 — both run-script entry handlers install the
-        pre-reload watchdog (not the completion poll) before the domain
-        reload; the completion poll is installed post-reload by the
+    def test_run_script_handlers_route_through_compile_barrier(self) -> None:
+        """Issue #68 — both run-script entry handlers hand the compile
+        observation to the shared ``ScheduleCompileBarrier`` mechanism so
+        a non-compiling snippet fast-fails with real diagnostics; a
+        compiled snippet's completion poll is installed post-reload by the
         startup resumer.
         """
         source = _read(BRIDGE)
@@ -501,11 +472,11 @@ class TestRunScriptShortPoll(unittest.TestCase):
             with self.subTest(handler=handler):
                 body = _extract_method(source, handler)
                 self.assertIn(
-                    "RunScriptPreReloadWatchdog", body,
+                    "ScheduleCompileBarrier", body,
                     msg=(
-                        f"{handler} must register RunScriptPreReloadWatchdog "
-                        "as its pre-reload poll so a stale type is never "
-                        "resolved before the temp script compiles."
+                        f"{handler} must route compilation through "
+                        "ScheduleCompileBarrier so a snippet compile failure "
+                        "is detected and reported with real diagnostics."
                     ),
                 )
 
@@ -633,27 +604,33 @@ def _action_registry_hashset(field: str) -> str:
     )
 
 
-class TestForceReimportSupport(unittest.TestCase):
-    """Issue #45: HandleRecompileScripts force-reimports each caller-supplied
-    reimport-target path before scheduling compilation.  The blanket
-    ``force_reimport`` bool (#106, Assets/Editor-only) is replaced by the
-    targeted ``reimport_paths`` string array."""
+class TestFireAndReturnRecompileRemovedFromRequestDto(unittest.TestCase):
+    """Issue #71: the retired fire-and-return recompile tool's
+    caller-supplied ``reimport_paths`` field is absent from the request
+    DTO, and the request DTO instead declares the compile-awareness
+    field consumed by the compile-aware ``editor_refresh``."""
 
-    def test_request_carries_reimport_paths_field(self) -> None:
+    def test_reimport_paths_field_is_absent(self) -> None:
         body = _extract_editor_control_request_body()
-        self.assertIn("public string[] reimport_paths", body)
+        self.assertNotIn(
+            "reimport_paths",
+            body,
+            msg=(
+                "#71: the retired fire-and-return recompile surface's "
+                "reimport_paths request field must be gone."
+            ),
+        )
 
-    def test_recompile_carries_reimport_plumbing(self) -> None:
-        source = _read(BRIDGE)
-        body = _extract_method(source, "HandleRecompileScripts")
-        self.assertIn("reimport_paths", body)
-        self.assertIn("ImportAssetOptions.ForceUpdate", body)
-        self.assertIn("ImportAssetOptions.ForceSynchronousImport", body)
-
-    def test_per_path_failure_emits_warning_diagnostic(self) -> None:
-        source = _read(BRIDGE)
-        body = _extract_method(source, "HandleRecompileScripts")
-        self.assertIn("warning", body)
+    def test_request_declares_wait_for_compile_field(self) -> None:
+        body = _extract_editor_control_request_body()
+        self.assertIn(
+            "public bool wait_for_compile",
+            body,
+            msg=(
+                "#70: the request DTO must declare the wait_for_compile "
+                "compile-awareness field."
+            ),
+        )
 
 
 class TestCompileTimeoutRequestField(unittest.TestCase):
@@ -774,34 +751,26 @@ class TestRecompileAndWaitDispatch(unittest.TestCase):
         literal = _action_registry_hashset("Async")
         self.assertIn('"run_script"', literal)
 
-    def test_recompile_and_wait_handler_subscribes_to_pipeline_events(self) -> None:
-        # Issue #203 / #213: the event-driven handler subscribes to the
-        # per-assembly finished event (records compile errors and
-        # ``compiledAny``) and the pipeline-level finished event (the
-        # always-fires terminator that synthesises the outcome before
-        # Unity enters domain reload). The no-op case is determined
-        # passively via ``!compiledAny`` at pipeline-finished time, so no
-        # subscription to ``assemblyCompilationNotRequired`` is needed.
+    def test_recompile_and_wait_handler_routes_through_compile_barrier(self) -> None:
+        # Issue #68: the pre-reload compile observation is owned by the
+        # shared ``ScheduleCompileBarrier`` mechanism. The handler hands
+        # the barrier the compile trigger (``RequestScriptCompilation``)
+        # and the per-outcome terminal actions.
         source = _read(BRIDGE)
         body = _extract_method(source, "HandleRecompileAndWait")
-        self.assertIn("CompilationPipeline.assemblyCompilationFinished", body)
-        self.assertIn("CompilationPipeline.compilationFinished", body)
-        self.assertNotIn("CompilationPipeline.assemblyCompilationNotRequired", body)
+        self.assertIn("ScheduleCompileBarrier", body)
+        self.assertIn("RequestScriptCompilation", body)
 
-    def test_recompile_and_wait_handler_emits_three_outcome_codes(self) -> None:
-        # Issue #203: on the pipeline-level finished event the handler
-        # synthesises one of three outcomes — no-op / OK / FAILED.
-        # Post H-track migration the no-op/failed/continue classification
-        # was extracted into the Unity-free ``RecompileOutcomeClassifier``
-        # (behavioral coverage in
-        # ``tests/csharp/RunScriptCompileResolutionTests.cs``); the handler
-        # routes through it (no-op and failed codes are the relocated
-        # ``RecompileOutcomeClassifier`` consts) and delegates the OK
-        # envelope to ``BuildRecompileReloadWaitPoll``.
+    def test_recompile_and_wait_handler_supplies_three_outcome_actions(self) -> None:
+        # Issue #68 / #203: the handler supplies the per-outcome terminal
+        # actions — compile-failed, no-assembly-compiled, compiled. The
+        # no-op action delegates to ``WriteRecompileNoOpResponse`` and the
+        # compiled action registers the post-reload reload-wait poll.
         source = _read(BRIDGE)
         body = _extract_method(source, "HandleRecompileAndWait")
-        self.assertIn("RecompileOutcomeClassifier.Classify", body)
-        self.assertIn("RecompileOutcomeClassifier.NoopCode", body)
+        self.assertIn("onCompileFailed", body)
+        self.assertIn("onNoAssemblyCompiled", body)
+        self.assertIn("onCompiled", body)
         self.assertIn("RecompileOutcomeClassifier.FailedCode", body)
         self.assertIn("BuildRecompileReloadWaitPoll", body)
         self.assertIn("EDITOR_CTRL_RECOMPILE_AND_WAIT_OK", source)
@@ -897,17 +866,18 @@ class TestRecompileAndWaitDomainReloadResume(unittest.TestCase):
         self.assertIn("RehydrateEntry", body)
 
     def test_reload_only_poll_observes_only_reload_counter(self) -> None:
-        # Issue #203: the post-reload poll body must reference the
-        # reload counter, the OK code, and the timeout code, and must
-        # NOT reference the mtime helper. Cross-call interference from
-        # any mtime-based check would re-introduce the no-op timeout
-        # regression.
+        # Issue #203 / #69: the post-reload poll body observes only the
+        # reload counter and the deadline, invokes the caller-supplied
+        # reload-complete action, and references neither the mtime helper
+        # nor any handler-specific terminal envelope (the recompile OK
+        # envelope moved into BuildRecompileAndWaitReloadComplete).
         source = _read(BRIDGE)
         body = _extract_method(source, "BuildRecompileReloadWaitPoll")
         self.assertIn("AssemblyReloadCount", body)
-        self.assertIn("EDITOR_CTRL_RECOMPILE_AND_WAIT_OK", body)
         self.assertIn("EDITOR_CTRL_RECOMPILE_TIMEOUT", body)
+        self.assertIn("onReloadComplete", body)
         self.assertNotIn("ReadAssemblyMtimeUnixMs", body)
+        self.assertNotIn("EDITOR_CTRL_RECOMPILE_AND_WAIT_OK", body)
 
     def test_resumer_uses_minus_one_reload_count_threshold(self) -> None:
         # Issue #191 / #203 race-condition pin: the resumer runs on the
@@ -1243,6 +1213,19 @@ class TestMenuExecuteBarrierSource(unittest.TestCase):
         """
         literal = _action_registry_hashset("Async")
         self.assertIn('"execute_menu_item"', literal)
+
+    def test_menu_barrier_compiled_path_uses_reload_wait_poll(self) -> None:
+        """Issue #69: when the menu-execute barrier observes a compile,
+        it must hand the post-reload wait to the single named
+        ``BuildRecompileReloadWaitPoll`` builder with the menu-specific
+        ``BuildMenuExecuteReloadComplete`` terminal action — not an
+        inline reload-counter loop. A revert to an inline poll would
+        re-duplicate the reload-wait logic #69 collapsed.
+        """
+        source = _read(BRIDGE)
+        body = _extract_method(source, "ScheduleMenuExecuteBarrier")
+        self.assertIn("BuildRecompileReloadWaitPoll", body)
+        self.assertIn("BuildMenuExecuteReloadComplete", body)
 
 
 _BRIDGE_PARTIAL_GLOB = "PrefabSentinel.UnityEditorControlBridge*.cs"
@@ -2083,175 +2066,152 @@ class TestResolveComponentTypeDedup(unittest.TestCase):
         )
 
 
-class TestRecompileAsmFinishedDelegateType(unittest.TestCase):
-    """Issue #213 secondary bug A (CS0426): the per-assembly compile-finished
-    subscription uses Unity's publicly documented two-argument delegate
-    signature, not a non-existent nested delegate type on
-    ``CompilationPipeline``.
+class TestCompileBarrierSource(unittest.TestCase):
+    """Issue #68 — source-text invariants for the shared compile-watch
+    mechanism (``ScheduleCompileBarrier``).
+
+    Tier 3 (spec Tier 3 Justification): the barrier references
+    ``CompilationPipeline`` events and runs inside the Unity Editor
+    process, which CI and the xUnit harness do not compile. These
+    source-scan invariants guard the consolidation against reversion;
+    runtime equivalence is verified by the PF-TEST recompile / menu /
+    run-script / refresh matrix recorded in observations.md.
     """
 
-    def test_handler_uses_action_string_compilermessage_array(self) -> None:
-        body = _extract_method(_read(BRIDGE), "HandleRecompileAndWait")
+    def test_barrier_subscribes_to_both_pipeline_events(self) -> None:
+        body = _extract_method(_read(BRIDGE), "ScheduleCompileBarrier")
+        self.assertIn("CompilationPipeline.assemblyCompilationFinished", body)
+        self.assertIn("CompilationPipeline.compilationFinished", body)
         self.assertRegex(
             body,
             r"Action<\s*string\s*,\s*CompilerMessage\[\]\s*>",
-            "Per-assembly compile-finished subscription must use Action<string, CompilerMessage[]>",
+            msg=(
+                "the per-assembly subscription must use Unity's published "
+                "Action<string, CompilerMessage[]> delegate signature"
+            ),
         )
 
-    def test_handler_does_not_reference_nested_delegate(self) -> None:
-        body = _extract_method(_read(BRIDGE), "HandleRecompileAndWait")
-        self.assertNotIn("CompilationPipeline.AssemblyCompilationFinished", body)
-
-
-class TestRecompileAndWaitOutcomeSync(unittest.TestCase):
-    """Issue #213 root cause: outcome synthesis must run inside the
-    pipeline-finished event subscription on the original application
-    domain (before Unity's domain reload destroys the callback), and a
-    boolean re-entry guard must prevent double-resolution if the deadline
-    watchdog and the pipeline-finished signal both observe a terminal
-    condition in the same frame.
-    """
-
-    @staticmethod
-    def _pipeline_finished_subscription_body(handler_body: str) -> str:
-        """Return the body of the ``compilationFinished`` lambda assigned
-        to ``onPipelineFinished``.
-        """
-        match = re.search(
-            r"onPipelineFinished\s*=\s*[^=]*?=>\s*\{",
-            handler_body,
+    def test_compile_watch_subscription_is_single_sourced(self) -> None:
+        # Issue #68 acceptance: the pre-reload compile observation exists
+        # exactly once. After consolidation only ScheduleCompileBarrier
+        # subscribes to the per-assembly compile-finished event.
+        source = _read(BRIDGE)
+        subscribe_count = source.count(
+            "CompilationPipeline.assemblyCompilationFinished +="
         )
-        if match is None:
-            raise AssertionError("onPipelineFinished assignment not found")
-        return _extract_braced_block(
-            handler_body, match.end(), "onPipelineFinished body"
+        self.assertEqual(
+            1,
+            subscribe_count,
+            msg=(
+                "the per-assembly compile-finished subscription must exist "
+                "exactly once (in ScheduleCompileBarrier); a re-duplicated "
+                f"copy re-grows the #68 duplication — found {subscribe_count}"
+            ),
         )
 
-    def test_pipeline_finished_body_synthesises_failure_noop_and_switchover(self) -> None:
-        # Post H-track migration the outcome precedence (failed > no-op >
-        # continue) was extracted into the Unity-free
-        # ``RecompileOutcomeClassifier`` (behavioral coverage in
-        # ``tests/csharp/RunScriptCompileResolutionTests.cs``); the
-        # subscription routes through it and emits the relocated consts.
-        body = _extract_method(_read(BRIDGE), "HandleRecompileAndWait")
-        sub_body = self._pipeline_finished_subscription_body(body)
-        self.assertIn("RecompileOutcomeClassifier.Classify", sub_body)
-        self.assertIn("RecompileOutcomeClassifier.FailedCode", sub_body)
-        self.assertIn("RecompileOutcomeClassifier.NoopCode", sub_body)
-        self.assertIn("BuildRecompileReloadWaitPoll", sub_body)
-        self.assertIn("WriteResponse(", sub_body)
+    def test_compile_aware_handlers_consume_the_barrier(self) -> None:
+        source = _read(BRIDGE)
+        for handler in (
+            "HandleRecompileAndWait",
+            "ScheduleMenuExecuteBarrier",
+            "HandleRunScript",
+            "HandleRunScriptSubmit",
+        ):
+            with self.subTest(handler=handler):
+                body = _extract_method(source, handler)
+                self.assertIn(
+                    "ScheduleCompileBarrier",
+                    body,
+                    msg=f"{handler} must consume the shared compile barrier",
+                )
 
-    def test_pipeline_finished_body_checks_and_sets_reentry_flag(self) -> None:
-        # Post H-track migration the boolean re-entry guard was extracted
-        # into the Unity-free ``RecompileResolutionGuard`` (behavioral
-        # coverage in ``tests/csharp/RunScriptCompileResolutionTests.cs``).
-        # The handler still owns the shared guard instance and the
-        # subscription claims single-resolution through it.
-        body = _extract_method(_read(BRIDGE), "HandleRecompileAndWait")
+    def test_barrier_emits_compiler_message_with_a_single_prefix(self) -> None:
+        # Issue #68: CompilerMessage.message already carries the
+        # file(line,col): prefix emitted by csc; the aggregation must emit
+        # it verbatim, not prepend a second {msg.file}(...) prefix.
+        body = _extract_method(_read(BRIDGE), "ScheduleCompileBarrier")
+        self.assertIn("compileErrors.Add(msg.message)", body)
+        self.assertNotIn(
+            "{msg.file}(",
+            body,
+            msg=(
+                "the diagnostic must not be prefixed twice with the "
+                "file(line,col): prefix (#68 double-prefix defect)"
+            ),
+        )
+
+    def test_barrier_routes_outcomes_through_classifier_and_guard(self) -> None:
+        body = _extract_method(_read(BRIDGE), "ScheduleCompileBarrier")
+        self.assertIn("RecompileOutcomeClassifier.Classify", body)
         self.assertIn("new RecompileResolutionGuard()", body)
-        sub_body = self._pipeline_finished_subscription_body(body)
         self.assertRegex(
-            sub_body, r"if\s*\(\s*!\s*resolutionGuard\.TryClaim\(\)\s*\)\s*return\s*;"
+            body,
+            r"if\s*\(\s*!\s*resolutionGuard\.TryClaim\(\)\s*\)\s*return\s*;",
+            msg=(
+                "the barrier must claim single-resolution through the "
+                "shared RecompileResolutionGuard so exactly one terminal "
+                "outcome resolves per episode"
+            ),
         )
 
+    def test_barrier_deadline_watchdog_invokes_injected_action(self) -> None:
+        body = _extract_method(_read(BRIDGE), "ScheduleCompileBarrier")
+        self.assertIn("RecompileDeadline.HasElapsed", body)
+        self.assertIn("onDeadlineExceeded", body)
 
-class TestRecompileAndWaitDeadlineWatchdog(unittest.TestCase):
-    """Issue #213: the per-frame deadline watchdog observes only the
-    deadline and the shared re-entry flag. It does not classify outcomes
-    or reach into the post-reload path; otherwise the same race that
-    motivates this work resurfaces.
-    """
+    def test_barrier_grace_window_resolves_no_compile_outcome(self) -> None:
+        # Issue #70: when the no-compile grace window is armed the barrier
+        # resolves the no-compile outcome only after the window elapses
+        # with the editor not compiling — the isCompiling check keeps a
+        # slow-to-start compile from being misread as no-compile.
+        body = _extract_method(_read(BRIDGE), "ScheduleCompileBarrier")
+        self.assertIn("onNoCompileObserved", body)
+        self.assertIn("EditorApplication.isCompiling", body)
 
-    @staticmethod
-    def _watchdog_body(handler_body: str) -> str:
-        """Return the body of the ``prePoll`` lambda — the per-frame
-        deadline watchdog.
-        """
-        match = re.search(r"prePoll\s*=\s*\(\s*\)\s*=>\s*\{", handler_body)
-        if match is None:
-            raise AssertionError("prePoll assignment not found")
-        return _extract_braced_block(handler_body, match.end(), "prePoll body")
-
-    def test_watchdog_only_emits_timeout_envelope(self) -> None:
-        body = _extract_method(_read(BRIDGE), "HandleRecompileAndWait")
-        watchdog = self._watchdog_body(body)
-        self.assertIn("EDITOR_CTRL_RECOMPILE_TIMEOUT", watchdog)
-        self.assertNotIn("EDITOR_CTRL_RECOMPILE_FAILED", watchdog)
-        self.assertNotIn("EDITOR_CTRL_RECOMPILE_AND_WAIT_NOOP", watchdog)
-        self.assertNotIn("BuildRecompileReloadWaitPoll", watchdog)
-
-    def test_watchdog_consults_shared_reentry_flag(self) -> None:
-        # Post H-track migration the single-resolution claim is owned by
-        # the Unity-free ``RecompileResolutionGuard``; the watchdog must
-        # route through ``resolutionGuard.TryClaim()`` so exactly one
-        # envelope is written per request.
-        body = _extract_method(_read(BRIDGE), "HandleRecompileAndWait")
-        watchdog = self._watchdog_body(body)
-        self.assertRegex(
-            watchdog, r"if\s*\(\s*!\s*resolutionGuard\.TryClaim\(\)\s*\)\s*return\s*;"
+    def test_barrier_schedule_failure_is_redacted(self) -> None:
+        # Issue #214: a compile trigger that raises routes to the
+        # caller-supplied schedule-failure action; the exception text is
+        # mirrored to the Unity console only and the barrier itself writes
+        # no MCP envelope.
+        body = _extract_method(_read(BRIDGE), "ScheduleCompileBarrier")
+        match = re.search(r"catch\s*\(\s*Exception\s+\w+\s*\)\s*\{", body)
+        self.assertIsNotNone(
+            match, "the barrier must catch a failing compile trigger"
         )
-
-
-class TestRecompileScheduleFailedCode(unittest.TestCase):
-    """Issue #204: the editor-side rejection of ``RequestScriptCompilation``
-    is a schedule-failure, not a deadline-elapsed condition. It must use
-    a dedicated ``EDITOR_CTRL_RECOMPILE_SCHEDULE_FAILED`` code so callers
-    can distinguish "Unity refused to start" from "we waited and got no
-    response".
-    """
-
-    def test_schedule_failed_code_emitted(self) -> None:
-        body = _extract_method(_read(BRIDGE), "HandleRecompileAndWait")
-        catch_body = _schedule_catch_body(body)
-        self.assertIn("EDITOR_CTRL_RECOMPILE_SCHEDULE_FAILED", catch_body)
-
-    def test_schedule_catch_does_not_emit_timeout_code(self) -> None:
-        body = _extract_method(_read(BRIDGE), "HandleRecompileAndWait")
-        catch_body = _schedule_catch_body(body)
-        self.assertNotIn("EDITOR_CTRL_RECOMPILE_TIMEOUT", catch_body)
-
-
-class RecompileScheduleFailedSanitization(unittest.TestCase):
-    """Issue #214: the schedule-failure envelope returned to the MCP client
-    must not embed ``ex.Message`` (or any other exception-derived accessor)
-    in its top-level ``message`` field. Internal detail flows to the Unity
-    console only via ``Debug.LogWarning`` so an operator inspecting the
-    local Editor session can still diagnose the rejection.
-
-    The cross-emission of the timeout code is value-pinned by
-    ``TestRecompileScheduleFailedCode.test_schedule_catch_does_not_emit_timeout_code``
-    (issue #204) so no duplicate row is added here.
-    """
-
-    def test_schedule_catch_does_not_leak_exception_message(self) -> None:
-        body = _extract_method(_read(BRIDGE), "HandleRecompileAndWait")
-        catch_body = _schedule_catch_body(body)
-        # The exception-message accessor must not appear inside the
-        # schedule-failure catch arm. The redacted top-level envelope is
-        # the only string returned to the MCP client; internal detail is
-        # restricted to ``Debug.LogWarning``.
-        self.assertNotRegex(catch_body, r"\bex\.Message\b")
-        self.assertNotRegex(catch_body, r"\.Message\b")
-
-    def test_schedule_catch_emits_console_warning(self) -> None:
-        body = _extract_method(_read(BRIDGE), "HandleRecompileAndWait")
-        catch_body = _schedule_catch_body(body)
-        # The full exception detail must be mirrored to the Unity
-        # console so an operator inspecting the local Editor session
-        # can still diagnose the rejection.
+        catch_body = _extract_braced_block(
+            body, match.end(), "ScheduleCompileBarrier schedule-failure catch"
+        )
         self.assertIn("Debug.LogWarning", catch_body)
+        self.assertIn("onScheduleFailure", catch_body)
+        self.assertNotRegex(
+            catch_body,
+            r"\bWriteResponse\b",
+            msg=(
+                "the barrier must not write the MCP envelope itself — the "
+                "caller's onScheduleFailure action owns the redacted envelope"
+            ),
+        )
 
-    def test_schedule_catch_message_is_fixed_redacted_string(self) -> None:
-        # Post H-track migration the fixed redacted message string was
-        # extracted into the Unity-free ``ScheduleFailureEnvelope``
-        # (behavioral coverage in
-        # ``tests/csharp/RunScriptCompileResolutionTests.cs``); the catch
-        # arm routes through ``ScheduleFailureEnvelope.RedactedMessage()``
-        # and the message literal is constant-pinned on that class.
+    def test_recompile_schedule_failure_action_uses_dedicated_code(self) -> None:
+        # Issue #204 / #214: the recompile-and-wait schedule-failure action
+        # writes the dedicated EDITOR_CTRL_RECOMPILE_SCHEDULE_FAILED code
+        # and the fixed redacted message — no exception text, no timeout
+        # code cross-emission.
         body = _extract_method(_read(BRIDGE), "HandleRecompileAndWait")
-        catch_body = _schedule_catch_body(body)
-        self.assertIn("ScheduleFailureEnvelope.RedactedMessage()", catch_body)
-        redaction = _strip_cs_comments(RUN_SCRIPT_COMPILE_REDACTION.read_text(encoding="utf-8"))
+        match = re.search(r"onScheduleFailure\s*=\s*\(\s*\)\s*=>\s*\{", body)
+        self.assertIsNotNone(
+            match, "HandleRecompileAndWait must supply an onScheduleFailure action"
+        )
+        action = _extract_braced_block(
+            body, match.end(), "recompile onScheduleFailure action"
+        )
+        self.assertIn("EDITOR_CTRL_RECOMPILE_SCHEDULE_FAILED", action)
+        self.assertIn("ScheduleFailureEnvelope.RedactedMessage()", action)
+        self.assertNotIn("EDITOR_CTRL_RECOMPILE_TIMEOUT", action)
+        self.assertNotRegex(action, r"\.Message\b")
+        redaction = _strip_cs_comments(
+            RUN_SCRIPT_COMPILE_REDACTION.read_text(encoding="utf-8")
+        )
         self.assertIn(
             "editor_recompile_and_wait: failed to schedule compilation.",
             redaction,
@@ -2326,54 +2286,6 @@ class TmpFontMissingMessageBranching(unittest.TestCase):
         self.assertIn("output_path", branch)
         self.assertIn("executed", branch)
         self.assertIn("read_only", branch)
-
-
-class RecompileForceReimportDiagnosticRedaction(unittest.TestCase):
-    """Issue #214: the per-file force-reimport diagnostic appended to the
-    ``HandleRecompileScripts`` success envelope must not embed
-    ``ex.Message`` on its ``evidence`` field. The exception category
-    identifies the failure, full detail flows to the Unity console.
-    """
-
-    @staticmethod
-    def _force_reimport_catch_body(handler_body: str) -> str:
-        """Return the body of the per-file catch surrounding
-        ``AssetDatabase.ImportAsset(rel, ...)``.
-        """
-        # The try block runs ``AssetDatabase.ImportAsset`` and then a
-        # success-count increment before the closing brace; allow any
-        # non-brace statements between the ImportAsset call and the
-        # ``} catch`` so the regex still locates the per-file catch.
-        match = re.search(
-            r"AssetDatabase\.ImportAsset\([^;]*;[^{}]*\}\s*"
-            r"catch\s*\(\s*Exception\s+\w+\s*\)\s*\{",
-            handler_body,
-            flags=re.DOTALL,
-        )
-        if match is None:
-            raise AssertionError(
-                "catch block surrounding force-reimport ImportAsset not found"
-            )
-        return _extract_braced_block(
-            handler_body, match.end(), "force-reimport per-file catch"
-        )
-
-    def test_force_reimport_diagnostic_evidence_omits_exception_message(self) -> None:
-        body = _extract_method(_read(BRIDGE), "HandleRecompileScripts")
-        catch_body = self._force_reimport_catch_body(body)
-        # The diagnostic ``evidence`` field must not be populated from
-        # ``ex.Message``. The exception category (``ex.GetType().Name``)
-        # is the only exception-derived value permitted here.
-        self.assertNotRegex(catch_body, r"\bex\.Message\b")
-        self.assertNotRegex(
-            catch_body, r"evidence\s*=\s*[A-Za-z_]\w*\.Message\b"
-        )
-
-    def test_force_reimport_catch_emits_console_warning(self) -> None:
-        body = _extract_method(_read(BRIDGE), "HandleRecompileScripts")
-        catch_body = self._force_reimport_catch_body(body)
-        # The full exception detail must be mirrored to the Unity console.
-        self.assertIn("Debug.LogWarning", catch_body)
 
 
 # ---------------------------------------------------------------------------
@@ -2672,14 +2584,16 @@ class TestRecompileNoOpImporterWarning(unittest.TestCase):
     """
 
     def test_noop_branch_consults_importer_error_predicate(self) -> None:
-        body = _extract_method(_read(BRIDGE), "HandleRecompileAndWait")
-        # The no-op branch must route the console buffer through the
-        # Unity-free importer-error classifier.
+        # Issue #68: the recompile no-op response is built by the
+        # dedicated WriteRecompileNoOpResponse helper, which must route
+        # the console buffer through the Unity-free importer-error
+        # classifier.
+        body = _extract_method(_read(BRIDGE), "WriteRecompileNoOpResponse")
         self.assertIn(
             "CollectImporterErrorDiagnostics",
             body,
             msg=(
-                "the no-op recompile branch must collect importer-error "
+                "the no-op recompile response must collect importer-error "
                 "diagnostics from the console buffer."
             ),
         )
@@ -2698,27 +2612,22 @@ class TestRecompileNoOpImporterWarning(unittest.TestCase):
         )
 
     def test_noop_importer_response_carries_warning_severity(self) -> None:
+        # When importer errors are present the no-op response must carry
+        # warning severity and the detected importer errors as diagnostics
+        # rather than reporting a silent success.
         body = _strip_cs_comments(
-            _extract_method(_read(BRIDGE), "HandleRecompileAndWait")
+            _extract_method(_read(BRIDGE), "WriteRecompileNoOpResponse")
         )
-        # Locate the no-op branch and assert that when importer errors are
-        # present the response carries warning severity and the
-        # diagnostics list.
-        noop_idx = body.find("RecompileOutcomeClassifier.NoopCode")
-        self.assertNotEqual(
-            -1, noop_idx, msg="no-op branch marker not found"
-        )
-        noop_region = body[noop_idx:]
         self.assertIn(
             'severity = "warning"',
-            noop_region,
+            body,
             msg=(
-                "an importer failure in the no-op branch must yield a "
+                "an importer failure in the no-op response must yield a "
                 "warning-severity response, not a silent success."
             ),
         )
         self.assertRegex(
-            noop_region,
+            body,
             r"diagnostics\s*=\s*importerErrors\.ToArray\(\)",
             msg=(
                 "the warning response must list the detected importer "
@@ -2896,32 +2805,6 @@ class TestHandleRunScriptStageRefreshCatchesNoLeak(unittest.TestCase):
             ),
         )
 
-    def test_refresh_failure_envelope_has_no_exception_text(self) -> None:
-        body = _extract_method(_read(BRIDGE), "HandleRunScript")
-        catch_body = _extract_catch_block(body, r"Exception\s+refreshEx")
-        envelope_segment = re.sub(
-            r"Debug\.LogWarning\([^;]*;",
-            "",
-            catch_body,
-        )
-        offenders = [
-            token for token in _LEAK_TOKENS if token in envelope_segment
-        ]
-        self.assertEqual(
-            (
-                offenders,
-                "Debug.LogWarning" in catch_body,
-                bool(re.search(r"\{refreshEx\}", catch_body)),
-            ),
-            ([], True, True),
-            msg=(
-                "HandleRunScript refresh catch must build a leak-free "
-                f"envelope (offenders={offenders}) and interpolate the "
-                "caught exception identifier into Debug.LogWarning."
-            ),
-        )
-
-
 class TestEditorControlDataDeclaresNoExceptionTextField(unittest.TestCase):
     """Issue #216: the shared response data shape carries no exception text."""
 
@@ -3050,41 +2933,38 @@ class TestCleanupRunScriptTempFilesRefreshCatchLogFormat(unittest.TestCase):
 
 
 class TestBuildRecompileReloadWaitPollDrainsImportQueue(unittest.TestCase):
-    """Issue #235: the post-reload poll synchronously drains the
-    AssetDatabase import queue between observing the assembly-reload
-    watermark advance and writing the success envelope. A drain failure
-    is mirrored to the Unity Console without affecting the envelope
-    outcome (the contract concerns compilation, not import completion).
+    """Issue #235 / #69: the recompile-and-wait reload-complete action
+    synchronously drains the AssetDatabase import queue before writing
+    the success envelope, through the shared ``DrainImportQueueBestEffort``
+    helper. A drain failure is mirrored to the Unity Console without
+    affecting the envelope outcome (the contract concerns compilation,
+    not import completion).
     """
 
-    def test_success_branch_calls_assetdatabase_refresh_before_writing(self) -> None:
-        body = _extract_method(_read(BRIDGE), "BuildRecompileReloadWaitPoll")
-        # End-state ordering: the watermark comparison
-        # (``AssemblyReloadCount <= reloadCountThreshold``) must come
-        # before the synchronous AssetDatabase refresh, which in turn
-        # must come before the success ``WriteResponse`` call.
-        watermark_pos = body.find("AssemblyReloadCount")
-        refresh_pos = body.find("AssetDatabase.Refresh")
+    def test_reload_complete_drains_before_writing_success(self) -> None:
+        body = _extract_method(
+            _read(BRIDGE), "BuildRecompileAndWaitReloadComplete"
+        )
+        # End-state ordering: the import-queue drain must come before the
+        # success ``WriteResponse`` call so a freshly compiled asset path
+        # resolves immediately.
+        drain_pos = body.find("DrainImportQueueBestEffort")
         success_pos = body.find("EDITOR_CTRL_RECOMPILE_AND_WAIT_OK")
         self.assertEqual(
-            (True, True, True),
+            (True, True),
             (
-                watermark_pos >= 0,
-                refresh_pos > watermark_pos,
-                success_pos > refresh_pos,
+                drain_pos >= 0,
+                success_pos > drain_pos,
             ),
             msg=(
-                "BuildRecompileReloadWaitPoll's success branch must order "
-                "(1) AssemblyReloadCount watermark check, "
-                "(2) AssetDatabase.Refresh import-queue drain, "
-                "(3) success envelope write — observed positions "
-                f"watermark={watermark_pos}, refresh={refresh_pos}, "
-                f"success={success_pos}."
+                "BuildRecompileAndWaitReloadComplete must drain the import "
+                "queue before writing the success envelope — observed "
+                f"positions drain={drain_pos}, success={success_pos}."
             ),
         )
 
     def test_drain_call_uses_synchronous_import_options(self) -> None:
-        body = _extract_method(_read(BRIDGE), "BuildRecompileReloadWaitPoll")
+        body = _extract_method(_read(BRIDGE), "DrainImportQueueBestEffort")
         # The drain is required to be synchronous so a freshly compiled
         # asset path resolves on the call immediately following the
         # success envelope on the documented happy path.
@@ -3092,7 +2972,7 @@ class TestBuildRecompileReloadWaitPollDrainsImportQueue(unittest.TestCase):
             "ImportAssetOptions.ForceSynchronousImport",
             body,
             msg=(
-                "BuildRecompileReloadWaitPoll drain must use "
+                "DrainImportQueueBestEffort must use "
                 "ImportAssetOptions.ForceSynchronousImport so the import "
                 "queue is drained synchronously before the success "
                 "envelope is written (issue #235)."
@@ -3100,14 +2980,11 @@ class TestBuildRecompileReloadWaitPollDrainsImportQueue(unittest.TestCase):
         )
 
     def test_drain_failure_logged_and_does_not_crash_poll(self) -> None:
-        body = _extract_method(_read(BRIDGE), "BuildRecompileReloadWaitPoll")
+        body = _extract_method(_read(BRIDGE), "DrainImportQueueBestEffort")
         # The drain refresh call must be wrapped in a try/catch that
-        # mirrors the failure to the Unity Console and continues to write
-        # the success envelope; an unhandled refresh exception must not
-        # turn the success path into a crash.
-        try_pos = body.find("try {")
-        if try_pos < 0:
-            try_pos = body.find("try\n")
+        # mirrors the failure to the Unity Console; an unhandled refresh
+        # exception must not turn the success path into a crash.
+        try_pos = body.find("try")
         catch_pos = body.find("catch (Exception")
         warning_pos = body.find("Debug.LogWarning")
         self.assertEqual(
@@ -3118,10 +2995,9 @@ class TestBuildRecompileReloadWaitPollDrainsImportQueue(unittest.TestCase):
                 warning_pos > catch_pos,
             ),
             msg=(
-                "BuildRecompileReloadWaitPoll's drain call must be "
-                "wrapped in try/catch with Debug.LogWarning so an "
-                "unhandled drain exception cannot turn the success path "
-                "into a crash (issue #235)."
+                "DrainImportQueueBestEffort's drain call must be wrapped "
+                "in try/catch with Debug.LogWarning so an unhandled drain "
+                "exception cannot crash the success path (issue #235)."
             ),
         )
 
@@ -4613,6 +4489,204 @@ class TestCreateAnimationClipSinglePath(unittest.TestCase):
                 "extension on the supplied asset path (issue #53)."
             ),
         )
+
+
+class TestRunScriptPollSurfacesCompileDiagnostics(unittest.TestCase):
+    """Issue #68 — a compile-failed run_script_submit records the real
+    compiler diagnostics in the completion artefact; HandleRunScriptPoll
+    copies them onto the outer poll response so a failed poll surfaces
+    why the snippet failed.
+    """
+
+    def test_poll_copies_completion_artifact_errors(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleRunScriptPoll")
+        self.assertIn(
+            "inner.data.errors",
+            body,
+            msg=(
+                "#68: HandleRunScriptPoll must copy the completion "
+                "artefact's data.errors onto the poll response so a "
+                "failed poll carries the compiler diagnostics."
+            ),
+        )
+
+
+class TestCompileAwareRefreshWiring(unittest.TestCase):
+    """Issue #70 — source-text invariants for the compile-aware
+    ``editor_refresh`` wiring.
+
+    Tier 3 (spec Tier 3 Justification): the refresh handler, dispatcher,
+    and resumer are Unity-dependent partials CI does not compile; the
+    three-outcome runtime behaviour is verified by the PF-TEST refresh
+    matrix recorded in observations.md.
+    """
+
+    _DOCS = Path(__file__).resolve().parent.parent / "docs"
+
+    def test_refresh_handler_is_compile_aware_through_the_barrier(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleRefreshAssetDatabase")
+        self.assertIn("request.wait_for_compile", body)
+        self.assertIn("ScheduleCompileBarrier", body)
+
+    def test_refresh_handler_injects_timeout_and_schedule_failure_codes(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleRefreshAssetDatabase")
+        for code in (
+            "EDITOR_CTRL_REFRESH_COMPILE_FAILED",
+            "EDITOR_CTRL_REFRESH_COMPILE_TIMEOUT",
+            "EDITOR_CTRL_REFRESH_SCHEDULE_FAILED",
+        ):
+            with self.subTest(code=code):
+                self.assertIn(code, body)
+
+    def test_refresh_codes_catalogued_in_api_reference(self) -> None:
+        api = (self._DOCS / "api-reference.md").read_text(encoding="utf-8")
+        for code in (
+            "EDITOR_CTRL_REFRESH_COMPILE_SUCCESS",
+            "EDITOR_CTRL_REFRESH_COMPILE_FAILED",
+            "EDITOR_CTRL_REFRESH_COMPILE_TIMEOUT",
+            "EDITOR_CTRL_REFRESH_SCHEDULE_FAILED",
+        ):
+            with self.subTest(code=code):
+                self.assertIn(
+                    code,
+                    api,
+                    f"docs/api-reference.md must catalogue {code}",
+                )
+
+    def test_refresh_action_is_async_capable(self) -> None:
+        literal = _action_registry_hashset("Async")
+        self.assertIn('"refresh_asset_database"', literal)
+
+    def test_dispatch_passes_response_path_to_refresh_handler(self) -> None:
+        body = _extract_method(_read(BRIDGE), "DispatchAction")
+        self.assertRegex(
+            body,
+            r"HandleRefreshAssetDatabase\(\s*request\s*,\s*responsePath\s*\)",
+        )
+
+    def test_resumer_has_compile_aware_refresh_branch(self) -> None:
+        body = _extract_method(_read(BRIDGE), "ResumePendingAsyncRunners")
+        self.assertIn('"refresh_asset_database"', body)
+
+
+class TestFireAndReturnRecompileActionAbsent(unittest.TestCase):
+    """Issue #71 — the fire-and-return recompile action, its handler, and
+    the reimport-diagnostic redaction helper are gone from the bridge.
+    """
+
+    def test_recompile_scripts_absent_from_action_registry(self) -> None:
+        supported = _action_registry_hashset("Supported")
+        async_set = _action_registry_hashset("Async")
+        self.assertNotIn('"recompile_scripts"', supported)
+        self.assertNotIn('"recompile_scripts"', async_set)
+
+    def test_recompile_scripts_absent_from_dispatch_switch(self) -> None:
+        body = _extract_method(_read(BRIDGE), "DispatchAction")
+        self.assertNotIn('"recompile_scripts"', body)
+
+    def test_fire_and_return_handler_is_absent(self) -> None:
+        source = _read(BRIDGE)
+        self.assertNotIn(
+            "HandleRecompileScripts",
+            source,
+            msg="#71: the fire-and-return recompile handler must be removed",
+        )
+
+    def test_reimport_diagnostic_helper_is_absent(self) -> None:
+        redaction = _strip_cs_comments(
+            RUN_SCRIPT_COMPILE_REDACTION.read_text(encoding="utf-8")
+        )
+        self.assertNotIn(
+            "ReimportDiagnostic",
+            redaction,
+            msg=(
+                "#71: the reimport-diagnostic redaction helper, referenced "
+                "only by the retired handler, must be removed"
+            ),
+        )
+
+
+class TestSetCameraGeometrySource(unittest.TestCase):
+    """Issues #66 / #73 / #74 — source-text invariants for ``HandleSetCamera``
+    Scene-view camera accuracy.
+
+    * #66: the perspective position-mode size↔camera-distance conversion is
+      sine-based, matching Unity's ``SceneView.GetPerspectiveCameraDistance``
+      contract (``cameraDistance = size / Sin(fov/2)``); a tangent conversion
+      re-introduces the landing offset.
+    * #73: the orthographic-projection switch is applied ahead of the
+      field-of-view read and the position/pivot geometry, so a single call
+      that both switches projection and positions the camera computes its
+      geometry under the requested projection.
+    * #74: ``editor_set_camera`` responses report the camera world position
+      through the synchronous resolver, not a raw transform read that
+      reflects the pre-call position.
+    """
+
+    def test_perspective_conversion_is_sine_based(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleSetCamera")
+        self.assertNotIn(
+            "Mathf.Tan",
+            body,
+            msg=(
+                "#66: HandleSetCamera must not use Mathf.Tan for the "
+                "size<->camera-distance conversion — the tangent form "
+                "re-introduces the perspective landing offset."
+            ),
+        )
+        # The position-only and the position-with-look-at branches each
+        # convert size<->camera-distance once; both must use Mathf.Sin.
+        self.assertEqual(
+            2,
+            body.count("Mathf.Sin"),
+            msg=(
+                "#66: both the position-only and the look-at conversions "
+                "in HandleSetCamera must use the sine-based form"
+            ),
+        )
+
+    def test_projection_switch_precedes_geometry(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleSetCamera")
+        switch_idx = body.index("request.camera_orthographic >= 0")
+        fov_idx = body.index("sceneView.camera.fieldOfView")
+        self.assertLess(
+            switch_idx,
+            fov_idx,
+            msg=(
+                "#73: the orthographic-projection switch must be applied "
+                "ahead of the field-of-view read and the position/pivot "
+                "geometry so a switch-and-position call computes geometry "
+                "under the requested projection"
+            ),
+        )
+
+    def test_set_camera_responses_resolve_position_synchronously(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleSetCamera")
+        # Both response paths — the reset path and the main path — must
+        # obtain the reported camera position from the synchronous
+        # resolver rather than the post-call transform read.
+        self.assertEqual(
+            2,
+            body.count("ResolveSyncedCameraPosition"),
+            msg=(
+                "#74: both editor_set_camera response paths (reset and "
+                "main) must resolve the reported camera position through "
+                "ResolveSyncedCameraPosition"
+            ),
+        )
+
+    def test_sync_position_resolver_derives_from_view_state(self) -> None:
+        body = _extract_method(_read(BRIDGE), "ResolveSyncedCameraPosition")
+        self.assertIn(
+            "sv.cameraDistance",
+            body,
+            msg=(
+                "#74: the resolver must derive the camera position from "
+                "SceneView.cameraDistance, not re-derive the trigonometry"
+            ),
+        )
+        self.assertIn("sv.pivot", body)
+        self.assertIn("sv.rotation", body)
 
 
 if __name__ == "__main__":

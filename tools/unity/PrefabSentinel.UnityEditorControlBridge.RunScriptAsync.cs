@@ -85,6 +85,7 @@ namespace PrefabSentinel
             // post-reload ``RunScriptPollFrame`` writes the inner result
             // there.  ``request.code`` is used by the snippet hash for
             // stuck detection, mirroring the synchronous handler.
+            string stuckKey = "id:" + id;
             var entry = new PendingAsyncRunner.PersistedEntry
             {
                 action = "run_script_submit",
@@ -93,37 +94,75 @@ namespace PrefabSentinel
                 callTimeUnixMs = callTimeMs,
                 deadlineUnixMs = deadlineMs,
                 tempId = id,
-                stuckKey = "id:" + id,
+                stuckKey = stuckKey,
                 tempDirAbs = tempDirAbs,
             };
 
-            // Issue #64: register the pre-reload watchdog; the startup
-            // resumer installs ``RunScriptPollFrame`` as the completion
-            // poll after the domain reload that the staged script
-            // triggers.
-            EditorApplication.CallbackFunction poll = null;
-            poll = () => RunScriptPreReloadWatchdog(entry, scriptAbs, metaAbs);
-            PendingAsyncRunner.Register(entry, poll);
-
-            // Kick off the synchronous Refresh after the poller is
-            // registered so the SessionState mirror reflects the
-            // in-flight entry before a domain reload triggered by
-            // Refresh would destroy this AppDomain.
-            try
+            // Issue #68: hand the compile observation to the shared
+            // ``ScheduleCompileBarrier`` mechanism.  A snippet that fails
+            // to compile records a compile-failure response — carrying the
+            // real compiler diagnostics — to the completion artefact
+            // before the compile-poll budget elapses; a snippet that
+            // compiles leaves the persisted entry in place so the startup
+            // resumer installs ``RunScriptPollFrame`` post-reload.
+            Action writeCompilePending = () =>
             {
-                AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
-            }
-            catch (Exception refreshEx)
-            {
-                Debug.LogWarning(
-                    $"[PrefabSentinel] HandleRunScriptSubmit: AssetDatabase.Refresh failed during staging: {refreshEx}");
                 PendingAsyncRunner.Complete(completionFile);
-                try { if (File.Exists(scriptAbs)) File.Delete(scriptAbs); } catch { /* mirrored to console below */ }
-                try { if (File.Exists(metaAbs)) File.Delete(metaAbs); } catch { /* mirrored to console below */ }
+                CleanupRunScriptTempFiles(scriptAbs, metaAbs);
+                WriteResponse(completionFile, RunScriptCompilePendingResponse(
+                    stuckKey, id, tempDirAbs,
+                    "Script compilation did not complete within the bounded "
+                    + "poll; a domain reload may still be pending. Retry the "
+                    + "snippet once Unity finishes compiling."));
+            };
+
+            // The compile trigger runs synchronously inside
+            // ScheduleCompileBarrier, so a rejected ``AssetDatabase.Refresh``
+            // resolves before this method returns.  A schedule failure must
+            // surface as the synchronous error envelope on the request's own
+            // response path — not as an ``accepted`` envelope the caller
+            // would then have to poll — so it is recorded here and returned.
+            bool scheduleFailed = false;
+
+            ScheduleCompileBarrier(new CompileBarrierSpec
+            {
+                preReloadEntry = entry,
+                persistPreReloadEntry = true,
+                deadlineMs = deadlineMs,
+                compileTrigger = () =>
+                    AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport),
+                onCompileFailed = errors =>
+                {
+                    PendingAsyncRunner.Complete(completionFile);
+                    CleanupRunScriptTempFiles(scriptAbs, metaAbs);
+                    WriteResponse(completionFile, BuildError(
+                        "EDITOR_CTRL_RUN_SCRIPT_COMPILE",
+                        $"run_script_submit: the snippet reported {errors.Count} "
+                        + "compile error(s).",
+                        new EditorControlData
+                        {
+                            temp_id = id,
+                            executed = false,
+                            errors = errors.ToArray(),
+                        }));
+                },
+                onCompiled = () => { },
+                onNoAssemblyCompiled = writeCompilePending,
+                onDeadlineExceeded = writeCompilePending,
+                onScheduleFailure = () =>
+                {
+                    scheduleFailed = true;
+                    PendingAsyncRunner.Complete(completionFile);
+                    CleanupRunScriptTempFiles(scriptAbs, metaAbs);
+                },
+            });
+
+            if (scheduleFailed)
                 return BuildError(
                     "EDITOR_CTRL_RUN_SCRIPT_COMPILE",
-                    "run_script_submit: AssetDatabase.Refresh failed before compile poll.");
-            }
+                    "run_script_submit: AssetDatabase.Refresh failed before "
+                    + "compile poll.",
+                    new EditorControlData { temp_id = id, executed = false });
 
             return BuildSuccess(
                 "EDITOR_CTRL_RUN_SCRIPT_SUBMIT_ACCEPTED",
@@ -183,6 +222,11 @@ namespace PrefabSentinel
                         string innerMessage = string.IsNullOrEmpty(inner.message)
                             ? "run_script_poll: job completed."
                             : inner.message;
+                        // Issue #68: a submit that failed to compile records
+                        // the real compiler diagnostics in the completion
+                        // artefact's ``data.errors``. Copy them onto the
+                        // outer poll response so a ``failed`` poll surfaces
+                        // why the snippet failed rather than an empty list.
                         return BuildSuccess(
                             "EDITOR_CTRL_RUN_SCRIPT_POLL_COMPLETED",
                             innerMessage,
@@ -192,6 +236,7 @@ namespace PrefabSentinel
                                 request_id = request.request_id,
                                 status = inner.success ? "completed" : "failed",
                                 stdout = innerStdout,
+                                errors = inner.data.errors ?? Array.Empty<string>(),
                             });
                     }
                     // Parse failure: surface the raw body so callers can

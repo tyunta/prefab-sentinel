@@ -146,16 +146,13 @@ namespace PrefabSentinel
         public string change_reason = string.Empty;
         public string temp_id = string.Empty;  // optional; handler generates one when empty
 
-        // Issue #45: caller-supplied reimport-target paths for the
-        // fire-and-return recompile (``recompile_scripts``).  When
-        // non-empty, HandleRecompileScripts force-reimports each listed
-        // asset path with ImportAssetOptions.ForceUpdate before scheduling
-        // compilation, so an externally edited script the caller names —
-        // including scripts outside Assets/Editor — round-trips through
-        // Unity's import pipeline reliably.  A null / empty array means
-        // "no targeted reimport"; this replaces the old blanket
-        // ``force_reimport`` bool (#106) which only covered Assets/Editor.
-        public string[] reimport_paths = null;
+        // Issue #70: opt-in compile awareness for ``editor_refresh``.
+        // When true, HandleRefreshAssetDatabase waits for and reports a
+        // refresh-triggered compile (refresh-OK / compile-success /
+        // compile-failure).  Defaults false so the fast synchronous
+        // refresh path is unchanged; every handler other than the
+        // refresh handler ignores this field.
+        public bool wait_for_compile = false;
 
         // Phase 10: Caller-supplied compile-poll budget (#102)
         // When > 0, HandleRunScript uses this as the bounded compile

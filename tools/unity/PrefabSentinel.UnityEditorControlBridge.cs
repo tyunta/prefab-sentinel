@@ -501,10 +501,11 @@ namespace PrefabSentinel
                     response = HandleCaptureConsoleLogs(request);
                     break;
                 case "refresh_asset_database":
-                    response = HandleRefreshAssetDatabase();
-                    break;
-                case "recompile_scripts":
-                    response = HandleRecompileScripts(request);
+                    // Issue #70: a compile-aware refresh may schedule an
+                    // async barrier that writes the response after compile
+                    // + reload completes. Pass the response path so the
+                    // handler can defer the response and return null.
+                    response = HandleRefreshAssetDatabase(request, responsePath);
                     break;
                 case "set_material":
                     response = HandleSetMaterial(request);

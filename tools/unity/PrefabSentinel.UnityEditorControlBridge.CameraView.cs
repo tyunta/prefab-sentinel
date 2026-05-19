@@ -47,6 +47,25 @@ namespace PrefabSentinel
             };
         }
 
+        /// <summary>
+        /// Resolve the Scene-view camera world position synchronously from
+        /// the supplied view's already-settled pivot, rotation, and camera
+        /// distance (issue #74).  Unity recomputes
+        /// ``camera.transform.position`` only on its next camera refresh, so
+        /// a transform read taken in the same dispatch frame as a
+        /// ``LookAt`` call reports the pre-call position.  Deriving the
+        /// position from ``SceneView.cameraDistance`` — Unity's own
+        /// published camera-distance value, sine-based for perspective and
+        /// ``size * 2`` for orthographic — is correct in-frame and tracks
+        /// whatever contract the running Unity version exposes.
+        /// </summary>
+        private static float[] ResolveSyncedCameraPosition(SceneView sv)
+        {
+            Vector3 forward = sv.rotation * Vector3.forward;
+            Vector3 pos = sv.pivot - forward * sv.cameraDistance;
+            return new[] { pos.x, pos.y, pos.z };
+        }
+
         private static EditorControlData BuildCameraData(CameraSnapshot current, CameraSnapshot? previous = null)
         {
             var data = new EditorControlData
@@ -324,6 +343,7 @@ namespace PrefabSentinel
                 sceneView.orthographic = DefaultSceneOrthographic;
                 ForceRenderAndRepaint(sceneView);
                 CameraSnapshot resetState = CaptureCameraState(sceneView);
+                resetState.position = ResolveSyncedCameraPosition(sceneView);
                 return BuildSuccess(
                     "EDITOR_CTRL_CAMERA_SET_OK",
                     "Camera reset to defaults",
@@ -337,6 +357,21 @@ namespace PrefabSentinel
                 return BuildError("EDITOR_CTRL_CAMERA_CONFLICT",
                     "'look_at' requires 'position' to be set.");
 
+            // Issue #73: apply the projection switch before the
+            // field-of-view read and the position/pivot geometry.  A
+            // single call that both switches projection and positions the
+            // camera must compute its geometry — and pass the projection
+            // flag into LookAt — under the requested projection, not the
+            // pre-switch one.
+            if (request.camera_orthographic >= 0)
+                sceneView.orthographic = request.camera_orthographic == 1;
+
+            // Issue #66: Unity's SceneView camera-distance contract is
+            // sine-based — cameraDistance = size / Sin(fov/2), matching
+            // SceneView.GetPerspectiveCameraDistance.  The perspective
+            // position-mode reverse-solve below uses Mathf.Sin so the
+            // set -> get round-trip closes and the camera lands at the
+            // requested position.
             float fov = sceneView.camera.fieldOfView;
 
             if (hasPosition)
@@ -361,7 +396,7 @@ namespace PrefabSentinel
                     Quaternion rot = Quaternion.LookRotation(direction);
                     float newSize = sceneView.orthographic
                         ? dist * 0.5f
-                        : dist * Mathf.Tan(fov * 0.5f * Mathf.Deg2Rad);
+                        : dist * Mathf.Sin(fov * 0.5f * Mathf.Deg2Rad);
                     sceneView.LookAt(
                         lookAt, rot, newSize, sceneView.orthographic,
                         instant: true);
@@ -379,7 +414,7 @@ namespace PrefabSentinel
 
                     float cameraDistance = sceneView.orthographic
                         ? newSize * 2f
-                        : newSize / Mathf.Tan(fov * 0.5f * Mathf.Deg2Rad);
+                        : newSize / Mathf.Sin(fov * 0.5f * Mathf.Deg2Rad);
                     Vector3 newPivot = cameraPos + rot * new Vector3(0, 0, cameraDistance);
                     sceneView.LookAt(
                         newPivot, rot, newSize, sceneView.orthographic,
@@ -414,12 +449,10 @@ namespace PrefabSentinel
                     instant: true);
             }
 
-            if (request.camera_orthographic >= 0)
-                sceneView.orthographic = request.camera_orthographic == 1;
-
             ForceRenderAndRepaint(sceneView);
 
             CameraSnapshot current = CaptureCameraState(sceneView);
+            current.position = ResolveSyncedCameraPosition(sceneView);
             return BuildSuccess("EDITOR_CTRL_CAMERA_SET_OK", "Camera updated",
                 data: BuildCameraData(current, previous));
         }

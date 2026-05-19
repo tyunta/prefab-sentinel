@@ -1,6 +1,6 @@
 # MCP ツール一覧
 
-`prefab-sentinel-mcp` が公開する全 MCP ツール（現在 85 件 / 15 カテゴリ）の正本カタログ。各カテゴリは `prefab_sentinel/mcp_tools_*.py` の 1 モジュールに対応する。エンベロープ仕様は [api-reference.md「レスポンスフォーマット」](./api-reference.md#レスポンスフォーマット)、エラーコードの正本は [api-reference.md「エラーコード規約」](./api-reference.md#エラーコード規約) を参照。
+`prefab-sentinel-mcp` が公開する全 MCP ツール（現在 84 件 / 15 カテゴリ）の正本カタログ。各カテゴリは `prefab_sentinel/mcp_tools_*.py` の 1 モジュールに対応する。エンベロープ仕様は [api-reference.md「レスポンスフォーマット」](./api-reference.md#レスポンスフォーマット)、エラーコードの正本は [api-reference.md「エラーコード規約」](./api-reference.md#エラーコード規約) を参照。
 
 ## 用途索引
 
@@ -117,9 +117,8 @@
 | `editor_get_material_property` | editor_view | ランタイムのシェーダープロパティ値を読み取り | — | read-only |
 | `editor_set_material_property` | editor_view | ランタイムでシェーダープロパティを設定（型はシェーダー定義から自動判定、Undo 対応） | — | write |
 | `editor_console` | editor_view | Unity Console ログを構造化データとして取得。`phase_filter` / `classification_filter` / pagination 対応 | #113, #117, #131, #239 | read-only |
-| `editor_refresh` | editor_view | `AssetDatabase.Refresh()` のトリガー | — | write |
+| `editor_refresh` | editor_view | `AssetDatabase.Refresh()` をトリガーし、refresh で誘発したコンパイルを観測（compile-aware）。コンパイル無し→refresh-OK、成功→compile-success、失敗→実コンパイラ診断付き compile-failure | #70 | write |
 | `editor_recompile` | editor_view | スクリプト再コンパイルを発行し `CompilationPipeline.compilationFinished` で完了を観測（同期 / ブロッキング） | #54, #118, #134, #203, #213, #235 | write |
-| `editor_recompile_async` | editor_view | C# スクリプト再コンパイルのトリガー（fire-and-return）。`reimport_paths` で外部編集スクリプトを `ForceUpdate` 再インポート | #45, #54 | write |
 | `editor_run_tests` | editor_view | Editor Bridge 経由で Unity 統合テストを実行 | — | read-only |
 
 ### editor_write

@@ -15,7 +15,7 @@ from prefab_sentinel.mcp_helpers import normalize_material_value
 __all__ = [
     "editor_console",
     "editor_recompile",
-    "editor_recompile_async",
+    "editor_refresh",
     "editor_screenshot",
     "editor_force_scene_view_refresh",
     "register_editor_view_tools",
@@ -128,30 +128,6 @@ def _recompile_timeout_out_of_range_envelope(value: float) -> dict[str, Any]:
     }
 
 
-def editor_recompile_async(
-    reimport_paths: list[str] | None = None,
-) -> dict[str, Any]:
-    """Fire-and-return C# script recompilation in the running Unity Editor.
-
-    Issue #54: the ``_async`` suffix marks this as the non-blocking
-    fire-and-return tool — it schedules compilation and returns without
-    waiting for the Editor to finish (use ``editor_recompile`` for the
-    synchronous, blocking variant).
-
-    Issue #45: ``reimport_paths`` is a caller-supplied list of asset
-    paths that the bridge synchronously re-imports with ``ForceUpdate``
-    before scheduling compilation, so externally edited scripts living
-    outside ``Assets/Editor/`` are picked up reliably. An empty list (the
-    default) is the legacy ``Refresh + RequestScriptCompilation`` path.
-
-    Returns the Editor Bridge response envelope unmodified.
-    """
-    return send_action(
-        action="recompile_scripts",
-        reimport_paths=list(reimport_paths or []),
-    )
-
-
 def editor_recompile(
     timeout_sec: float = RECOMPILE_AND_WAIT_DEFAULT_TIMEOUT_SEC,
 ) -> dict[str, Any]:
@@ -180,6 +156,24 @@ def editor_recompile(
         action="editor_recompile_and_wait",
         timeout_sec=transport_poll_sec,
         request_extras={"timeout_sec": float(timeout_sec)},
+    )
+
+
+def editor_refresh() -> dict[str, Any]:
+    """Refresh the asset database and report any triggered compile.
+
+    Issue #70: the refresh is compile-aware. It asks the bridge to wait
+    for and report a refresh-triggered compile, so the result reflects
+    refresh-OK (no compile), compile-success, or compile-failure with the
+    real compiler diagnostics. The transport poll budget covers a compile
+    plus the domain reload, matching the recompile-and-wait budget.
+
+    Returns the Editor Bridge response envelope unmodified.
+    """
+    return send_action(
+        action="refresh_asset_database",
+        timeout_sec=int(RECOMPILE_AND_WAIT_DEFAULT_TIMEOUT_SEC) + 5,
+        wait_for_compile=True,
     )
 
 
@@ -618,30 +612,18 @@ def register_editor_view_tools(server: FastMCP) -> None:
             phase_filter=phase_filter,
         )
 
-    @server.tool()
-    def editor_refresh() -> dict[str, Any]:
-        """Trigger AssetDatabase.Refresh() in the running Unity Editor."""
-        return send_action(action="refresh_asset_database")
+    @server.tool(name="editor_refresh")
+    def _editor_refresh() -> dict[str, Any]:
+        """Refresh the asset database and report any triggered compile.
 
-    @server.tool(name="editor_recompile_async")
-    def _editor_recompile_async(
-        reimport_paths: list[str] | None = None,
-    ) -> dict[str, Any]:
-        """Fire-and-return C# script recompilation (issue #54).
-
-        The ``_async`` suffix marks this as the non-blocking variant: it
-        schedules compilation and returns immediately. Use
-        ``editor_recompile`` when you need to wait for completion.
-
-        Args:
-            reimport_paths: Caller-supplied list of asset paths to
-                synchronously re-import with ``ForceUpdate`` before
-                scheduling compilation (issue #45). Use when externally
-                edited scripts outside ``Assets/Editor/`` are not picked
-                up by the default refresh. Empty (default) = legacy
-                refresh path.
+        Issue #70: the refresh is compile-aware. It returns refresh-OK
+        when no compile is triggered, compile-success when a triggered
+        compile passes, or compile-failure with the real compiler
+        diagnostics when it fails. The transport poll budget covers a
+        compile plus the domain reload, matching the recompile-and-wait
+        budget.
         """
-        return editor_recompile_async(reimport_paths=reimport_paths)
+        return editor_refresh()
 
     @server.tool(name="editor_recompile")
     def _editor_recompile(
@@ -649,12 +631,8 @@ def register_editor_view_tools(server: FastMCP) -> None:
     ) -> dict[str, Any]:
         """Recompile scripts and synchronously wait for completion (issue #54).
 
-        The bare name marks this as the synchronous, blocking variant:
-        it returns only after the Editor reports compilation finished,
-        the compiled-assembly file's modification time has advanced past
-        the request's call-time observation, and the post-reload signal
-        has fired since the request was issued. Use
-        ``editor_recompile_async`` for the fire-and-return variant.
+        It returns only after the Editor reports compilation finished and
+        the post-reload signal has fired since the request was issued.
 
         Args:
             timeout_sec: Maximum wait, in seconds, before the bridge
