@@ -30,7 +30,7 @@ namespace PrefabSentinel
         // *start* (observed through ``EditorApplication.isCompiling`` or a
         // per-assembly finished event) before concluding "no compile".
         // The value is a starting point; #70 requires it be confirmed
-        // against the PF-TEST refresh matrix on real Unity — too short
+        // against a real-Unity refresh matrix — too short
         // misreads a slow-to-start compile as no-compile, too long makes
         // every compile-free refresh wait it out.
         private const int CompileBarrierNoCompileGraceWindowMs = 1500;

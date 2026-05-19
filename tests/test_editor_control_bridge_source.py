@@ -2074,7 +2074,7 @@ class TestCompileBarrierSource(unittest.TestCase):
     ``CompilationPipeline`` events and runs inside the Unity Editor
     process, which CI and the xUnit harness do not compile. These
     source-scan invariants guard the consolidation against reversion;
-    runtime equivalence is verified by the PF-TEST recompile / menu /
+    runtime equivalence is verified by the real-Unity recompile / menu /
     run-script / refresh matrix recorded in observations.md.
     """
 
@@ -4517,7 +4517,7 @@ class TestCompileAwareRefreshWiring(unittest.TestCase):
 
     Tier 3 (spec Tier 3 Justification): the refresh handler, dispatcher,
     and resumer are Unity-dependent partials CI does not compile; the
-    three-outcome runtime behaviour is verified by the PF-TEST refresh
+    three-outcome runtime behaviour is verified by the real-Unity refresh
     matrix recorded in observations.md.
     """
 
