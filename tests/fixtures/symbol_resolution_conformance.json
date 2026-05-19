@@ -1,0 +1,40 @@
+{
+  "description": "Cross-language conformance fixture for #N-disambiguated symbol-path resolution (issue #38). Consumed by tests/test_symbol_resolution_conformance.py (Python offline symbol tree) and tests/csharp/SymbolPathResolverTests.cs (C# Unity-free resolver). A path is a '/'-delimited segment list; a segment is 'name' or 'name#N' where N is the 0-based occurrence among same-named siblings in child order. A non-'#N' segment matches every same-named sibling and recursion unions the results; the final match-list size decides the outcome: 0 -> not_found, 1 -> unique, >1 -> ambiguous.",
+  "roots": [
+    {
+      "id": "go_root",
+      "name": "Root",
+      "children": [
+        {
+          "id": "go_body",
+          "name": "Body",
+          "children": [
+            {"id": "go_head", "name": "Head", "children": []},
+            {"id": "go_mesh0", "name": "Mesh", "children": []},
+            {"id": "go_mesh1", "name": "Mesh", "children": []}
+          ]
+        },
+        {"id": "go_arm0", "name": "Arm", "children": []},
+        {
+          "id": "go_arm1",
+          "name": "Arm",
+          "children": [
+            {"id": "go_hand", "name": "Hand", "children": []}
+          ]
+        }
+      ]
+    }
+  ],
+  "cases": [
+    {"name": "nested unique path resolves to its leaf node", "path": "Root/Body/Head", "outcome": "unique", "expected_id": "go_head"},
+    {"name": "first same-named sibling is selected by #0", "path": "Root/Body/Mesh#0", "outcome": "unique", "expected_id": "go_mesh0"},
+    {"name": "second same-named sibling is selected by #1", "path": "Root/Body/Mesh#1", "outcome": "unique", "expected_id": "go_mesh1"},
+    {"name": "same-named siblings with no #N are ambiguous", "path": "Root/Body/Mesh", "outcome": "ambiguous"},
+    {"name": "ambiguous ancestor pruned to one branch by a unique descendant", "path": "Root/Arm/Hand", "outcome": "unique", "expected_id": "go_hand"},
+    {"name": "#N on an ancestor segment then descends to the descendant", "path": "Root/Arm#1/Hand", "outcome": "unique", "expected_id": "go_hand"},
+    {"name": "#N on an ancestor past the last occurrence is not found", "path": "Root/Arm#2", "outcome": "not_found"},
+    {"name": "non-existent leaf name is not found", "path": "Root/Body/Nope", "outcome": "not_found"},
+    {"name": "#0 on a name with a single occurrence still resolves it", "path": "Root/Body/Head#0", "outcome": "unique", "expected_id": "go_head"},
+    {"name": "#1 on a name with a single occurrence is not found", "path": "Root/Body/Head#1", "outcome": "not_found"}
+  ]
+}

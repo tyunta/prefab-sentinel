@@ -12,10 +12,13 @@ namespace PrefabSentinel
             if (string.IsNullOrEmpty(request.hierarchy_path))
                 return BuildError("EDITOR_CTRL_MISSING_PATH", "hierarchy_path is required for list_materials.");
 
-            GameObject go = ResolveGameObjectInActiveStage(request.hierarchy_path);
-            if (go == null)
+            if (!TryResolveGameObjectInActiveStage(
+                request.hierarchy_path, out GameObject go, out var ambiguity))
+            {
+                if (ambiguity != null) return ambiguity;
                 return BuildError("EDITOR_CTRL_OBJECT_NOT_FOUND",
                     $"GameObject not found: {request.hierarchy_path}");
+            }
 
             var renderers = go.GetComponentsInChildren<Renderer>();
             var slots = new List<MaterialSlotEntry>();
@@ -69,10 +72,13 @@ namespace PrefabSentinel
             if (request.material_index < 0)
                 return BuildError("EDITOR_CTRL_MISSING_INDEX", "material_index is required (>= 0).");
 
-            var go = ResolveGameObjectInActiveStage(request.hierarchy_path);
-            if (go == null)
+            if (!TryResolveGameObjectInActiveStage(
+                request.hierarchy_path, out GameObject go, out var ambiguity))
+            {
+                if (ambiguity != null) return ambiguity;
                 return BuildError("EDITOR_CTRL_OBJECT_NOT_FOUND",
                     $"GameObject not found: {request.hierarchy_path}");
+            }
 
             var renderer = go.GetComponent<Renderer>();
             if (renderer == null)

@@ -67,11 +67,13 @@ namespace PrefabSentinel
             //    Issue #258: when a Prefab Stage is open, ``GameObject.Find``
             //    silently returns null for hierarchies inside the stage
             //    because Unity isolates stage contents from the global
-            //    scene-search.  ``ResolveGameObjectInActiveStage`` consults
-            //    the stage root first and transparently falls through to
-            //    ``GameObject.Find`` when no stage is active, so the
-            //    out-of-stage contract is preserved.
-            var go = ResolveGameObjectInActiveStage(goPath);
+            //    scene-search.  ``TryResolveGameObjectInActiveStage``
+            //    consults the stage root first and transparently falls
+            //    through to ``GameObject.Find`` when no stage is active, so
+            //    the out-of-stage contract is preserved.
+            TryResolveGameObjectInActiveStage(goPath, out GameObject go, out var ambiguity);
+            if (ambiguity != null)
+                return (null, ambiguity.message);
             if (go != null)
             {
                 if (componentName != null)

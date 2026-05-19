@@ -9,10 +9,8 @@ from mcp.server.fastmcp import FastMCP
 
 from prefab_sentinel.json_io import dump_json
 from prefab_sentinel.mcp_helpers import (
-    find_component_on_go,
     read_asset,
     resolve_component_with_type,
-    resolve_game_object_node,
 )
 from prefab_sentinel.mcp_validation import require_change_reason
 from prefab_sentinel.patch_plan import PLAN_VERSION
@@ -20,7 +18,6 @@ from prefab_sentinel.services.prefab_variant.overrides import (
     iter_base_property_values,
 )
 from prefab_sentinel.services.serialized_object.property_diagnostics import (
-    resolve_component_not_found,
     resolve_property_not_found,
 )
 from prefab_sentinel.session import ProjectSession
@@ -32,7 +29,7 @@ __all__ = ["register_set_property_tools"]
 # element of any container field. Splitting on this lets us recover the
 # container name (``m_Materials``) from element paths
 # (``m_Materials.Array.data[0]``); the container itself is a valid
-# ``set_component_fields`` target.
+# ``set_properties`` target.
 _ARRAY_ELEMENT_SUFFIX = ".Array.data["
 
 
@@ -53,7 +50,7 @@ def _collect_known_property_paths(text: str, file_id: str) -> list[str]:
         if prop_path not in seen:
             seen.add(prop_path)
             out.append(prop_path)
-        # Surface the container name so ``set_component_fields`` calls
+        # Surface the container name so ``set_properties`` calls
         # that target the whole array (e.g. ``{"m_Materials": [...]}``)
         # are not rejected with a false ``SER003`` (issue #109 follow-up).
         suffix_index = prop_path.find(_ARRAY_ELEMENT_SUFFIX)
@@ -107,7 +104,11 @@ def register_set_property_tools(server: FastMCP, session: ProjectSession) -> Non
         if err is not None:
             return err
         assert node is not None
+        assert component_name is not None
 
+        # Issue #37: the set op identifies its target by the resolved
+        # symbol node's exact fileID, so an asset with several same-type
+        # components on one GameObject resolves to the intended one.
         plan: dict[str, object] = {
             "plan_version": PLAN_VERSION,
             "resources": [{"id": "target", "path": asset_path, "mode": "open"}],
@@ -115,7 +116,7 @@ def register_set_property_tools(server: FastMCP, session: ProjectSession) -> Non
                 {
                     "resource": "target",
                     "op": "set",
-                    "component": component_name,
+                    "file_id": node.file_id,
                     "path": property_path,
                     "value": value,
                 },
@@ -144,42 +145,44 @@ def register_set_property_tools(server: FastMCP, session: ProjectSession) -> Non
         return result
 
     @server.tool()
-    def set_component_fields(
+    def set_properties(
         asset_path: str,
         symbol_path: str,
-        component: str,
-        fields: dict[str, Any],
+        properties: dict[str, Any],
         dry_run: bool = False,
         confirm: bool = False,
         change_reason: str | None = None,
         out_report: str | None = None,
     ) -> dict[str, Any]:
-        """Set multiple serialized field values on a component in a single transaction.
+        """Set multiple serialized property values on a component in a single transaction.
 
         Two-phase workflow:
         - confirm=False (default): dry-run preview of changes.
         - confirm=True: applies changes to disk (requires change_reason + out_report).
         - dry_run=True: explicit preview flag (overrides confirm if both are True).
 
+        Issue #41: ``symbol_path`` resolves directly to a component (the
+        same component-resolution path ``set_property`` uses) — there is
+        no separate ``component`` argument.
+
         Args:
             asset_path: Asset file path (.prefab, .unity, .asset).
-            symbol_path: Human-readable path to the target GameObject
-                (e.g. "Controller" or "Body/Head").
-            component: Component type name on the GameObject
-                (e.g. "MeshRenderer" or "DualButtonController").
-            fields: Mapping of property paths to new values
+            symbol_path: Human-readable path to a component
+                (e.g. "Controller/MeshRenderer" or
+                "Body/Head/MonoBehaviour(PlayerScript)").
+            properties: Mapping of property paths to new values
                 ({property_path: value, ...}).
             dry_run: Explicit preview flag; overrides confirm when both are True.
             confirm: Set True to apply changes (requires change_reason + out_report).
             change_reason: Human-readable reason for the change (required when confirm=True).
             out_report: Path to write result JSON report (required when confirm=True).
         """
-        if not fields:
+        if not properties:
             return {
                 "success": False,
                 "severity": "error",
                 "code": "EMPTY_FIELDS",
-                "message": "fields dict must not be empty.",
+                "message": "properties dict must not be empty.",
                 "data": {},
                 "diagnostics": [],
             }
@@ -230,31 +233,16 @@ def register_set_property_tools(server: FastMCP, session: ProjectSession) -> Non
 
         text, resolved = read_asset(asset_path, session.project_root)
         tree = session.get_symbol_tree(resolved, text, include_properties=False)
-        go_node, err = resolve_game_object_node(tree, symbol_path, asset_path)
+        node, component_name, err = resolve_component_with_type(
+            tree, symbol_path, asset_path,
+        )
         if err is not None:
-            return err
-        assert go_node is not None
-
-        node, component_name, err = find_component_on_go(go_node, component, asset_path)
-        if err is not None:
-            if err.get("code") == "COMPONENT_NOT_FOUND":
-                # ``find_component_on_go`` already enumerated the component
-                # types on the GameObject under ``data.available_components``;
-                # reuse the list rather than walking ``go_node.children``
-                # again (DRY).
-                err_data = err.get("data", {})
-                candidates = err_data.get("available_components", [])
-                return resolve_component_not_found(
-                    asset_path,
-                    component,
-                    candidates,
-                ).to_dict()
             return err
         assert node is not None
         assert component_name is not None
 
         known_paths = _collect_known_property_paths(text, node.file_id)
-        for field_path in fields:
+        for field_path in properties:
             if field_path not in known_paths:
                 return resolve_property_not_found(
                     asset_path,
@@ -263,15 +251,18 @@ def register_set_property_tools(server: FastMCP, session: ProjectSession) -> Non
                     known_paths,
                 ).to_dict()
 
+        # Issue #37: each set op identifies its target by the resolved
+        # symbol node's exact fileID, so an asset with several same-type
+        # components on one GameObject resolves to the intended one.
         ops = [
             {
                 "resource": "target",
                 "op": "set",
-                "component": component_name,
+                "file_id": node.file_id,
                 "path": field_path,
                 "value": field_value,
             }
-            for field_path, field_value in fields.items()
+            for field_path, field_value in properties.items()
         ]
         plan: dict[str, object] = {
             "plan_version": PLAN_VERSION,
@@ -296,7 +287,7 @@ def register_set_property_tools(server: FastMCP, session: ProjectSession) -> Non
             "resolved_component": component_name,
             "file_id": node.file_id,
             "class_id": node.class_id,
-            "fields": list(fields.keys()),
+            "fields": list(properties.keys()),
         }
 
         if report_path is not None and effective_confirm:

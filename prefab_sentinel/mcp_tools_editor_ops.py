@@ -8,6 +8,7 @@ from mcp.server.fastmcp import FastMCP
 
 from prefab_sentinel.editor_bridge import send_action
 from prefab_sentinel.json_io import dump_json
+from prefab_sentinel.mcp_validation import require_write_audit
 
 __all__ = ["register_editor_ops_tools"]
 
@@ -20,7 +21,7 @@ def register_editor_ops_tools(server: FastMCP) -> None:
         hierarchy_path: str,
         component_type: str,
         property_name: str,
-        value: str = "",
+        value: str | None = None,
         object_reference: str = "",
     ) -> dict[str, Any]:
         """Set a serialized property on a component via Unity's SerializedObject API.
@@ -34,17 +35,21 @@ def register_editor_ops_tools(server: FastMCP) -> None:
         for project assets. Append :ComponentType to reference a specific
         component (e.g. "/MyObj:AudioSource").
 
-        Note: Setting a String property to empty string is not supported
-        (indistinguishable from "no value provided").
+        Issue #52: ``value`` is typed ``str | None``. An empty-string
+        write (``value=""``) is a deliberate, valid write distinct from
+        an unspecified value (``value=None``); the bridge request carries
+        a value-present marker so the empty-string write is not dropped.
 
         Args:
             hierarchy_path: Hierarchy path to the GameObject.
             component_type: Component type name (simple or fully qualified).
             property_name: SerializedProperty path (e.g. "targetObject", "m_Speed").
             value: Value for primitive/enum properties (auto-parsed by type).
+                ``None`` (default) = unspecified; ``""`` = a deliberate
+                empty-string write.
             object_reference: Hierarchy path or asset path for ObjectReference properties.
         """
-        if value and object_reference:
+        if value is not None and object_reference:
             return {
                 "success": False,
                 "severity": "error",
@@ -60,84 +65,98 @@ def register_editor_ops_tools(server: FastMCP) -> None:
         }
         if object_reference:
             kwargs["object_reference"] = object_reference
-        else:
+        elif value is not None:
             kwargs["property_value"] = value
+            kwargs["property_value_present"] = True
+        else:
+            kwargs["property_value_present"] = False
         return send_action(action="editor_set_property", **kwargs)
 
     @server.tool()
-    def editor_set_component_fields(
+    def editor_set_properties(
         hierarchy_path: str,
         component_type: str,
-        fields: list[dict[str, str]],
+        properties: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        """Set multiple serialized fields on a live Unity Editor component in a single Undo group.
+        """Set multiple serialized properties on a live Unity Editor component in a single Undo group.
 
-        Each field must specify a name plus either value (for primitives) or
-        object_reference (for ObjectReference properties).
+        Each entry must specify a ``property_name`` plus either ``value``
+        (for primitives) or ``object_reference`` (for ObjectReference
+        properties).
+
+        Issue #52: each per-entry value carries a ``value_present``
+        marker across the bridge boundary, so an entry with an
+        empty-string ``value`` is distinct from one that omits ``value``.
 
         Args:
             hierarchy_path: Hierarchy path to the target GameObject
                 (e.g. "/DualButtonController/Controller").
             component_type: Component type name (e.g. "DualButtonController").
-            fields: List of field dicts, each with "name" and either "value"
-                or "object_reference".
+            properties: List of entry dicts, each with "property_name" and
+                either "value" or "object_reference".
         """
-        if not fields:
+        if not properties:
             return {
                 "success": False,
                 "severity": "error",
                 "code": "EDITOR_SET_COMP_EMPTY_FIELDS",
-                "message": "fields list must not be empty.",
+                "message": "properties list must not be empty.",
                 "data": {},
                 "diagnostics": [],
             }
 
-        operations: list[dict[str, str]] = []
-        for field in fields:
-            if "name" not in field:
+        operations: list[dict[str, Any]] = []
+        for entry in properties:
+            if "property_name" not in entry:
                 return {
                     "success": False,
                     "severity": "error",
                     "code": "EDITOR_SET_COMP_INVALID_FIELD",
                     "message": (
-                        f"Each field must have a 'name' key. Got: {field!r}"
+                        f"Each entry must have a 'property_name' key. "
+                        f"Got: {entry!r}"
                     ),
-                    "data": {"field": field},
+                    "data": {"field": entry},
                     "diagnostics": [],
                 }
-            if "value" in field and "object_reference" in field:
+            if "value" in entry and "object_reference" in entry:
                 return {
                     "success": False,
                     "severity": "error",
                     "code": "EDITOR_SET_COMP_INVALID_FIELD",
                     "message": (
-                        f"Field {field['name']!r} must have either "
+                        f"Entry {entry['property_name']!r} must have either "
                         f"'value' or 'object_reference', not both."
                     ),
-                    "data": {"field": field},
+                    "data": {"field": entry},
                     "diagnostics": [],
                 }
-            if "value" not in field and "object_reference" not in field:
+            if "value" not in entry and "object_reference" not in entry:
                 return {
                     "success": False,
                     "severity": "error",
                     "code": "EDITOR_SET_COMP_INVALID_FIELD",
                     "message": (
-                        f"Field {field['name']!r} must have either "
+                        f"Entry {entry['property_name']!r} must have either "
                         f"'value' or 'object_reference'."
                     ),
-                    "data": {"field": field},
+                    "data": {"field": entry},
                     "diagnostics": [],
                 }
-            op: dict[str, str] = {
+            op: dict[str, Any] = {
                 "hierarchy_path": hierarchy_path,
                 "component_type": component_type,
-                "property_name": field["name"],
+                "property_name": entry["property_name"],
             }
-            if "value" in field:
-                op["value"] = field["value"]
+            if "value" in entry:
+                # Issue #52: the per-entry value-present marker keeps an
+                # empty-string entry value distinct from an absent one
+                # across the bridge boundary.
+                op["value"] = entry["value"]
+                op["value_present"] = True
             else:
-                op["object_reference"] = field["object_reference"]
+                op["object_reference"] = entry["object_reference"]
+                op["value_present"] = False
             operations.append(op)
 
         return send_action(
@@ -151,10 +170,16 @@ def register_editor_ops_tools(server: FastMCP) -> None:
         asset_path: str,
         protect_components: list[str],
         force_original: bool = False,
+        confirm: bool = False,
+        change_reason: str = "",
     ) -> dict[str, Any]:
         """Save a scene GameObject as a Prefab or Prefab Variant asset
         with optional strip-and-reattach protection for caller-named
         component types (issues #193, #228).
+
+        Issue #49: saving a prefab writes a ``.prefab`` asset to disk in
+        a form Unity's Undo cannot reverse, so it requires the writer
+        audit pair (``confirm=True`` AND a non-empty ``change_reason``).
 
         When ``protect_components`` is non-empty, the bridge handler
         observes the saved asset, re-attaches any component type listed
@@ -188,7 +213,14 @@ def register_editor_ops_tools(server: FastMCP) -> None:
                 before saving, forcing the result to be an original
                 Prefab (not a Variant).  Warning: this unpacks the scene
                 GameObject (destructive, but Undo-able).
+            confirm: Required ``True`` to apply (writer audit gate).
+            change_reason: Required non-empty audit reason.
         """
+        audit_err = require_write_audit(
+            "editor_safe_save_prefab", confirm, change_reason,
+        )
+        if audit_err is not None:
+            return audit_err
         # Issue #228: always serialise the protected-components list onto
         # the request payload, including the empty case. The wrapper does
         # not gate on emptiness; the bridge handler treats an explicitly
@@ -201,6 +233,8 @@ def register_editor_ops_tools(server: FastMCP) -> None:
             "protect_components_json": dump_json(
                 list(protect_components), indent=None
             ),
+            "confirm": True,
+            "change_reason": change_reason.strip(),
         }
         if force_original:
             kwargs["force_original"] = True
@@ -209,7 +243,7 @@ def register_editor_ops_tools(server: FastMCP) -> None:
     @server.tool()
     def editor_set_parent(
         hierarchy_path: str,
-        parent_path: str = "",
+        parent_hierarchy_path: str = "",
     ) -> dict[str, Any]:
         """Set the parent of a GameObject in the scene hierarchy (Undo-able).
 
@@ -217,10 +251,11 @@ def register_editor_ops_tools(server: FastMCP) -> None:
 
         Args:
             hierarchy_path: Hierarchy path to the child GameObject to move.
-            parent_path: Hierarchy path to the new parent. Empty = move to scene root.
+            parent_hierarchy_path: Hierarchy path to the new parent.
+                Empty = move to scene root.
         """
         return send_action(
             action="editor_set_parent",
             hierarchy_path=hierarchy_path,
-            new_name=parent_path,
+            parent_hierarchy_path=parent_hierarchy_path,
         )

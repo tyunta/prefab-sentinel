@@ -13,10 +13,13 @@ namespace PrefabSentinel
             if (string.IsNullOrEmpty(request.hierarchy_path))
                 return BuildError("EDITOR_CTRL_MISSING_PATH", "hierarchy_path is required for delete_object.");
 
-            GameObject go = ResolveGameObjectInActiveStage(request.hierarchy_path);
-            if (go == null)
+            if (!TryResolveGameObjectInActiveStage(
+                request.hierarchy_path, out GameObject go, out var ambiguity))
+            {
+                if (ambiguity != null) return ambiguity;
                 return BuildError("EDITOR_CTRL_OBJECT_NOT_FOUND",
                     $"GameObject not found: {request.hierarchy_path}");
+            }
 
             // Prefab instance roots cannot be directly destroyed; unpack first.
             if (PrefabUtility.IsPartOfPrefabInstance(go)
@@ -45,10 +48,13 @@ namespace PrefabSentinel
             if (string.IsNullOrEmpty(request.hierarchy_path))
                 return BuildError("EDITOR_CTRL_MISSING_PATH", "hierarchy_path is required for list_children.");
 
-            GameObject go = ResolveGameObjectInActiveStage(request.hierarchy_path);
-            if (go == null)
+            if (!TryResolveGameObjectInActiveStage(
+                request.hierarchy_path, out GameObject go, out var ambiguity))
+            {
+                if (ambiguity != null) return ambiguity;
                 return BuildError("EDITOR_CTRL_OBJECT_NOT_FOUND",
                     $"GameObject not found: {request.hierarchy_path}");
+            }
 
             int maxDepth = Math.Min(Math.Max(request.depth, 1), 50);
             var children = new List<ChildEntry>();
@@ -191,10 +197,13 @@ namespace PrefabSentinel
             if (string.IsNullOrEmpty(request.new_name))
                 return BuildError("EDITOR_CTRL_RENAME_NO_NAME", "new_name is required.");
 
-            var go = ResolveGameObjectInActiveStage(request.hierarchy_path);
-            if (go == null)
+            if (!TryResolveGameObjectInActiveStage(
+                request.hierarchy_path, out GameObject go, out var ambiguity))
+            {
+                if (ambiguity != null) return ambiguity;
                 return BuildError("EDITOR_CTRL_RENAME_NOT_FOUND",
                     $"GameObject not found: {request.hierarchy_path}");
+            }
 
             string oldName = go.name;
             Undo.RecordObject(go, $"PrefabSentinel: Rename {oldName}");
@@ -221,18 +230,24 @@ namespace PrefabSentinel
             if (string.IsNullOrEmpty(request.hierarchy_path))
                 return BuildError("EDITOR_CTRL_SET_PARENT_NO_PATH", "hierarchy_path is required.");
 
-            var child = ResolveGameObjectInActiveStage(request.hierarchy_path);
-            if (child == null)
+            if (!TryResolveGameObjectInActiveStage(
+                request.hierarchy_path, out GameObject child, out var ambiguity))
+            {
+                if (ambiguity != null) return ambiguity;
                 return BuildError("EDITOR_CTRL_SET_PARENT_NOT_FOUND",
                     $"GameObject not found: {request.hierarchy_path}");
+            }
 
             Transform newParent = null;
-            if (!string.IsNullOrEmpty(request.new_name))
+            if (!string.IsNullOrEmpty(request.parent_hierarchy_path))
             {
-                var parentGo = ResolveGameObjectInActiveStage(request.new_name);
-                if (parentGo == null)
+                if (!TryResolveGameObjectInActiveStage(
+                    request.parent_hierarchy_path, out GameObject parentGo, out var ambiguity2))
+                {
+                    if (ambiguity2 != null) return ambiguity2;
                     return BuildError("EDITOR_CTRL_SET_PARENT_PARENT_NOT_FOUND",
-                        $"Parent GameObject not found: {request.new_name}");
+                        $"Parent GameObject not found: {request.parent_hierarchy_path}");
+                }
                 newParent = parentGo.transform;
             }
 

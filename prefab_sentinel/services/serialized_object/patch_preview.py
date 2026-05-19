@@ -54,10 +54,14 @@ def soft_warnings_for_preview(target: str, preview: list[dict[str, Any]]) -> lis
     """
     warnings: list[Diagnostic] = []
     for entry in preview:
-        loc = f"{entry.get('component', '')}:{entry.get('path', '')}"
+        # Issue #37: a set op targets by either a type-name ``component``
+        # selector or an exact ``file_id``; the warning location names
+        # whichever identifier the op carried.
+        identifier = entry.get("component") or entry.get("file_id", "")
+        loc = f"{identifier}:{entry.get('path', '')}"
         before_val = entry.get("before", "")
         if isinstance(before_val, UnresolvedReason):
-            component = entry.get("component", "")
+            component = identifier
             prop_path = entry.get("path", "")
             warnings.append(
                 Diagnostic(

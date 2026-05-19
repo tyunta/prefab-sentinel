@@ -14,9 +14,10 @@ namespace PrefabSentinel
     /// <item><description>Refresh / recompile / run-integration-tests handlers.</description></item>
     /// <item><description>Synchronous recompile-and-wait handler (issue #118) and its
     ///       upper-bound check (issue #134).</description></item>
-    /// <item><description>The per-frame compile / load poller for ``run_script`` (issue
-    ///       #108) and its stuck-detection / temp-area-recovery
-    ///       helpers (issue #116).</description></item>
+    /// <item><description>The two-phase ``run_script`` completion detection — the
+    ///       pre-reload compile-pending watchdog and the post-reload
+    ///       completion poll (issues #108 / #64) — and its
+    ///       stuck-detection / temp-area-recovery helpers (issue #116).</description></item>
     /// <item><description>The startup cleanup hook that resumes in-flight async runner
     ///       entries on the new AppDomain after a domain reload.</description></item>
     /// </list>
@@ -25,82 +26,137 @@ namespace PrefabSentinel
     {
         // ── Handlers shared with Editor refresh / recompile / tests ──
 
-        private static EditorControlResponse HandleRefreshAssetDatabase()
+        /// <summary>
+        /// Issue #70: ``editor_refresh`` handler.  Without compile
+        /// awareness it refreshes the asset database synchronously and
+        /// reports refresh-OK — the cheap path the screenshot / deploy
+        /// refreshes depend on.  When the caller opts into compile
+        /// awareness it observes the refresh-triggered compile through the
+        /// shared compile-watch barrier and reports refresh-OK (no
+        /// compile), compile-success, or compile-failure with real
+        /// compiler diagnostics.
+        /// </summary>
+        private static EditorControlResponse HandleRefreshAssetDatabase(
+            EditorControlRequest request, string responsePath)
         {
-            AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
-            return BuildSuccess("EDITOR_CTRL_REFRESH_OK",
-                "AssetDatabase.Refresh completed",
-                data: new EditorControlData { executed = true });
+            if (!request.wait_for_compile)
+            {
+                AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+                return BuildSuccess("EDITOR_CTRL_REFRESH_OK",
+                    "AssetDatabase.Refresh completed",
+                    data: new EditorControlData { executed = true });
+            }
+
+            long callTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            long deadlineMs = callTimeMs
+                + (long)(RecompileAndWaitDefaultTimeoutSec * 1000f);
+            int callTimeReloadCount = PendingAsyncRunner.AssemblyReloadCount;
+            var preEntry = new PendingAsyncRunner.PersistedEntry
+            {
+                action = "refresh_asset_database",
+                responsePath = responsePath,
+                requestJson = JsonUtility.ToJson(request),
+                callTimeUnixMs = callTimeMs,
+                deadlineUnixMs = deadlineMs,
+            };
+
+            ScheduleCompileBarrier(new CompileBarrierSpec
+            {
+                preReloadEntry = preEntry,
+                persistPreReloadEntry = false,
+                deadlineMs = deadlineMs,
+                noCompileGraceWindowMs = CompileBarrierNoCompileGraceWindowMs,
+                compileTrigger = () =>
+                    AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport),
+                onNoCompileObserved = () =>
+                {
+                    PendingAsyncRunner.Complete(responsePath);
+                    WriteResponse(responsePath, BuildSuccess(
+                        "EDITOR_CTRL_REFRESH_OK",
+                        "AssetDatabase.Refresh completed; no compile was triggered.",
+                        new EditorControlData { executed = true }));
+                },
+                onNoAssemblyCompiled = () =>
+                {
+                    PendingAsyncRunner.Complete(responsePath);
+                    WriteResponse(responsePath, BuildSuccess(
+                        "EDITOR_CTRL_REFRESH_OK",
+                        "AssetDatabase.Refresh completed; no assembly required "
+                        + "compilation.",
+                        new EditorControlData { executed = true }));
+                },
+                onCompileFailed = errors =>
+                {
+                    PendingAsyncRunner.Complete(responsePath);
+                    WriteResponse(responsePath, BuildError(
+                        "EDITOR_CTRL_REFRESH_COMPILE_FAILED",
+                        $"editor_refresh: the triggered compile reported "
+                        + $"{errors.Count} compile error(s).",
+                        new EditorControlData
+                        {
+                            executed = false,
+                            errors = errors.ToArray(),
+                        }));
+                },
+                onCompiled = () =>
+                {
+                    PendingAsyncRunner.Complete(responsePath);
+                    var reloadEntry = new PendingAsyncRunner.PersistedEntry
+                    {
+                        action = "refresh_asset_database",
+                        responsePath = responsePath,
+                        requestJson = JsonUtility.ToJson(request),
+                        callTimeUnixMs = callTimeMs,
+                        deadlineUnixMs = deadlineMs,
+                    };
+                    EditorApplication.CallbackFunction reloadPoll =
+                        BuildRecompileReloadWaitPoll(
+                            responsePath, deadlineMs, callTimeReloadCount,
+                            "editor_refresh: timed out waiting for the "
+                            + "post-reload AssemblyReloadCount tick after a "
+                            + "compile-aware refresh.",
+                            BuildRefreshCompileSuccessReloadComplete(responsePath));
+                    PendingAsyncRunner.Register(reloadEntry, reloadPoll);
+                },
+                onDeadlineExceeded = () =>
+                {
+                    PendingAsyncRunner.Complete(responsePath);
+                    WriteResponse(responsePath, BuildError(
+                        "EDITOR_CTRL_REFRESH_COMPILE_TIMEOUT",
+                        "editor_refresh: timed out waiting for the triggered "
+                        + "compile to finish."));
+                },
+                onScheduleFailure = () =>
+                {
+                    PendingAsyncRunner.Complete(responsePath);
+                    WriteResponse(responsePath, BuildError(
+                        "EDITOR_CTRL_REFRESH_SCHEDULE_FAILED",
+                        "editor_refresh: failed to schedule the asset refresh."));
+                },
+            });
+
+            return null;
         }
 
-        private static EditorControlResponse HandleRecompileScripts(EditorControlRequest request)
+        /// <summary>
+        /// Post-reload terminal action for a compile-aware ``editor_refresh``
+        /// whose triggered compile passed and reloaded the domain (issue
+        /// #70).  Drains the import queue synchronously, then writes the
+        /// refresh compile-success envelope.
+        /// </summary>
+        private static Action BuildRefreshCompileSuccessReloadComplete(
+            string responsePath)
         {
-            var diagnostics = new List<EditorControlDiagnostic>();
-
-            // When force_reimport is requested, synchronously re-import every
-            // C# file under Assets/Editor with ForceUpdate so externally
-            // edited scripts are guaranteed to round-trip through Unity's
-            // import pipeline before compilation is scheduled.
-            if (request.force_reimport)
+            return () =>
             {
-                string editorRoot = "Assets/Editor";
-                string editorRootAbs = Path.Combine(
-                    Directory.GetCurrentDirectory(),
-                    editorRoot.Replace('/', Path.DirectorySeparatorChar));
-                if (Directory.Exists(editorRootAbs))
-                {
-                    foreach (string csAbs in Directory.GetFiles(
-                        editorRootAbs, "*.cs", SearchOption.AllDirectories))
-                    {
-                        string rel = csAbs
-                            .Substring(Directory.GetCurrentDirectory().Length)
-                            .TrimStart(Path.DirectorySeparatorChar, '/')
-                            .Replace(Path.DirectorySeparatorChar, '/');
-                        try
-                        {
-                            AssetDatabase.ImportAsset(
-                                rel,
-                                ImportAssetOptions.ForceUpdate
-                                | ImportAssetOptions.ForceSynchronousImport);
-                        }
-                        catch (Exception ex)
-                        {
-                            // Issue #214 / H-7: do not embed exception text
-                            // in the diagnostic evidence returned to the MCP
-                            // client. The redacted evidence (type name only)
-                            // is owned by ``ReimportDiagnostic``; the full
-                            // detail is mirrored to the Unity console below.
-                            Debug.LogWarning(
-                                $"[PrefabSentinel] HandleRecompileScripts: force-reimport of '{rel}' failed: {ex}");
-                            diagnostics.Add(new EditorControlDiagnostic
-                            {
-                                path = rel,
-                                location = "force_reimport",
-                                detail = "warning",
-                                evidence = ReimportDiagnostic.Evidence(ex),
-                            });
-                        }
-                    }
-                }
-            }
-
-            AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
-            // Schedule compilation on next frame so that the response JSON
-            // is written to disk before domain reload destroys this context.
-            EditorApplication.delayCall += () =>
-            {
-                CompilationPipeline.RequestScriptCompilation();
+                DrainImportQueueBestEffort("BuildRefreshCompileSuccessReloadComplete");
+                PendingAsyncRunner.Complete(responsePath);
+                WriteResponse(responsePath, BuildSuccess(
+                    "EDITOR_CTRL_REFRESH_COMPILE_SUCCESS",
+                    "editor_refresh: the triggered compile completed "
+                    + "successfully.",
+                    new EditorControlData { executed = true }));
             };
-            var response = BuildSuccess("EDITOR_CTRL_RECOMPILE_OK",
-                request.force_reimport
-                    ? "Force re-import of editor scripts completed; AssetDatabase.Refresh completed; script recompilation scheduled (domain reload will follow)"
-                    : "AssetDatabase.Refresh completed; script recompilation scheduled (domain reload will follow)",
-                data: new EditorControlData { executed = true });
-            if (diagnostics.Count > 0)
-            {
-                response.diagnostics = diagnostics.ToArray();
-            }
-            return response;
         }
 
         private static EditorControlResponse HandleRunIntegrationTests()
@@ -172,20 +228,25 @@ namespace PrefabSentinel
             RecompileTimeoutValidator.DefaultTimeoutSec;
 
         /// <summary>
-        /// Builds the post-reload poll used by ``editor_recompile_and_wait``
-        /// once compilation has finished and at least one assembly was
-        /// recompiled. Issue #203: the post-reload phase observes only
-        /// the reload counter and the deadline — the
+        /// Builds the single post-reload reload-wait poll (issue #69).
+        /// It waits for the domain reload to finish — observing only the
+        /// reload counter and the deadline — and then runs the
+        /// caller-supplied reload-complete action.  Issue #203: the
         /// ``CompilationPipeline.compilationFinished`` event is the
-        /// authoritative pre-reload terminator and lives in
-        /// ``HandleRecompileAndWait`` itself, so this poll never reads
-        /// the assembly modification time.
+        /// authoritative pre-reload terminator (owned by the shared
+        /// compile-watch barrier), so this poll never reads the assembly
+        /// modification time.  Every reload-wait consumer —
+        /// ``editor_recompile_and_wait``, both ``execute_menu_item`` paths,
+        /// and the compile-aware ``editor_refresh`` — registers this one
+        /// builder with its own reload-complete action, so the poll holds
+        /// no handler-specific terminal outcome.
         /// </summary>
         private static EditorApplication.CallbackFunction BuildRecompileReloadWaitPoll(
             string responsePath,
             long deadlineMs,
             int reloadCountThreshold,
-            string timeoutDetail)
+            string timeoutDetail,
+            Action onReloadComplete)
         {
             EditorApplication.CallbackFunction poll = null;
             poll = () =>
@@ -200,37 +261,90 @@ namespace PrefabSentinel
                     return;
                 }
                 if (PendingAsyncRunner.AssemblyReloadCount <= reloadCountThreshold) return;
+                onReloadComplete();
+            };
+            return poll;
+        }
 
-                // Issue #235: the assembly-reload watermark advancing
-                // does not imply the AssetDatabase import queue has
-                // drained. A freshly compiled asset path therefore
-                // resolves to null on the call immediately following
-                // the success envelope unless the queue is drained
-                // synchronously before the envelope is written.
-                // Per Unity's documented contract,
-                // ``AssetDatabase.Refresh(ForceSynchronousImport)``
-                // is the published synchronous drain. The drain failure
-                // does not affect the envelope outcome — the
-                // recompile-and-wait contract concerns compilation, not
-                // import completion — so the catch mirrors the failure
-                // to the Unity Console only.
-                try
-                {
-                    AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
-                }
-                catch (Exception drainEx)
-                {
-                    Debug.LogWarning(
-                        $"[PrefabSentinel] BuildRecompileReloadWaitPoll: post-reload AssetDatabase.Refresh failed: {drainEx}");
-                }
+        /// <summary>
+        /// Issue #235: drain the AssetDatabase import queue synchronously
+        /// after a domain reload so a freshly compiled asset path resolves
+        /// on the call immediately following a post-reload success
+        /// envelope.  The assembly-reload watermark advancing does not
+        /// imply the import queue has drained;
+        /// ``AssetDatabase.Refresh(ForceSynchronousImport)`` is Unity's
+        /// published synchronous drain.  A drain failure does not affect
+        /// the envelope outcome — the contract concerns compilation, not
+        /// import completion — so the failure is mirrored to the Unity
+        /// Console only.
+        /// </summary>
+        private static void DrainImportQueueBestEffort(string context)
+        {
+            try
+            {
+                AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+            }
+            catch (Exception drainEx)
+            {
+                Debug.LogWarning(
+                    $"[PrefabSentinel] {context}: post-reload "
+                    + $"AssetDatabase.Refresh failed: {drainEx}");
+            }
+        }
 
+        /// <summary>
+        /// Issue #69: the post-reload terminal action for
+        /// ``editor_recompile_and_wait`` — drains the import queue and
+        /// writes the recompile-and-wait success envelope.
+        /// </summary>
+        private static Action BuildRecompileAndWaitReloadComplete(
+            string responsePath)
+        {
+            return () =>
+            {
+                DrainImportQueueBestEffort("BuildRecompileAndWaitReloadComplete");
                 PendingAsyncRunner.Complete(responsePath);
                 WriteResponse(responsePath, BuildSuccess(
                     "EDITOR_CTRL_RECOMPILE_AND_WAIT_OK",
-                    "editor_recompile_and_wait: compilation completed and assembly reloaded.",
+                    "editor_recompile_and_wait: compilation completed and "
+                    + "assembly reloaded.",
                     new EditorControlData { executed = true }));
             };
-            return poll;
+        }
+
+        /// <summary>
+        /// Issue #45: scan the console log buffer for AssetDatabase
+        /// importer-error lines and return one warning diagnostic per
+        /// match. The match decision is owned by the Unity-free
+        /// ``ImporterErrorClassifier`` predicate; this method only
+        /// snapshots the buffer and maps matches into diagnostics. An
+        /// empty list means no importer error was observed.
+        /// </summary>
+        private static List<EditorControlDiagnostic> CollectImporterErrorDiagnostics()
+        {
+            var diagnostics = new List<EditorControlDiagnostic>();
+            // Snapshot the full buffer (oldest-first, no time / type /
+            // phase filter, no cursor) so every captured line is checked.
+            var snapshot = ConsoleLogBuffer.GetEntries(
+                ConsoleLogBuffer.DefaultCapacity,
+                "all",
+                0f,
+                "all",
+                "all",
+                newestFirst: false,
+                cursorAfterSequence: long.MinValue);
+            foreach (ConsoleLogEntry entry in snapshot.entries)
+            {
+                if (!ImporterErrorClassifier.IsImporterError(entry.message))
+                    continue;
+                diagnostics.Add(new EditorControlDiagnostic
+                {
+                    location = "importer_error",
+                    detail = "warning",
+                    evidence = entry.message,
+                });
+            }
+            return diagnostics;
         }
 
         private static EditorControlResponse HandleRecompileAndWait(
@@ -257,169 +371,13 @@ namespace PrefabSentinel
             long deadlineMs = callTimeMs + (long)(budgetSec * 1000f);
             int callTimeReloadCount = PendingAsyncRunner.AssemblyReloadCount;
 
-            // Issue #203: event-driven completion. The mtime polling
-            // approach failed because Unity does not advance
-            // ``Library/ScriptAssemblies/Assembly-CSharp.dll``'s mtime
-            // when every assembly is reported as not requiring
-            // compilation, so the old completion check could never fire
-            // and the surface always timed out on no-op compiles. The
-            // event-driven approach observes:
-            //
-            //   * ``assemblyCompilationFinished`` for per-assembly
-            //     outcome (records compile errors of error severity and
-            //     marks ``compiledAny`` when a real compile occurred).
-            //   * ``compilationFinished`` as the always-fires terminator
-            //     that synthesises the outcome before Unity enters the
-            //     domain reload that destroys this AppDomain (issue #213).
-            //     The no-op case is determined passively at this point:
-            //     ``compiledAny == false`` means no per-assembly finished
-            //     event ever fired, which corresponds to every assembly
-            //     having been reported as not requiring compilation.
-            //
-            // Issue #213 root cause: the previous implementation only set
-            // a flag inside ``compilationFinished`` and deferred outcome
-            // processing to the next ``EditorApplication.update`` tick.
-            // Unity begins domain reload in the same frame as
-            // ``compilationFinished``, so the deferred lambda was
-            // destroyed before it could write the response — every call
-            // surfaced as a transport timeout. Synthesising the outcome
-            // synchronously inside the pipeline-finished subscription
-            // guarantees the response file is written while the original
-            // AppDomain is still alive. ``resolved`` is the shared
-            // re-entry guard between the subscription and the deadline
-            // watchdog so exactly one envelope is written per request
-            // even if both observe a terminal condition in the same frame.
-            bool compiledAny = false;
-            // Issue H-7: the single-resolution guard shared between the
-            // pipeline-finished subscription and the deadline watchdog.
-            var resolutionGuard = new RecompileResolutionGuard();
-            var compileErrors = new List<string>();
-
-            // Per-assembly compile-finished delegate type (issue #213
-            // secondary bug A / CS0426): Unity 2022.3 publishes the event
-            // signature as ``Action<string, CompilerMessage[]>``. No
-            // nested delegate type exists on the public compilation-
-            // pipeline API surface in this version.
-            Action<string, CompilerMessage[]> onAsmFinished = null;
-            Action<object> onPipelineFinished = null;
-
-            onAsmFinished = (asmPath, messages) =>
-            {
-                bool asmHadError = false;
-                if (messages != null)
-                {
-                    foreach (var msg in messages)
-                    {
-                        if (msg.type == CompilerMessageType.Error)
-                        {
-                            asmHadError = true;
-                            compileErrors.Add(
-                                string.IsNullOrEmpty(msg.file)
-                                    ? msg.message
-                                    : $"{msg.file}({msg.line},{msg.column}): {msg.message}");
-                        }
-                    }
-                }
-                if (!asmHadError)
-                    compiledAny = true;
-            };
-
-            void Unsubscribe()
-            {
-                CompilationPipeline.assemblyCompilationFinished -= onAsmFinished;
-                CompilationPipeline.compilationFinished -= onPipelineFinished;
-            }
-
-            onPipelineFinished = _ =>
-            {
-                if (!resolutionGuard.TryClaim()) return;
-                Unsubscribe();
-
-                // Issue H-7: outcome precedence (failed > no-op > continue)
-                // is owned by the Unity-free RecompileOutcomeClassifier.
-                string outcome = RecompileOutcomeClassifier.Classify(
-                    new RecompileResultSnapshot(compileErrors.Count, compiledAny));
-
-                if (outcome == RecompileOutcomeClassifier.FailedCode)
-                {
-                    PendingAsyncRunner.Complete(responsePath);
-                    WriteResponse(responsePath, BuildError(
-                        RecompileOutcomeClassifier.FailedCode,
-                        $"editor_recompile_and_wait: {compileErrors.Count} compile error(s).",
-                        data: new EditorControlData
-                        {
-                            executed = true,
-                            errors = compileErrors.ToArray(),
-                        }));
-                    return;
-                }
-
-                if (outcome == RecompileOutcomeClassifier.NoopCode)
-                {
-                    // No per-assembly finished event ever fired, which
-                    // corresponds to every assembly having been reported
-                    // as not requiring compilation. No domain reload will
-                    // follow, so synthesise the no-op success synchronously
-                    // and skip the SessionState mirror — there is nothing
-                    // to resume after a reload that never happens.
-                    PendingAsyncRunner.Complete(responsePath);
-                    WriteResponse(responsePath, BuildSuccess(
-                        RecompileOutcomeClassifier.NoopCode,
-                        "editor_recompile_and_wait: every assembly was reported "
-                        + "as not requiring compilation; no domain reload occurred.",
-                        new EditorControlData { executed = true }));
-                    return;
-                }
-
-                // At least one assembly compiled. Switch over to the
-                // post-reload wait poll and persist the entry so the
-                // wait survives the inevitable domain reload that Unity
-                // begins immediately after this subscription returns.
-                PendingAsyncRunner.Complete(responsePath);
-                var reloadEntry = new PendingAsyncRunner.PersistedEntry
-                {
-                    action = "editor_recompile_and_wait",
-                    responsePath = responsePath,
-                    requestJson = JsonUtility.ToJson(request),
-                    callTimeUnixMs = callTimeMs,
-                    deadlineUnixMs = deadlineMs,
-                };
-                EditorApplication.CallbackFunction reloadPoll = BuildRecompileReloadWaitPoll(
-                    responsePath,
-                    deadlineMs,
-                    callTimeReloadCount,
-                    $"editor_recompile_and_wait: timed out after {budgetSec:F1}s waiting "
-                    + "for the post-reload AssemblyReloadCount tick.");
-                PendingAsyncRunner.Register(reloadEntry, reloadPoll);
-            };
-
-            CompilationPipeline.assemblyCompilationFinished += onAsmFinished;
-            CompilationPipeline.compilationFinished += onPipelineFinished;
-
-            EditorApplication.CallbackFunction prePoll = null;
-            prePoll = () =>
-            {
-                long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                // Issue H-7: the watchdog fires only strictly past the
-                // deadline and only if it wins the single-resolution claim.
-                if (!RecompileDeadline.HasElapsed(nowMs, deadlineMs)) return;
-                if (!resolutionGuard.TryClaim()) return;
-                Unsubscribe();
-                PendingAsyncRunner.Complete(responsePath);
-                WriteResponse(responsePath, BuildError(
-                    "EDITOR_CTRL_RECOMPILE_TIMEOUT",
-                    $"editor_recompile_and_wait: timed out after {budgetSec:F1}s "
-                    + "before CompilationPipeline.compilationFinished fired."));
-            };
-
-            // Pre-reload entry: not persisted to SessionState — the
-            // pipeline-event subscriptions live on this AppDomain and
-            // cannot survive a reload. Persistence happens only on the
-            // ``compiledAny`` switchover path inside the
-            // ``compilationFinished`` subscription. We still register
-            // the watchdog against the response path so the
-            // ``EditorApplication.update`` loop drives it as a fallback
-            // for the case where ``compilationFinished`` never fires.
+            // Issue #68: the pre-reload compile observation is owned by the
+            // shared ``ScheduleCompileBarrier`` mechanism; this handler
+            // supplies only the compile trigger and its terminal outcomes.
+            // The pre-reload entry is transient — the pipeline-event
+            // subscriptions live on this AppDomain and cannot survive a
+            // domain reload; only the ``compiled`` switchover persists a
+            // post-reload entry.
             var preEntry = new PendingAsyncRunner.PersistedEntry
             {
                 action = "editor_recompile_and_wait",
@@ -428,56 +386,127 @@ namespace PrefabSentinel
                 callTimeUnixMs = callTimeMs,
                 deadlineUnixMs = deadlineMs,
             };
-            PendingAsyncRunner.RegisterTransient(preEntry, prePoll);
 
-            try
+            ScheduleCompileBarrier(new CompileBarrierSpec
             {
-                CompilationPipeline.RequestScriptCompilation();
-            }
-            catch (Exception ex)
-            {
-                // Issue #204: editor-side rejection of the compilation
-                // request is a schedule-failure, not a deadline-elapsed
-                // condition. Use a dedicated code so callers can
-                // distinguish "Unity refused to start" from "we waited
-                // and got no response".
-                //
-                // Issue #214: the human-readable message returned to
-                // the MCP client must not embed exception text because
-                // Unity exception strings can carry host filesystem
-                // paths, assembly names, and OS-level details. The
-                // redacted envelope names only the surface and the
-                // failure category; the full exception detail flows to
-                // the Unity console via ``Debug.LogWarning`` for local
-                // diagnosis.
-                resolutionGuard.TryClaim();
-                Unsubscribe();
-                PendingAsyncRunner.Complete(responsePath);
-                Debug.LogWarning(
-                    $"[PrefabSentinel] HandleRecompileAndWait: RequestScriptCompilation rejected: {ex}");
-                // Issue #214 / H-7: the caller-visible message is the fixed
-                // redacted string owned by ScheduleFailureEnvelope; the full
-                // exception detail goes only to the Unity console above.
-                return BuildError(
-                    "EDITOR_CTRL_RECOMPILE_SCHEDULE_FAILED",
-                    ScheduleFailureEnvelope.RedactedMessage());
-            }
+                preReloadEntry = preEntry,
+                persistPreReloadEntry = false,
+                deadlineMs = deadlineMs,
+                compileTrigger = () => CompilationPipeline.RequestScriptCompilation(),
+                onCompileFailed = errors =>
+                {
+                    PendingAsyncRunner.Complete(responsePath);
+                    WriteResponse(responsePath, BuildError(
+                        RecompileOutcomeClassifier.FailedCode,
+                        $"editor_recompile_and_wait: {errors.Count} compile error(s).",
+                        new EditorControlData
+                        {
+                            executed = true,
+                            errors = errors.ToArray(),
+                        }));
+                },
+                onNoAssemblyCompiled = () => WriteRecompileNoOpResponse(responsePath),
+                onCompiled = () =>
+                {
+                    // At least one assembly compiled. Switch over to the
+                    // post-reload wait poll and persist the entry so the
+                    // wait survives the domain reload Unity begins
+                    // immediately after the pipeline-finished event.
+                    PendingAsyncRunner.Complete(responsePath);
+                    var reloadEntry = new PendingAsyncRunner.PersistedEntry
+                    {
+                        action = "editor_recompile_and_wait",
+                        responsePath = responsePath,
+                        requestJson = JsonUtility.ToJson(request),
+                        callTimeUnixMs = callTimeMs,
+                        deadlineUnixMs = deadlineMs,
+                    };
+                    EditorApplication.CallbackFunction reloadPoll =
+                        BuildRecompileReloadWaitPoll(
+                            responsePath,
+                            deadlineMs,
+                            callTimeReloadCount,
+                            $"editor_recompile_and_wait: timed out after "
+                            + $"{budgetSec:F1}s waiting for the post-reload "
+                            + "AssemblyReloadCount tick.",
+                            BuildRecompileAndWaitReloadComplete(responsePath));
+                    PendingAsyncRunner.Register(reloadEntry, reloadPoll);
+                },
+                onDeadlineExceeded = () =>
+                {
+                    PendingAsyncRunner.Complete(responsePath);
+                    WriteResponse(responsePath, BuildError(
+                        "EDITOR_CTRL_RECOMPILE_TIMEOUT",
+                        $"editor_recompile_and_wait: timed out after {budgetSec:F1}s "
+                        + "before CompilationPipeline.compilationFinished fired."));
+                },
+                onScheduleFailure = () =>
+                {
+                    // Issue #214 / H-7: the caller-visible message is the
+                    // fixed redacted string owned by ScheduleFailureEnvelope;
+                    // the full exception detail goes only to the Unity
+                    // console (logged by the barrier).
+                    PendingAsyncRunner.Complete(responsePath);
+                    WriteResponse(responsePath, BuildError(
+                        "EDITOR_CTRL_RECOMPILE_SCHEDULE_FAILED",
+                        ScheduleFailureEnvelope.RedactedMessage()));
+                },
+            });
 
             return null;
+        }
+
+        /// <summary>
+        /// Issue #45 / #68: write the ``editor_recompile_and_wait`` no-op
+        /// response. A no-op compile can mask an AssetDatabase importer
+        /// failure (the "Build asset version error" / "Import Error Code"
+        /// shapes); the console buffer is scanned through the Unity-free
+        /// ``ImporterErrorClassifier`` predicate and, when importer errors
+        /// are present, the response is downgraded from a silent success
+        /// to a ``warning``-severity response carrying the offending lines
+        /// so the failure is not lost.
+        /// </summary>
+        private static void WriteRecompileNoOpResponse(string responsePath)
+        {
+            PendingAsyncRunner.Complete(responsePath);
+            var importerErrors = CollectImporterErrorDiagnostics();
+            if (importerErrors.Count > 0)
+            {
+                WriteResponse(responsePath, new EditorControlResponse
+                {
+                    protocol_version = ProtocolVersion,
+                    success = true,
+                    severity = "warning",
+                    code = RecompileOutcomeClassifier.NoopCode,
+                    message = "editor_recompile_and_wait: every assembly "
+                        + "was reported as not requiring compilation, but "
+                        + $"{importerErrors.Count} AssetDatabase importer "
+                        + "error(s) are present on the console — the "
+                        + "no-op may be masking an import failure.",
+                    data = new EditorControlData { executed = true },
+                    diagnostics = importerErrors.ToArray(),
+                });
+                return;
+            }
+            WriteResponse(responsePath, BuildSuccess(
+                RecompileOutcomeClassifier.NoopCode,
+                "editor_recompile_and_wait: every assembly was reported "
+                + "as not requiring compilation; no domain reload occurred.",
+                new EditorControlData { executed = true }));
         }
 
         private static EditorControlResponse HandleRunScript(
             EditorControlRequest request, string responsePath)
         {
-            // Issue #108: this handler is now async / frame-driven. It
-            // stages the temp .cs file, kicks off a synchronous Refresh,
-            // and registers an ``EditorApplication.update`` poller via
-            // ``PendingAsyncRunner`` instead of blocking the main thread
-            // on a busy-sleep loop.  The poller observes the same
-            // completion conditions (compile finished + assembly mtime
-            // advanced + afterAssemblyReload fired) used by the
-            // ``editor_recompile_and_wait`` surface, then invokes the
-            // entry point and writes the response.
+            // Issue #108 / #64 / #68: this handler is async / frame-driven.
+            // It stages the temp .cs file and hands the compile observation
+            // to the shared ``ScheduleCompileBarrier`` mechanism.  A snippet
+            // that fails to compile resolves to a compile-error response
+            // carrying the real compiler diagnostics before the compile-poll
+            // budget elapses; a snippet that compiles triggers a domain
+            // reload, after which the startup resumer installs
+            // ``RunScriptPollFrame`` as the completion poll that resolves
+            // and invokes the freshly compiled temp type.
             if (string.IsNullOrEmpty(request.code))
             {
                 return BuildError("EDITOR_CTRL_RUN_SCRIPT_COMPILE",
@@ -538,8 +567,6 @@ namespace PrefabSentinel
                 request.compile_timeout, RunScriptCompileTimeoutMs,
                 callTimeMs, RunScriptEntryTypeTimeoutMs);
             long deadlineMs = deadline.DeadlineMs;
-            long callTimeAssemblyMtime =
-                PendingAsyncRunner.ReadAssemblyMtimeUnixMs();
 
             var entry = new PendingAsyncRunner.PersistedEntry
             {
@@ -548,48 +575,84 @@ namespace PrefabSentinel
                 requestJson = JsonUtility.ToJson(request),
                 callTimeUnixMs = callTimeMs,
                 deadlineUnixMs = deadlineMs,
-                callTimeAssemblyMtimeUnixMs = callTimeAssemblyMtime,
                 tempId = tempId,
                 stuckKey = stuckKey,
                 tempDirAbs = tempDirAbs,
             };
 
-            EditorApplication.CallbackFunction poll = null;
-            poll = () => RunScriptPollFrame(
-                entry, scriptAbs, metaAbs);
-            PendingAsyncRunner.Register(entry, poll);
-
-            // Trigger the synchronous Refresh after the poller is registered
-            // so the SessionState mirror reflects the in-flight entry before
-            // a domain reload triggered by Refresh occurs.
-            try
+            // Compile did not produce a runnable assembly within budget:
+            // tear down the staging area and write the compile-pending
+            // response (shared by the no-assembly-compiled and the
+            // deadline-exceeded outcomes).
+            Action writeCompilePending = () =>
             {
-                AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
-            }
-            catch (Exception refreshEx)
-            {
-                // Issue #216: route the original exception detail to the
-                // Unity console only; the MCP client receives a fixed
-                // surface-identifying message.
-                Debug.LogWarning(
-                    $"[PrefabSentinel] HandleRunScript: AssetDatabase.Refresh failed during run_script staging: {refreshEx}");
                 PendingAsyncRunner.Complete(responsePath);
-                TryDeleteFile(scriptAbs);
-                TryDeleteFile(metaAbs);
-                return BuildError("EDITOR_CTRL_RUN_SCRIPT_COMPILE",
-                    "run_script: AssetDatabase.Refresh failed before compile poll.",
-                    new EditorControlData { temp_id = tempId, executed = false });
-            }
+                CleanupRunScriptTempFiles(scriptAbs, metaAbs);
+                WriteResponse(responsePath, RunScriptCompilePendingResponse(
+                    stuckKey, tempId, tempDirAbs,
+                    "Script compilation did not complete within the bounded "
+                    + "poll; a domain reload may still be pending. Retry after "
+                    + "Unity finishes compiling. If the freshly compiled type "
+                    + "still cannot be located, run the snippet through "
+                    + "`editor_execute_menu_item` against a persistent editor "
+                    + "helper script committed under `Assets/Editor/`."));
+            };
+
+            ScheduleCompileBarrier(new CompileBarrierSpec
+            {
+                preReloadEntry = entry,
+                // The entry must survive the domain reload that a compiled
+                // snippet triggers so the startup resumer can install
+                // ``RunScriptPollFrame``.
+                persistPreReloadEntry = true,
+                deadlineMs = deadlineMs,
+                compileTrigger = () =>
+                    AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport),
+                onCompileFailed = errors =>
+                {
+                    PendingAsyncRunner.Complete(responsePath);
+                    CleanupRunScriptTempFiles(scriptAbs, metaAbs);
+                    WriteResponse(responsePath, BuildError(
+                        "EDITOR_CTRL_RUN_SCRIPT_COMPILE",
+                        $"run_script: the snippet reported {errors.Count} "
+                        + "compile error(s).",
+                        new EditorControlData
+                        {
+                            temp_id = tempId,
+                            executed = false,
+                            errors = errors.ToArray(),
+                        }));
+                },
+                // A compiled snippet leaves the persisted entry in place;
+                // the post-reload resumer installs ``RunScriptPollFrame``,
+                // which resolves the temp type and invokes ``Run()``.
+                onCompiled = () => { },
+                onNoAssemblyCompiled = writeCompilePending,
+                onDeadlineExceeded = writeCompilePending,
+                onScheduleFailure = () =>
+                {
+                    PendingAsyncRunner.Complete(responsePath);
+                    CleanupRunScriptTempFiles(scriptAbs, metaAbs);
+                    WriteResponse(responsePath, BuildError(
+                        "EDITOR_CTRL_RUN_SCRIPT_COMPILE",
+                        "run_script: AssetDatabase.Refresh failed before compile poll.",
+                        new EditorControlData { temp_id = tempId, executed = false }));
+                },
+            });
 
             return null;
         }
 
         /// <summary>
-        /// Frame poller for an in-flight ``run_script`` request.  Runs each
-        /// editor frame until the documented completion conditions are
-        /// observed, then invokes the entry point and writes the response.
-        /// Cleans up the temp .cs / .cs.meta files on every termination
-        /// path (success, runtime exception, compile timeout, recovery).
+        /// Issue #64: post-reload completion poll for an in-flight
+        /// ``run_script`` / ``run_script_submit`` request, installed by
+        /// the startup resumer after the domain reload.  Completion is
+        /// the resolution of the freshly compiled temp script type; there
+        /// is no assembly-modification-time gate, so an editor-only
+        /// snippet is detected exactly like a runtime one.  Invokes the
+        /// entry point and writes the response; cleans up the temp .cs /
+        /// .cs.meta files on every termination path (success, runtime
+        /// exception, compile timeout, recovery).
         /// </summary>
         private static void RunScriptPollFrame(
             PendingAsyncRunner.PersistedEntry entry,
@@ -620,8 +683,6 @@ namespace PrefabSentinel
             }
 
             if (EditorApplication.isCompiling) return;
-            long currentMtime = PendingAsyncRunner.ReadAssemblyMtimeUnixMs();
-            if (currentMtime <= entry.callTimeAssemblyMtimeUnixMs) return;
 
             Type scriptType = FindTempScriptType();
             if (scriptType == null) return;
@@ -965,35 +1026,21 @@ namespace PrefabSentinel
                     }
                     else if (entry.action == "execute_menu_item")
                     {
-                        // Issue #225: the menu-execute slow path may
-                        // persist a SessionState entry before the
-                        // domain reload that follows compilation. The
-                        // resumer rebuilds the post-reload poll so the
-                        // menu item runs against the freshly-loaded
-                        // assemblies and the response is written back
-                        // to the original watch-directory path.
-                        string responsePath = entry.responsePath;
-                        long deadlineMs = entry.deadlineUnixMs;
+                        // Issue #225 / #69: the menu-execute slow path may
+                        // persist a SessionState entry before the domain
+                        // reload that follows compilation. The resumer
+                        // rebuilds the single post-reload reload-wait poll
+                        // with the menu reload-complete action so the menu
+                        // item runs against the freshly-loaded assemblies.
                         EditorControlRequest req = JsonUtility.FromJson<EditorControlRequest>(
                             entry.requestJson);
                         string menuPath = req != null ? req.menu_path : "";
-                        EditorApplication.CallbackFunction poll = null;
-                        poll = () =>
-                        {
-                            long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                            if (RecompileDeadline.HasElapsed(nowMs, deadlineMs))
-                            {
-                                PendingAsyncRunner.Complete(responsePath);
-                                WriteResponse(responsePath, BuildError(
-                                    "EDITOR_CTRL_RECOMPILE_TIMEOUT",
-                                    "execute_menu_item: timed out after domain reload."));
-                                return;
-                            }
-                            if (PendingAsyncRunner.AssemblyReloadCount <= -1) return;
-                            PendingAsyncRunner.Complete(responsePath);
-                            InvokeMenuItemAndWriteResponse(
-                                menuPath, responsePath, recompileWaited: true);
-                        };
+                        EditorApplication.CallbackFunction poll = BuildRecompileReloadWaitPoll(
+                            entry.responsePath,
+                            entry.deadlineUnixMs,
+                            -1,
+                            "execute_menu_item: timed out after domain reload.",
+                            BuildMenuExecuteReloadComplete(menuPath, entry.responsePath));
                         PendingAsyncRunner.RehydrateEntry(entry, poll);
                     }
                     else if (entry.action == "editor_recompile_and_wait")
@@ -1018,7 +1065,25 @@ namespace PrefabSentinel
                             entry.responsePath,
                             entry.deadlineUnixMs,
                             -1,
-                            "editor_recompile_and_wait: timed out after domain reload.");
+                            "editor_recompile_and_wait: timed out after domain reload.",
+                            BuildRecompileAndWaitReloadComplete(entry.responsePath));
+                        PendingAsyncRunner.RehydrateEntry(entry, poll);
+                    }
+                    else if (entry.action == "refresh_asset_database")
+                    {
+                        // Issue #70: a compile-aware ``editor_refresh`` whose
+                        // triggered compile reloaded the domain is resumed
+                        // here. The post-reload poll observes the reload
+                        // counter and writes the refresh compile-success
+                        // envelope (the -1 threshold rationale matches the
+                        // recompile-and-wait branch above).
+                        EditorApplication.CallbackFunction poll = BuildRecompileReloadWaitPoll(
+                            entry.responsePath,
+                            entry.deadlineUnixMs,
+                            -1,
+                            "editor_refresh: timed out after domain reload "
+                            + "waiting for the AssemblyReloadCount tick.",
+                            BuildRefreshCompileSuccessReloadComplete(entry.responsePath));
                         PendingAsyncRunner.RehydrateEntry(entry, poll);
                     }
                 }

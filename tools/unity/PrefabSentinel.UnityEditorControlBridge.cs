@@ -19,7 +19,7 @@ namespace PrefabSentinel
     public static partial class UnityEditorControlBridge
     {
         public const int ProtocolVersion = 1;
-        public const string BridgeVersion = "0.6.1";
+        public const string BridgeVersion = "0.7.0";
 
         /// <summary>Actions that write their response file asynchronously (not on return).</summary>
         // Issue H-8: the membership sets are owned by ``ActionRegistry`` as the
@@ -69,11 +69,15 @@ namespace PrefabSentinel
             public string phase = string.Empty;
         }
 
-        // Issue #239: editor-state snapshot returned by the dedicated
-        // ``get_editor_state`` action.  Carries exactly the four live
+        // Issue #239 / #40: editor-state snapshot returned by the dedicated
+        // ``get_editor_state`` action.  Carries exactly the five live
         // editor flags surfaced by the ``get_project_status`` MCP tool's
         // ``editor_state`` field — adding a flag here is a contract
-        // change for both the Python tool and the C# bridge.
+        // change for both the Python tool and the C# bridge.  The fifth
+        // flag ``has_unsaved_changes`` (issue #40) reports whether the
+        // open scene or the active Prefab Stage holds unsaved edits; the
+        // offline symbol-reference tools consult it to attach a freshness
+        // marker noting the offline tree reflects last-saved disk.
         [Serializable]
         public sealed class EditorStateSnapshot
         {
@@ -81,6 +85,7 @@ namespace PrefabSentinel
             public bool is_will_change_playmode = false;
             public bool is_compiling = false;
             public bool is_building_player = false;
+            public bool has_unsaved_changes = false;
         }
 
         [Serializable]
@@ -165,6 +170,12 @@ namespace PrefabSentinel
 
             public bool read_only = true;
             public bool executed = false;
+
+            // Issue #51: the dispatched action name.  Populated only on
+            // the dispatch-boundary EDITOR_CTRL_HANDLER_EXCEPTION path
+            // so callers can branch on the failing action as a
+            // structured field rather than parsing the message string.
+            public string action = string.Empty;
 
             // vrcsdk_upload response
             public string target_type = string.Empty;
@@ -428,6 +439,46 @@ namespace PrefabSentinel
                 return;
             }
 
+            // Issue #51: the whole action switch runs inside a dispatch-level
+            // exception boundary. Any handler exception not caught internally
+            // yields a typed ``EDITOR_CTRL_HANDLER_EXCEPTION`` envelope naming
+            // the dispatched action, with the exception redacted to its type
+            // name only — no stack trace crosses the MCP boundary. The full
+            // detail is mirrored to the Unity console for local triage. The
+            // watch-loop generic catch is no longer the sink for handler
+            // exceptions; ``EDITOR_BRIDGE_ERROR`` remains only for genuine
+            // watch-loop / pre-dispatch failures.
+            EditorControlResponse response;
+            try
+            {
+                response = DispatchAction(request, requestPath, responsePath);
+            }
+            catch (Exception handlerEx)
+            {
+                Debug.LogWarning(
+                    $"[PrefabSentinel] RunFromPaths: handler for action "
+                    + $"'{request.action}' threw: {handlerEx}");
+                response = BuildError(
+                    "EDITOR_CTRL_HANDLER_EXCEPTION",
+                    $"editor_control action '{request.action}' failed: the "
+                    + $"handler raised {handlerEx.GetType().Name}. "
+                    + "Inspect the Unity console for the full exception detail "
+                    + "and retry once the underlying cause is resolved.",
+                    new EditorControlData { action = request.action });
+            }
+
+            if (response != null)
+                WriteResponse(responsePath, response);
+        }
+
+        // Issue #51: the action dispatch switch, extracted so the
+        // ``RunFromPaths`` exception boundary wraps every handler call in a
+        // single try/catch. Returns ``null`` for handlers that write their
+        // response file asynchronously (the dispatcher then skips the
+        // synchronous WriteResponse).
+        private static EditorControlResponse DispatchAction(
+            EditorControlRequest request, string requestPath, string responsePath)
+        {
             EditorControlResponse response;
             switch (request.action)
             {
@@ -450,10 +501,11 @@ namespace PrefabSentinel
                     response = HandleCaptureConsoleLogs(request);
                     break;
                 case "refresh_asset_database":
-                    response = HandleRefreshAssetDatabase();
-                    break;
-                case "recompile_scripts":
-                    response = HandleRecompileScripts(request);
+                    // Issue #70: a compile-aware refresh may schedule an
+                    // async barrier that writes the response after compile
+                    // + reload completes. Pass the response path so the
+                    // handler can defer the response and return null.
+                    response = HandleRefreshAssetDatabase(request, responsePath);
                     break;
                 case "set_material":
                     response = HandleSetMaterial(request);
@@ -616,8 +668,7 @@ namespace PrefabSentinel
                     break;
             }
 
-            if (response != null)
-                WriteResponse(responsePath, response);
+            return response;
         }
 
         // ── Non-fatal exception classifier (issue #117) ──
@@ -949,6 +1000,11 @@ namespace PrefabSentinel
             public string component_type = string.Empty;
             public string property_name = string.Empty;
             public string value = string.Empty;
+            // Issue #52: per-op value-present marker.  ``value`` alone
+            // cannot tell an empty-string op value from an absent one;
+            // when ``value_present`` is true the handler writes ``value``
+            // even when empty, when false the op supplies no value.
+            public bool value_present = false;
             public string object_reference = string.Empty;
         }
 
@@ -989,10 +1045,9 @@ namespace PrefabSentinel
         // Issues #108 / #118: ``PendingAsyncRunner`` is the single async
         // completion registry shared by ``HandleRunScript`` and
         // ``HandleRecompileAndWait``.  Each entry registers an
-        // ``EditorApplication.update`` callback that polls the editor's
-        // compile-state and the compiled-assembly mtime; the response
-        // file is written only after the documented completion signals
-        // are observed or the supplied budget is exceeded.  In-flight
+        // ``EditorApplication.update`` callback; the response file is
+        // written only after the documented completion signals are
+        // observed or the supplied budget is exceeded.  In-flight
         // requests are mirrored to ``SessionState`` so a domain reload
         // (triggered by the recompile itself) does not lose the entry.
         // The post-reload resumer (an ``[InitializeOnLoad]`` hook) walks
@@ -1002,11 +1057,6 @@ namespace PrefabSentinel
         {
             private const string SessionStateKey =
                 "PrefabSentinel_PendingAsyncRunner_v1";
-            // Path to the compiled assembly observed by both completion
-            // signals.  The bridge tracks its mtime as the second
-            // completion signal; the post-reload event provides the third.
-            internal const string CompiledAssemblyRelPath =
-                "Library/ScriptAssemblies/Assembly-CSharp.dll";
 
             [Serializable]
             internal sealed class PersistedEntry
@@ -1016,7 +1066,6 @@ namespace PrefabSentinel
                 public string requestJson = string.Empty;
                 public long callTimeUnixMs;
                 public long deadlineUnixMs;
-                public long callTimeAssemblyMtimeUnixMs;
                 public string tempId = string.Empty;
                 public string stuckKey = string.Empty;
                 public string tempDirAbs = string.Empty;
@@ -1110,25 +1159,6 @@ namespace PrefabSentinel
                 Persist();
             }
 
-            internal static long ReadAssemblyMtimeUnixMs()
-            {
-                try
-                {
-                    string abs = Path.Combine(
-                        Directory.GetCurrentDirectory(),
-                        CompiledAssemblyRelPath.Replace('/', Path.DirectorySeparatorChar));
-                    if (!File.Exists(abs)) return 0L;
-                    DateTime mtime = File.GetLastWriteTimeUtc(abs);
-                    return new DateTimeOffset(mtime).ToUnixTimeMilliseconds();
-                }
-                catch (Exception ex)
-                {
-                    Debug.LogWarning(
-                        $"[PrefabSentinel] PendingAsyncRunner: assembly mtime read failed: {ex.Message}");
-                    return 0L;
-                }
-            }
-
             private static void Persist()
             {
                 try
@@ -1180,7 +1210,7 @@ namespace PrefabSentinel
         // ── Editor state snapshot (#239) ──
 
         /// <summary>
-        /// Snapshot the four editor-state flags surfaced by the
+        /// Snapshot the five editor-state flags surfaced by the
         /// ``get_project_status`` MCP tool.  Pure read of editor APIs;
         /// no side effects.  Adding a field here is a contract change
         /// shared with ``EditorStateSnapshot`` and the Python tool's
@@ -1194,6 +1224,7 @@ namespace PrefabSentinel
                 is_will_change_playmode = EditorApplication.isPlayingOrWillChangePlaymode,
                 is_compiling = EditorApplication.isCompiling,
                 is_building_player = BuildPipeline.isBuildingPlayer,
+                has_unsaved_changes = HasUnsavedEditorChanges(),
             };
             return BuildSuccess(
                 "EDITOR_CTRL_EDITOR_STATE_OK",
@@ -1203,6 +1234,28 @@ namespace PrefabSentinel
                     executed = true,
                     editor_state = snapshot,
                 });
+        }
+
+        /// <summary>
+        /// Issue #40: report whether the editor holds unsaved scene or
+        /// Prefab Stage edits.  When a Prefab Stage is active, its preview
+        /// scene's ``isDirty`` flag is authoritative — the open background
+        /// scene is irrelevant while staging.  Otherwise every loaded
+        /// scene is inspected and the result is the OR of their ``isDirty``
+        /// flags.  Pure read; no side effects.
+        /// </summary>
+        private static bool HasUnsavedEditorChanges()
+        {
+            var stage = PrefabStageUtility.GetCurrentPrefabStage();
+            if (stage != null)
+                return stage.scene.isDirty;
+
+            for (int i = 0; i < EditorSceneManager.sceneCount; i++)
+            {
+                if (EditorSceneManager.GetSceneAt(i).isDirty)
+                    return true;
+            }
+            return false;
         }
 
         // ── Response Builders ──

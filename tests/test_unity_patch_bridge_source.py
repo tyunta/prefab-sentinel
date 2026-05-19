@@ -246,6 +246,78 @@ class TestPatchBridgeOperationalRulesInventory(unittest.TestCase):
                 )
 
 
+class TestPatchSelectorNResolverDelegation(unittest.TestCase):
+    """Issue #38 (T-38-6): the ``TypeName@/hierarchy/path`` patch
+    selector routes ``#N`` token resolution through the shared Unity-free
+    ``SymbolPathResolver``.
+
+    Tier 3 (spec.md Tier 3 Justification T-38-6): the patch selector
+    matching runs against live ``Component`` collections inside the
+    Unity process and is not xUnit-compiled; the ``#N`` resolution rule
+    itself is Tier 1-covered through the shared Unity-free resolver
+    (T-38-c2 / T-38-3 / T-38-4).  This source-scan pins only the
+    delegation to the shared resolver — a third independent ``#N``
+    matcher drifting from the resolver is the failure mode caught.
+    """
+
+    _RESOLVE_PARTIAL = _TOOLS_DIR / "PrefabSentinel.UnityPatchBridge.Resolve.cs"
+
+    def _resolve_source(self) -> str:
+        return _strip_cs_comments(
+            self._RESOLVE_PARTIAL.read_text(encoding="utf-8")
+        )
+
+    def test_selector_resolution_delegates_to_shared_resolver(self) -> None:
+        source = self._resolve_source()
+        self.assertIn(
+            "SymbolPathResolver.Resolve",
+            source,
+            msg=(
+                "the patch selector hierarchy resolution must delegate "
+                "to the shared Unity-free SymbolPathResolver so the #N "
+                "rule does not drift from the offline / live tracks."
+            ),
+        )
+
+    def test_unique_component_finder_routes_hierarchy_through_resolver(
+        self,
+    ) -> None:
+        # ``TryFindUniqueComponent`` must call the resolver-backed
+        # hierarchy resolver rather than re-implementing a path-string
+        # equality match for the hierarchy part of the selector.
+        match = re.search(
+            r"bool\s+TryFindUniqueComponent\s*\(",
+            self._resolve_source(),
+        )
+        self.assertIsNotNone(
+            match, msg="TryFindUniqueComponent declaration not found"
+        )
+        source = self._resolve_source()
+        start = match.start()
+        depth = 0
+        opened = False
+        end = len(source)
+        for index in range(start, len(source)):
+            ch = source[index]
+            if ch == "{":
+                depth += 1
+                opened = True
+            elif ch == "}":
+                depth -= 1
+                if opened and depth == 0:
+                    end = index + 1
+                    break
+        body = source[start:end]
+        self.assertIn(
+            "TryResolveHierarchyPathWithResolver",
+            body,
+            msg=(
+                "TryFindUniqueComponent must resolve the selector's "
+                "hierarchy part through the resolver-backed helper."
+            ),
+        )
+
+
 class TestPrefabApplyRejectionEnvelopeSource(unittest.TestCase):
     """Issue #298 — the prefab apply rejection path declares the
     documented ``SER_APPLY_REJECTED`` code together with the diagnostic
@@ -326,5 +398,74 @@ class TestPrefabApplyRejectionEnvelopeSource(unittest.TestCase):
             msg=(
                 "Rejection envelope must surface the attempted value "
                 "under the `attempted_value` payload key (issue #298)."
+            ),
+        )
+
+
+class TestFileIdTargetedSetOp(unittest.TestCase):
+    """Issue #37 — a patch v2 ``set`` op may identify its target
+    component by an exact fileID, resolved through Unity's
+    global-object-id facility.
+
+    Tier 3: the patch bridge runs inside the Unity Editor runtime and is
+    not xUnit-compiled; this comment-stripped scan pins the resolver and
+    the op-target branching. Runtime fileID resolution is verified by
+    the mandatory deploy_bridge pass (observations.md).
+    """
+
+    _RESOLVE = _TOOLS_DIR / "PrefabSentinel.UnityPatchBridge.Resolve.cs"
+    _MUTATION = _TOOLS_DIR / "PrefabSentinel.UnityPatchBridge.Mutation.cs"
+    _CORE_PATH = _TOOLS_DIR / _CORE
+
+    def test_patch_op_declares_file_id_field(self) -> None:
+        text = _strip_cs_comments(self._CORE_PATH.read_text(encoding="utf-8"))
+        self.assertRegex(
+            text,
+            r"public\s+string\s+file_id\s*=",
+            msg=(
+                "the PatchOp DTO must declare a file_id target field so "
+                "a set op can carry an exact fileID (issue #37)."
+            ),
+        )
+
+    def test_resolve_partial_has_fileid_resolver_using_global_object_id(
+        self,
+    ) -> None:
+        text = _strip_cs_comments(self._RESOLVE.read_text(encoding="utf-8"))
+        self.assertIn(
+            "TryResolveComponentByFileId",
+            text,
+            msg=(
+                "Resolve.cs must declare a fileID-based component "
+                "resolver (issue #37)."
+            ),
+        )
+        self.assertIn(
+            "GlobalObjectId",
+            text,
+            msg=(
+                "the fileID component resolver must match a component by "
+                "its Unity local fileID via the GlobalObjectId facility "
+                "(issue #37)."
+            ),
+        )
+
+    def test_set_op_target_resolution_branches_on_file_id(self) -> None:
+        text = _strip_cs_comments(self._MUTATION.read_text(encoding="utf-8"))
+        self.assertIn(
+            "op.file_id",
+            text,
+            msg=(
+                "the set-op target resolution must branch on op.file_id "
+                "so a fileID target takes the exact-resolution path "
+                "(issue #37)."
+            ),
+        )
+        self.assertIn(
+            "TryResolveComponentByFileId",
+            text,
+            msg=(
+                "the set-op fileID branch must resolve through "
+                "TryResolveComponentByFileId (issue #37)."
             ),
         )

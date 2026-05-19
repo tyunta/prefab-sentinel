@@ -247,7 +247,6 @@ class TestSupportedActions(unittest.TestCase):
             "instantiate_to_scene",
             "ping_object",
             "capture_console_logs",
-            "recompile_scripts",
             "refresh_asset_database",
             "set_material",
             "delete_object",

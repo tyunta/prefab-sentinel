@@ -39,6 +39,7 @@ def validate_op(
     op_name = str(op.get("op", "")).strip()
     op_label = op_name or "?"
     component = str(op.get("component", "")).strip()
+    file_id = str(op.get("file_id", "")).strip()
     property_path = str(op.get("path", "")).strip()
 
     if op_name not in VALUE_OPS:
@@ -66,18 +67,28 @@ def validate_op(
                 )
             )
         return None
-    if not component:
+    # Issue #37: a ``set`` op may target its component by a type-name
+    # ``component`` selector or an exact ``file_id``; when both are
+    # present ``file_id`` wins. Array ops still require ``component``.
+    if op_name == "set" and file_id:
+        target_id = file_id
+    elif component:
+        target_id = component
+    else:
         diagnostics.append(
             Diagnostic(
                 path=target,
                 location=f"ops[{index}] ({op_label}).component",
                 detail="schema_error",
-                evidence="component is required",
+                evidence=(
+                    "component or file_id is required"
+                    if op_name == "set"
+                    else "component is required"
+                ),
             )
         )
         return None
-    _bare = component.lstrip("-")
-    if _bare.isdigit():
+    if component and component.lstrip("-").isdigit():
         diagnostics.append(
             Diagnostic(
                 path=target,
@@ -115,13 +126,19 @@ def validate_op(
             )
             return None
         value = op.get("value")
-        entry = {
-            "op": op_name,
-            "component": component,
-            "path": property_path,
-            "before": resolve_before_value(service, target, component, property_path),
-            "after": value,
-        }
+        # Issue #37: a preview row names the target identifier the op
+        # actually carried; an unused selector/fileID key is omitted
+        # rather than emitted as an empty string.
+        entry: dict[str, Any] = {"op": op_name}
+        if component:
+            entry["component"] = component
+        if file_id:
+            entry["file_id"] = file_id
+        entry["path"] = property_path
+        entry["before"] = resolve_before_value(
+            service, target, target_id, property_path
+        )
+        entry["after"] = value
         if isinstance(value, str) and (
             value.startswith("$")
             or value.startswith("c_")

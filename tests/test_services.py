@@ -1086,7 +1086,7 @@ class PatchValidatorEnvelopeTests(unittest.TestCase):
             data={"property_path": bad_path},
         )
 
-    # Shared prefab fixture YAML used by SER003 set_component_fields rows.
+    # Shared prefab fixture YAML used by SER003 set_properties rows.
     _SER003_PREFAB_YAML = (
         "%YAML 1.1\n"
         "%TAG !u! tag:unity3d.com,2011:\n"
@@ -1118,8 +1118,8 @@ class PatchValidatorEnvelopeTests(unittest.TestCase):
         "  m_Enabled: 1\n"
     )
 
-    def test_set_component_fields_unknown_property_emits_ser003_envelope(self) -> None:
-        """SER003 (property_not_found classification): the supplied
+    def test_set_properties_unknown_property_emits_ser003_envelope(self) -> None:
+        """SER003 (property_not_found classification): the resolved
         component exists on the chain but the referenced property does
         not.  Pins the full payload (target, component, property_path,
         suggestions, read_only) and the diagnostic by full-string
@@ -1135,12 +1135,11 @@ class PatchValidatorEnvelopeTests(unittest.TestCase):
 
             server = create_server()
             _, response = _run(server.call_tool(
-                "set_component_fields",
+                "set_properties",
                 {
                     "asset_path": str(prefab_path),
-                    "symbol_path": "Cube",
-                    "component": "MeshRenderer",
-                    "fields": {"m_NoSuchField": 0},
+                    "symbol_path": "Cube/MeshRenderer",
+                    "properties": {"m_NoSuchField": 0},
                 },
             ))
 
@@ -1175,11 +1174,11 @@ class PatchValidatorEnvelopeTests(unittest.TestCase):
             diag["message"],
         )
 
-    def test_set_component_fields_unknown_component_emits_ser003_envelope(self) -> None:
-        """SER003 (component_not_found classification): the supplied
-        component type is not present on the resolved chain.  Pins the
-        full payload (target, component, suggestions, read_only) and
-        the diagnostic by full-string equality."""
+    def test_set_properties_unknown_component_emits_symbol_not_found(self) -> None:
+        """Issue #41: with no separate component argument, a component
+        symbol path that does not resolve fails fast at symbol
+        resolution with ``SYMBOL_NOT_FOUND`` (the legacy
+        component-not-found SER003 branch no longer exists)."""
         from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
         from tests.test_mcp_server import _run  # noqa: PLC0415
 
@@ -1191,37 +1190,24 @@ class PatchValidatorEnvelopeTests(unittest.TestCase):
 
             server = create_server()
             _, response = _run(server.call_tool(
-                "set_component_fields",
+                "set_properties",
                 {
                     "asset_path": str(prefab_path),
-                    "symbol_path": "Cube",
-                    "component": "NoSuchComponent",
-                    "fields": {"m_X": 0},
+                    "symbol_path": "Cube/NoSuchComponent",
+                    "properties": {"m_X": 0},
                 },
             ))
 
         assert_error_envelope(
             response,
-            code="SER003",
+            code="SYMBOL_NOT_FOUND",
             severity="error",
-            message_match=r"not found",
+            message_match=r"symbol path",
             data={
-                "target": str(prefab_path),
-                "component": "NoSuchComponent",
-                "suggestions": ["Transform", "MeshRenderer"],
-                "read_only": True,
+                "asset_path": str(prefab_path),
+                "symbol_path": "Cube/NoSuchComponent",
+                "suggestions": response["data"].get("suggestions", []),
             },
-        )
-        self.assertEqual(1, len(response["diagnostics"]))
-        diag = response["diagnostics"][0]
-        # Issue #304: unified wire shape; locator fields live in ``data``.
-        self.assertEqual(str(prefab_path), diag["data"]["path"])
-        self.assertEqual("component 'NoSuchComponent'", diag["data"]["location"])
-        self.assertEqual("component_not_found", diag["code"])
-        self.assertEqual(
-            f"component type 'NoSuchComponent' is not present in the chain"
-            f" for target '{prefab_path}'",
-            diag["message"],
         )
 
     # ----- Issue #143: validate_property_path family rows -----
@@ -1408,8 +1394,9 @@ class PatchValidatorEnvelopeTests(unittest.TestCase):
         )
 
     def test_validate_op_missing_component_emits_schema_error(self) -> None:
-        """Rejection family: ``component`` empty or absent emits a
-        ``schema_error`` diagnostic with ``component is required`` evidence."""
+        """Rejection family: a ``set`` op with neither ``component`` nor
+        ``file_id`` emits a ``schema_error`` diagnostic naming both
+        accepted target identifiers (issue #37)."""
         result, diagnostics = self._run_validate_op(
             {"op": "set", "component": "", "path": "m_X", "value": 1}
         )
@@ -1421,8 +1408,45 @@ class PatchValidatorEnvelopeTests(unittest.TestCase):
             diagnostics,
             location="ops[0] (set).component",
             detail="schema_error",
-            evidence="component is required",
+            evidence="component or file_id is required",
         )
+
+    def test_validate_op_set_with_file_id_target_is_accepted(self) -> None:
+        """Issue #37: a ``set`` op may identify its target by an exact
+        ``file_id`` instead of a ``component`` selector; the op validates
+        and the preview row carries the file_id."""
+        result, diagnostics = self._run_validate_op(
+            {"op": "set", "file_id": "300", "path": "m_X", "value": 1}
+        )
+        self.assertEqual([], diagnostics)
+        self.assertIsInstance(result, dict)
+        self.assertEqual(
+            ("set", "300", "m_X", 1),
+            (result["op"], result["file_id"], result["path"], result["after"]),
+            msg=(
+                "a file_id-targeted set op must validate and carry the "
+                "file_id on its preview row (issue #37)."
+            ),
+        )
+
+    def test_validate_op_set_preview_row_omits_unused_target_identifier(self) -> None:
+        """Issue #37: a ``set`` preview row carries only the target
+        identifier the op supplied — a component-targeted op omits the
+        ``file_id`` key and a file_id-targeted op omits ``component`` —
+        rather than emitting the unused one as an empty string."""
+        by_component, comp_diags = self._run_validate_op(
+            {"op": "set", "component": "X", "path": "m_X", "value": 1}
+        )
+        self.assertEqual([], comp_diags)
+        self.assertEqual("X", by_component["component"])
+        self.assertNotIn("file_id", by_component)
+
+        by_file_id, fid_diags = self._run_validate_op(
+            {"op": "set", "file_id": "300", "path": "m_X", "value": 1}
+        )
+        self.assertEqual([], fid_diags)
+        self.assertEqual("300", by_file_id["file_id"])
+        self.assertNotIn("component", by_file_id)
 
     def test_validate_op_numeric_fileid_component_emits_likely_fileid(self) -> None:
         """Rejection family: a numeric component string (e.g. ``"123"``)

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -19,32 +20,121 @@ namespace PrefabSentinel
     public static partial class UnityEditorControlBridge
     {
         /// <summary>
-        /// Resolve a hierarchy path against the active Prefab Stage when
-        /// one exists, otherwise against the open scene.  Returns
-        /// ``null`` when the lookup misses; callers report their own
-        /// ``EDITOR_CTRL_*_NOT_FOUND`` envelope.
+        /// Issue #38: resolve a ``/``-delimited hierarchy path against the
+        /// active Prefab Stage, with each segment allowed to carry a
+        /// ``name#N`` disambiguator.  Segment resolution is delegated to
+        /// the Unity-free <see cref="SymbolPathResolver"/> so the live
+        /// editor track shares one ``#N`` rule with the offline symbol
+        /// tree and the patch selector; this resolver does no independent
+        /// first-pick path walk.  When the path matches same-named
+        /// siblings without a ``#N``, <paramref name="ambiguityEnvelope"/>
+        /// is the ``EDITOR_CTRL_HIERARCHY_PATH_AMBIGUOUS`` error and
+        /// <paramref name="go"/> is ``null`` — resolution stops rather
+        /// than silently picking the first sibling.  A genuine miss
+        /// leaves both ``null``.
         /// </summary>
-        internal static GameObject ResolveGameObjectInActiveStage(string hierarchyPath)
+        internal static bool TryResolveGameObjectInActiveStage(
+            string hierarchyPath,
+            out GameObject go,
+            out EditorControlResponse ambiguityEnvelope)
         {
-            if (string.IsNullOrEmpty(hierarchyPath)) return null;
+            go = null;
+            ambiguityEnvelope = null;
+            if (string.IsNullOrEmpty(hierarchyPath)) return false;
+
             var stage = PrefabStageUtility.GetCurrentPrefabStage();
-            if (stage != null)
+            if (stage == null)
             {
-                var stageRoot = stage.prefabContentsRoot;
-                if (stageRoot == null) return null;
-                // Absolute-style paths (``/Root/Child``) are accepted as
-                // a convenience for callers that mirror Unity's
-                // hierarchy log format; leading-slash normalization is
-                // owned by the Unity-free StageHierarchyPathLogic so it
-                // is exercised by the C# xUnit harness (issue #18).
-                string normalized = StageHierarchyPathLogic.NormalizeStagePath(hierarchyPath);
-                // A single-name path addresses the stage root rather
-                // than a child of an unnamed pivot.
-                if (stageRoot.name == normalized) return stageRoot;
-                var t = stageRoot.transform.Find(normalized);
-                return t != null ? t.gameObject : null;
+                // No Prefab Stage open — fall back to the open scene.
+                go = GameObject.Find(hierarchyPath);
+                return go != null;
             }
-            return GameObject.Find(hierarchyPath);
+
+            var stageRoot = stage.prefabContentsRoot;
+            if (stageRoot == null) return false;
+
+            // Absolute-style paths (``/Root/Child``) are accepted as a
+            // convenience for callers that mirror Unity's hierarchy log
+            // format; leading-slash normalization is owned by the
+            // Unity-free StageHierarchyPathLogic so it is exercised by
+            // the C# xUnit harness (issue #18).
+            string normalized =
+                StageHierarchyPathLogic.NormalizeStagePath(hierarchyPath);
+            if (string.IsNullOrEmpty(normalized)) return false;
+
+            // A single-name path equal to the stage root's name addresses
+            // the stage root itself; descent paths are root-relative
+            // (``Body/Head`` resolves under the root, not ``Root/Body/Head``),
+            // preserving the pre-#38 path contract.
+            if (stageRoot.name == normalized)
+            {
+                go = stageRoot;
+                return true;
+            }
+
+            // Build a node tree from the stage root's *children* and
+            // resolve the root-relative segments through the shared
+            // Unity-free ``#N`` resolver; the resolver disambiguates
+            // same-named siblings by ``#N`` and rejects an ambiguous
+            // segment rather than first-picking.  ``Transform.GetChild``
+            // order is the resolution-significant child order the
+            // resolver expects.
+            var idToTransform = new Dictionary<string, Transform>();
+            var rootSiblings = new List<SymbolPathNode>(
+                stageRoot.transform.childCount);
+            for (int i = 0; i < stageRoot.transform.childCount; i++)
+            {
+                rootSiblings.Add(BuildStageNode(
+                    stageRoot.transform.GetChild(i), idToTransform));
+            }
+            string[] segments = normalized.Split('/');
+
+            SymbolPathResolution resolution = SymbolPathResolver.Resolve(
+                rootSiblings, segments);
+
+            if (resolution.Outcome == SymbolPathOutcome.Ambiguous)
+            {
+                ambiguityEnvelope = BuildError(
+                    "EDITOR_CTRL_HIERARCHY_PATH_AMBIGUOUS",
+                    $"hierarchy_path '{hierarchyPath}' matched "
+                    + $"{resolution.MatchCount} same-named objects in the "
+                    + "active Prefab Stage. Disambiguate a same-named "
+                    + "segment with a '#N' suffix (0-based, child order), "
+                    + "e.g. 'Body/Mesh#1'.");
+                return false;
+            }
+            if (resolution.Outcome != SymbolPathOutcome.Unique) return false;
+
+            if (idToTransform.TryGetValue(resolution.Node.Id, out Transform t)
+                && t != null)
+            {
+                go = t.gameObject;
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Build a <see cref="SymbolPathNode"/> tree mirroring a live
+        /// Prefab Stage transform subtree.  Each node's ``Id`` is a
+        /// synthetic key registered in <paramref name="idToTransform"/>
+        /// so the resolver's unique result maps back to the live
+        /// ``Transform``.  Children are appended in
+        /// ``Transform.GetChild`` order — the order the resolver treats
+        /// as significant for ``#N``.
+        /// </summary>
+        private static SymbolPathNode BuildStageNode(
+            Transform transform,
+            Dictionary<string, Transform> idToTransform)
+        {
+            string id = transform.GetInstanceID().ToString();
+            idToTransform[id] = transform;
+            var children = new List<SymbolPathNode>(transform.childCount);
+            for (int i = 0; i < transform.childCount; i++)
+            {
+                children.Add(BuildStageNode(transform.GetChild(i), idToTransform));
+            }
+            return new SymbolPathNode(id, transform.name, children);
         }
 
         private static EditorControlResponse HandleOpenPrefab(EditorControlRequest request)

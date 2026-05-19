@@ -67,8 +67,17 @@ namespace PrefabSentinel
         // get_material_property
         public string property_name = string.Empty; // empty = list all properties
 
-        // set_material_property
+        // set_material_property; also the value carrier for
+        // editor_set_property / editor_set_udonsharp_field.
         public string property_value = string.Empty;  // raw JSON string, manually parsed by handler
+
+        // Issue #52: value-present marker for editor_set_property /
+        // editor_set_udonsharp_field.  ``property_value`` cannot itself
+        // distinguish "write the empty string" from "no value supplied"
+        // — an empty string is a legal write.  When ``property_value_present``
+        // is true the handler writes ``property_value`` even when empty;
+        // when false ``property_value`` is treated as no value supplied.
+        public bool property_value_present = false;
 
         // vrcsdk_upload
         public string target_type = string.Empty;    // "avatar" or "world"
@@ -103,6 +112,10 @@ namespace PrefabSentinel
 
         // Phase 4: Rename + AddComponent + Udon
         public string new_name = string.Empty;
+        // Issue #56: dedicated reparent-address field for editor_set_parent.
+        // The parent address travels here rather than overloading
+        // ``new_name`` (the rename field); empty = move to scene root.
+        public string parent_hierarchy_path = string.Empty;
         public string component_type = string.Empty;
         public int component_index = -1;  // -1 = unspecified
 
@@ -133,12 +146,13 @@ namespace PrefabSentinel
         public string change_reason = string.Empty;
         public string temp_id = string.Empty;  // optional; handler generates one when empty
 
-        // Phase 10: Force re-import on recompile (#106)
-        // When set, HandleRecompileScripts runs ImportAsset with
-        // ForceUpdate | ForceSynchronousImport on each editor script
-        // before scheduling compilation, so externally edited files
-        // under Assets/Editor are picked up reliably.
-        public bool force_reimport = false;
+        // Issue #70: opt-in compile awareness for ``editor_refresh``.
+        // When true, HandleRefreshAssetDatabase waits for and reports a
+        // refresh-triggered compile (refresh-OK / compile-success /
+        // compile-failure).  Defaults false so the fast synchronous
+        // refresh path is unchanged; every handler other than the
+        // refresh handler ignores this field.
+        public bool wait_for_compile = false;
 
         // Phase 10: Caller-supplied compile-poll budget (#102)
         // When > 0, HandleRunScript uses this as the bounded compile
@@ -187,11 +201,12 @@ namespace PrefabSentinel
         // ``editor_wire_persistent_listener`` consumes the source
         // identity (``hierarchy_path`` + source component is taken
         // from the resolved object's component_type), the source
-        // event field name (``event_path``), the target identity
-        // (``target_path``), the method name on the target
-        // (``method``), and the string argument bound at edit time
-        // (``arg``).
-        public string event_path = string.Empty;
+        // event field name (``event_property_name`` — issue #61 named
+        // this field for the component field it carries, not as a
+        // path), the target identity (``target_path``), the method
+        // name on the target (``method``), and the string argument
+        // bound at edit time (``arg``).
+        public string event_property_name = string.Empty;
         public string target_path = string.Empty;
         public string method = string.Empty;
         public string arg = string.Empty;
@@ -239,13 +254,13 @@ namespace PrefabSentinel
         public string request_id = string.Empty;
         public bool cleanup_on_timeout = false;
 
-        // Issue #243: AnimationClip authoring payload.  ``target_dir``
-        // and ``animation_clip_name`` locate where to write a new clip;
-        // ``curves_json`` carries the curve specification as a JSON
-        // array; ``target_hierarchy_path`` locates the live GameObject
-        // for the apply surface.
-        public string target_dir = string.Empty;
-        public string animation_clip_name = string.Empty;
+        // Issue #243 / #53: AnimationClip authoring payload.  The
+        // create surface reuses the existing ``asset_path`` field for
+        // the full ``Assets/…/Name.anim`` destination — the bridge
+        // derives directory and filename from it.  ``curves_json``
+        // carries the curve specification as a JSON array;
+        // ``target_hierarchy_path`` locates the live GameObject for the
+        // apply surface.
         public string curves_json = string.Empty;
         public string target_hierarchy_path = string.Empty;
     }
