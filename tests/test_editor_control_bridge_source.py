@@ -4648,7 +4648,11 @@ class TestSetCameraGeometrySource(unittest.TestCase):
     def test_projection_switch_precedes_geometry(self) -> None:
         body = _extract_method(_read(BRIDGE), "HandleSetCamera")
         switch_idx = body.index("request.camera_orthographic >= 0")
-        fov_idx = body.index("sceneView.camera.fieldOfView")
+        # Anchor on the main-path ``float fov =`` declaration: the reset
+        # branch passes ``sceneView.camera.fieldOfView`` as an argument
+        # earlier in the method (#74 synced-position resolver), so a bare
+        # substring search would match that unrelated read first.
+        fov_idx = body.index("float fov = sceneView.camera.fieldOfView")
         self.assertLess(
             switch_idx,
             fov_idx,
@@ -4677,14 +4681,25 @@ class TestSetCameraGeometrySource(unittest.TestCase):
 
     def test_sync_position_resolver_derives_from_view_state(self) -> None:
         body = _extract_method(_read(BRIDGE), "ResolveSyncedCameraPosition")
-        self.assertIn(
+        # #73/#74: the resolver must derive the camera distance from the
+        # synchronously-settled size + projection, NOT read
+        # SceneView.cameraDistance. That property is transiently invalid
+        # across a same-call projection switch — it evaluates the
+        # sine-based perspective distance against a field-of-view still
+        # mid-transition, blowing the reported position up to a
+        # near-divide-by-zero value.
+        self.assertNotIn(
             "sv.cameraDistance",
             body,
             msg=(
-                "#74: the resolver must derive the camera position from "
-                "SceneView.cameraDistance, not re-derive the trigonometry"
+                "#73/#74: the resolver must not read "
+                "SceneView.cameraDistance — it is transiently invalid "
+                "across a projection switch; derive the distance from "
+                "size + orthographic + fov instead"
             ),
         )
+        self.assertIn("sv.size", body)
+        self.assertIn("sv.orthographic", body)
         self.assertIn("sv.pivot", body)
         self.assertIn("sv.rotation", body)
 

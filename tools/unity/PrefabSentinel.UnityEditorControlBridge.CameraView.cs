@@ -49,20 +49,32 @@ namespace PrefabSentinel
 
         /// <summary>
         /// Resolve the Scene-view camera world position synchronously from
-        /// the supplied view's already-settled pivot, rotation, and camera
-        /// distance (issue #74).  Unity recomputes
-        /// ``camera.transform.position`` only on its next camera refresh, so
-        /// a transform read taken in the same dispatch frame as a
-        /// ``LookAt`` call reports the pre-call position.  Deriving the
-        /// position from ``SceneView.cameraDistance`` — Unity's own
-        /// published camera-distance value, sine-based for perspective and
-        /// ``size * 2`` for orthographic — is correct in-frame and tracks
-        /// whatever contract the running Unity version exposes.
+        /// the supplied view's already-settled pivot, rotation, size and
+        /// projection (issue #74).  Unity recomputes
+        /// ``camera.transform.position`` only on its next camera refresh,
+        /// so a transform read taken in the same dispatch frame as a
+        /// ``LookAt`` call reports the pre-call position.
+        ///
+        /// The camera distance is derived here from ``size`` and the
+        /// projection flag rather than read from
+        /// ``SceneView.cameraDistance``: across a same-call projection
+        /// switch (issue #73) that property is transiently invalid — it
+        /// evaluates the sine-based perspective distance against a
+        /// field-of-view still mid-transition, blowing up to a
+        /// near-divide-by-zero value.  ``size``, ``orthographic``,
+        /// ``pivot`` and ``rotation`` are all settled synchronously by
+        /// ``LookAt(instant:true)``, so this derivation is correct
+        /// in-frame.  The transform mirrors
+        /// SceneView.GetPerspectiveCameraDistance — ``size / Sin(fov/2)``
+        /// for perspective, ``size * 2`` for orthographic.
         /// </summary>
-        private static float[] ResolveSyncedCameraPosition(SceneView sv)
+        private static float[] ResolveSyncedCameraPosition(SceneView sv, float fov)
         {
             Vector3 forward = sv.rotation * Vector3.forward;
-            Vector3 pos = sv.pivot - forward * sv.cameraDistance;
+            float cameraDistance = sv.orthographic
+                ? sv.size * 2f
+                : sv.size / Mathf.Sin(fov * 0.5f * Mathf.Deg2Rad);
+            Vector3 pos = sv.pivot - forward * cameraDistance;
             return new[] { pos.x, pos.y, pos.z };
         }
 
@@ -343,7 +355,8 @@ namespace PrefabSentinel
                 sceneView.orthographic = DefaultSceneOrthographic;
                 ForceRenderAndRepaint(sceneView);
                 CameraSnapshot resetState = CaptureCameraState(sceneView);
-                resetState.position = ResolveSyncedCameraPosition(sceneView);
+                resetState.position = ResolveSyncedCameraPosition(
+                    sceneView, sceneView.camera.fieldOfView);
                 return BuildSuccess(
                     "EDITOR_CTRL_CAMERA_SET_OK",
                     "Camera reset to defaults",
@@ -452,7 +465,7 @@ namespace PrefabSentinel
             ForceRenderAndRepaint(sceneView);
 
             CameraSnapshot current = CaptureCameraState(sceneView);
-            current.position = ResolveSyncedCameraPosition(sceneView);
+            current.position = ResolveSyncedCameraPosition(sceneView, fov);
             return BuildSuccess("EDITOR_CTRL_CAMERA_SET_OK", "Camera updated",
                 data: BuildCameraData(current, previous));
         }

@@ -1,6 +1,6 @@
 {
   "name": "prefab-sentinel",
-  "version": "0.6.4",
+  "version": "0.6.5",
   "description": "An MCP server specialized for VRChat avatar and world projects: it parses the asset YAML directly — including UdonSharp's split program/behaviour structure — to detect and repair broken references, prefab Variant override drift, and null wiring across prefabs, scenes, and materials. Built for AI agents, every fix runs through a dry-run → confirm gate with an audit log, so asset YAML is never hand-edited.",
   "author": {
     "name": "tyunta",
