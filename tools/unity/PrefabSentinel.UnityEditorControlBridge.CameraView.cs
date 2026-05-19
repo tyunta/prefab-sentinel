@@ -47,6 +47,37 @@ namespace PrefabSentinel
             };
         }
 
+        /// <summary>
+        /// Resolve the Scene-view camera world position synchronously from
+        /// the supplied view's already-settled pivot, rotation, size and
+        /// projection (issue #74).  Unity recomputes
+        /// ``camera.transform.position`` only on its next camera refresh,
+        /// so a transform read taken in the same dispatch frame as a
+        /// ``LookAt`` call reports the pre-call position.
+        ///
+        /// The camera distance is derived here from ``size`` and the
+        /// projection flag rather than read from
+        /// ``SceneView.cameraDistance``: across a same-call projection
+        /// switch (issue #73) that property is transiently invalid — it
+        /// evaluates the sine-based perspective distance against a
+        /// field-of-view still mid-transition, blowing up to a
+        /// near-divide-by-zero value.  ``size``, ``orthographic``,
+        /// ``pivot`` and ``rotation`` are all settled synchronously by
+        /// ``LookAt(instant:true)``, so this derivation is correct
+        /// in-frame.  The transform mirrors
+        /// SceneView.GetPerspectiveCameraDistance — ``size / Sin(fov/2)``
+        /// for perspective, ``size * 2`` for orthographic.
+        /// </summary>
+        private static float[] ResolveSyncedCameraPosition(SceneView sv, float fov)
+        {
+            Vector3 forward = sv.rotation * Vector3.forward;
+            float cameraDistance = sv.orthographic
+                ? sv.size * 2f
+                : sv.size / Mathf.Sin(fov * 0.5f * Mathf.Deg2Rad);
+            Vector3 pos = sv.pivot - forward * cameraDistance;
+            return new[] { pos.x, pos.y, pos.z };
+        }
+
         private static EditorControlData BuildCameraData(CameraSnapshot current, CameraSnapshot? previous = null)
         {
             var data = new EditorControlData
@@ -217,18 +248,28 @@ namespace PrefabSentinel
             // date before reading bounds so post-edit framing is accurate.
             SynchronizeBoundsSourcesForFrame(selectedGo);
 
+            // Issue #75: resolve a concrete Bounds so the frame can be
+            // driven through SceneView.Frame(bounds, instant:true). The
+            // animated FrameSelected() leaves pivot and size un-advanced
+            // when CaptureCameraState reads them in the same dispatch
+            // frame, so the response reported the entire pre-frame camera
+            // snapshot. boundsCenter/Extents stay null for an object with
+            // neither a Renderer nor a RectTransform — preserving the
+            // response's existing "bounds unavailable" contract — while a
+            // unit-size fallback Bounds still drives the instant frame.
             float[] boundsCenter = null;
             float[] boundsExtents = null;
+            bool haveBounds = false;
+            Bounds frameBounds = new Bounds(selectedGo.transform.position, Vector3.one);
             Renderer renderer = selectedGo.GetComponentInChildren<Renderer>();
             if (renderer != null)
             {
-                Bounds b = renderer.bounds;
-                boundsCenter = new[] { b.center.x, b.center.y, b.center.z };
-                boundsExtents = new[] { b.extents.x, b.extents.y, b.extents.z };
+                frameBounds = renderer.bounds;
+                haveBounds = true;
             }
             else
             {
-                // RectTransform fallback: report the world-space AABB of the
+                // RectTransform fallback: frame the world-space AABB of the
                 // selected RectTransform when no Renderer is in the subtree.
                 var rect = selectedGo.GetComponent<RectTransform>();
                 if (rect != null)
@@ -241,20 +282,32 @@ namespace PrefabSentinel
                         min = Vector3.Min(min, corners[i]);
                         max = Vector3.Max(max, corners[i]);
                     }
-                    Vector3 center = (min + max) * 0.5f;
-                    Vector3 extents = (max - min) * 0.5f;
-                    boundsCenter = new[] { center.x, center.y, center.z };
-                    boundsExtents = new[] { extents.x, extents.y, extents.z };
+                    frameBounds = new Bounds((min + max) * 0.5f, max - min);
+                    haveBounds = true;
                 }
             }
+            if (haveBounds)
+            {
+                boundsCenter = new[]
+                    { frameBounds.center.x, frameBounds.center.y, frameBounds.center.z };
+                boundsExtents = new[]
+                    { frameBounds.extents.x, frameBounds.extents.y, frameBounds.extents.z };
+            }
 
-            // Frame synchronously so we can capture post-frame camera state
-            sceneView.FrameSelected();
+            // Frame synchronously (issue #75): SceneView.Frame with
+            // instant:true settles pivot and size in this dispatch frame,
+            // unlike the animated FrameSelected().
+            sceneView.Frame(frameBounds, instant: true);
             if (request.zoom > 0f)
                 sceneView.size = request.zoom;
             ForceRenderAndRepaint(sceneView);
 
             CameraSnapshot cam = CaptureCameraState(sceneView);
+            // Issue #74 / #75: camera.transform.position is recomputed by
+            // Unity only on its next camera refresh, so resolve it
+            // synchronously from the now-settled pivot/rotation/size.
+            cam.position = ResolveSyncedCameraPosition(
+                sceneView, sceneView.camera.fieldOfView);
             var data = BuildCameraData(cam);
             data.selected_object = objectName;
             data.bounds_center = boundsCenter;
@@ -324,6 +377,8 @@ namespace PrefabSentinel
                 sceneView.orthographic = DefaultSceneOrthographic;
                 ForceRenderAndRepaint(sceneView);
                 CameraSnapshot resetState = CaptureCameraState(sceneView);
+                resetState.position = ResolveSyncedCameraPosition(
+                    sceneView, sceneView.camera.fieldOfView);
                 return BuildSuccess(
                     "EDITOR_CTRL_CAMERA_SET_OK",
                     "Camera reset to defaults",
@@ -337,6 +392,21 @@ namespace PrefabSentinel
                 return BuildError("EDITOR_CTRL_CAMERA_CONFLICT",
                     "'look_at' requires 'position' to be set.");
 
+            // Issue #73: apply the projection switch before the
+            // field-of-view read and the position/pivot geometry.  A
+            // single call that both switches projection and positions the
+            // camera must compute its geometry — and pass the projection
+            // flag into LookAt — under the requested projection, not the
+            // pre-switch one.
+            if (request.camera_orthographic >= 0)
+                sceneView.orthographic = request.camera_orthographic == 1;
+
+            // Issue #66: Unity's SceneView camera-distance contract is
+            // sine-based — cameraDistance = size / Sin(fov/2), matching
+            // SceneView.GetPerspectiveCameraDistance.  The perspective
+            // position-mode reverse-solve below uses Mathf.Sin so the
+            // set -> get round-trip closes and the camera lands at the
+            // requested position.
             float fov = sceneView.camera.fieldOfView;
 
             if (hasPosition)
@@ -361,7 +431,7 @@ namespace PrefabSentinel
                     Quaternion rot = Quaternion.LookRotation(direction);
                     float newSize = sceneView.orthographic
                         ? dist * 0.5f
-                        : dist * Mathf.Tan(fov * 0.5f * Mathf.Deg2Rad);
+                        : dist * Mathf.Sin(fov * 0.5f * Mathf.Deg2Rad);
                     sceneView.LookAt(
                         lookAt, rot, newSize, sceneView.orthographic,
                         instant: true);
@@ -379,7 +449,7 @@ namespace PrefabSentinel
 
                     float cameraDistance = sceneView.orthographic
                         ? newSize * 2f
-                        : newSize / Mathf.Tan(fov * 0.5f * Mathf.Deg2Rad);
+                        : newSize / Mathf.Sin(fov * 0.5f * Mathf.Deg2Rad);
                     Vector3 newPivot = cameraPos + rot * new Vector3(0, 0, cameraDistance);
                     sceneView.LookAt(
                         newPivot, rot, newSize, sceneView.orthographic,
@@ -414,12 +484,10 @@ namespace PrefabSentinel
                     instant: true);
             }
 
-            if (request.camera_orthographic >= 0)
-                sceneView.orthographic = request.camera_orthographic == 1;
-
             ForceRenderAndRepaint(sceneView);
 
             CameraSnapshot current = CaptureCameraState(sceneView);
+            current.position = ResolveSyncedCameraPosition(sceneView, fov);
             return BuildSuccess("EDITOR_CTRL_CAMERA_SET_OK", "Camera updated",
                 data: BuildCameraData(current, previous));
         }

@@ -19,7 +19,7 @@ namespace PrefabSentinel
     public static partial class UnityEditorControlBridge
     {
         public const int ProtocolVersion = 1;
-        public const string BridgeVersion = "0.6.4";
+        public const string BridgeVersion = "0.6.7";
 
         /// <summary>Actions that write their response file asynchronously (not on return).</summary>
         // Issue H-8: the membership sets are owned by ``ActionRegistry`` as the
@@ -501,10 +501,11 @@ namespace PrefabSentinel
                     response = HandleCaptureConsoleLogs(request);
                     break;
                 case "refresh_asset_database":
-                    response = HandleRefreshAssetDatabase();
-                    break;
-                case "recompile_scripts":
-                    response = HandleRecompileScripts(request);
+                    // Issue #70: a compile-aware refresh may schedule an
+                    // async barrier that writes the response after compile
+                    // + reload completes. Pass the response path so the
+                    // handler can defer the response and return null.
+                    response = HandleRefreshAssetDatabase(request, responsePath);
                     break;
                 case "set_material":
                     response = HandleSetMaterial(request);

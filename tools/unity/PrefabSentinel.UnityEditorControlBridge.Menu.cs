@@ -147,9 +147,9 @@ namespace PrefabSentinel
             return null;
         }
 
-        // Issue #225: schedule the implicit-barrier async pipeline.
-        // Reuses the recompile-and-wait pipeline events so the surface
-        // inherits ``EDITOR_CTRL_RECOMPILE_FAILED`` /
+        // Issue #225 / #68: schedule the implicit-barrier async pipeline
+        // through the shared ``ScheduleCompileBarrier`` mechanism so the
+        // surface inherits ``EDITOR_CTRL_RECOMPILE_FAILED`` /
         // ``EDITOR_CTRL_RECOMPILE_TIMEOUT`` verbatim and schedules the
         // menu execute on the post-reload tick.
         private static void ScheduleMenuExecuteBarrier(
@@ -159,120 +159,7 @@ namespace PrefabSentinel
             long deadlineMs = callTimeMs
                 + (long)(RecompileAndWaitDefaultTimeoutSec * 1000f);
             int callTimeReloadCount = PendingAsyncRunner.AssemblyReloadCount;
-            bool resolved = false;
-            bool compiledAny = false;
-            var compileErrors = new List<string>();
-
-            Action<string, CompilerMessage[]> onAsmFinished = null;
-            Action<object> onPipelineFinished = null;
-
-            onAsmFinished = (asmPath, messages) =>
-            {
-                bool asmHadError = false;
-                if (messages != null)
-                {
-                    foreach (var msg in messages)
-                    {
-                        if (msg.type == CompilerMessageType.Error)
-                        {
-                            asmHadError = true;
-                            compileErrors.Add(
-                                string.IsNullOrEmpty(msg.file)
-                                    ? msg.message
-                                    : $"{msg.file}({msg.line},{msg.column}): {msg.message}");
-                        }
-                    }
-                }
-                if (!asmHadError) compiledAny = true;
-            };
-
-            void Unsubscribe()
-            {
-                CompilationPipeline.assemblyCompilationFinished -= onAsmFinished;
-                CompilationPipeline.compilationFinished -= onPipelineFinished;
-            }
-
-            onPipelineFinished = _ =>
-            {
-                if (resolved) return;
-                resolved = true;
-                Unsubscribe();
-
-                if (compileErrors.Count > 0)
-                {
-                    PendingAsyncRunner.Complete(responsePath);
-                    WriteResponse(responsePath, BuildError(
-                        "EDITOR_CTRL_RECOMPILE_FAILED",
-                        $"execute_menu_item: {compileErrors.Count} compile error(s).",
-                        new EditorControlData
-                        {
-                            executed = false,
-                            errors = compileErrors.ToArray(),
-                            recompile_waited = true,
-                        }));
-                    return;
-                }
-
-                if (!compiledAny)
-                {
-                    InvokeMenuItemAndWriteResponse(
-                        request.menu_path, responsePath, recompileWaited: true);
-                    PendingAsyncRunner.Complete(responsePath);
-                    return;
-                }
-
-                // ≥1 assembly compiled. Switch to the post-reload wait
-                // so the menu item runs against the freshly loaded
-                // assemblies.
-                PendingAsyncRunner.Complete(responsePath);
-                var reloadEntry = new PendingAsyncRunner.PersistedEntry
-                {
-                    action = "execute_menu_item",
-                    responsePath = responsePath,
-                    requestJson = JsonUtility.ToJson(request),
-                    callTimeUnixMs = callTimeMs,
-                    deadlineUnixMs = deadlineMs,
-                };
-                EditorApplication.CallbackFunction reloadPoll = null;
-                reloadPoll = () =>
-                {
-                    long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                    if (nowMs > deadlineMs)
-                    {
-                        PendingAsyncRunner.Complete(responsePath);
-                        WriteResponse(responsePath, BuildError(
-                            "EDITOR_CTRL_RECOMPILE_TIMEOUT",
-                            "execute_menu_item: timed out after domain reload "
-                            + "before AssemblyReloadCount advanced."));
-                        return;
-                    }
-                    if (PendingAsyncRunner.AssemblyReloadCount
-                        <= callTimeReloadCount) return;
-
-                    PendingAsyncRunner.Complete(responsePath);
-                    InvokeMenuItemAndWriteResponse(
-                        request.menu_path, responsePath, recompileWaited: true);
-                };
-                PendingAsyncRunner.Register(reloadEntry, reloadPoll);
-            };
-
-            CompilationPipeline.assemblyCompilationFinished += onAsmFinished;
-            CompilationPipeline.compilationFinished += onPipelineFinished;
-
-            EditorApplication.CallbackFunction prePoll = null;
-            prePoll = () =>
-            {
-                if (resolved) return;
-                long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                if (nowMs <= deadlineMs) return;
-                resolved = true;
-                Unsubscribe();
-                PendingAsyncRunner.Complete(responsePath);
-                WriteResponse(responsePath, BuildError(
-                    "EDITOR_CTRL_RECOMPILE_TIMEOUT",
-                    "execute_menu_item: timed out before "
-                    + "CompilationPipeline.compilationFinished fired."));
-            };
+            string menuPath = request.menu_path;
 
             var preEntry = new PendingAsyncRunner.PersistedEntry
             {
@@ -282,23 +169,88 @@ namespace PrefabSentinel
                 callTimeUnixMs = callTimeMs,
                 deadlineUnixMs = deadlineMs,
             };
-            PendingAsyncRunner.RegisterTransient(preEntry, prePoll);
 
-            try
+            ScheduleCompileBarrier(new CompileBarrierSpec
             {
-                CompilationPipeline.RequestScriptCompilation();
-            }
-            catch (Exception ex)
+                preReloadEntry = preEntry,
+                persistPreReloadEntry = false,
+                deadlineMs = deadlineMs,
+                compileTrigger = () => CompilationPipeline.RequestScriptCompilation(),
+                onCompileFailed = errors =>
+                {
+                    PendingAsyncRunner.Complete(responsePath);
+                    WriteResponse(responsePath, BuildError(
+                        "EDITOR_CTRL_RECOMPILE_FAILED",
+                        $"execute_menu_item: {errors.Count} compile error(s).",
+                        new EditorControlData
+                        {
+                            executed = false,
+                            errors = errors.ToArray(),
+                            recompile_waited = true,
+                        }));
+                },
+                onNoAssemblyCompiled = () =>
+                {
+                    // No assembly required compilation: run the menu item
+                    // immediately against the already-loaded assemblies.
+                    PendingAsyncRunner.Complete(responsePath);
+                    InvokeMenuItemAndWriteResponse(
+                        menuPath, responsePath, recompileWaited: true);
+                },
+                onCompiled = () =>
+                {
+                    // ≥1 assembly compiled. Switch to the post-reload wait
+                    // so the menu item runs against the freshly loaded
+                    // assemblies.
+                    PendingAsyncRunner.Complete(responsePath);
+                    var reloadEntry = new PendingAsyncRunner.PersistedEntry
+                    {
+                        action = "execute_menu_item",
+                        responsePath = responsePath,
+                        requestJson = JsonUtility.ToJson(request),
+                        callTimeUnixMs = callTimeMs,
+                        deadlineUnixMs = deadlineMs,
+                    };
+                    EditorApplication.CallbackFunction reloadPoll =
+                        BuildRecompileReloadWaitPoll(
+                            responsePath, deadlineMs, callTimeReloadCount,
+                            "execute_menu_item: timed out after domain reload "
+                            + "before AssemblyReloadCount advanced.",
+                            BuildMenuExecuteReloadComplete(menuPath, responsePath));
+                    PendingAsyncRunner.Register(reloadEntry, reloadPoll);
+                },
+                onDeadlineExceeded = () =>
+                {
+                    PendingAsyncRunner.Complete(responsePath);
+                    WriteResponse(responsePath, BuildError(
+                        "EDITOR_CTRL_RECOMPILE_TIMEOUT",
+                        "execute_menu_item: timed out before "
+                        + "CompilationPipeline.compilationFinished fired."));
+                },
+                onScheduleFailure = () =>
+                {
+                    PendingAsyncRunner.Complete(responsePath);
+                    WriteResponse(responsePath, BuildError(
+                        "EDITOR_CTRL_RECOMPILE_SCHEDULE_FAILED",
+                        "execute_menu_item: failed to schedule compilation."));
+                },
+            });
+        }
+
+        /// <summary>
+        /// Issue #69: the post-reload terminal action for
+        /// ``execute_menu_item`` — invokes the menu item against the
+        /// freshly loaded assemblies and writes the menu-execute envelope.
+        /// </summary>
+        private static Action BuildMenuExecuteReloadComplete(
+            string menuPath, string responsePath)
+        {
+            return () =>
             {
-                resolved = true;
-                Unsubscribe();
                 PendingAsyncRunner.Complete(responsePath);
-                Debug.LogWarning(
-                    $"[PrefabSentinel] HandleExecuteMenuItem: RequestScriptCompilation rejected: {ex}");
-                WriteResponse(responsePath, BuildError(
-                    "EDITOR_CTRL_RECOMPILE_SCHEDULE_FAILED",
-                    "execute_menu_item: failed to schedule compilation."));
-            }
+                InvokeMenuItemAndWriteResponse(
+                    menuPath, responsePath, recompileWaited: true);
+            };
         }
 
         private static void InvokeMenuItemAndWriteResponse(

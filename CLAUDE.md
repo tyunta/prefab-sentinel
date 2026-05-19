@@ -12,7 +12,7 @@
 - 必須参照の欠落は補完せず `error` で停止する（fail-fast）。
 - ファイルサイズ目安（200〜400 行）は **partial 単位**で評価する。1 ファイル合計ではなく `partial class` ごとの責務単位で行数を判定する。partial 構成は disk 上のファイル名（`tools/unity/PrefabSentinel.Unity*Bridge.<Concern>.cs`）が正本で、test が CLAUDE.md inventory との drift を検出する（`tests/test_editor_control_bridge_source.py::TestOperationalRulesPartialInventory` / `tests/test_unity_patch_bridge_source.py::TestPatchBridgeOperationalRulesInventory`）。
 - 現在の per-concern token inventory（test 用、追加・削除時に同期）:
-  - `UnityEditorControlBridge`: AnimationClip / BlendShape / CameraView / Components / ConsoleCapture / Helpers / Hierarchy / MaterialBatch / MaterialQuery / MaterialWrite / Menu / MenuScriptWatch / PrefabStage / Properties / PropertyWrite / RunScriptAsync / RunScriptCompile / SaveInstantiate / Screenshot / UdonSharpAddComponent / UdonSharpFieldWrite / UdonSharpInvocation / UdonSharpListenerWiring / UiElement
+  - `UnityEditorControlBridge`: AnimationClip / BlendShape / CameraView / CompileBarrier / Components / ConsoleCapture / Helpers / Hierarchy / MaterialBatch / MaterialQuery / MaterialWrite / Menu / MenuScriptWatch / PrefabStage / Properties / PropertyWrite / RunScriptAsync / RunScriptCompile / SaveInstantiate / Screenshot / UdonSharpAddComponent / UdonSharpFieldWrite / UdonSharpInvocation / UdonSharpListenerWiring / UiElement
   - `UnityPatchBridge`: Payloads / Prefab / Asset / Scene / Resolve / Mutation / ManagedReference / Diagnostics
 - `Mutation` partial は value-kind dispatcher と各 `SerializedPropertyType` 用 reader が 1 つの cohesive concern を構成するため、200〜400 行ガイドラインも issue #129 暫定の 1,000 行上限も意図的に超過する（issue #129 spec.md "further sub-split" / Non-Goals 参照）。
 

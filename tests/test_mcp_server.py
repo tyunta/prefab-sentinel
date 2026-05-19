@@ -149,7 +149,7 @@ class TestToolRegistration(unittest.TestCase):
             # Editor bridge tools
             "editor_screenshot", "editor_select", "editor_frame",
             "editor_get_camera", "editor_set_camera",
-            "editor_refresh", "editor_recompile", "editor_recompile_async",
+            "editor_refresh", "editor_recompile",
             "editor_instantiate",
             "editor_set_material", "editor_delete",
             "editor_get_blend_shapes", "editor_set_blend_shape",
@@ -209,8 +209,9 @@ class TestToolRegistration(unittest.TestCase):
         # Issue #195 added the dedicated ``editor_create_ui_element``
         # tool, bringing the registered surface from 75 to 76; issues
         # #233 / #236 / #240 / #242 / #243 add 9 more tools, bringing
-        # the surface to 85.
-        self.assertEqual(85, len(tools))
+        # the surface to 85; issue #71 retired the fire-and-return
+        # ``editor_recompile_async`` tool, leaving 84.
+        self.assertEqual(84, len(tools))
 
 
 class TestToolsCatalogDoc(unittest.TestCase):
@@ -2494,10 +2495,17 @@ class TestEditorSideEffectTools(unittest.TestCase):
     """Test side-effect editor bridge MCP tools."""
 
     def test_editor_refresh_delegates(self) -> None:
+        # Issue #70: editor_refresh is compile-aware — it asks the bridge
+        # to wait for and report a refresh-triggered compile and sizes its
+        # transport budget to cover a compile plus domain reload.
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
             _, result = _run(server.call_tool("editor_refresh", {}))
-        mock_send.assert_called_once_with(action="refresh_asset_database")
+        mock_send.assert_called_once_with(
+            action="refresh_asset_database",
+            timeout_sec=65,
+            wait_for_compile=True,
+        )
         self.assertTrue(result["success"])
 
     def test_editor_recompile_delegates(self) -> None:
@@ -2527,19 +2535,25 @@ class TestEditorSideEffectTools(unittest.TestCase):
 
 
 class TestEditorRecompileNaming(unittest.TestCase):
-    """T-54-1: the recompile pair has consistent sync/async naming.
-
-    ``editor_recompile`` (bare) is the synchronous/blocking tool;
-    ``editor_recompile_async`` (suffixed) is the fire-and-return tool.
-    No legacy ``editor_recompile_and_wait`` tool remains registered.
+    """T-54-1 / issue #71: only the synchronous blocking ``editor_recompile``
+    tool is registered. The fire-and-return ``editor_recompile_async`` tool
+    is retired, and no legacy ``editor_recompile_and_wait`` tool remains.
     """
 
-    def test_recompile_pair_has_sync_async_naming(self) -> None:
+    def test_blocking_recompile_registered_and_fire_and_return_absent(self) -> None:
         server = create_server()
         tools = _run(server.list_tools())
         names = {t.name for t in tools}
-        self.assertIn("editor_recompile", names)
-        self.assertIn("editor_recompile_async", names)
+        self.assertIn(
+            "editor_recompile",
+            names,
+            msg="the blocking editor_recompile tool must stay registered",
+        )
+        self.assertNotIn(
+            "editor_recompile_async",
+            names,
+            msg="#71: the retired fire-and-return recompile tool must be absent",
+        )
         self.assertNotIn("editor_recompile_and_wait", names)
 
     def test_bare_recompile_is_synchronous_blocking(self) -> None:
@@ -2556,55 +2570,6 @@ class TestEditorRecompileNaming(unittest.TestCase):
             timeout_sec=35,
             request_extras={"timeout_sec": 30.0},
         )
-
-    def test_async_recompile_is_fire_and_return(self) -> None:
-        # The suffixed name drives the fire-and-return ``recompile_scripts``
-        # bridge action without a wait budget.
-        server = create_server()
-        with patch(
-            "prefab_sentinel.mcp_tools_editor_view.send_action",
-            return_value={"success": True},
-        ) as mock_send:
-            _run(server.call_tool("editor_recompile_async", {}))
-        mock_send.assert_called_once_with(
-            action="recompile_scripts", reimport_paths=[],
-        )
-
-
-class TestEditorRecompileReimportPath(unittest.TestCase):
-    """T-45-3: the fire-and-return recompile forwards caller reimport paths."""
-
-    def setUp(self) -> None:
-        # Decouple from any host-exported watch dir (issues #88/#89/#270).
-        os.environ.pop("UNITYTOOL_BRIDGE_WATCH_DIR", None)
-
-    def test_reimport_paths_forwarded_as_list(self) -> None:
-        server = create_server()
-        targets = ["Assets/Scripts/External.cs", "Assets/Scripts/Other.cs"]
-        with patch(
-            "prefab_sentinel.mcp_tools_editor_view.send_action",
-            return_value={"success": True},
-        ) as mock_send:
-            _run(server.call_tool(
-                "editor_recompile_async",
-                {"reimport_paths": targets},
-            ))
-        mock_send.assert_called_once_with(
-            action="recompile_scripts", reimport_paths=targets,
-        )
-        # The caller-supplied list must reach the bridge as a JSON array.
-        sent = mock_send.call_args[1]["reimport_paths"]
-        self.assertEqual(targets, sent)
-        self.assertIsInstance(sent, list)
-
-    def test_omitted_reimport_paths_send_empty_list(self) -> None:
-        server = create_server()
-        with patch(
-            "prefab_sentinel.mcp_tools_editor_view.send_action",
-            return_value={"success": True},
-        ) as mock_send:
-            _run(server.call_tool("editor_recompile_async", {}))
-        self.assertEqual([], mock_send.call_args[1]["reimport_paths"])
 
 
 class TestEditorAuditReclassification(unittest.TestCase):

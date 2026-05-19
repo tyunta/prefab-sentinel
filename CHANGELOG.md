@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+### Changed
+
+- `editor_refresh` を compile-aware 化。`AssetDatabase.Refresh()` が誘発したコンパイルを観測し、コンパイル無し→refresh-OK、成功→compile-success、失敗→実コンパイラ診断付き compile-failure を返す（issue #70）。従来は refresh をトリガーして即座に返るため、refresh が誘発したコンパイルの成否を報告できなかった。
+
+### Removed
+
+- fire-and-return 再コンパイルツール `editor_recompile_async`（bridge action `recompile_scripts`）を撤去（issue #71）。ブロッキング版 `editor_recompile` と実用上重複していたため。再コンパイルは `editor_recompile` へ、外部編集スクリプトの取り込みは compile-aware な `editor_refresh` へ移行する。`reimport_paths` による対象限定再インポート機能は失われる。
+
+### Fixed
+
+- perspective モードの `editor_set_camera` がカメラを要求位置に着地させるよう修正（issue #66）。size↔camera-distance 変換が Unity の `SceneView` カメラ距離契約（sine ベース）と一致せず、視線方向にオフセットして着地していた。
+- `editor_set_camera` が投影切り替えとカメラ配置を 1 回の呼び出しで行う際、ジオメトリを要求後の投影で計算するよう修正（issue #73）。従来は投影切り替えがジオメトリ計算と `LookAt` の後に適用されていた。
+- `editor_set_camera` 応答が同一ディスパッチフレームで実際に到達したカメラ位置を報告するよう修正（issue #74）。従来は Unity の次回カメラ更新前の transform を読み、呼び出し前の位置を報告していた。
+- 非コンパイル `editor_run_script` / `editor_run_script_submit` スニペットが、コンパイルポーリング予算の経過を待たず実コンパイラ診断付きでコンパイル失敗を返すよう修正（issue #68）。
+
 ## [0.6.0] - 2026-05-18
 
 ### Added
