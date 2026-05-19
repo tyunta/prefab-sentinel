@@ -204,11 +204,12 @@ namespace PrefabSentinel
         // ``editor_wire_persistent_listener`` consumes the source
         // identity (``hierarchy_path`` + source component is taken
         // from the resolved object's component_type), the source
-        // event field name (``event_path``), the target identity
-        // (``target_path``), the method name on the target
-        // (``method``), and the string argument bound at edit time
-        // (``arg``).
-        public string event_path = string.Empty;
+        // event field name (``event_property_name`` — issue #61 named
+        // this field for the component field it carries, not as a
+        // path), the target identity (``target_path``), the method
+        // name on the target (``method``), and the string argument
+        // bound at edit time (``arg``).
+        public string event_property_name = string.Empty;
         public string target_path = string.Empty;
         public string method = string.Empty;
         public string arg = string.Empty;

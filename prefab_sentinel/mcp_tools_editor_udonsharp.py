@@ -262,15 +262,15 @@ def register_editor_udonsharp_tools(server: FastMCP) -> None:
         Returns:
             The bridge envelope.
         """
-        # The bridge DTO names the event field ``event_path`` and the
-        # target field ``target_path`` (wire contract unchanged); the
-        # MCP-facing arguments are renamed to ``property_name`` and
-        # ``target_hierarchy_path`` for naming-convention conformance
-        # (#53/#58).
+        # The bridge DTO names the event field ``event_property_name``
+        # (issue #61 named it for the component field it carries) and
+        # the target field ``target_path``; the MCP-facing arguments
+        # are ``property_name`` and ``target_hierarchy_path`` for
+        # naming-convention conformance (#53/#58).
         return send_action(
             action="editor_wire_persistent_listener",
             hierarchy_path=hierarchy_path,
-            event_path=property_name,
+            event_property_name=property_name,
             target_path=target_hierarchy_path,
             method=method,
             arg=arg,

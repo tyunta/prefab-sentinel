@@ -80,11 +80,9 @@ namespace PrefabSentinel
                 : RunScriptCompileTimeoutMs;
             long callTimeMs = acceptedAt;
             long deadlineMs = callTimeMs + compilePollMs + RunScriptEntryTypeTimeoutMs;
-            long callTimeAssemblyMtime =
-                PendingAsyncRunner.ReadAssemblyMtimeUnixMs();
 
-            // The completion file is the entry's response path so the
-            // existing ``RunScriptPollFrame`` writes the inner result
+            // The completion file is the entry's response path; the
+            // post-reload ``RunScriptPollFrame`` writes the inner result
             // there.  ``request.code`` is used by the snippet hash for
             // stuck detection, mirroring the synchronous handler.
             var entry = new PendingAsyncRunner.PersistedEntry
@@ -94,14 +92,17 @@ namespace PrefabSentinel
                 requestJson = JsonUtility.ToJson(request),
                 callTimeUnixMs = callTimeMs,
                 deadlineUnixMs = deadlineMs,
-                callTimeAssemblyMtimeUnixMs = callTimeAssemblyMtime,
                 tempId = id,
                 stuckKey = "id:" + id,
                 tempDirAbs = tempDirAbs,
             };
 
+            // Issue #64: register the pre-reload watchdog; the startup
+            // resumer installs ``RunScriptPollFrame`` as the completion
+            // poll after the domain reload that the staged script
+            // triggers.
             EditorApplication.CallbackFunction poll = null;
-            poll = () => RunScriptPollFrame(entry, scriptAbs, metaAbs);
+            poll = () => RunScriptPreReloadWatchdog(entry, scriptAbs, metaAbs);
             PendingAsyncRunner.Register(entry, poll);
 
             // Kick off the synchronous Refresh after the poller is

@@ -3014,8 +3014,9 @@ class TestEditorArgumentNaming(unittest.TestCase):
         self.assertIn("event_path", str(cm.exception))
 
     def test_listener_property_name_travels_on_event_wire_field(self) -> None:
-        """Issue #58: the renamed property_name argument is forwarded on
-        the unchanged event_path wire field."""
+        """Issue #61: the property_name argument is forwarded on the
+        event_property_name wire field; the misleading event_path wire
+        key is gone."""
         with patch(
             "prefab_sentinel.mcp_tools_editor_udonsharp.send_action",
             return_value={"success": True},
@@ -3026,12 +3027,16 @@ class TestEditorArgumentNaming(unittest.TestCase):
             )
         kwargs = send.call_args.kwargs
         self.assertEqual(
-            ("editor_wire_persistent_listener", "OnX"),
-            (kwargs["action"], kwargs["event_path"]),
+            ("editor_wire_persistent_listener", "OnX", False),
+            (
+                kwargs["action"],
+                kwargs["event_property_name"],
+                "event_path" in kwargs,
+            ),
             msg=(
                 "editor_wire_persistent_listener must forward the "
-                "property_name argument on the event_path wire field "
-                "(issue #58)."
+                "property_name argument on the event_property_name wire "
+                "field and emit no stale event_path key (issue #61)."
             ),
         )
 

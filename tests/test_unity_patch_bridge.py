@@ -8,6 +8,7 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
+from prefab_sentinel.bridge_constants import PROTOCOL_VERSION as _EDITOR_CONTROL_PROTOCOL
 from tests._assertion_helpers import assert_error_envelope
 from tests.bridge_test_helpers import EditorBridgeResponder
 from tools.unity_patch_bridge import main as _bridge_main
@@ -85,6 +86,44 @@ def _success_response(request_payload: dict[str, object]) -> dict[str, object]:
         "data": {"applied": len(request_payload.get("ops", []))},
         "diagnostics": [],
     }
+
+
+def _editor_bridge_unknown_action_response() -> dict[str, object]:
+    """The envelope ``EditorBridge`` emits for an action-less request.
+
+    Reproduces ``EditorBridge.WriteErrorResponse`` on the empty-action
+    branch: a failure envelope stamped with the *editor-control*
+    protocol version (not the patch protocol), which is exactly what
+    masks the routing failure once the relay's protocol check runs.
+    """
+    return {
+        "protocol_version": _EDITOR_CONTROL_PROTOCOL,
+        "success": False,
+        "severity": "error",
+        "code": "EDITOR_BRIDGE_UNKNOWN_ACTION",
+        "message": "Empty action field in request.",
+        "data": {},
+        "diagnostics": [],
+    }
+
+
+def _routing_faithful_response(
+    request_payload: dict[str, object],
+) -> dict[str, object]:
+    """Dispatch a request the way the resident ``EditorBridge`` does.
+
+    ``EditorBridge`` peeks at the request's ``action`` field: an empty
+    action is rejected with ``EDITOR_BRIDGE_UNKNOWN_ACTION``; a
+    non-empty action unclaimed by the editor-control / runtime action
+    sets falls through to ``UnityPatchBridge``, which applies the
+    patch.  This builder reproduces both branches so a dropped
+    discriminator fails the round-trip rather than passing against a
+    builder that ignores ``action``.
+    """
+    action = str(request_payload.get("action", ""))
+    if not action:
+        return _editor_bridge_unknown_action_response()
+    return _success_response(request_payload)
 
 
 class UnityPatchBridgeTests(unittest.TestCase):
@@ -296,6 +335,132 @@ class UnityPatchBridgeTests(unittest.TestCase):
             code="BRIDGE_LEGACY_SCHEMA_REJECTED",
             severity="error",
             data={"received_keys": ["ops", "protocol_version", "target"]},
+        )
+
+    def test_patch_apply_round_trips_through_routing_faithful_responder(self) -> None:
+        """Issue #63: a patch request carrying the ``action`` discriminator
+        is routed to the patch bridge by a responder that dispatches
+        exactly as ``EditorBridge`` does, and round-trips to a
+        ``SER_APPLY_OK`` success envelope.  A dropped discriminator would
+        land on the empty-action branch and surface
+        ``BRIDGE_PROTOCOL_VERSION`` instead.
+        """
+        with tempfile.TemporaryDirectory() as watch_dir:
+            watch_path = Path(watch_dir)
+            payload = {
+                "protocol_version": 2,
+                "plan_version": 2,
+                "resources": [
+                    {
+                        "id": "prefab",
+                        "kind": "prefab",
+                        "path": "Assets/Test.prefab",
+                        "mode": "open",
+                    }
+                ],
+                "ops": [
+                    {
+                        "resource": "prefab",
+                        "op": "set",
+                        "component": "Example.Component",
+                        "path": "enabled",
+                        "value": True,
+                    }
+                ],
+            }
+            with EditorBridgeResponder(watch_path, _routing_faithful_response):
+                result = _run_bridge(
+                    payload,
+                    env_overrides={
+                        "UNITYTOOL_BRIDGE_WATCH_DIR": watch_dir,
+                        "UNITYTOOL_UNITY_TIMEOUT_SEC": "10",
+                    },
+                )
+        self.assertEqual(
+            (True, "SER_APPLY_OK"),
+            (bool(result["success"]), result["code"]),
+            msg=(
+                "a patch request must carry the action discriminator so a "
+                "routing-faithful responder reaches the patch bridge and "
+                f"round-trips to SER_APPLY_OK; got envelope={result!r}"
+            ),
+        )
+
+    def test_patch_request_carries_patch_apply_action_discriminator(self) -> None:
+        """Issue #63: the relay stamps ``action='patch_apply'`` onto every
+        patch request so the resident ``EditorBridge`` dispatches it to
+        ``UnityPatchBridge``.
+        """
+        with tempfile.TemporaryDirectory() as watch_dir:
+            watch_path = Path(watch_dir)
+            payload = {
+                "protocol_version": 2,
+                "plan_version": 2,
+                "resources": [
+                    {
+                        "id": "prefab",
+                        "kind": "prefab",
+                        "path": "Assets/Test.prefab",
+                        "mode": "open",
+                    }
+                ],
+                "ops": [],
+            }
+            with EditorBridgeResponder(watch_path, _success_response) as responder:
+                _run_bridge(
+                    payload,
+                    env_overrides={
+                        "UNITYTOOL_BRIDGE_WATCH_DIR": watch_dir,
+                        "UNITYTOOL_UNITY_TIMEOUT_SEC": "10",
+                    },
+                )
+        self.assertEqual(
+            "patch_apply",
+            responder.observed_requests[0].get("action"),
+            msg=(
+                "every patch request written to the watch directory must "
+                "carry action='patch_apply'; got observed request "
+                f"{responder.observed_requests[0]!r}"
+            ),
+        )
+
+    def test_empty_action_request_is_rejected_by_routing_faithful_responder(self) -> None:
+        """Issue #63: the routing-faithful responder reproduces
+        ``EditorBridge``'s empty-action branch — a request with no
+        ``action`` is rejected with ``EDITOR_BRIDGE_UNKNOWN_ACTION``.
+        This pins the responder's fidelity: without it the round-trip
+        test above would pass against a responder that proves nothing
+        about routing.
+        """
+        response = _routing_faithful_response(
+            {"protocol_version": 2, "target": "Assets/Test.prefab", "ops": []}
+        )
+        self.assertEqual(
+            (False, "EDITOR_BRIDGE_UNKNOWN_ACTION"),
+            (bool(response["success"]), response["code"]),
+            msg=(
+                "an action-less request must be rejected with "
+                f"EDITOR_BRIDGE_UNKNOWN_ACTION; got {response!r}"
+            ),
+        )
+
+    def test_patch_apply_discriminator_does_not_collide_with_editor_control_actions(
+        self,
+    ) -> None:
+        """Issue #63: ``patch_apply`` must stay in the patch-bridge
+        fall-through space — it must not be a member of the
+        editor-control action set, or it would be routed to the wrong
+        bridge.
+        """
+        from prefab_sentinel.editor_bridge import SUPPORTED_ACTIONS
+
+        self.assertNotIn(
+            "patch_apply",
+            SUPPORTED_ACTIONS,
+            msg=(
+                "the patch_apply discriminator collides with the "
+                "editor-control action set; pick a value outside it."
+            ),
         )
 
 

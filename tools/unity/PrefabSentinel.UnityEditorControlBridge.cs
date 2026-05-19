@@ -1044,10 +1044,9 @@ namespace PrefabSentinel
         // Issues #108 / #118: ``PendingAsyncRunner`` is the single async
         // completion registry shared by ``HandleRunScript`` and
         // ``HandleRecompileAndWait``.  Each entry registers an
-        // ``EditorApplication.update`` callback that polls the editor's
-        // compile-state and the compiled-assembly mtime; the response
-        // file is written only after the documented completion signals
-        // are observed or the supplied budget is exceeded.  In-flight
+        // ``EditorApplication.update`` callback; the response file is
+        // written only after the documented completion signals are
+        // observed or the supplied budget is exceeded.  In-flight
         // requests are mirrored to ``SessionState`` so a domain reload
         // (triggered by the recompile itself) does not lose the entry.
         // The post-reload resumer (an ``[InitializeOnLoad]`` hook) walks
@@ -1057,11 +1056,6 @@ namespace PrefabSentinel
         {
             private const string SessionStateKey =
                 "PrefabSentinel_PendingAsyncRunner_v1";
-            // Path to the compiled assembly observed by both completion
-            // signals.  The bridge tracks its mtime as the second
-            // completion signal; the post-reload event provides the third.
-            internal const string CompiledAssemblyRelPath =
-                "Library/ScriptAssemblies/Assembly-CSharp.dll";
 
             [Serializable]
             internal sealed class PersistedEntry
@@ -1071,7 +1065,6 @@ namespace PrefabSentinel
                 public string requestJson = string.Empty;
                 public long callTimeUnixMs;
                 public long deadlineUnixMs;
-                public long callTimeAssemblyMtimeUnixMs;
                 public string tempId = string.Empty;
                 public string stuckKey = string.Empty;
                 public string tempDirAbs = string.Empty;
@@ -1163,25 +1156,6 @@ namespace PrefabSentinel
                 ActiveEntries.Remove(responsePath);
                 TransientResponsePaths.Remove(responsePath);
                 Persist();
-            }
-
-            internal static long ReadAssemblyMtimeUnixMs()
-            {
-                try
-                {
-                    string abs = Path.Combine(
-                        Directory.GetCurrentDirectory(),
-                        CompiledAssemblyRelPath.Replace('/', Path.DirectorySeparatorChar));
-                    if (!File.Exists(abs)) return 0L;
-                    DateTime mtime = File.GetLastWriteTimeUtc(abs);
-                    return new DateTimeOffset(mtime).ToUnixTimeMilliseconds();
-                }
-                catch (Exception ex)
-                {
-                    Debug.LogWarning(
-                        $"[PrefabSentinel] PendingAsyncRunner: assembly mtime read failed: {ex.Message}");
-                    return 0L;
-                }
             }
 
             private static void Persist()

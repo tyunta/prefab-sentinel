@@ -23,10 +23,10 @@ namespace PrefabSentinel
                 return BuildError(
                     "EDITOR_CTRL_UDON_WIRE_NO_PATH",
                     "hierarchy_path is required for editor_wire_persistent_listener.");
-            if (string.IsNullOrEmpty(request.event_path))
+            if (string.IsNullOrEmpty(request.event_property_name))
                 return BuildError(
                     "EDITOR_CTRL_UDON_WIRE_EVENT_NOT_FOUND",
-                    "event_path is required.");
+                    "event_property_name is required.");
             if (string.IsNullOrEmpty(request.target_path))
                 return BuildError(
                     "EDITOR_CTRL_UDON_WIRE_TARGET_NOT_FOUND",
@@ -48,7 +48,7 @@ namespace PrefabSentinel
             Component sourceComp;
             UnityEventBase eventBase;
             string eventResolveError = ResolveSourceEvent(
-                sourceGo, request.event_path, out sourceComp, out eventBase);
+                sourceGo, request.event_property_name, out sourceComp, out eventBase);
             if (eventResolveError != null)
                 return BuildError(
                     "EDITOR_CTRL_UDON_WIRE_EVENT_NOT_FOUND",
@@ -114,7 +114,7 @@ namespace PrefabSentinel
 
             return BuildSuccess(
                 "EDITOR_CTRL_UDON_WIRE_OK",
-                $"Wired {sourceComp.GetType().Name}.{request.event_path} → " +
+                $"Wired {sourceComp.GetType().Name}.{request.event_property_name} → " +
                 $"{targetComp.GetType().Name}.{request.method}(\"{request.arg}\").",
                 new EditorControlData
                 {
