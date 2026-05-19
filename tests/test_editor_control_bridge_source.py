@@ -41,6 +41,7 @@ _BRIDGE_GLOB = "PrefabSentinel.UnityEditorControlBridge*.cs"
 # the source-text tests below retain only Tier 3 delegation-invariant
 # and constant-value-pin assertions, reading the relocated declarations
 # from these dedicated files.
+EDITOR_BRIDGE: Path = TOOLS_DIR / "PrefabSentinel.EditorBridge.cs"
 EDITOR_CONTROL_REQUEST: Path = TOOLS_DIR / "PrefabSentinel.Dispatch.EditorControlRequest.cs"
 ACTION_REGISTRY: Path = TOOLS_DIR / "PrefabSentinel.Dispatch.ActionRegistry.cs"
 INPUT_VALIDATORS: Path = TOOLS_DIR / "PrefabSentinel.Properties.InputValidators.cs"
@@ -385,13 +386,14 @@ class TestBatchObjectSpecComponents(unittest.TestCase):
 
 
 class TestRunScriptShortPoll(unittest.TestCase):
-    """Issue #108 (brushed-up under #222 Phase 1/2): the per-frame
-    ``RunScriptPollFrame`` observes the documented completion
-    conditions (``EditorApplication.isCompiling``, assembly mtime
-    advance, deadline) and locates the freshly compiled type, returning
-    to wait for the next frame whenever the conditions have not yet
-    settled. The compile-pending response surfaced when the deadline
-    elapses still hints at the persistent helper alternative.
+    """Issue #108 (brushed-up under #222 Phase 1/2; #64): run-script
+    completion detection is a two-phase split.  The pre-reload
+    ``RunScriptPreReloadWatchdog`` enforces only the compile-pending
+    deadline; the post-reload ``RunScriptPollFrame`` treats resolution
+    of the freshly compiled temp type as the completion signal, with no
+    assembly-modification-time gate.  The compile-pending response
+    surfaced when the deadline elapses still hints at the persistent
+    helper alternative.
 
     Brush-up: paired source-text assertions on the same body are
     collapsed into tuple value-pins so a mutation that drops either
@@ -442,6 +444,93 @@ class TestRunScriptShortPoll(unittest.TestCase):
             msg=(
                 "Compile-pending response must hint at the persistent "
                 "helper alternative (editor_execute_menu_item)."
+            ),
+        )
+
+    def test_completion_poll_has_no_assembly_mtime_gate(self) -> None:
+        """Issue #64 — the post-reload completion poll detects completion
+        by resolving the freshly compiled temp type, not by comparing
+        assembly modification times; the editor-only temp script
+        compiles into Assembly-CSharp-Editor.dll, which the old mtime
+        gate (watching Assembly-CSharp.dll) never advanced.
+        """
+        body = _extract_method(_read(BRIDGE), "RunScriptPollFrame")
+        self.assertEqual(
+            (False, False),
+            (
+                "ReadAssemblyMtimeUnixMs" in body,
+                "callTimeAssemblyMtimeUnixMs" in body,
+            ),
+            msg=(
+                "RunScriptPollFrame must carry no assembly-mtime gate "
+                "(neither ReadAssemblyMtimeUnixMs nor "
+                "callTimeAssemblyMtimeUnixMs)."
+            ),
+        )
+
+    def test_pre_reload_watchdog_is_deadline_only(self) -> None:
+        """Issue #64 — the pre-reload watchdog enforces only the
+        compile-pending deadline.  It must not resolve the temp type:
+        the only type resolvable before the domain reload is a stale one
+        from the previous AppDomain.
+        """
+        body = _extract_method(_read(BRIDGE), "RunScriptPreReloadWatchdog")
+        self.assertEqual(
+            (True, True, False),
+            (
+                "deadlineUnixMs" in body,
+                "RunScriptCompilePendingResponse" in body,
+                "FindTempScriptType" in body,
+            ),
+            msg=(
+                "RunScriptPreReloadWatchdog must reference the deadline "
+                "(deadlineUnixMs) and the compile-pending response "
+                "(RunScriptCompilePendingResponse) and must not call the "
+                "temp-type resolver (FindTempScriptType)."
+            ),
+        )
+
+    def test_run_script_handlers_register_pre_reload_watchdog(self) -> None:
+        """Issue #64 — both run-script entry handlers install the
+        pre-reload watchdog (not the completion poll) before the domain
+        reload; the completion poll is installed post-reload by the
+        startup resumer.
+        """
+        source = _read(BRIDGE)
+        for handler in ("HandleRunScript", "HandleRunScriptSubmit"):
+            with self.subTest(handler=handler):
+                body = _extract_method(source, handler)
+                self.assertIn(
+                    "RunScriptPreReloadWatchdog", body,
+                    msg=(
+                        f"{handler} must register RunScriptPreReloadWatchdog "
+                        "as its pre-reload poll so a stale type is never "
+                        "resolved before the temp script compiles."
+                    ),
+                )
+
+    def test_assembly_mtime_machinery_absent_from_bridge_source(self) -> None:
+        """Issue #64 — once the run-script poll stops reading assembly
+        modification time, its sole consumer is gone, so the mtime
+        helper, the compiled-assembly path constant, and the persisted
+        mtime field are removed (no-dead-code rule).
+        """
+        source = _read(BRIDGE)
+        still_present = [
+            ident
+            for ident in (
+                "callTimeAssemblyMtimeUnixMs",
+                "ReadAssemblyMtimeUnixMs",
+                "CompiledAssemblyRelPath",
+            )
+            if ident in source
+        ]
+        self.assertEqual(
+            [],
+            still_present,
+            msg=(
+                "the dead assembly-mtime machinery must be fully removed "
+                f"from the bridge source; still present: {still_present}."
             ),
         )
 
@@ -1670,15 +1759,78 @@ class TestUdonSharpRequestFields(unittest.TestCase):
 
     def test_request_carries_wire_listener_fields(self) -> None:
         body = _extract_editor_control_request_body()
-        # Source/target identity, method name, and the string argument.
-        self.assertIn("event_path", body)
+        # Target identity, method name, and the string argument.
         self.assertIn("target_path", body)
         self.assertIn("method", body)
         self.assertIn("arg", body)
 
+    def test_event_field_named_event_property_name_in_dto_and_handler(self) -> None:
+        """Issue #61 — the persistent-listener event wire field is named
+        ``event_property_name`` (the value is a component field name, so
+        the former ``_path`` suffix was misleading); the old name is
+        absent from both the DTO and the handler.
+        """
+        dto = _extract_editor_control_request_body()
+        handler = _extract_method(_read(BRIDGE), "HandleWirePersistentListener")
+        self.assertEqual(
+            (True, False, True, False),
+            (
+                "event_property_name" in dto,
+                "event_path" in dto,
+                "event_property_name" in handler,
+                "event_path" in handler,
+            ),
+            msg=(
+                "the persistent-listener event field must be named "
+                "event_property_name in both the EditorControlRequest "
+                "DTO and HandleWirePersistentListener; event_path must "
+                "be absent from both."
+            ),
+        )
+
     def test_request_carries_fields_json_for_add_udonsharp(self) -> None:
         body = _extract_editor_control_request_body()
         self.assertIn("fields_json", body)
+
+
+def _extract_editor_bridge_ongui() -> str:
+    """Return the comment-stripped body of ``EditorBridgeWindow.OnGUI()``.
+
+    ``OnGUI`` is an instance method (``private void``), so the
+    ``static``-anchored ``_extract_method`` extractor does not apply; this
+    helper locates the signature and brace-extracts the body directly.
+    """
+    source = _strip_cs_comments(EDITOR_BRIDGE.read_text(encoding="utf-8"))
+    match = re.search(r"private\s+void\s+OnGUI\s*\(\s*\)\s*\{", source)
+    if match is None:
+        raise AssertionError("OnGUI not found in EditorBridge source")
+    return _extract_braced_block(source, match.end(), "OnGUI body")
+
+
+class TestEditorBridgeWindowVersionLine(unittest.TestCase):
+    """Issue #65 — the Editor Bridge window shows the running bridge
+    version beneath the title, sourced from the canonical
+    ``UnityEditorControlBridge.BridgeVersion`` constant. No new
+    hardcoded version-string literal is introduced.
+    """
+
+    def test_ongui_renders_version_from_constant_without_hardcoded_literal(self) -> None:
+        body = _extract_editor_bridge_ongui()
+        version_literal = re.search(r'"\d+\.\d+(?:\.\d+)?"', body)
+        # Tuple value-pin: the version line must reference the canonical
+        # constant AND introduce no version-string literal of its own.
+        self.assertEqual(
+            (True, None),
+            (
+                "UnityEditorControlBridge.BridgeVersion" in body,
+                version_literal.group(0) if version_literal else None,
+            ),
+            msg=(
+                "OnGUI must render the bridge version from the canonical "
+                "UnityEditorControlBridge.BridgeVersion constant and must "
+                "not hardcode a version-string literal."
+            ),
+        )
 
 
 class TestBestEffortCatchWarnings(unittest.TestCase):

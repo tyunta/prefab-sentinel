@@ -14,9 +14,10 @@ namespace PrefabSentinel
     /// <item><description>Refresh / recompile / run-integration-tests handlers.</description></item>
     /// <item><description>Synchronous recompile-and-wait handler (issue #118) and its
     ///       upper-bound check (issue #134).</description></item>
-    /// <item><description>The per-frame compile / load poller for ``run_script`` (issue
-    ///       #108) and its stuck-detection / temp-area-recovery
-    ///       helpers (issue #116).</description></item>
+    /// <item><description>The two-phase ``run_script`` completion detection — the
+    ///       pre-reload compile-pending watchdog and the post-reload
+    ///       completion poll (issues #108 / #64) — and its
+    ///       stuck-detection / temp-area-recovery helpers (issue #116).</description></item>
     /// <item><description>The startup cleanup hook that resumes in-flight async runner
     ///       entries on the new AppDomain after a domain reload.</description></item>
     /// </list>
@@ -527,15 +528,17 @@ namespace PrefabSentinel
         private static EditorControlResponse HandleRunScript(
             EditorControlRequest request, string responsePath)
         {
-            // Issue #108: this handler is now async / frame-driven. It
+            // Issue #108 / #64: this handler is async / frame-driven. It
             // stages the temp .cs file, kicks off a synchronous Refresh,
-            // and registers an ``EditorApplication.update`` poller via
-            // ``PendingAsyncRunner`` instead of blocking the main thread
-            // on a busy-sleep loop.  The poller observes the same
-            // completion conditions (compile finished + assembly mtime
-            // advanced + afterAssemblyReload fired) used by the
-            // ``editor_recompile_and_wait`` surface, then invokes the
-            // entry point and writes the response.
+            // and registers ``RunScriptPreReloadWatchdog`` via
+            // ``PendingAsyncRunner``.  The watchdog only enforces the
+            // compile-pending deadline; adding the temp script triggers a
+            // domain reload, after which the startup resumer installs
+            // ``RunScriptPollFrame`` as the completion poll.  Completion
+            // is the resolution of the freshly compiled temp type — an
+            // assembly-agnostic signal, so an editor-only snippet
+            // (compiled into Assembly-CSharp-Editor) is detected exactly
+            // like a runtime one.
             if (string.IsNullOrEmpty(request.code))
             {
                 return BuildError("EDITOR_CTRL_RUN_SCRIPT_COMPILE",
@@ -596,8 +599,6 @@ namespace PrefabSentinel
                 request.compile_timeout, RunScriptCompileTimeoutMs,
                 callTimeMs, RunScriptEntryTypeTimeoutMs);
             long deadlineMs = deadline.DeadlineMs;
-            long callTimeAssemblyMtime =
-                PendingAsyncRunner.ReadAssemblyMtimeUnixMs();
 
             var entry = new PendingAsyncRunner.PersistedEntry
             {
@@ -606,15 +607,13 @@ namespace PrefabSentinel
                 requestJson = JsonUtility.ToJson(request),
                 callTimeUnixMs = callTimeMs,
                 deadlineUnixMs = deadlineMs,
-                callTimeAssemblyMtimeUnixMs = callTimeAssemblyMtime,
                 tempId = tempId,
                 stuckKey = stuckKey,
                 tempDirAbs = tempDirAbs,
             };
 
             EditorApplication.CallbackFunction poll = null;
-            poll = () => RunScriptPollFrame(
-                entry, scriptAbs, metaAbs);
+            poll = () => RunScriptPreReloadWatchdog(entry, scriptAbs, metaAbs);
             PendingAsyncRunner.Register(entry, poll);
 
             // Trigger the synchronous Refresh after the poller is registered
@@ -643,11 +642,48 @@ namespace PrefabSentinel
         }
 
         /// <summary>
-        /// Frame poller for an in-flight ``run_script`` request.  Runs each
-        /// editor frame until the documented completion conditions are
-        /// observed, then invokes the entry point and writes the response.
-        /// Cleans up the temp .cs / .cs.meta files on every termination
-        /// path (success, runtime exception, compile timeout, recovery).
+        /// Issue #64: pre-reload watchdog for an in-flight ``run_script`` /
+        /// ``run_script_submit`` request.  Adding the temp script triggers
+        /// a domain reload; until that reload happens this callback only
+        /// enforces the compile-pending deadline.  It never resolves or
+        /// invokes a type, because the only type resolvable before the
+        /// reload is a stale one from the previous AppDomain — the
+        /// post-reload completion poll (``RunScriptPollFrame``) is
+        /// installed by the startup resumer.  On deadline elapse this
+        /// completes the entry, removes the temp files, and writes the
+        /// compile-pending response.
+        /// </summary>
+        private static void RunScriptPreReloadWatchdog(
+            PendingAsyncRunner.PersistedEntry entry,
+            string scriptAbs,
+            string metaAbs)
+        {
+            long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            if (nowMs <= entry.deadlineUnixMs) return;
+
+            string responsePath = entry.responsePath;
+            PendingAsyncRunner.Complete(responsePath);
+            CleanupRunScriptTempFiles(scriptAbs, metaAbs);
+            EditorControlResponse pending = RunScriptCompilePendingResponse(
+                entry.stuckKey, entry.tempId, entry.tempDirAbs,
+                "Script compilation did not complete within the bounded poll; " +
+                "a domain reload may still be pending. Retry after Unity finishes " +
+                "compiling. If the freshly compiled type still cannot be located, " +
+                "run the snippet through `editor_execute_menu_item` against a " +
+                "persistent editor helper script committed under `Assets/Editor/`.");
+            WriteResponse(responsePath, pending);
+        }
+
+        /// <summary>
+        /// Issue #64: post-reload completion poll for an in-flight
+        /// ``run_script`` / ``run_script_submit`` request, installed by
+        /// the startup resumer after the domain reload.  Completion is
+        /// the resolution of the freshly compiled temp script type; there
+        /// is no assembly-modification-time gate, so an editor-only
+        /// snippet is detected exactly like a runtime one.  Invokes the
+        /// entry point and writes the response; cleans up the temp .cs /
+        /// .cs.meta files on every termination path (success, runtime
+        /// exception, compile timeout, recovery).
         /// </summary>
         private static void RunScriptPollFrame(
             PendingAsyncRunner.PersistedEntry entry,
@@ -678,8 +714,6 @@ namespace PrefabSentinel
             }
 
             if (EditorApplication.isCompiling) return;
-            long currentMtime = PendingAsyncRunner.ReadAssemblyMtimeUnixMs();
-            if (currentMtime <= entry.callTimeAssemblyMtimeUnixMs) return;
 
             Type scriptType = FindTempScriptType();
             if (scriptType == null) return;

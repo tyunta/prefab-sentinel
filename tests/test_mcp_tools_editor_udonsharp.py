@@ -199,13 +199,28 @@ class WirePersistentListenerForwardingTests(_UdonSharpToolHarness):
         send.assert_called_once()
         kwargs = send.call_args.kwargs
         self.assertEqual(
-            "editor_wire_persistent_listener", kwargs["action"]
+            (
+                "editor_wire_persistent_listener",
+                "/UI/Slider",
+                "onValueChanged",
+                "/Logic/UdonController",
+                "SendCustomEvent",
+                "OnSliderChanged",
+            ),
+            (
+                kwargs["action"],
+                kwargs["hierarchy_path"],
+                kwargs["event_property_name"],
+                kwargs["target_path"],
+                kwargs["method"],
+                kwargs["arg"],
+            ),
+            msg=(
+                "editor_wire_persistent_listener must forward every argument "
+                "on the correct wire keys; event_property_name carries the "
+                "property_name value (issue #61)."
+            ),
         )
-        self.assertEqual("/UI/Slider", kwargs["hierarchy_path"])
-        self.assertEqual("onValueChanged", kwargs["event_path"])
-        self.assertEqual("/Logic/UdonController", kwargs["target_path"])
-        self.assertEqual("SendCustomEvent", kwargs["method"])
-        self.assertEqual("OnSliderChanged", kwargs["arg"])
 
 
 if __name__ == "__main__":

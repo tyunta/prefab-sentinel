@@ -568,7 +568,21 @@ def _run_via_editor_bridge(
     response_file = watch_dir / f"{request_id}.response.json"
     tmp_file = Path(str(request_file) + ".tmp")
 
+    # Issue #63: the resident EditorBridge dispatches each file-IPC
+    # request by its ``action`` field. Without a discriminator the
+    # request lands on EditorBridge's empty-action branch, which replies
+    # with the editor-control protocol version (1); the check in
+    # ``_finalize_unity_response`` below then surfaces a spurious
+    # BRIDGE_PROTOCOL_VERSION mismatch that masks the routing failure.
+    # ``patch_apply`` is unclaimed by the editor-control and runtime
+    # action sets, so a discriminated request falls through to
+    # UnityPatchBridge. ``protocol_version`` is the patch protocol
+    # (PLAN_VERSION) owned by UnityPatchBridge — distinct from the
+    # editor-control protocol; with routing fixed the response carries
+    # the matching patch version, so the protocol check compares like
+    # against like.
     request_payload = {
+        "action": "patch_apply",
         "protocol_version": PROTOCOL_VERSION,
         "target": target,
         "kind": resource.get("kind", ""),
