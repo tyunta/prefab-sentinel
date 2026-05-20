@@ -2639,7 +2639,7 @@ namespace PrefabSentinel
             // Seed an arbitrary state first so the reset is observable.
             var seed = RunEditorControlBridge(BuildEditorControlRequest(
                 "set_camera",
-                "\"camera_pivot\":[5.0,3.0,-7.0],\"yaw\":120.0,\"pitch\":15.0,\"distance\":12.0"));
+                "\"camera_pivot\":[5.0,3.0,-7.0],\"yaw\":120.0,\"pitch\":15.0,\"size\":12.0"));
             // Failures here are not fatal — the reset must work regardless.
 
             var resp = RunEditorControlBridge(BuildEditorControlRequest(

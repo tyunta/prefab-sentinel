@@ -344,18 +344,22 @@ class TestSetCameraParams(unittest.TestCase):
     """Validate editor_set_camera parameter conversion."""
 
     def test_pivot_orbit_kwargs(self) -> None:
+        # Issue #81: orbit-radius argument is named ``size`` (it
+        # carries ``SceneView.size`` semantics — Scene-view half-width).
         kwargs = build_set_camera_kwargs(
             pivot='{"x":0,"y":1.3,"z":0}',
             yaw=345.0,
             pitch=8.0,
-            distance=0.28,
+            size=0.28,
         )
         self.assertEqual(kwargs["camera_pivot"], [0, 1.3, 0])
         self.assertEqual(kwargs["yaw"], 345.0)
         self.assertEqual(kwargs["pitch"], 8.0)
-        self.assertEqual(kwargs["distance"], 0.28)
+        self.assertEqual(kwargs["size"], 0.28)
         self.assertNotIn("camera_position", kwargs)
         self.assertNotIn("camera_look_at", kwargs)
+        # The pre-rename key must not survive as a hidden alias.
+        self.assertNotIn("distance", kwargs)
 
     def test_position_look_at_kwargs(self) -> None:
         kwargs = build_set_camera_kwargs(
@@ -371,17 +375,36 @@ class TestSetCameraParams(unittest.TestCase):
             position='{"x":0,"y":1.5,"z":-1}',
             yaw=0.0,
             pitch=10.0,
-            distance=0.5,
+            size=0.5,
         )
         self.assertEqual(kwargs["camera_position"], [0, 1.5, -1])
         self.assertEqual(kwargs["yaw"], 0.0)
         self.assertEqual(kwargs["pitch"], 10.0)
-        self.assertEqual(kwargs["distance"], 0.5)
+        self.assertEqual(kwargs["size"], 0.5)
         self.assertNotIn("camera_look_at", kwargs)
+        self.assertNotIn("distance", kwargs)
 
     def test_omitted_params_excluded(self) -> None:
         kwargs = build_set_camera_kwargs(yaw=180.0)
         self.assertEqual(kwargs, {"yaw": 180.0})
+
+    def test_size_sentinel_minus_one_is_omitted(self) -> None:
+        # Issue #81: the orbit-radius sentinel ``-1.0`` means "keep
+        # current" and must not be forwarded verbatim; the produced
+        # kwargs dict must contain neither ``size`` nor the pre-rename
+        # alias ``distance``.
+        kwargs = build_set_camera_kwargs(size=-1.0)
+        self.assertEqual(kwargs, {})
+
+    def test_distance_is_not_a_registered_builder_parameter(self) -> None:
+        # Issue #81: the pre-rename keyword name must not survive as a
+        # hidden alias on the builder's keyword surface; callers that
+        # still pass ``distance=...`` should get the standard Python
+        # ``TypeError`` for an unknown keyword argument.
+        import inspect
+        params = inspect.signature(build_set_camera_kwargs).parameters
+        self.assertIn("size", params)
+        self.assertNotIn("distance", params)
 
     def test_orthographic_passed(self) -> None:
         kwargs = build_set_camera_kwargs(orthographic=1)

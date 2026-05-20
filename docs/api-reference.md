@@ -101,6 +101,13 @@ wire `severity` の決定規則（issue #4）: `Diagnostic` dataclass は任意�
 | `EDITOR_CTRL_SAFE_SAVE_PREFAB_PROTECT_REQUIRED` | `editor_safe_save_prefab` の request payload に `protect_components` フィールド自体が含まれない場合（issue #193 / issue #228）。`severity="error"`。issue #228 でトリガが「リスト未指定」のみに narrow され、明示的な空リスト `[]` は raw-save mode へ向かう（rejection ではなく success path）。 |
 | `STALE_GUID_INDEX_HINT`（`Diagnostic.detail`） | `validate_refs` の missing-asset 失敗パスで、cached resolver が missing と報告した GUID のうち少なくとも 1 件が fresh meta-file scan で resolve できた場合（issue #229）。トップレベル code ではなく warning severity の `Diagnostic` として diagnostics 配列に追加される。`evidence` に stale-resolved 件数と `refresh_guid_index=True` を retry 推奨として含める。`refresh_guid_index=True` がすでにセット済みの場合・missing asset がそもそも報告されなかった場合・fresh scan も resolve できなかった場合は発火しない。 |
 | `CROP_ROI_INVALID` / `EDITOR_CTRL_CROP_ROI_INVALID` / `EDITOR_CTRL_CROP_ROI_OUT_OF_BOUNDS` / `EDITOR_CTRL_CROP_ROI_NO_TARGET` | `editor_screenshot` の `crop_roi` 検証（issue #249）。`severity="error"`。Wrapper 側は allowlist preset でも pixel quadruple でもない値を `CROP_ROI_INVALID` で pre-bridge reject。Bridge 側は同一形状違反を `_INVALID`、ピクセル範囲外を `_OUT_OF_BOUNDS`、対象 RenderTexture / Camera が存在しない場合を `_NO_TARGET` で返す。 |
+| `SCREENSHOT_VIEW_INVALID` | `editor_screenshot` の `view` セレクタが `SCREENSHOT_VIEW_ALLOWLIST`（`scene` / `game`）外の場合（issue #259）。`severity="error"`、Wrapper 側で pre-bridge reject。 |
+| `SCREENSHOT_ANGLE_INVALID` / `EDITOR_CTRL_SCREENSHOT_ANGLE_INVALID` | `editor_screenshot` の `angle` が `SCREENSHOT_ANGLE_PRESETS`（`front` / `three_quarter` / `back` / `right` / `left` / `top`）外の場合（issue #84）。`severity="error"`。Wrapper 側は `target` 非空のときのみ allowlist gate を発火（`target` 空のとき `angle` は意味を持たない）。Bridge 側は defense-in-depth ミラーで、Wrapper を経由しない経路（integration test 等）に対しても同じ拒否を行う。 |
+| `SCREENSHOT_TARGET_INVALID_VIEW` | `editor_screenshot` の object-capture モードが `view!='scene'` と組み合わされた場合（issue #84）。`severity="error"`、Wrapper 側で pre-bridge reject。object-capture は SceneView の framing 経路でしか実行できない。 |
+| `SCREENSHOT_TARGET_CROP_CONFLICT` | `editor_screenshot` の `target` 指定と face-feature `crop_roi`（`eye_left` / `eye_right` / `mouth` / `auto_face`）の同時指定（issue #84）。`severity="error"`、Wrapper 側で pre-bridge reject。両方が SceneView の再フレーミングを駆動するため拒否。`target` と pixel-rectangle `crop_roi` は許容（ピクセル切り出しは framing の後段で独立）。 |
+| `EDITOR_CTRL_SCREENSHOT_TARGET_NOT_FOUND` | `editor_screenshot` の object-capture モードで `target` の hierarchy path がアクティブな Scene / Prefab Stage に存在しなかった場合（issue #84）。`severity="error"`、Bridge 側で発火。 |
+| `EDITOR_CTRL_SCREENSHOT_TARGET_NO_RENDERERS` | `editor_screenshot` の object-capture モードで resolved subtree に active な `Renderer` / `SkinnedMeshRenderer` が 1 件もなかった場合（issue #84）。`severity="error"`、Bridge 側で発火。AABB を導けないため framing を実行しない。 |
+| `EDITOR_CTRL_SCREENSHOT_VIEW_INVALID` | `editor_screenshot` の Bridge 側 view-allowlist mirror（issue #259）。`severity="error"`。Wrapper 側 `SCREENSHOT_VIEW_INVALID` とペアで Bridge も同じ allowlist を強制し、出力 path 合成前に拒否する。 |
 | `EDITOR_CTRL_BATCH_BLEND_SHAPE_PARSE` | `editor_batch_set_blend_shape` の `shapes_json` を JSON として parse できなかった場合（issue #240）。`severity="error"`、Bridge 側で発火。 |
 | `EDITOR_CTRL_PREFAB_STAGE_NOT_FOUND` / `..._OPEN_FAILED` / `..._CLOSE_FAILED` | Prefab Stage open/close 系の Bridge 失敗（issue #236）。`severity="error"`。`_NOT_FOUND` は対象 Prefab パスが解決できない、`_OPEN_FAILED` / `_CLOSE_FAILED` は `PrefabStageUtility` 呼び出しで例外。 |
 | `REQUEST_ID_INVALID` | `editor_run_script_poll` 等の poll 系 MCP ツールが受け取った request identifier の形状違反（issue #233）。`severity="error"`、Python 入口で pre-bridge reject。期待形状は `prefab_sentinel.mcp_tools_editor_exec._build_request_id_invalid_envelope` を参照。 |
@@ -145,7 +152,7 @@ wire `severity` の決定規則（issue #4）: `Diagnostic` dataclass は任意�
 
 | モード | 入力 | 効果 |
 |--------|------|------|
-| Pivot orbit | `pivot` (+ `yaw` / `pitch` / `distance`) | pivot を中心に yaw/pitch/distance で周回。pivot 省略時は現在値を維持。 |
+| Pivot orbit | `pivot` (+ `yaw` / `pitch` / `size`) | pivot を中心に yaw/pitch/size で周回（`size` は SceneView 半幅、issue #81）。pivot 省略時は現在値を維持。 |
 | Position | `position` (+ `look_at` または `yaw`/`pitch`) | カメラ世界座標を直接指定。`look_at` で注視点モード、`yaw`/`pitch` でオイラーモード。`position` と `pivot` の同時指定は `EDITOR_CTRL_CAMERA_CONFLICT`。 |
 | Reset | `reset_to_defaults=True` | pivot=`(0,0,0)`, rotation=`Euler(30, -45, 0)`, size=10、perspective に戻す。他のパラメータは無視。 |
 

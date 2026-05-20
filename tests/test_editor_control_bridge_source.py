@@ -3214,6 +3214,233 @@ class ScreenshotViewAllowlistSourceTests(unittest.TestCase):
         )
 
 
+class ScreenshotObjectCaptureSourceTests(unittest.TestCase):
+    """Issue #84 — bridge-side source-text invariants for the
+    target-oriented capture branch on ``HandleCaptureScreenshot``.
+
+    The new branch reads ``request.target`` and ``request.angle``,
+    delegates target resolution to the existing stage-aware resolver
+    ``TryResolveGameObjectInActiveStage`` (so the ambiguous-hierarchy
+    envelope ``EDITOR_CTRL_HIERARCHY_PATH_AMBIGUOUS`` surfaces
+    unchanged), invokes the Unity-free framing math via
+    ``ObjectCaptureFramingMath``, and surfaces the three new bridge
+    error codes for "no match", "no renderers", and "unknown preset".
+
+    The dispatcher routing for ``capture_screenshot`` is unchanged
+    (the action already exists); this class also pins the literal
+    presence of ``capture_screenshot`` in the dispatcher and the
+    ActionRegistry so a future routing rewrite is caught.
+
+    T3 source-text invariant: the bridge runs inside the Unity Editor;
+    the Python harness cannot drive the SceneView (justified in
+    spec.md Tier 3 Justification).
+    """
+
+    _BRIDGE_CODES = (
+        "EDITOR_CTRL_SCREENSHOT_TARGET_NOT_FOUND",
+        "EDITOR_CTRL_SCREENSHOT_TARGET_NO_RENDERERS",
+        "EDITOR_CTRL_SCREENSHOT_ANGLE_INVALID",
+    )
+
+    _DOCS_API_REFERENCE = (
+        Path(__file__).resolve().parent.parent / "docs" / "api-reference.md"
+    )
+
+    _DOCS_TOOLS = (
+        Path(__file__).resolve().parent.parent / "docs" / "tools.md"
+    )
+
+    def _screenshot_partial_body(self) -> str:
+        # The object-capture branch lives in the Screenshot partial
+        # (``PrefabSentinel.UnityEditorControlBridge.Screenshot.cs``);
+        # the partial may dispatch from ``HandleCaptureScreenshot`` to a
+        # private helper, so this T3 net inspects the full partial body
+        # (comments stripped) rather than a single method extraction.
+        partial = (
+            TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Screenshot.cs"
+        )
+        return _strip_cs_comments(partial.read_text(encoding="utf-8"))
+
+    def test_handler_branches_on_request_target(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleCaptureScreenshot")
+        self.assertIn(
+            "request.target",
+            body,
+            msg=(
+                "HandleCaptureScreenshot must dispatch on "
+                "``request.target`` to engage the target-oriented "
+                "capture branch (#84)."
+            ),
+        )
+
+    def test_handler_routes_target_through_stage_aware_resolver(self) -> None:
+        body = self._screenshot_partial_body()
+        # The object-capture branch must route through the existing
+        # stage-aware resolver so the ambiguous-hierarchy envelope
+        # surfaces unchanged; an independent hierarchy walk would
+        # silently first-pick a same-named sibling.
+        self.assertIn(
+            "TryResolveGameObjectInActiveStage",
+            body,
+            msg=(
+                "The Screenshot partial's object-capture branch must "
+                "delegate target resolution to "
+                "TryResolveGameObjectInActiveStage so the existing "
+                "EDITOR_CTRL_HIERARCHY_PATH_AMBIGUOUS envelope surfaces "
+                "unchanged (#84)."
+            ),
+        )
+
+    def test_handler_invokes_pure_framing_math_helper(self) -> None:
+        body = self._screenshot_partial_body()
+        self.assertIn(
+            "ObjectCaptureFramingMath",
+            body,
+            msg=(
+                "The Screenshot partial's object-capture branch must "
+                "invoke the Unity-free ObjectCaptureFramingMath helper "
+                "(#84)."
+            ),
+        )
+
+    def test_handler_emits_new_bridge_error_codes(self) -> None:
+        body = self._screenshot_partial_body()
+        for code in self._BRIDGE_CODES:
+            with self.subTest(code=code):
+                self.assertIn(
+                    f'"{code}"', body,
+                    msg=(
+                        f"The Screenshot partial must reference the "
+                        f"bridge-side error code literal {code!r} (#84)."
+                    ),
+                )
+
+    def test_dispatcher_routes_capture_screenshot_unchanged(self) -> None:
+        # Issue #84: the dispatcher already routes ``capture_screenshot``;
+        # this row pins the routing so an accidental rewrite breaks the
+        # new mode.
+        source = _read(BRIDGE)
+        body = _extract_method(source, "DispatchAction")
+        self.assertIn('case "capture_screenshot":', body)
+        self.assertIn("HandleCaptureScreenshot", body)
+
+    def test_new_error_codes_documented_in_api_reference(self) -> None:
+        docs = self._DOCS_API_REFERENCE.read_text(encoding="utf-8")
+        wrapper_codes = (
+            "SCREENSHOT_ANGLE_INVALID",
+            "SCREENSHOT_TARGET_INVALID_VIEW",
+            "SCREENSHOT_TARGET_CROP_CONFLICT",
+        )
+        for code in wrapper_codes + self._BRIDGE_CODES:
+            with self.subTest(code=code):
+                self.assertIn(
+                    code, docs,
+                    msg=(
+                        f"docs/api-reference.md must document the new "
+                        f"error code {code!r} introduced by issue #84."
+                    ),
+                )
+
+    def test_tools_registry_mentions_target_and_angle(self) -> None:
+        docs = self._DOCS_TOOLS.read_text(encoding="utf-8")
+        for literal in ("target", "angle", "SCREENSHOT_ANGLE_PRESETS"):
+            with self.subTest(literal=literal):
+                self.assertIn(
+                    literal, docs,
+                    msg=(
+                        f"docs/tools.md must mention {literal!r} so the "
+                        f"editor_screenshot registry entry exposes the "
+                        f"new target-oriented capability (#84)."
+                    ),
+                )
+
+
+class HandleSetCameraSizeFieldSourceTests(unittest.TestCase):
+    """Issue #81 — the orbit-radius argument is named ``size`` end-to-end
+    (Python wrapper, kwargs builder, wire DTO, bridge handler).  This T3
+    net pins:
+
+    * ``HandleSetCamera`` reads from ``request.size`` (the consumer-side
+      half of the rename — a DTO-only rename that misses the consumer
+      would slip past the schema test);
+    * ``HandleSetCamera`` does not reference ``request.distance`` (no
+      hidden alias).
+
+    The handler runs only inside the Unity Editor process; this is the
+    bridge-side source-text regression net (justified in spec.md Tier 3
+    Justification).
+    """
+
+    def test_handle_set_camera_consumes_request_size(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleSetCamera")
+        self.assertIn(
+            "request.size",
+            body,
+            msg=(
+                "HandleSetCamera must consume the orbit-radius field "
+                "under the name ``request.size`` (#81)."
+            ),
+        )
+
+    def test_handle_set_camera_does_not_reference_request_distance(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleSetCamera")
+        self.assertNotIn(
+            "request.distance",
+            body,
+            msg=(
+                "HandleSetCamera must not reference ``request.distance``; "
+                "the orbit-radius field was renamed to ``size`` end-to-end "
+                "(#81) and the pre-rename alias must not survive."
+            ),
+        )
+
+
+class EditorSetCameraDocsRenameTests(unittest.TestCase):
+    """Issue #81 — the camera-modes table in ``docs/api-reference.md``
+    names the orbit-radius argument as ``size``; the pre-rename name
+    ``distance`` does not appear in the Pivot-orbit row.
+    """
+
+    _DOCS_PATH = (
+        Path(__file__).resolve().parent.parent / "docs" / "api-reference.md"
+    )
+
+    def _pivot_orbit_row(self) -> str:
+        text = self._DOCS_PATH.read_text(encoding="utf-8")
+        # Find the row starting with the "Pivot orbit" cell label so
+        # the assertion is anchored to the orbit-radius row and not to
+        # an unrelated mention of ``distance`` elsewhere in the doc.
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("| Pivot orbit "):
+                return line
+        raise AssertionError("Pivot orbit row not found in api-reference.md")
+
+    def test_pivot_orbit_row_names_size(self) -> None:
+        row = self._pivot_orbit_row()
+        self.assertIn(
+            "`size`",
+            row,
+            msg=(
+                "Pivot-orbit row of the camera-modes table must name the "
+                "orbit-radius argument as ``size`` (#81); observed row="
+                f"{row!r}"
+            ),
+        )
+
+    def test_pivot_orbit_row_does_not_name_distance(self) -> None:
+        row = self._pivot_orbit_row()
+        self.assertNotIn(
+            "distance",
+            row,
+            msg=(
+                "Pivot-orbit row of the camera-modes table must not "
+                "carry the pre-rename name ``distance`` (#81); observed "
+                f"row={row!r}"
+            ),
+        )
+
+
 def _extract_resolve_object_reference_body(source: str) -> str:
     """Custom extractor for ``ResolveObjectReference`` because the
     method's return type is the value tuple ``(UnityEngine.Object obj,
@@ -3355,6 +3582,9 @@ class EditorControlBridgeRequestSchemaTests(unittest.TestCase):
         "curves_json",
         # Prefab Stage save flag (issue #236).
         "save_on_close",
+        # Target-oriented screenshot (issue #84).
+        "target",
+        "angle",
     )
 
     _NEW_RESPONSE_FIELDS = (
