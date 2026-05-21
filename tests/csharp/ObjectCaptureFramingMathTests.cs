@@ -387,45 +387,61 @@ public class ObjectCaptureFramingMathTests
     [Fact]
     public void Outlier_Filter_Picks_The_Largest_Extent_Renderer_As_The_Core()
     {
-        // Core renderer at the origin with extents 1.0; small candidates
-        // at progressively larger distances. Only candidates within the
-        // 0.30 * 1.0 = 0.30 m margin survive (none beyond 0.30 m).
+        // Per-axis AABB-containment outlier filter (matches the PoC
+        // reference): core extents (1.0, 0.5, 0.5) ⇒ per-axis allow
+        // box = extents + max(0.3 * extents, 0.1) = (1.3, 0.65, 0.65).
+        // Candidates whose absolute center offset fits inside the box
+        // along *every* axis are kept; ones that escape along even a
+        // single axis are dropped. The previous euclidean-sphere form
+        // dropped renderers far along one axis (e.g., a VRChat avatar's
+        // head 1 m above the body center) — this regression caused #84
+        // to clip the head out of frame in real-Unity visual verification.
         var renderers = new List<ObjectCaptureFramingMath.RendererBoundsRecord>
         {
             new ObjectCaptureFramingMath.RendererBoundsRecord(
-                new float[] { 0.1f, 0f, 0f }, new float[] { 0.05f, 0.05f, 0.05f }),
+                new float[] { 1.2f, 0f, 0f }, new float[] { 0.05f, 0.05f, 0.05f }),
             new ObjectCaptureFramingMath.RendererBoundsRecord(
                 new float[] { 0f, 0f, 0f }, new float[] { 1.0f, 0.5f, 0.5f }),
             new ObjectCaptureFramingMath.RendererBoundsRecord(
-                new float[] { 0.4f, 0f, 0f }, new float[] { 0.05f, 0.05f, 0.05f }),
+                new float[] { 0f, 0f, 1.0f }, new float[] { 0.05f, 0.05f, 0.05f }),
             new ObjectCaptureFramingMath.RendererBoundsRecord(
-                new float[] { 1.0f, 0f, 0f }, new float[] { 0.05f, 0.05f, 0.05f }),
+                new float[] { 1.5f, 0f, 0f }, new float[] { 0.05f, 0.05f, 0.05f }),
         };
 
         IList<ObjectCaptureFramingMath.RendererBoundsRecord> kept =
             ObjectCaptureFramingMath.SelectFramingRenderers(renderers);
 
         // Stable order: core first, then in-input-order kept candidates.
+        // renderers[0] kept (|dx|=1.2 < 1.3 allowX);
+        // renderers[2] dropped (|dz|=1.0 > 0.65 allowZ);
+        // renderers[3] dropped (|dx|=1.5 > 1.3 allowX).
         Assert.Equal(2, kept.Count);
         Assert.Same(renderers[1], kept[0]); // core (largest extent)
-        Assert.Same(renderers[0], kept[1]); // inside 0.30 m
+        Assert.Same(renderers[0], kept[1]); // inside per-axis box
     }
 
-    // -------- Outlier filter margin = max(0.30 * core_extent, 0.1) --------
+    // -------- Outlier filter per-axis box = extents + max(0.30 * extents, 0.1) --------
 
     [Theory]
-    [InlineData(1.0f, 0.29f, true)]   // 0.30 * 1.0 = 0.30 m; 0.29 m kept
-    [InlineData(1.0f, 0.31f, false)]  // 0.31 m > 0.30 m → excluded
-    [InlineData(0.01f, 0.09f, true)]  // floor 0.1 m kicks in; 0.09 m kept
-    [InlineData(0.01f, 0.11f, false)] // 0.11 m > 0.1 m floor → excluded
-    public void Outlier_Filter_Inclusion_Margin_Matches_Max_Of_Relative_And_Floor(
-        float coreExtent, float candidateDistance, bool expectedKept)
+    // Core (1.0, 0.5, 0.5) → allow (1.3, 0.65, 0.65); test each axis.
+    [InlineData(1.0f, 1.29f, 0f, 0f, true)]   // x 1.29 < 1.3
+    [InlineData(1.0f, 1.31f, 0f, 0f, false)]  // x 1.31 > 1.3
+    [InlineData(1.0f, 0f, 0.64f, 0f, true)]   // y 0.64 < 0.65
+    [InlineData(1.0f, 0f, 0.66f, 0f, false)]  // y 0.66 > 0.65
+    [InlineData(1.0f, 0f, 0f, 0.64f, true)]   // z 0.64 < 0.65
+    [InlineData(1.0f, 0f, 0f, 0.66f, false)]  // z 0.66 > 0.65
+    // Tiny core (0.01, 0.005, 0.005) → floor 0.1 m kicks in on every
+    // axis; allow ≈ (0.11, 0.105, 0.105).
+    [InlineData(0.01f, 0.10f, 0f, 0f, true)]
+    [InlineData(0.01f, 0.12f, 0f, 0f, false)]
+    public void Outlier_Filter_Per_Axis_Inclusion_Box_Matches_Max_Of_Relative_And_Floor(
+        float coreLargestExtent, float dx, float dy, float dz, bool expectedKept)
     {
         var core = new ObjectCaptureFramingMath.RendererBoundsRecord(
             new float[] { 0f, 0f, 0f },
-            new float[] { coreExtent, coreExtent * 0.5f, coreExtent * 0.5f });
+            new float[] { coreLargestExtent, coreLargestExtent * 0.5f, coreLargestExtent * 0.5f });
         var candidate = new ObjectCaptureFramingMath.RendererBoundsRecord(
-            new float[] { candidateDistance, 0f, 0f },
+            new float[] { dx, dy, dz },
             new float[] { 0.001f, 0.001f, 0.001f });
         var input = new List<ObjectCaptureFramingMath.RendererBoundsRecord>
         {
@@ -442,7 +458,7 @@ public class ObjectCaptureFramingMathTests
         }
         Assert.True(
             candidateKept == expectedKept,
-            $"core_extent={coreExtent}, distance={candidateDistance}, "
+            $"core_extent={coreLargestExtent}, offset=({dx},{dy},{dz}), "
             + $"expected kept={expectedKept}, observed kept={candidateKept}.");
     }
 

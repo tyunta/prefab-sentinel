@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using UnityEditor;
 using UnityEngine;
@@ -512,11 +513,26 @@ namespace PrefabSentinel
             }
 
             // Resolve the preset to a world-space camera-position
-            // direction relative to the target's world rotation.
+            // direction relative to the target's yaw (Y-axis) rotation
+            // only. Pitch / roll from ``target.transform.rotation`` are
+            // discarded because sub-tree targets (face meshes, parts,
+            // accessories) frequently inherit non-identity X / Z
+            // rotations from FBX / PMX axis-import conventions — e.g.,
+            // MMD face meshes are imported with X=-90 so the local
+            // ``forward`` points along world +Y. Applying the preset
+            // relative to that local frame produces nonsensical views
+            // (front becomes top-down). Caller intent is virtually
+            // always "frame this object from world-horizontal at its
+            // facing direction", so we collapse the rotation to its
+            // yaw component before composing the preset direction.
+            // Avatar roots typically have identity or pure-yaw
+            // rotations, so this is a no-op there.
             Quaternion targetRot = target.transform.rotation;
+            float targetYawDeg = targetRot.eulerAngles.y;
+            Quaternion targetYawOnly = Quaternion.Euler(0f, targetYawDeg, 0f);
             bool dirOk = ObjectCaptureFramingMath.TryResolvePresetDirection(
                 angle,
-                new float[] { targetRot.x, targetRot.y, targetRot.z, targetRot.w },
+                new float[] { targetYawOnly.x, targetYawOnly.y, targetYawOnly.z, targetYawOnly.w },
                 out float[] cameraDir,
                 out string dirReason);
             if (!dirOk)
@@ -560,9 +576,29 @@ namespace PrefabSentinel
             CameraSnapshot previous = CaptureCameraState(sceneView);
             try
             {
+                Vector3 newPivotWorld = new Vector3(pivot[0], pivot[1], pivot[2]);
                 sceneView.LookAt(
-                    new Vector3(pivot[0], pivot[1], pivot[2]),
+                    newPivotWorld,
                     lookRot, size, ortho: false, instant: true);
+
+                // SceneView.LookAt(instant:true) sets m_Position /
+                // m_Rotation / m_Size immediately, but the underlying
+                // ``sceneView.camera.transform`` is only re-synced when
+                // the next ``SceneView.OnGUI`` runs ``SetupCamera()``.
+                // Because this handler then calls ``cam.Render()`` in
+                // the same dispatch tick, without an explicit sync the
+                // render would use the pre-LookAt transform and every
+                // angle preset would produce an identical image. Mirror
+                // the SceneView perspective-distance derivation
+                // (issue #66: distance = size / sin(fov/2)) and apply
+                // pivot / rotation directly so the in-call render
+                // reflects the requested framing.
+                float halfFovRad = cam.fieldOfView * 0.5f * Mathf.Deg2Rad;
+                float cameraDistance = size / Mathf.Sin(halfFovRad);
+                cam.transform.position = newPivotWorld + cameraDirV * cameraDistance;
+                cam.transform.rotation = lookRot;
+                cam.orthographic = false;
+
                 ForceRenderAndRepaint(sceneView);
 
                 int w = request.width > 0 ? request.width : (int)sceneView.position.width;
@@ -587,9 +623,9 @@ namespace PrefabSentinel
                     if (!string.IsNullOrEmpty(request.crop_roi))
                     {
                         if (!TryResolveCropRoi(request.crop_roi,
-                                out string roiLabel, out CropBoundsEntry resolved)
+                                out string roiLabel, out CropBoundsEntry roiBounds)
                             || roiLabel != "pixel_rect"
-                            || resolved == null)
+                            || roiBounds == null)
                         {
                             return BuildError(
                                 "EDITOR_CTRL_CROP_ROI_INVALID",
@@ -597,20 +633,20 @@ namespace PrefabSentinel
                                 + "quadruple (face-feature presets are rejected "
                                 + "at the wrapper when target is supplied).");
                         }
-                        if (resolved.w <= 0 || resolved.h <= 0
-                            || resolved.x + resolved.w > w
-                            || resolved.y + resolved.h > h)
+                        if (roiBounds.w <= 0 || roiBounds.h <= 0
+                            || roiBounds.x + roiBounds.w > w
+                            || roiBounds.y + roiBounds.h > h)
                         {
                             return BuildError(
                                 "EDITOR_CTRL_CROP_ROI_OUT_OF_BOUNDS",
                                 $"crop_roi pixel rectangle {request.crop_roi} does "
                                 + $"not fit inside the rendered frame {w}x{h}.");
                         }
-                        readX = resolved.x;
-                        readY = resolved.y;
-                        readW = resolved.w;
-                        readH = resolved.h;
-                        pixelRectApplied = resolved;
+                        readX = roiBounds.x;
+                        readY = roiBounds.y;
+                        readW = roiBounds.w;
+                        readH = roiBounds.h;
+                        pixelRectApplied = roiBounds;
                     }
 
                     RenderTexture.active = rt;
