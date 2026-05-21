@@ -4934,5 +4934,54 @@ class TestSetCameraGeometrySource(unittest.TestCase):
         self.assertIn("sv.rotation", body)
 
 
+class TestGenericCollectionUsingDirective(unittest.TestCase):
+    """Issue #84 follow-up — every bridge ``.cs`` file that references a
+    generic collection type from ``System.Collections.Generic``
+    (``List<>`` / ``IList<>`` / ``Dictionary<>`` …) must also declare
+    ``using System.Collections.Generic;``.
+
+    The original target-oriented screenshot port shipped ``IList<>`` and
+    ``List<>`` references in ``PrefabSentinel.UnityEditorControlBridge
+    .Screenshot.cs`` without that using directive. CI compiles neither
+    the ``tools/unity/`` Unity-dependent ``.cs`` files (no Unity
+    reference assemblies in CI per CLAUDE.md §"Bridge C# コンパイル
+    検証") nor the xUnit-hosted ``tests/csharp`` mirror that excludes
+    them, so the resulting ``CS0246`` only surfaced when the bridge was
+    deployed into a real Unity project. This text-level invariant
+    closes that gap statically.
+    """
+
+    # Negative lookbehind ``(?<!\.)`` rejects fully-qualified usages
+    # like ``System.Collections.Generic.List<...>`` which resolve
+    # without the using directive (see PrefabSentinel.VRCSDKUploadHandler
+    # .cs for an in-tree example) — only the *short* unqualified form
+    # requires the directive to compile.
+    GENERIC_TYPE_REGEX = re.compile(
+        r"(?<!\.)\b(?:List|IList|IReadOnlyList|Dictionary|IDictionary|HashSet|"
+        r"Queue|Stack|IEnumerable|IReadOnlyCollection|ICollection)<"
+    )
+    USING_DIRECTIVE = "using System.Collections.Generic;"
+
+    def test_bridge_files_referencing_generic_collections_declare_the_using(
+        self,
+    ) -> None:
+        offenders: list[str] = []
+        for path in sorted(TOOLS_DIR.glob("PrefabSentinel*.cs")):
+            text = path.read_text(encoding="utf-8")
+            if self.GENERIC_TYPE_REGEX.search(text) and (
+                self.USING_DIRECTIVE not in text
+            ):
+                offenders.append(path.name)
+        self.assertEqual(
+            [],
+            offenders,
+            msg=(
+                "Bridge C# files reference generic collection types but miss "
+                f"`{self.USING_DIRECTIVE}`: {offenders}. Without the "
+                "directive, Unity rejects the file at deploy time (CS0246)."
+            ),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

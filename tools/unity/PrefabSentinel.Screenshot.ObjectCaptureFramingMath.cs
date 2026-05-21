@@ -272,21 +272,36 @@ namespace PrefabSentinel
                 }
             }
 
-            float threshold = OutlierMarginRelative * coreExtent;
-            if (threshold < OutlierMarginFloor) threshold = OutlierMarginFloor;
-            float thresholdSq = threshold * threshold;
-
+            // Per-axis AABB containment matches the PoC reference
+            // (PFPoCFraming.Frame ``Bounds.Contains`` with a per-axis
+            // expansion vector). A euclidean-sphere distance test —
+            // the bridge's initial port — over-aggressively drops
+            // renderers far from the core along a single axis: a
+            // VRChat avatar's head sits ~1m above the body's center,
+            // so a sphere threshold of ``OutlierMarginRelative *
+            // largest-extent`` (~0.24 m for an 0.8 m core) excludes
+            // it, the aggregate AABB then covers only the body, and
+            // framing clips the head out of frame.
             var core = renderers[coreIndex];
+            float allowX = core.ExtentsWorld[0]
+                + Math.Max(OutlierMarginRelative * core.ExtentsWorld[0], OutlierMarginFloor);
+            float allowY = core.ExtentsWorld[1]
+                + Math.Max(OutlierMarginRelative * core.ExtentsWorld[1], OutlierMarginFloor);
+            float allowZ = core.ExtentsWorld[2]
+                + Math.Max(OutlierMarginRelative * core.ExtentsWorld[2], OutlierMarginFloor);
+
             var kept = new List<RendererBoundsRecord> { core };
             for (int i = 0; i < renderers.Count; i++)
             {
                 if (i == coreIndex) continue;
                 var r = renderers[i];
-                double dx = r.CenterWorld[0] - core.CenterWorld[0];
-                double dy = r.CenterWorld[1] - core.CenterWorld[1];
-                double dz = r.CenterWorld[2] - core.CenterWorld[2];
-                double distSq = dx * dx + dy * dy + dz * dz;
-                if (distSq <= thresholdSq) kept.Add(r);
+                float dx = Math.Abs(r.CenterWorld[0] - core.CenterWorld[0]);
+                float dy = Math.Abs(r.CenterWorld[1] - core.CenterWorld[1]);
+                float dz = Math.Abs(r.CenterWorld[2] - core.CenterWorld[2]);
+                if (dx <= allowX && dy <= allowY && dz <= allowZ)
+                {
+                    kept.Add(r);
+                }
             }
             return kept;
         }

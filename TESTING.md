@@ -268,3 +268,48 @@ Unity の `internal` メンバを参照する必要が生じた段階で初め�
 ### 安全網: 手動 deploy コンパイル確認
 
 Unity 依存 Bridge C#（`tools/unity/` の `UnityEditor` / VRChat SDK 参照ファイル）を変更したら、`deploy_bridge` で実 Unity 2022.3 + VRChat SDK プロジェクトに配置し、Unity のコンパイルがエラー 0 件であることを手動で確認する。これが現状唯一のコンパイル検証経路。pure-logic を新規抽出して Unity 非依存にできた分は xUnit ハーネス（`<Compile Include>`）へ取り込み、検証対象を段階的に CI 側へ移すことで、この未検証 surface を縮小していく。
+
+### 安全網: dev 経路での visual 検証
+
+コンパイルが 0 件でも、Unity 依存箇所の振る舞いは実機 SceneView で動かさないと確認できない（`SceneView.LookAt(instant:true)` の camera 同期挙動、`BakeMesh` の現ポーズ bounds、preset 角度の見え方など。issue #84 で実証）。リリース前に main / public mirror を待たず、dev 作業ブランチの資材だけで visual 検証する経路を残す。
+
+**前提と制約**:
+- visual 検証には **MCP plugin Python と Bridge C# が同じ commit の資材で揃っている必要**がある。bridge だけ手動配置しても plugin 側のリクエスト形が古いと検証が成立しない。
+- Claude Code / Codex CLI が起動済みの plugin プロセス（`~/.claude/plugins/cache/.../prefab-sentinel-mcp` 等）は session 開始時に固定されるため、session 内で同 plugin を最新ソースに張り替えても反映されない。`.mcp.json` を編集して再起動するか、本節の ad-hoc 経路を使う。
+
+**経路**: `uvx --from <local-path>[mcp] prefab-sentinel-mcp` で dev ソースから MCP server を一時起動し、stdio で `activate_project` → `deploy_bridge` → 検証ツールを呼ぶ Python script を走らせる。`mcp` Python SDK の `stdio_client` + `ClientSession` で実装する：
+
+```python
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+
+params = StdioServerParameters(
+    command="uvx",
+    args=[
+        "--from", "/mnt/d/git/prefab-sentinel-dev[mcp]",
+        "prefab-sentinel-mcp",
+    ],
+    env={**os.environ, "UNITYTOOL_BRIDGE_WATCH_DIR": "D:\\VRChatProject\\prefab-sentinel"},
+)
+async with stdio_client(params) as (read, write):
+    async with ClientSession(read, write) as session:
+        await session.initialize()
+        await session.call_tool("activate_project", {...})
+        await session.call_tool("deploy_bridge", {})
+        await session.call_tool("<verify_tool>", {...})
+```
+
+実行は `uv run --with 'mcp>=1.12' python /tmp/verify_<topic>.py`。Claude Code 設定の永続変更も bg uvx 残置もなく完結する。
+
+**uv キャッシュの落とし穴**（astral-sh/uv#16196）:
+- `uvx --from <local-path>` のデフォルト cache key は `pyproject.toml` / `setup.py` / `setup.cfg` のみ。`tools/unity/*.cs` を編集しても **wheel が rebuild されない** ため、修正済みソースが配置されず古い bridge が deploy される事故が起こる。
+- 恒久対策として `pyproject.toml` に `[tool.uv] cache-keys` を追加し、`tools/unity/**/*.cs` / `*.asmdef` / `knowledge/**/*.md` を cache key に含めている（issue #84 修正のコミットで追加）。
+- 即時のリカバリは `uvx --reinstall --no-cache --from ...` で起動するか、`uv cache clean prefab-sentinel` でパッケージキャッシュを落としてから起動する。
+
+**Unity 側の手順**:
+1. `deploy_bridge` 直後は `Library/ScriptAssemblies/PrefabSentinel.Editor.dll` の mtime / サイズが変わっていることを確認（変化なしなら Unity がまだ import していない）。
+2. Unity Editor を**最前面に出して `Ctrl+R`** で AssetDatabase.Refresh を強制（background 化中は domain reload が保留される — グローバルメモリ `feedback-unity-background-defers-compile`）。
+3. `editor_console`（severity=error）で `CS****` が残っていないことを確認。
+4. 検証ツール（`editor_screenshot` 等）を呼んで結果を観察。screenshot は `D:\VRChatProject\<bridge-watch-dir>\screenshots\` に保存される。
+
+**bridge dispatch 経路の確認**: 新しい branch を追加した bridge handler は、応答の `message` / `code` フィールドで分岐先が確認できる。例えば issue #84 の `HandleObjectCaptureScreenshot` 成功時は `"Object-capture screenshot of '...' (angle=...)"` を返し、既存 SceneView capture 経路の `"Scene view captured to ..."` と区別できる。視覚以前に文字列で経路同定する習慣をつける。
