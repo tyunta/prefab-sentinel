@@ -85,9 +85,10 @@ public class EditorControlRequestTests
     {
         var request = new EditorControlRequest();
 
-        // yaw / pitch use NaN as the "keep current" sentinel; distance uses -1.
+        // yaw / pitch use NaN as the "keep current" sentinel; the
+        // orbit-radius ``size`` field (issue #81) uses -1.
         Assert.True(float.IsNaN(request.yaw));
         Assert.True(float.IsNaN(request.pitch));
-        Assert.Equal(-1f, request.distance);
+        Assert.Equal(-1f, request.size);
     }
 }

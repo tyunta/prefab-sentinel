@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using UnityEditor;
 using UnityEngine;
@@ -119,7 +120,7 @@ namespace PrefabSentinel
         }
 
         /// <summary>
-        /// Capture a screenshot of the Unity Editor (issue #249).
+        /// Capture a screenshot of the Unity Editor (issues #249, #84).
         ///
         /// When ``crop_roi`` is non-empty the handler resolves it to a
         /// preset label or a pixel rectangle and surfaces the resolution
@@ -129,6 +130,16 @@ namespace PrefabSentinel
         /// so the editor's scene view pivot returns to its pre-call
         /// value before the response is built. The pixel-rect branch
         /// crops the encoded PNG to the supplied rectangle.
+        ///
+        /// Issue #84: when ``request.target`` is non-empty the handler
+        /// re-frames the SceneView onto the named GameObject's
+        /// world-space AABB at the requested angle preset via
+        /// ``ObjectCaptureFramingMath`` and ``SceneView.LookAt``, then
+        /// restores the previous SceneView camera state before the
+        /// response is built. The response carries the framing
+        /// AABB on the existing ``bounds_center`` / ``bounds_extents``
+        /// fields (additive: these fields are unset on the existing
+        /// capture paths).
         /// </summary>
         private static EditorControlResponse HandleCaptureScreenshot(EditorControlRequest request, string requestPath)
         {
@@ -155,6 +166,20 @@ namespace PrefabSentinel
 
             string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
             string outputPath = Path.Combine(outputDir, $"{request.view}_{timestamp}.png");
+
+            // Issue #84: target-oriented capture mode is dispatched
+            // here, BEFORE the crop_roi resolution. The wrapper rejects
+            // ``target`` + face-feature crop_roi, so on the bridge side
+            // a non-empty ``target`` only ever arrives with empty
+            // crop_roi or a pixel rectangle (the latter is orthogonal
+            // to framing and applied post-render by
+            // ``HandleObjectCaptureScreenshot``). The branch owns its
+            // own render and camera-state restore; it never falls
+            // through to the existing scene/game switch below.
+            if (!string.IsNullOrEmpty(request.target))
+            {
+                return HandleObjectCaptureScreenshot(request, outputPath);
+            }
 
             // Issue #249: resolve the optional region argument before
             // engaging the renderer.  An unrecognised value short-circuits
@@ -259,19 +284,7 @@ namespace PrefabSentinel
                     Texture2D tex = null;
                     try
                     {
-                        var smrs = UnityEngine.Object.FindObjectsOfType<SkinnedMeshRenderer>();
-                        foreach (var smr in smrs)
-                            smr.forceMatrixRecalculationPerRender = true;
-
-                        rt = new RenderTexture(w, h, 24);
-                        RenderTexture prev = cam.targetTexture;
-                        cam.targetTexture = rt;
-                        cam.Render();
-                        cam.targetTexture = prev;
-
-                        foreach (var smr in smrs)
-                            smr.forceMatrixRecalculationPerRender = false;
-
+                        rt = RenderSceneViewToTexture(cam, w, h);
                         RenderTexture.active = rt;
                         if (cropLabel == "pixel_rect" && cropBounds != null)
                         {
@@ -381,6 +394,388 @@ namespace PrefabSentinel
             {
                 return BuildError("EDITOR_CTRL_SCREENSHOT_FAILED", $"Screenshot failed: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Issue #84 — target-oriented capture branch of
+        /// ``HandleCaptureScreenshot``.  Resolves ``request.target``
+        /// through the existing stage-aware resolver, aggregates
+        /// renderer bounds (SkinnedMeshRenderer baked at the current
+        /// pose; MeshRenderer corners world-transformed), runs the
+        /// Unity-free outlier filter + framing solver, applies the
+        /// computed pivot/rotation/size via ``SceneView.LookAt``,
+        /// renders + encodes, and restores the previous SceneView
+        /// state before returning.  Returns the response envelope
+        /// (success or error); the caller dispatches on a non-null
+        /// return.
+        /// </summary>
+        private static EditorControlResponse HandleObjectCaptureScreenshot(
+            EditorControlRequest request, string outputPath)
+        {
+            // Defense-in-depth: the wrapper rejects unknown presets,
+            // but the bridge mirrors the gate so a direct bridge call
+            // (e.g., from the integration test runner) sees the same
+            // typed error.
+            string angle = string.IsNullOrEmpty(request.angle)
+                ? "three_quarter"
+                : request.angle;
+            bool knownPreset = false;
+            foreach (var preset in ObjectCaptureFramingMath.PresetNames)
+            {
+                if (string.Equals(preset, angle, StringComparison.Ordinal))
+                {
+                    knownPreset = true;
+                    break;
+                }
+            }
+            if (!knownPreset)
+            {
+                return BuildError(
+                    "EDITOR_CTRL_SCREENSHOT_ANGLE_INVALID",
+                    $"angle='{request.angle}' is not one of the accepted preset names "
+                    + $"({string.Join(", ", ObjectCaptureFramingMath.PresetNames)}).");
+            }
+
+            SceneView sceneView = SceneView.lastActiveSceneView;
+            if (sceneView == null)
+                return BuildError("EDITOR_CTRL_NO_SCENE_VIEW", "No active SceneView found.");
+            Camera cam = sceneView.camera;
+            if (cam == null)
+                return BuildError("EDITOR_CTRL_NO_SCENE_CAMERA", "SceneView camera is null.");
+
+            // Resolve the target through the stage-aware resolver so
+            // the existing EDITOR_CTRL_HIERARCHY_PATH_AMBIGUOUS envelope
+            // surfaces unchanged on ambiguous hierarchy paths.
+            EditorControlResponse ambiguity;
+            bool resolved = TryResolveGameObjectInActiveStage(
+                request.target, out GameObject target, out ambiguity);
+            if (ambiguity != null) return ambiguity;
+            if (!resolved || target == null)
+            {
+                return BuildError(
+                    "EDITOR_CTRL_SCREENSHOT_TARGET_NOT_FOUND",
+                    $"target='{request.target}' matched no GameObject in "
+                    + "the active Scene or Prefab Stage.");
+            }
+
+            // Aggregate active renderer bounds on the resolved subtree.
+            // SkinnedMeshRenderer.BakeMesh gives a tight pose-current
+            // AABB; Renderer.bounds is conservative (culling-oriented)
+            // but adequate for non-skinned meshes.
+            var records = new List<ObjectCaptureFramingMath.RendererBoundsRecord>();
+            foreach (var smr in target.GetComponentsInChildren<SkinnedMeshRenderer>(includeInactive: false))
+            {
+                var baked = new Mesh();
+                try
+                {
+                    smr.BakeMesh(baked);
+                    Bounds local = baked.bounds;
+                    Bounds world = TransformBoundsToWorld(local, smr.transform);
+                    records.Add(new ObjectCaptureFramingMath.RendererBoundsRecord(
+                        new float[] { world.center.x, world.center.y, world.center.z },
+                        new float[] { world.extents.x, world.extents.y, world.extents.z }));
+                }
+                finally
+                {
+                    UnityEngine.Object.DestroyImmediate(baked);
+                }
+            }
+            foreach (var r in target.GetComponentsInChildren<Renderer>(includeInactive: false))
+            {
+                if (r is SkinnedMeshRenderer) continue; // already baked
+                if (!r.enabled) continue;
+                Bounds world = r.bounds;
+                records.Add(new ObjectCaptureFramingMath.RendererBoundsRecord(
+                    new float[] { world.center.x, world.center.y, world.center.z },
+                    new float[] { world.extents.x, world.extents.y, world.extents.z }));
+            }
+            if (records.Count == 0)
+            {
+                return BuildError(
+                    "EDITOR_CTRL_SCREENSHOT_TARGET_NO_RENDERERS",
+                    $"target='{request.target}' resolved to a subtree with "
+                    + "no active SkinnedMeshRenderer or MeshRenderer.");
+            }
+
+            var kept = ObjectCaptureFramingMath.SelectFramingRenderers(records);
+            Bounds aggregated = AggregateRendererBounds(kept);
+            Vector3 c = aggregated.center;
+            Vector3 e = aggregated.extents;
+            float[] corners = new float[24];
+            int idx = 0;
+            for (int sx = -1; sx <= 1; sx += 2)
+            for (int sy = -1; sy <= 1; sy += 2)
+            for (int sz = -1; sz <= 1; sz += 2)
+            {
+                corners[idx++] = c.x + sx * e.x;
+                corners[idx++] = c.y + sy * e.y;
+                corners[idx++] = c.z + sz * e.z;
+            }
+
+            // Resolve the preset to a world-space camera-position
+            // direction relative to the target's yaw (Y-axis) rotation
+            // only. Pitch / roll from ``target.transform.rotation`` are
+            // discarded because sub-tree targets (face meshes, parts,
+            // accessories) frequently inherit non-identity X / Z
+            // rotations from FBX / PMX axis-import conventions — e.g.,
+            // MMD face meshes are imported with X=-90 so the local
+            // ``forward`` points along world +Y. Applying the preset
+            // relative to that local frame produces nonsensical views
+            // (front becomes top-down). Caller intent is virtually
+            // always "frame this object from world-horizontal at its
+            // facing direction", so we collapse the rotation to its
+            // yaw component before composing the preset direction.
+            // Avatar roots typically have identity or pure-yaw
+            // rotations, so this is a no-op there.
+            Quaternion targetRot = target.transform.rotation;
+            float targetYawDeg = targetRot.eulerAngles.y;
+            Quaternion targetYawOnly = Quaternion.Euler(0f, targetYawDeg, 0f);
+            bool dirOk = ObjectCaptureFramingMath.TryResolvePresetDirection(
+                angle,
+                new float[] { targetYawOnly.x, targetYawOnly.y, targetYawOnly.z, targetYawOnly.w },
+                out float[] cameraDir,
+                out string dirReason);
+            if (!dirOk)
+            {
+                return BuildError(
+                    "EDITOR_CTRL_SCREENSHOT_ANGLE_INVALID",
+                    $"angle='{request.angle}' rejected by framing math: {dirReason}.");
+            }
+
+            // Compose the orthonormal camera basis. The SceneView
+            // looks at the pivot; the camera position is on the
+            // ``+cameraDir`` side of the pivot, so the camera forward
+            // is ``-cameraDir``. Right and up are derived as Unity's
+            // ``Quaternion.LookRotation`` would (Y-up, with the world
+            // ``Vector3.up`` as the reference up).
+            Vector3 cameraDirV = new Vector3(cameraDir[0], cameraDir[1], cameraDir[2]).normalized;
+            Vector3 cameraForward = -cameraDirV;
+            Quaternion lookRot = Quaternion.LookRotation(cameraForward, Vector3.up);
+            Vector3 cameraRight = lookRot * Vector3.right;
+            Vector3 cameraUp = lookRot * Vector3.up;
+
+            float fov = cam.fieldOfView;
+            float aspect = (request.width > 0 && request.height > 0)
+                ? ((float)request.width / (float)request.height)
+                : cam.aspect;
+            bool framingOk = ObjectCaptureFramingMath.TrySolveFramingForAabb(
+                corners,
+                new float[] { cameraRight.x, cameraRight.y, cameraRight.z },
+                new float[] { cameraUp.x, cameraUp.y, cameraUp.z },
+                new float[] { cameraDirV.x, cameraDirV.y, cameraDirV.z },
+                fov, aspect, ObjectCaptureFramingMath.DefaultFramingMargin,
+                ObjectCaptureFramingMath.RecenteringIterationCount,
+                out float[] pivot, out float size, out string framingReason);
+            if (!framingOk)
+            {
+                return BuildError(
+                    "EDITOR_CTRL_SCREENSHOT_FAILED",
+                    $"Framing solver failed: {framingReason}.");
+            }
+
+            CameraSnapshot previous = CaptureCameraState(sceneView);
+            try
+            {
+                Vector3 newPivotWorld = new Vector3(pivot[0], pivot[1], pivot[2]);
+                sceneView.LookAt(
+                    newPivotWorld,
+                    lookRot, size, ortho: false, instant: true);
+
+                // SceneView.LookAt(instant:true) sets m_Position /
+                // m_Rotation / m_Size immediately, but the underlying
+                // ``sceneView.camera.transform`` is only re-synced when
+                // the next ``SceneView.OnGUI`` runs ``SetupCamera()``.
+                // Because this handler then calls ``cam.Render()`` in
+                // the same dispatch tick, without an explicit sync the
+                // render would use the pre-LookAt transform and every
+                // angle preset would produce an identical image. Mirror
+                // the SceneView perspective-distance derivation
+                // (issue #66: distance = size / sin(fov/2)) and apply
+                // pivot / rotation directly so the in-call render
+                // reflects the requested framing.
+                float halfFovRad = cam.fieldOfView * 0.5f * Mathf.Deg2Rad;
+                float cameraDistance = size / Mathf.Sin(halfFovRad);
+                cam.transform.position = newPivotWorld + cameraDirV * cameraDistance;
+                cam.transform.rotation = lookRot;
+                cam.orthographic = false;
+
+                ForceRenderAndRepaint(sceneView);
+
+                int w = request.width > 0 ? request.width : (int)sceneView.position.width;
+                int h = request.height > 0 ? request.height : (int)sceneView.position.height;
+
+                RenderTexture rt = null;
+                Texture2D tex = null;
+                try
+                {
+                    rt = RenderSceneViewToTexture(cam, w, h);
+
+                    // Pixel-rectangle crop_roi (issue #84 + #249): the
+                    // wrapper accepts ``target`` + pixel-rectangle
+                    // crop_roi (face-feature presets are rejected at
+                    // the wrapper), and the spec requires the rectangle
+                    // to be applied to the rendered frame after
+                    // framing. Out-of-frame rectangles return the same
+                    // EDITOR_CTRL_CROP_ROI_OUT_OF_BOUNDS envelope as
+                    // the existing pixel-rect branch.
+                    int readX = 0, readY = 0, readW = w, readH = h;
+                    CropBoundsEntry pixelRectApplied = null;
+                    if (!string.IsNullOrEmpty(request.crop_roi))
+                    {
+                        if (!TryResolveCropRoi(request.crop_roi,
+                                out string roiLabel, out CropBoundsEntry roiBounds)
+                            || roiLabel != "pixel_rect"
+                            || roiBounds == null)
+                        {
+                            return BuildError(
+                                "EDITOR_CTRL_CROP_ROI_INVALID",
+                                $"crop_roi='{request.crop_roi}' is not a pixel "
+                                + "quadruple (face-feature presets are rejected "
+                                + "at the wrapper when target is supplied).");
+                        }
+                        if (roiBounds.w <= 0 || roiBounds.h <= 0
+                            || roiBounds.x + roiBounds.w > w
+                            || roiBounds.y + roiBounds.h > h)
+                        {
+                            return BuildError(
+                                "EDITOR_CTRL_CROP_ROI_OUT_OF_BOUNDS",
+                                $"crop_roi pixel rectangle {request.crop_roi} does "
+                                + $"not fit inside the rendered frame {w}x{h}.");
+                        }
+                        readX = roiBounds.x;
+                        readY = roiBounds.y;
+                        readW = roiBounds.w;
+                        readH = roiBounds.h;
+                        pixelRectApplied = roiBounds;
+                    }
+
+                    RenderTexture.active = rt;
+                    tex = new Texture2D(readW, readH, TextureFormat.RGB24, false);
+                    tex.ReadPixels(new Rect(readX, readY, readW, readH), 0, 0);
+                    tex.Apply();
+                    RenderTexture.active = null;
+
+                    byte[] png = tex.EncodeToPNG();
+                    File.WriteAllBytes(outputPath, png);
+
+                    return BuildSuccess(
+                        "EDITOR_CTRL_SCREENSHOT_OK",
+                        $"Object-capture screenshot of '{request.target}' "
+                        + $"(angle={angle}) captured to {outputPath}",
+                        data: new EditorControlData
+                        {
+                            output_path = outputPath,
+                            view = "scene",
+                            width = readW,
+                            height = readH,
+                            executed = true,
+                            bounds_center = new float[] { c.x, c.y, c.z },
+                            bounds_extents = new float[] { e.x, e.y, e.z },
+                            crop_roi_applied = pixelRectApplied != null ? "pixel_rect" : string.Empty,
+                            crop_bounds = pixelRectApplied,
+                        });
+                }
+                finally
+                {
+                    if (tex != null) UnityEngine.Object.DestroyImmediate(tex);
+                    if (rt != null) UnityEngine.Object.DestroyImmediate(rt);
+                    RenderTexture.active = null;
+                }
+            }
+            catch (Exception ex)
+            {
+                return BuildError(
+                    "EDITOR_CTRL_SCREENSHOT_FAILED",
+                    $"Object-capture screenshot failed: {ex.Message}");
+            }
+            finally
+            {
+                // Restore the previous SceneView camera state so the
+                // caller observes no persistent framing change. This
+                // mirrors the existing crop_roi preset branch.
+                if (SceneView.lastActiveSceneView != null)
+                {
+                    var sv = SceneView.lastActiveSceneView;
+                    var prevPivot = new Vector3(
+                        previous.pivot[0], previous.pivot[1], previous.pivot[2]);
+                    var prevRot = new Quaternion(
+                        previous.rotation_quat[0], previous.rotation_quat[1],
+                        previous.rotation_quat[2], previous.rotation_quat[3]);
+                    sv.LookAt(prevPivot, prevRot, previous.size, previous.orthographic, instant: true);
+                }
+            }
+        }
+
+        private static Bounds TransformBoundsToWorld(Bounds local, Transform t)
+        {
+            Vector3 c = local.center;
+            Vector3 e = local.extents;
+            Vector3[] corners = new Vector3[8];
+            int idx = 0;
+            for (int sx = -1; sx <= 1; sx += 2)
+            for (int sy = -1; sy <= 1; sy += 2)
+            for (int sz = -1; sz <= 1; sz += 2)
+            {
+                corners[idx++] = t.TransformPoint(new Vector3(
+                    c.x + sx * e.x, c.y + sy * e.y, c.z + sz * e.z));
+            }
+            Vector3 min = corners[0];
+            Vector3 max = corners[0];
+            for (int i = 1; i < 8; i++)
+            {
+                min = Vector3.Min(min, corners[i]);
+                max = Vector3.Max(max, corners[i]);
+            }
+            var world = new Bounds((min + max) * 0.5f, max - min);
+            return world;
+        }
+
+        private static Bounds AggregateRendererBounds(
+            IList<ObjectCaptureFramingMath.RendererBoundsRecord> records)
+        {
+            var first = records[0];
+            Vector3 fc = new Vector3(
+                first.CenterWorld[0], first.CenterWorld[1], first.CenterWorld[2]);
+            Vector3 fe = new Vector3(
+                first.ExtentsWorld[0], first.ExtentsWorld[1], first.ExtentsWorld[2]);
+            Bounds aggregated = new Bounds(fc, fe * 2f);
+            for (int i = 1; i < records.Count; i++)
+            {
+                var r = records[i];
+                Vector3 rc = new Vector3(
+                    r.CenterWorld[0], r.CenterWorld[1], r.CenterWorld[2]);
+                Vector3 re = new Vector3(
+                    r.ExtentsWorld[0], r.ExtentsWorld[1], r.ExtentsWorld[2]);
+                aggregated.Encapsulate(new Bounds(rc, re * 2f));
+            }
+            return aggregated;
+        }
+
+        /// <summary>
+        /// Render the current scene through ``cam`` into a freshly
+        /// allocated ``RenderTexture`` sized ``width × height``. Sets
+        /// ``forceMatrixRecalculationPerRender`` on every active
+        /// ``SkinnedMeshRenderer`` for the duration of the render so
+        /// blendshape-driven meshes evaluate at the current pose
+        /// (knowledge/blendshape-capture-pipeline.md; issue #242). The
+        /// caller owns the returned ``RenderTexture`` and is responsible
+        /// for ``DestroyImmediate``-ing it.
+        /// </summary>
+        private static RenderTexture RenderSceneViewToTexture(Camera cam, int width, int height)
+        {
+            var smrs = UnityEngine.Object.FindObjectsOfType<SkinnedMeshRenderer>();
+            foreach (var smr in smrs)
+                smr.forceMatrixRecalculationPerRender = true;
+
+            var rt = new RenderTexture(width, height, 24);
+            RenderTexture prev = cam.targetTexture;
+            cam.targetTexture = rt;
+            cam.Render();
+            cam.targetTexture = prev;
+
+            foreach (var smr in smrs)
+                smr.forceMatrixRecalculationPerRender = false;
+            return rt;
         }
 
         /// <summary>
