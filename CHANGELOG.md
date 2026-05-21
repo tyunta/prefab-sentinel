@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-05-21
+
+### Added
+
+- `editor_screenshot` に対象オブジェクト指定モードを追加。GameObject の hierarchy パスと角度プリセット（`front` / `three_quarter` / `back` / `right` / `left` / `top` の 6 種）を渡すと、Scene ビューで対象が画面いっぱい・中央に映る screenshot を 1 コールで取得できる。「カメラを動かして良い角度を探す」試し撮りループが不要になる。対象の transform 回転が傾いている場合（顔メッシュなど import で X 回転が掛かったオブジェクトを含む）でも、世界水平から対象の向いている方向に対して撮影される。
+
 ## [0.7.0] - 2026-05-19
 
 ### Changed

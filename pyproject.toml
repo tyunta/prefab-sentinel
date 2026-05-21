@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "prefab-sentinel"
-version = "0.7.0"
+version = "0.7.1"
 description = "Prefab Sentinel — Unity Prefab/Scene inspection and editing toolkit."
 requires-python = ">=3.11"
 readme = "README.md"
@@ -68,8 +68,22 @@ packages = ["prefab_sentinel"]
 "tools/unity" = "prefab_sentinel/_bridge_files"
 "knowledge" = "prefab_sentinel/_knowledge_files"
 
+# uv cache-keys: default cache invalidation only watches pyproject.toml,
+# setup.py, setup.cfg (astral-sh/uv#16196). The wheel force-includes
+# `tools/unity/` and `knowledge/`, so edits under those trees would
+# otherwise be invisible to `uvx --from <local-path>` and produce stale
+# wheels that ship outdated bridge C# or knowledge markdown. Listing
+# them here makes their mtime/contents part of the cache key.
+[tool.uv]
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "tools/unity/**/*.cs" },
+    { file = "tools/unity/**/*.asmdef" },
+    { file = "knowledge/**/*.md" },
+]
+
 [tool.bumpversion]
-current_version = "0.7.0"
+current_version = "0.7.1"
 commit = false
 tag = false
 allow_dirty = true

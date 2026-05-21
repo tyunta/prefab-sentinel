@@ -2373,10 +2373,14 @@ class TestEditorReadOnlyTools(unittest.TestCase):
         mock_send.assert_called_once_with(action="get_camera")
 
     def test_editor_set_camera_mode_b(self) -> None:
+        # Issue #81: orbit-radius MCP argument is named ``size``;
+        # the pre-rename ``distance`` alias is not registered on the
+        # MCP surface and must not appear on the bridge call kwargs.
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
-            _run(server.call_tool("editor_set_camera", {"yaw": 45.0, "pitch": 15.0, "distance": 3.0}))
-        mock_send.assert_called_once_with(action="set_camera", yaw=45.0, pitch=15.0, distance=3.0)
+            _run(server.call_tool("editor_set_camera", {"yaw": 45.0, "pitch": 15.0, "size": 3.0}))
+        mock_send.assert_called_once_with(action="set_camera", yaw=45.0, pitch=15.0, size=3.0)
+        self.assertNotIn("distance", mock_send.call_args.kwargs)
 
     def test_editor_set_camera_defaults(self) -> None:
         server = create_server()

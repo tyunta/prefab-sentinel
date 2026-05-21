@@ -105,7 +105,7 @@
 
 | ツール | 区分 | 簡潔説明 | 関連 issue | 種別 |
 |--------|------|----------|-----------|------|
-| `editor_screenshot` | editor_view | Scene / Game ビューのスクリーンショット取得。`view` allowlist / `crop_roi` preset 対応 | #249, #259 | read-only |
+| `editor_screenshot` | editor_view | Scene / Game ビューのスクリーンショット取得。`view` allowlist / `crop_roi` preset 対応。`target`（hierarchy_path）+ `angle`（`SCREENSHOT_ANGLE_PRESETS` の 6 プリセット `front` / `three_quarter` / `back` / `right` / `left` / `top`）で対象 GameObject を画面いっぱい・中央フィットに 1 コール capture できる object-capture モード（issue #84） | #249, #259, #84 | read-only |
 | `editor_force_scene_view_refresh` | editor_view | 全 SkinnedMeshRenderer の `forceMatrixRecalculationPerRender` を立てて player-loop を 1 tick 進める | #242, #268 | write |
 | `editor_select` | editor_view | Hierarchy 内の GameObject を選択（Prefab Stage 対応） | — | write |
 | `editor_frame` | editor_view | 選択オブジェクトを Scene ビューでフレーミング | — | write |

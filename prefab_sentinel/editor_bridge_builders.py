@@ -16,13 +16,19 @@ def build_set_camera_kwargs(
     pivot: str = "",
     yaw: float = float("nan"),
     pitch: float = float("nan"),
-    distance: float = -1.0,
+    size: float = -1.0,
     orthographic: int = -1,
     position: str = "",
     look_at: str = "",
     reset_to_defaults: bool = False,
 ) -> dict[str, Any]:
-    """Build send_action kwargs from set_camera parameters."""
+    """Build send_action kwargs from set_camera parameters.
+
+    Issue #81: ``size`` carries ``SceneView.size`` semantics
+    (Scene-view half-width); ``-1.0`` is the "keep current" sentinel
+    and is omitted from the produced kwargs rather than forwarded
+    verbatim.
+    """
     kwargs: dict[str, Any] = {}
     if position:
         p = load_json(position)
@@ -37,8 +43,8 @@ def build_set_camera_kwargs(
         kwargs["yaw"] = yaw
     if not math.isnan(pitch):
         kwargs["pitch"] = pitch
-    if distance >= 0:
-        kwargs["distance"] = distance
+    if size >= 0:
+        kwargs["size"] = size
     if orthographic >= 0:
         kwargs["camera_orthographic"] = orthographic
     if reset_to_defaults:

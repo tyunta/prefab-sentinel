@@ -24,6 +24,8 @@ __all__ = [
     "RECOMPILE_AND_WAIT_TIMEOUT_MAX_SEC",
     "SCREENSHOT_CROP_ROI_PRESETS",
     "SCREENSHOT_VIEW_ALLOWLIST",
+    "SCREENSHOT_ANGLE_PRESETS",
+    "SCREENSHOT_ANGLE_DEFAULT",
 ]
 
 # Issue #249: canonical screenshot region preset allowlist.  Mirrors the
@@ -35,6 +37,25 @@ SCREENSHOT_CROP_ROI_PRESETS: tuple[str, ...] = (
     "mouth",
     "auto_face",
 )
+
+# Issue #84: canonical angle-preset allowlist for ``editor_screenshot``
+# target-oriented capture mode.  Mirrors ``ObjectCaptureFramingMath
+# .PresetNames`` on the bridge side; both layers enforce the same
+# six-name set so an unrecognised preset short-circuits at the
+# wrapper.  Order matches the issue body verbatim.
+SCREENSHOT_ANGLE_PRESETS: tuple[str, ...] = (
+    "front",
+    "three_quarter",
+    "back",
+    "right",
+    "left",
+    "top",
+)
+
+# Default preset used when the caller supplies ``target`` without
+# ``angle``.  Issue #84 body: ``three_quarter`` is the documented
+# default angle for the target-oriented capture mode.
+SCREENSHOT_ANGLE_DEFAULT: str = "three_quarter"
 
 # Issue #259: canonical view-selector allowlist for ``editor_screenshot``.
 # The selector is interpolated into the output filename on the bridge
@@ -228,6 +249,88 @@ def _crop_roi_invalid_envelope(value: str) -> dict[str, Any]:
     }
 
 
+def _screenshot_angle_invalid_envelope(value: str) -> dict[str, Any]:
+    """Return the canonical ``SCREENSHOT_ANGLE_INVALID`` envelope.
+
+    Issue #84: the message names the supplied value and the accepted
+    six-preset set so the caller can correct the request without
+    consulting external docs.
+    """
+    return {
+        "success": False,
+        "severity": "error",
+        "code": "SCREENSHOT_ANGLE_INVALID",
+        "message": (
+            f"angle={value!r} is not one of the accepted preset names "
+            f"({', '.join(SCREENSHOT_ANGLE_PRESETS)}); the target-oriented "
+            "screenshot mode rejects non-allowlisted angles at the wrapper "
+            "before any bridge transport activity."
+        ),
+        "data": {
+            "supplied": value,
+            "allowed_angles": list(SCREENSHOT_ANGLE_PRESETS),
+        },
+        "diagnostics": [],
+    }
+
+
+def _screenshot_target_invalid_view_envelope(view: str) -> dict[str, Any]:
+    """Return the canonical ``SCREENSHOT_TARGET_INVALID_VIEW`` envelope.
+
+    Issue #84: the target-oriented capture mode is Scene-view-only
+    because the framing math drives ``SceneView.LookAt``; the Game view
+    has no equivalent.
+    """
+    return {
+        "success": False,
+        "severity": "error",
+        "code": "SCREENSHOT_TARGET_INVALID_VIEW",
+        "message": (
+            f"view={view!r} is incompatible with the target-oriented "
+            "capture mode; target framing drives the SceneView only, so "
+            "``target`` requires view='scene'."
+        ),
+        "data": {
+            "supplied": view,
+            "allowed_views": ["scene"],
+        },
+        "diagnostics": [],
+    }
+
+
+def _screenshot_target_crop_conflict_envelope(
+    target: str, crop_roi: str,
+) -> dict[str, Any]:
+    """Return the canonical ``SCREENSHOT_TARGET_CROP_CONFLICT`` envelope.
+
+    Issue #84: the four face-feature ``crop_roi`` presets re-frame the
+    SceneView (``ResolvePresetTarget``), so combining one with the
+    target-oriented framing path would request two competing re-frame
+    operations on the same call.  Pixel-rectangle ``crop_roi`` is not
+    rejected — it post-crops the rendered frame and is orthogonal to
+    framing.
+    """
+    return {
+        "success": False,
+        "severity": "error",
+        "code": "SCREENSHOT_TARGET_CROP_CONFLICT",
+        "message": (
+            f"crop_roi={crop_roi!r} (face-feature preset) cannot be "
+            f"combined with target={target!r}: target framing and "
+            "face-feature preset cropping each drive a SceneView "
+            "re-frame, so requesting both in one call is rejected. "
+            "Pixel-rectangle crop_roi together with target is "
+            "supported."
+        ),
+        "data": {
+            "supplied_target": target,
+            "supplied_crop_roi": crop_roi,
+            "allowed_crop_roi_with_target": "pixel rectangle 'x,y,w,h' only",
+        },
+        "diagnostics": [],
+    }
+
+
 def _is_valid_pixel_rect(value: str) -> bool:
     """Return whether ``value`` is a comma-separated quadruple of
     non-negative integers (the pixel-rectangle escape hatch for
@@ -251,8 +354,10 @@ def editor_screenshot(
     height: int = 0,
     refresh: bool = True,
     crop_roi: str = "",
+    target: str = "",
+    angle: str = SCREENSHOT_ANGLE_DEFAULT,
 ) -> dict[str, Any]:
-    """Capture a screenshot of the Unity Editor (issues #249, #259).
+    """Capture a screenshot of the Unity Editor (issues #249, #259, #84).
 
     The view selector is interpolated into the output filename on the
     bridge side, so the wrapper enforces a positive allowlist
@@ -270,6 +375,23 @@ def editor_screenshot(
     ``"x,y,w,h"``; everything else is rejected at the wrapper with the
     ``CROP_ROI_INVALID`` envelope so the bridge is not contacted for a
     bogus region argument.
+
+    Issue #84 target-oriented capture mode: when ``target`` is non-empty
+    the bridge re-frames the SceneView onto the named GameObject's
+    world-space bounds at the requested angle preset.  The wrapper
+    rejects:
+
+    * ``angle`` values outside ``SCREENSHOT_ANGLE_PRESETS``
+      (``SCREENSHOT_ANGLE_INVALID``);
+    * ``view`` other than ``scene`` together with ``target``
+      (``SCREENSHOT_TARGET_INVALID_VIEW``);
+    * a face-feature ``crop_roi`` preset together with ``target``
+      (``SCREENSHOT_TARGET_CROP_CONFLICT``) — pixel-rectangle
+      ``crop_roi`` together with ``target`` is supported.
+
+    All wrapper rejections short-circuit before the pre-screenshot
+    refresh.  When ``target`` is empty, ``angle`` is ignored and the
+    wrapper behaves as it did before issue #84.
     """
     # Issue #259: view-selector allowlist must run BEFORE the refresh
     # round-trip so a rejected request never produces side-effecting
@@ -282,6 +404,17 @@ def editor_screenshot(
         and not _is_valid_pixel_rect(crop_roi)
     ):
         return _crop_roi_invalid_envelope(crop_roi)
+    if target:
+        # Issue #84: the angle allowlist gate fires whenever target is
+        # supplied, including when angle still carries the wrapper
+        # default — the default is meaningful only when target is set,
+        # so a tampered default surfaces here, not on the bridge.
+        if angle not in SCREENSHOT_ANGLE_PRESETS:
+            return _screenshot_angle_invalid_envelope(angle)
+        if view != "scene":
+            return _screenshot_target_invalid_view_envelope(view)
+        if crop_roi in SCREENSHOT_CROP_ROI_PRESETS:
+            return _screenshot_target_crop_conflict_envelope(target, crop_roi)
     if refresh:
         try:
             send_action(action="refresh_asset_database")
@@ -295,6 +428,9 @@ def editor_screenshot(
     }
     if crop_roi:
         kwargs["crop_roi"] = crop_roi
+    if target:
+        kwargs["target"] = target
+        kwargs["angle"] = angle
     return send_action(**kwargs)
 
 
@@ -359,8 +495,10 @@ def register_editor_view_tools(server: FastMCP) -> None:
         height: int = 0,
         refresh: bool = True,
         crop_roi: str = "",
+        target: str = "",
+        angle: str = SCREENSHOT_ANGLE_DEFAULT,
     ) -> dict[str, Any]:
-        """Capture a screenshot of the Unity Editor (issue #249).
+        """Capture a screenshot of the Unity Editor (issues #249, #84).
 
         Args:
             view: Which view to capture ("scene" or "game").
@@ -374,10 +512,23 @@ def register_editor_view_tools(server: FastMCP) -> None:
                 non-negative integers ``"x,y,w,h"``. Unrecognised values
                 are rejected pre-bridge with the ``CROP_ROI_INVALID``
                 envelope.
+            target: Hierarchy path of a GameObject. When supplied,
+                triggers the target-oriented capture mode (issue #84):
+                the SceneView is re-framed onto the target's world-
+                space AABB at the requested angle preset, the
+                screenshot is captured, then the previous SceneView
+                camera state is restored.  Empty (default) keeps the
+                pre-#84 behavior of capturing the current view.
+            angle: One of ``SCREENSHOT_ANGLE_PRESETS`` (``front`` /
+                ``three_quarter`` / ``back`` / ``right`` / ``left`` /
+                ``top``).  Meaningful only when ``target`` is supplied;
+                ignored when ``target`` is empty.  Default
+                ``three_quarter`` (issue #84 body).
         """
         return editor_screenshot(
             view=view, width=width, height=height,
             refresh=refresh, crop_roi=crop_roi,
+            target=target, angle=angle,
         )
 
     @server.tool(name="editor_force_scene_view_refresh")
@@ -437,7 +588,7 @@ def register_editor_view_tools(server: FastMCP) -> None:
         pivot: str = "",
         yaw: float = float("nan"),
         pitch: float = float("nan"),
-        distance: float = -1.0,
+        size: float = -1.0,
         orthographic: int = -1,
         position: str = "",
         look_at: str = "",
@@ -447,7 +598,7 @@ def register_editor_view_tools(server: FastMCP) -> None:
 
         Three modes (mutually exclusive):
 
-        * Pivot orbit — ``pivot`` + ``yaw`` / ``pitch`` / ``distance``.
+        * Pivot orbit — ``pivot`` + ``yaw`` / ``pitch`` / ``size``.
         * Position — ``position`` + (``look_at`` or ``yaw`` / ``pitch``).
         * Reset — ``reset_to_defaults=True`` returns the SceneView to its
           documented default pivot, rotation, size, and orthographic flag.
@@ -461,7 +612,7 @@ def register_editor_view_tools(server: FastMCP) -> None:
             pivot: JSON '{"x":0,"y":0,"z":0}' — orbit center.
             yaw: Horizontal rotation in degrees.
             pitch: Vertical rotation in degrees.
-            distance: SceneView.size (>=0 to set, -1 = keep).
+            size: SceneView.size, the Scene-view half-width (>=0 to set, -1 = keep).
             orthographic: -1=keep, 0=perspective, 1=orthographic.
             position: JSON '{"x":0,"y":1,"z":-5}' — camera world position.
             look_at: JSON '{"x":0,"y":1,"z":0}' — look-at target (requires position).
@@ -469,7 +620,7 @@ def register_editor_view_tools(server: FastMCP) -> None:
                 restore the SceneView to its documented defaults.
         """
         kwargs = build_set_camera_kwargs(
-            pivot=pivot, yaw=yaw, pitch=pitch, distance=distance,
+            pivot=pivot, yaw=yaw, pitch=pitch, size=size,
             orthographic=orthographic, position=position, look_at=look_at,
             reset_to_defaults=reset_to_defaults,
         )

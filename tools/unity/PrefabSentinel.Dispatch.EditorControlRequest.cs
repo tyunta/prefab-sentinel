@@ -53,11 +53,13 @@ namespace PrefabSentinel
         public int depth = 1;
 
         // camera (get_camera / set_camera)
-        // Pivot orbit: pivot + yaw/pitch/distance
+        // Pivot orbit: pivot + yaw/pitch/size (issue #81 — orbit-radius
+        // argument carries SceneView.size semantics, Scene-view
+        // half-width; named ``size`` end-to-end).
         public float[] camera_pivot = null;      // [x, y, z] pivot point
         public float yaw = float.NaN;           // NaN = keep current
         public float pitch = float.NaN;
-        public float distance = -1f;             // SceneView.size; -1 = keep current
+        public float size = -1f;                 // SceneView.size; -1 = keep current
         // Position mode: camera_position + camera_look_at or yaw/pitch
         public float[] camera_position = null;   // [x, y, z] camera world coords
         public float[] camera_look_at = null;    // [x, y, z] look-at target
@@ -230,6 +232,16 @@ namespace PrefabSentinel
         // a comma-separated pixel quadruple ``"x,y,w,h"``.  Empty =
         // no region, capture full frame.
         public string crop_roi = string.Empty;
+
+        // Issue #84: target-oriented capture mode payload for
+        // ``capture_screenshot``.  ``target`` is the hierarchy path
+        // of the GameObject to frame (empty = no object-capture
+        // mode, current-view capture).  ``angle`` is one of the
+        // six preset names from ``ObjectCaptureFramingMath.PresetNames``
+        // (``front`` / ``three_quarter`` / ``back`` / ``right`` /
+        // ``left`` / ``top``); ignored when ``target`` is empty.
+        public string target = string.Empty;
+        public string angle = string.Empty;
 
         // Issue #241: caller-supplied pagination knobs for
         // ``get_blend_shapes``.  Defaults reproduce the pre-pagination

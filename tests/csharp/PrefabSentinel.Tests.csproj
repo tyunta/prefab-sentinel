@@ -49,6 +49,9 @@
     <Compile Include="..\..\tools\unity\PrefabSentinel.Screenshot.ViewAllowlistClassifier.cs">
       <Link>Bridge\PrefabSentinel.Screenshot.ViewAllowlistClassifier.cs</Link>
     </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.Screenshot.ObjectCaptureFramingMath.cs">
+      <Link>Bridge\PrefabSentinel.Screenshot.ObjectCaptureFramingMath.cs</Link>
+    </Compile>
     <!--
       H-track xUnit migration (issues #10-#16, #19): the Unity-free decision
       classes extracted from the C# bridge handlers. Each file references only
