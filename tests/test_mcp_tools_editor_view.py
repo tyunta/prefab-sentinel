@@ -353,6 +353,210 @@ class EditorScreenshotViewAllowlistTests(unittest.TestCase):
         )
 
 
+class EditorScreenshotAngleAllowlistTests(unittest.TestCase):
+    """Issue #84 — ``editor_screenshot`` rejects an ``angle`` value
+    outside the six-preset allowlist before any bridge transport
+    activity, and the exported allowlist tuple pins the canonical
+    six-name set in issue-body order.
+    """
+
+    _BRIDGE_OK = _SCREENSHOT_BRIDGE_OK
+
+    def test_allowlist_constant_pins_exact_value(self) -> None:
+        # Pin the exported tuple verbatim in the issue-body order;
+        # drift (adding a seventh, reordering, swapping a name) is
+        # the failure mode this row catches.
+        self.assertEqual(
+            ("front", "three_quarter", "back", "right", "left", "top"),
+            mcp_tools_editor_view.SCREENSHOT_ANGLE_PRESETS,
+            msg=(
+                "Wrapper-side angle allowlist must equal the six "
+                "preset names from issue #84 in canonical order."
+            ),
+        )
+
+    def test_unknown_angle_preset_rejected_pre_bridge(self) -> None:
+        with patch.object(
+            mcp_tools_editor_view, "send_action", return_value=self._BRIDGE_OK,
+        ) as send:
+            response = mcp_tools_editor_view.editor_screenshot(
+                target="/Avatar", angle="three_eighths", refresh=False,
+            )
+        send.assert_not_called()
+        observed = (
+            response["success"],
+            response["severity"],
+            response["code"],
+            "three_eighths" in response["message"],
+            "three_quarter" in response["message"],
+        )
+        self.assertEqual(
+            (False, "error", "SCREENSHOT_ANGLE_INVALID", True, True),
+            observed,
+            msg=(
+                "Unknown angle preset must yield SCREENSHOT_ANGLE_INVALID "
+                "with a message naming the supplied value and at least "
+                "one of the six allowed preset names."
+            ),
+        )
+
+    def test_wrapper_rejection_on_target_path_suppresses_refresh(self) -> None:
+        # Pre-bridge wrapper rejection on an angle-allowlist violation
+        # must suppress the pre-screenshot refresh round-trip; the
+        # wrapper performs no transport activity at all on rejection.
+        with patch.object(
+            mcp_tools_editor_view, "send_action", return_value=self._BRIDGE_OK,
+        ) as send:
+            response = mcp_tools_editor_view.editor_screenshot(
+                target="/Avatar", angle="bogus", refresh=True,
+            )
+        send.assert_not_called()
+        self.assertEqual(
+            "SCREENSHOT_ANGLE_INVALID", response["code"],
+            msg=(
+                "Rejected target/angle combination must suppress the "
+                "pre-screenshot refresh round-trip (#84)."
+            ),
+        )
+
+
+class EditorScreenshotTargetForwardingTests(unittest.TestCase):
+    """Issue #84 — ``editor_screenshot`` target-oriented capture mode
+    forwarding contract.
+
+    Pins:
+
+    * Default screenshot call carries neither ``target`` nor ``angle``
+      on the bridge kwargs (no silent forwarding of the default
+      ``angle="three_quarter"`` when ``target`` is empty).
+    * Object-capture forwarding: both ``target`` and ``angle`` reach
+      the bridge action verbatim.
+    * ``view="game"`` + ``target`` is rejected pre-bridge with
+      ``SCREENSHOT_TARGET_INVALID_VIEW``.
+    * ``target`` + face-feature ``crop_roi`` preset is rejected with
+      ``SCREENSHOT_TARGET_CROP_CONFLICT``.
+    * ``target`` + pixel-rectangle ``crop_roi`` is accepted; both
+      fields reach the bridge.
+    """
+
+    _BRIDGE_OK = _SCREENSHOT_BRIDGE_OK
+
+    def test_default_args_produce_no_target_or_angle_on_kwargs(self) -> None:
+        with patch.object(
+            mcp_tools_editor_view, "send_action", return_value=self._BRIDGE_OK,
+        ) as send:
+            mcp_tools_editor_view.editor_screenshot(refresh=False)
+        send.assert_called_once()
+        kwargs = send.call_args.kwargs
+        self.assertEqual(
+            ("capture_screenshot", False, False),
+            (
+                kwargs["action"],
+                "target" in kwargs,
+                "angle" in kwargs,
+            ),
+            msg=(
+                "Default editor_screenshot() must carry neither "
+                "``target`` nor ``angle`` on the bridge kwargs (no "
+                "silent forwarding of the wrapper default angle when "
+                "target is empty)."
+            ),
+        )
+
+    def test_target_and_angle_both_reach_the_bridge_verbatim(self) -> None:
+        with patch.object(
+            mcp_tools_editor_view, "send_action", return_value=self._BRIDGE_OK,
+        ) as send:
+            mcp_tools_editor_view.editor_screenshot(
+                target="/Avatar/Body", angle="three_quarter", refresh=False,
+            )
+        send.assert_called_once()
+        kwargs = send.call_args.kwargs
+        self.assertEqual(
+            ("capture_screenshot", "/Avatar/Body", "three_quarter"),
+            (kwargs["action"], kwargs["target"], kwargs["angle"]),
+            msg=(
+                "target='/Avatar/Body' and angle='three_quarter' must "
+                "reach the bridge unchanged on the capture_screenshot "
+                "action."
+            ),
+        )
+
+    def test_view_game_with_target_is_rejected_pre_bridge(self) -> None:
+        with patch.object(
+            mcp_tools_editor_view, "send_action", return_value=self._BRIDGE_OK,
+        ) as send:
+            response = mcp_tools_editor_view.editor_screenshot(
+                view="game", target="/Avatar", refresh=False,
+            )
+        send.assert_not_called()
+        observed = (
+            response["success"],
+            response["severity"],
+            response["code"],
+            "game" in response["message"],
+            "scene" in response["message"],
+        )
+        self.assertEqual(
+            (False, "error", "SCREENSHOT_TARGET_INVALID_VIEW", True, True),
+            observed,
+            msg=(
+                "view='game' with target must yield "
+                "SCREENSHOT_TARGET_INVALID_VIEW naming the supplied "
+                "view and the Scene-view-only constraint."
+            ),
+        )
+
+    def test_target_with_face_feature_crop_roi_is_rejected(self) -> None:
+        with patch.object(
+            mcp_tools_editor_view, "send_action", return_value=self._BRIDGE_OK,
+        ) as send:
+            response = mcp_tools_editor_view.editor_screenshot(
+                target="/Avatar", crop_roi="auto_face", refresh=False,
+            )
+        send.assert_not_called()
+        observed = (
+            response["success"],
+            response["severity"],
+            response["code"],
+            "auto_face" in response["message"],
+            "/Avatar" in response["message"],
+        )
+        self.assertEqual(
+            (False, "error", "SCREENSHOT_TARGET_CROP_CONFLICT", True, True),
+            observed,
+            msg=(
+                "target + face-feature crop_roi must yield "
+                "SCREENSHOT_TARGET_CROP_CONFLICT naming both supplied "
+                "values."
+            ),
+        )
+
+    def test_target_with_pixel_rectangle_crop_roi_passes_through(self) -> None:
+        # Pixel-rectangle crop_roi is independent of the framing
+        # re-frame, so the combination is explicitly accepted by
+        # the spec; both fields must reach the bridge.
+        with patch.object(
+            mcp_tools_editor_view, "send_action", return_value=self._BRIDGE_OK,
+        ) as send:
+            mcp_tools_editor_view.editor_screenshot(
+                target="/Avatar",
+                crop_roi="10,20,300,200",
+                refresh=False,
+            )
+        send.assert_called_once()
+        kwargs = send.call_args.kwargs
+        self.assertEqual(
+            ("capture_screenshot", "/Avatar", "10,20,300,200"),
+            (kwargs["action"], kwargs["target"], kwargs["crop_roi"]),
+            msg=(
+                "target + pixel-rectangle crop_roi must both reach the "
+                "bridge on the capture_screenshot action (the rectangle "
+                "is applied to the rendered frame after framing)."
+            ),
+        )
+
+
 class EditorForceSceneViewRefreshTests(unittest.TestCase):
     """Issue #242 — ``editor_force_scene_view_refresh`` routing."""
 

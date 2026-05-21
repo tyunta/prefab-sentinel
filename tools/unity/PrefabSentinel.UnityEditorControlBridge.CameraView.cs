@@ -360,7 +360,8 @@ namespace PrefabSentinel
             bool hasPivot = request.camera_pivot != null && request.camera_pivot.Length == 3;
             bool hasYaw = !float.IsNaN(request.yaw);
             bool hasPitch = !float.IsNaN(request.pitch);
-            bool hasDistance = request.distance >= 0f;
+            // Issue #81: orbit-radius field is named ``size`` end-to-end.
+            bool hasSize = request.size >= 0f;
 
             // Reset mode (issue #112): restore the SceneView to documented
             // defaults via the public synchronous LookAt entry point and
@@ -438,7 +439,7 @@ namespace PrefabSentinel
                 }
                 else
                 {
-                    float newSize = hasDistance ? request.distance : sceneView.size;
+                    float newSize = hasSize ? request.size : sceneView.size;
                     Vector3 currentEuler = sceneView.rotation.eulerAngles;
                     float curYaw = (currentEuler.y + 180f) % 360f;
                     float curPitch = currentEuler.x > 180f ? currentEuler.x - 360f : currentEuler.x;
@@ -478,7 +479,7 @@ namespace PrefabSentinel
                     newRot = Quaternion.Euler(newPitch, internalYaw, 0f);
                 }
 
-                float newSize = hasDistance ? request.distance : sceneView.size;
+                float newSize = hasSize ? request.size : sceneView.size;
                 sceneView.LookAt(
                     newPivot, newRot, newSize, sceneView.orthographic,
                     instant: true);
