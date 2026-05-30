@@ -35,6 +35,12 @@ namespace PrefabSentinel
                     return WriteQuaternionValue(prop, value);
                 case SerializedPropertyType.ObjectReference:
                     return WriteObjectReferenceValue(prop, value);
+                case SerializedPropertyType.Integer:
+                    if (prop.type == "LayerMask")
+                    {
+                        return WriteLayerMaskValue(prop, value);
+                    }
+                    break;
             }
 
             if (!TryMapSerializedPropertyKind(prop.propertyType, out SerializedPropertyKind kind))
@@ -53,24 +59,122 @@ namespace PrefabSentinel
         private static PropertyWriteResult WriteEnumValue(
             SerializedProperty prop, string value)
         {
-            // enumNames returns internal C# names (preferred for
-            // programmatic input); enumDisplayNames may contain spaces.
-#pragma warning disable 0618  // enumNames deprecated but intentionally used
-            int idx = System.Array.IndexOf(prop.enumNames, value);
-            if (idx >= 0)
+#pragma warning disable 0618
+            var definition = new EnumPropertyDefinition(
+                prop.enumNames,
+                prop.enumDisplayNames,
+                ResolveEnumBackingValues(prop));
+            EnumPropertyParseResult parsed = EnumPropertyValueParser.Parse(definition, value);
+            if (!parsed.Success)
             {
-                prop.enumValueIndex = idx;
-                return PropertyWriteResult.Ok();
+                return PropertyWriteResult.Failure(
+                    parsed.ErrorCode,
+                    $"Enum value '{value}' rejected. Names: {string.Join(", ", parsed.Names)}; displays: {string.Join(", ", parsed.DisplayNames)}.",
+                    new EditorControlData { suggestions = parsed.Names });
             }
-            if (int.TryParse(value, out int numericIndex))
-            {
-                prop.enumValueIndex = numericIndex;
-                return PropertyWriteResult.Ok();
-            }
-            return PropertyWriteResult.Failure(
-                "EDITOR_CTRL_SET_PROP_TYPE_MISMATCH",
-                $"Enum value '{value}' not found. Valid: {string.Join(", ", prop.enumNames)}");
+            prop.enumValueIndex = parsed.Index;
+            return PropertyWriteResult.Ok();
 #pragma warning restore 0618
+        }
+
+        private static int[] ResolveEnumBackingValues(SerializedProperty prop)
+        {
+#pragma warning disable 0618
+            int[] fallback = new int[prop.enumNames.Length];
+            for (int i = 0; i < fallback.Length; i++) fallback[i] = i;
+            Type enumType = ResolveSerializedFieldType(prop);
+            if (enumType == null || !enumType.IsEnum) return fallback;
+
+            string[] runtimeNames = Enum.GetNames(enumType);
+            Array runtimeValues = Enum.GetValues(enumType);
+            var byName = new System.Collections.Generic.Dictionary<string, int>();
+            for (int i = 0; i < runtimeNames.Length; i++)
+            {
+                byName[runtimeNames[i]] = Convert.ToInt32(runtimeValues.GetValue(i));
+            }
+
+            int[] values = new int[prop.enumNames.Length];
+            for (int i = 0; i < prop.enumNames.Length; i++)
+            {
+                values[i] = byName.TryGetValue(prop.enumNames[i], out int backing)
+                    ? backing
+                    : fallback[i];
+            }
+            return values;
+#pragma warning restore 0618
+        }
+
+        private static Type ResolveSerializedFieldType(SerializedProperty prop)
+        {
+            UnityEngine.Object target = prop.serializedObject.targetObject;
+            if (target == null) return null;
+            Type currentType = target.GetType();
+            string[] parts = prop.propertyPath.Replace(".Array.data[", "[").Split('.');
+            Type fieldType = currentType;
+            foreach (string rawPart in parts)
+            {
+                if (rawPart.StartsWith("[", StringComparison.Ordinal))
+                {
+                    fieldType = ElementType(fieldType);
+                    continue;
+                }
+                var field = FindField(fieldType, rawPart);
+                if (field == null) return null;
+                fieldType = field.FieldType;
+            }
+            return fieldType;
+        }
+
+        private static System.Reflection.FieldInfo FindField(Type owner, string name)
+        {
+            for (Type type = owner; type != null; type = type.BaseType)
+            {
+                var field = type.GetField(
+                    name,
+                    System.Reflection.BindingFlags.Instance
+                    | System.Reflection.BindingFlags.Public
+                    | System.Reflection.BindingFlags.NonPublic);
+                if (field != null) return field;
+            }
+            return null;
+        }
+
+        private static Type ElementType(Type type)
+        {
+            if (type == null) return null;
+            if (type.IsArray) return type.GetElementType();
+            if (type.IsGenericType) return type.GetGenericArguments()[0];
+            return type;
+        }
+
+
+        private static PropertyWriteResult WriteLayerMaskValue(
+            SerializedProperty prop, string value)
+        {
+            LayerMaskParseResult parsed = LayerMaskValueParser.Parse(
+                value,
+                LayerMask.NameToLayer,
+                CurrentLayerNames());
+            if (!parsed.Success)
+            {
+                return PropertyWriteResult.Failure(
+                    parsed.ErrorCode,
+                    $"LayerMask value '{value}' rejected. Layers: {string.Join(", ", parsed.Candidates)}.",
+                    new EditorControlData { suggestions = parsed.Candidates });
+            }
+            prop.intValue = parsed.Mask;
+            return PropertyWriteResult.Ok();
+        }
+
+        private static string[] CurrentLayerNames()
+        {
+            var names = new System.Collections.Generic.List<string>();
+            for (int i = 0; i < 32; i++)
+            {
+                string name = LayerMask.LayerToName(i);
+                if (!string.IsNullOrEmpty(name)) names.Add(name);
+            }
+            return names.ToArray();
         }
 
         private static PropertyWriteResult WriteQuaternionValue(
@@ -112,12 +216,19 @@ namespace PrefabSentinel
         private static PropertyWriteResult WriteObjectReferenceValue(
             SerializedProperty prop, string referencePath)
         {
-            var (obj, refError) = ResolveObjectReference(referencePath);
-            if (obj == null)
+            ExpectedObjectReferenceResolution expected = ResolveExpectedObjectReferenceType(prop);
+            if (!expected.Success)
                 return PropertyWriteResult.Failure(
-                    "EDITOR_CTRL_SET_PROP_REF_NOT_FOUND",
-                    refError ?? $"Object reference not found: {referencePath}");
-            prop.objectReferenceValue = obj;
+                    expected.ErrorCode,
+                    expected.ErrorMessage,
+                    new EditorControlData { suggestions = expected.Candidates });
+            ObjectReferenceResolution resolved = ResolveTypedObjectReference(referencePath, expected.Type);
+            if (!resolved.Success)
+                return PropertyWriteResult.Failure(
+                    resolved.ErrorCode,
+                    resolved.ErrorMessage,
+                    new EditorControlData { suggestions = resolved.Candidates });
+            prop.objectReferenceValue = resolved.Object;
             return PropertyWriteResult.Ok();
         }
 
@@ -214,22 +325,36 @@ namespace PrefabSentinel
         public bool Success { get; }
         public string ErrorCode { get; }
         public string ErrorMessage { get; }
+        public UnityEditorControlBridge.EditorControlData ErrorData { get; }
 
-        private PropertyWriteResult(bool success, string errorCode, string errorMessage)
+        private PropertyWriteResult(
+            bool success,
+            string errorCode,
+            string errorMessage,
+            UnityEditorControlBridge.EditorControlData errorData)
         {
             Success = success;
             ErrorCode = errorCode;
             ErrorMessage = errorMessage;
+            ErrorData = errorData;
         }
 
         public static PropertyWriteResult Ok()
         {
-            return new PropertyWriteResult(true, string.Empty, string.Empty);
+            return new PropertyWriteResult(true, string.Empty, string.Empty, null);
         }
 
         public static PropertyWriteResult Failure(string errorCode, string errorMessage)
         {
-            return new PropertyWriteResult(false, errorCode, errorMessage);
+            return new PropertyWriteResult(false, errorCode, errorMessage, null);
+        }
+
+        public static PropertyWriteResult Failure(
+            string errorCode,
+            string errorMessage,
+            UnityEditorControlBridge.EditorControlData errorData)
+        {
+            return new PropertyWriteResult(false, errorCode, errorMessage, errorData);
         }
     }
 }

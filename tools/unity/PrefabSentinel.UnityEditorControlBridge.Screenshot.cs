@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.UI;
 
 namespace PrefabSentinel
 {
@@ -74,6 +75,54 @@ namespace PrefabSentinel
             label = "pixel_rect";
             bounds = new CropBoundsEntry { x = vals[0], y = vals[1], w = vals[2], h = vals[3] };
             return true;
+        }
+
+        private static EditorControlResponse ResolveTargetPixelCrop(
+            EditorControlRequest request,
+            int frameWidth,
+            int frameHeight,
+            out int readX,
+            out int readY,
+            out int readW,
+            out int readH,
+            out CropBoundsEntry pixelRectApplied)
+        {
+            readX = 0;
+            readY = 0;
+            readW = frameWidth;
+            readH = frameHeight;
+            pixelRectApplied = null;
+            if (string.IsNullOrEmpty(request.crop_roi))
+                return null;
+
+            if (!TryResolveCropRoi(request.crop_roi, out string roiLabel, out CropBoundsEntry roiBounds)
+                || roiLabel != "pixel_rect"
+                || roiBounds == null)
+            {
+                return BuildError(
+                    "EDITOR_CTRL_CROP_ROI_INVALID",
+                    $"crop_roi='{request.crop_roi}' is not a pixel "
+                    + "quadruple (face-feature presets are rejected "
+                    + "at the wrapper when target is supplied).");
+            }
+
+            if (roiBounds.w <= 0 || roiBounds.h <= 0
+                || roiBounds.x > frameWidth || roiBounds.y > frameHeight
+                || roiBounds.w > frameWidth - roiBounds.x
+                || roiBounds.h > frameHeight - roiBounds.y)
+            {
+                return BuildError(
+                    "EDITOR_CTRL_CROP_ROI_OUT_OF_BOUNDS",
+                    $"crop_roi pixel rectangle {request.crop_roi} does "
+                    + $"not fit inside the rendered frame {frameWidth}x{frameHeight}.");
+            }
+
+            readX = roiBounds.x;
+            readY = roiBounds.y;
+            readW = roiBounds.w;
+            readH = roiBounds.h;
+            pixelRectApplied = roiBounds;
+            return null;
         }
 
         /// <summary>
@@ -158,6 +207,13 @@ namespace PrefabSentinel
                     "(scene, game). The view selector is interpolated into the " +
                     "output filename so non-allowlisted inputs are rejected " +
                     "before any filesystem activity.");
+            }
+
+            if (!ScreenshotDimensionBounds.Accepts(request.width, request.height))
+            {
+                return BuildError(
+                    ScreenshotDimensionBounds.BridgeOutOfRangeCode,
+                    ScreenshotDimensionBounds.BuildMessage(request.width, request.height));
             }
 
             string outputDir = Path.Combine(Path.GetDirectoryName(requestPath), "screenshots");
@@ -412,29 +468,9 @@ namespace PrefabSentinel
         private static EditorControlResponse HandleObjectCaptureScreenshot(
             EditorControlRequest request, string outputPath)
         {
-            // Defense-in-depth: the wrapper rejects unknown presets,
-            // but the bridge mirrors the gate so a direct bridge call
-            // (e.g., from the integration test runner) sees the same
-            // typed error.
             string angle = string.IsNullOrEmpty(request.angle)
                 ? "three_quarter"
                 : request.angle;
-            bool knownPreset = false;
-            foreach (var preset in ObjectCaptureFramingMath.PresetNames)
-            {
-                if (string.Equals(preset, angle, StringComparison.Ordinal))
-                {
-                    knownPreset = true;
-                    break;
-                }
-            }
-            if (!knownPreset)
-            {
-                return BuildError(
-                    "EDITOR_CTRL_SCREENSHOT_ANGLE_INVALID",
-                    $"angle='{request.angle}' is not one of the accepted preset names "
-                    + $"({string.Join(", ", ObjectCaptureFramingMath.PresetNames)}).");
-            }
 
             SceneView sceneView = SceneView.lastActiveSceneView;
             if (sceneView == null)
@@ -456,6 +492,31 @@ namespace PrefabSentinel
                     "EDITOR_CTRL_SCREENSHOT_TARGET_NOT_FOUND",
                     $"target='{request.target}' matched no GameObject in "
                     + "the active Scene or Prefab Stage.");
+            }
+            EditorControlResponse selectorError = ValidateTargetScreenshotSelectors(request);
+            if (selectorError != null) return selectorError;
+            if (ShouldUseWorldSpaceUiCapture(request, target, out EditorControlResponse uiUnsupported))
+            {
+                if (uiUnsupported != null) return uiUnsupported;
+                return HandleWorldSpaceUiCaptureScreenshot(
+                    request, outputPath, sceneView, cam, target, angle);
+            }
+
+            bool knownPreset = false;
+            foreach (var preset in ObjectCaptureFramingMath.PresetNames)
+            {
+                if (string.Equals(preset, angle, StringComparison.Ordinal))
+                {
+                    knownPreset = true;
+                    break;
+                }
+            }
+            if (!knownPreset)
+            {
+                return BuildError(
+                    "EDITOR_CTRL_SCREENSHOT_ANGLE_INVALID",
+                    $"angle='{request.angle}' is not one of the accepted preset names "
+                    + $"({string.Join(", ", ObjectCaptureFramingMath.PresetNames)}).");
             }
 
             // Aggregate active renderer bounds on the resolved subtree.
@@ -608,47 +669,14 @@ namespace PrefabSentinel
                 Texture2D tex = null;
                 try
                 {
-                    rt = RenderSceneViewToTexture(cam, w, h);
-
-                    // Pixel-rectangle crop_roi (issue #84 + #249): the
-                    // wrapper accepts ``target`` + pixel-rectangle
-                    // crop_roi (face-feature presets are rejected at
-                    // the wrapper), and the spec requires the rectangle
-                    // to be applied to the rendered frame after
-                    // framing. Out-of-frame rectangles return the same
-                    // EDITOR_CTRL_CROP_ROI_OUT_OF_BOUNDS envelope as
-                    // the existing pixel-rect branch.
                     int readX = 0, readY = 0, readW = w, readH = h;
                     CropBoundsEntry pixelRectApplied = null;
-                    if (!string.IsNullOrEmpty(request.crop_roi))
-                    {
-                        if (!TryResolveCropRoi(request.crop_roi,
-                                out string roiLabel, out CropBoundsEntry roiBounds)
-                            || roiLabel != "pixel_rect"
-                            || roiBounds == null)
-                        {
-                            return BuildError(
-                                "EDITOR_CTRL_CROP_ROI_INVALID",
-                                $"crop_roi='{request.crop_roi}' is not a pixel "
-                                + "quadruple (face-feature presets are rejected "
-                                + "at the wrapper when target is supplied).");
-                        }
-                        if (roiBounds.w <= 0 || roiBounds.h <= 0
-                            || roiBounds.x + roiBounds.w > w
-                            || roiBounds.y + roiBounds.h > h)
-                        {
-                            return BuildError(
-                                "EDITOR_CTRL_CROP_ROI_OUT_OF_BOUNDS",
-                                $"crop_roi pixel rectangle {request.crop_roi} does "
-                                + $"not fit inside the rendered frame {w}x{h}.");
-                        }
-                        readX = roiBounds.x;
-                        readY = roiBounds.y;
-                        readW = roiBounds.w;
-                        readH = roiBounds.h;
-                        pixelRectApplied = roiBounds;
-                    }
+                    EditorControlResponse cropError = ResolveTargetPixelCrop(
+                        request, w, h, out readX, out readY, out readW, out readH,
+                        out pixelRectApplied);
+                    if (cropError != null) return cropError;
 
+                    rt = RenderSceneViewToTexture(cam, w, h);
                     RenderTexture.active = rt;
                     tex = new Texture2D(readW, readH, TextureFormat.RGB24, false);
                     tex.ReadPixels(new Rect(readX, readY, readW, readH), 0, 0);
@@ -693,6 +721,205 @@ namespace PrefabSentinel
                 // Restore the previous SceneView camera state so the
                 // caller observes no persistent framing change. This
                 // mirrors the existing crop_roi preset branch.
+                if (SceneView.lastActiveSceneView != null)
+                {
+                    var sv = SceneView.lastActiveSceneView;
+                    var prevPivot = new Vector3(
+                        previous.pivot[0], previous.pivot[1], previous.pivot[2]);
+                    var prevRot = new Quaternion(
+                        previous.rotation_quat[0], previous.rotation_quat[1],
+                        previous.rotation_quat[2], previous.rotation_quat[3]);
+                    sv.LookAt(prevPivot, prevRot, previous.size, previous.orthographic, instant: true);
+                }
+            }
+        }
+
+
+        private static EditorControlResponse ValidateTargetScreenshotSelectors(
+            EditorControlRequest request)
+        {
+            if (request.target_mode != "auto"
+                && request.target_mode != "renderer"
+                && request.target_mode != "world_space_ui")
+            {
+                return BuildError(
+                    "SCREENSHOT_TARGET_MODE_INVALID",
+                    $"target_mode='{request.target_mode}' is not one of auto, renderer, world_space_ui.");
+            }
+            if (request.projection != "auto"
+                && request.projection != "perspective"
+                && request.projection != "orthographic")
+            {
+                return BuildError(
+                    "SCREENSHOT_PROJECTION_INVALID",
+                    $"projection='{request.projection}' is not one of auto, perspective, orthographic.");
+            }
+            if (request.padding_ratio < 0f || request.padding_ratio > 1f)
+            {
+                return BuildError(
+                    "SCREENSHOT_PADDING_RATIO_INVALID",
+                    $"padding_ratio={request.padding_ratio} must be between 0.0 and 1.0 inclusive.");
+            }
+            return null;
+        }
+
+        private static bool ShouldUseWorldSpaceUiCapture(
+            EditorControlRequest request,
+            GameObject target,
+            out EditorControlResponse unsupported)
+        {
+            unsupported = null;
+            bool wantsUi = request.target_mode == "world_space_ui";
+            if (request.target_mode == "renderer") return false;
+
+            Canvas canvas = ResolveRelevantCanvas(target);
+            bool hasRect = target.GetComponent<RectTransform>() != null
+                || target.GetComponentInChildren<RectTransform>(includeInactive: false) != null;
+            if (!hasRect)
+            {
+                if (!wantsUi) return false;
+                unsupported = BuildError(
+                    "EDITOR_CTRL_SCREENSHOT_UI_UNSUPPORTED",
+                    $"target='{request.target}' has no active RectTransform contributors.");
+                return true;
+            }
+            if (canvas == null || canvas.renderMode != RenderMode.WorldSpace)
+            {
+                unsupported = BuildError(
+                    "EDITOR_CTRL_SCREENSHOT_UI_UNSUPPORTED",
+                    $"target='{request.target}' is not under a World Space Canvas.");
+                return true;
+            }
+            return true;
+        }
+
+        private static Canvas ResolveRelevantCanvas(GameObject target)
+        {
+            Canvas ownOrParent = target.GetComponentInParent<Canvas>();
+            if (ownOrParent != null) return ownOrParent;
+            return target.GetComponentInChildren<Canvas>(includeInactive: false);
+        }
+
+        private static EditorControlResponse HandleWorldSpaceUiCaptureScreenshot(
+            EditorControlRequest request,
+            string outputPath,
+            SceneView sceneView,
+            Camera cam,
+            GameObject target,
+            string angle)
+        {
+            if (angle != "front" && angle != "back" && angle != "current_camera")
+            {
+                return BuildError(
+                    "EDITOR_CTRL_SCREENSHOT_ANGLE_INVALID",
+                    $"World Space UI target capture accepts angle='front', 'back', or 'current_camera'; got '{angle}'.");
+            }
+
+            RectTransform anchor = target.GetComponent<RectTransform>()
+                ?? target.GetComponentInChildren<RectTransform>(includeInactive: false);
+
+            List<GeometryContributorRecord> records = CollectGeometryContributors(
+                target, includeChildren: true);
+            GeometryBoundsResult bounds = GeometryBoundsMath.Aggregate(
+                ToBoundsContributors(records),
+                "rect_transform",
+                includeChildren: true);
+            if (!bounds.Success)
+            {
+                return BuildError(
+                    bounds.ErrorCode,
+                    $"World Space UI bounds unavailable for target='{request.target}'.");
+            }
+
+            Vector3 center = DoubleArrayToVector3(bounds.Center);
+            Vector3 extents = DoubleArrayToVector3(bounds.Extents);
+            Vector3 uiNormal = (anchor.rotation * Vector3.forward).normalized;
+            Vector3 cameraDir = uiNormal;
+            Vector3 up = (anchor.rotation * Vector3.up).normalized;
+            if (angle == "back")
+            {
+                cameraDir = -uiNormal;
+            }
+            else if (angle == "current_camera")
+            {
+                cameraDir = (-cam.transform.forward).normalized;
+                up = cam.transform.up.normalized;
+            }
+            Quaternion lookRot = Quaternion.LookRotation(-cameraDir, up);
+            float aspect = request.width > 0 && request.height > 0
+                ? (float)request.width / (float)request.height
+                : cam.aspect;
+            float paddedHalfHeight = Math.Max(extents.y, extents.x / Math.Max(aspect, 0.001f))
+                * (1f + request.padding_ratio);
+            if (paddedHalfHeight <= 0f) paddedHalfHeight = 0.01f;
+            float distance = Math.Max(extents.z + paddedHalfHeight, 0.1f);
+            Vector3 cameraPosition = center + cameraDir * distance;
+            bool orthographic = request.projection != "perspective";
+
+            CameraSnapshot previous = CaptureCameraState(sceneView);
+            try
+            {
+                sceneView.LookAt(center, lookRot, paddedHalfHeight, orthographic, instant: true);
+                cam.transform.position = cameraPosition;
+                cam.transform.rotation = lookRot;
+                cam.orthographic = orthographic;
+                cam.orthographicSize = paddedHalfHeight;
+                ForceRenderAndRepaint(sceneView);
+
+                int w = request.width > 0 ? request.width : (int)sceneView.position.width;
+                int h = request.height > 0 ? request.height : (int)sceneView.position.height;
+                int readX = 0, readY = 0, readW = w, readH = h;
+                CropBoundsEntry pixelRectApplied = null;
+                RenderTexture rt = null;
+                Texture2D tex = null;
+                try
+                {
+                    EditorControlResponse cropError = ResolveTargetPixelCrop(
+                        request, w, h, out readX, out readY, out readW, out readH,
+                        out pixelRectApplied);
+                    if (cropError != null) return cropError;
+
+                    rt = RenderSceneViewToTexture(cam, w, h);
+                    RenderTexture.active = rt;
+                    tex = new Texture2D(readW, readH, TextureFormat.RGB24, false);
+                    tex.ReadPixels(new Rect(readX, readY, readW, readH), 0, 0);
+                    tex.Apply();
+                    RenderTexture.active = null;
+                    File.WriteAllBytes(outputPath, tex.EncodeToPNG());
+                }
+                finally
+                {
+                    if (tex != null) UnityEngine.Object.DestroyImmediate(tex);
+                    if (rt != null) UnityEngine.Object.DestroyImmediate(rt);
+                    RenderTexture.active = null;
+                }
+
+                return BuildSuccess(
+                    "EDITOR_CTRL_SCREENSHOT_OK",
+                    $"World Space UI screenshot of '{request.target}' captured to {outputPath}",
+                    data: new EditorControlData
+                    {
+                        output_path = outputPath,
+                        view = "scene",
+                        width = readW,
+                        height = readH,
+                        executed = true,
+                        target_mode = "world_space_ui",
+                        projection = orthographic ? "orthographic" : "perspective",
+                        bounds_source = "rect_transform",
+                        bounds_center = Vector3ToArray(center),
+                        bounds_extents = Vector3ToArray(extents),
+                        ui_normal = Vector3ToArray(uiNormal),
+                        camera_position = Vector3ToArray(cameraPosition),
+                        camera_look_at = Vector3ToArray(center),
+                        camera_orthographic = orthographic,
+                        camera_size = paddedHalfHeight,
+                        crop_roi_applied = pixelRectApplied != null ? "pixel_rect" : string.Empty,
+                        crop_bounds = pixelRectApplied,
+                    });
+            }
+            finally
+            {
                 if (SceneView.lastActiveSceneView != null)
                 {
                     var sv = SceneView.lastActiveSceneView;

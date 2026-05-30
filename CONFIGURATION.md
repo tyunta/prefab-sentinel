@@ -53,6 +53,7 @@
 | `copy_component_fields` | ✅ | — |
 | `set_properties` | ✅ | ✅ |
 | `set_material_property` | ✅ | — |
+| `editor_set_material_property` | ✅ | — |
 | `copy_asset` | ✅ | — |
 | `rename_asset` | ✅ | — |
 | `revert_overrides` | ✅ | — |
@@ -64,8 +65,13 @@
 | `editor_execute_menu_item` | ✅ | — |
 | `editor_safe_save_prefab` | ✅ | — |
 | `editor_create_udon_program_asset` | ✅ | — |
+| `editor_add_udonsharp_component` | ✅ | — |
+| `editor_set_udonsharp_field` | ✅ | — |
+| `editor_wire_persistent_listener` | ✅ | — |
 | `editor_create_scene` | ✅ | — |
 | `editor_save_scene` | ✅ | — |
 | `editor_close_prefab` | ✅ | — |
 
 issue #49 で `editor_execute_menu_item` / `editor_safe_save_prefab` / `editor_create_udon_program_asset` / `editor_create_scene` / `editor_save_scene` が監査ペア対象へ追加された（逆不可逆性原理: arbitrary code 実行・非 Undo の asset 改変）。`editor_batch_set_blend_shape` / `editor_apply_animation_clip` は Undo 可能な scene 変更のため監査ペア対象外（`confirm` / `change_reason` を渡すと `TypeError`）。
+
+`validate_runtime(profile="clientsim")` も ClientSim が Play Mode と scene dirty state に触れうるため `confirm=True` + 非空 `change_reason` を要求する。既定 profile は `compile_only` で、ClientSim は明示 profile なしには実行されない。

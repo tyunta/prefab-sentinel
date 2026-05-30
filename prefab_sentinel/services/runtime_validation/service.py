@@ -46,6 +46,9 @@ class RuntimeValidationService:
         target_root: Path,
         scene_path: str | None = None,
         profile: str | None = None,
+        confirm: bool = False,
+        change_reason: str | None = None,
+        allow_dirty_before: bool = False,
     ) -> ToolResponse:
         return invoke_via_editor_bridge(
             action=action,
@@ -53,6 +56,66 @@ class RuntimeValidationService:
             scene_path=scene_path,
             profile=profile,
             relative_fn=self._relative,
+            confirm=confirm,
+            change_reason=change_reason,
+            allow_dirty_before=allow_dirty_before,
+        )
+
+    @staticmethod
+    def _clientsim_side_effect_codes(report: object) -> list[str]:
+        if not isinstance(report, dict):
+            return []
+        if report.get("diff_complete") is False:
+            return ["CLIENTSIM_SIDE_EFFECT_DIFF_UNAVAILABLE"]
+        changed_keys = (
+            "added_gameobjects",
+            "removed_gameobjects",
+            "added_components",
+            "removed_components",
+            "asset_change_candidates",
+        )
+        if any(report.get(key) for key in changed_keys):
+            return ["CLIENTSIM_SIDE_EFFECT_DIFF_DETECTED"]
+        if report.get("dirty_before") != report.get("dirty_after"):
+            return ["CLIENTSIM_SIDE_EFFECT_DIFF_DETECTED"]
+        if report.get("dirty_count_before") != report.get("dirty_count_after"):
+            return ["CLIENTSIM_SIDE_EFFECT_DIFF_DETECTED"]
+        return []
+
+    @staticmethod
+    def _with_clientsim_side_effect_diagnostics(response: ToolResponse) -> ToolResponse:
+        from prefab_sentinel.contracts import Diagnostic, max_severity
+
+        codes = RuntimeValidationService._clientsim_side_effect_codes(
+            response.data.get("side_effect_report")
+        )
+        if not codes:
+            return response
+
+        messages = {
+            "CLIENTSIM_SIDE_EFFECT_DIFF_UNAVAILABLE": "ClientSim side-effect diff could not be fully collected.",
+            "CLIENTSIM_SIDE_EFFECT_DIFF_DETECTED": "ClientSim side-effect diff detected scene, hierarchy, component, dirty, or asset candidates.",
+        }
+        diagnostics = [
+            *response.diagnostics,
+            *[
+                Diagnostic(
+                    path=str(response.data.get("scene_path", "")),
+                    location="",
+                    detail=code,
+                    evidence=messages[code],
+                    severity=Severity.WARNING.value,
+                )
+                for code in codes
+            ],
+        ]
+        return ToolResponse(
+            success=response.success,
+            severity=max_severity([response.severity, Severity.WARNING]),
+            code=response.code,
+            message=response.message,
+            data=response.data,
+            diagnostics=diagnostics,
         )
 
     def compile_udonsharp(self, project_root: str | None = None) -> ToolResponse:
@@ -83,49 +146,64 @@ class RuntimeValidationService:
             target_root=target_root,
         )
 
-    def run_clientsim(self, scene_path: str, profile: str) -> ToolResponse:
-        """Run a ClientSim session for a scene via the resident Editor Bridge.
-
-        Args:
-            scene_path: Path to the ``.unity`` scene file.
-            profile: ClientSim profile name to use.
-
-        Returns:
-            ``ToolResponse`` with the ClientSim execution result from
-            Unity, or a ``RUN002`` envelope when the scene path fails
-            local validation.
-        """
+    def run_clientsim(
+        self,
+        scene_path: str,
+        profile: str,
+        confirm: bool = False,
+        change_reason: str | None = None,
+        allow_dirty_before: bool = False,
+    ) -> ToolResponse:
         target_root = default_runtime_root(self.project_root)
+        resolved_root = Path(target_root).resolve()
         scene = resolve_scope_path(scene_path, target_root)
+        rejection_data = {
+            "scene_path": scene_path,
+            "profile": profile,
+            "read_only": True,
+            "executed": False,
+        }
+        if not scene.is_relative_to(resolved_root):
+            return error_response(
+                "RUN002",
+                "Scene path resolves outside runtime root.",
+                data=rejection_data,
+            )
         if not scene.exists():
             return error_response(
                 "RUN002",
                 "Scene path was not found for runtime validation.",
-                data={
-                    "scene_path": scene_path,
-                    "profile": profile,
-                    "read_only": True,
-                    "executed": False,
-                },
+                data=rejection_data,
             )
         if scene.suffix.lower() != ".unity":
             return error_response(
                 "RUN002",
                 "Runtime validation requires a .unity scene path.",
-                data={
-                    "scene_path": scene_path,
-                    "profile": profile,
-                    "read_only": True,
-                    "executed": False,
-                },
+                data=rejection_data,
+            )
+        if profile != "clientsim":
+            return error_response(
+                "VALIDATE_RUNTIME_PROFILE_UNSUPPORTED",
+                "ClientSim execution requires the clientsim runtime validation profile.",
+                data=rejection_data,
+            )
+        if not confirm or change_reason is None or not change_reason.strip():
+            return error_response(
+                "CLIENTSIM_CONFIRM_REQUIRED",
+                "ClientSim validation requires explicit audit confirmation and a non-empty change reason.",
+                data=rejection_data,
             )
 
-        return self._invoke_unity_runtime(
+        response = self._invoke_unity_runtime(
             action="run_clientsim",
             target_root=target_root,
             scene_path=self._relative(scene),
             profile=profile,
+            confirm=confirm,
+            change_reason=change_reason.strip(),
+            allow_dirty_before=allow_dirty_before,
         )
+        return self._with_clientsim_side_effect_diagnostics(response)
 
     def collect_unity_console(
         self,
@@ -210,6 +288,54 @@ class RuntimeValidationService:
                 "log_lines": lines,
                 "since_timestamp": since_timestamp,
                 "read_only": True,
+            },
+        )
+
+    def collect_editor_console(
+        self,
+        since_timestamp: str | None = None,
+        max_lines: int = 4000,
+    ) -> ToolResponse:
+        from prefab_sentinel.editor_bridge import send_action
+
+        max_entries = min(max(max_lines, 1), 1000)
+        response = send_action(
+            action="capture_console_logs",
+            max_entries=max_entries,
+            since_seconds=0.0,
+            order="oldest_first",
+        )
+        data = response.get("data")
+        if not response.get("success") or not isinstance(data, dict):
+            return error_response(
+                str(response.get("code", "RUN_EDITOR_CONSOLE_ERROR")),
+                str(response.get("message", "Editor console capture failed.")),
+                data={
+                    "since_timestamp": since_timestamp,
+                    "read_only": True,
+                    "executed": bool(isinstance(data, dict) and data.get("executed", False)),
+                    "bridge_response": response,
+                },
+            )
+
+        entries = data.get("entries", [])
+        log_lines: list[str] = []
+        if isinstance(entries, list):
+            for entry in entries:
+                if isinstance(entry, dict):
+                    message = entry.get("message", "")
+                    log_type = entry.get("log_type", "")
+                    if isinstance(message, str):
+                        log_lines.append(f"[{log_type}] {message}" if log_type else message)
+        return success_response(
+            "RUN_EDITOR_CONSOLE_COLLECTED",
+            "Editor Bridge console entries collected.",
+            data={
+                "line_count": len(log_lines),
+                "log_lines": log_lines,
+                "since_timestamp": since_timestamp,
+                "read_only": True,
+                "executed": True,
             },
         )
 

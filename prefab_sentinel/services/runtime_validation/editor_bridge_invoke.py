@@ -43,8 +43,10 @@ def invoke_via_editor_bridge(
     scene_path: str | None,
     profile: str | None,
     relative_fn: Callable[[Path], str],
+    confirm: bool = False,
+    change_reason: str | None = None,
+    allow_dirty_before: bool = False,
 ) -> ToolResponse:
-    """Send a runtime validation request via the editor bridge file watcher."""
     watch_dir_raw = os.environ.get(BRIDGE_WATCH_DIR_ENV, "").strip()
     if not watch_dir_raw:
         return error_response(
@@ -87,14 +89,14 @@ def invoke_via_editor_bridge(
         "scene_path": to_windows_path(scene_path) if scene_path else "",
         "profile": profile or "",
         "timeout_sec": timeout_sec,
+        "confirm": confirm,
+        "change_reason": change_reason or "",
+        "allow_dirty_before": allow_dirty_before,
     }
 
     try:
         watch_dir.mkdir(parents=True, exist_ok=True)
-        tmp_file.write_text(
-            dump_json(payload, indent=None),
-            encoding="utf-8",
-        )
+        tmp_file.write_text(dump_json(payload, indent=None), encoding="utf-8")
         tmp_file.rename(request_file)
     except OSError as exc:
         return error_response(
@@ -158,9 +160,6 @@ def invoke_via_editor_bridge(
             "profile": profile,
             "timeout_sec": timeout_sec,
             "request_file": str(request_file),
-            # ``bridge_mode`` is always "editor" since the batchmode dispatch
-            # path was removed in issue #270; retained as a stable transport
-            # tag for response-shape callers.
             "bridge_mode": "editor",
             "read_only": False,
             "executed": False,

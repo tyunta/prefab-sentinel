@@ -109,6 +109,38 @@ class ConsoleCapturePhaseFilterForwardingTests(unittest.TestCase):
         )
 
 
+class EditorConsoleDeterministicCaptureTests(unittest.TestCase):
+    def test_editor_console_since_sequence_reads_ring_buffer(self) -> None:
+        with patch.object(
+            mcp_tools_editor_view, "send_action",
+            return_value=_success_envelope(),
+        ) as send:
+            mcp_tools_editor_view.editor_console(since_sequence=41, order="oldest_first")
+
+        send.assert_called_once()
+        kwargs = send.call_args.kwargs
+        self.assertEqual(
+            ("capture_console_logs", 41, "oldest_first"),
+            (kwargs["action"], kwargs["since_sequence"], kwargs["order"]),
+            msg=f"console sequence selector forwarding mismatch: {kwargs!r}",
+        )
+
+    def test_editor_console_request_id_filters_related_logs(self) -> None:
+        with patch.object(
+            mcp_tools_editor_view, "send_action",
+            return_value=_success_envelope(),
+        ) as send:
+            mcp_tools_editor_view.editor_console(since_request_id="0123456789abcdef0123456789abcdef")
+
+        send.assert_called_once()
+        kwargs = send.call_args.kwargs
+        self.assertEqual(
+            "0123456789abcdef0123456789abcdef",
+            kwargs["since_request_id"],
+            msg=f"console request-id selector forwarding mismatch: {kwargs!r}",
+        )
+
+
 class EditorScreenshotRegionForwardingTests(unittest.TestCase):
     """Issue #249 — ``editor_screenshot`` region argument forwarding.
 
@@ -353,6 +385,50 @@ class EditorScreenshotViewAllowlistTests(unittest.TestCase):
         )
 
 
+class EditorScreenshotPreflightFailureTests(unittest.TestCase):
+    def test_oversized_dimensions_rejected_before_refresh_or_capture(self) -> None:
+        with patch.object(
+            mcp_tools_editor_view, "send_action", return_value=_SCREENSHOT_BRIDGE_OK,
+        ) as send:
+            response = mcp_tools_editor_view.editor_screenshot(
+                width=mcp_tools_editor_view.SCREENSHOT_DIMENSION_MAX + 1,
+                height=64,
+                refresh=True,
+            )
+
+        send.assert_not_called()
+        self.assertEqual(
+            (False, "error", "SCREENSHOT_DIMENSIONS_OUT_OF_RANGE"),
+            (response["success"], response["severity"], response["code"]),
+        )
+        self.assertEqual(
+            {
+                "width": mcp_tools_editor_view.SCREENSHOT_DIMENSION_MAX + 1,
+                "height": 64,
+                "min": mcp_tools_editor_view.SCREENSHOT_DIMENSION_MIN,
+                "max": mcp_tools_editor_view.SCREENSHOT_DIMENSION_MAX,
+            },
+            response["data"],
+        )
+
+    def test_refresh_failure_returns_without_capture_request(self) -> None:
+        refresh_failure = {
+            "success": False,
+            "severity": "error",
+            "code": "EDITOR_REFRESH_FAILED",
+            "message": "refresh failed",
+            "data": {"phase": "refresh"},
+            "diagnostics": [],
+        }
+        with patch.object(
+            mcp_tools_editor_view, "send_action", return_value=refresh_failure,
+        ) as send:
+            response = mcp_tools_editor_view.editor_screenshot(refresh=True)
+
+        send.assert_called_once_with(action="refresh_asset_database")
+        self.assertEqual(refresh_failure, response)
+
+
 class EditorScreenshotAngleAllowlistTests(unittest.TestCase):
     """Issue #84 — ``editor_screenshot`` rejects an ``angle`` value
     outside the six-preset allowlist before any bridge transport
@@ -363,15 +439,20 @@ class EditorScreenshotAngleAllowlistTests(unittest.TestCase):
     _BRIDGE_OK = _SCREENSHOT_BRIDGE_OK
 
     def test_allowlist_constant_pins_exact_value(self) -> None:
-        # Pin the exported tuple verbatim in the issue-body order;
-        # drift (adding a seventh, reordering, swapping a name) is
-        # the failure mode this row catches.
         self.assertEqual(
-            ("front", "three_quarter", "back", "right", "left", "top"),
+            (
+                "front",
+                "three_quarter",
+                "back",
+                "right",
+                "left",
+                "top",
+                "current_camera",
+            ),
             mcp_tools_editor_view.SCREENSHOT_ANGLE_PRESETS,
             msg=(
-                "Wrapper-side angle allowlist must equal the six "
-                "preset names from issue #84 in canonical order."
+                "Wrapper-side angle allowlist must include renderer presets "
+                "and the UI-only current_camera selector in canonical order."
             ),
         )
 
@@ -555,6 +636,116 @@ class EditorScreenshotTargetForwardingTests(unittest.TestCase):
                 "is applied to the rendered frame after framing)."
             ),
         )
+
+
+class EditorScreenshotUiFramingTests(unittest.TestCase):
+    def test_world_space_ui_target_selectors_reach_bridge(self) -> None:
+        with patch.object(
+            mcp_tools_editor_view, "send_action", return_value=_SCREENSHOT_BRIDGE_OK,
+        ) as send:
+            mcp_tools_editor_view.editor_screenshot(
+                target="/Canvas/WatchingButton",
+                target_mode="world_space_ui",
+                projection="orthographic",
+                padding_ratio=0.2,
+                angle="front",
+                refresh=False,
+            )
+
+        send.assert_called_once()
+        self.assertEqual(
+            (
+                "capture_screenshot",
+                "/Canvas/WatchingButton",
+                "world_space_ui",
+                "orthographic",
+                0.2,
+                "front",
+            ),
+            (
+                send.call_args.kwargs["action"],
+                send.call_args.kwargs["target"],
+                send.call_args.kwargs["target_mode"],
+                send.call_args.kwargs["projection"],
+                send.call_args.kwargs["padding_ratio"],
+                send.call_args.kwargs["angle"],
+            ),
+            msg=f"UI screenshot selectors were not forwarded: {send.call_args.kwargs!r}",
+        )
+
+    def test_world_space_ui_current_camera_selector_and_metadata_are_preserved(self) -> None:
+        bridge_response = {
+            "success": True,
+            "severity": "info",
+            "code": "EDITOR_CTRL_SCREENSHOT_OK",
+            "message": "ok",
+            "data": {
+                "target_mode": "world_space_ui",
+                "bounds_source": "rect_transform",
+                "bounds_center": [1.0, 2.0, 3.0],
+                "bounds_extents": [0.5, 0.25, 0.1],
+                "ui_normal": [0.0, 0.0, 1.0],
+                "camera_position": [1.0, 2.0, 8.0],
+                "camera_look_at": [1.0, 2.0, 3.0],
+                "camera_orthographic": True,
+                "camera_size": 0.6,
+                "projection": "orthographic",
+            },
+            "diagnostics": [],
+        }
+        with patch.object(
+            mcp_tools_editor_view, "send_action", return_value=bridge_response,
+        ) as send:
+            response = mcp_tools_editor_view.editor_screenshot(
+                target="/Canvas/WatchingButton",
+                target_mode="world_space_ui",
+                angle="current_camera",
+                refresh=False,
+            )
+
+        send.assert_called_once()
+        self.assertEqual("current_camera", send.call_args.kwargs["angle"])
+        self.assertEqual(bridge_response, response)
+
+    def test_ui_selector_validation_errors_are_typed(self) -> None:
+        cases = [
+            (
+                {"target": "/Canvas", "target_mode": "screen_space"},
+                "SCREENSHOT_TARGET_MODE_INVALID",
+                "screen_space",
+            ),
+            (
+                {"target": "/Canvas", "projection": "fisheye"},
+                "SCREENSHOT_PROJECTION_INVALID",
+                "fisheye",
+            ),
+            (
+                {"target": "/Canvas", "padding_ratio": -0.01},
+                "SCREENSHOT_PADDING_RATIO_INVALID",
+                "-0.01",
+            ),
+        ]
+        with patch.object(
+            mcp_tools_editor_view, "send_action", return_value=_SCREENSHOT_BRIDGE_OK,
+        ) as send:
+            for kwargs, expected_code, expected_message_part in cases:
+                with self.subTest(expected_code=expected_code):
+                    response = mcp_tools_editor_view.editor_screenshot(
+                        refresh=False,
+                        **kwargs,
+                    )
+                    self.assertEqual(
+                        (False, "error", expected_code, True),
+                        (
+                            response["success"],
+                            response["severity"],
+                            response["code"],
+                            expected_message_part in response["message"],
+                        ),
+                        msg=f"unexpected selector error envelope: {response!r}",
+                    )
+
+        send.assert_not_called()
 
 
 class EditorForceSceneViewRefreshTests(unittest.TestCase):

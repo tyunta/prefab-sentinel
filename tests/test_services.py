@@ -2605,52 +2605,114 @@ class RuntimeValidationServiceTests(unittest.TestCase):
                 msg=f"bridge compile must report executed=True: {response.data!r}",
             )
 
-    def test_run_clientsim_returns_missing_scene_error(self) -> None:
+    def test_clientsim_missing_or_non_scene_path_is_typed_for_missing_scene(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             _create_sample_project(root)
             svc = RuntimeValidationService(project_root=root)
 
-            response = svc.run_clientsim("Assets/MissingScene.unity", "default")
+            response = svc.run_clientsim(
+                "Assets/MissingScene.unity",
+                "clientsim",
+                confirm=True,
+                change_reason="audit clientsim validation",
+            )
 
-            self.assertEqual("RUN002", response.code)
+            self.assertEqual(
+                (False, "RUN002"),
+                (response.success, response.code),
+                msg=f"missing ClientSim scene envelope mismatch: {response.to_dict()!r}",
+            )
             self.assertEqual(
                 (True, False),
                 (response.data["read_only"], response.data["executed"]),
-                msg=(
-                    "a rejected clientsim run stays read-only and unexecuted: "
-                    f"{response.data!r}"
-                ),
+                msg=f"a rejected clientsim run must be read-only and unexecuted: {response.data!r}",
             )
 
-    def test_run_clientsim_rejects_non_unity_extension(self) -> None:
-        """``run_clientsim`` rejects scene paths whose suffix is not
-        ``.unity`` with ``RUN002`` before contacting Unity.
-        """
+    def test_clientsim_outside_root_scene_path_fails_closed_before_file_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            root = base / "project"
+            outside = base / "outside"
+            _create_sample_project(root)
+            outside.mkdir()
+            existing_scene = outside / "Probe.unity"
+            missing_scene = outside / "Missing.unity"
+            non_scene = outside / "Probe.txt"
+            write_file(existing_scene, "%YAML 1.1\n")
+            write_file(non_scene, "not a scene\n")
+            svc = RuntimeValidationService(project_root=root)
+
+            with patch.object(svc, "_invoke_unity_runtime") as invoke:
+                existing_response = svc.run_clientsim(
+                    str(existing_scene),
+                    "clientsim",
+                    confirm=True,
+                    change_reason="audit clientsim validation",
+                )
+                missing_response = svc.run_clientsim(
+                    str(missing_scene),
+                    "clientsim",
+                    confirm=True,
+                    change_reason="audit clientsim validation",
+                )
+                non_scene_response = svc.run_clientsim(
+                    str(non_scene),
+                    "clientsim",
+                    confirm=True,
+                    change_reason="audit clientsim validation",
+                )
+
+            invoke.assert_not_called()
+            expected = (False, "RUN002", "Scene path resolves outside runtime root.")
+            self.assertEqual(
+                (expected, expected, expected),
+                (
+                    (existing_response.success, existing_response.code, existing_response.message),
+                    (missing_response.success, missing_response.code, missing_response.message),
+                    (non_scene_response.success, non_scene_response.code, non_scene_response.message),
+                ),
+                msg=(
+                    "outside-root ClientSim scene rejection must not disclose existence or suffix: "
+                    f"{existing_response.to_dict()!r}, {missing_response.to_dict()!r}, "
+                    f"{non_scene_response.to_dict()!r}"
+                ),
+            )
+            self.assertEqual(
+                ((True, False), (True, False), (True, False)),
+                (
+                    (existing_response.data["read_only"], existing_response.data["executed"]),
+                    (missing_response.data["read_only"], missing_response.data["executed"]),
+                    (non_scene_response.data["read_only"], non_scene_response.data["executed"]),
+                ),
+                msg="outside-root ClientSim rejections must be read-only and unexecuted",
+            )
+
+    def test_clientsim_missing_or_non_scene_path_is_typed_for_non_scene_asset(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             _create_sample_project(root)
-            write_file(
-                root / "Assets" / "Scenes" / "Smoke.txt",
-                "not a scene\n",
-            )
+            write_file(root / "Assets" / "Scenes" / "Smoke.txt", "not a scene\n")
             svc = RuntimeValidationService(project_root=root)
-            response = svc.run_clientsim("Assets/Scenes/Smoke.txt", "default")
+            response = svc.run_clientsim(
+                "Assets/Scenes/Smoke.txt",
+                "clientsim",
+                confirm=True,
+                change_reason="audit clientsim validation",
+            )
 
-            self.assertEqual("RUN002", response.code)
+            self.assertEqual(
+                (False, "RUN002"),
+                (response.success, response.code),
+                msg=f"non-scene ClientSim asset envelope mismatch: {response.to_dict()!r}",
+            )
             self.assertEqual(
                 (True, False),
                 (response.data["read_only"], response.data["executed"]),
-                msg=(
-                    "a non-.unity scene path stays read-only and unexecuted: "
-                    f"{response.data!r}"
-                ),
+                msg=f"a non-.unity scene path must be read-only and unexecuted: {response.data!r}",
             )
 
-    def test_run_clientsim_reaches_unity_via_editor_bridge(self) -> None:
-        """The clientsim dispatcher writes a request file to the watch
-        directory and surfaces the responder's envelope unchanged.
-        """
+    def test_clientsim_dirty_scene_refuses_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             _create_sample_project(root)
@@ -2667,7 +2729,87 @@ GameObject:
             svc = RuntimeValidationService(project_root=root)
 
             def respond(request: dict) -> dict:
-                self.assertEqual("run_clientsim", request["action"])
+                self.assertEqual(
+                    ("run_clientsim", False, True),
+                    (request["action"], request["allow_dirty_before"], request["confirm"]),
+                    msg=f"ClientSim dirty-scene request mismatch: {request!r}",
+                )
+                return {
+                    "success": False,
+                    "severity": "error",
+                    "code": "CLIENTSIM_DIRTY_SCENE",
+                    "message": "ClientSim refused unsaved active-scene changes before execution.",
+                    "data": {"executed": False, "read_only": True, "dirty_before": True},
+                    "diagnostics": [],
+                }
+
+            from tests.bridge_test_helpers import EditorBridgeResponder
+
+            with EditorBridgeResponder(watch_dir, respond):
+                with patch.dict(
+                    os.environ,
+                    {
+                        "UNITYTOOL_BRIDGE_WATCH_DIR": str(watch_dir),
+                        "UNITYTOOL_UNITY_TIMEOUT_SEC": "10",
+                    },
+                    clear=False,
+                ):
+                    response = svc.run_clientsim(
+                        "Assets/Scenes/Smoke.unity",
+                        "clientsim",
+                        confirm=True,
+                        change_reason="audit clientsim validation",
+                    )
+
+            self.assertEqual(
+                (False, "CLIENTSIM_DIRTY_SCENE", "error"),
+                (response.success, response.code, response.severity.value),
+                msg=f"dirty ClientSim envelope mismatch: {response.to_dict()!r}",
+            )
+            self.assertIn("unsaved active-scene", response.message)
+
+    def test_clientsim_success_reports_side_effect_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_sample_project(root)
+            write_file(
+                root / "Assets" / "Scenes" / "Smoke.unity",
+                """%YAML 1.1
+--- !u!1 &1
+GameObject:
+  m_Name: Smoke
+""",
+            )
+            watch_dir = root / "watch"
+            watch_dir.mkdir()
+            svc = RuntimeValidationService(project_root=root)
+
+            side_effect_report = {
+                "diff_complete": True,
+                "scene_path": "Assets/Scenes/Smoke.unity",
+                "root_objects_before": ["World"],
+                "root_objects_after": ["World", "ClientSim"],
+                "hierarchy_paths_before": ["/World"],
+                "hierarchy_paths_after": ["/World", "/ClientSim"],
+                "components_before": {"/World": ["Transform"]},
+                "components_after": {"/World": ["Transform"], "/ClientSim": ["Transform"]},
+                "added_gameobjects": ["/ClientSim"],
+                "removed_gameobjects": [],
+                "added_components": [{"path": "/ClientSim", "component": "Transform"}],
+                "removed_components": [],
+                "dirty_before": False,
+                "dirty_after": True,
+                "dirty_count_before": 0,
+                "dirty_count_after": 1,
+                "asset_change_candidates": ["Assets/Scenes/Smoke.unity"],
+            }
+
+            def respond(request: dict) -> dict:
+                self.assertEqual(
+                    ("run_clientsim", True, "audit clientsim validation"),
+                    (request["action"], request["confirm"], request["change_reason"]),
+                    msg=f"ClientSim audited request mismatch: {request!r}",
+                )
                 return {
                     "success": True,
                     "severity": "info",
@@ -2677,6 +2819,7 @@ GameObject:
                         "clientsim_ready": True,
                         "executed": True,
                         "read_only": False,
+                        "side_effect_report": side_effect_report,
                     },
                     "diagnostics": [],
                 }
@@ -2692,18 +2835,93 @@ GameObject:
                     },
                     clear=False,
                 ):
-                    response = svc.run_clientsim("Assets/Scenes/Smoke.unity", "default")
+                    response = svc.run_clientsim(
+                        "Assets/Scenes/Smoke.unity",
+                        "clientsim",
+                        confirm=True,
+                        change_reason="audit clientsim validation",
+                    )
 
-            self.assertEqual("RUN_CLIENTSIM_OK", response.code)
             self.assertEqual(
-                (True, True),
-                (response.data["clientsim_ready"], response.data["executed"]),
-                msg=(
-                    "a bridge clientsim run reports ready and executed: "
-                    f"{response.data!r}"
-                ),
+                (True, "RUN_CLIENTSIM_OK", "warning", False),
+                (response.success, response.code, response.severity.value, response.data["read_only"]),
+                msg=f"ClientSim side-effect envelope mismatch: {response.to_dict()!r}",
             )
-            self.assertEqual(".", response.data["project_root"])
+            self.assertEqual(
+                side_effect_report,
+                response.data["side_effect_report"],
+                msg=f"ClientSim side-effect report mismatch: {response.data!r}",
+            )
+            self.assertEqual(
+                ["CLIENTSIM_SIDE_EFFECT_DIFF_DETECTED"],
+                [diagnostic["code"] for diagnostic in response.to_dict()["diagnostics"]],
+                msg=f"ClientSim side-effect diagnostics mismatch: {response.to_dict()!r}",
+            )
+
+    def test_clientsim_incomplete_side_effect_diff_warns(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_sample_project(root)
+            write_file(
+                root / "Assets" / "Scenes" / "Smoke.unity",
+                """%YAML 1.1
+--- !u!1 &1
+GameObject:
+  m_Name: Smoke
+""",
+            )
+            watch_dir = root / "watch"
+            watch_dir.mkdir()
+            svc = RuntimeValidationService(project_root=root)
+
+            def respond(request: dict) -> dict:
+                return {
+                    "success": True,
+                    "severity": "info",
+                    "code": "RUN_CLIENTSIM_OK",
+                    "message": "clientsim ok",
+                    "data": {
+                        "executed": True,
+                        "read_only": False,
+                        "side_effect_report": {
+                            "diff_complete": False,
+                            "dirty_before": False,
+                            "dirty_after": False,
+                            "dirty_count_before": 0,
+                            "dirty_count_after": 0,
+                        },
+                    },
+                    "diagnostics": [],
+                }
+
+            from tests.bridge_test_helpers import EditorBridgeResponder
+
+            with EditorBridgeResponder(watch_dir, respond):
+                with patch.dict(
+                    os.environ,
+                    {
+                        "UNITYTOOL_BRIDGE_WATCH_DIR": str(watch_dir),
+                        "UNITYTOOL_UNITY_TIMEOUT_SEC": "10",
+                    },
+                    clear=False,
+                ):
+                    response = svc.run_clientsim(
+                        "Assets/Scenes/Smoke.unity",
+                        "clientsim",
+                        confirm=True,
+                        change_reason="audit clientsim validation",
+                    )
+
+            self.assertEqual(
+                (True, "RUN_CLIENTSIM_OK", "warning", False),
+                (response.success, response.code, response.severity.value, response.data["side_effect_report"]["diff_complete"]),
+                msg=f"incomplete ClientSim diff envelope mismatch: {response.to_dict()!r}",
+            )
+            self.assertEqual(
+                ["CLIENTSIM_SIDE_EFFECT_DIFF_UNAVAILABLE"],
+                [diagnostic["code"] for diagnostic in response.to_dict()["diagnostics"]],
+                msg=f"incomplete ClientSim diff diagnostics mismatch: {response.to_dict()!r}",
+            )
 
     def test_classify_errors_detects_known_categories(self) -> None:
         svc = RuntimeValidationService(project_root=Path.cwd())
@@ -2725,12 +2943,6 @@ GameObject:
         self.assertEqual(1, response.data["count_by_category"]["DUPLICATE_EVENTSYSTEM"])
 
     def test_orchestrator_validate_runtime_pipeline(self) -> None:
-        """When the watch directory is unconfigured, ``validate_runtime``
-        fails-fast on the runtime step with the editor-bridge config
-        envelope; the surrounding pipeline reports error severity (the
-        max of the compile and clientsim steps' ``RUN_CONFIG_ERROR``
-        codes).
-        """
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             _create_sample_project(root)
@@ -2742,10 +2954,7 @@ GameObject:
   m_Name: Smoke
 """,
             )
-            write_file(
-                root / "Logs" / "Editor.log",
-                "NullReferenceException in UdonBehaviour\n",
-            )
+            write_file(root / "Logs" / "Editor.log", "NullReferenceException in UdonBehaviour\n")
 
             orchestrator = Phase1Orchestrator.default(project_root=root)
             response = orchestrator.validate_runtime(
@@ -2754,17 +2963,28 @@ GameObject:
             )
 
             self.assertEqual(
-                (False, "VALIDATE_RUNTIME_RESULT"),
-                (response.success, response.code),
-                msg=f"envelope mismatch: {response!r}",
+                (False, "VALIDATE_RUNTIME_RESULT", "compile_only"),
+                (response.success, response.code, response.data["profile"]),
+                msg=f"compile-only runtime validation envelope mismatch: {response.to_dict()!r}",
             )
-            self.assertEqual("error", response.severity.value)
+            self.assertEqual(
+                [
+                    "inspect_world_canvas",
+                    "compile_udonsharp",
+                    "collect_unity_console",
+                    "classify_errors",
+                    "assert_no_critical_errors",
+                ],
+                [step["step"] for step in response.data["steps"]],
+                msg=f"compile-only runtime validation steps mismatch: {response.data!r}",
+            )
             step_codes = [
                 step["result"]["code"]
                 for step in response.data["steps"]
                 if isinstance(step, dict) and isinstance(step.get("result"), dict)
             ]
             self.assertIn("RUN_CONFIG_ERROR", step_codes)
+            self.assertNotIn("RUN_CLIENTSIM_OK", step_codes)
 
     def test_orchestrator_validate_runtime_pipeline_uses_editor_bridge_when_configured(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2789,24 +3009,7 @@ GameObject:
                         "severity": "info",
                         "code": "RUN_COMPILE_OK",
                         "message": "compile ok",
-                        "data": {
-                            "udon_program_count": 3,
-                            "executed": True,
-                            "read_only": False,
-                        },
-                        "diagnostics": [],
-                    }
-                if action == "run_clientsim":
-                    return {
-                        "success": True,
-                        "severity": "info",
-                        "code": "RUN_CLIENTSIM_OK",
-                        "message": "clientsim ok",
-                        "data": {
-                            "clientsim_ready": True,
-                            "executed": True,
-                            "read_only": False,
-                        },
+                        "data": {"udon_program_count": 3, "executed": True, "read_only": False},
                         "diagnostics": [],
                     }
                 return {
@@ -2830,23 +3033,29 @@ GameObject:
                     },
                     clear=False,
                 ):
-                    response = orchestrator.validate_runtime(
-                        scene_path="Assets/Scenes/Smoke.unity",
-                    )
+                    response = orchestrator.validate_runtime(scene_path="Assets/Scenes/Smoke.unity")
 
             self.assertEqual(
-                (True, "VALIDATE_RUNTIME_RESULT"),
-                (response.success, response.code),
-                msg=f"envelope mismatch: {response!r}",
+                (True, "VALIDATE_RUNTIME_RESULT", "compile_only"),
+                (response.success, response.code, response.data["profile"]),
+                msg=f"configured compile-only validation envelope mismatch: {response.to_dict()!r}",
             )
             step_codes = [
                 step["result"]["code"]
                 for step in response.data["steps"]
                 if isinstance(step, dict) and isinstance(step.get("result"), dict)
             ]
-            self.assertIn("RUN_COMPILE_OK", step_codes)
-            self.assertIn("RUN_CLIENTSIM_OK", step_codes)
-            self.assertIn("RUN_ASSERT_OK", step_codes)
+            self.assertEqual(
+                [
+                    "WORLD_CANVAS_INSPECT_OK",
+                    "RUN_COMPILE_OK",
+                    "RUN_LOG_MISSING",
+                    "RUN_CLASSIFY_OK",
+                    "RUN_ASSERT_OK",
+                ],
+                step_codes,
+                msg=f"configured compile-only step codes mismatch: {response.data!r}",
+            )
 
 
 class SerializedObjectServiceTests(unittest.TestCase):

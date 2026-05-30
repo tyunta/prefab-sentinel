@@ -41,6 +41,8 @@ namespace PrefabSentinel
         [Serializable]
         public sealed class EditorControlDiagnostic
         {
+            public string code = string.Empty;
+            public string severity = string.Empty;
             public string path = string.Empty;
             public string location = string.Empty;
             public string detail = string.Empty;
@@ -59,6 +61,7 @@ namespace PrefabSentinel
             // pagination is stable across calls even when the ring buffer
             // wraps.
             public long sequence_id = 0;
+            public string request_id = string.Empty;
             // Issue #239: editor-phase tag assigned at ingestion under
             // the same capture lock.  Values come from
             // ``ConsoleLogEntryPredicate.SupportedPhaseFilters`` minus ``all``:
@@ -97,6 +100,18 @@ namespace PrefabSentinel
             public int depth = 0;
             public bool active = true;
             public string tag = "Untagged";
+        }
+
+        [Serializable]
+        public sealed class GeometryBoundsContributorEntry
+        {
+            public string source = string.Empty;
+            public string hierarchy_path = string.Empty;
+            public bool target = false;
+            public float[] center = null;
+            public float[] extents = null;
+            public float[] min = null;
+            public float[] max = null;
         }
 
         [Serializable]
@@ -155,6 +170,7 @@ namespace PrefabSentinel
             public float[] camera_position = null;     // [x, y, z]
             public float[] camera_rotation_quat = null; // [x, y, z, w] quaternion
             public float[] camera_euler = null;        // [yaw, pitch, roll]
+            public float[] camera_look_at = null;
             public float[] camera_pivot = null;        // [x, y, z]
             public float camera_size = 0f;
             public bool camera_orthographic = false;
@@ -167,6 +183,36 @@ namespace PrefabSentinel
             // Bounds info (frame_selected only)
             public float[] bounds_center = null;     // [x, y, z] world-space AABB center
             public float[] bounds_extents = null;    // [x, y, z] half-size
+            public float[] bounds_size = null;
+            public float[] bounds_min = null;
+            public float[] bounds_max = null;
+            public string hierarchy_path = string.Empty;
+            public string parent_path = string.Empty;
+            public float[] local_position = null;
+            public float[] world_position = null;
+            public float[] local_rotation_quat = null;
+            public float[] world_rotation_quat = null;
+            public float[] local_euler = null;
+            public float[] world_euler = null;
+            public float[] local_scale = null;
+            public float[] lossy_scale = null;
+            public bool active_self = false;
+            public bool active_in_hierarchy = false;
+            public string bounds_source = string.Empty;
+            public string target_mode = string.Empty;
+            public string projection = string.Empty;
+            public float[] ui_normal = null;
+            public bool include_children = false;
+            public int contributor_count = 0;
+            public GeometryBoundsContributorEntry[] bounds_contributors =
+                Array.Empty<GeometryBoundsContributorEntry>();
+            public string target_path = string.Empty;
+            public float distance = 0f;
+            public string distance_mode = string.Empty;
+            public float[] from_point = null;
+            public float[] to_point = null;
+            public float[] target_bounds_center = null;
+            public float[] target_bounds_extents = null;
 
             public bool read_only = true;
             public bool executed = false;
@@ -215,6 +261,11 @@ namespace PrefabSentinel
             public string stdout = string.Empty;
             public string[] errors = Array.Empty<string>();
             public string temp_id = string.Empty;
+            public RunScriptValue return_value = null;
+            public RunScriptOutputEntry[] outputs = Array.Empty<RunScriptOutputEntry>();
+            public string unsupported_output_key = string.Empty;
+            public RunScriptExceptionSummary exception = null;
+            public WslPathHint[] path_hints = Array.Empty<WslPathHint>();
 
             // Issue #239: live editor-state snapshot returned by the
             // dedicated ``get_editor_state`` action; consumed by the
@@ -652,6 +703,15 @@ namespace PrefabSentinel
                 case "run_script_poll":
                     response = HandleRunScriptPoll(request, responsePath);
                     break;
+                case "get_transform":
+                    response = HandleGetTransform(request);
+                    break;
+                case "get_bounds":
+                    response = HandleGetBounds(request);
+                    break;
+                case "measure_distance":
+                    response = HandleMeasureDistance(request);
+                    break;
                 case "inspect_animation_clip":
                     response = HandleInspectAnimationClip(request);
                     break;
@@ -729,11 +789,6 @@ namespace PrefabSentinel
         /// </summary>
         public static class ConsoleLogBuffer
         {
-            // Issue #131: ring-buffer capacity must be public so the
-            // ``capture_console_logs`` request validator and the Python-side
-            // mirror constant can reference the same single value. The
-            // request bound mirrors this capacity — callers cannot ask for
-            // more entries than the buffer has ever held.
             public const int DefaultCapacity = 1000;
 
             private struct RawEntry
@@ -741,16 +796,9 @@ namespace PrefabSentinel
                 public string message;
                 public string stackTrace;
                 public LogType logType;
-                public double timestamp; // EditorApplication.timeSinceStartup
-                // Issue #113: monotonic ingestion sequence assigned by
-                // OnLogMessage under the capture lock. Stable across ring
-                // buffer wraparounds so cursor tokens remain meaningful.
+                public double timestamp;
                 public long sequenceId;
-                // Issue #239: editor-phase tag captured by OnLogMessage
-                // under the same lock as the sequence id, so a single
-                // ingestion snapshots a self-consistent (phase, seq)
-                // pair.  Values are taken from
-                // ``ConsoleLogEntryPredicate.SupportedPhaseFilters`` minus ``all``.
+                public string requestId;
                 public string phase;
             }
 
@@ -759,6 +807,8 @@ namespace PrefabSentinel
             private static int _count;
             private static bool _capturing;
             private static long _nextSequenceId;
+            private static string _currentRequestId = string.Empty;
+            private static string _phaseSnapshot = "edit";
             private static readonly object _lock = new object();
 
             public static void StartCapture()
@@ -770,15 +820,18 @@ namespace PrefabSentinel
                     _head = 0;
                     _count = 0;
                     _nextSequenceId = 0;
+                    _phaseSnapshot = ClassifyCurrentEditorPhase();
                     _capturing = true;
                 }
-                Application.logMessageReceived += OnLogMessage;
+                EditorApplication.update += RefreshEditorPhaseSnapshot;
+                Application.logMessageReceivedThreaded += OnLogMessage;
             }
 
             public static void StopCapture()
             {
                 if (!_capturing) return;
-                Application.logMessageReceived -= OnLogMessage;
+                Application.logMessageReceivedThreaded -= OnLogMessage;
+                EditorApplication.update -= RefreshEditorPhaseSnapshot;
                 lock (_lock)
                 {
                     _capturing = false;
@@ -787,17 +840,21 @@ namespace PrefabSentinel
 
             public static bool IsCapturing => _capturing;
 
+            public static void BeginRequest(string requestId)
+            {
+                lock (_lock) { _currentRequestId = requestId ?? string.Empty; }
+            }
+
+            public static void EndRequest(string requestId)
+            {
+                lock (_lock)
+                {
+                    if (_currentRequestId == requestId) _currentRequestId = string.Empty;
+                }
+            }
+
             private static void OnLogMessage(string message, string stackTrace, LogType type)
             {
-                // Issue #239 / H-3: snapshot the phase outside the lock so
-                // the EditorApplication / BuildPipeline reads don't extend
-                // the capture lock's hold time. The build > play > edit
-                // priority decision is owned by the Unity-free
-                // ``ConsoleLogPhaseClassifier``.
-                string phase = ConsoleLogPhaseClassifier.Classify(
-                    BuildPipeline.isBuildingPlayer,
-                    EditorApplication.isPlayingOrWillChangePlaymode);
-
                 lock (_lock)
                 {
                     if (!_capturing || _buffer == null) return;
@@ -806,36 +863,40 @@ namespace PrefabSentinel
                         message = message,
                         stackTrace = stackTrace,
                         logType = type,
-                        timestamp = EditorApplication.timeSinceStartup,
+                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0,
                         sequenceId = _nextSequenceId++,
-                        phase = phase,
+                        requestId = _currentRequestId,
+                        phase = _phaseSnapshot,
                     };
                     _head = (_head + 1) % _buffer.Length;
                     if (_count < _buffer.Length) _count++;
                 }
             }
 
-            /// <summary>
-            /// Snapshot the buffer, applying filters and ordering.
-            /// ``classificationFilter`` selects between ``all`` (default),
-            /// ``non_fatal``, and ``fatal``. ``newestFirst`` walks the
-            /// buffer in reverse ingestion order. ``cursorAfterSequence``
-            /// is exclusive: only entries strictly past that ingestion
-            /// position (in the requested direction) are considered;
-            /// ``long.MinValue`` (oldest_first) or ``long.MaxValue``
-            /// (newest_first) means "no cursor".
-            ///
-            /// Returns the page entries (in the requested direction) and
-            /// a flag indicating whether at least one matching entry
-            /// remains past the page; the caller turns that into the
-            /// opaque continuation token.
-            /// </summary>
+            private static void RefreshEditorPhaseSnapshot()
+            {
+                string phase = ClassifyCurrentEditorPhase();
+                lock (_lock)
+                {
+                    _phaseSnapshot = phase;
+                }
+            }
+
+            private static string ClassifyCurrentEditorPhase()
+            {
+                return ConsoleLogPhaseClassifier.Classify(
+                    BuildPipeline.isBuildingPlayer,
+                    EditorApplication.isPlayingOrWillChangePlaymode);
+            }
+
             public static (List<ConsoleLogEntry> entries, bool hasMore) GetEntries(
                 int maxEntries,
                 string logTypeFilter,
                 float sinceSeconds,
                 string classificationFilter,
                 string phaseFilter,
+                long sinceSequence,
+                string sinceRequestId,
                 bool newestFirst,
                 long cursorAfterSequence)
             {
@@ -845,33 +906,40 @@ namespace PrefabSentinel
                 {
                     if (_buffer == null || _count == 0) return (result, hasMore);
 
-                    double now = EditorApplication.timeSinceStartup;
+                    double now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0;
                     int start = (_head - _count + _buffer.Length) % _buffer.Length;
+                    bool hasSequenceSelector = sinceSequence >= 0;
+                    bool hasRequestSelector = ConsoleCaptureRequestValidator.UsesRequestIdSelector(
+                        sinceSequence, sinceRequestId);
+                    bool cursorIsEmpty = newestFirst
+                        ? cursorAfterSequence == long.MaxValue
+                        : cursorAfterSequence == long.MinValue;
+                    bool hasCursorSelector = !hasSequenceSelector && !hasRequestSelector && !cursorIsEmpty;
+                    bool hasTimeSelector = !hasSequenceSelector && !hasRequestSelector && !hasCursorSelector && sinceSeconds > 0f;
 
                     for (int i = 0; i < _count; i++)
                     {
-                        // Walk index in the requested direction so the
-                        // first matching entry returned is the one the
-                        // caller asked for (newest or oldest), and the
-                        // page can stop early.
                         int physicalIndex = newestFirst
                             ? (start + _count - 1 - i) % _buffer.Length
                             : (start + i) % _buffer.Length;
                         var entry = _buffer[physicalIndex];
 
-                        // Exclusive cursor: skip up to and including the
-                        // supplied sequence position so the next page
-                        // starts strictly past it.
-                        if (newestFirst)
+                        if (hasCursorSelector)
                         {
-                            if (entry.sequenceId >= cursorAfterSequence) continue;
+                            if (newestFirst)
+                            {
+                                if (entry.sequenceId >= cursorAfterSequence) continue;
+                            }
+                            else
+                            {
+                                if (entry.sequenceId <= cursorAfterSequence) continue;
+                            }
                         }
-                        else
-                        {
-                            if (entry.sequenceId <= cursorAfterSequence) continue;
-                        }
-
-                        if (sinceSeconds > 0f && (now - entry.timestamp) > sinceSeconds)
+                        if (hasTimeSelector && (now - entry.timestamp) > sinceSeconds)
+                            continue;
+                        if (hasSequenceSelector && entry.sequenceId <= sinceSequence)
+                            continue;
+                        if (hasRequestSelector && entry.requestId != sinceRequestId)
                             continue;
                         if (!MatchesTypeFilter(entry.logType, logTypeFilter))
                             continue;
@@ -884,8 +952,6 @@ namespace PrefabSentinel
 
                         if (result.Count >= maxEntries)
                         {
-                            // Found one more matching entry past the
-                            // requested page size — flag continuation.
                             hasMore = true;
                             break;
                         }
@@ -897,6 +963,7 @@ namespace PrefabSentinel
                             log_type = entry.logType.ToString(),
                             timestamp = TimeSpan.FromSeconds(entry.timestamp).ToString(@"hh\:mm\:ss"),
                             sequence_id = entry.sequenceId,
+                            request_id = entry.requestId ?? string.Empty,
                             phase = entry.phase ?? string.Empty,
                         });
                     }
@@ -904,23 +971,37 @@ namespace PrefabSentinel
                 return (result, hasMore);
             }
 
-            /// <summary>
-            /// Returns the highest sequence id ever ingested, even after the
-            /// ring buffer has wrapped. Used by ``HandleCaptureConsoleLogs``
-            /// to validate cursor tokens against the realistic range of
-            /// past ingestion positions.
-            /// </summary>
+            public static bool HasRequestId(string requestId)
+            {
+                if (string.IsNullOrEmpty(requestId)) return false;
+                lock (_lock)
+                {
+                    if (_buffer == null || _count == 0) return false;
+                    int start = (_head - _count + _buffer.Length) % _buffer.Length;
+                    for (int i = 0; i < _count; i++)
+                    {
+                        var entry = _buffer[(start + i) % _buffer.Length];
+                        if (entry.requestId == requestId) return true;
+                    }
+                    return false;
+                }
+            }
+
             public static long PeekHighestIngestedSequenceId()
             {
                 lock (_lock) { return _nextSequenceId - 1; }
             }
 
-            /// <summary>
-            /// Walk the buffer for entries whose timestamp is greater than
-            /// or equal to ``sinceTimestamp`` and tally non-fatal pattern
-            /// matches. Used by save/instantiate handlers to surface known
-            /// noise as warnings without losing console signal.
-            /// </summary>
+            public static long PeekLowestRetainedSequenceId()
+            {
+                lock (_lock)
+                {
+                    if (_buffer == null || _count == 0) return _nextSequenceId;
+                    int start = (_head - _count + _buffer.Length) % _buffer.Length;
+                    return _buffer[start].sequenceId;
+                }
+            }
+
             public static (int udonsharpObsNreCount, List<string> labels)
                 CollectNonFatalCountsSince(double sinceTimestamp)
             {
@@ -969,11 +1050,6 @@ namespace PrefabSentinel
                     default:          return true;
                 }
             }
-
-            // Issue H-3: classification / phase filter-support membership and
-            // the phase-match predicate are owned by the Unity-free
-            // ``ConsoleLogEntryPredicate``. The log-type-typed predicates
-            // above stay here because they take a UnityEngine.LogType.
         }
 
         // ── Batch Operation DTOs ──

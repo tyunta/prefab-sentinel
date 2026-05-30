@@ -521,6 +521,30 @@ class InspectWorldCanvasStepTests(unittest.TestCase):
             [d.detail for d in response.diagnostics],
         )
 
+    def test_scene_outside_runtime_root_is_not_read_or_inspected(self) -> None:
+        from unittest.mock import MagicMock
+
+        from prefab_sentinel.contracts import Severity as _Severity
+        from prefab_sentinel.orchestrator_validation import (  # noqa: PLC0415
+            _inspect_world_canvas_step,
+        )
+
+        with tempfile.TemporaryDirectory() as runtime_dir, tempfile.TemporaryDirectory() as outside_dir:
+            outside_scene = Path(outside_dir) / "outside.unity"
+            outside_scene.write_text("not a Unity scene fixture", encoding="utf-8")
+            inspector = MagicMock()
+            with patch_world_canvas_inspector(inspector):
+                response = _inspect_world_canvas_step(str(outside_scene), Path(runtime_dir))
+
+        self.assertTrue(response.success)
+        self.assertEqual(_Severity.INFO, response.severity)
+        self.assertEqual("WORLD_CANVAS_INSPECT_OK", response.code)
+        self.assertEqual(
+            ["WORLD_CANVAS_SCENE_OUTSIDE_ROOT"],
+            [d.detail for d in response.diagnostics],
+        )
+        inspector.assert_not_called()
+
     def test_scene_with_local_scale_finding_returns_warning_severity(self) -> None:
         """A scene whose canvas inspector emits a
         ``WORLD_CANVAS_LOCAL_SCALE`` finding is rolled up to
@@ -567,13 +591,10 @@ def patch_world_canvas_inspector(stub):
     )
 
 
-class ValidateRuntimePipelineTests(unittest.TestCase):
-    """Issue #146 row: pin ``validate_runtime`` outcomes for the
-    fail-fast path (runtime step error) and the clean path."""
-
+class ValidateRuntimeProfileTests(unittest.TestCase):
     @staticmethod
     def _make_response(code: str, severity, success: bool, data: dict | None = None):
-        from prefab_sentinel.contracts import ToolResponse  # noqa: PLC0415
+        from prefab_sentinel.contracts import ToolResponse
 
         return ToolResponse(
             success=success,
@@ -585,8 +606,6 @@ class ValidateRuntimePipelineTests(unittest.TestCase):
 
     @staticmethod
     def _canvas_step_result(scene_path: str) -> dict:
-        """Full nested ``inspect_world_canvas`` result envelope (the
-        canvas step is real, not mocked, so its payload is deterministic)."""
         return {
             "success": True,
             "severity": "info",
@@ -608,8 +627,6 @@ class ValidateRuntimePipelineTests(unittest.TestCase):
         code: str,
         data: dict | None = None,
     ) -> dict:
-        """Full nested step result envelope for a stubbed runtime step.
-        The mock response carries message ``"m"`` and the supplied data."""
         return {
             "success": success,
             "severity": severity,
@@ -619,95 +636,26 @@ class ValidateRuntimePipelineTests(unittest.TestCase):
             "diagnostics": [],
         }
 
-    def test_fail_fast_runtime_step_error_aborts_pipeline(self) -> None:
-        """When ``run_clientsim`` returns ``severity=error``, the
-        pipeline aborts at the run-clientsim step.  The full top-level
-        payload binds by value, with ``fail_fast_triggered`` true,
-        scene_path and profile echoed, and each step's name plus its
-        full nested result envelope (canvas / compile / run-clientsim)
-        bound by exact value."""
-        from unittest.mock import MagicMock  # noqa: PLC0415
+    @staticmethod
+    def _write_scene(temp_dir: str) -> str:
+        scene = Path(temp_dir) / "scene.unity"
+        scene.write_text("%YAML 1.1\n--- !u!1 &1\nGameObject:\n", encoding="utf-8")
+        return str(scene)
 
-        from prefab_sentinel.contracts import Severity  # noqa: PLC0415
-        from prefab_sentinel.orchestrator_validation import (  # noqa: PLC0415
-            validate_runtime,
-        )
-        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+    def _runtime_with_log_steps(self):
+        from unittest.mock import MagicMock
+
+        from prefab_sentinel.contracts import Severity
 
         runtime = MagicMock()
-        runtime.compile_udonsharp.return_value = self._make_response(
-            "RUN_COMPILE_OK", Severity.INFO, True
-        )
-        runtime.run_clientsim.return_value = self._make_response(
-            "RUN_CLIENTSIM_FAILED", Severity.ERROR, False
-        )
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            scene = Path(temp_dir) / "scene.unity"
-            scene.write_text(
-                "%YAML 1.1\n--- !u!1 &1\nGameObject:\n", encoding="utf-8"
-            )
-            scene_path = str(scene)
-            response = validate_runtime(runtime, scene_path)
-
-            assert_error_envelope(
-                response,
-                code="VALIDATE_RUNTIME_RESULT",
-                severity="error",
-                message_match=r"fail-fast policy",
-                data={
-                    "scene_path": scene_path,
-                    "profile": "default",
-                    "read_only": True,
-                    "fail_fast_triggered": True,
-                    "steps": [
-                        {
-                            "step": "inspect_world_canvas",
-                            "result": self._canvas_step_result(scene_path),
-                        },
-                        {
-                            "step": "compile_udonsharp",
-                            "result": self._stub_step_result(
-                                success=True,
-                                severity="info",
-                                code="RUN_COMPILE_OK",
-                            ),
-                        },
-                        {
-                            "step": "run_clientsim",
-                            "result": self._stub_step_result(
-                                success=False,
-                                severity="error",
-                                code="RUN_CLIENTSIM_FAILED",
-                            ),
-                        },
-                    ],
-                },
-            )
-
-    def test_clean_pipeline_runs_full_step_sequence(self) -> None:
-        """When every step succeeds, the pipeline runs the full
-        six-step sequence; ``fail_fast_triggered`` is False; the full
-        top-level payload binds by value, with each step's name plus
-        its full nested result envelope bound by exact value."""
-        from unittest.mock import MagicMock  # noqa: PLC0415
-
-        from prefab_sentinel.contracts import Severity  # noqa: PLC0415
-        from prefab_sentinel.orchestrator_validation import (  # noqa: PLC0415
-            validate_runtime,
-        )
-
-        runtime = MagicMock()
-        # MagicMock treats any attribute starting with ``assert`` as an
-        # assertion method by default; bind it explicitly so the
-        # orchestrator's ``runtime_validation.assert_no_critical_errors``
-        # call resolves to a normal mock callable.
+        runtime.project_root = Path("/")
         runtime.assert_no_critical_errors = MagicMock()
-        runtime.compile_udonsharp.return_value = self._make_response(
-            "RUN_COMPILE_OK", Severity.INFO, True
-        )
+        runtime.compile_udonsharp.return_value = self._make_response("RUN_COMPILE_OK", Severity.INFO, True)
         runtime.run_clientsim.return_value = self._make_response(
-            "RUN_CLIENTSIM_OK", Severity.INFO, True
+            "RUN_CLIENTSIM_OK",
+            Severity.INFO,
+            True,
+            data={"read_only": False, "executed": True},
         )
         runtime.collect_unity_console.return_value = self._make_response(
             "RUN_LOG_COLLECTED",
@@ -715,82 +663,195 @@ class ValidateRuntimePipelineTests(unittest.TestCase):
             True,
             data={"log_lines": [], "read_only": True},
         )
-        runtime.classify_errors.return_value = self._make_response(
-            "RUN_CLASSIFY_OK", Severity.INFO, True
+        runtime.collect_editor_console.return_value = self._make_response(
+            "RUN_EDITOR_CONSOLE_COLLECTED",
+            Severity.INFO,
+            True,
+            data={"log_lines": [], "read_only": True},
         )
-        runtime.assert_no_critical_errors.return_value = self._make_response(
-            "RUN_ASSERT_OK", Severity.INFO, True
+        runtime.classify_errors.return_value = self._make_response("RUN_CLASSIFY_OK", Severity.INFO, True)
+        runtime.assert_no_critical_errors.return_value = self._make_response("RUN_ASSERT_OK", Severity.INFO, True)
+        return runtime
+
+    def test_validate_runtime_default_profile_never_runs_clientsim(self) -> None:
+        from prefab_sentinel.contracts import Severity
+        from prefab_sentinel.orchestrator_validation import validate_runtime
+
+        runtime = self._runtime_with_log_steps()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            scene_path = self._write_scene(temp_dir)
+            response = validate_runtime(runtime, scene_path)
+
+        self.assertEqual(
+            (True, "VALIDATE_RUNTIME_RESULT", Severity.INFO),
+            (response.success, response.code, response.severity),
+            msg=f"compile-only validation envelope mismatch: {response.to_dict()!r}",
+        )
+        self.assertEqual(
+            "compile_only",
+            response.data["profile"],
+            msg=f"default validation profile mismatch: {response.data!r}",
+        )
+        self.assertEqual(
+            [
+                "inspect_world_canvas",
+                "compile_udonsharp",
+                "collect_unity_console",
+                "classify_errors",
+                "assert_no_critical_errors",
+            ],
+            [step["step"] for step in response.data["steps"]],
+            msg=f"default validation step sequence must exclude ClientSim: {response.data!r}",
+        )
+        runtime.run_clientsim.assert_not_called()
+
+    def test_validate_runtime_rejects_unknown_profile(self) -> None:
+        from prefab_sentinel.contracts import Severity
+        from prefab_sentinel.orchestrator_validation import validate_runtime
+
+        runtime = self._runtime_with_log_steps()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            scene_path = self._write_scene(temp_dir)
+            response = validate_runtime(runtime, scene_path, profile="smoke")
+
+        self.assertEqual(
+            (False, "VALIDATE_RUNTIME_PROFILE_UNSUPPORTED", Severity.ERROR),
+            (response.success, response.code, response.severity),
+            msg=f"unsupported runtime profile envelope mismatch: {response.to_dict()!r}",
+        )
+        self.assertIn("compile_only", response.message)
+        self.assertIn("editor_console_only", response.message)
+        self.assertIn("clientsim", response.message)
+        runtime.compile_udonsharp.assert_not_called()
+        runtime.run_clientsim.assert_not_called()
+
+    def test_validate_runtime_editor_console_only_uses_console_without_clientsim(self) -> None:
+        from prefab_sentinel.contracts import Severity
+        from prefab_sentinel.orchestrator_validation import validate_runtime
+
+        runtime = self._runtime_with_log_steps()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            scene_path = self._write_scene(temp_dir)
+            response = validate_runtime(runtime, scene_path, profile="editor_console_only")
+
+        self.assertEqual(
+            (True, "VALIDATE_RUNTIME_RESULT", Severity.INFO),
+            (response.success, response.code, response.severity),
+            msg=f"console-only validation envelope mismatch: {response.to_dict()!r}",
+        )
+        self.assertEqual(
+            "editor_console_only",
+            response.data["profile"],
+            msg=f"console-only profile mismatch: {response.data!r}",
+        )
+        self.assertEqual(
+            [
+                "inspect_world_canvas",
+                "collect_editor_console",
+                "classify_errors",
+                "assert_no_critical_errors",
+            ],
+            [step["step"] for step in response.data["steps"]],
+            msg=f"console-only step sequence must exclude compile and ClientSim: {response.data!r}",
+        )
+        runtime.collect_unity_console.assert_not_called()
+        runtime.compile_udonsharp.assert_not_called()
+        runtime.run_clientsim.assert_not_called()
+
+    def test_clientsim_profile_runs_full_side_effect_sequence(self) -> None:
+        from prefab_sentinel.contracts import Severity
+        from prefab_sentinel.orchestrator_validation import validate_runtime
+
+        runtime = self._runtime_with_log_steps()
+        runtime.run_clientsim.return_value = self._make_response(
+            "RUN_CLIENTSIM_OK",
+            Severity.INFO,
+            True,
+            data={"read_only": False, "executed": True},
         )
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            scene = Path(temp_dir) / "scene.unity"
-            scene.write_text(
-                "%YAML 1.1\n--- !u!1 &1\nGameObject:\n", encoding="utf-8"
+            scene_path = self._write_scene(temp_dir)
+            response = validate_runtime(
+                runtime,
+                scene_path,
+                profile="clientsim",
+                confirm=True,
+                change_reason="audit clientsim validation",
             )
-            scene_path = str(scene)
-            response = validate_runtime(runtime, scene_path)
 
-            from prefab_sentinel.contracts import Severity as _Severity  # noqa: PLC0415
+        self.assertEqual(
+            [
+                "inspect_world_canvas",
+                "compile_udonsharp",
+                "run_clientsim",
+                "collect_unity_console",
+                "classify_errors",
+                "assert_no_critical_errors",
+            ],
+            [step["step"] for step in response.data["steps"]],
+            msg=f"clientsim profile step sequence mismatch: {response.data!r}",
+        )
+        runtime.run_clientsim.assert_called_once_with(
+            scene_path,
+            "clientsim",
+            confirm=True,
+            change_reason="audit clientsim validation",
+            allow_dirty_before=False,
+        )
 
-            self.assertTrue(response.success)
-            self.assertEqual("VALIDATE_RUNTIME_RESULT", response.code)
-            self.assertEqual(_Severity.INFO, response.severity)
-            self.assertEqual(
-                {
-                    "scene_path": scene_path,
-                    "profile": "default",
-                    "read_only": True,
-                    "fail_fast_triggered": False,
-                    "steps": [
-                        {
-                            "step": "inspect_world_canvas",
-                            "result": self._canvas_step_result(scene_path),
-                        },
-                        {
-                            "step": "compile_udonsharp",
-                            "result": self._stub_step_result(
-                                success=True,
-                                severity="info",
-                                code="RUN_COMPILE_OK",
-                            ),
-                        },
-                        {
-                            "step": "run_clientsim",
-                            "result": self._stub_step_result(
-                                success=True,
-                                severity="info",
-                                code="RUN_CLIENTSIM_OK",
-                            ),
-                        },
-                        {
-                            "step": "collect_unity_console",
-                            "result": self._stub_step_result(
-                                success=True,
-                                severity="info",
-                                code="RUN_LOG_COLLECTED",
-                                data={"log_lines": [], "read_only": True},
-                            ),
-                        },
-                        {
-                            "step": "classify_errors",
-                            "result": self._stub_step_result(
-                                success=True,
-                                severity="info",
-                                code="RUN_CLASSIFY_OK",
-                            ),
-                        },
-                        {
-                            "step": "assert_no_critical_errors",
-                            "result": self._stub_step_result(
-                                success=True,
-                                severity="info",
-                                code="RUN_ASSERT_OK",
-                            ),
-                        },
-                    ],
-                },
-                response.data,
+    def test_clientsim_step_error_aborts_pipeline(self) -> None:
+        from prefab_sentinel.contracts import Severity
+        from prefab_sentinel.orchestrator_validation import validate_runtime
+        from tests._assertion_helpers import assert_error_envelope
+
+        runtime = self._runtime_with_log_steps()
+        runtime.run_clientsim.return_value = self._make_response("RUN_CLIENTSIM_FAILED", Severity.ERROR, False)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            scene_path = self._write_scene(temp_dir)
+            response = validate_runtime(
+                runtime,
+                scene_path,
+                profile="clientsim",
+                confirm=True,
+                change_reason="audit clientsim validation",
             )
+
+        assert_error_envelope(
+            response,
+            code="VALIDATE_RUNTIME_RESULT",
+            severity="error",
+            message_match=r"fail-fast policy",
+            data={
+                "scene_path": scene_path,
+                "profile": "clientsim",
+                "read_only": True,
+                "fail_fast_triggered": True,
+                "steps": [
+                    {"step": "inspect_world_canvas", "result": self._canvas_step_result(scene_path)},
+                    {
+                        "step": "compile_udonsharp",
+                        "result": self._stub_step_result(
+                            success=True,
+                            severity="info",
+                            code="RUN_COMPILE_OK",
+                        ),
+                    },
+                    {
+                        "step": "run_clientsim",
+                        "result": self._stub_step_result(
+                            success=False,
+                            severity="error",
+                            code="RUN_CLIENTSIM_FAILED",
+                        ),
+                    },
+                ],
+            },
+        )
 
 
 class TestValidationSnapshotPinning:

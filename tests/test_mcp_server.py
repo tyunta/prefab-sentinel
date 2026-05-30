@@ -200,6 +200,10 @@ class TestToolRegistration(unittest.TestCase):
             "editor_inspect_animation_clip",
             "editor_create_animation_clip",
             "editor_apply_animation_clip",
+            # Issue #98: live geometry read primitives.
+            "editor_get_transform",
+            "editor_get_bounds",
+            "editor_measure_distance",
         }
         self.assertEqual(expected, tool_names)
 
@@ -210,8 +214,9 @@ class TestToolRegistration(unittest.TestCase):
         # tool, bringing the registered surface from 75 to 76; issues
         # #233 / #236 / #240 / #242 / #243 add 9 more tools, bringing
         # the surface to 85; issue #71 retired the fire-and-return
-        # ``editor_recompile_async`` tool, leaving 84.
-        self.assertEqual(84, len(tools))
+        # ``editor_recompile_async`` tool, leaving 84; issue #98 adds
+        # three live geometry tools, bringing the surface to 87.
+        self.assertEqual(87, len(tools))
 
 
 class TestToolsCatalogDoc(unittest.TestCase):
@@ -2295,13 +2300,19 @@ class TestEditorReadOnlyTools(unittest.TestCase):
             _run(server.call_tool("editor_screenshot", {"refresh": False}))
         mock_send.assert_called_once_with(action="capture_screenshot", view="scene", width=0, height=0)
 
-    def test_editor_screenshot_refresh_failure_still_captures(self) -> None:
+    def test_editor_screenshot_refresh_failure_stops_before_capture(self) -> None:
+        from mcp.server.fastmcp.exceptions import ToolError
+
         server = create_server()
-        responses = [Exception("refresh failed"), {"success": True, "data": {"output_path": "/shot.png"}}]
-        with patch("prefab_sentinel.mcp_tools_editor_view.send_action", side_effect=responses) as mock_send:
-            _, result = _run(server.call_tool("editor_screenshot", {"refresh": True}))
-        self.assertEqual(mock_send.call_count, 2)
-        self.assertTrue(result["success"])
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_view.send_action",
+            side_effect=Exception("refresh failed"),
+        ) as mock_send:
+            with self.assertRaises(ToolError) as ctx:
+                _run(server.call_tool("editor_screenshot", {"refresh": True}))
+
+        mock_send.assert_called_once_with(action="refresh_asset_database")
+        self.assertIn("refresh failed", str(ctx.exception))
 
     def test_editor_select_delegates(self) -> None:
         server = create_server()
@@ -2683,6 +2694,8 @@ class TestEditorAddUdonSharpComponentTool(unittest.TestCase):
                 {
                     "hierarchy_path": "/UI/PlayButton",
                     "type_full_name": "VVMW.PlayController",
+                    "confirm": True,
+                    "change_reason": "add PlayController",
                 },
             ))
         assert_error_envelope(
@@ -2715,6 +2728,8 @@ class TestEditorAddUdonSharpComponentTool(unittest.TestCase):
                 {
                     "hierarchy_path": "/UI/PlayButton",
                     "type_full_name": "VVMW.PlayController",
+                    "confirm": True,
+                    "change_reason": "add PlayController",
                 },
             ))
         assert_error_envelope(
@@ -2805,6 +2820,8 @@ class TestEditorSetUdonSharpFieldValueSemantics(unittest.TestCase):
                     "hierarchy_path": "/UI/PlayButton",
                     "property_name": "label",
                     "value": "",
+                    "confirm": True,
+                    "change_reason": "set label",
                 },
             ))
         # No client-side NO_VALUE rejection for an empty-string write.
@@ -2942,6 +2959,7 @@ class TestEditorArgumentNaming(unittest.TestCase):
             self._tool_fn("editor_wire_persistent_listener")(
                 hierarchy_path="/A", property_name="onValueChanged",
                 target_hierarchy_path="/B", method="M", arg="x",
+                confirm=True, change_reason="wire listener",
             )
         send.assert_called_once()
 
@@ -2993,6 +3011,7 @@ class TestEditorArgumentNaming(unittest.TestCase):
             self._tool_fn("editor_wire_persistent_listener")(
                 hierarchy_path="/A", property_name="OnX",
                 target_hierarchy_path="/B", method="M", arg="x",
+                confirm=True, change_reason="wire listener",
             )
         kwargs = send.call_args.kwargs
         self.assertEqual(
@@ -3129,12 +3148,14 @@ class TestEditorWriteTools(unittest.TestCase):
 
     def test_editor_set_material_property_delegates(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_write.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_set_material_property", {
                 "hierarchy_path": "/Foo",
                 "material_index": 0,
                 "property_name": "_Color",
                 "value": "[1, 0, 0, 1]",
+                "confirm": True,
+                "change_reason": "set material color",
             }))
         mock_send.assert_called_once_with(
             action="set_material_property",
@@ -3142,6 +3163,21 @@ class TestEditorWriteTools(unittest.TestCase):
             material_index=0,
             property_name="_Color",
             property_value="[1, 0, 0, 1]",
+        )
+
+    def test_editor_set_material_property_requires_audit_pair(self) -> None:
+        server = create_server()
+        with patch("prefab_sentinel.mcp_tools_editor_write.send_action") as mock_send:
+            _, result = _run(server.call_tool("editor_set_material_property", {
+                "hierarchy_path": "/Foo",
+                "material_index": 0,
+                "property_name": "_Color",
+                "value": "[1, 0, 0, 1]",
+            }))
+
+        mock_send.assert_not_called()
+        assert_error_envelope(
+            result, code="CHANGE_REASON_REQUIRED", severity="error",
         )
 
     def test_editor_batch_set_material_property_delegates(self) -> None:
@@ -3822,30 +3858,56 @@ class TestInspectHierarchyTool(unittest.TestCase):
 
 
 class TestValidateRuntimeTool(unittest.TestCase):
-    """Tests for the validate_runtime MCP tool."""
+    def _runtime_with_validation_steps(self):
+        from unittest.mock import MagicMock
 
-    def test_delegates_to_orchestrator(self) -> None:
+        from prefab_sentinel.contracts import Severity, ToolResponse
+
+        runtime = MagicMock()
+        runtime.assert_no_critical_errors = MagicMock()
+        runtime.compile_udonsharp.return_value = ToolResponse(True, Severity.INFO, "RUN_COMPILE_OK", "m", {"read_only": True})
+        runtime.run_clientsim.return_value = ToolResponse(True, Severity.INFO, "RUN_CLIENTSIM_OK", "m", {"read_only": False})
+        runtime.collect_unity_console.return_value = ToolResponse(
+            True,
+            Severity.INFO,
+            "RUN_LOG_COLLECTED",
+            "m",
+            {"read_only": True, "log_lines": []},
+        )
+        runtime.classify_errors.return_value = ToolResponse(True, Severity.INFO, "RUN_CLASSIFY_OK", "m", {"read_only": True})
+        runtime.assert_no_critical_errors.return_value = ToolResponse(True, Severity.INFO, "RUN_ASSERT_OK", "m", {"read_only": True})
+        return runtime
+
+    def test_delegates_to_orchestrator_with_compile_only_defaults(self) -> None:
         mock_resp = MagicMock()
         mock_resp.to_dict.return_value = {"success": True, "data": {"steps": []}}
         mock_orch = MagicMock()
         mock_orch.validate_runtime.return_value = mock_resp
 
         server = create_server()
-        with patch.object(
-            ProjectSession, "get_orchestrator", return_value=mock_orch,
-        ):
-            _, result = _run(server.call_tool("validate_runtime", {
-                "asset_path": "Assets/Scenes/Main.unity",
-            }))
+        with patch.object(ProjectSession, "get_orchestrator", return_value=mock_orch):
+            _, result = _run(
+                server.call_tool(
+                    "validate_runtime",
+                    {"asset_path": "Assets/Scenes/Main.unity"},
+                )
+            )
 
-        self.assertTrue(result["success"])
+        self.assertEqual(
+            True,
+            result["success"],
+            msg=f"validate_runtime tool result mismatch: {result!r}",
+        )
         mock_orch.validate_runtime.assert_called_once_with(
             scene_path="Assets/Scenes/Main.unity",
-            profile="default",
+            profile="compile_only",
             log_file=None,
             since_timestamp=None,
             allow_warnings=False,
             max_diagnostics=200,
+            confirm=False,
+            change_reason=None,
+            allow_dirty_before_clientsim=False,
         )
 
     def test_passes_all_params(self) -> None:
@@ -3855,25 +3917,74 @@ class TestValidateRuntimeTool(unittest.TestCase):
         mock_orch.validate_runtime.return_value = mock_resp
 
         server = create_server()
-        with patch.object(
-            ProjectSession, "get_orchestrator", return_value=mock_orch,
-        ):
-            _run(server.call_tool("validate_runtime", {
-                "asset_path": "Assets/S.unity",
-                "profile": "smoke",
-                "log_file": "/tmp/Editor.log",
-                "allow_warnings": True,
-                "max_diagnostics": 50,
-            }))
+        with patch.object(ProjectSession, "get_orchestrator", return_value=mock_orch):
+            _run(
+                server.call_tool(
+                    "validate_runtime",
+                    {
+                        "asset_path": "Assets/S.unity",
+                        "profile": "clientsim",
+                        "log_file": "/tmp/Editor.log",
+                        "since_timestamp": "2026-05-30T00:00:00Z",
+                        "allow_warnings": True,
+                        "max_diagnostics": 50,
+                        "confirm": True,
+                        "change_reason": "audit clientsim validation",
+                        "allow_dirty_before_clientsim": True,
+                    },
+                )
+            )
 
         mock_orch.validate_runtime.assert_called_once_with(
             scene_path="Assets/S.unity",
-            profile="smoke",
+            profile="clientsim",
             log_file="/tmp/Editor.log",
-            since_timestamp=None,
+            since_timestamp="2026-05-30T00:00:00Z",
             allow_warnings=True,
             max_diagnostics=50,
+            confirm=True,
+            change_reason="audit clientsim validation",
+            allow_dirty_before_clientsim=True,
         )
+
+    def test_validate_runtime_rejects_unknown_profile(self) -> None:
+        from prefab_sentinel.contracts import Severity
+        from prefab_sentinel.orchestrator_validation import validate_runtime
+
+        runtime = self._runtime_with_validation_steps()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            scene = Path(temp_dir) / "Scene.unity"
+            scene.write_text("%YAML 1.1\n", encoding="utf-8")
+            response = validate_runtime(runtime, str(scene), profile="smoke")
+
+        self.assertEqual(
+            (False, "VALIDATE_RUNTIME_PROFILE_UNSUPPORTED", Severity.ERROR),
+            (response.success, response.code, response.severity),
+            msg=f"unsupported runtime profile envelope mismatch: {response.to_dict()!r}",
+        )
+        runtime.compile_udonsharp.assert_not_called()
+        runtime.run_clientsim.assert_not_called()
+
+    def test_validate_runtime_clientsim_requires_audit_pair(self) -> None:
+        from prefab_sentinel.contracts import Severity
+        from prefab_sentinel.orchestrator_validation import validate_runtime
+
+        runtime = self._runtime_with_validation_steps()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            scene = Path(temp_dir) / "Scene.unity"
+            scene.write_text("%YAML 1.1\n", encoding="utf-8")
+            response = validate_runtime(runtime, str(scene), profile="clientsim")
+
+        self.assertEqual(
+            (False, "CLIENTSIM_CONFIRM_REQUIRED", Severity.ERROR),
+            (response.success, response.code, response.severity),
+            msg=f"clientsim audit gate envelope mismatch: {response.to_dict()!r}",
+        )
+        self.assertIn("explicit audit", response.message)
+        runtime.compile_udonsharp.assert_not_called()
+        runtime.run_clientsim.assert_not_called()
 
 
 class TestPatchApplyTool(unittest.TestCase):

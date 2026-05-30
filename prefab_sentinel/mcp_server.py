@@ -29,6 +29,7 @@ from prefab_sentinel.mcp_tools_editor_advanced import register_editor_advanced_t
 from prefab_sentinel.mcp_tools_editor_animation import register_editor_animation_tools
 from prefab_sentinel.mcp_tools_editor_batch import register_editor_batch_tools
 from prefab_sentinel.mcp_tools_editor_exec import register_editor_exec_tools
+from prefab_sentinel.mcp_tools_editor_geometry import register_editor_geometry_tools
 from prefab_sentinel.mcp_tools_editor_ops import register_editor_ops_tools
 from prefab_sentinel.mcp_tools_editor_prefab_stage import (
     register_editor_prefab_stage_tools,
@@ -158,6 +159,7 @@ def create_server(
     register_editor_ops_tools(server)
     register_editor_advanced_tools(server)
     register_editor_exec_tools(server)
+    register_editor_geometry_tools(server)
     register_editor_udonsharp_tools(server)
     # Issue #236 / #243: dedicated registration hooks for the Prefab
     # Stage open/close primitives and the three AnimationClip surfaces.

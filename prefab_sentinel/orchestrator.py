@@ -535,30 +535,26 @@ class Phase1Orchestrator:
     def validate_runtime(
         self,
         scene_path: str,
-        profile: str = "default",
+        profile: str = "compile_only",
         log_file: str | None = None,
         since_timestamp: str | None = None,
         allow_warnings: bool = False,
         max_diagnostics: int = 200,
+        confirm: bool = False,
+        change_reason: str | None = None,
+        allow_dirty_before_clientsim: bool = False,
     ) -> ToolResponse:
-        """Run the full runtime validation pipeline (compile + ClientSim + log check).
-
-        Args:
-            scene_path: Path to the ``.unity`` scene to validate.
-            profile: ClientSim profile name.
-            log_file: Optional explicit path to Unity Editor.log.
-            since_timestamp: Only classify log lines after this timestamp.
-            allow_warnings: When ``True``, warnings do not fail the assertion.
-            max_diagnostics: Cap on classified diagnostic entries.
-
-        Returns:
-            ``ToolResponse`` with ``data.steps`` containing compile_udonsharp,
-            run_clientsim, collect_unity_console, classify_errors, and
-            assert_no_critical_errors sub-step results.
-        """
         return orchestrator_validation.validate_runtime(
-            self.runtime_validation, scene_path, profile, log_file,
-            since_timestamp, allow_warnings, max_diagnostics,
+            self.runtime_validation,
+            scene_path,
+            profile,
+            log_file,
+            since_timestamp,
+            allow_warnings,
+            max_diagnostics,
+            confirm,
+            change_reason,
+            allow_dirty_before_clientsim,
         )
 
     # ------------------------------------------------------------------

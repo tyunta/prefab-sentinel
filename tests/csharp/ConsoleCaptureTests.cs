@@ -74,23 +74,38 @@ public class ConsoleCaptureRequestValidatorTests
     private const int Capacity = 1000;
 
     [Theory]
-    [InlineData(0, false)]      // below the inclusive lower bound
-    [InlineData(1, true)]       // lower bound
-    [InlineData(Capacity, true)]      // upper bound
-    [InlineData(Capacity + 1, false)] // above the upper bound
-    public void Entry_Count_Is_Valid_Only_Within_The_Inclusive_Range(
-        int maxEntries, bool expectedSuccess)
+    [InlineData(1)]
+    [InlineData(Capacity)]
+    public void Entry_Count_Accepts_Inclusive_Range(int maxEntries)
     {
         ConsoleCaptureValidation result = ConsoleCaptureRequestValidator.Validate(
             "newest_first", "", maxEntries, highestSeqId: 5, capacity: Capacity);
 
-        Assert.Equal(expectedSuccess, result.Success);
-        if (!expectedSuccess)
-        {
-            Assert.Equal(
-                ConsoleCaptureRequestValidator.MaxEntriesOutOfRangeCode,
-                result.ErrorCode);
-        }
+        Assert.Equal((true, string.Empty), (result.Success, result.ErrorCode));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(Capacity + 1)]
+    public void Entry_Count_Rejects_Outside_Inclusive_Range(int maxEntries)
+    {
+        ConsoleCaptureValidation result = ConsoleCaptureRequestValidator.Validate(
+            "newest_first", "", maxEntries, highestSeqId: 5, capacity: Capacity);
+
+        Assert.Equal(
+            (false, ConsoleCaptureRequestValidator.MaxEntriesOutOfRangeCode),
+            (result.Success, result.ErrorCode));
+    }
+
+    [Fact]
+    public void Sequence_Selector_Disables_Request_Id_Selector()
+    {
+        Assert.Equal(
+            (false, true),
+            (
+                ConsoleCaptureRequestValidator.UsesRequestIdSelector(7, "stale-request"),
+                ConsoleCaptureRequestValidator.UsesRequestIdSelector(-1, "active-request")
+            ));
     }
 
     [Fact]
@@ -179,5 +194,27 @@ public class ConsoleCaptureRequestValidatorTests
 
         Assert.False(result.Success);
         Assert.Equal(ConsoleCaptureRequestValidator.InvalidOrderCode, result.ErrorCode);
+    }
+
+    [Fact]
+    public void Since_Sequence_Below_Sentinel_Is_Rejected_With_The_Invalid_Sequence_Code()
+    {
+        ConsoleCaptureValidation result = ConsoleCaptureRequestValidator.Validate(
+            "newest_first", "", maxEntries: 10, highestSeqId: 50,
+            capacity: Capacity, sinceSequence: -2);
+
+        Assert.False(result.Success);
+        Assert.Equal(ConsoleCaptureRequestValidator.InvalidSinceSequenceCode, result.ErrorCode);
+    }
+
+    [Fact]
+    public void Since_Sequence_Past_The_Highest_Sequence_Is_Rejected_With_The_Invalid_Sequence_Code()
+    {
+        ConsoleCaptureValidation result = ConsoleCaptureRequestValidator.Validate(
+            "newest_first", "", maxEntries: 10, highestSeqId: 50,
+            capacity: Capacity, sinceSequence: 51);
+
+        Assert.False(result.Success);
+        Assert.Equal(ConsoleCaptureRequestValidator.InvalidSinceSequenceCode, result.ErrorCode);
     }
 }

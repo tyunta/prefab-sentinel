@@ -309,6 +309,10 @@ class TestSupportedActions(unittest.TestCase):
             "inspect_animation_clip",
             "create_animation_clip",
             "apply_animation_clip",
+            # Issue #98: live geometry read primitives.
+            "get_transform",
+            "get_bounds",
+            "measure_distance",
         }
         self.assertEqual(expected, SUPPORTED_ACTIONS)
 

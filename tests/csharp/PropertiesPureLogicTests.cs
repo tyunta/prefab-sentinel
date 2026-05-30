@@ -100,7 +100,12 @@ public class QuaternionInputValidatorTests
         // |1.00005 - 1| = 5e-5 < the 1e-4 tolerance.
         QuaternionParse result = QuaternionInputValidator.Validate("0,0,0,1.00005");
 
-        Assert.True(result.Success);
+        Assert.Equal((true, 0f, 0f, 0f, 1.00005f), (
+            result.Success,
+            result.X,
+            result.Y,
+            result.Z,
+            result.W));
     }
 
     [Fact]
@@ -171,7 +176,7 @@ public class PropertyValueParserTests
         bool ok = PropertyValueParser.TryParse(
             SerializedPropertyKind.Vector3, "1,2", out ParsedPropertyValue value);
 
-        Assert.False(ok);
+        Assert.Equal((false, (float[]?)null), (ok, value.Components));
     }
 
     [Fact]
@@ -182,5 +187,102 @@ public class PropertyValueParserTests
 
         Assert.True(ok);
         Assert.Equal(new[] { 1f, 2f, 3f }, value.Components);
+    }
+}
+
+public class EnumPropertyWriteTests
+{
+    [Fact]
+    public void Enum_Inputs_Accept_Name_Display_Index_And_Backing_Value()
+    {
+        var definition = new EnumPropertyDefinition(
+            new[] { "AlphaMode", "BetaMode" },
+            new[] { "Alpha Mode", "Beta Mode" },
+            new[] { 10, 20 });
+
+        Assert.Equal(0, EnumPropertyValueParser.Parse(definition, "AlphaMode").Index);
+        Assert.Equal(1, EnumPropertyValueParser.Parse(definition, "beta mode").Index);
+        Assert.Equal(1, EnumPropertyValueParser.Parse(definition, "index:1").Index);
+        Assert.Equal(1, EnumPropertyValueParser.Parse(definition, "value:20").Index);
+    }
+
+    [Fact]
+    public void Enum_Failures_Are_Typed_With_Candidates()
+    {
+        var ambiguous = new EnumPropertyDefinition(
+            new[] { "Foo", "foo" },
+            new[] { "Foo", "foo" },
+            new[] { 0, 1 });
+
+        EnumPropertyParseResult ambiguousResult =
+            EnumPropertyValueParser.Parse(ambiguous, "FOO");
+        EnumPropertyParseResult outOfRange =
+            EnumPropertyValueParser.Parse(ambiguous, "index:9");
+        EnumPropertyParseResult missingValue =
+            EnumPropertyValueParser.Parse(ambiguous, "value:42");
+        EnumPropertyParseResult badToken =
+            EnumPropertyValueParser.Parse(ambiguous, "not-a-token");
+
+        Assert.Equal(
+            (
+                "EDITOR_CTRL_SET_PROP_ENUM_AMBIGUOUS",
+                "EDITOR_CTRL_SET_PROP_ENUM_INDEX_OUT_OF_RANGE",
+                "EDITOR_CTRL_SET_PROP_ENUM_VALUE_NOT_FOUND",
+                "EDITOR_CTRL_SET_PROP_ENUM_PARSE_FAILED",
+                "Foo"
+            ),
+            (
+                ambiguousResult.ErrorCode,
+                outOfRange.ErrorCode,
+                missingValue.ErrorCode,
+                badToken.ErrorCode,
+                badToken.Names[0]
+            ));
+    }
+}
+
+public class LayerMaskPropertyWriteTests
+{
+    [Fact]
+    public void LayerMask_Inputs_Accept_Raw_Symbolic_Single_And_Array_Forms()
+    {
+        int Resolver(string name) => name switch
+        {
+            "Default" => 0,
+            "UI" => 5,
+            _ => -1,
+        };
+        string[] candidates = { "Default", "UI" };
+
+        Assert.Equal(3, LayerMaskValueParser.Parse("3", Resolver, candidates).Mask);
+        Assert.Equal(16, LayerMaskValueParser.Parse("0x10", Resolver, candidates).Mask);
+        Assert.Equal(0, LayerMaskValueParser.Parse("Nothing", Resolver, candidates).Mask);
+        Assert.Equal(-1, LayerMaskValueParser.Parse("Everything", Resolver, candidates).Mask);
+        Assert.Equal(32, LayerMaskValueParser.Parse("UI", Resolver, candidates).Mask);
+        Assert.Equal(33, LayerMaskValueParser.Parse("[\"Default\",\"UI\"]", Resolver, candidates).Mask);
+    }
+
+    [Fact]
+    public void LayerMask_Failures_Are_Typed_With_Candidates()
+    {
+        int Resolver(string name) => name == "UI" ? 5 : -1;
+        string[] candidates = { "UI" };
+
+        LayerMaskParseResult invalid =
+            LayerMaskValueParser.Parse("[5]", Resolver, candidates);
+        LayerMaskParseResult unknown =
+            LayerMaskValueParser.Parse("Environment", Resolver, candidates);
+
+        Assert.Equal(
+            (
+                "EDITOR_CTRL_SET_PROP_LAYERMASK_PARSE_FAILED",
+                "EDITOR_CTRL_SET_PROP_LAYERMASK_UNKNOWN_LAYER",
+                "UI"
+            ),
+            (
+                invalid.ErrorCode,
+                unknown.ErrorCode,
+                unknown.Candidates[0]
+            ));
     }
 }

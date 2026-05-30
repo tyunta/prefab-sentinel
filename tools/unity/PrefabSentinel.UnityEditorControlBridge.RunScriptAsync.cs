@@ -183,9 +183,6 @@ namespace PrefabSentinel
                 return BuildError(
                     "EDITOR_CTRL_RUN_SCRIPT_UNKNOWN_REQUEST",
                     "run_script_poll requires a non-empty request_id.");
-            // Defence-in-depth: reject malformed identifiers before any
-            // path is composed so a wrapper-less direct caller cannot
-            // traverse out of the watch directory.
             if (!RunScriptSubmitRequestIdRe.IsMatch(request.request_id))
                 return BuildError(
                     "EDITOR_CTRL_RUN_SCRIPT_UNKNOWN_REQUEST",
@@ -199,13 +196,6 @@ namespace PrefabSentinel
                 try
                 {
                     string body = File.ReadAllText(completionFile);
-                    // The completion file is the inner EditorControlResponse
-                    // serialised by ``RunScriptPollFrame``.  Map its
-                    // ``data`` fields onto the outer poll response so
-                    // callers see ``data.stdout`` as the actual script
-                    // output rather than a raw JSON blob; the inner
-                    // success flag drives the poll status (``completed``
-                    // when the inner run succeeded, ``failed`` otherwise).
                     EditorControlResponse inner = null;
                     try
                     {
@@ -222,25 +212,33 @@ namespace PrefabSentinel
                         string innerMessage = string.IsNullOrEmpty(inner.message)
                             ? "run_script_poll: job completed."
                             : inner.message;
-                        // Issue #68: a submit that failed to compile records
-                        // the real compiler diagnostics in the completion
-                        // artefact's ``data.errors``. Copy them onto the
-                        // outer poll response so a ``failed`` poll surfaces
-                        // why the snippet failed rather than an empty list.
-                        return BuildSuccess(
-                            "EDITOR_CTRL_RUN_SCRIPT_POLL_COMPLETED",
-                            innerMessage,
-                            data: new EditorControlData
+                        var response = new EditorControlResponse
+                        {
+                            protocol_version = ProtocolVersion,
+                            success = inner.success,
+                            severity = inner.severity,
+                            code = inner.success
+                                ? "EDITOR_CTRL_RUN_SCRIPT_POLL_COMPLETED"
+                                : inner.code,
+                            message = innerMessage,
+                            data = new EditorControlData
                             {
                                 executed = inner.data.executed,
                                 request_id = request.request_id,
                                 status = inner.success ? "completed" : "failed",
                                 stdout = innerStdout,
                                 errors = inner.data.errors ?? Array.Empty<string>(),
-                            });
+                                return_value = inner.data.return_value,
+                                outputs = inner.data.outputs ?? Array.Empty<RunScriptOutputEntry>(),
+                                unsupported_output_key = inner.data.unsupported_output_key ?? string.Empty,
+                                exception = inner.data.exception,
+                                path_hints = inner.data.path_hints ?? Array.Empty<WslPathHint>(),
+                            },
+                            diagnostics = inner.diagnostics ?? Array.Empty<EditorControlDiagnostic>(),
+                        };
+                        if (response.diagnostics.Length > 0 && response.success) response.severity = "warning";
+                        return response;
                     }
-                    // Parse failure: surface the raw body so callers can
-                    // still inspect the unparseable completion artefact.
                     return BuildSuccess(
                         "EDITOR_CTRL_RUN_SCRIPT_POLL_COMPLETED",
                         "run_script_poll: completion file present but unparseable; raw body surfaced via stdout.",
@@ -261,10 +259,6 @@ namespace PrefabSentinel
                         "run_script_poll: completion file unreadable.");
                 }
             }
-            // Cleanup on timeout: when the bridge deadline elapsed and
-            // the caller asked for teardown, remove the temp script
-            // and the registered poll so the in-flight job is
-            // finalised; report failed in the same call.
             if (request.cleanup_on_timeout)
             {
                 string tempDirAbs = Path.Combine(

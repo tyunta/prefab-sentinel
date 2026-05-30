@@ -223,6 +223,73 @@ class TestApplyPropertyValueTypes(unittest.TestCase):
         )
 
 
+class TestTypedPropertyWriterSource(unittest.TestCase):
+    def _property_writer_source(self) -> str:
+        return _read(TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.PropertyWrite.cs")
+
+    def test_enum_writer_uses_declared_enum_backing_values(self) -> None:
+        source = self._property_writer_source()
+        body = _extract_method(source, "WriteEnumValue")
+        self.assertIn("ResolveEnumBackingValues(prop)", body)
+        resolver = _extract_method(source, "ResolveEnumBackingValues")
+        self.assertIn("Enum.GetValues(enumType)", resolver)
+        self.assertNotIn("Enumerable.Range(0, prop.enumNames.Length)", body)
+
+    def test_object_reference_writer_uses_expected_type_and_typed_codes(self) -> None:
+        writer = self._property_writer_source()
+        body = _extract_method(writer, "WriteObjectReferenceValue")
+        self.assertIn("ResolveExpectedObjectReferenceType(prop)", body)
+        self.assertIn("ResolveTypedObjectReference", body)
+        resolver_source = _read(
+            TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.PropertyObjectReference.cs"
+        )
+        expected_type = _extract_method(
+            resolver_source, "ResolveExpectedObjectReferenceType"
+        )
+        self.assertIn("EDITOR_CTRL_SET_PROP_OBJECT_REF_TYPE_MISMATCH", expected_type)
+        resolver = _extract_method(resolver_source, "ResolveTypedObjectReference")
+        for token in (
+            "EDITOR_CTRL_SET_PROP_OBJECT_REF_NOT_FOUND",
+            "EDITOR_CTRL_SET_PROP_OBJECT_REF_TYPE_MISMATCH",
+            "EDITOR_CTRL_SET_PROP_OBJECT_REF_AMBIGUOUS",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, resolver)
+
+    def test_object_reference_resolver_prefers_asset_paths_over_hierarchy_shorthand(self) -> None:
+        resolver_source = _read(
+            TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.PropertyObjectReference.cs"
+        )
+        resolver = _extract_method(resolver_source, "ResolveTypedObjectReference")
+        asset_lookup = resolver.find("AssetDatabase.LoadAssetAtPath(reference, expectedType)")
+        hierarchy_lookup = resolver.find("TryResolveGameObjectInActiveStage(goPath")
+        self.assertNotEqual(
+            -1,
+            asset_lookup,
+            msg="ResolveTypedObjectReference must look up asset paths directly.",
+        )
+        self.assertNotEqual(
+            -1,
+            hierarchy_lookup,
+            msg="ResolveTypedObjectReference must keep hierarchy shorthand resolution.",
+        )
+        self.assertLess(
+            asset_lookup,
+            hierarchy_lookup,
+            msg=(
+                "ResolveTypedObjectReference must prefer project asset paths "
+                "before hierarchy shorthand so asset references are not shadowed."
+            ),
+        )
+
+    def test_property_write_result_carries_structured_error_data(self) -> None:
+        source = self._property_writer_source()
+        self.assertIn("internal readonly struct PropertyWriteResult", source)
+        self.assertIn("EditorControlData ErrorData", source)
+        handler = _extract_method(_read(TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Properties.cs"), "HandleEditorSetProperty")
+        self.assertIn("writeResult.ErrorData", handler)
+
+
 class TestHandleEditorSetPropertyQuaternion(unittest.TestCase):
     """Issue #24 / #111 — quaternion coverage in the unified layer.
 
@@ -319,6 +386,27 @@ class TestHandleCaptureConsoleLogsContract(unittest.TestCase):
         # Ordering / malformed-cursor / max-entries validation is owned by
         # the Unity-free validator; the handler must route through it.
         self.assertIn("ConsoleCaptureRequestValidator.Validate", body)
+
+    def test_handler_checks_request_id_existence_before_post_filters(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleCaptureConsoleLogs")
+        self.assertIn(
+            "bool requestIdSelectorActive = ConsoleCaptureRequestValidator.UsesRequestIdSelector(",
+            body,
+        )
+        self.assertIn(
+            "bool knownRequestId = !requestIdSelectorActive",
+            body,
+        )
+        self.assertIn(
+            "ConsoleLogBuffer.HasRequestId(request.since_request_id)",
+            body,
+        )
+        self.assertLess(
+            body.index("ConsoleLogBuffer.HasRequestId(request.since_request_id)"),
+            body.index("ConsoleLogBuffer.GetEntries"),
+            msg="request-id existence must be decided before type/classification/phase filters",
+        )
 
 
 class TestBatchCreateParentWarning(unittest.TestCase):
@@ -1675,6 +1763,37 @@ class TestSetUdonSharpFieldHandler(unittest.TestCase):
         )
 
 
+class TestUdonSharpArrayWriterSource(unittest.TestCase):
+    def _array_writer_source(self) -> str:
+        return _read(TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.UdonSharpArrayWrite.cs")
+
+    def test_array_writer_emits_typed_error_partitions(self) -> None:
+        source = self._array_writer_source()
+        for code in (
+            "EDITOR_CTRL_UDON_SET_FIELD_NON_ARRAY_VALUES",
+            "EDITOR_CTRL_UDON_SET_FIELD_VALUES_JSON_PARSE",
+            "EDITOR_CTRL_UDON_SET_FIELD_ARRAY_LENGTH_MISMATCH",
+            "EDITOR_CTRL_UDON_SET_FIELD_UNSUPPORTED_ARRAY_TYPE",
+            "EDITOR_CTRL_UDON_SET_FIELD_ARRAY_ELEMENT_PARSE",
+        ):
+            with self.subTest(code=code):
+                self.assertIn(code, source)
+
+    def test_array_writer_handles_supported_element_partitions(self) -> None:
+        source = self._array_writer_source()
+        body = _extract_method(source, "WriteUdonSharpArrayElement")
+        for token in (
+            "VRCUrl",
+            "SerializedPropertyType.String",
+            "SerializedPropertyType.Integer",
+            "SerializedPropertyType.Float",
+            "SerializedPropertyType.Boolean",
+            "values_json[{index}]",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+
+
 class TestWirePersistentListenerHandler(unittest.TestCase):
     """Issue #119 — ``HandleWirePersistentListener`` must use the
     published string-mode entry point, walk the existing persistent-call
@@ -1774,6 +1893,12 @@ class TestUdonSharpRequestFields(unittest.TestCase):
     def test_request_carries_fields_json_for_add_udonsharp(self) -> None:
         body = _extract_editor_control_request_body()
         self.assertIn("fields_json", body)
+
+    def test_request_carries_array_fields_for_set_udonsharp(self) -> None:
+        body = _extract_editor_control_request_body()
+        self.assertIn("values_json", body)
+        self.assertIn("values_json_present", body)
+        self.assertIn("expected_length", body)
 
 
 def _extract_editor_bridge_ongui() -> str:
@@ -2335,21 +2460,16 @@ class TestConsoleLogEntryDeclaresPhaseField(unittest.TestCase):
 
 
 class TestOnLogMessagePhasePriority(unittest.TestCase):
-    """Issue #239: OnLogMessage snapshots phase with ``build > play > edit``.
-
-    Post H-track migration the build > play > edit precedence was
-    extracted into the Unity-free ``ConsoleLogPhaseClassifier.Classify``
-    (behavioral coverage in ``tests/csharp/ConsoleCaptureTests.cs``).
-    This source-text test retains the Tier 3 delegation invariant: the
-    handler reads both canonical editor-API flags and feeds them into
-    the classifier.
-    """
+    """Issue #239: console logs keep the canonical phase precedence."""
 
     def test_delegates_phase_classification(self) -> None:
-        body = _extract_method(_read(BRIDGE), "OnLogMessage")
-        self.assertIn("ConsoleLogPhaseClassifier.Classify", body)
-        self.assertIn("BuildPipeline.isBuildingPlayer", body)
-        self.assertIn("EditorApplication.isPlayingOrWillChangePlaymode", body)
+        text = _read(BRIDGE)
+        log_body = _extract_method(text, "OnLogMessage")
+        refresh_body = _extract_method(text, "ClassifyCurrentEditorPhase")
+        self.assertIn("_phaseSnapshot", log_body)
+        self.assertIn("ConsoleLogPhaseClassifier.Classify", refresh_body)
+        self.assertIn("BuildPipeline.isBuildingPlayer", refresh_body)
+        self.assertIn("EditorApplication.isPlayingOrWillChangePlaymode", refresh_body)
 
 
 def _extract_get_entries_body(source: str) -> str:
@@ -2383,6 +2503,40 @@ class TestConsoleLogBufferRetrievalAppliesPhaseFilter(unittest.TestCase):
             "ConsoleLogEntryPredicate.MatchesPhaseFilter(entry.phase, phaseFilter)",
             body,
         )
+
+    def test_get_entries_resolves_selector_precedence_before_filters(self) -> None:
+        body = _extract_get_entries_body(_read(BRIDGE))
+        self.assertIn(
+            "bool hasSequenceSelector = sinceSequence >= 0",
+            body,
+        )
+        self.assertIn(
+            "bool hasRequestSelector = ConsoleCaptureRequestValidator.UsesRequestIdSelector(",
+            body,
+        )
+        self.assertIn(
+            "bool hasCursorSelector = !hasSequenceSelector && !hasRequestSelector && !cursorIsEmpty",
+            body,
+        )
+        self.assertIn(
+            "bool hasTimeSelector = !hasSequenceSelector && !hasRequestSelector && !hasCursorSelector && sinceSeconds > 0f",
+            body,
+        )
+
+    def test_request_id_known_check_uses_active_selector(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleCaptureConsoleLogs")
+        self.assertIn(
+            "ConsoleCaptureRequestValidator.UsesRequestIdSelector(",
+            body,
+        )
+        self.assertIn("bool knownRequestId = !requestIdSelectorActive", body)
+
+    def test_get_entries_reports_buffer_reset_from_retained_lower_bound(self) -> None:
+        source = _read(BRIDGE)
+        self.assertIn("PeekLowestRetainedSequenceId", source)
+        body = _extract_method(source, "HandleCaptureConsoleLogs")
+        self.assertIn("EDITOR_CTRL_CONSOLE_BUFFER_RESET", body)
+        self.assertIn("ConsoleLogBuffer.PeekLowestRetainedSequenceId()", body)
 
 
 class TestHandleCaptureConsoleLogsValidatesPhaseFilter(unittest.TestCase):
@@ -2642,10 +2796,9 @@ class TestRecompileNoOpImporterWarning(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
-# Forbidden tokens that would re-introduce the leak.  Each script-runner
-# catch site must contain none of these inside the catch block, and the
-# shared EditorControlData class body must declare no exception-text
-# field.
+# Forbidden tokens that would re-introduce raw exception-text leakage.
+# Structured exception summaries are allowed; full exception message and
+# ToString payloads remain console-only.
 _LEAK_TOKENS = (
     "ex.Message",
     "ex.ToString()",
@@ -2657,7 +2810,6 @@ _LEAK_TOKENS = (
     "inner.ToString()",
     "tie.Message",
     "tie.ToString()",
-    "exception =",
 )
 
 
@@ -2679,7 +2831,7 @@ def _extract_catch_block(method_body: str, exception_pattern: str) -> str:
 
 
 class TestRunScriptPollFrameRuntimeCatchesNoLeakInEnvelope(unittest.TestCase):
-    """Issue #216: per-frame runtime catches carry no exception text."""
+    """Issue #216/#93: runtime catches carry no raw exception text."""
 
     def test_target_invocation_exception_envelope_has_no_exception_text(
         self,
@@ -3198,6 +3350,36 @@ class ScreenshotViewAllowlistSourceTests(unittest.TestCase):
             ),
         )
 
+    def test_handler_dimension_check_precedes_output_and_texture_allocation(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleCaptureScreenshot")
+        dimension_pos = body.find("ScreenshotDimensionBounds.Accepts")
+        output_dir_pos = body.find("string outputDir = Path.Combine")
+        object_dispatch_pos = body.find("HandleObjectCaptureScreenshot(request, outputPath)")
+        texture_pos = body.find("new Texture2D")
+        render_texture_pos = body.find("RenderTexture.GetTemporary")
+        self.assertEqual(
+            (True, True, True, True, True, True),
+            (
+                dimension_pos >= 0,
+                output_dir_pos >= 0,
+                object_dispatch_pos >= 0,
+                texture_pos >= 0,
+                render_texture_pos >= 0,
+                dimension_pos < output_dir_pos
+                and dimension_pos < object_dispatch_pos
+                and dimension_pos < texture_pos
+                and dimension_pos < render_texture_pos,
+            ),
+            msg=(
+                "Screenshot dimension rejection must run before output path "
+                "composition, target dispatch, Texture2D allocation, and "
+                "RenderTexture allocation; "
+                f"positions: dimension={dimension_pos}, output_dir={output_dir_pos}, "
+                f"object_dispatch={object_dispatch_pos}, texture={texture_pos}, "
+                f"render_texture={render_texture_pos}."
+            ),
+        )
+
     def test_handler_pins_scene_and_game_allowlist_literals(self) -> None:
         body = _extract_method(_read(BRIDGE), "HandleCaptureScreenshot")
         # The two accepted selectors must both appear as literals so
@@ -3353,6 +3535,121 @@ class ScreenshotObjectCaptureSourceTests(unittest.TestCase):
                         f"new target-oriented capability (#84)."
                     ),
                 )
+
+
+class GeometryMeasureDistanceSourceTests(unittest.TestCase):
+    def test_measure_distance_validates_bounds_source_before_pivot_shortcut(self) -> None:
+        source = _read(TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Geometry.cs")
+        body = _extract_method(source, "HandleMeasureDistance")
+        validation_idx = body.find("ValidateBoundsSourceSelector(")
+        pivot_idx = body.find("request.distance_mode == \"pivot\"")
+        self.assertNotEqual(
+            -1,
+            validation_idx,
+            msg="HandleMeasureDistance must validate bounds_source explicitly.",
+        )
+        self.assertIn("request.bounds_source", body[validation_idx:pivot_idx])
+        self.assertNotEqual(
+            -1,
+            pivot_idx,
+            msg="HandleMeasureDistance must keep the pivot distance branch.",
+        )
+        self.assertLess(
+            validation_idx,
+            pivot_idx,
+            msg="bounds_source validation must run before the pivot shortcut.",
+        )
+
+
+class ScreenshotWorldSpaceUiSourceTests(unittest.TestCase):
+    def _screenshot_partial_body(self) -> str:
+        return _read(TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Screenshot.cs")
+
+    def test_ui_capture_supports_front_back_current_camera_and_rejects_other_angles(self) -> None:
+        body = _extract_method(
+            self._screenshot_partial_body(),
+            "HandleWorldSpaceUiCaptureScreenshot",
+        )
+        self.assertIn("angle != \"front\" && angle != \"back\" && angle != \"current_camera\"", body)
+        self.assertIn("EDITOR_CTRL_SCREENSHOT_ANGLE_INVALID", body)
+        self.assertIn("angle == \"back\"", body)
+        self.assertIn("angle == \"current_camera\"", body)
+        self.assertIn("cam.transform.forward", body)
+
+    def test_object_capture_validates_renderer_angle_after_ui_branch(self) -> None:
+        body = _extract_method(
+            self._screenshot_partial_body(),
+            "HandleObjectCaptureScreenshot",
+        )
+        ui_selector_index = body.index("ShouldUseWorldSpaceUiCapture")
+        renderer_preset_index = body.index("ObjectCaptureFramingMath.PresetNames")
+        renderer_error_index = body.index("EDITOR_CTRL_SCREENSHOT_ANGLE_INVALID", renderer_preset_index)
+        self.assertLess(
+            ui_selector_index,
+            renderer_preset_index,
+            msg="current_camera must reach the World Space UI branch before renderer preset validation",
+        )
+        self.assertLess(renderer_preset_index, renderer_error_index)
+        self.assertNotIn(
+            "ObjectCaptureFramingMath.PresetNames",
+            body[:ui_selector_index],
+            msg="renderer-only angle validation must not run before World Space UI dispatch",
+        )
+
+    def test_ui_capture_reports_required_framing_metadata(self) -> None:
+        body = _extract_method(
+            self._screenshot_partial_body(),
+            "HandleWorldSpaceUiCaptureScreenshot",
+        )
+        for token in (
+            "bounds_source = \"rect_transform\"",
+            "bounds_center = Vector3ToArray(center)",
+            "bounds_extents = Vector3ToArray(extents)",
+            "ui_normal = Vector3ToArray(uiNormal)",
+            "camera_position = Vector3ToArray(cameraPosition)",
+            "camera_look_at = Vector3ToArray(center)",
+            "camera_orthographic = orthographic",
+            "camera_size = paddedHalfHeight",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+
+    def test_ui_capture_applies_target_pixel_rectangle_crop(self) -> None:
+        body = _extract_method(
+            self._screenshot_partial_body(),
+            "HandleWorldSpaceUiCaptureScreenshot",
+        )
+        crop_index = body.index("ResolveTargetPixelCrop(")
+        render_index = body.index("RenderSceneViewToTexture", crop_index)
+        texture_index = body.index("new Texture2D(readW, readH", render_index)
+        read_index = body.index("ReadPixels(new Rect(readX, readY, readW, readH)", texture_index)
+        response_index = body.index("BuildSuccess(", read_index)
+        for token in (
+            'width = readW',
+            'height = readH',
+            'crop_roi_applied = pixelRectApplied != null ? "pixel_rect" : string.Empty',
+            "crop_bounds = pixelRectApplied",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body[response_index:])
+
+    def test_explicit_world_space_ui_without_rect_transform_is_handled_error(self) -> None:
+        body = _extract_method(
+            self._screenshot_partial_body(),
+            "ShouldUseWorldSpaceUiCapture",
+        )
+        error_index = body.index("has no active RectTransform contributors")
+        handled_index = body.index("return true;", error_index)
+        self.assertNotIn(
+            "return false;",
+            body[error_index:handled_index],
+            msg="explicit world_space_ui targets without RectTransform must not fall through before the unsupported envelope is handled",
+        )
+        self.assertLess(
+            body.index("if (!wantsUi) return false;"),
+            error_index,
+            msg="only auto mode may fall back to renderer capture when RectTransform contributors are absent",
+        )
 
 
 class HandleSetCameraSizeFieldSourceTests(unittest.TestCase):
@@ -3585,6 +3882,17 @@ class EditorControlBridgeRequestSchemaTests(unittest.TestCase):
         # Target-oriented screenshot (issue #84).
         "target",
         "angle",
+        "target_mode",
+        "padding_ratio",
+        "projection",
+        "since_sequence",
+        "since_request_id",
+        "bounds_source",
+        "include_children",
+        "distance_mode",
+        "values_json",
+        "values_json_present",
+        "expected_length",
     )
 
     _NEW_RESPONSE_FIELDS = (
@@ -3613,6 +3921,21 @@ class EditorControlBridgeRequestSchemaTests(unittest.TestCase):
         "renderers_touched",
         # Async poll status.
         "status",
+        "return_value",
+        "outputs",
+        "exception",
+        "path_hints",
+        "hierarchy_path",
+        "local_position",
+        "world_position",
+        "bounds_source",
+        "bounds_center",
+        "bounds_extents",
+        "target_mode",
+        "projection",
+        "ui_normal",
+        "distance_mode",
+        "distance",
     )
 
     def test_request_dto_declares_every_new_field(self) -> None:
@@ -3727,6 +4050,9 @@ class EditorControlBridgeDispatcherRoutingTests(unittest.TestCase):
         "close_prefab",
         "run_script_submit",
         "run_script_poll",
+        "get_transform",
+        "get_bounds",
+        "measure_distance",
         "inspect_animation_clip",
         "create_animation_clip",
         "apply_animation_clip",
@@ -3739,6 +4065,9 @@ class EditorControlBridgeDispatcherRoutingTests(unittest.TestCase):
         "close_prefab": "HandleClosePrefab",
         "run_script_submit": "HandleRunScriptSubmit",
         "run_script_poll": "HandleRunScriptPoll",
+        "get_transform": "HandleGetTransform",
+        "get_bounds": "HandleGetBounds",
+        "measure_distance": "HandleMeasureDistance",
         "inspect_animation_clip": "HandleInspectAnimationClip",
         "create_animation_clip": "HandleCreateAnimationClip",
         "apply_animation_clip": "HandleApplyAnimationClip",
@@ -4738,6 +5067,62 @@ class TestRunScriptPollSurfacesCompileDiagnostics(unittest.TestCase):
                 "artefact's data.errors onto the poll response so a "
                 "failed poll carries the compiler diagnostics."
             ),
+        )
+
+
+class TestRunScriptPollFailureEnvelopeSource(unittest.TestCase):
+    def test_failed_poll_preserves_inner_failure_envelope(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleRunScriptPoll")
+        self.assertIn(
+            "success = inner.success",
+            body,
+            msg="Async poll completion must preserve failed inner success state.",
+        )
+        self.assertIn(
+            "severity = inner.severity",
+            body,
+            msg="Async poll completion must preserve failed inner severity.",
+        )
+        self.assertIn(
+            "? \"EDITOR_CTRL_RUN_SCRIPT_POLL_COMPLETED\"\n                                : inner.code",
+            body,
+            msg="Failed async poll completion must keep the runtime/compile error code.",
+        )
+        self.assertIn(
+            "exception = inner.data.exception",
+            body,
+            msg="Failed async poll completion must keep structured exception payloads.",
+        )
+
+
+class TestClientSimSideEffectAssetCandidatesSource(unittest.TestCase):
+    def test_clientsim_report_uses_snapshot_asset_candidates(self) -> None:
+        source = _read(TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.cs")
+        body = _extract_method(source, "BuildSideEffectReport")
+        self.assertIn(
+            "asset_change_candidates = Difference(\n                    after?.AssetChangeCandidates,\n                    before?.AssetChangeCandidates)",
+            body,
+            msg="ClientSim side-effect report must serialize observed asset candidates.",
+        )
+
+    def test_clientsim_snapshot_collects_dirty_asset_candidates(self) -> None:
+        source = _read(TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.cs")
+        snapshot_body = _extract_method(source, "CaptureSceneSnapshot")
+        collect_body = _extract_method(source, "DirtyAssetChangeCandidates")
+        self.assertIn(
+            "AssetChangeCandidates = DirtyAssetChangeCandidates()",
+            snapshot_body,
+            msg="ClientSim snapshots must capture asset candidates before diffing.",
+        )
+        self.assertIn(
+            "DirtyScenePaths()",
+            collect_body,
+            msg="Dirty scene paths must be included as asset-change candidates.",
+        )
+        self.assertIn(
+            "DirtyAssetPaths()",
+            collect_body,
+            msg="Dirty project assets must be included as asset-change candidates.",
         )
 
 
