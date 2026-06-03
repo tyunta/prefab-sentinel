@@ -520,7 +520,7 @@ def editor_console(
     ):
         return _max_entries_out_of_range_envelope(max_entries)
 
-    request = {
+    request: dict[str, Any] = {
         "action": "capture_console_logs",
         "max_entries": max_entries,
         "log_type_filter": log_type_filter,

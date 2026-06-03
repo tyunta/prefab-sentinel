@@ -165,3 +165,108 @@ def invoke_via_editor_bridge(
             "executed": False,
         },
     )
+
+
+def _clientsim_side_effect_codes(report: object) -> list[str]:
+    if not isinstance(report, dict):
+        return []
+    if report.get("diff_complete") is False:
+        return ["CLIENTSIM_SIDE_EFFECT_DIFF_UNAVAILABLE"]
+    changed_keys = (
+        "added_gameobjects",
+        "removed_gameobjects",
+        "added_components",
+        "removed_components",
+        "asset_change_candidates",
+    )
+    if any(report.get(key) for key in changed_keys):
+        return ["CLIENTSIM_SIDE_EFFECT_DIFF_DETECTED"]
+    if report.get("dirty_before") != report.get("dirty_after"):
+        return ["CLIENTSIM_SIDE_EFFECT_DIFF_DETECTED"]
+    if report.get("dirty_count_before") != report.get("dirty_count_after"):
+        return ["CLIENTSIM_SIDE_EFFECT_DIFF_DETECTED"]
+    return []
+
+
+def with_clientsim_side_effect_diagnostics(response: ToolResponse) -> ToolResponse:
+    from prefab_sentinel.contracts import Diagnostic, Severity, max_severity
+
+    codes = _clientsim_side_effect_codes(response.data.get("side_effect_report"))
+    if not codes:
+        return response
+
+    messages = {
+        "CLIENTSIM_SIDE_EFFECT_DIFF_UNAVAILABLE": "ClientSim side-effect diff could not be fully collected.",
+        "CLIENTSIM_SIDE_EFFECT_DIFF_DETECTED": "ClientSim side-effect diff detected scene, hierarchy, component, dirty, or asset candidates.",
+    }
+    diagnostics = [
+        *response.diagnostics,
+        *[
+            Diagnostic(
+                path=str(response.data.get("scene_path", "")),
+                location="",
+                detail=code,
+                evidence=messages[code],
+                severity=Severity.WARNING.value,
+            )
+            for code in codes
+        ],
+    ]
+    return ToolResponse(
+        success=response.success,
+        severity=max_severity([response.severity, Severity.WARNING]),
+        code=response.code,
+        message=response.message,
+        data=response.data,
+        diagnostics=diagnostics,
+    )
+
+
+def collect_editor_console_via_bridge(
+    *,
+    since_timestamp: str | None = None,
+    max_lines: int = 4000,
+) -> ToolResponse:
+    from prefab_sentinel.contracts import success_response
+    from prefab_sentinel.editor_bridge import send_action
+
+    max_entries = min(max(max_lines, 1), 1000)
+    response = send_action(
+        action="capture_console_logs",
+        max_entries=max_entries,
+        since_seconds=0.0,
+        order="oldest_first",
+    )
+    data = response.get("data")
+    if not response.get("success") or not isinstance(data, dict):
+        return error_response(
+            str(response.get("code", "RUN_EDITOR_CONSOLE_ERROR")),
+            str(response.get("message", "Editor console capture failed.")),
+            data={
+                "since_timestamp": since_timestamp,
+                "read_only": True,
+                "executed": bool(isinstance(data, dict) and data.get("executed", False)),
+                "bridge_response": response,
+            },
+        )
+
+    entries = data.get("entries", [])
+    log_lines: list[str] = []
+    if isinstance(entries, list):
+        for entry in entries:
+            if isinstance(entry, dict):
+                message = entry.get("message", "")
+                log_type = entry.get("log_type", "")
+                if isinstance(message, str):
+                    log_lines.append(f"[{log_type}] {message}" if log_type else message)
+    return success_response(
+        "RUN_EDITOR_CONSOLE_COLLECTED",
+        "Editor Bridge console entries collected.",
+        data={
+            "line_count": len(log_lines),
+            "log_lines": log_lines,
+            "since_timestamp": since_timestamp,
+            "read_only": True,
+            "executed": True,
+        },
+    )
