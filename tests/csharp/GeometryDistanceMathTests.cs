@@ -25,33 +25,33 @@ public class GeometryDistanceMathTests
             new[] { 1d, 1d, 1d },
             new[] { 3d, 4d, 0d },
             new[] { 1d, 1d, 1d },
-            "center");
+            "bounds_center");
 
         Assert.Equal((true, 5d), (result.Success, result.Distance));
     }
 
     [Fact]
-    public void Surface_Mode_Returns_Closest_Aabb_Distance()
+    public void Bounds_Nearest_Mode_Returns_Closest_Aabb_Distance()
     {
         GeometryDistanceResult result = GeometryBoundsMath.MeasureDistance(
             new[] { 0d, 0d, 0d },
             new[] { 1d, 1d, 1d },
             new[] { 4d, 0d, 0d },
             new[] { 1d, 1d, 1d },
-            "surface");
+            "bounds_nearest");
 
         Assert.Equal((true, 2d), (result.Success, result.Distance));
     }
 
     [Fact]
-    public void Surface_Mode_Returns_Zero_For_Overlapping_Aabbs()
+    public void Bounds_Nearest_Mode_Returns_Zero_For_Overlapping_Aabbs()
     {
         GeometryDistanceResult result = GeometryBoundsMath.MeasureDistance(
             new[] { 0d, 0d, 0d },
             new[] { 2d, 2d, 2d },
             new[] { 1d, 1d, 1d },
             new[] { 2d, 2d, 2d },
-            "surface");
+            "bounds_nearest");
 
         Assert.Equal((true, 0d), (result.Success, result.Distance));
     }

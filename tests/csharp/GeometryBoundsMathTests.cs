@@ -29,6 +29,24 @@ public class GeometryBoundsMathTests
     }
 
     [Fact]
+    public void Combined_Source_Aggregates_All_Supported_Contributor_Types()
+    {
+        GeometryBoundsResult result = GeometryBoundsMath.Aggregate(
+            new[]
+            {
+                GeometryBoundsContributor.Target("renderer", new[] { 0d, 0d, 0d }, new[] { 1d, 1d, 1d }),
+                GeometryBoundsContributor.Target("collider", new[] { 4d, 0d, 0d }, new[] { 1d, 1d, 1d }),
+                GeometryBoundsContributor.Target("rect_transform", new[] { 8d, 0d, 0d }, new[] { 1d, 1d, 1d }),
+            },
+            "combined",
+            includeChildren: true);
+
+        Assert.Equal((true, "combined"), (result.Success, result.Source));
+        Assert.Equal(new[] { 4d, 0d, 0d }, result.Center);
+        Assert.Equal(new[] { 5d, 1d, 1d }, result.Extents);
+    }
+
+    [Fact]
     public void Target_Only_Source_Excludes_Child_Contributors()
     {
         GeometryBoundsResult result = GeometryBoundsMath.Aggregate(

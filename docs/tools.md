@@ -128,7 +128,7 @@
 | ツール | 区分 | 簡潔説明 | 関連 issue | 種別 |
 |--------|------|----------|-----------|------|
 | `editor_get_transform` | editor_geometry | hierarchy path の local/world position、quaternion/euler rotation、scale、parent、active flags を返す | #98 | read-only |
-| `editor_get_bounds` | editor_geometry | renderer / collider / RectTransform / auto の world-space AABB を child-including または target-only で返す | #98 | read-only |
+| `editor_get_bounds` | editor_geometry | renderer / collider / RectTransform / auto / combined の world-space AABB を child-including または target-only で返す | #98 | read-only |
 | `editor_measure_distance` | editor_geometry | 2 hierarchy path 間の pivot / bounds-center / nearest-AABB distance を測る | #98 | read-only |
 
 ### editor_write

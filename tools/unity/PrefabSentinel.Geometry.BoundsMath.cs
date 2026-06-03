@@ -64,6 +64,7 @@ namespace PrefabSentinel
             "renderer",
             "collider",
             "rect_transform",
+            "combined",
         };
 
         public static GeometryBoundsResult Aggregate(
@@ -83,8 +84,10 @@ namespace PrefabSentinel
             List<GeometryBoundsContributor> eligible = contributors
                 .Where(c => includeChildren || c.IncludeWithTargetOnly)
                 .ToList();
-            string selectedSource = ResolveBoundsSource(eligible, source);
-            if (selectedSource.Length == 0)
+            string selectedSource = source == "combined"
+                ? "combined"
+                : ResolveBoundsSource(eligible, source);
+            if (selectedSource.Length == 0 || eligible.Count == 0)
             {
                 return new GeometryBoundsResult
                 {
@@ -93,9 +96,9 @@ namespace PrefabSentinel
                 };
             }
 
-            List<GeometryBoundsContributor> selected = eligible
-                .Where(c => c.Source == selectedSource)
-                .ToList();
+            List<GeometryBoundsContributor> selected = selectedSource == "combined"
+                ? eligible
+                : eligible.Where(c => c.Source == selectedSource).ToList();
             double minX = selected.Min(c => c.Center[0] - c.Extents[0]);
             double minY = selected.Min(c => c.Center[1] - c.Extents[1]);
             double minZ = selected.Min(c => c.Center[2] - c.Extents[2]);
@@ -127,7 +130,7 @@ namespace PrefabSentinel
                     Distance = Distance(centerA, centerB),
                 };
             }
-            if (mode == "surface")
+            if (mode == "bounds_nearest" || mode == "surface")
             {
                 double dx = Math.Max(0d, Math.Abs(centerA[0] - centerB[0]) - extentsA[0] - extentsB[0]);
                 double dy = Math.Max(0d, Math.Abs(centerA[1] - centerB[1]) - extentsA[1] - extentsB[1]);

@@ -36,11 +36,19 @@ namespace PrefabSentinel
             Type elementType = fieldInfo != null && fieldInfo.FieldType.IsArray
                 ? fieldInfo.FieldType.GetElementType()
                 : null;
-            if (!IsSupportedUdonArrayElementType(elementType) && elements.Count == 0)
+            if (elementType == null || !IsSupportedUdonArrayElementType(elementType))
             {
                 return BuildError(
                     "EDITOR_CTRL_UDON_SET_FIELD_UNSUPPORTED_ARRAY_TYPE",
-                    $"Field {request.field_name} is not a supported UdonSharp array type.");
+                    $"Field {request.field_name} is not a supported UdonSharp array type.",
+                    new EditorControlData
+                    {
+                        field_name = request.field_name,
+                        element_index = -1,
+                        expected_type = elementType != null
+                            ? (elementType.FullName ?? elementType.Name)
+                            : "<unknown>",
+                    });
             }
 
             prop.arraySize = elements.Count;
@@ -66,17 +74,19 @@ namespace PrefabSentinel
                 && elementType.FullName.EndsWith("VRCUrl", StringComparison.Ordinal))
             {
                 if (element.Kind != JsonArrayScalarKind.String)
-                {
-                    return BuildError(
-                        "EDITOR_CTRL_UDON_SET_FIELD_ARRAY_ELEMENT_PARSE",
-                        $"values_json[{index}] for {fieldName} must be a non-null VRCUrl string.");
-                }
+                    return ArrayElementParseError(index, fieldName, "VRCUrl string");
                 SerializedProperty urlProp = item.FindPropertyRelative("url");
                 if (urlProp == null)
                 {
                     return BuildError(
                         "EDITOR_CTRL_UDON_SET_FIELD_UNSUPPORTED_ARRAY_TYPE",
-                        $"values_json[{index}] targets a VRCUrl wrapper without a url sub-field.");
+                        $"values_json[{index}] targets a VRCUrl wrapper without a url sub-field.",
+                        new EditorControlData
+                        {
+                            field_name = fieldName,
+                            element_index = index,
+                            expected_type = "VRCUrl.url",
+                        });
                 }
                 urlProp.stringValue = element.Value;
                 return null;
@@ -115,13 +125,19 @@ namespace PrefabSentinel
                 default:
                     return BuildError(
                         "EDITOR_CTRL_UDON_SET_FIELD_UNSUPPORTED_ARRAY_TYPE",
-                        $"Field {fieldName} has unsupported array element type {item.propertyType}.");
+                        $"Field {fieldName} has unsupported array element type {item.propertyType}.",
+                        new EditorControlData
+                        {
+                            field_name = fieldName,
+                            element_index = index,
+                            expected_type = item.propertyType.ToString(),
+                        });
             }
         }
 
         private static bool IsSupportedUdonArrayElementType(Type elementType)
         {
-            if (elementType == null) return true;
+            if (elementType == null) return false;
             if (elementType == typeof(string)
                 || elementType == typeof(int)
                 || elementType == typeof(float)
@@ -138,7 +154,13 @@ namespace PrefabSentinel
         {
             return BuildError(
                 "EDITOR_CTRL_UDON_SET_FIELD_ARRAY_ELEMENT_PARSE",
-                $"values_json[{index}] for {fieldName} could not be parsed as {expectedType}.");
+                $"values_json[{index}] for {fieldName} could not be parsed as {expectedType}.",
+                new EditorControlData
+                {
+                    field_name = fieldName,
+                    element_index = index,
+                    expected_type = expectedType,
+                });
         }
     }
 }

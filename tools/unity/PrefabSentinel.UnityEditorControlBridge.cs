@@ -248,6 +248,11 @@ namespace PrefabSentinel
             // error hint suggestions
             public string[] suggestions = Array.Empty<string>();
 
+            // UdonSharp array write error context.
+            public string field_name = string.Empty;
+            public int element_index = -1;
+            public string expected_type = string.Empty;
+
             // Phase 8: Reflection
             public string reflect_result_json = string.Empty;
 

@@ -1779,6 +1779,30 @@ class TestUdonSharpArrayWriterSource(unittest.TestCase):
             with self.subTest(code=code):
                 self.assertIn(code, source)
 
+    def test_array_writer_resolves_supported_element_type_from_field_info(self) -> None:
+        source = self._array_writer_source()
+        body = _extract_method(source, "WriteUdonSharpArrayValue")
+        for token in (
+            "fieldInfo.FieldType.IsArray",
+            "fieldInfo.FieldType.GetElementType()",
+            "!IsSupportedUdonArrayElementType(elementType)",
+            "prop.arraySize = elements.Count",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+        self.assertNotIn("&& elements.Count == 0", body)
+
+    def test_array_element_parse_error_reports_structured_index_context(self) -> None:
+        source = self._array_writer_source()
+        body = _extract_method(source, "ArrayElementParseError")
+        for token in (
+            "field_name = fieldName",
+            "element_index = index",
+            "expected_type = expectedType",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+
     def test_array_writer_handles_supported_element_partitions(self) -> None:
         source = self._array_writer_source()
         body = _extract_method(source, "WriteUdonSharpArrayElement")
@@ -3936,6 +3960,10 @@ class EditorControlBridgeRequestSchemaTests(unittest.TestCase):
         "ui_normal",
         "distance_mode",
         "distance",
+        # UdonSharp array write error context.
+        "field_name",
+        "element_index",
+        "expected_type",
     )
 
     def test_request_dto_declares_every_new_field(self) -> None:
