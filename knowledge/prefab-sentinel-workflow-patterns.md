@@ -1,7 +1,7 @@
 ---
 tool: prefab-sentinel-workflow-patterns
-version_tested: "prefab-sentinel 0.5.162"
-last_updated: 2026-05-07
+version_tested: "prefab-sentinel 0.7.1"
+last_updated: 2026-05-27
 confidence: high
 ---
 
@@ -52,6 +52,19 @@ Prefab ファイルが古い場合やシーン上にオーバーライドがあ�
 
 ### ランタイムエラー調査
 `validate_runtime` → ログ分類 → アセット特定 → 修正提案
+
+### ClientSim を使わない副作用ゼロ検証
+
+入稿用 scene やユーザーが手動調整中の scene では、ClientSim / `validate_runtime` を read-only 検査として扱わない。ClientSim 起動は scene 状態や生成物に副作用を残すことがあるため、明示的な opt-in がない限り実行しない。
+
+副作用を避けて UdonSharp / scene wiring の最低限ゲートを踏む場合は以下を使う:
+
+1. `editor_recompile` — Unity 側で C# / UdonSharp の再コンパイル完了を待つ
+2. `editor_console(log_type_filter="error")` と `editor_console(log_type_filter="exception")` — 直近の error / exception を確認
+3. `inspect_wiring(script_filter=...)` — 変更対象 UdonBehaviour の必須参照だけを確認
+4. `validate_structure` — scene / prefab YAML の fileID 重複・Transform 不整合・missing component・orphan transform を確認
+
+この経路は runtime smoke ではないため、VRChat 実機挙動までは保証しない。目的は「ClientSim 副作用なしで、編集直後のコンパイル・配線・serialized structure が破綻していないこと」を確認すること。
 
 ### ランタイム階層確認
 `editor_list_children` でシーン実行中の子オブジェクト一覧を取得。`inspect_hierarchy` はファイルベースだが、こちらは Prefab Instance 内のネスト構造も表示
