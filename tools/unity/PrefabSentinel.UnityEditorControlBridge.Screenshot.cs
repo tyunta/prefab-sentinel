@@ -815,8 +815,15 @@ namespace PrefabSentinel
                     $"World Space UI target capture accepts angle='front', 'back', or 'current_camera'; got '{angle}'.");
             }
 
-            RectTransform anchor = target.GetComponent<RectTransform>()
-                ?? target.GetComponentInChildren<RectTransform>(includeInactive: false);
+            RectTransform anchor = target.GetComponent<RectTransform>();
+            if (anchor == null)
+                anchor = target.GetComponentInChildren<RectTransform>(includeInactive: false);
+            if (anchor == null)
+            {
+                return BuildError(
+                    "EDITOR_CTRL_SCREENSHOT_UI_UNSUPPORTED",
+                    $"target='{request.target}' has no active RectTransform contributors.");
+            }
 
             List<GeometryContributorRecord> records = CollectGeometryContributors(
                 target, includeChildren: true);
@@ -834,11 +841,11 @@ namespace PrefabSentinel
             Vector3 center = DoubleArrayToVector3(bounds.Center);
             Vector3 extents = DoubleArrayToVector3(bounds.Extents);
             Vector3 uiNormal = (anchor.rotation * Vector3.forward).normalized;
-            Vector3 cameraDir = uiNormal;
+            Vector3 cameraDir = -uiNormal;
             Vector3 up = (anchor.rotation * Vector3.up).normalized;
             if (angle == "back")
             {
-                cameraDir = -uiNormal;
+                cameraDir = uiNormal;
             }
             else if (angle == "current_camera")
             {

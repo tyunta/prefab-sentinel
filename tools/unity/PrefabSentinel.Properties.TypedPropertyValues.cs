@@ -20,12 +20,12 @@ namespace PrefabSentinel
 
     public sealed class EnumPropertyParseResult
     {
-        public bool Success { get; private init; }
-        public int Index { get; private init; } = -1;
-        public string ErrorCode { get; private init; } = string.Empty;
-        public string[] Names { get; private init; } = Array.Empty<string>();
-        public string[] DisplayNames { get; private init; } = Array.Empty<string>();
-        public int[] Values { get; private init; } = Array.Empty<int>();
+        public bool Success { get; private set; }
+        public int Index { get; private set; } = -1;
+        public string ErrorCode { get; private set; } = string.Empty;
+        public string[] Names { get; private set; } = Array.Empty<string>();
+        public string[] DisplayNames { get; private set; } = Array.Empty<string>();
+        public int[] Values { get; private set; } = Array.Empty<int>();
 
         public static EnumPropertyParseResult Ok(int index)
         {
@@ -156,11 +156,11 @@ namespace PrefabSentinel
 
     public sealed class LayerMaskParseResult
     {
-        public bool Success { get; private init; }
-        public int Mask { get; private init; }
-        public string ErrorCode { get; private init; } = string.Empty;
-        public string Token { get; private init; } = string.Empty;
-        public string[] Candidates { get; private init; } = Array.Empty<string>();
+        public bool Success { get; private set; }
+        public int Mask { get; private set; }
+        public string ErrorCode { get; private set; } = string.Empty;
+        public string Token { get; private set; } = string.Empty;
+        public string[] Candidates { get; private set; } = Array.Empty<string>();
 
         public static LayerMaskParseResult Ok(int mask)
         {

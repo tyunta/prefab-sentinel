@@ -5,6 +5,8 @@ using System.Linq;
 
 namespace PrefabSentinel
 {
+#nullable disable
+
     [Serializable]
     public sealed class RunScriptValue
     {
@@ -26,14 +28,15 @@ namespace PrefabSentinel
         public double[] NumberArray => number_array;
         public bool[] BoolArray => bool_array;
 
-        public static RunScriptValue FromReturnValue(object? value)
+        public static RunScriptValue FromReturnValue(object value)
         {
-            if (TryCreate(value, out RunScriptValue? result))
-                return result!;
+            RunScriptValue result;
+            if (TryCreate(value, out result))
+                return result;
             return new RunScriptValue { kind = "unsupported" };
         }
 
-        internal static bool TryCreate(object? value, out RunScriptValue? result)
+        internal static bool TryCreate(object value, out RunScriptValue result)
         {
             result = null;
             if (value == null)
@@ -178,18 +181,18 @@ namespace PrefabSentinel
 
     public sealed class RunScriptOutputSnapshot
     {
-        public RunScriptOutputEntry[] Outputs { get; init; } = Array.Empty<RunScriptOutputEntry>();
-        public string UnsupportedKey { get; init; } = string.Empty;
+        public RunScriptOutputEntry[] Outputs { get; set; } = Array.Empty<RunScriptOutputEntry>();
+        public string UnsupportedKey { get; set; } = string.Empty;
         public bool HasUnsupportedOutput => !string.IsNullOrEmpty(UnsupportedKey);
     }
 
     public static class Output
     {
         [ThreadStatic]
-        private static List<RunScriptOutputEntry>? currentEntries;
+        private static List<RunScriptOutputEntry> currentEntries;
 
         [ThreadStatic]
-        private static string? unsupportedKey;
+        private static string unsupportedKey;
 
         public static void BeginCapture()
         {
@@ -212,19 +215,20 @@ namespace PrefabSentinel
             return snapshot;
         }
 
-        public static void Add(string key, object? value)
+        public static void Add(string key, object value)
         {
             if (currentEntries == null)
                 throw new InvalidOperationException("Output.Add requires an active run-script capture.");
             if (string.IsNullOrWhiteSpace(key))
                 return;
-            if (!RunScriptValue.TryCreate(value, out RunScriptValue? result))
+            RunScriptValue result;
+            if (!RunScriptValue.TryCreate(value, out result))
             {
                 if (string.IsNullOrEmpty(unsupportedKey))
                     unsupportedKey = key;
                 return;
             }
-            currentEntries.Add(new RunScriptOutputEntry { key = key, value = result! });
+            currentEntries.Add(new RunScriptOutputEntry { key = key, value = result });
         }
     }
 

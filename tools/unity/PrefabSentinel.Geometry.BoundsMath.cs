@@ -35,18 +35,18 @@ namespace PrefabSentinel
 
     public sealed class GeometryBoundsResult
     {
-        public bool Success { get; init; }
-        public string Source { get; init; } = string.Empty;
-        public double[] Center { get; init; } = Array.Empty<double>();
-        public double[] Extents { get; init; } = Array.Empty<double>();
-        public string ErrorCode { get; init; } = string.Empty;
+        public bool Success { get; set; }
+        public string Source { get; set; } = string.Empty;
+        public double[] Center { get; set; } = Array.Empty<double>();
+        public double[] Extents { get; set; } = Array.Empty<double>();
+        public string ErrorCode { get; set; } = string.Empty;
     }
 
     public sealed class GeometryDistanceResult
     {
-        public bool Success { get; init; }
-        public double Distance { get; init; }
-        public string ErrorCode { get; init; } = string.Empty;
+        public bool Success { get; set; }
+        public double Distance { get; set; }
+        public string ErrorCode { get; set; } = string.Empty;
     }
 
     public static class GeometryBoundsMath

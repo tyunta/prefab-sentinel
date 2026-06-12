@@ -2789,6 +2789,20 @@ class TestRecompileNoOpImporterWarning(unittest.TestCase):
             ),
         )
 
+    def test_collector_supplies_disabled_sequence_and_request_selectors(self) -> None:
+        collector = _extract_method(
+            _read(BRIDGE), "CollectImporterErrorDiagnostics"
+        )
+        self.assertIn(
+            "\"all\",\n                -1,\n                string.Empty,\n                newestFirst: false",
+            collector,
+            msg=(
+                "the importer-error collector snapshots the full console "
+                "buffer, so it must explicitly disable sequence/request "
+                "selectors when calling ConsoleLogBuffer.GetEntries."
+            ),
+        )
+
     def test_noop_importer_response_carries_warning_severity(self) -> None:
         # When importer errors are present the no-op response must carry
         # warning severity and the detected importer errors as diagnostics
@@ -3600,6 +3614,27 @@ class ScreenshotWorldSpaceUiSourceTests(unittest.TestCase):
         self.assertIn("angle == \"current_camera\"", body)
         self.assertIn("cam.transform.forward", body)
 
+    def test_ui_capture_front_uses_readable_side_of_rect_transform(self) -> None:
+        body = _extract_method(
+            self._screenshot_partial_body(),
+            "HandleWorldSpaceUiCaptureScreenshot",
+        )
+        self.assertIn(
+            "Vector3 cameraDir = -uiNormal;",
+            body,
+            msg=(
+                "World Space UI angle='front' must place the camera on the "
+                "readable side of Unity UI graphics; using +uiNormal captures "
+                "the panel from behind and mirrors the text."
+            ),
+        )
+        back_index = body.index('if (angle == "back")')
+        self.assertIn(
+            "cameraDir = uiNormal;",
+            body[back_index:],
+            msg="angle='back' must select the opposite side from front.",
+        )
+
     def test_object_capture_validates_renderer_angle_after_ui_branch(self) -> None:
         body = _extract_method(
             self._screenshot_partial_body(),
@@ -3673,6 +3708,28 @@ class ScreenshotWorldSpaceUiSourceTests(unittest.TestCase):
             body.index("if (!wantsUi) return false;"),
             error_index,
             msg="only auto mode may fall back to renderer capture when RectTransform contributors are absent",
+        )
+
+    def test_ui_capture_anchor_resolution_avoids_null_coalescing_on_unity_objects(self) -> None:
+        body = _extract_method(
+            self._screenshot_partial_body(),
+            "HandleWorldSpaceUiCaptureScreenshot",
+        )
+        self.assertIn("RectTransform anchor = target.GetComponent<RectTransform>();", body)
+        self.assertIn(
+            "if (anchor == null)\n                anchor = target.GetComponentInChildren<RectTransform>(includeInactive: false);",
+            body,
+            msg=(
+                "RectTransform anchor resolution must use Unity's overloaded "
+                "null check before falling back to children; C# ?? can retain "
+                "a Unity fake-null component wrapper and later throw "
+                "MissingComponentException."
+            ),
+        )
+        self.assertNotIn(
+            "GetComponent<RectTransform>()\n                ??",
+            body,
+            msg="UnityEngine.Object references must not use ?? for RectTransform fallback.",
         )
 
 
@@ -5392,6 +5449,90 @@ class TestGenericCollectionUsingDirective(unittest.TestCase):
                 "Bridge C# files reference generic collection types but miss "
                 f"`{self.USING_DIRECTIVE}`: {offenders}. Without the "
                 "directive, Unity rejects the file at deploy time (CS0246)."
+            ),
+        )
+
+
+class TestUnityBridgeCSharpLanguageVersionSource(unittest.TestCase):
+    """Bridge sources must stay within Unity Editor's supported C# syntax.
+
+    PR #109 introduced a C# 10 file-scoped namespace in a bridge helper.
+    The dotnet test mirror compiled with ``LangVersion=latest`` and missed
+    it, but Unity rejected the deployed file with CS8773 under C# 9.0.
+    """
+
+    FILE_SCOPED_NAMESPACE_REGEX = re.compile(
+        r"(?m)^\s*namespace\s+[A-Za-z_][A-Za-z0-9_.]*\s*;"
+    )
+
+    def test_bridge_files_do_not_use_file_scoped_namespaces(self) -> None:
+        offenders: list[str] = []
+        for path in sorted(TOOLS_DIR.glob("*.cs")):
+            text = _strip_cs_comments(path.read_text(encoding="utf-8"))
+            if self.FILE_SCOPED_NAMESPACE_REGEX.search(text):
+                offenders.append(path.name)
+
+        self.assertEqual(
+            [],
+            offenders,
+            msg=(
+                "Bridge C# files use file-scoped namespaces: "
+                f"{offenders}. Unity compiles the bridge with C# 9.0 in "
+                "supported projects, so C# 10 namespace syntax fails at "
+                "deploy time (CS8773). Use block-scoped namespaces instead."
+            ),
+        )
+
+    def test_bridge_files_do_not_use_init_only_accessors(self) -> None:
+        init_only_accessor = re.compile(r"\binit\s*;")
+        offenders: list[str] = []
+        for path in sorted(TOOLS_DIR.glob("*.cs")):
+            text = _strip_cs_comments(path.read_text(encoding="utf-8"))
+            if init_only_accessor.search(text):
+                offenders.append(path.name)
+
+        self.assertEqual(
+            [],
+            offenders,
+            msg=(
+                "Bridge C# files use init-only accessors: "
+                f"{offenders}. Unity's supported .NET profile does not "
+                "provide System.Runtime.CompilerServices.IsExternalInit, "
+                "so these fail at deploy time (CS0518). Use set/private set "
+                "accessors instead."
+            ),
+        )
+
+    def test_run_script_result_channels_avoids_nullable_reference_annotations(self) -> None:
+        source = _strip_cs_comments(
+            (TOOLS_DIR / "PrefabSentinel.RunScript.ResultChannels.cs").read_text(
+                encoding="utf-8"
+            )
+        )
+        nullable_reference_annotation = re.compile(
+            r"\b(?:object|string|RunScriptValue|List<RunScriptOutputEntry>)\s*\?"
+        )
+        self.assertNotRegex(
+            source,
+            nullable_reference_annotation,
+            msg=(
+                "RunScript result-channel bridge code must not use nullable "
+                "reference annotations without a nullable annotations context; "
+                "Unity reports those as CS8632 warnings at deploy time."
+            ),
+        )
+
+    def test_run_script_result_channels_declares_nullable_disabled_context(self) -> None:
+        source = (TOOLS_DIR / "PrefabSentinel.RunScript.ResultChannels.cs").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "#nullable disable",
+            source,
+            msg=(
+                "RunScript result-channel bridge code intentionally uses "
+                "nullable-disabled C# so both Unity's default context and the "
+                "nullable-enabled dotnet mirror compile without nullable noise."
             ),
         )
 

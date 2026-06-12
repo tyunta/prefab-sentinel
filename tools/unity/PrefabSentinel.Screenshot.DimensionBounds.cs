@@ -1,4 +1,5 @@
-namespace PrefabSentinel;
+namespace PrefabSentinel
+{
 
 internal static class ScreenshotDimensionBounds
 {
@@ -22,4 +23,5 @@ internal static class ScreenshotDimensionBounds
     {
         return value >= MinDimension && value <= MaxDimension;
     }
+}
 }

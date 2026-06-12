@@ -324,13 +324,16 @@ namespace PrefabSentinel
         {
             var diagnostics = new List<EditorControlDiagnostic>();
             // Snapshot the full buffer (oldest-first, no time / type /
-            // phase filter, no cursor) so every captured line is checked.
+            // phase filter, no sequence/request selector, no cursor) so
+            // every captured line is checked.
             var snapshot = ConsoleLogBuffer.GetEntries(
                 ConsoleLogBuffer.DefaultCapacity,
                 "all",
                 0f,
                 "all",
                 "all",
+                -1,
+                string.Empty,
                 newestFirst: false,
                 cursorAfterSequence: long.MinValue);
             foreach (ConsoleLogEntry entry in snapshot.entries)
