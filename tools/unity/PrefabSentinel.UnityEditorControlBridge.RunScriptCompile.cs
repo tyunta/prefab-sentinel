@@ -324,13 +324,16 @@ namespace PrefabSentinel
         {
             var diagnostics = new List<EditorControlDiagnostic>();
             // Snapshot the full buffer (oldest-first, no time / type /
-            // phase filter, no cursor) so every captured line is checked.
+            // phase filter, no sequence/request selector, no cursor) so
+            // every captured line is checked.
             var snapshot = ConsoleLogBuffer.GetEntries(
                 ConsoleLogBuffer.DefaultCapacity,
                 "all",
                 0f,
                 "all",
                 "all",
+                -1,
+                string.Empty,
                 newestFirst: false,
                 cursorAfterSequence: long.MinValue);
             foreach (ConsoleLogEntry entry in snapshot.entries)
@@ -664,8 +667,9 @@ namespace PrefabSentinel
             string stuckKey = entry.stuckKey;
             string tempDirAbs = entry.tempDirAbs;
             string responsePath = entry.responsePath;
+            EditorControlRequest persistedRequest = JsonUtility.FromJson<EditorControlRequest>(entry.requestJson);
+            string sourceCode = persistedRequest.code;
 
-            // ── Compile-pending timeout ──
             if (nowMs > entry.deadlineUnixMs)
             {
                 PendingAsyncRunner.Complete(responsePath);
@@ -697,7 +701,7 @@ namespace PrefabSentinel
                 WriteResponse(responsePath, BuildError(
                     "EDITOR_CTRL_RUN_SCRIPT_COMPILE",
                     $"Entry point '{RunScriptTypeName}.{RunScriptEntryPoint}()' not found " +
-                    "(must be `public static void Run()`).",
+                    "(must be `public static Run()` with a void or primitive return).",
                     new EditorControlData { temp_id = tempId, executed = false }));
                 return;
             }
@@ -706,26 +710,62 @@ namespace PrefabSentinel
             var buffer = new System.IO.StringWriter();
             Console.SetOut(buffer);
             EditorControlResponse response;
+            Output.BeginCapture();
+            ConsoleLogBuffer.BeginRequest(tempId);
             try
             {
-                runMethod.Invoke(null, null);
+                object returnObject = runMethod.Invoke(null, null);
+                RunScriptOutputSnapshot outputSnapshot = Output.EndCapture();
                 RunScriptConsecutiveCompilePending.Remove(stuckKey);
-                response = BuildSuccess("EDITOR_CTRL_RUN_SCRIPT_OK",
-                    $"PrefabSentinelTempScript.Run() completed (temp_id={tempId}).",
-                    new EditorControlData
-                    {
-                        temp_id = tempId,
-                        executed = true,
-                        stdout = buffer.ToString(),
-                    });
+                if (!RunScriptValue.TryCreate(returnObject, out RunScriptValue returnValue))
+                {
+                    response = BuildError(
+                        "EDITOR_CTRL_RUN_SCRIPT_OUTPUT_UNSUPPORTED",
+                        "run_script: return value is not a JSON-safe primitive or primitive array.",
+                        new EditorControlData
+                        {
+                            temp_id = tempId,
+                            executed = true,
+                            stdout = buffer.ToString(),
+                            outputs = outputSnapshot.Outputs,
+                            unsupported_output_key = "return_value",
+                            path_hints = WslPathHintDetector.FindHints(sourceCode),
+                        });
+                }
+                else if (outputSnapshot.HasUnsupportedOutput)
+                {
+                    response = BuildError(
+                        "EDITOR_CTRL_RUN_SCRIPT_OUTPUT_UNSUPPORTED",
+                        $"run_script: output '{outputSnapshot.UnsupportedKey}' is not a JSON-safe primitive or primitive array.",
+                        new EditorControlData
+                        {
+                            temp_id = tempId,
+                            executed = true,
+                            stdout = buffer.ToString(),
+                            return_value = returnValue,
+                            outputs = outputSnapshot.Outputs,
+                            unsupported_output_key = outputSnapshot.UnsupportedKey,
+                            path_hints = WslPathHintDetector.FindHints(sourceCode),
+                        });
+                }
+                else
+                {
+                    response = BuildSuccess("EDITOR_CTRL_RUN_SCRIPT_OK",
+                        $"PrefabSentinelTempScript.Run() completed (temp_id={tempId}).",
+                        new EditorControlData
+                        {
+                            temp_id = tempId,
+                            executed = true,
+                            stdout = buffer.ToString(),
+                            return_value = returnValue,
+                            outputs = outputSnapshot.Outputs,
+                            path_hints = WslPathHintDetector.FindHints(sourceCode),
+                        });
+                }
             }
             catch (TargetInvocationException tie)
             {
-                // Issue #216: route the original exception detail to the
-                // Unity console only; the MCP-bound envelope carries a
-                // fixed surface-identifying message and no exception-text
-                // field.  ``stdout`` is preserved because it is caller
-                // output produced by the snippet itself.
+                RunScriptOutputSnapshot outputSnapshot = Output.EndCapture();
                 Exception inner = tie.InnerException ?? tie;
                 Debug.LogWarning(
                     $"[PrefabSentinel] RunScriptPollFrame: Run() threw (TargetInvocationException): {inner}");
@@ -736,13 +776,14 @@ namespace PrefabSentinel
                         temp_id = tempId,
                         executed = true,
                         stdout = buffer.ToString(),
+                        outputs = outputSnapshot.Outputs,
+                        exception = RunScriptExceptionSummary.FromException(inner),
+                        path_hints = WslPathHintDetector.FindHints(sourceCode, inner),
                     });
             }
             catch (Exception ex)
             {
-                // Issue #216: same redaction as the TargetInvocationException
-                // branch — the bridge guarantees no exception text crosses
-                // the MCP boundary.
+                RunScriptOutputSnapshot outputSnapshot = Output.EndCapture();
                 Debug.LogWarning(
                     $"[PrefabSentinel] RunScriptPollFrame: Run() threw: {ex}");
                 response = BuildError("EDITOR_CTRL_RUN_SCRIPT_RUNTIME",
@@ -752,16 +793,43 @@ namespace PrefabSentinel
                         temp_id = tempId,
                         executed = true,
                         stdout = buffer.ToString(),
+                        outputs = outputSnapshot.Outputs,
+                        exception = RunScriptExceptionSummary.FromException(ex),
+                        path_hints = WslPathHintDetector.FindHints(sourceCode, ex),
                     });
             }
             finally
             {
+                ConsoleLogBuffer.EndRequest(tempId);
                 Console.SetOut(originalOut);
             }
 
             PendingAsyncRunner.Complete(responsePath);
             CleanupRunScriptTempFiles(scriptAbs, metaAbs);
-            WriteResponse(responsePath, response);
+            WriteResponse(responsePath, AttachRunScriptPathHintDiagnostics(response));
+        }
+
+        private static EditorControlResponse AttachRunScriptPathHintDiagnostics(EditorControlResponse response)
+        {
+            if (response == null || response.data == null || response.data.path_hints == null
+                || response.data.path_hints.Length == 0)
+                return response;
+
+            var diagnostics = new List<EditorControlDiagnostic>();
+            if (response.diagnostics != null) diagnostics.AddRange(response.diagnostics);
+            foreach (var hint in response.data.path_hints)
+            {
+                diagnostics.Add(new EditorControlDiagnostic
+                {
+                    code = "EDITOR_CTRL_RUN_SCRIPT_WSL_PATH",
+                    severity = "warning",
+                    detail = "WSL mounted-drive path detected in run-script input or exception text.",
+                    evidence = hint.detected_path,
+                });
+            }
+            response.diagnostics = diagnostics.ToArray();
+            if (response.success) response.severity = "warning";
+            return response;
         }
 
         private static void CleanupRunScriptTempFiles(string scriptAbs, string metaAbs)

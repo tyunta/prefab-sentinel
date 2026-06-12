@@ -100,7 +100,7 @@ SUPPORTED_ACTIONS = frozenset(
         "editor_recompile_and_wait",
         # Issue #119: high-level UdonSharp authoring surface — three
         # synchronous handlers (Add / SetField / WireListener) that wrap
-        # the AddComponent → RunBehaviourSetup → CopyProxyToUdon chain,
+        # the AddComponent / RunBehaviourSetup / CopyProxyToUdon chain,
         # the SerializedObject field-write surface, and the published
         # UnityEventTools persistent-listener entry point.  Mirrors the
         # bridge-side SupportedActions set so an out-of-sync action name
@@ -124,6 +124,9 @@ SUPPORTED_ACTIONS = frozenset(
         # Issue #233: asynchronous run-script submit / poll surfaces.
         "run_script_submit",
         "run_script_poll",
+        "get_transform",
+        "get_bounds",
+        "measure_distance",
         # Issue #243: AnimationClip primitives (inspect / create / apply).
         "inspect_animation_clip",
         "create_animation_clip",
@@ -232,7 +235,7 @@ def send_action(
     if request_extras:
         request_payload.update(request_extras)
 
-    # Atomic write: .tmp → rename to avoid partial reads by the watcher.
+    # Atomic write uses .tmp plus rename to avoid partial reads by the watcher.
     try:
         watch_dir.mkdir(parents=True, exist_ok=True)
         tmp_file.write_text(

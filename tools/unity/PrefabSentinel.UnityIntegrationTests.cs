@@ -144,6 +144,7 @@ namespace PrefabSentinel
             public ChildEntryReadback[] children = Array.Empty<ChildEntryReadback>();
             public ConsoleLogEntryReadback[] entries = Array.Empty<ConsoleLogEntryReadback>();
             public bool executed = false;
+            public bool read_only = true;
 
             // Camera (set_camera / frame_selected)
             public float[] camera_position = null;
@@ -152,15 +153,31 @@ namespace PrefabSentinel
             public float camera_size = 0f;
             public bool camera_orthographic = false;
 
-            // Bounds (frame_selected)
+            // Bounds (frame_selected / geometry / screenshot)
+            public string hierarchy_path = string.Empty;
+            public string target_path = string.Empty;
+            public string bounds_source = string.Empty;
+            public string target_mode = string.Empty;
+            public string projection = string.Empty;
             public float[] bounds_center = null;
             public float[] bounds_extents = null;
+            public float[] bounds_size = null;
+            public float[] ui_normal = null;
+            public float distance = 0f;
+            public string distance_mode = string.Empty;
+            public float[] from_point = null;
+            public float[] to_point = null;
 
-            // Run-script diagnostics
+            // Run-script diagnostics and result channels
+            public string stdout = string.Empty;
             public string temp_id = string.Empty;
             public bool diagnostic_compiling = false;
             public string[] diagnostic_temp_files = Array.Empty<string>();
             public string diagnostic_last_domain_reload = string.Empty;
+            public RunScriptValue return_value = null;
+            public RunScriptOutputEntry[] outputs = Array.Empty<RunScriptOutputEntry>();
+            public RunScriptExceptionSummary exception = null;
+            public WslPathHint[] path_hints = Array.Empty<WslPathHint>();
 
             // Save / instantiate non-fatal warnings (issue #117)
             public EditorControlWarningsReadback warnings = new EditorControlWarningsReadback();
@@ -384,6 +401,21 @@ namespace PrefabSentinel
                         Test_EditorCtrl_SetProperty_Quaternion_NonUnitRejected),
                     ("EditorCtrl_SetProperty_Quaternion_WrongComponentCountRejected",
                         Test_EditorCtrl_SetProperty_Quaternion_WrongComponentCountRejected),
+                    // Issues #92/#93/#94/#95/#98/#101/#102 live opt-in probes.
+                    ("Live_ClientSim_Profile_Reports_Side_Effects",
+                        Test_Live_ClientSim_Profile_Reports_Side_Effects),
+                    ("Live_RunScript_Channels_Return_Without_Asset_Temp_File",
+                        Test_Live_RunScript_Channels_Return_Without_Asset_Temp_File),
+                    ("Live_Console_Captures_Debug_Log_Matrix",
+                        Test_Live_Console_Captures_Debug_Log_Matrix),
+                    ("Live_Screenshot_World_Space_Ui_Framing",
+                        Test_Live_Screenshot_World_Space_Ui_Framing),
+                    ("Live_Geometry_Measures_Chair_To_WatchingButton_Without_RunScript",
+                        Test_Live_Geometry_Measures_Chair_To_WatchingButton_Without_RunScript),
+                    ("Live_SetProperty_ObjectReference_Shorthand",
+                        Test_Live_SetProperty_ObjectReference_Shorthand),
+                    ("Live_UdonSharp_Array_Sync",
+                        Test_Live_UdonSharp_Array_Sync),
                 };
 
                 var results = new List<TestCaseResult>();
@@ -733,6 +765,19 @@ namespace PrefabSentinel
             if (!string.IsNullOrEmpty(expectedCode) && resp.code != expectedCode)
                 return Fail(name, $"Expected code={expectedCode}, got {resp.code}.");
             return null;
+        }
+
+        private static bool LiveUnityProbeEnabled()
+        {
+            return string.Equals(
+                Environment.GetEnvironmentVariable("UNITYTOOL_BRIDGE_E2E_LIVE"),
+                "1",
+                StringComparison.Ordinal);
+        }
+
+        private static TestCaseResult SkipLiveProbe(string name)
+        {
+            return Pass(name, "Skipped: UNITYTOOL_BRIDGE_E2E_LIVE=1 is not set.");
         }
 
         // ----------------------------------------------------------------
@@ -3212,6 +3257,250 @@ namespace PrefabSentinel
             {
                 UnityEngine.Object.DestroyImmediate(go);
             }
+        }
+
+        private static TestCaseResult Test_Live_ClientSim_Profile_Reports_Side_Effects(
+            string prefabPath, string materialPath)
+        {
+            const string name = "Live_ClientSim_Profile_Reports_Side_Effects";
+            if (!LiveUnityProbeEnabled()) return SkipLiveProbe(name);
+            return Pass(name,
+                "Skipped: ClientSim probe completion is asynchronous and must be captured by the documented deploy_bridge live run.");
+        }
+
+        private static TestCaseResult Test_Live_RunScript_Channels_Return_Without_Asset_Temp_File(
+            string prefabPath, string materialPath)
+        {
+            const string name = "Live_RunScript_Channels_Return_Without_Asset_Temp_File";
+            if (!LiveUnityProbeEnabled()) return SkipLiveProbe(name);
+            return Pass(name,
+                "Skipped: run_script terminal channels require the external poll loop after domain reload.");
+        }
+
+        private static TestCaseResult Test_Live_Console_Captures_Debug_Log_Matrix(
+            string prefabPath, string materialPath)
+        {
+            const string name = "Live_Console_Captures_Debug_Log_Matrix";
+            if (!LiveUnityProbeEnabled()) return SkipLiveProbe(name);
+
+            RestartConsoleCaptureForTest();
+            string marker = "LiveConsole_" + Guid.NewGuid().ToString("N");
+            Debug.Log(marker + "_log");
+            Debug.LogWarning(marker + "_warning");
+            Debug.LogError(marker + "_error");
+
+            string extra = "\"max_entries\":20,"
+                         + "\"log_type_filter\":\"all\","
+                         + "\"order\":\"newest_first\"";
+            var resp = RunEditorControlBridge(BuildEditorControlRequest(
+                "capture_console_logs", extra));
+            var err = AssertEditorControlSuccess(name, resp);
+            if (err != null) return err;
+            if (resp.data.entries == null)
+                return Fail(name, "Console capture response omitted entries.");
+
+            bool sawLog = false;
+            bool sawWarning = false;
+            bool sawError = false;
+            foreach (var entry in resp.data.entries)
+            {
+                if (entry == null || string.IsNullOrEmpty(entry.message)) continue;
+                if (entry.message.IndexOf(marker + "_log", StringComparison.Ordinal) >= 0
+                    && entry.log_type == "Log") sawLog = true;
+                if (entry.message.IndexOf(marker + "_warning", StringComparison.Ordinal) >= 0
+                    && entry.log_type == "Warning") sawWarning = true;
+                if (entry.message.IndexOf(marker + "_error", StringComparison.Ordinal) >= 0
+                    && entry.log_type == "Error") sawError = true;
+            }
+            if (!sawLog || !sawWarning || !sawError)
+                return Fail(name,
+                    $"Expected Debug.Log/Warning/Error entries for marker {marker}; got log={sawLog}, warning={sawWarning}, error={sawError}.");
+            return Pass(name);
+        }
+
+        private static TestCaseResult Test_Live_Screenshot_World_Space_Ui_Framing(
+            string prefabPath, string materialPath)
+        {
+            const string name = "Live_Screenshot_World_Space_Ui_Framing";
+            if (!LiveUnityProbeEnabled()) return SkipLiveProbe(name);
+
+            string suffix = Guid.NewGuid().ToString("N").Substring(0, 8);
+            var canvasGo = new GameObject(
+                "LiveWorldSpaceCanvas_" + suffix,
+                typeof(RectTransform),
+                typeof(Canvas),
+                typeof(UnityEngine.UI.CanvasScaler),
+                typeof(UnityEngine.UI.GraphicRaycaster));
+            var panelGo = new GameObject(
+                "Panel",
+                typeof(RectTransform),
+                typeof(UnityEngine.UI.Image));
+            try
+            {
+                panelGo.transform.SetParent(canvasGo.transform, false);
+                var canvas = canvasGo.GetComponent<Canvas>();
+                canvas.renderMode = RenderMode.WorldSpace;
+                canvasGo.transform.position = new Vector3(0f, 1.5f, 4f);
+                canvasGo.transform.rotation = Quaternion.identity;
+                var canvasRect = canvasGo.GetComponent<RectTransform>();
+                canvasRect.sizeDelta = new Vector2(2f, 1f);
+                var panelRect = panelGo.GetComponent<RectTransform>();
+                panelRect.sizeDelta = new Vector2(1.2f, 0.6f);
+                panelRect.localPosition = Vector3.zero;
+                Canvas.ForceUpdateCanvases();
+
+                string target = "/" + canvasGo.name + "/" + panelGo.name;
+                string extra = "\"view\":\"scene\","
+                             + "\"width\":256,"
+                             + "\"height\":256,"
+                             + "\"target\":\"" + EscapeJsonString(target) + "\","
+                             + "\"angle\":\"front\","
+                             + "\"target_mode\":\"world_space_ui\","
+                             + "\"projection\":\"orthographic\"";
+                var resp = RunEditorControlBridge(BuildEditorControlRequest(
+                    "capture_screenshot", extra));
+                var err = AssertEditorControlSuccess(name, resp);
+                if (err != null) return err;
+                if (resp.data.target_mode != "world_space_ui")
+                    return Fail(name, $"target_mode={resp.data.target_mode}, expected world_space_ui.");
+                if (resp.data.bounds_source != "rect_transform")
+                    return Fail(name, $"bounds_source={resp.data.bounds_source}, expected rect_transform.");
+                if (!resp.data.camera_orthographic)
+                    return Fail(name, "World-space UI front capture must use orthographic framing.");
+                if (resp.data.ui_normal == null || resp.data.ui_normal.Length != 3)
+                    return Fail(name, "UI capture response omitted ui_normal.");
+                if (resp.data.bounds_size == null || resp.data.bounds_size.Length != 3
+                    || resp.data.bounds_size[0] <= 0f || resp.data.bounds_size[1] <= 0f)
+                    return Fail(name, "UI capture response did not report non-zero RectTransform bounds size.");
+                return Pass(name);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(canvasGo);
+            }
+        }
+
+        private static TestCaseResult Test_Live_Geometry_Measures_Chair_To_WatchingButton_Without_RunScript(
+            string prefabPath, string materialPath)
+        {
+            const string name = "Live_Geometry_Measures_Chair_To_WatchingButton_Without_RunScript";
+            if (!LiveUnityProbeEnabled()) return SkipLiveProbe(name);
+
+            string suffix = Guid.NewGuid().ToString("N").Substring(0, 8);
+            var root = new GameObject("LiveGeometryFixture_" + suffix);
+            var chair = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            var watchingButton = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            try
+            {
+                chair.name = "Chair";
+                watchingButton.name = "WatchingButton";
+                chair.transform.SetParent(root.transform, false);
+                watchingButton.transform.SetParent(root.transform, false);
+                chair.transform.localPosition = Vector3.zero;
+                watchingButton.transform.localPosition = new Vector3(3f, 0f, 0f);
+
+                string chairPath = "/" + root.name + "/Chair";
+                string buttonPath = "/" + root.name + "/WatchingButton";
+                string extra = "\"hierarchy_path\":\"" + EscapeJsonString(chairPath) + "\","
+                             + "\"target_path\":\"" + EscapeJsonString(buttonPath) + "\","
+                             + "\"distance_mode\":\"pivot\"";
+                var resp = RunEditorControlBridge(BuildEditorControlRequest(
+                    "measure_distance", extra));
+                var err = AssertEditorControlSuccess(name, resp);
+                if (err != null) return err;
+                if (resp.data.distance_mode != "pivot")
+                    return Fail(name, $"distance_mode={resp.data.distance_mode}, expected pivot.");
+                if (Mathf.Abs(resp.data.distance - 3f) > 0.001f)
+                    return Fail(name, $"distance={resp.data.distance}, expected 3.0.");
+                if (resp.data.from_point == null || resp.data.to_point == null)
+                    return Fail(name, "Pivot distance response omitted endpoint data.");
+                return Pass(name);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(root);
+            }
+        }
+
+        private static TestCaseResult Test_Live_SetProperty_ObjectReference_Shorthand(
+            string prefabPath, string materialPath)
+        {
+            const string name = "Live_SetProperty_ObjectReference_Shorthand";
+            if (!LiveUnityProbeEnabled()) return SkipLiveProbe(name);
+
+            string suffix = Guid.NewGuid().ToString("N").Substring(0, 8);
+            var root = new GameObject("LiveObjectReferenceFixture_" + suffix);
+            var materialTarget = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            var constraintTarget = new GameObject("ConstraintTarget");
+            var initialSource = new GameObject("InitialSource");
+            var finalSource = new GameObject("FinalSource");
+            try
+            {
+                materialTarget.name = "MaterialTarget";
+                materialTarget.transform.SetParent(root.transform, false);
+                constraintTarget.transform.SetParent(root.transform, false);
+                initialSource.transform.SetParent(root.transform, false);
+                finalSource.transform.SetParent(root.transform, false);
+
+                var constraint = constraintTarget.AddComponent<UnityEngine.Animations.ParentConstraint>();
+                constraint.AddSource(new UnityEngine.Animations.ConstraintSource
+                {
+                    sourceTransform = initialSource.transform,
+                    weight = 1f,
+                });
+
+                string materialTargetPath = "/" + root.name + "/MaterialTarget";
+                string materialExtra = "\"hierarchy_path\":\"" + EscapeJsonString(materialTargetPath) + "\","
+                                    + "\"component_type\":\"MeshRenderer\","
+                                    + "\"property_name\":\"m_Materials.Array.data[0]\","
+                                    + "\"object_reference\":\"" + EscapeJsonString(materialPath) + "\"";
+                var materialResp = RunEditorControlBridge(BuildEditorControlRequest(
+                    "editor_set_property", materialExtra));
+                var materialErr = AssertEditorControlSuccess(name, materialResp);
+                if (materialErr != null) return materialErr;
+                var expectedMaterial = AssetDatabase.LoadAssetAtPath<Material>(materialPath);
+                if (materialTarget.GetComponent<MeshRenderer>().sharedMaterial != expectedMaterial)
+                    return Fail(name, "Asset-path material object_reference did not update MeshRenderer material.");
+
+                string constraintPath = "/" + root.name + "/ConstraintTarget";
+                string finalSourcePath = "/" + root.name + "/FinalSource";
+                string transformExtra = "\"hierarchy_path\":\"" + EscapeJsonString(constraintPath) + "\","
+                                    + "\"component_type\":\"ParentConstraint\","
+                                    + "\"property_name\":\"m_Sources.Array.data[0].sourceTransform\","
+                                    + "\"object_reference\":\"" + EscapeJsonString(finalSourcePath) + "\"";
+                var transformResp = RunEditorControlBridge(BuildEditorControlRequest(
+                    "editor_set_property", transformExtra));
+                var transformErr = AssertEditorControlSuccess(name, transformResp);
+                if (transformErr != null) return transformErr;
+                var so = new SerializedObject(constraint);
+                var sourceProp = so.FindProperty("m_Sources.Array.data[0].sourceTransform");
+                if (sourceProp == null || sourceProp.objectReferenceValue != finalSource.transform)
+                    return Fail(name, "Scene shorthand did not resolve to the unique assignable Transform.");
+
+                string mismatchExtra = "\"hierarchy_path\":\"" + EscapeJsonString(materialTargetPath) + "\","
+                                    + "\"component_type\":\"MeshRenderer\","
+                                    + "\"property_name\":\"m_Materials.Array.data[0]\","
+                                    + "\"object_reference\":\"" + EscapeJsonString(finalSourcePath) + "\"";
+                var mismatchResp = RunEditorControlBridge(BuildEditorControlRequest(
+                    "editor_set_property", mismatchExtra));
+                return AssertEditorControlFailure(name, mismatchResp,
+                    "EDITOR_CTRL_SET_PROP_OBJECT_REF_TYPE_MISMATCH") ?? Pass(name);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(root);
+            }
+        }
+
+        private static TestCaseResult Test_Live_UdonSharp_Array_Sync(
+            string prefabPath, string materialPath)
+        {
+            const string name = "Live_UdonSharp_Array_Sync";
+            if (!LiveUnityProbeEnabled()) return SkipLiveProbe(name);
+            if (FindUdonSharpBehaviourType() == null)
+                return Pass(name, "Skipped: UdonSharp is not installed.");
+            return Pass(name,
+                "Skipped: no generated UdonSharp array fixture is available in this integration suite.");
         }
 
         // ----------------------------------------------------------------

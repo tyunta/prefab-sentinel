@@ -229,7 +229,7 @@ class CsharpHarnessCollectionSkipTests(unittest.TestCase):
 # 依存復元（plain restore は lock を再生成。CI 差分が出る場合はコミットする）
 dotnet restore tests/csharp/PrefabSentinel.Tests.csproj
 
-# ロックモード復元 → ビルド → テスト（CI と同型）
+# ロックモード復元 then ビルド then テスト（CI と同型）
 dotnet restore tests/csharp/PrefabSentinel.Tests.csproj --locked-mode
 dotnet build  tests/csharp/PrefabSentinel.Tests.csproj --no-restore --configuration Release
 dotnet test   tests/csharp/PrefabSentinel.Tests.csproj --no-build  --configuration Release
@@ -313,3 +313,8 @@ async with stdio_client(params) as (read, write):
 4. 検証ツール（`editor_screenshot` 等）を呼んで結果を観察。screenshot は `D:\VRChatProject\<bridge-watch-dir>\screenshots\` に保存される。
 
 **bridge dispatch 経路の確認**: 新しい branch を追加した bridge handler は、応答の `message` / `code` フィールドで分岐先が確認できる。例えば issue #84 の `HandleObjectCaptureScreenshot` 成功時は `"Object-capture screenshot of '...' (angle=...)"` を返し、既存 SceneView capture 経路の `"Scene view captured to ..."` と区別できる。視覚以前に文字列で経路同定する習慣をつける。
+
+**issue #92/#93/#94/#95/#98/#101/#102/#103 batch probes**:
+- Python focused: `uv run --extra mcp pytest tests/test_orchestrator_validation.py tests/test_mcp_tools_editor_exec.py tests/test_mcp_tools_editor_view.py tests/test_mcp_tools_editor_geometry.py tests/test_mcp_tools_editor_udonsharp.py tests/test_mcp_server.py tests/test_services.py`
+- Unity-free C#: `dotnet test tests/csharp/PrefabSentinel.Tests.csproj --no-restore`
+- Live Unity opt-in (`UNITYTOOL_BRIDGE_E2E_LIVE=1`): validate `profile="clientsim"` side-effect report, deterministic `editor_console` request correlation, `editor_screenshot(target_mode="world_space_ui")`, geometry chair-to-WatchingButton distance, typed `editor_set_property`, and UdonSharp `values_json` array sync. Unity-dependent bridge partials still require `deploy_bridge` + Editor compile confirmation because CI/xUnit does not compile files that reference UnityEditor / VRChat SDK assemblies.

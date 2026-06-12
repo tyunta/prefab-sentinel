@@ -139,43 +139,72 @@ def _rewrite_transport_timeout_envelope(
     }
 
 
+def _decode_run_script_value(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    kind = value.get("kind")
+    if kind == "null":
+        return None
+    if kind == "string" and isinstance(value.get("string_value"), str):
+        return value["string_value"]
+    if kind == "number" and isinstance(value.get("number_value"), int | float) and not isinstance(value.get("number_value"), bool):
+        return value["number_value"]
+    if kind == "bool" and isinstance(value.get("bool_value"), bool):
+        return value["bool_value"]
+    if kind == "string_array":
+        raw = value.get("string_array")
+        if isinstance(raw, list) and all(isinstance(item, str) for item in raw):
+            return list(raw)
+    if kind == "number_array":
+        raw = value.get("number_array")
+        if isinstance(raw, list) and all(isinstance(item, int | float) and not isinstance(item, bool) for item in raw):
+            return list(raw)
+    if kind == "bool_array":
+        raw = value.get("bool_array")
+        if isinstance(raw, list) and all(isinstance(item, bool) for item in raw):
+            return list(raw)
+    return value
+
+
+def _decode_run_script_outputs(outputs: Any) -> Any:
+    if isinstance(outputs, dict):
+        return outputs
+    if not isinstance(outputs, list):
+        return outputs
+    decoded: dict[str, Any] = {}
+    for entry in outputs:
+        if not isinstance(entry, dict):
+            return outputs
+        key = entry.get("key")
+        if not isinstance(key, str) or not key:
+            return outputs
+        if "value" not in entry:
+            return outputs
+        decoded[key] = _decode_run_script_value(entry["value"])
+    return decoded
+
+
+def _normalize_run_script_envelope(response: dict[str, Any]) -> dict[str, Any]:
+    data = response.get("data")
+    if not isinstance(data, dict):
+        return response
+    normalized_data = dict(data)
+    if "return_value" in normalized_data:
+        normalized_data["return_value"] = _decode_run_script_value(normalized_data["return_value"])
+    if "outputs" in normalized_data:
+        normalized_data["outputs"] = _decode_run_script_outputs(normalized_data["outputs"])
+    return {**response, "data": normalized_data}
+
+
 def editor_run_script(
     code: str,
     confirm: bool,
     change_reason: str | None,
     compile_timeout_ms: int = DEFAULT_COMPILE_TIMEOUT_MS,
 ) -> dict[str, Any]:
-    """Compile and execute a C# snippet inside the Unity Editor.
-
-    Parameters
-    ----------
-    code:
-        C# source.  The bridge writes this to
-        ``Assets/Editor/_PrefabSentinelTemp/<temp_id>.cs`` and invokes
-        ``PrefabSentinelTempScript.Run()`` (``public static void``).  The
-        snippet must define that fixed entry point.
-    confirm:
-        Must be ``True``.  ``False`` returns ``CHANGE_REASON_REQUIRED``.
-    change_reason:
-        Required, non-empty.  Empty / whitespace / ``None`` returns
-        ``CHANGE_REASON_REQUIRED``.
-    compile_timeout_ms:
-        Bounded compile-pending budget in milliseconds; forwarded to the
-        bridge as ``compile_timeout``. Defaults to fifteen seconds.
-        Values outside the inclusive
-        ``[COMPILE_TIMEOUT_MIN_MS, COMPILE_TIMEOUT_MAX_MS]`` range
-        return ``COMPILE_TIMEOUT_OUT_OF_RANGE`` without contacting the
-        bridge (issue #127).
-
-    Returns
-    -------
-    dict
-        The Editor Bridge response envelope, unmodified.
-    """
     audit_err = require_write_audit("editor_run_script", confirm, change_reason)
     if audit_err is not None:
         return audit_err
-    # require_write_audit guarantees change_reason is a non-empty string here.
     normalized_reason = (change_reason or "").strip()
 
     if (
@@ -198,7 +227,7 @@ def editor_run_script(
             compile_timeout_ms=compile_timeout_ms,
             transport_timeout_sec=transport_timeout_sec,
         )
-    return response
+    return _normalize_run_script_envelope(response)
 
 
 def _request_id_invalid_envelope(value: str) -> dict[str, Any]:
@@ -226,14 +255,6 @@ def editor_run_script_submit(
     change_reason: str | None,
     compile_timeout_ms: int = DEFAULT_COMPILE_TIMEOUT_MS,
 ) -> dict[str, Any]:
-    """Stage a C# snippet asynchronously (issue #233).
-
-    Identical input contract to ``editor_run_script`` (audit pair +
-    compile-budget range) but does not wait for compilation: returns
-    the bridge-assigned opaque ``request_id`` and acceptance timestamp
-    within the synchronous transport budget so the caller can poll for
-    terminal completion through ``editor_run_script_poll``.
-    """
     audit_err = require_write_audit(
         "editor_run_script_submit", confirm, change_reason,
     )
@@ -244,34 +265,29 @@ def editor_run_script_submit(
         or compile_timeout_ms > COMPILE_TIMEOUT_MAX_MS
     ):
         return _compile_timeout_out_of_range_envelope(compile_timeout_ms)
-    # require_write_audit guarantees change_reason is a non-empty string here.
     normalized_reason = (change_reason or "").strip()
-    return send_action(
+    response = send_action(
         action="run_script_submit",
         code=code,
         change_reason=normalized_reason,
         compile_timeout=compile_timeout_ms,
         confirm=True,
     )
+    return _normalize_run_script_envelope(response)
 
 
 def editor_run_script_poll(
     request_id: str,
     cleanup_on_timeout: bool = False,
 ) -> dict[str, Any]:
-    """Poll an asynchronous run-script job for terminal state (issue #233).
-
-    Rejects malformed identifiers pre-bridge with
-    ``REQUEST_ID_INVALID``; otherwise forwards the identifier and the
-    cleanup-on-timeout flag verbatim to the bridge.
-    """
     if not isinstance(request_id, str) or not _REQUEST_ID_RE.match(request_id):
         return _request_id_invalid_envelope(request_id)
-    return send_action(
+    response = send_action(
         action="run_script_poll",
         request_id=request_id,
         cleanup_on_timeout=cleanup_on_timeout,
     )
+    return _normalize_run_script_envelope(response)
 
 
 def register_editor_exec_tools(server: FastMCP) -> None:

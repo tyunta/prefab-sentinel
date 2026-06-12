@@ -98,8 +98,11 @@ MCP サーバーは Plugin 内部で `uv` / `uvx` 経由でローカル起動さ
 | `inspect_variant` | Prefab Variant の override チェーン分析 |
 | `find_referencing_assets` | GUID / パスの参照元アセット検索 |
 | `patch_apply` | パッチ計画の検証・適用（dry-run / confirm ゲート付き） |
-| `validate_runtime` | UdonSharp コンパイル + ClientSim 実行検証 |
-| `editor_*` | Editor Bridge 経由の Scene / Hierarchy / Component / BlendShape / Animation 編集 |
+| `validate_runtime` | 既定 `compile_only` の UdonSharp compile 検証。ClientSim は `profile="clientsim"` + audit pair で明示 opt-in |
+| `editor_get_transform` / `editor_get_bounds` / `editor_measure_distance` | Editor Bridge 経由の read-only live geometry 検査 |
+| `editor_*` | Editor Bridge 経由の Scene / Hierarchy / Component / BlendShape / Animation 編集、スクリーンショット、Console、UdonSharp field write |
+
+Routine CI / agent validation では `validate_runtime(profile="compile_only")` または `validate_runtime(profile="editor_console_only")` を使う。ClientSim は submission scene 向けの明示 opt-in で、`profile="clientsim"` + audit pair が揃った場合だけ実行する。
 
 read-only 検査（`validate_*` / `inspect_*` / `find_*`）は Unity 不要、`editor_*` 系と `patch_apply` の confirm 適用は Editor Bridge 常駐が前提。
 

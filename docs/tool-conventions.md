@@ -36,6 +36,8 @@ offline symbol tree（YAML 直読みで構築する人間可読ツリー）上�
 
 live editor の scene または active Prefab Stage 上の GameObject を `/` 区切りで指す（例: `/Canvas/Panel/Button`）。editor_* ツールが使う。Prefab Stage が開いていれば stage root を先に解決する。権威は live editor。
 
+live geometry (`editor_get_transform` / `editor_get_bounds` / `editor_measure_distance`) と target screenshot (`editor_screenshot(target=...)`) は同じ hierarchy-path authority を使う。geometry は read-only で、missing / ambiguous path は typed envelope で fail-fast する。routine geometry inspection は dedicated geometry tool を使い、`editor_run_script` snippets を第一選択にしない。
+
 ### 1.5 patch-selector
 
 patch v2 スキーマの op 内でコンポーネントを指す文字列フォーマット `TypeName@/hierarchy/path`（例: `MeshRenderer@/Body/Head`）。引数ではなく op フィールドの値なので §2.1 の引数命名規約の対象外。
@@ -100,3 +102,4 @@ patch v2 スキーマの op 内でコンポーネントを指す文字列フォ�
 | 監査側 | `editor_create_animation_clip` / `editor_safe_save_prefab` / `editor_create_udon_program_asset` / `editor_create_scene` / `editor_save_scene` / `editor_close_prefab`(save=True) | (c) |
 | 監査側 | offline write（`patch_apply` / `set_property` / `add_component` 等） | (c) disk YAML 書き込み |
 | 非監査側 | `editor_set_property` / `editor_set_blend_shape` / `editor_batch_set_property` / `editor_batch_set_blend_shape` / `editor_apply_animation_clip` 等 | Undo 可能な scene / live 変更 |
+| 条件付き監査 | `validate_runtime(profile="clientsim")` | ClientSim は Play Mode / dirty scene state に触れうるため明示 profile + audit pair を要求する。`compile_only` / `editor_console_only` は read-only profile。 |

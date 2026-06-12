@@ -377,22 +377,15 @@ def register_validation_tools(server: FastMCP, session: ProjectSession) -> None:
     @server.tool()
     def validate_runtime(
         asset_path: str,
-        profile: str = "default",
+        profile: str = "compile_only",
         log_file: str | None = None,
         since_timestamp: str | None = None,
         allow_warnings: bool = False,
         max_diagnostics: int = 200,
+        confirm: bool = False,
+        change_reason: str | None = None,
+        allow_dirty_before_clientsim: bool = False,
     ) -> dict[str, Any]:
-        """Run runtime validation: UdonSharp compile + ClientSim execution.
-
-        Args:
-            asset_path: Target Unity scene path.
-            profile: Runtime profile label for ClientSim execution context.
-            log_file: Unity log file path (default: <project>/Logs/Editor.log).
-            since_timestamp: Log cursor label for filtering.
-            allow_warnings: Treat warning-only findings as pass.
-            max_diagnostics: Maximum diagnostics to include (default: 200).
-        """
         orch = session.get_orchestrator()
         resp = orch.validate_runtime(
             scene_path=asset_path,
@@ -401,5 +394,8 @@ def register_validation_tools(server: FastMCP, session: ProjectSession) -> None:
             since_timestamp=since_timestamp,
             allow_warnings=allow_warnings,
             max_diagnostics=max_diagnostics,
+            confirm=confirm,
+            change_reason=change_reason,
+            allow_dirty_before_clientsim=allow_dirty_before_clientsim,
         )
         return resp.to_dict()

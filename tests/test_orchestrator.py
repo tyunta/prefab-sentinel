@@ -774,16 +774,22 @@ class ValidateRuntimeTests(unittest.TestCase):
         self.assertTrue(result.success)
         self.assertEqual("VALIDATE_RUNTIME_RESULT", result.code)
         self.assertFalse(result.data["fail_fast_triggered"])
-        # Issue #121: an additional leading WorldSpace-Canvas step joins
-        # the pipeline (now 6 steps; was 5).
-        self.assertEqual(6, len(result.data["steps"]))
+        # The default profile is compile-only: canvas, compile, collect,
+        # classify, and assert.
+        self.assertEqual(5, len(result.data["steps"]))
+        orch.runtime_validation.run_clientsim.assert_not_called()
 
     def test_fail_fast_on_run_clientsim_error(self) -> None:
         orch = _make_orchestrator()
         orch.runtime_validation.compile_udonsharp.return_value = _ok_response()
         orch.runtime_validation.run_clientsim.return_value = _error_response()
 
-        result = orch.validate_runtime("Assets/Scenes/Test.unity")
+        result = orch.validate_runtime(
+            "Assets/Scenes/Test.unity",
+            profile="clientsim",
+            confirm=True,
+            change_reason="unit test",
+        )
         self.assertFalse(result.success)
         self.assertTrue(result.data["fail_fast_triggered"])
         # Issue #121: WorldSpace-Canvas inspection is the leading step,
@@ -877,7 +883,12 @@ class ValidateRuntimeTests(unittest.TestCase):
             "prefab_sentinel.orchestrator_validation._inspect_world_canvas_step",
             return_value=self._canvas_step_response([canvas_diag]),
         ):
-            result = orch.validate_runtime("Assets/Scenes/Test.unity")
+            result = orch.validate_runtime(
+                "Assets/Scenes/Test.unity",
+                profile="clientsim",
+                confirm=True,
+                change_reason="unit test",
+            )
 
         self.assertEqual(2, len(result.diagnostics))
         self.assertEqual(canvas_diag.detail, result.diagnostics[0].detail)
@@ -896,7 +907,12 @@ class ValidateRuntimeTests(unittest.TestCase):
             "prefab_sentinel.orchestrator_validation._inspect_world_canvas_step",
             return_value=self._canvas_step_response([canvas_diag]),
         ):
-            result = orch.validate_runtime("Assets/Scenes/Test.unity")
+            result = orch.validate_runtime(
+                "Assets/Scenes/Test.unity",
+                profile="clientsim",
+                confirm=True,
+                change_reason="unit test",
+            )
 
         self.assertFalse(result.success)
         self.assertEqual("VALIDATE_RUNTIME_RESULT", result.code)
@@ -1468,7 +1484,7 @@ class PatchApplyTests(unittest.TestCase):
     def test_postcondition_schema_fail_fast(self) -> None:
         orch = self._make_orch_with_dry_run()
         plan = self._minimal_plan()
-        # asset_exists with neither resource nor path → schema error at orchestrator level
+        # asset_exists with neither resource nor path maps to an orchestrator schema error.
         plan["postconditions"] = [{"type": "asset_exists"}]
         result = orch.patch_apply(plan, dry_run=False, confirm=True)
         self.assertFalse(result.success)
@@ -1932,11 +1948,11 @@ class TestCheckFieldCoverage(unittest.TestCase):
         self.assertTrue(result.success)
         self.assertEqual("CSF_COVERAGE_OK", result.code)
 
-        # playerName is in C# but not in YAML → unused
+        # playerName is in C# but not in YAML, so it is unused.
         unused_names = {e["field_name"] for e in result.data["unused_fields"]}
         self.assertIn("playerName", unused_names)
 
-        # legacyField is in YAML but not in C# → orphaned
+        # legacyField is in YAML but not in C#, so it is orphaned.
         orphaned_names = {e["field_name"] for e in result.data["orphaned_paths"]}
         self.assertIn("legacyField", orphaned_names)
 
@@ -2141,7 +2157,7 @@ class TestNestedWiringTraversal(unittest.TestCase):
                 assets_dir, "Child.prefab", _CHILD_WIRING_GUID, child_text,
             )
 
-            # Base.prefab — PrefabInstance→Child, no direct MonoBehaviours
+            # Base.prefab has PrefabInstance to Child, no direct MonoBehaviours.
             base_text = (
                 YAML_HEADER
                 + make_gameobject("10", "BaseRoot", ["20"])
@@ -2210,7 +2226,7 @@ class TestNestedWiringTraversal(unittest.TestCase):
                 assets_dir, "Child.prefab", _CHILD_WIRING_GUID, child_text,
             )
 
-            # Base.prefab — PrefabInstance→Child only
+            # Base.prefab has PrefabInstance to Child only.
             base_text = (
                 YAML_HEADER
                 + make_gameobject("10", "BaseRoot", ["20"])
@@ -2275,7 +2291,7 @@ class TestNestedWiringTraversal(unittest.TestCase):
                 assets_dir, "Child.prefab", _CHILD_WIRING_GUID, child_text,
             )
 
-            # Base.prefab — direct MonoBehaviour + PrefabInstance→Child
+            # Base.prefab has direct MonoBehaviour plus PrefabInstance to Child.
             base_text = (
                 YAML_HEADER
                 + make_gameobject("10", "BaseObj", ["20", "30"])

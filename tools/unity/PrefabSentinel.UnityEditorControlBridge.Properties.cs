@@ -12,7 +12,6 @@ namespace PrefabSentinel
     {
         private static EditorControlResponse HandleEditorSetProperty(EditorControlRequest request)
         {
-            // ── Validation ──
             if (string.IsNullOrEmpty(request.hierarchy_path))
                 return BuildError("EDITOR_CTRL_SET_PROP_NO_PATH", "hierarchy_path is required.");
             if (string.IsNullOrEmpty(request.component_type))
@@ -20,11 +19,6 @@ namespace PrefabSentinel
             if (string.IsNullOrEmpty(request.property_name))
                 return BuildError("EDITOR_CTRL_SET_PROP_NO_FIELD", "property_name is required.");
 
-            // Issue #52: an empty-string write is a deliberate value; the
-            // ``property_value_present`` marker — not the emptiness of
-            // ``property_value`` — is authoritative for whether a value was
-            // supplied.  ``property_value`` alone still counts so callers
-            // that omit the marker but send a non-empty value keep working.
             bool hasValue = request.property_value_present
                 || !string.IsNullOrEmpty(request.property_value);
             bool hasRef = !string.IsNullOrEmpty(request.object_reference);
@@ -35,12 +29,6 @@ namespace PrefabSentinel
                 return BuildError("EDITOR_CTRL_SET_PROP_BOTH_VALUE",
                     "Provide property_value or object_reference, not both.");
 
-            // ── Resolve target ──
-            // Issue #38: an ambiguous hierarchy_path (same-named siblings
-            // with no #N) surfaces the dedicated
-            // EDITOR_CTRL_HIERARCHY_PATH_AMBIGUOUS envelope rather than a
-            // generic NOT_FOUND, so the caller can distinguish "add a #N
-            // disambiguator" from "the object does not exist".
             if (!TryResolveGameObjectInActiveStage(
                     request.hierarchy_path, out GameObject go,
                     out EditorControlResponse ambiguity))
@@ -51,17 +39,9 @@ namespace PrefabSentinel
                     $"GameObject not found: {request.hierarchy_path}");
             }
 
-            // GameObject-as-target branch: when the caller addresses the
-            // GameObject itself (not a component on it), the SerializedObject
-            // is constructed directly from the GameObject and writes are
-            // restricted to the small allowlist of GameObject-level fields.
             bool gameObjectTarget =
                 string.Equals(request.component_type, "GameObject", StringComparison.Ordinal);
 
-            // GameObject-level serialized properties accepted by the
-            // GameObject-as-target branch are owned by the Unity-free
-            // ``GameObjectPropertyAllowlist`` (issue H-4). Writes to anything
-            // outside it return EDITOR_CTRL_SET_PROP_GAMEOBJECT_PROP_NOT_ALLOWED.
             SerializedObject so;
             if (gameObjectTarget)
             {
@@ -90,7 +70,6 @@ namespace PrefabSentinel
                 so = new SerializedObject(component);
             }
 
-            // ── Find property ──
             var prop = so.FindProperty(request.property_name);
             if (prop == null)
             {
@@ -118,14 +97,14 @@ namespace PrefabSentinel
                 return BuildError("EDITOR_CTRL_SET_PROP_FIELD_NOT_FOUND", message, data);
             }
 
-            // ── Set value by type ──
-            // The unified property-write layer owns per-type application
-            // and try-parse error classification; for an object-reference
-            // target the supplied string is the reference path (issue #24).
             string writeInput = hasRef ? request.object_reference : request.property_value;
             PropertyWriteResult writeResult = WritePropertyValue(prop, writeInput);
             if (!writeResult.Success)
+            {
+                if (writeResult.ErrorData != null)
+                    return BuildError(writeResult.ErrorCode, writeResult.ErrorMessage, writeResult.ErrorData);
                 return BuildError(writeResult.ErrorCode, writeResult.ErrorMessage);
+            }
 
             so.ApplyModifiedProperties();
 

@@ -1,6 +1,6 @@
 # MCP ツール一覧
 
-`prefab-sentinel-mcp` が公開する全 MCP ツール（現在 84 件 / 15 カテゴリ）の正本カタログ。各カテゴリは `prefab_sentinel/mcp_tools_*.py` の 1 モジュールに対応する。エンベロープ仕様は [api-reference.md「レスポンスフォーマット」](./api-reference.md#レスポンスフォーマット)、エラーコードの正本は [api-reference.md「エラーコード規約」](./api-reference.md#エラーコード規約) を参照。
+`prefab-sentinel-mcp` が公開する全 MCP ツール（現在 87 件 / 16 カテゴリ）の正本カタログ。各カテゴリは `prefab_sentinel/mcp_tools_*.py` の 1 モジュールに対応する。エンベロープ仕様は [api-reference.md「レスポンスフォーマット」](./api-reference.md#レスポンスフォーマット)、エラーコードの正本は [api-reference.md「エラーコード規約」](./api-reference.md#エラーコード規約) を参照。
 
 ## 用途索引
 
@@ -13,6 +13,7 @@
 - **symbols** — 人間可読パスで Unity オブジェクトをアドレッシングする
 - **session** — `activate_project` でスコープを宣言し、`deploy_bridge` で Bridge C# を同期する
 - **editor_view** — Editor Bridge 経由で Scene/Hierarchy/Console を read する（スクショ・カメラ・ログ）
+- **editor_geometry** — Transform / Bounds / Distance を dedicated read-only API で取得する
 - **editor_write** — Editor Bridge 経由で Hierarchy / Component / BlendShape / Menu を write する
 - **editor_ops** — `editor_set_property` / `editor_safe_save_prefab` 等の compound 編集を行う
 - **editor_advanced** — VRC SDK アップロード / 任意リフレクション呼び出し
@@ -24,7 +25,7 @@
 
 ## 全ツール一覧（カテゴリ別）
 
-各カテゴリ表のカラム: ツール / 区分 / 簡潔説明 / 関連 issue / 種別（read-only / write）。`write` はプロジェクト / Editor / アセット状態に副作用を持つことを示す表示で、`confirm=True` + 非空 `change_reason` を引数として要求する audit-pair 対象はこの中の部分集合（`patch` / `components` / `set_property` の各カテゴリ全体と、`vrcsdk_upload` / `editor_run_script` / `editor_run_script_submit` / `editor_create_animation_clip` / `editor_execute_menu_item` / `editor_safe_save_prefab` / `editor_create_udon_program_asset` / `editor_create_scene` / `editor_save_scene` / `editor_close_prefab`）に限られる。正本一覧は [CONFIGURATION.md](../CONFIGURATION.md#confirm--change_reason-必須対象一覧)。それ以外の `write` ツール（例: `editor_select` / `editor_rename` / `editor_set_blend_shape` / `editor_set_property` / `editor_batch_*` / `editor_batch_set_blend_shape` / `editor_apply_animation_clip` 等）は audit-pair なしで呼び出す（`confirm` / `change_reason` を引数に渡すと `TypeError` で拒否される）。issue #49 で `editor_execute_menu_item` / `editor_safe_save_prefab` / `editor_create_udon_program_asset` / `editor_create_scene` / `editor_save_scene` が audit-pair 側へ、`editor_batch_set_blend_shape` / `editor_apply_animation_clip` が非 audit 側へ再分類された（逆不可逆性原理の適用）。
+各カテゴリ表のカラム: ツール / 区分 / 簡潔説明 / 関連 issue / 種別（read-only / write）。`write` はプロジェクト / Editor / アセット状態に副作用を持つことを示す表示で、`confirm=True` + 非空 `change_reason` を引数として要求する audit-pair 対象はこの中の部分集合（`patch` / `components` / `set_property` の各カテゴリ全体と、`vrcsdk_upload` / `editor_run_script` / `editor_run_script_submit` / `editor_create_animation_clip` / `editor_execute_menu_item` / `editor_safe_save_prefab` / `editor_create_udon_program_asset` / `editor_set_material_property` / `editor_add_udonsharp_component` / `editor_set_udonsharp_field` / `editor_wire_persistent_listener` / `editor_create_scene` / `editor_save_scene` / `editor_close_prefab`）に限られる。正本一覧は [CONFIGURATION.md](../CONFIGURATION.md#confirm--change_reason-必須対象一覧)。それ以外の `write` ツール（例: `editor_select` / `editor_rename` / `editor_set_blend_shape` / `editor_set_property` / `editor_batch_*` / `editor_batch_set_blend_shape` / `editor_apply_animation_clip` 等）は audit-pair なしで呼び出す（`confirm` / `change_reason` を引数に渡すと `TypeError` で拒否される）。issue #49 で `editor_execute_menu_item` / `editor_safe_save_prefab` / `editor_create_udon_program_asset` / `editor_create_scene` / `editor_save_scene` が audit-pair 側へ、`editor_batch_set_blend_shape` / `editor_apply_animation_clip` が非 audit 側へ再分類された（逆不可逆性原理の適用）。
 
 ### components
 
@@ -76,7 +77,7 @@
 | `validate_structure` | validation | YAML 内部構造の検証（fileID 重複・Transform 整合） | — | read-only |
 | `inspect_hierarchy` | validation | GameObject 階層ツリー表示。`expand_monobehaviour` でスクリプトクラス名展開 | #196, #238 | read-only |
 | `validate_all_wiring` | validation | スコープ内の全 `.prefab` / `.unity` の null 参照を一括スキャン | — | read-only |
-| `validate_runtime` | validation | UdonSharp コンパイル + ClientSim 実行検証 | — | read-only |
+| `validate_runtime` | validation | `compile_only` / `editor_console_only` / `clientsim` profile で runtime 検証。既定は Play Mode に入らない `compile_only`、ClientSim は明示 profile + audit pair 必須 | #92 | read-only |
 
 ### symbols
 
@@ -105,7 +106,7 @@
 
 | ツール | 区分 | 簡潔説明 | 関連 issue | 種別 |
 |--------|------|----------|-----------|------|
-| `editor_screenshot` | editor_view | Scene / Game ビューのスクリーンショット取得。`view` allowlist / `crop_roi` preset 対応。`target`（hierarchy_path）+ `angle`（`SCREENSHOT_ANGLE_PRESETS` の 6 プリセット `front` / `three_quarter` / `back` / `right` / `left` / `top`）で対象 GameObject を画面いっぱい・中央フィットに 1 コール capture できる object-capture モード（issue #84） | #249, #259, #84 | read-only |
+| `editor_screenshot` | editor_view | Scene / Game ビューのスクリーンショット取得。`width` / `height` は `0`（現在 view サイズ）または `[1, 4096]` の範囲だけ受理する。renderer target capture は `angle`（`SCREENSHOT_ANGLE_PRESETS`: front/back/left/right/top/three_quarter; UI-only current_camera）を保持し、`target_mode=world_space_ui` / `projection` / `padding_ratio` で World Space UI の RectTransform bounds を SceneView に orthographic framing できる（UI angle: front/back/current_camera） | #249, #259, #84, #95 | read-only |
 | `editor_force_scene_view_refresh` | editor_view | 全 SkinnedMeshRenderer の `forceMatrixRecalculationPerRender` を立てて player-loop を 1 tick 進める | #242, #268 | write |
 | `editor_select` | editor_view | Hierarchy 内の GameObject を選択（Prefab Stage 対応） | — | write |
 | `editor_frame` | editor_view | 選択オブジェクトを Scene ビューでフレーミング | — | write |
@@ -115,11 +116,20 @@
 | `editor_list_materials` | editor_view | ランタイムレンダラーのマテリアルスロット一覧 | — | read-only |
 | `editor_list_roots` | editor_view | 現在の Scene / Prefab Stage のルートオブジェクト一覧 | — | read-only |
 | `editor_get_material_property` | editor_view | ランタイムのシェーダープロパティ値を読み取り | — | read-only |
-| `editor_set_material_property` | editor_view | ランタイムでシェーダープロパティを設定（型はシェーダー定義から自動判定、Undo 対応） | — | write |
-| `editor_console` | editor_view | Unity Console ログを構造化データとして取得。`phase_filter` / `classification_filter` / pagination 対応 | #113, #117, #131, #239 | read-only |
+| `editor_console` | editor_view | Unity Console ログを bridge-owned callback buffer から構造化取得。`since_sequence` / `since_request_id` / `phase_filter` / `classification_filter` / pagination 対応 | #94, #113, #117, #131, #239 | read-only |
 | `editor_refresh` | editor_view | `AssetDatabase.Refresh()` をトリガーし、refresh で誘発したコンパイルを観測（compile-aware）。コンパイル無し→refresh-OK、成功→compile-success、失敗→実コンパイラ診断付き compile-failure | #70 | write |
 | `editor_recompile` | editor_view | スクリプト再コンパイルを発行し `CompilationPipeline.compilationFinished` で完了を観測（同期 / ブロッキング） | #54, #118, #134, #203, #213, #235 | write |
 | `editor_run_tests` | editor_view | Editor Bridge 経由で Unity 統合テストを実行 | — | read-only |
+
+### editor_geometry
+
+`prefab_sentinel/mcp_tools_editor_geometry.py`。Editor Bridge 経由の read-only live geometry API。ad-hoc `editor_run_script` ではなく専用 action を使う。
+
+| ツール | 区分 | 簡潔説明 | 関連 issue | 種別 |
+|--------|------|----------|-----------|------|
+| `editor_get_transform` | editor_geometry | hierarchy path の local/world position、quaternion/euler rotation、scale、parent、active flags を返す | #98 | read-only |
+| `editor_get_bounds` | editor_geometry | renderer / collider / RectTransform / auto / combined の world-space AABB を child-including または target-only で返す | #98 | read-only |
+| `editor_measure_distance` | editor_geometry | 2 hierarchy path 間の pivot / bounds-center / nearest-AABB distance を測る | #98 | read-only |
 
 ### editor_write
 
@@ -129,6 +139,7 @@
 |--------|------|----------|-----------|------|
 | `editor_instantiate` | editor_write | Prefab を現在の Scene にインスタンス化 | — | write |
 | `editor_set_material` | editor_write | ランタイムでレンダラーのマテリアルスロットを差し替え（Undo 対応） | — | write |
+| `editor_set_material_property` | editor_write | ランタイムでシェーダープロパティを設定（型はシェーダー定義から自動判定、Undo 対応、audit pair 必須） | — | write |
 | `editor_find_renderers_by_material` | editor_write | 指定マテリアルを使うレンダラーを Scene / Prefab Stage から逆引きする | — | read-only |
 | `editor_rename` | editor_write | GameObject をリネーム（Undo 対応） | — | write |
 | `editor_add_component` | editor_write | ランタイムで GameObject にコンポーネントを追加（UdonSharp 自動 backing 対応） | #103 | write |
@@ -146,7 +157,7 @@
 
 | ツール | 区分 | 簡潔説明 | 関連 issue | 種別 |
 |--------|------|----------|-----------|------|
-| `editor_set_property` | editor_ops | SerializedObject API 経由でコンポーネントのプロパティを設定（UdonSharp / Quaternion 対応） | #111 | write |
+| `editor_set_property` | editor_ops | SerializedObject API 経由でコンポーネントのプロパティを設定（enum 名/display/index、LayerMask raw/symbolic、ObjectReference shorthand、UdonSharp / Quaternion 対応） | #101, #111 | write |
 | `editor_set_properties` | editor_ops | 単一コンポーネントの複数プロパティを 1 リクエストで一括設定（Undo グループ）。各 entry は `property_name` キー + `value_present` マーカーを持つ | #41, #52 | write |
 | `editor_safe_save_prefab` | editor_ops | シーン上の GameObject を Prefab / Variant として保存。`protect_components` / raw-save mode 対応 | #193, #228 | write |
 | `editor_set_parent` | editor_ops | 既存 GameObject の親子関係を変更（Undo 対応） | — | write |
@@ -194,7 +205,7 @@
 
 | ツール | 区分 | 簡潔説明 | 関連 issue | 種別 |
 |--------|------|----------|-----------|------|
-| `editor_run_script` | editor_exec | C# スニペットを 1 ステップでコンパイル + 実行。`confirm` + `change_reason` 必須、`compile_timeout_ms` ∈ `[1, 120000]` | #74, #116, #127, #226, #234 | write |
+| `editor_run_script` | editor_exec | C# スニペットを 1 ステップでコンパイル + 実行。stdout / primitive return / structured outputs / exception summary / WSL path hints を分離して返す。`confirm` + `change_reason` 必須、`compile_timeout_ms` ∈ `[1, 120000]` | #74, #93, #103, #116, #127, #226, #234 | write |
 | `editor_run_script_submit` | editor_exec | 長時間スクリプト用の非同期 submit。bridge に identifier と acceptance timestamp を返す | #233 | write |
 | `editor_run_script_poll` | editor_exec | submit が返した 32 文字 lower-case hex identifier で poll し結果を取り出す | #233 | read-only |
 
@@ -213,6 +224,6 @@
 
 | ツール | 区分 | 簡潔説明 | 関連 issue | 種別 |
 |--------|------|----------|-----------|------|
-| `editor_add_udonsharp_component` | editor_udonsharp | `UdonSharpBehaviour` 派生コンポーネントを upsert（追加 or 既存再利用）し初期フィールドを 1 トランザクションで適用 | #119 | write |
-| `editor_set_udonsharp_field` | editor_udonsharp | `UdonSharpBehaviour` の指定フィールドを書き込み、`CopyProxyToUdon` で backing と同期 | #119 | write |
-| `editor_wire_persistent_listener` | editor_udonsharp | `UnityEventTools.AddStringPersistentListener` の高水準ラッパー（string モード、ノーオプ可） | #119 | write |
+| `editor_add_udonsharp_component` | editor_udonsharp | `UdonSharpBehaviour` 派生コンポーネントを upsert（追加 or 既存再利用）し初期フィールドを 1 トランザクションで適用。audit pair 必須 | #119 | write |
+| `editor_set_udonsharp_field` | editor_udonsharp | `UdonSharpBehaviour` の指定フィールドを書き込み、`CopyProxyToUdon` で backing と同期。`values_json` で string/int/float/bool/VRCUrl whole-array writes 対応。audit pair 必須 | #102, #119 | write |
+| `editor_wire_persistent_listener` | editor_udonsharp | `UnityEventTools.AddStringPersistentListener` の高水準ラッパー（string モード、ノーオプ可）。audit pair 必須 | #119 | write |

@@ -153,8 +153,6 @@ class EditorRunScriptTests(unittest.TestCase):
                 change_reason="path-traversal repro",
             )
         self.assertEqual(bridge_envelope, resp)
-        self.assertFalse(resp["success"])
-        self.assertEqual("error", resp["severity"])
 
     def test_runtime_exception_propagates(self) -> None:
         """T11c: RUNTIME envelope with exception/executed fields passes through."""
@@ -177,8 +175,169 @@ class EditorRunScriptTests(unittest.TestCase):
                 change_reason="runtime exception repro",
             )
         self.assertEqual(bridge_envelope, resp)
-        self.assertFalse(resp["success"])
-        self.assertEqual("error", resp["severity"])
+
+
+class EditorRunScriptResultChannelTests(unittest.TestCase):
+    _SNIPPET = (
+        "public static class PrefabSentinelTempScript {"
+        "  public static int Run() { return 7; }"
+        "}"
+    )
+
+    def test_run_script_returns_stdout_return_value_and_outputs(self) -> None:
+        bridge_envelope = {
+            "success": True,
+            "severity": "info",
+            "code": "EDITOR_CTRL_RUN_SCRIPT_OK",
+            "message": "ran",
+            "data": {
+                "stdout": "hello\n",
+                "return_value": {"kind": "number", "number_value": 7},
+                "outputs": [
+                    {"key": "label", "value": {"kind": "string", "string_value": "WatchingButton"}},
+                    {"key": "visible", "value": {"kind": "bool", "bool_value": True}},
+                ],
+                "executed": True,
+            },
+            "diagnostics": [],
+        }
+        with patch.object(mcp_tools_editor_exec, "send_action", return_value=bridge_envelope):
+            response = mcp_tools_editor_exec.editor_run_script(
+                code=self._SNIPPET,
+                confirm=True,
+                change_reason="capture result channels",
+            )
+
+        self.assertEqual(
+            ("hello\n", 7, {"label": "WatchingButton", "visible": True}),
+            (
+                response["data"]["stdout"],
+                response["data"]["return_value"],
+                response["data"]["outputs"],
+            ),
+            msg=f"run-script result channels mismatch: {response!r}",
+        )
+
+    def test_run_script_submit_and_poll_share_terminal_channels(self) -> None:
+        request_id = "0123456789abcdef0123456789abcdef"
+        poll_envelope = {
+            "success": True,
+            "severity": "info",
+            "code": "EDITOR_CTRL_RUN_SCRIPT_POLL_COMPLETED",
+            "message": "completed",
+            "data": {
+                "request_id": request_id,
+                "status": "completed",
+                "stdout": "async\n",
+                "return_value": {"kind": "string", "string_value": "done"},
+                "outputs": [
+                    {"key": "count", "value": {"kind": "number", "number_value": 2}},
+                ],
+            },
+            "diagnostics": [],
+        }
+        with patch.object(mcp_tools_editor_exec, "send_action", return_value=poll_envelope):
+            response = mcp_tools_editor_exec.editor_run_script_poll(request_id)
+
+        self.assertEqual(
+            ("async\n", "done", {"count": 2}),
+            (
+                response["data"]["stdout"],
+                response["data"]["return_value"],
+                response["data"]["outputs"],
+            ),
+            msg=f"async run-script terminal channels mismatch: {response!r}",
+        )
+
+    def test_run_script_poll_runtime_failure_keeps_terminal_channels(self) -> None:
+        request_id = "0123456789abcdef0123456789abcdef"
+        poll_envelope = {
+            "success": False,
+            "severity": "error",
+            "code": "EDITOR_CTRL_RUN_SCRIPT_RUNTIME",
+            "message": "runtime failed",
+            "data": {
+                "request_id": request_id,
+                "status": "failed",
+                "stdout": "before failure\n",
+                "exception": {
+                    "type": "InvalidOperationException",
+                    "message": "boom",
+                    "short_stack": "Thrower.Run",
+                },
+            },
+            "diagnostics": [],
+        }
+        with patch.object(mcp_tools_editor_exec, "send_action", return_value=poll_envelope):
+            response = mcp_tools_editor_exec.editor_run_script_poll(request_id)
+
+        self.assertEqual(
+            (
+                False,
+                "error",
+                "EDITOR_CTRL_RUN_SCRIPT_RUNTIME",
+                "failed",
+                {
+                    "type": "InvalidOperationException",
+                    "message": "boom",
+                    "short_stack": "Thrower.Run",
+                },
+            ),
+            (
+                response["success"],
+                response["severity"],
+                response["code"],
+                response["data"]["status"],
+                response["data"]["exception"],
+            ),
+            msg=f"async runtime failure channels mismatch: {response!r}",
+        )
+
+    def test_run_script_runtime_exception_is_structured_and_redacted(self) -> None:
+        bridge_envelope = {
+            "success": False,
+            "severity": "error",
+            "code": "EDITOR_CTRL_RUN_SCRIPT_RUNTIME",
+            "message": "run_script: Run() threw a runtime exception.",
+            "data": {
+                "stdout": "before\n",
+                "exception": {
+                    "type": "System.InvalidOperationException",
+                    "message": "failed at <wsl-path>",
+                    "short_stack": "at PrefabSentinelTempScript.Run()",
+                },
+                "path_hints": [
+                    {
+                        "detected_path": "/mnt/c/project/Assets/Scene.unity",
+                        "windows_path": "C:\\project\\Assets\\Scene.unity",
+                        "asset_relative_path": "Assets/Scene.unity",
+                        "application_data_path": "Application.dataPath + \"/Scene.unity\"",
+                    }
+                ],
+            },
+            "diagnostics": [],
+        }
+        with patch.object(mcp_tools_editor_exec, "send_action", return_value=bridge_envelope):
+            response = mcp_tools_editor_exec.editor_run_script(
+                code=self._SNIPPET,
+                confirm=True,
+                change_reason="capture runtime exception",
+            )
+
+        self.assertEqual(
+            (
+                "System.InvalidOperationException",
+                "failed at <wsl-path>",
+                "Assets/Scene.unity",
+            ),
+            (
+                response["data"]["exception"]["type"],
+                response["data"]["exception"]["message"],
+                response["data"]["path_hints"][0]["asset_relative_path"],
+            ),
+            msg=f"runtime exception channel mismatch: {response!r}",
+        )
+        self.assertNotIn("/mnt/c/project", str(response["data"]["exception"]))
 
 
 class EditorRunScriptDefaultsTests(unittest.TestCase):

@@ -18,9 +18,6 @@ namespace PrefabSentinel
                 return BuildError("EDITOR_CTRL_CONSOLE_NOT_ACTIVE",
                     "Console log capture is not active. Enable Editor Bridge to start capturing.");
 
-            // Issue #117 / H-3: reject unsupported classification filter
-            // values before we touch the buffer. Filter-support membership
-            // is owned by the Unity-free ``ConsoleLogEntryPredicate``.
             string classificationFilter = string.IsNullOrEmpty(request.classification_filter)
                 ? "all"
                 : request.classification_filter;
@@ -30,9 +27,6 @@ namespace PrefabSentinel
                     "classification_filter must be one of: "
                     + string.Join(", ", ConsoleLogEntryPredicate.SupportedClassificationFilters));
 
-            // Issue #239: phase filter — same gating shape as the
-            // classification filter so unsupported values yield a typed
-            // error before the buffer walk.
             string phaseFilter = string.IsNullOrEmpty(request.phase_filter)
                 ? "all"
                 : request.phase_filter;
@@ -42,23 +36,33 @@ namespace PrefabSentinel
                     "phase_filter must be one of: "
                     + string.Join(", ", ConsoleLogEntryPredicate.SupportedPhaseFilters));
 
-            // Issue #113 / #131 / H-3: ordering keyword, opaque continuation
-            // token, and the max-entries bound are validated up front by the
-            // Unity-free ``ConsoleCaptureRequestValidator`` so an invalid
-            // request short-circuits before the buffer walk.
+            long highestSequence = ConsoleLogBuffer.PeekHighestIngestedSequenceId();
             ConsoleCaptureValidation validation = ConsoleCaptureRequestValidator.Validate(
                 request.order,
                 request.cursor,
                 request.max_entries,
-                ConsoleLogBuffer.PeekHighestIngestedSequenceId(),
-                ConsoleLogBuffer.DefaultCapacity);
+                highestSequence,
+                ConsoleLogBuffer.DefaultCapacity,
+                request.since_sequence,
+                request.since_request_id);
             if (!validation.Success)
                 return BuildError(validation.ErrorCode, validation.ErrorMessage);
+
+            bool requestIdSelectorActive = ConsoleCaptureRequestValidator.UsesRequestIdSelector(
+                request.since_sequence, request.since_request_id);
+            bool knownRequestId = !requestIdSelectorActive
+                || ConsoleLogBuffer.HasRequestId(request.since_request_id);
 
             var (entries, hasMore) = ConsoleLogBuffer.GetEntries(
                 request.max_entries, request.log_type_filter, request.since_seconds,
                 classificationFilter, phaseFilter,
+                request.since_sequence, request.since_request_id,
                 validation.NewestFirst, validation.CursorAfter);
+
+            if (!knownRequestId)
+                return BuildError(
+                    "EDITOR_CTRL_UNKNOWN_REQUEST_ID",
+                    $"No console entries were captured for request id '{request.since_request_id}'.");
 
             string nextCursor = string.Empty;
             if (hasMore && entries.Count > 0)
@@ -68,7 +72,7 @@ namespace PrefabSentinel
                     System.Globalization.CultureInfo.InvariantCulture);
             }
 
-            return BuildSuccess("EDITOR_CTRL_CONSOLE_OK",
+            var response = BuildSuccess("EDITOR_CTRL_CONSOLE_OK",
                 $"Captured {entries.Count} log entries",
                 data: new EditorControlData
                 {
@@ -78,6 +82,29 @@ namespace PrefabSentinel
                     executed = true,
                     next_cursor = nextCursor,
                 });
+
+            long lowest = ConsoleLogBuffer.PeekLowestRetainedSequenceId();
+            bool sequenceSelectorDropped = request.since_sequence >= 0
+                && lowest > request.since_sequence + 1;
+            bool cursorSelectorDropped = !string.IsNullOrEmpty(request.cursor)
+                && validation.CursorAfter >= 0
+                && lowest > validation.CursorAfter + 1;
+            if (sequenceSelectorDropped || cursorSelectorDropped)
+            {
+                response.diagnostics = new[]
+                {
+                    new EditorControlDiagnostic
+                    {
+                        code = "EDITOR_CTRL_CONSOLE_BUFFER_RESET",
+                        severity = "warning",
+                        detail = "Requested console sequence is older than the retained ring-buffer window.",
+                        evidence = $"lowest_retained_sequence={lowest}",
+                    },
+                };
+                response.severity = "warning";
+            }
+
+            return response;
         }
     }
 }

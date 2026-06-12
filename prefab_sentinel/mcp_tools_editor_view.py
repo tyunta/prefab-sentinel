@@ -1,8 +1,7 @@
-"""MCP tools for read-only editor bridge operations."""
+"""MCP tools for view-oriented editor bridge operations."""
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -10,7 +9,6 @@ from mcp.server.fastmcp import FastMCP
 from prefab_sentinel.bridge_constants import CONSOLE_LOG_BUFFER_MAX_ENTRIES
 from prefab_sentinel.editor_bridge import send_action
 from prefab_sentinel.editor_bridge_builders import build_set_camera_kwargs
-from prefab_sentinel.mcp_helpers import normalize_material_value
 
 __all__ = [
     "editor_console",
@@ -26,6 +24,8 @@ __all__ = [
     "SCREENSHOT_VIEW_ALLOWLIST",
     "SCREENSHOT_ANGLE_PRESETS",
     "SCREENSHOT_ANGLE_DEFAULT",
+    "SCREENSHOT_TARGET_MODE_ALLOWLIST",
+    "SCREENSHOT_PROJECTION_ALLOWLIST",
 ]
 
 # Issue #249: canonical screenshot region preset allowlist.  Mirrors the
@@ -41,8 +41,8 @@ SCREENSHOT_CROP_ROI_PRESETS: tuple[str, ...] = (
 # Issue #84: canonical angle-preset allowlist for ``editor_screenshot``
 # target-oriented capture mode.  Mirrors ``ObjectCaptureFramingMath
 # .PresetNames`` on the bridge side; both layers enforce the same
-# six-name set so an unrecognised preset short-circuits at the
-# wrapper.  Order matches the issue body verbatim.
+# Renderer target presets plus the UI-only current-camera selector.
+# The bridge rejects current_camera on renderer captures.
 SCREENSHOT_ANGLE_PRESETS: tuple[str, ...] = (
     "front",
     "three_quarter",
@@ -50,6 +50,7 @@ SCREENSHOT_ANGLE_PRESETS: tuple[str, ...] = (
     "right",
     "left",
     "top",
+    "current_camera",
 )
 
 # Default preset used when the caller supplies ``target`` without
@@ -65,8 +66,16 @@ SCREENSHOT_ANGLE_DEFAULT: str = "three_quarter"
 # tuple; the bridge-side allowlist is identical so the two layers
 # cannot drift.
 SCREENSHOT_VIEW_ALLOWLIST: tuple[str, ...] = ("scene", "game")
-
-logger = logging.getLogger(__name__)
+SCREENSHOT_TARGET_MODE_ALLOWLIST: tuple[str, ...] = (
+    "auto",
+    "renderer",
+    "world_space_ui",
+)
+SCREENSHOT_PROJECTION_ALLOWLIST: tuple[str, ...] = (
+    "auto",
+    "perspective",
+    "orthographic",
+)
 
 # Issue #131: inclusive size bounds shared by the editor-console MCP tool
 # and the C# bridge handler.  The upper bound mirrors the published
@@ -99,6 +108,11 @@ RECOMPILE_AND_WAIT_DEFAULT_TIMEOUT_SEC = 60.0
 # slip past the client check, so both sides validate identically.
 RECOMPILE_AND_WAIT_TIMEOUT_MAX_SEC = 1800.0
 
+
+# 0 preserves the existing "use current view size" contract; positive
+# dimensions are capped before Unity allocates RenderTexture / Texture2D.
+SCREENSHOT_DIMENSION_MIN = 0
+SCREENSHOT_DIMENSION_MAX = 4096
 
 def _max_entries_out_of_range_envelope(value: int) -> dict[str, Any]:
     """Return the canonical MAX_ENTRIES_OUT_OF_RANGE envelope.
@@ -331,6 +345,74 @@ def _screenshot_target_crop_conflict_envelope(
     }
 
 
+def _screenshot_target_mode_invalid_envelope(value: str) -> dict[str, Any]:
+    return {
+        "success": False,
+        "severity": "error",
+        "code": "SCREENSHOT_TARGET_MODE_INVALID",
+        "message": (
+            f"target_mode={value!r} is not one of "
+            f"({', '.join(SCREENSHOT_TARGET_MODE_ALLOWLIST)})."
+        ),
+        "data": {
+            "supplied": value,
+            "allowed_target_modes": list(SCREENSHOT_TARGET_MODE_ALLOWLIST),
+        },
+        "diagnostics": [],
+    }
+
+
+def _screenshot_projection_invalid_envelope(value: str) -> dict[str, Any]:
+    return {
+        "success": False,
+        "severity": "error",
+        "code": "SCREENSHOT_PROJECTION_INVALID",
+        "message": (
+            f"projection={value!r} is not one of "
+            f"({', '.join(SCREENSHOT_PROJECTION_ALLOWLIST)})."
+        ),
+        "data": {
+            "supplied": value,
+            "allowed_projections": list(SCREENSHOT_PROJECTION_ALLOWLIST),
+        },
+        "diagnostics": [],
+    }
+
+
+def _screenshot_padding_ratio_invalid_envelope(value: float) -> dict[str, Any]:
+    return {
+        "success": False,
+        "severity": "error",
+        "code": "SCREENSHOT_PADDING_RATIO_INVALID",
+        "message": (
+            f"padding_ratio={value!r} must be between 0.0 and 1.0 inclusive."
+        ),
+        "data": {"supplied": value},
+        "diagnostics": [],
+    }
+
+
+def _screenshot_dimensions_out_of_range_envelope(
+    width: int, height: int,
+) -> dict[str, Any]:
+    return {
+        "success": False,
+        "severity": "error",
+        "code": "SCREENSHOT_DIMENSIONS_OUT_OF_RANGE",
+        "message": (
+            f"width={width} and height={height} must each be 0 or within "
+            f"[1, {SCREENSHOT_DIMENSION_MAX}] pixels."
+        ),
+        "data": {
+            "width": width,
+            "height": height,
+            "min": SCREENSHOT_DIMENSION_MIN,
+            "max": SCREENSHOT_DIMENSION_MAX,
+        },
+        "diagnostics": [],
+    }
+
+
 def _is_valid_pixel_rect(value: str) -> bool:
     """Return whether ``value`` is a comma-separated quadruple of
     non-negative integers (the pixel-rectangle escape hatch for
@@ -356,48 +438,26 @@ def editor_screenshot(
     crop_roi: str = "",
     target: str = "",
     angle: str = SCREENSHOT_ANGLE_DEFAULT,
+    target_mode: str = "auto",
+    padding_ratio: float = 0.10,
+    projection: str = "auto",
 ) -> dict[str, Any]:
-    """Capture a screenshot of the Unity Editor (issues #249, #259, #84).
-
-    The view selector is interpolated into the output filename on the
-    bridge side, so the wrapper enforces a positive allowlist
-    (``SCREENSHOT_VIEW_ALLOWLIST``) before any transport activity —
-    including the optional pre-screenshot refresh round-trip — to
-    prevent path-separator or traversal injection through that field
-    (issue #259).  Rejected selectors return the
-    ``SCREENSHOT_VIEW_INVALID`` envelope verbatim.
-
-    When ``crop_roi`` is empty the wrapper invokes the bridge with no
-    region field on the call kwargs and surfaces the bridge envelope
-    unchanged.  When non-empty, the value must be either one of the four
-    allowlisted preset names (``eye_left | eye_right | mouth |
-    auto_face``) or a comma-separated quadruple of non-negative integers
-    ``"x,y,w,h"``; everything else is rejected at the wrapper with the
-    ``CROP_ROI_INVALID`` envelope so the bridge is not contacted for a
-    bogus region argument.
-
-    Issue #84 target-oriented capture mode: when ``target`` is non-empty
-    the bridge re-frames the SceneView onto the named GameObject's
-    world-space bounds at the requested angle preset.  The wrapper
-    rejects:
-
-    * ``angle`` values outside ``SCREENSHOT_ANGLE_PRESETS``
-      (``SCREENSHOT_ANGLE_INVALID``);
-    * ``view`` other than ``scene`` together with ``target``
-      (``SCREENSHOT_TARGET_INVALID_VIEW``);
-    * a face-feature ``crop_roi`` preset together with ``target``
-      (``SCREENSHOT_TARGET_CROP_CONFLICT``) — pixel-rectangle
-      ``crop_roi`` together with ``target`` is supported.
-
-    All wrapper rejections short-circuit before the pre-screenshot
-    refresh.  When ``target`` is empty, ``angle`` is ignored and the
-    wrapper behaves as it did before issue #84.
-    """
-    # Issue #259: view-selector allowlist must run BEFORE the refresh
-    # round-trip so a rejected request never produces side-effecting
-    # bridge calls.
+    """Capture a screenshot of the Unity Editor (issues #249, #259, #84, #95)."""
     if view not in SCREENSHOT_VIEW_ALLOWLIST:
         return _screenshot_view_invalid_envelope(view)
+    if target_mode not in SCREENSHOT_TARGET_MODE_ALLOWLIST:
+        return _screenshot_target_mode_invalid_envelope(target_mode)
+    if projection not in SCREENSHOT_PROJECTION_ALLOWLIST:
+        return _screenshot_projection_invalid_envelope(projection)
+    if padding_ratio < 0.0 or padding_ratio > 1.0:
+        return _screenshot_padding_ratio_invalid_envelope(padding_ratio)
+    if (
+        width < SCREENSHOT_DIMENSION_MIN
+        or height < SCREENSHOT_DIMENSION_MIN
+        or width > SCREENSHOT_DIMENSION_MAX
+        or height > SCREENSHOT_DIMENSION_MAX
+    ):
+        return _screenshot_dimensions_out_of_range_envelope(width, height)
     if (
         crop_roi
         and crop_roi not in SCREENSHOT_CROP_ROI_PRESETS
@@ -405,10 +465,6 @@ def editor_screenshot(
     ):
         return _crop_roi_invalid_envelope(crop_roi)
     if target:
-        # Issue #84: the angle allowlist gate fires whenever target is
-        # supplied, including when angle still carries the wrapper
-        # default — the default is meaningful only when target is set,
-        # so a tampered default surfaces here, not on the bridge.
         if angle not in SCREENSHOT_ANGLE_PRESETS:
             return _screenshot_angle_invalid_envelope(angle)
         if view != "scene":
@@ -416,10 +472,9 @@ def editor_screenshot(
         if crop_roi in SCREENSHOT_CROP_ROI_PRESETS:
             return _screenshot_target_crop_conflict_envelope(target, crop_roi)
     if refresh:
-        try:
-            send_action(action="refresh_asset_database")
-        except Exception:
-            logger.warning("Pre-screenshot refresh failed", exc_info=True)
+        refresh_response = send_action(action="refresh_asset_database")
+        if refresh_response.get("success") is not True:
+            return refresh_response
     kwargs: dict[str, Any] = {
         "action": "capture_screenshot",
         "view": view,
@@ -431,6 +486,9 @@ def editor_screenshot(
     if target:
         kwargs["target"] = target
         kwargs["angle"] = angle
+        kwargs["target_mode"] = target_mode
+        kwargs["padding_ratio"] = padding_ratio
+        kwargs["projection"] = projection
     return send_action(**kwargs)
 
 
@@ -453,40 +511,34 @@ def editor_console(
     order: str = "newest_first",
     cursor: str = "",
     phase_filter: str = "all",
+    since_sequence: int | None = None,
+    since_request_id: str = "",
 ) -> dict[str, Any]:
-    """Capture Unity Console log entries as structured data.
-
-    Validates ``max_entries`` against the inclusive
-    ``[CONSOLE_MAX_ENTRIES_MIN, CONSOLE_MAX_ENTRIES_MAX]`` range before
-    contacting the bridge; out-of-range requests return the
-    ``MAX_ENTRIES_OUT_OF_RANGE`` envelope.  In-range requests are
-    forwarded to the bridge unchanged.
-
-    Issue #239: ``phase_filter`` selects between ``all`` (default),
-    ``edit``, ``play``, and ``build``.  The bridge validates the
-    selector and rejects unsupported values with
-    ``EDITOR_CTRL_INVALID_PHASE_FILTER``.
-    """
     if (
         max_entries < CONSOLE_MAX_ENTRIES_MIN
         or max_entries > CONSOLE_MAX_ENTRIES_MAX
     ):
         return _max_entries_out_of_range_envelope(max_entries)
 
-    return send_action(
-        action="capture_console_logs",
-        max_entries=max_entries,
-        log_type_filter=log_type_filter,
-        since_seconds=since_seconds,
-        classification_filter=classification_filter,
-        order=order,
-        cursor=cursor,
-        phase_filter=phase_filter,
-    )
+    request: dict[str, Any] = {
+        "action": "capture_console_logs",
+        "max_entries": max_entries,
+        "log_type_filter": log_type_filter,
+        "since_seconds": since_seconds,
+        "classification_filter": classification_filter,
+        "order": order,
+        "cursor": cursor,
+        "phase_filter": phase_filter,
+    }
+    if since_sequence is not None:
+        request["since_sequence"] = since_sequence
+    if since_request_id:
+        request["since_request_id"] = since_request_id
+    return send_action(**request)
 
 
 def register_editor_view_tools(server: FastMCP) -> None:
-    """Register read-only editor bridge tools on *server*."""
+    """Register view-oriented editor bridge tools on *server*."""
 
     @server.tool(name="editor_screenshot")
     def _editor_screenshot(
@@ -497,38 +549,18 @@ def register_editor_view_tools(server: FastMCP) -> None:
         crop_roi: str = "",
         target: str = "",
         angle: str = SCREENSHOT_ANGLE_DEFAULT,
+        target_mode: str = "auto",
+        padding_ratio: float = 0.10,
+        projection: str = "auto",
     ) -> dict[str, Any]:
-        """Capture a screenshot of the Unity Editor (issues #249, #84).
-
-        Args:
-            view: Which view to capture ("scene" or "game").
-            width: Capture width in pixels (0 = current window size).
-            height: Capture height in pixels (0 = current window size).
-            refresh: Refresh the asset database before capturing (default True).
-            crop_roi: Optional region selector. Empty (default) captures
-                the full frame. Otherwise the value must be either one
-                of the four named presets ``eye_left | eye_right |
-                mouth | auto_face`` or a comma-separated quadruple of
-                non-negative integers ``"x,y,w,h"``. Unrecognised values
-                are rejected pre-bridge with the ``CROP_ROI_INVALID``
-                envelope.
-            target: Hierarchy path of a GameObject. When supplied,
-                triggers the target-oriented capture mode (issue #84):
-                the SceneView is re-framed onto the target's world-
-                space AABB at the requested angle preset, the
-                screenshot is captured, then the previous SceneView
-                camera state is restored.  Empty (default) keeps the
-                pre-#84 behavior of capturing the current view.
-            angle: One of ``SCREENSHOT_ANGLE_PRESETS`` (``front`` /
-                ``three_quarter`` / ``back`` / ``right`` / ``left`` /
-                ``top``).  Meaningful only when ``target`` is supplied;
-                ignored when ``target`` is empty.  Default
-                ``three_quarter`` (issue #84 body).
-        """
+        """Capture a screenshot of the Unity Editor."""
         return editor_screenshot(
             view=view, width=width, height=height,
             refresh=refresh, crop_roi=crop_roi,
             target=target, angle=angle,
+            target_mode=target_mode,
+            padding_ratio=padding_ratio,
+            projection=projection,
         )
 
     @server.tool(name="editor_force_scene_view_refresh")
@@ -674,35 +706,7 @@ def register_editor_view_tools(server: FastMCP) -> None:
             property_name=property_name,
         )
 
-    @server.tool()
-    def editor_set_material_property(
-        hierarchy_path: str,
-        material_index: int,
-        property_name: str,
-        value: str | list | int | float,
-    ) -> dict[str, Any]:
-        """Set a shader property value on a material at runtime.
 
-        Type is determined from shader definition (not from the value format).
-
-        Args:
-            hierarchy_path: Hierarchy path to the GameObject with a Renderer.
-            material_index: Material slot index (0-based).
-            property_name: Shader property name (e.g. "_Color", "_MainTex").
-            value: Value as string. Format depends on shader type:
-                Float/Range: "0.5"
-                Int: "2"
-                Color: "[1, 0.8, 0.6, 1]" (RGBA)
-                Vector: "[0, 1, 0, 0]" (XYZW)
-                Texture: "guid:abc123..." or "path:Assets/Tex/foo.png" or "" (null)
-        """
-        return send_action(
-            action="set_material_property",
-            hierarchy_path=hierarchy_path,
-            material_index=material_index,
-            property_name=property_name,
-            property_value=normalize_material_value(value),
-        )
 
     @server.tool(name="editor_console")
     def _editor_console(
@@ -713,46 +717,10 @@ def register_editor_view_tools(server: FastMCP) -> None:
         order: str = "newest_first",
         cursor: str = "",
         phase_filter: str = "all",
+        since_sequence: int | None = None,
+        since_request_id: str = "",
     ) -> dict[str, Any]:
-        """Capture Unity Console log entries as structured data.
-
-        Issue #113 (breaking change): the default ordering is
-        ``newest_first`` and the default time window is 60.0 seconds so
-        the typical interactive debugging request returns the most
-        recent log entries first within a recent window. Pagination is
-        opaque: the bridge response carries a ``next_cursor`` field
-        whenever more matching entries remain, and the next call should
-        forward that token verbatim through ``cursor`` to continue.
-
-        Issue #131: ``max_entries`` must satisfy
-        ``CONSOLE_MAX_ENTRIES_MIN <= max_entries <= CONSOLE_MAX_ENTRIES_MAX``.
-        Out-of-range requests return the ``MAX_ENTRIES_OUT_OF_RANGE``
-        envelope without contacting the bridge.
-
-        Args:
-            max_entries: Maximum number of log entries to retrieve
-                (default: 200; inclusive upper bound is the buffered
-                ring-buffer capacity, lower bound is 1).
-            log_type_filter: Filter by log type: "all", "error", "warning", "exception".
-            since_seconds: Only entries from the last N seconds (0 = no time filter).
-                Default is 60.0 — recent-window capture for typical
-                interactive debugging.
-            classification_filter: Filter by non-fatal classification:
-                ``"all"`` (default), ``"non_fatal"`` (only entries matching the
-                bridge-side non-fatal pattern table), or ``"fatal"`` (only
-                entries that do not match it).
-            order: Ordering keyword. Accepted set: ``"newest_first"`` (default)
-                or ``"oldest_first"``. Forwarded verbatim; the bridge
-                rejects any other value.
-            cursor: Opaque continuation token from a previous call's
-                ``next_cursor`` response field. Empty (default) starts a
-                fresh page from the most recent (or oldest, depending on
-                ordering) matching entry.
-            phase_filter: Editor phase filter (issue #239). One of
-                ``"all"`` (default), ``"edit"``, ``"play"``, or
-                ``"build"``. Bridge rejects any other value with
-                ``EDITOR_CTRL_INVALID_PHASE_FILTER``.
-        """
+        """Capture Unity Console log entries as structured data."""
         return editor_console(
             max_entries=max_entries,
             log_type_filter=log_type_filter,
@@ -761,6 +729,8 @@ def register_editor_view_tools(server: FastMCP) -> None:
             order=order,
             cursor=cursor,
             phase_filter=phase_filter,
+            since_sequence=since_sequence,
+            since_request_id=since_request_id,
         )
 
     @server.tool(name="editor_refresh")
