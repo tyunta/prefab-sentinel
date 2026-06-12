@@ -151,3 +151,7 @@ void WirePlaybackControls(Slider volume, Toggle mute, Button play, UdonBehaviour
 Udon 側は `public void OnVolumeChanged()` / `public void OnMuteToggled()` /
 `public void OnPlayTapped()` を定義するだけで受信できる（payload 引数なし）。Slider の
 現在値は `OnVolumeChanged()` 内で `slider.value` を直接読む。
+
+## 関連 knowledge
+
+- [prefab-sentinel-ugui-event-wiring](./prefab-sentinel-ugui-event-wiring.md)

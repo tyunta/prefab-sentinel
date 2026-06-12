@@ -19,7 +19,7 @@ namespace PrefabSentinel
     public static partial class UnityEditorControlBridge
     {
         public const int ProtocolVersion = 1;
-        public const string BridgeVersion = "0.7.2";
+        public const string BridgeVersion = "0.7.3";
 
         /// <summary>Actions that write their response file asynchronously (not on return).</summary>
         // Issue H-8: the membership sets are owned by ``ActionRegistry`` as the

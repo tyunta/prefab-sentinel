@@ -1,7 +1,7 @@
 ---
 tool: prefab-sentinel-workflow-patterns
 version_tested: "prefab-sentinel 0.7.1"
-last_updated: 2026-05-27
+last_updated: 2026-06-07
 confidence: high
 ---
 
@@ -166,3 +166,5 @@ Inspector の表示名と SerializedProperty の `propertyPath` が食い違う 
 - **`inspect_wiring` のページネーション契約 (issue #197 仕様参照)**: Nested package prefab を多数含む対象を呼ぶと MCP token cap を超える。`cursor` は `pos:<offset>` 形式の不透明 continuation token、`page_size` は `[1, 500]` の inclusive bounds（既定 50）。`data.component_count` は常に総件数で、`data.components` は当ページのスライス。`data.next_cursor` が空文字のとき exhausted。`null_reference_count` 等の diagnostic counts はページ非依存（全ページで同じ値）。`Phase1Orchestrator.validate_all_wiring`（aggregator）は `page_size=500` で呼ぶので、aggregate scan は 1 ページに収まる前提
 - **`editor_recompile_and_wait` の三分岐 (issue #203 仕様参照)**: `CompilationPipeline.compilationFinished` イベント駆動で 3 つの結果を返す: 全アセンブリ `assemblyCompilationNotRequired` → `EDITOR_CTRL_RECOMPILE_AND_WAIT_NOOP`（同期 success、SessionState 永続化なし）/ `assemblyCompilationFinished` で `CompilerMessageType.Error` のメッセージ 1 件以上 → `EDITOR_CTRL_RECOMPILE_FAILED`（`data.errors` にメッセージ列）/ 1 件以上のアセンブリが実コンパイル → domain reload 後の `AssemblyReloadCount` 増加で `EDITOR_CTRL_RECOMPILE_AND_WAIT_OK`。mtime polling 経路は採用しない — Unity が `assemblyCompilationNotRequired` を返すケースで mtime が進まないため絶対に発火しない
 - **`editor_create_ui_element` の使い分け (issue #195 仕様参照)**: `editor_create_primitive` は `GameObject.CreatePrimitive(PrimitiveType.X)` のラッパなので Cube/Sphere/Cylinder/Capsule/Plane/Quad の 6 値のみ。uGUI 要素（Image/TextMeshProUGUI/Button/Slider/Toggle）は `editor_create_ui_element` を使う。`rect={"anchorMin": [...], "anchorMax": [...], "sizeDelta": [...]}` で RectTransform を第一級指定、`properties={"color": [r,g,b,a], "font": "<asset path>"}` で graphic を設定。TMP の `font` を省略すると `Assets/TextMesh Pro/Resources/Fonts & Materials/LiberationSans SDF.asset` を自動代入（fontSize 体感サイズの再現に必要、§3 trap 回避）
+- **known-good subtree 比較は audio/video prefab の原因切り分けに有効**: VVMW / VizVid のように内部配列・module field・child speaker の組み合わせで動く prefab は、hand-built subtree が失敗し、raw package subtree が成功することがある。この場合は media decode や Unity component 単体を疑う前に、`editor_list_children` / `inspect_wiring` / `find_unity_symbol` で known-good subtree と hand-built subtree の hierarchy・component・serialized field を比較する。成功した raw subtree を baseline として採用し、不要な再実装を避ける判断が有効。
+- **subjective gate と serialized gate を分離する**: spatial audio / video playback / animation capture のように実機視聴・目視が必要な機能では、PrefabSentinel は wiring・hierarchy・saved state の検証を担当し、音質・定位・見た目の良否は別 gate に分離する。Direct / Spatial / custom routing の A/B UI を作る場合も、PrefabSentinel の検証対象は「比較モードが同一 prefab state で再現可能に保存されていること」までに限定する。

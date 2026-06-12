@@ -135,4 +135,5 @@ UdonSharp field に入った ObjectReference は、単純な asset reference sea
 
 - [prefab-sentinel-workflow-patterns](./prefab-sentinel-workflow-patterns.md)
 - [prefab-sentinel-wiring-triage](./prefab-sentinel-wiring-triage.md)
+- [prefab-sentinel-ugui-event-wiring](./prefab-sentinel-ugui-event-wiring.md)
 - [udonsharp](./udonsharp.md)
