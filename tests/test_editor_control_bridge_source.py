@@ -60,7 +60,6 @@ UI_ELEMENT_ALLOWLIST: Path = TOOLS_DIR / "PrefabSentinel.UiElement.Allowlist.cs"
 _CS_BLOCK_COMMENT_RE = re.compile(r"/\*[\s\S]*?\*/")
 _CS_LINE_COMMENT_RE = re.compile(r"//[^\n]*")
 
-
 def _strip_cs_comments(source: str) -> str:
     return _CS_LINE_COMMENT_RE.sub("", _CS_BLOCK_COMMENT_RE.sub("", source))
 
@@ -165,7 +164,7 @@ class TestApplyPropertyValueTypes(unittest.TestCase):
     cannot be executed by this harness (spec Tier 3 Justification: no
     Unity-loadable serialized-property harness in this repo). Its
     Unity-free parsing sub-logic is exercised at Tier 1 in
-    ``tests/csharp/PropertiesPureLogicTests.cs``; these source-text
+    ``tests/csharp/PropertyValueParserTests.cs``; these source-text
     invariants pin the parser delegation and the absence of any parallel
     implementation.
     """
@@ -221,6 +220,9 @@ class TestApplyPropertyValueTypes(unittest.TestCase):
                 "the unified WritePropertyValue layer (issue #24)."
             ),
         )
+
+
+
 
 
 class TestTypedPropertyWriterSource(unittest.TestCase):
@@ -297,7 +299,7 @@ class TestHandleEditorSetPropertyQuaternion(unittest.TestCase):
     switch into the unified ``WritePropertyValue`` layer, where it must
     remain covered. Arity and unit-norm validation is owned by the
     Unity-free ``QuaternionInputValidator`` (Tier 1-covered in
-    ``tests/csharp/PropertiesPureLogicTests.cs``). These source-text
+    ``tests/csharp/QuaternionInputValidatorTests.cs``). These source-text
     invariants pin the dispatch and the delegation; the final test is a
     constant-value pin on the relocated ``NormTolerance`` literal.
     """
@@ -608,7 +610,7 @@ class TestSetPropertyGameObject(unittest.TestCase):
         # Post H-track migration the GameObject property allowlist (the
         # inline ``gameObjectAllowedProperties`` array) was extracted into
         # the Unity-free ``GameObjectPropertyAllowlist``; its membership
-        # coverage now lives in ``tests/csharp/PropertiesPureLogicTests.cs``.
+        # coverage now lives in ``tests/csharp/GameObjectPropertyAllowlistTests.cs``.
         # The handler must route through the relocated allowlist.
         source = _read(BRIDGE)
         body = _extract_method(source, "HandleEditorSetProperty")
@@ -632,7 +634,7 @@ class TestSetPropertySuggestions(unittest.TestCase):
     Post H-track migration the similarity ranking (Levenshtein distance
     + the 0.4 distance-ratio threshold) was extracted into the Unity-free
     ``SuggestionRanker``; that behavioral coverage now lives in
-    ``tests/csharp/PropertiesPureLogicTests.cs``. This source-text test
+    ``tests/csharp/SuggestionRankerTests.cs``. This source-text test
     retains the Tier 3 delegation invariant (the handler routes the
     not-found branch through ``SuggestionRanker.SuggestSimilar``).
     """
@@ -3461,6 +3463,108 @@ class ScreenshotViewAllowlistSourceTests(unittest.TestCase):
                 "Bridge-side allowlist must enumerate both "
                 "lower-case ASCII selectors (``\"scene\"`` and "
                 "``\"game\"``) so the two layers cannot drift (#259)."
+            ),
+        )
+
+
+class TestScreenshotCropBoundsSource(unittest.TestCase):
+    _SCREENSHOT = TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Screenshot.cs"
+
+    def _method_body(self, method_name: str) -> str:
+        return _extract_method(_read(self._SCREENSHOT), method_name)
+
+    def test_crop_roi_null_is_rejected_before_empty_no_crop_path(self) -> None:
+        resolver_body = self._method_body("TryResolveCropRoi")
+        null_guard_index = resolver_body.index("if (value == null)")
+        empty_guard_index = resolver_body.index("if (value.Length == 0)")
+
+        self.assertLess(null_guard_index, empty_guard_index)
+        self.assertNotIn("string.IsNullOrEmpty(value)", resolver_body)
+
+    def test_object_capture_null_crop_roi_is_rejected_before_no_crop_path(self) -> None:
+        body = self._method_body("ResolveTargetPixelCrop")
+        null_guard_index = body.index("if (request.crop_roi == null)")
+        empty_guard_index = body.index("if (request.crop_roi.Length == 0)")
+
+        self.assertLess(null_guard_index, empty_guard_index)
+        self.assertIn(
+            '"EDITOR_CTRL_CROP_ROI_INVALID"',
+            body[null_guard_index:empty_guard_index],
+        )
+
+    def test_object_capture_pixel_crop_delegates_before_render_and_read(self) -> None:
+        object_body = self._method_body("HandleObjectCaptureScreenshot")
+        crop_index = object_body.find("ResolveTargetPixelCrop(")
+        render_index = object_body.find("RenderSceneViewToTexture")
+        read_index = object_body.find("ReadPixels")
+
+        self.assertNotEqual(
+            -1,
+            crop_index,
+            msg="HandleObjectCaptureScreenshot must call ResolveTargetPixelCrop.",
+        )
+        self.assertNotEqual(
+            -1,
+            render_index,
+            msg="HandleObjectCaptureScreenshot must render through RenderSceneViewToTexture.",
+        )
+        self.assertNotEqual(
+            -1,
+            read_index,
+            msg="HandleObjectCaptureScreenshot must read pixels after crop validation.",
+        )
+        self.assertLess(
+            crop_index,
+            render_index,
+            msg=(
+                "Expected object-capture crop validation via "
+                "ResolveTargetPixelCrop before RenderSceneViewToTexture."
+            ),
+        )
+        self.assertLess(
+            crop_index,
+            read_index,
+            msg=(
+                "Expected object-capture crop validation via "
+                "ResolveTargetPixelCrop before ReadPixels."
+            ),
+        )
+
+        resolver_body = self._method_body("ResolveTargetPixelCrop")
+        self.assertIn(
+            "ScreenshotCropBounds.FitsWithinFrame",
+            resolver_body,
+            msg=(
+                "Expected ResolveTargetPixelCrop to reject non-fitting "
+                "pixel crops through ScreenshotCropBounds.FitsWithinFrame."
+            ),
+        )
+        self.assertIn(
+            '"EDITOR_CTRL_CROP_ROI_OUT_OF_BOUNDS"',
+            resolver_body,
+            msg=(
+                "Expected ResolveTargetPixelCrop to preserve the existing "
+                "EDITOR_CTRL_CROP_ROI_OUT_OF_BOUNDS envelope."
+            ),
+        )
+
+    def test_scene_pixel_crop_delegates_and_has_no_direct_edge_addition(self) -> None:
+        body = self._method_body("HandleCaptureScreenshot")
+        self.assertIn(
+            "ScreenshotCropBounds.FitsWithinFrame",
+            body,
+            msg=(
+                "Expected HandleCaptureScreenshot scene pixel crops to use "
+                "ScreenshotCropBounds.FitsWithinFrame."
+            ),
+        )
+        self.assertNotRegex(
+            body,
+            r"cropBounds\.x\s*\+\s*cropBounds\.w|"
+            r"cropBounds\.y\s*\+\s*cropBounds\.h",
+            msg=(
+                "HandleCaptureScreenshot must not use direct int edge "
+                "addition for scene pixel crop bounds."
             ),
         )
 

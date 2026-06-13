@@ -10,12 +10,39 @@ namespace PrefabSentinel
     {
         private static string NormalizeHandle(string raw)
         {
-            string normalized = (raw ?? string.Empty).Trim();
+            string normalized = raw.Trim();
             if (normalized.StartsWith("$", StringComparison.Ordinal))
             {
                 normalized = normalized.Substring(1);
             }
             return normalized.Trim();
+        }
+
+        private static bool TryNormalizeResultHandle(
+            string rawHandle,
+            string requestTarget,
+            int opIndex,
+            List<BridgeDiagnostic> diagnostics,
+            out string handle
+        )
+        {
+            handle = string.Empty;
+            if (rawHandle == null)
+            {
+                diagnostics.Add(
+                    new BridgeDiagnostic
+                    {
+                        path = requestTarget,
+                        location = $"ops[{opIndex}].result",
+                        detail = "schema_error",
+                        evidence = "result handle is null"
+                    }
+                );
+                return false;
+            }
+
+            handle = NormalizeHandle(rawHandle);
+            return true;
         }
         private static bool TryRegisterHandle(
             string rawHandle,
@@ -26,7 +53,12 @@ namespace PrefabSentinel
             List<BridgeDiagnostic> diagnostics
         )
         {
-            string handle = NormalizeHandle(rawHandle);
+            if (!TryNormalizeResultHandle(
+                    rawHandle, requestTarget, opIndex, diagnostics,
+                    out string handle))
+            {
+                return false;
+            }
             if (string.IsNullOrWhiteSpace(handle))
             {
                 return true;
@@ -55,6 +87,12 @@ namespace PrefabSentinel
         )
         {
             obj = null;
+            if (rawHandle == null)
+            {
+                error = "handle is null";
+                return false;
+            }
+
             string handle = NormalizeHandle(rawHandle);
             if (string.IsNullOrWhiteSpace(handle))
             {
@@ -142,12 +180,15 @@ namespace PrefabSentinel
         {
             parentObject = null;
             isSceneRoot = false;
-            string normalized = NormalizeHandle(rawHandle);
-            if (string.Equals(normalized, SceneHandleName, StringComparison.Ordinal))
+            if (rawHandle != null)
             {
-                error = string.Empty;
-                isSceneRoot = true;
-                return true;
+                string normalized = NormalizeHandle(rawHandle);
+                if (string.Equals(normalized, SceneHandleName, StringComparison.Ordinal))
+                {
+                    error = string.Empty;
+                    isSceneRoot = true;
+                    return true;
+                }
             }
             return TryResolveGameObjectHandle(rawHandle, handles, out parentObject, out error);
         }
@@ -343,6 +384,17 @@ namespace PrefabSentinel
             error = $"component type '{rawTypeName}' matched {matches.Count} components on '{objectPath}'";
             return false;
         }
+        private static bool IsPathInsideDirectory(string directory, string candidate)
+        {
+            if (string.IsNullOrEmpty(directory) || string.IsNullOrEmpty(candidate))
+            {
+                return false;
+            }
+
+            string root = directory.Replace('\\', '/').TrimEnd('/');
+            string path = candidate.Replace('\\', '/').TrimEnd('/');
+            return path.StartsWith(root + "/", StringComparison.OrdinalIgnoreCase);
+        }
         private static bool TryResolveAssetPath(
             string target,
             bool allowMissing,
@@ -350,8 +402,15 @@ namespace PrefabSentinel
             out string error
         )
         {
-            assetPath = (target ?? string.Empty).Trim().Replace('\\', '/');
+            assetPath = string.Empty;
             error = string.Empty;
+            if (target == null)
+            {
+                error = "target is null.";
+                return false;
+            }
+
+            assetPath = target.Trim().Replace('\\', '/');
             if (string.IsNullOrWhiteSpace(assetPath))
             {
                 error = "target is empty.";
@@ -359,26 +418,28 @@ namespace PrefabSentinel
             }
 
             string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+            string fullProjectRoot = Path.GetFullPath(projectRoot).Replace('\\', '/').TrimEnd('/');
+            string assetsRoot = Path.GetFullPath(Application.dataPath).Replace('\\', '/').TrimEnd('/');
+            string fullTarget = Path.IsPathRooted(assetPath)
+                ? Path.GetFullPath(assetPath).Replace('\\', '/').TrimEnd('/')
+                : Path.GetFullPath(Path.Combine(projectRoot, assetPath)).Replace('\\', '/').TrimEnd('/');
             if (Path.IsPathRooted(assetPath))
             {
-                string fullTarget = Path.GetFullPath(assetPath).Replace('\\', '/');
-                string fullProjectRoot = projectRoot.Replace('\\', '/');
-                string prefix = fullProjectRoot + "/";
-                if (!fullTarget.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                if (!IsPathInsideDirectory(fullProjectRoot, fullTarget))
                 {
                     error = "absolute target must be inside the Unity project root.";
                     return false;
                 }
-                assetPath = fullTarget.Substring(prefix.Length);
             }
 
-            assetPath = assetPath.Replace('\\', '/');
-            if (!assetPath.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
+            if (!IsPathInsideDirectory(assetsRoot, fullTarget))
             {
                 error = "target must resolve to an Assets/ path.";
                 return false;
             }
-            if (!allowMissing && !File.Exists(Path.Combine(projectRoot, assetPath)))
+
+            assetPath = "Assets/" + fullTarget.Substring(assetsRoot.Length).TrimStart('/');
+            if (!allowMissing && !File.Exists(fullTarget))
             {
                 error = "target file was not found.";
                 return false;
@@ -403,7 +464,13 @@ namespace PrefabSentinel
         {
             component = null;
             error = string.Empty;
-            string fileId = (rawFileId ?? string.Empty).Trim();
+            if (rawFileId == null)
+            {
+                error = "file_id is null";
+                return false;
+            }
+
+            string fileId = rawFileId.Trim();
             if (string.IsNullOrEmpty(fileId))
             {
                 error = "file_id is empty";
@@ -635,6 +702,12 @@ namespace PrefabSentinel
             result = null;
             error = string.Empty;
 
+            if (hierarchyPath == null)
+            {
+                error = "hierarchy path is null";
+                return false;
+            }
+
             if (string.IsNullOrWhiteSpace(hierarchyPath))
             {
                 result = root;
@@ -655,7 +728,6 @@ namespace PrefabSentinel
                 return true;
             }
 
-            // Build list of available children for diagnostics.
             List<string> available = new List<string>();
             CollectChildPaths(root.transform, "", available, 32);
             string hint = available.Count > 0
@@ -692,7 +764,13 @@ namespace PrefabSentinel
             hierarchySelector = string.Empty;
             error = string.Empty;
 
-            string raw = (selector ?? string.Empty).Trim();
+            if (selector == null)
+            {
+                error = "component selector is null";
+                return false;
+            }
+
+            string raw = selector.Trim();
             if (string.IsNullOrWhiteSpace(raw))
             {
                 error = "component selector is empty";

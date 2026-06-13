@@ -52,7 +52,8 @@ namespace PrefabSentinel
         {
             label = string.Empty;
             bounds = null;
-            if (string.IsNullOrEmpty(value)) return true;
+            if (value == null) return false;
+            if (value.Length == 0) return true;
             foreach (var preset in SupportedScreenshotPresets)
             {
                 if (preset == value)
@@ -92,7 +93,13 @@ namespace PrefabSentinel
             readW = frameWidth;
             readH = frameHeight;
             pixelRectApplied = null;
-            if (string.IsNullOrEmpty(request.crop_roi))
+            if (request.crop_roi == null)
+            {
+                return BuildError(
+                    "EDITOR_CTRL_CROP_ROI_INVALID",
+                    "crop_roi is null.");
+            }
+            if (request.crop_roi.Length == 0)
                 return null;
 
             if (!TryResolveCropRoi(request.crop_roi, out string roiLabel, out CropBoundsEntry roiBounds)
@@ -106,10 +113,9 @@ namespace PrefabSentinel
                     + "at the wrapper when target is supplied).");
             }
 
-            if (roiBounds.w <= 0 || roiBounds.h <= 0
-                || roiBounds.x > frameWidth || roiBounds.y > frameHeight
-                || roiBounds.w > frameWidth - roiBounds.x
-                || roiBounds.h > frameHeight - roiBounds.y)
+            if (!ScreenshotCropBounds.FitsWithinFrame(
+                    roiBounds.x, roiBounds.y, roiBounds.w, roiBounds.h,
+                    frameWidth, frameHeight))
             {
                 return BuildError(
                     "EDITOR_CTRL_CROP_ROI_OUT_OF_BOUNDS",
@@ -294,9 +300,9 @@ namespace PrefabSentinel
                     if (cropLabel == "pixel_rect")
                     {
                         if (cropBounds == null
-                            || cropBounds.w <= 0 || cropBounds.h <= 0
-                            || cropBounds.x + cropBounds.w > w
-                            || cropBounds.y + cropBounds.h > h)
+                            || !ScreenshotCropBounds.FitsWithinFrame(
+                                cropBounds.x, cropBounds.y,
+                                cropBounds.w, cropBounds.h, w, h))
                         {
                             return BuildError(
                                 "EDITOR_CTRL_CROP_ROI_OUT_OF_BOUNDS",
