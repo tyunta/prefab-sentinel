@@ -225,5 +225,5 @@
 | ツール | 区分 | 簡潔説明 | 関連 issue | 種別 |
 |--------|------|----------|-----------|------|
 | `editor_add_udonsharp_component` | editor_udonsharp | `UdonSharpBehaviour` 派生コンポーネントを upsert（追加 or 既存再利用）し初期フィールドを 1 トランザクションで適用。audit pair 必須 | #119 | write |
-| `editor_set_udonsharp_field` | editor_udonsharp | `UdonSharpBehaviour` の指定フィールドを書き込み、`CopyProxyToUdon` で backing と同期。`values_json` で string/int/float/bool/VRCUrl whole-array writes 対応。audit pair 必須 | #102, #119 | write |
+| `editor_set_udonsharp_field` | editor_udonsharp | `UdonSharpBehaviour` の指定フィールドを書き込み、`CopyProxyToUdon` で backing と同期。`values_json` で string/int/float/bool/VRCUrl/ObjectReference whole-array writes 対応。audit pair 必須 | #102, #119 | write |
 | `editor_wire_persistent_listener` | editor_udonsharp | `UnityEventTools.AddStringPersistentListener` の高水準ラッパー（string モード、ノーオプ可）。audit pair 必須 | #119 | write |

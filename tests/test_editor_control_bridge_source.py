@@ -1817,6 +1817,19 @@ class TestUdonSharpArrayWriterSource(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, body)
 
+    def test_array_writer_supports_object_reference_elements(self) -> None:
+        source = self._array_writer_source()
+        support_body = _extract_method(source, "IsSupportedUdonArrayElementType")
+        element_body = _extract_method(source, "WriteUdonSharpArrayElement")
+        self.assertIn("typeof(UnityEngine.Object).IsAssignableFrom(elementType)", support_body)
+        for token in (
+            "ResolveObjectReference(element.Value)",
+            "elementType.IsAssignableFrom(obj.GetType())",
+            "item.objectReferenceValue = obj",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, element_body)
+
 
 class TestWirePersistentListenerHandler(unittest.TestCase):
     """Issue #119 — ``HandleWirePersistentListener`` must use the
@@ -2561,6 +2574,24 @@ class TestConsoleLogBufferRetrievalAppliesPhaseFilter(unittest.TestCase):
         body = _extract_method(source, "HandleCaptureConsoleLogs")
         self.assertIn("EDITOR_CTRL_CONSOLE_BUFFER_RESET", body)
         self.assertIn("ConsoleLogBuffer.PeekLowestRetainedSequenceId()", body)
+
+    def test_run_from_paths_scopes_dispatch_by_derived_transport_request_id(self) -> None:
+        source = _read(BRIDGE)
+        run_body = _extract_method(source, "RunFromPaths")
+        dispatch_body = _extract_method(source, "DispatchAction")
+        self.assertIn("DeriveTransportRequestId(requestPath)", run_body)
+        self.assertIn("ConsoleLogBuffer.BeginRequest(transportRequestId)", run_body)
+        self.assertIn("ConsoleLogBuffer.EndRequest(transportRequestId)", run_body)
+        self.assertIn("string transportRequestId", dispatch_body)
+
+    def test_run_script_persists_transport_request_id_for_delayed_logs(self) -> None:
+        source = _read(BRIDGE)
+        run_body = _extract_method(source, "HandleRunScript")
+        poll_body = _extract_method(source, "RunScriptPollFrame")
+        entry_body = _extract_class_body(source, "PersistedEntry")
+        self.assertIn("public string transportRequestId", entry_body)
+        self.assertIn("transportRequestId = transportRequestId", run_body)
+        self.assertIn("ConsoleLogBuffer.BeginRequest(entry.transportRequestId)", poll_body)
 
 
 class TestHandleCaptureConsoleLogsValidatesPhaseFilter(unittest.TestCase):

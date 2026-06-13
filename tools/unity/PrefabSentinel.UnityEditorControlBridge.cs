@@ -19,7 +19,7 @@ namespace PrefabSentinel
     public static partial class UnityEditorControlBridge
     {
         public const int ProtocolVersion = 1;
-        public const string BridgeVersion = "0.7.1";
+        public const string BridgeVersion = "0.7.2";
 
         /// <summary>Actions that write their response file asynchronously (not on return).</summary>
         // Issue H-8: the membership sets are owned by ``ActionRegistry`` as the
@@ -470,61 +470,80 @@ namespace PrefabSentinel
 
         // ── Entry Point ──
 
+private static string DeriveTransportRequestId(string requestPath)
+        {
+            string fileName = Path.GetFileName(requestPath);
+            const string requestSuffix = ".request.json";
+            if (fileName.EndsWith(requestSuffix, StringComparison.Ordinal))
+                return fileName.Substring(0, fileName.Length - requestSuffix.Length);
+            return Path.GetFileNameWithoutExtension(fileName);
+        }
+
         public static void RunFromPaths(string requestPath, string responsePath)
         {
-            EditorControlRequest request;
+            string transportRequestId = DeriveTransportRequestId(requestPath);
+            ConsoleLogBuffer.BeginRequest(transportRequestId);
             try
             {
-                string json = File.ReadAllText(requestPath);
-                request = JsonUtility.FromJson<EditorControlRequest>(json);
-            }
-            catch (Exception ex)
-            {
-                WriteResponse(responsePath, BuildError(
-                    "EDITOR_CTRL_PROTOCOL_ERROR",
-                    $"Failed to read request: {ex.Message}"));
-                return;
-            }
+                EditorControlRequest request;
+                try
+                {
+                    string json = File.ReadAllText(requestPath);
+                    request = JsonUtility.FromJson<EditorControlRequest>(json);
+                }
+                catch (Exception ex)
+                {
+                    WriteResponse(responsePath, BuildError(
+                        "EDITOR_CTRL_PROTOCOL_ERROR",
+                        $"Failed to read request: {ex.Message}"));
+                    return;
+                }
 
-            if (request.protocol_version != ProtocolVersion)
-            {
-                WriteResponse(responsePath, BuildError(
-                    "EDITOR_CTRL_PROTOCOL_VERSION",
-                    $"Bridge protocol v{request.protocol_version}, required v{ProtocolVersion}. " +
-                    "Update Bridge: copy tools/unity/*.cs from prefab-sentinel to Assets/Editor/PrefabSentinel/"));
-                return;
-            }
+                if (request.protocol_version != ProtocolVersion)
+                {
+                    WriteResponse(responsePath, BuildError(
+                        "EDITOR_CTRL_PROTOCOL_VERSION",
+                        $"Bridge protocol v{request.protocol_version}, required v{ProtocolVersion}. " +
+                        "Update Bridge: copy tools/unity/*.cs from prefab-sentinel to Assets/Editor/PrefabSentinel/"));
+                    return;
+                }
 
-            // Issue #51: the whole action switch runs inside a dispatch-level
-            // exception boundary. Any handler exception not caught internally
-            // yields a typed ``EDITOR_CTRL_HANDLER_EXCEPTION`` envelope naming
-            // the dispatched action, with the exception redacted to its type
-            // name only — no stack trace crosses the MCP boundary. The full
-            // detail is mirrored to the Unity console for local triage. The
-            // watch-loop generic catch is no longer the sink for handler
-            // exceptions; ``EDITOR_BRIDGE_ERROR`` remains only for genuine
-            // watch-loop / pre-dispatch failures.
-            EditorControlResponse response;
-            try
-            {
-                response = DispatchAction(request, requestPath, responsePath);
-            }
-            catch (Exception handlerEx)
-            {
-                Debug.LogWarning(
-                    $"[PrefabSentinel] RunFromPaths: handler for action "
-                    + $"'{request.action}' threw: {handlerEx}");
-                response = BuildError(
-                    "EDITOR_CTRL_HANDLER_EXCEPTION",
-                    $"editor_control action '{request.action}' failed: the "
-                    + $"handler raised {handlerEx.GetType().Name}. "
-                    + "Inspect the Unity console for the full exception detail "
-                    + "and retry once the underlying cause is resolved.",
-                    new EditorControlData { action = request.action });
-            }
+                // Issue #51: the whole action switch runs inside a dispatch-level
+                // exception boundary. Any handler exception not caught internally
+                // yields a typed ``EDITOR_CTRL_HANDLER_EXCEPTION`` envelope naming
+                // the dispatched action, with the exception redacted to its type
+                // name only - no stack trace crosses the MCP boundary. The full
+                // detail is mirrored to the Unity console for local triage. The
+                // watch-loop generic catch is no longer the sink for handler
+                // exceptions; ``EDITOR_BRIDGE_ERROR`` remains only for genuine
+                // watch-loop / pre-dispatch failures.
+                EditorControlResponse response;
+                try
+                {
+                    response = DispatchAction(
+                        request, requestPath, responsePath, transportRequestId);
+                }
+                catch (Exception handlerEx)
+                {
+                    Debug.LogWarning(
+                        $"[PrefabSentinel] RunFromPaths: handler for action "
+                        + $"'{request.action}' threw: {handlerEx}");
+                    response = BuildError(
+                        "EDITOR_CTRL_HANDLER_EXCEPTION",
+                        $"editor_control action '{request.action}' failed: the "
+                        + $"handler raised {handlerEx.GetType().Name}. "
+                        + "Inspect the Unity console for the full exception detail "
+                        + "and retry once the underlying cause is resolved.",
+                        new EditorControlData { action = request.action });
+                }
 
-            if (response != null)
-                WriteResponse(responsePath, response);
+                if (response != null)
+                    WriteResponse(responsePath, response);
+            }
+            finally
+            {
+                ConsoleLogBuffer.EndRequest(transportRequestId);
+            }
         }
 
         // Issue #51: the action dispatch switch, extracted so the
@@ -533,7 +552,10 @@ namespace PrefabSentinel
         // response file asynchronously (the dispatcher then skips the
         // synchronous WriteResponse).
         private static EditorControlResponse DispatchAction(
-            EditorControlRequest request, string requestPath, string responsePath)
+            EditorControlRequest request,
+            string requestPath,
+            string responsePath,
+            string transportRequestId)
         {
             EditorControlResponse response;
             switch (request.action)
@@ -673,7 +695,8 @@ namespace PrefabSentinel
                     response = EditorReflectHandler.Handle(request);
                     break;
                 case "run_script":
-                    response = HandleRunScript(request, responsePath);
+                    response = HandleRunScript(
+                        request, responsePath, transportRequestId);
                     break;
                 case "editor_recompile_and_wait":
                     response = HandleRecompileAndWait(request, responsePath);
@@ -1150,6 +1173,7 @@ namespace PrefabSentinel
                 public string tempId = string.Empty;
                 public string stuckKey = string.Empty;
                 public string tempDirAbs = string.Empty;
+                public string transportRequestId = string.Empty;
             }
 
             [Serializable]
@@ -1164,7 +1188,7 @@ namespace PrefabSentinel
                 = new Dictionary<string, PersistedEntry>();
 
             // Each entry's poll delegate. Populated lazily by the handler
-            // that owns the entry.  Lost across domain reload; the
+            // that owns the entry. Lost across domain reload; the
             // post-reload resumer re-installs them.
             private static readonly Dictionary<string, EditorApplication.CallbackFunction>
                 ActiveCallbacks =
@@ -1211,7 +1235,7 @@ namespace PrefabSentinel
             /// Issue #203: register a per-frame poll without mirroring the
             /// entry to SessionState. Used by ``HandleRecompileAndWait``'s
             /// pre-reload phase, which observes pipeline events on the
-            /// current AppDomain — those subscriptions cannot survive a
+            /// current AppDomain - those subscriptions cannot survive a
             /// domain reload, so persisting the entry would resurrect a
             /// stale state on the new domain. The handler escalates to
             /// ``Register`` only when at least one assembly compiled and

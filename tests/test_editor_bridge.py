@@ -173,6 +173,7 @@ class TestSendAction(unittest.TestCase):
         """Simulate Unity writing a response file."""
         with tempfile.TemporaryDirectory() as tmpdir:
             watch_dir = Path(tmpdir)
+            seen_request_id: dict[str, str] = {}
 
             def fake_send():
                 """Write a fake response before polling starts."""
@@ -182,6 +183,7 @@ class TestSendAction(unittest.TestCase):
                 for f in watch_dir.iterdir():
                     if f.name.endswith(".request.json"):
                         base = f.name.replace(".request.json", "")
+                        seen_request_id["value"] = base
                         resp_path = watch_dir / f"{base}.response.json"
                         resp = {
                             "protocol_version": PROTOCOL_VERSION,
@@ -222,6 +224,7 @@ class TestSendAction(unittest.TestCase):
                 self.assertTrue(result["success"])
                 self.assertEqual("EDITOR_CTRL_SCREENSHOT_OK", result["code"])
                 self.assertEqual("/tmp/test.png", result["data"]["output_path"])
+                self.assertEqual(seen_request_id["value"], result["request_id"])
 
 
 class TestEditorBridgeSupportedActions(unittest.TestCase):
