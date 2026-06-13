@@ -131,6 +131,8 @@ namespace PrefabSentinel
             // Issue #113: monotonic ingestion sequence assigned by the
             // bridge under the capture lock.
             public long sequence_id = 0;
+            public string request_id = string.Empty;
+            public string phase = string.Empty;
         }
 
         [Serializable]
@@ -385,6 +387,8 @@ namespace PrefabSentinel
                         Test_EditorCtrl_CaptureConsoleLogs_FiltersByClassification),
                     ("EditorCtrl_CaptureConsoleLogs_RejectsUnsupportedClassification",
                         Test_EditorCtrl_CaptureConsoleLogs_RejectsUnsupportedClassification),
+                    ("EditorCtrl_CaptureConsoleLogs_FiltersByRequestId",
+                        Test_EditorCtrl_CaptureConsoleLogs_FiltersByRequestId),
                     // Phase 1 issue #113 — ordering + opaque cursor pagination
                     ("EditorCtrl_CaptureConsoleLogs_DefaultOrderIsNewestFirst",
                         Test_EditorCtrl_CaptureConsoleLogs_DefaultOrderIsNewestFirst),
@@ -738,6 +742,33 @@ namespace PrefabSentinel
                 // documented Directory.Delete failure modes are absorbed; any
                 // other exception is left to propagate so the test fails
                 // loudly instead of hiding a real bug.
+                try { Directory.Delete(tempDir, true); }
+                catch (DirectoryNotFoundException) { /* already gone */ }
+                catch (IOException) { /* file in use; best-effort cleanup */ }
+                catch (UnauthorizedAccessException) { /* fs refused; best-effort cleanup */ }
+            }
+        }
+
+        private static EditorControlResponseReadback RunEditorControlBridgeWithStem(
+            string requestJson, string requestStem)
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "PrefabSentinelTests_EC_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+            string requestPath = Path.Combine(tempDir, requestStem + ".json");
+            string responsePath = Path.Combine(tempDir, "response.json");
+            try
+            {
+                File.WriteAllText(requestPath, requestJson);
+                UnityEditorControlBridge.RunFromPaths(requestPath, responsePath);
+
+                if (!File.Exists(responsePath))
+                    return null;
+
+                string responseJson = File.ReadAllText(responsePath);
+                return JsonUtility.FromJson<EditorControlResponseReadback>(responseJson);
+            }
+            finally
+            {
                 try { Directory.Delete(tempDir, true); }
                 catch (DirectoryNotFoundException) { /* already gone */ }
                 catch (IOException) { /* file in use; best-effort cleanup */ }
@@ -3019,6 +3050,77 @@ namespace PrefabSentinel
                 "capture_console_logs", "\"classification_filter\":\"bogus\""));
             return AssertEditorControlFailure(name, resp,
                 "EDITOR_CTRL_INVALID_CLASSIFICATION_FILTER") ?? Pass(name);
+        }
+
+        private static TestCaseResult Test_EditorCtrl_CaptureConsoleLogs_FiltersByRequestId(
+            string prefabPath, string materialPath)
+        {
+            const string name = "EditorCtrl_CaptureConsoleLogs_FiltersByRequestId";
+
+            RestartConsoleCaptureForTest();
+            string requestId = "ReqCapture" + Guid.NewGuid().ToString("N");
+            string otherRequestId = "OtherReq" + Guid.NewGuid().ToString("N");
+            string marker = "RequestIdCapture_" + Guid.NewGuid().ToString("N");
+            string otherMarker = marker + "_other";
+
+            UnityEditorControlBridge.ConsoleLogBuffer.BeginRequest(otherRequestId);
+            try
+            {
+                Debug.LogWarning(otherMarker);
+            }
+            finally
+            {
+                UnityEditorControlBridge.ConsoleLogBuffer.EndRequest(otherRequestId);
+            }
+
+            UnityEditorControlBridge.ConsoleLogBuffer.BeginRequest(requestId);
+            try
+            {
+                Debug.Log(marker + "_log");
+                Debug.LogWarning(marker + "_warning");
+                Debug.LogError(marker + "_error");
+            }
+            finally
+            {
+                UnityEditorControlBridge.ConsoleLogBuffer.EndRequest(requestId);
+            }
+
+            string extra = "\"max_entries\":20,"
+                         + "\"log_type_filter\":\"all\","
+                         + "\"since_seconds\":0,"
+                         + "\"since_request_id\":\"" + EscapeJsonString(requestId) + "\","
+                         + "\"order\":\"oldest_first\"";
+            var resp = RunEditorControlBridge(BuildEditorControlRequest(
+                "capture_console_logs", extra));
+            var err = AssertEditorControlSuccess(name, resp);
+            if (err != null) return err;
+            if (resp.data.entries == null)
+                return Fail(name, "Console capture response omitted entries.");
+
+            bool sawLog = false;
+            bool sawWarning = false;
+            bool sawError = false;
+            foreach (var entry in resp.data.entries)
+            {
+                if (entry == null) continue;
+                if (entry.request_id != requestId)
+                    return Fail(name,
+                        $"Request-id filter returned entry for '{entry.request_id}' instead of '{requestId}'.");
+                string message = entry.message ?? string.Empty;
+                if (message.IndexOf(otherMarker, StringComparison.Ordinal) >= 0)
+                    return Fail(name, "Request-id filter leaked an entry from another request.");
+                if (message.IndexOf(marker + "_log", StringComparison.Ordinal) >= 0
+                    && entry.log_type == "Log") sawLog = true;
+                if (message.IndexOf(marker + "_warning", StringComparison.Ordinal) >= 0
+                    && entry.log_type == "Warning") sawWarning = true;
+                if (message.IndexOf(marker + "_error", StringComparison.Ordinal) >= 0
+                    && entry.log_type == "Error") sawError = true;
+            }
+
+            if (!sawLog || !sawWarning || !sawError)
+                return Fail(name,
+                    $"Expected request-scoped Debug.Log/Warning/Error entries; got log={sawLog}, warning={sawWarning}, error={sawError}.");
+            return Pass(name);
         }
 
         // ----------------------------------------------------------------

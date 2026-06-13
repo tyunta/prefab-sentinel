@@ -91,6 +91,39 @@ namespace PrefabSentinel
                 urlProp.stringValue = element.Value;
                 return null;
             }
+            if (elementType != null
+                && typeof(UnityEngine.Object).IsAssignableFrom(elementType))
+            {
+                if (element.Kind != JsonArrayScalarKind.String)
+                    return ArrayElementParseError(index, fieldName, "ObjectReference string");
+                var (obj, refError) = ResolveObjectReference(element.Value);
+                if (obj == null)
+                {
+                    return BuildError(
+                        "EDITOR_CTRL_UDON_SET_FIELD_ARRAY_ELEMENT_PARSE",
+                        refError ?? $"values_json[{index}] object reference could not be resolved.",
+                        new EditorControlData
+                        {
+                            field_name = fieldName,
+                            element_index = index,
+                            expected_type = elementType.FullName ?? elementType.Name,
+                        });
+                }
+                if (!elementType.IsAssignableFrom(obj.GetType()))
+                {
+                    return BuildError(
+                        "EDITOR_CTRL_UDON_SET_FIELD_ARRAY_ELEMENT_PARSE",
+                        $"values_json[{index}] resolved {obj.GetType().FullName} is not assignable to {elementType.FullName}.",
+                        new EditorControlData
+                        {
+                            field_name = fieldName,
+                            element_index = index,
+                            expected_type = elementType.FullName ?? elementType.Name,
+                        });
+                }
+                item.objectReferenceValue = obj;
+                return null;
+            }
             switch (item.propertyType)
             {
                 case SerializedPropertyType.String:
@@ -145,8 +178,12 @@ namespace PrefabSentinel
             {
                 return true;
             }
-            return elementType.FullName != null
-                && elementType.FullName.EndsWith("VRCUrl", StringComparison.Ordinal);
+            if (elementType.FullName != null
+                && elementType.FullName.EndsWith("VRCUrl", StringComparison.Ordinal))
+            {
+                return true;
+            }
+            return typeof(UnityEngine.Object).IsAssignableFrom(elementType);
         }
 
         private static EditorControlResponse ArrayElementParseError(

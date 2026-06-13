@@ -278,6 +278,10 @@ def send_action(
             # transport tag for response-shape callers and pinned by tests.
             payload.setdefault("bridge_mode", "editor")
             payload.setdefault("action", action)
+            # Issue #94: this is the file-transport request id used by the
+            # bridge to tag log entries captured during the request. Expose it
+            # so callers can pass it to editor_console(since_request_id=...).
+            payload.setdefault("request_id", request_id)
 
             # Cache bridge version from response
             global _last_bridge_version

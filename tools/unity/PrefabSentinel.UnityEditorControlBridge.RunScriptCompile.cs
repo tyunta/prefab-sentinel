@@ -499,7 +499,9 @@ namespace PrefabSentinel
         }
 
         private static EditorControlResponse HandleRunScript(
-            EditorControlRequest request, string responsePath)
+            EditorControlRequest request,
+            string responsePath,
+            string transportRequestId)
         {
             // Issue #108 / #64 / #68: this handler is async / frame-driven.
             // It stages the temp .cs file and hands the compile observation
@@ -550,7 +552,7 @@ namespace PrefabSentinel
             catch (Exception stagingEx)
             {
                 // Issue #216: the envelope returned to the MCP client
-                // must not embed exception text — Unity exception
+                // must not embed exception text - Unity exception
                 // strings can leak host filesystem paths and OS-level
                 // details.  Route the original exception detail to the
                 // Unity console only; the MCP client receives a fixed
@@ -581,6 +583,7 @@ namespace PrefabSentinel
                 tempId = tempId,
                 stuckKey = stuckKey,
                 tempDirAbs = tempDirAbs,
+                transportRequestId = transportRequestId,
             };
 
             // Compile did not produce a runnable assembly within budget:
@@ -711,7 +714,7 @@ namespace PrefabSentinel
             Console.SetOut(buffer);
             EditorControlResponse response;
             Output.BeginCapture();
-            ConsoleLogBuffer.BeginRequest(tempId);
+            ConsoleLogBuffer.BeginRequest(entry.transportRequestId);
             try
             {
                 object returnObject = runMethod.Invoke(null, null);
@@ -800,7 +803,7 @@ namespace PrefabSentinel
             }
             finally
             {
-                ConsoleLogBuffer.EndRequest(tempId);
+                ConsoleLogBuffer.EndRequest(entry.transportRequestId);
                 Console.SetOut(originalOut);
             }
 

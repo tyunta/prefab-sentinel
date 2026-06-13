@@ -96,12 +96,13 @@ namespace PrefabSentinel
                 tempId = id,
                 stuckKey = stuckKey,
                 tempDirAbs = tempDirAbs,
+                transportRequestId = id,
             };
 
             // Issue #68: hand the compile observation to the shared
             // ``ScheduleCompileBarrier`` mechanism.  A snippet that fails
-            // to compile records a compile-failure response — carrying the
-            // real compiler diagnostics — to the completion artefact
+            // to compile records a compile-failure response - carrying the
+            // real compiler diagnostics - to the completion artefact
             // before the compile-poll budget elapses; a snippet that
             // compiles leaves the persisted entry in place so the startup
             // resumer installs ``RunScriptPollFrame`` post-reload.
@@ -120,8 +121,8 @@ namespace PrefabSentinel
             // ScheduleCompileBarrier, so a rejected ``AssetDatabase.Refresh``
             // resolves before this method returns.  A schedule failure must
             // surface as the synchronous error envelope on the request's own
-            // response path — not as an ``accepted`` envelope the caller
-            // would then have to poll — so it is recorded here and returned.
+            // response path - not as an ``accepted`` envelope the caller
+            // would then have to poll - so it is recorded here and returned.
             bool scheduleFailed = false;
 
             ScheduleCompileBarrier(new CompileBarrierSpec
