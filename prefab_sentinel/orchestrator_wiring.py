@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import cast
 
 from prefab_sentinel.contracts import (
     Diagnostic,
@@ -232,7 +233,7 @@ def _diagnostic_wire_rows(
     diagnostics: list[Diagnostic],
     default_severity: Severity,
 ) -> list[dict[str, object]]:
-    return ToolResponse(
+    wire_diagnostics = ToolResponse(
         success=True,
         severity=default_severity,
         code="INSPECT_WIRING_DIAGNOSTICS",
@@ -240,6 +241,7 @@ def _diagnostic_wire_rows(
         data={},
         diagnostics=diagnostics,
     ).to_dict()["diagnostics"]
+    return cast(list[dict[str, object]], wire_diagnostics)
 
 
 def _diagnostic_severity(diag: Diagnostic, default_severity: Severity) -> str:
