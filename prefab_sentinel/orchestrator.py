@@ -269,6 +269,8 @@ class Phase1Orchestrator:
         page_size: int = orchestrator_wiring.INSPECT_WIRING_PAGE_SIZE_DEFAULT,
         summary_only: bool = False,
         script_filter: str = "",
+        include_out_of_scope_diagnostics: bool = False,
+        diagnostics_baseline: orchestrator_wiring.DiagnosticsBaseline | None = None,
     ) -> ToolResponse:
         """Analyze MonoBehaviour field wiring in a Prefab or Scene (read-only).
 
@@ -287,6 +289,11 @@ class Phase1Orchestrator:
                 list to entries whose recorded script class matches the
                 supplied identifier. Bare class names and dotted
                 fully-qualified names are both accepted (issue #227).
+            include_out_of_scope_diagnostics: When ``script_filter`` is
+                active, include diagnostic rows for non-matching
+                components in ``data.out_of_scope_diagnostics``.
+            diagnostics_baseline: Optional project-level diagnostics
+                baseline used to classify current wiring diagnostics.
 
         Returns:
             ``ToolResponse`` with ``data.components`` carrying a single
@@ -298,6 +305,8 @@ class Phase1Orchestrator:
             self.prefab_variant, self.reference_resolver, target_path,
             udon_only=udon_only, cursor=cursor, page_size=page_size,
             summary_only=summary_only, script_filter=script_filter,
+            include_out_of_scope_diagnostics=include_out_of_scope_diagnostics,
+            diagnostics_baseline=diagnostics_baseline,
         )
 
     def validate_all_wiring(
@@ -521,6 +530,7 @@ class Phase1Orchestrator:
         snapshot_save: str = "",
         snapshot_diff: str = "",
         refresh_guid_index: bool = False,
+        diagnostics_baseline: orchestrator_validation.DiagnosticsBaseline | None = None,
     ) -> ToolResponse:
         """Scan for broken GUID/fileID references in scope (read-only).
 
@@ -551,6 +561,7 @@ class Phase1Orchestrator:
             snapshot_save=snapshot_save,
             snapshot_diff=snapshot_diff,
             refresh_guid_index=refresh_guid_index,
+            diagnostics_baseline=diagnostics_baseline,
         )
 
     def validate_runtime(

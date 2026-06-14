@@ -60,7 +60,6 @@ def _build_three_class_fixture(root: Path) -> Path:
     scripts = assets / "Scripts"
     scripts.mkdir(parents=True, exist_ok=True)
 
-    # Empty .cs files; the wiring scan only reads their stem.
     (scripts / "FooBehaviour.cs").write_text("", encoding="utf-8")
     _write_meta(scripts / "FooBehaviour.cs.meta", _FOO_SCRIPT_GUID)
     (scripts / "BarBehaviour.cs").write_text("", encoding="utf-8")
@@ -68,19 +67,125 @@ def _build_three_class_fixture(root: Path) -> Path:
     (scripts / "BazBehaviour.cs").write_text("", encoding="utf-8")
     _write_meta(scripts / "BazBehaviour.cs.meta", _BAZ_SCRIPT_GUID)
 
-    # Base.prefab: a single GameObject carrying three MonoBehaviours,
-    # one per script GUID.
     base_text = (
         YAML_HEADER
         + make_gameobject("10", "Root", ["20", "30", "40", "50"])
         + make_transform("20", "10")
         + make_monobehaviour("30", "10", guid=_FOO_SCRIPT_GUID)
-        + make_monobehaviour("40", "10", guid=_BAR_SCRIPT_GUID)
+        + make_monobehaviour(
+            "40",
+            "10",
+            guid=_BAR_SCRIPT_GUID,
+            fields={"targetRef": "{fileID: 0}"},
+        )
         + make_monobehaviour("50", "10", guid=_BAZ_SCRIPT_GUID)
     )
     base_path = assets / "Base.prefab"
     base_path.write_text(base_text, encoding="utf-8")
     _write_meta(assets / "Base.prefab.meta", "11111111111111111111111111111111")
+    return base_path
+
+
+def _build_mixed_severity_fixture(root: Path) -> Path:
+    assets = root / "Assets"
+    scripts = assets / "Scripts"
+    scripts.mkdir(parents=True, exist_ok=True)
+
+    (scripts / "FooBehaviour.cs").write_text("", encoding="utf-8")
+    _write_meta(scripts / "FooBehaviour.cs.meta", _FOO_SCRIPT_GUID)
+    (scripts / "BarBehaviour.cs").write_text("", encoding="utf-8")
+    _write_meta(scripts / "BarBehaviour.cs.meta", _BAR_SCRIPT_GUID)
+
+    base_text = (
+        YAML_HEADER
+        + make_gameobject("10", "Root", ["20", "30", "40"])
+        + make_transform("20", "10")
+        + make_monobehaviour(
+            "30",
+            "10",
+            guid=_FOO_SCRIPT_GUID,
+            fields={"targetRef": "{fileID: 0}"},
+        )
+        + make_monobehaviour(
+            "40",
+            "10",
+            guid=_BAR_SCRIPT_GUID,
+            fields={"missingRef": "{fileID: 999}"},
+        )
+    )
+    base_path = assets / "MixedSeverity.prefab"
+    base_path.write_text(base_text, encoding="utf-8")
+    _write_meta(assets / "MixedSeverity.prefab.meta", "33333333333333333333333333333333")
+    return base_path
+
+
+def _build_duplicate_reference_fixture(root: Path) -> Path:
+    assets = root / "Assets"
+    scripts = assets / "Scripts"
+    scripts.mkdir(parents=True, exist_ok=True)
+
+    (scripts / "FooBehaviour.cs").write_text("", encoding="utf-8")
+    _write_meta(scripts / "FooBehaviour.cs.meta", _FOO_SCRIPT_GUID)
+
+    base_text = (
+        YAML_HEADER
+        + make_gameobject("10", "Root", ["20", "30"])
+        + make_transform("20", "10")
+        + make_monobehaviour(
+            "30",
+            "10",
+            guid=_FOO_SCRIPT_GUID,
+            fields={
+                "firstA": "{fileID: 60}",
+                "firstB": "{fileID: 60}",
+                "secondA": "{fileID: 70}",
+                "secondB": "{fileID: 70}",
+            },
+        )
+        + make_gameobject("60", "TargetA", ["61"])
+        + make_transform("61", "60")
+        + make_gameobject("70", "TargetB", ["71"])
+        + make_transform("71", "70")
+    )
+    base_path = assets / "DuplicateRefs.prefab"
+    base_path.write_text(base_text, encoding="utf-8")
+    _write_meta(assets / "DuplicateRefs.prefab.meta", "22222222222222222222222222222222")
+    return base_path
+
+
+def _build_mixed_duplicate_reference_fixture(root: Path) -> Path:
+    assets = root / "Assets"
+    scripts = assets / "Scripts"
+    scripts.mkdir(parents=True, exist_ok=True)
+
+    (scripts / "FooBehaviour.cs").write_text("", encoding="utf-8")
+    _write_meta(scripts / "FooBehaviour.cs.meta", _FOO_SCRIPT_GUID)
+
+    base_text = (
+        YAML_HEADER
+        + make_gameobject("10", "Root", ["20", "30", "40"])
+        + make_transform("20", "10")
+        + make_monobehaviour(
+            "30",
+            "10",
+            guid=_FOO_SCRIPT_GUID,
+            fields={
+                "sameA": "{fileID: 60}",
+                "sameB": "{fileID: 60}",
+            },
+        )
+        + make_monobehaviour(
+            "40",
+            "10",
+            guid=_FOO_SCRIPT_GUID,
+            fields={"crossA": "{fileID: 60}"},
+        )
+        + make_gameobject("60", "TargetA", ["61"])
+        + make_transform("61", "60")
+    )
+    base_path = assets / "MixedDuplicateRefs.prefab"
+    base_path.write_text(base_text, encoding="utf-8")
+    _write_meta(assets / "MixedDuplicateRefs.prefab.meta", "44444444444444444444444444444444")
     return base_path
 
 
@@ -156,6 +261,225 @@ class InspectWiringFilterAndSummaryTests(unittest.TestCase):
         ):
             self.assertIn(key, resp.data)
 
+    def test_clean_filter_reports_out_of_scope_counts_without_raising_severity(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            base = _build_three_class_fixture(root)
+            resp = self._run(root, base, script_filter="FooBehaviour")
+
+        self.assertEqual(
+            (True, Severity.INFO, 0, 1, 1),
+            (
+                resp.success,
+                resp.severity,
+                resp.data.get("diagnostic_counts", {}).get("filtered", {}).get("total"),
+                resp.data.get("diagnostic_counts", {}).get("out_of_scope", {}).get("total"),
+                len(resp.diagnostics),
+            ),
+        )
+        self.assertEqual([], resp.data.get("filtered_diagnostics"))
+        self.assertNotIn("out_of_scope_diagnostics", resp.data)
+
+    def test_clean_filter_opt_in_includes_out_of_scope_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            base = _build_three_class_fixture(root)
+            resp = self._run(
+                root,
+                base,
+                script_filter="FooBehaviour",
+                include_out_of_scope_diagnostics=True,
+            )
+
+        self.assertEqual(
+            (1, "Null reference: Root.targetRef"),
+            (
+                len(resp.data.get("out_of_scope_diagnostics", [])),
+                resp.data.get("out_of_scope_diagnostics", [{}])[0].get("code"),
+            ),
+        )
+
+    def test_unfiltered_opt_in_does_not_create_out_of_scope_partition(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            base = _build_three_class_fixture(root)
+            resp = self._run(root, base, include_out_of_scope_diagnostics=True)
+
+        self.assertEqual((Severity.WARNING, 1), (resp.severity, len(resp.diagnostics)))
+        self.assertNotIn("diagnostic_counts", resp.data)
+        self.assertNotIn("filtered_diagnostics", resp.data)
+        self.assertNotIn("out_of_scope_diagnostics", resp.data)
+
+    def test_warning_filter_classifies_filtered_diagnostic_as_known(self) -> None:
+        from prefab_sentinel.diagnostics_baseline import DiagnosticsBaseline
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            base = _build_three_class_fixture(root)
+            known_key = f"inspect_wiring:null_reference:{base}:40:targetRef"
+            baseline = DiagnosticsBaseline(
+                known_diagnostics=(known_key,),
+                path=str(root / "config" / "diagnostics_baseline.json"),
+                status="loaded",
+            )
+            resp = self._run(
+                root,
+                base,
+                script_filter="BarBehaviour",
+                diagnostics_baseline=baseline,
+            )
+
+        self.assertEqual(
+            (Severity.WARNING, 1, 1, 0, [known_key]),
+            (
+                resp.severity,
+                resp.data.get("diagnostic_counts", {}).get("filtered", {}).get("total"),
+                resp.data.get("diagnostics_baseline", {}).get("known_count"),
+                resp.data.get("diagnostics_baseline", {}).get("new_count"),
+                [
+                    item["key"]
+                    for item in resp.data.get("diagnostics_baseline", {}).get("known", [])
+                ],
+            ),
+        )
+
+
+    def test_filtered_warning_keeps_warning_severity_with_out_of_scope_error(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            base = _build_mixed_severity_fixture(root)
+            resp = self._run(root, base, script_filter="FooBehaviour")
+
+        self.assertEqual(
+            {
+                "response": (True, Severity.WARNING),
+                "filtered_counts": {"total": 1, "warning": 1, "error": 0},
+                "out_of_scope_counts": {"total": 1, "warning": 0, "error": 1},
+                "filtered_rows": [("warning", "Null reference: Root.targetRef")],
+            },
+            {
+                "response": (resp.success, resp.severity),
+                "filtered_counts": {
+                    "total": resp.data["diagnostic_counts"]["filtered"]["total"],
+                    "warning": resp.data["diagnostic_counts"]["filtered"]["warning"],
+                    "error": resp.data["diagnostic_counts"]["filtered"]["error"],
+                },
+                "out_of_scope_counts": {
+                    "total": resp.data["diagnostic_counts"]["out_of_scope"]["total"],
+                    "warning": resp.data["diagnostic_counts"]["out_of_scope"]["warning"],
+                    "error": resp.data["diagnostic_counts"]["out_of_scope"]["error"],
+                },
+                "filtered_rows": [
+                    (row["severity"], row["code"])
+                    for row in resp.data.get("filtered_diagnostics", [])
+                ],
+            },
+        )
+
+
+    def test_duplicate_reference_keys_include_target_file_id(self) -> None:
+        from prefab_sentinel.diagnostics_baseline import DiagnosticsBaseline
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            base = _build_duplicate_reference_fixture(root)
+            baseline = DiagnosticsBaseline(
+                known_diagnostics=(),
+                path=str(root / "config" / "diagnostics_baseline.json"),
+                status="loaded",
+            )
+            pv, rr = _services_for_root(root)
+            with patch(
+                "prefab_sentinel.orchestrator_wiring.collect_project_guid_index",
+                return_value={
+                    _FOO_SCRIPT_GUID: root / "Assets" / "Scripts" / "FooBehaviour.cs",
+                },
+            ):
+                resp = inspect_wiring(
+                    pv,
+                    rr,
+                    target_path=str(base),
+                    diagnostics_baseline=baseline,
+                )
+
+        duplicate_keys = [
+            item["key"]
+            for item in resp.data.get("diagnostics_baseline", {}).get("new", [])
+            if item["data"]["category"] == "duplicate_reference"
+        ]
+        self.assertEqual(
+            [
+                f"inspect_wiring:duplicate_reference:{base}:30:same-component:fileID:60",
+                f"inspect_wiring:duplicate_reference:{base}:30:same-component:fileID:70",
+            ],
+            duplicate_keys,
+        )
+
+
+    def test_duplicate_reference_keys_include_branch_kind_for_same_target(self) -> None:
+        from prefab_sentinel.diagnostics_baseline import DiagnosticsBaseline
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            base = _build_mixed_duplicate_reference_fixture(root)
+            baseline = DiagnosticsBaseline(
+                known_diagnostics=(),
+                path=str(root / "config" / "diagnostics_baseline.json"),
+                status="loaded",
+            )
+            pv, rr = _services_for_root(root)
+            with patch(
+                "prefab_sentinel.orchestrator_wiring.collect_project_guid_index",
+                return_value={
+                    _FOO_SCRIPT_GUID: root / "Assets" / "Scripts" / "FooBehaviour.cs",
+                },
+            ):
+                resp = inspect_wiring(
+                    pv,
+                    rr,
+                    target_path=str(base),
+                    diagnostics_baseline=baseline,
+                )
+
+        duplicate_keys = [
+            item["key"]
+            for item in resp.data.get("diagnostics_baseline", {}).get("new", [])
+            if item["data"]["category"] == "duplicate_reference"
+        ]
+        self.assertEqual(
+            [
+                f"inspect_wiring:duplicate_reference:{base}:30:same-component:fileID:60",
+                f"inspect_wiring:duplicate_reference:{base}:30:cross-component:fileID:60",
+            ],
+            duplicate_keys,
+        )
+
+    def test_summary_filter_keeps_counts_without_detail_arrays(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            base = _build_three_class_fixture(root)
+            resp = self._run(
+                root,
+                base,
+                script_filter="FooBehaviour",
+                summary_only=True,
+            )
+
+        self.assertNotIn("components", resp.data)
+        self.assertNotIn("filtered_diagnostics", resp.data)
+        self.assertNotIn("out_of_scope_diagnostics", resp.data)
+        self.assertEqual(
+            {"filtered_total": 0, "out_of_scope_total": 1},
+            {
+                "filtered_total": resp.data.get("diagnostic_counts", {})
+                .get("filtered", {})
+                .get("total"),
+                "out_of_scope_total": resp.data.get("diagnostic_counts", {})
+                .get("out_of_scope", {})
+                .get("total"),
+            },
+        )
+
     def test_bare_class_name_filter_narrows_to_one_component(self) -> None:
         """Issue #227 — a bare class name filter matches one of three
         scripts; the surviving entry is the FooBehaviour one and the
@@ -196,7 +520,14 @@ class InspectWiringFilterAndSummaryTests(unittest.TestCase):
         self.assertEqual(Severity.WARNING, resp.severity)
         self.assertEqual("INSPECT_WIRING_EMPTY_FILTER_RESULT", resp.code)
         self.assertIn("NonexistentBehaviour", resp.message)
-        self.assertEqual(0, resp.data["component_count"])
+        self.assertEqual(
+            (0, 0, 0),
+            (
+                resp.data["component_count"],
+                resp.data["diagnostic_counts"]["filtered"]["total"],
+                resp.data["diagnostic_counts"]["out_of_scope"]["total"],
+            ),
+        )
 
     def test_summary_mode_suppresses_slice_and_pagination(self) -> None:
         """Issue #227 — summary mode keeps the response under the token

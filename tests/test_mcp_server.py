@@ -13,6 +13,7 @@ from typing import Any
 from unittest.mock import MagicMock, call, patch
 
 from prefab_sentinel.contracts import Severity, ToolResponse
+from prefab_sentinel.diagnostics_baseline import DiagnosticsBaseline
 from prefab_sentinel.mcp_helpers import KNOWLEDGE_URI_PREFIX
 from prefab_sentinel.mcp_server import _resolve_knowledge_dir, create_server
 from prefab_sentinel.mcp_validation import require_change_reason
@@ -262,9 +263,8 @@ class TestToolsCatalogDoc(unittest.TestCase):
         registered = len(_run(create_server().list_tools()))
         header = self._TOOLS_MD.read_text(encoding="utf-8").splitlines()[2]
         match = re.search(r"現在 (\d+) 件", header)
-        self.assertIsNotNone(
-            match,
-            msg="docs/tools.md header must state the tool count as '現在 N 件'.",
+        assert match is not None, (
+            "docs/tools.md header must state the tool count as '現在 N 件'."
         )
         self.assertEqual(
             registered,
@@ -621,6 +621,9 @@ class TestOrchestratorTools(unittest.TestCase):
             # With no caller list and a path that has no
             # config/ignore_guids.txt the merged tuple is empty.
             ignore_asset_guids=(),
+            diagnostics_baseline=DiagnosticsBaseline(
+                known_diagnostics=(), path=None, status="not_loaded_no_project_root"
+            ),
         )
 
     def test_validate_refs_forwards_refresh_guid_index_flag(self) -> None:
@@ -679,6 +682,10 @@ class TestOrchestratorTools(unittest.TestCase):
             page_size=50,
             summary_only=False,
             script_filter="",
+            include_out_of_scope_diagnostics=False,
+            diagnostics_baseline=DiagnosticsBaseline(
+                known_diagnostics=(), path=None, status="not_loaded_no_project_root"
+            ),
         )
 
     def test_inspect_wiring_forwards_summary_and_filter_flags(self) -> None:
@@ -709,6 +716,81 @@ class TestOrchestratorTools(unittest.TestCase):
         kwargs = mock_orch.inspect_wiring.call_args.kwargs
         self.assertEqual(True, kwargs["summary_only"])
         self.assertEqual("AvatarSync", kwargs["script_filter"])
+
+    def test_inspect_wiring_forwards_out_of_scope_flag_and_project_baseline(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            project_root = Path(raw)
+            config_dir = project_root / "config"
+            config_dir.mkdir()
+            (config_dir / "diagnostics_baseline.json").write_text(
+                json.dumps({
+                    "version": 1,
+                    "known_diagnostics": [
+                        "inspect_wiring:null_reference:Assets/Base.prefab:40:targetRef",
+                    ],
+                }),
+                encoding="utf-8",
+            )
+            mock_resp = MagicMock()
+            mock_resp.to_dict.return_value = {
+                "success": True,
+                "severity": "info",
+                "data": {"component_count": 3},
+            }
+            mock_orch = MagicMock()
+            mock_orch.inspect_wiring.return_value = mock_resp
+
+            server = self._make_server()
+
+            with (
+                patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_cls,
+                patch.object(ProjectSession, "project_root", project_root),
+            ):
+                mock_cls.default.return_value = mock_orch
+                _run(server.call_tool(
+                    "inspect_wiring",
+                    {
+                        "asset_path": "Assets/Base.prefab",
+                        "script_filter": "FooBehaviour",
+                        "include_out_of_scope_diagnostics": True,
+                    },
+                ))
+
+        kwargs = mock_orch.inspect_wiring.call_args.kwargs
+        baseline = kwargs["diagnostics_baseline"]
+        self.assertEqual(
+            (True, "loaded", ("inspect_wiring:null_reference:Assets/Base.prefab:40:targetRef",)),
+            (
+                kwargs["include_out_of_scope_diagnostics"],
+                baseline.status,
+                baseline.known_diagnostics,
+            ),
+        )
+
+    def test_inspect_wiring_invalid_project_baseline_returns_error_before_orchestration(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            project_root = Path(raw)
+            config_dir = project_root / "config"
+            config_dir.mkdir()
+            (config_dir / "diagnostics_baseline.json").write_text("{", encoding="utf-8")
+            mock_orch = MagicMock()
+
+            server = self._make_server()
+
+            with (
+                patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_cls,
+                patch.object(ProjectSession, "project_root", project_root),
+            ):
+                mock_cls.default.return_value = mock_orch
+                _, result = _run(server.call_tool(
+                    "inspect_wiring",
+                    {"asset_path": "Assets/Base.prefab"},
+                ))
+
+        self.assertEqual(
+            (False, "DIAGNOSTICS_BASELINE_INVALID", 0),
+            (result["success"], result["code"], mock_orch.inspect_wiring.call_count),
+        )
 
     def test_inspect_wiring_delegates_cursor_and_page_size(self) -> None:
         # Issue #197: the MCP tool surface forwards the opaque continuation
@@ -747,6 +829,10 @@ class TestOrchestratorTools(unittest.TestCase):
             page_size=25,
             summary_only=False,
             script_filter="",
+            include_out_of_scope_diagnostics=False,
+            diagnostics_baseline=DiagnosticsBaseline(
+                known_diagnostics=(), path=None, status="not_loaded_no_project_root"
+            ),
         )
 
     def test_find_referencing_assets_delegates(self) -> None:

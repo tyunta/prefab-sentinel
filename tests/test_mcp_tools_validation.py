@@ -340,6 +340,70 @@ class ValidationToolForwardingTests(unittest.TestCase):
             ),
         )
 
+    def test_project_baseline_is_forwarded_with_scope_ignore_guids(self) -> None:
+        with _ScopedSessionFixture(self) as (scope, orch_mock, validate_refs):
+            project_root = scope.parents[1]
+            baseline_path = project_root / "config" / "diagnostics_baseline.json"
+            baseline_path.parent.mkdir(parents=True, exist_ok=True)
+            baseline_path.write_text(
+                '{"version": 1, "known_diagnostics": ["known-key"]}',
+                encoding="utf-8",
+            )
+            file_path = scope / IGNORE_GUIDS_RELATIVE_PATH
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            file_path.write_text(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+                encoding="utf-8",
+            )
+
+            response = validate_refs(scope=str(scope))
+
+        kwargs = orch_mock.validate_refs.call_args.kwargs
+        forwarded_baseline = kwargs.get("diagnostics_baseline")
+        self.assertEqual(
+            (
+                ("known-key",),
+                str(baseline_path),
+                "loaded",
+                ("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",),
+                True,
+            ),
+            (
+                None if forwarded_baseline is None else forwarded_baseline.known_diagnostics,
+                None if forwarded_baseline is None else forwarded_baseline.path,
+                None if forwarded_baseline is None else forwarded_baseline.status,
+                kwargs["ignore_asset_guids"],
+                any(
+                    diag.get("code") == "IGNORE_GUIDS_FILE_LOADED"
+                    for diag in response["diagnostics"]
+                ),
+            ),
+        )
+
+    def test_invalid_project_baseline_returns_error_before_orchestration(self) -> None:
+        with _ScopedSessionFixture(self) as (scope, orch_mock, validate_refs):
+            project_root = scope.parents[1]
+            baseline_path = project_root / "config" / "diagnostics_baseline.json"
+            baseline_path.parent.mkdir(parents=True, exist_ok=True)
+            baseline_path.write_text("{", encoding="utf-8")
+
+            response = validate_refs(scope=str(scope))
+
+        self.assertEqual(
+            (
+                "DIAGNOSTICS_BASELINE_INVALID",
+                "error",
+                {"path": str(baseline_path), "read_only": True},
+                0,
+            ),
+            (
+                response["code"],
+                response["severity"],
+                response["data"],
+                orch_mock.validate_refs.call_count,
+            ),
+        )
+
     def test_caller_list_and_file_entries_are_unioned(self) -> None:
         with _ScopedSessionFixture(self) as (scope, orch_mock, validate_refs):
             file_path = scope / IGNORE_GUIDS_RELATIVE_PATH

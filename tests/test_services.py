@@ -179,14 +179,8 @@ class ReferenceResolverServiceTests(unittest.TestCase):
             # truncated hint is in data, not diagnostics
             self.assertIn("--max-diagnostics", response.data["truncated_hint"])
             self.assertEqual(1, response.data["truncated_diagnostics"])
-            self.assertGreaterEqual(
-                response.data["broken_occurrences"],
-                response.data["broken_count"],
-                msg=(
-                    "occurrence count must be >= unique broken-reference count: "
-                    f"{response.data!r}"
-                ),
-            )
+            self.assertEqual(2, response.data["broken_count"])
+            self.assertEqual(2, response.data["broken_occurrences"])
 
     def test_scan_broken_references_honors_ignore_asset_guids(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -462,6 +456,28 @@ PrefabInstance:
             result2 = service.collect_scope_files(assets)
             self.assertEqual(result1, result2)  # Same cached list
 
+
+    def test_collect_scope_files_skips_symlinked_unity_text_assets(self) -> None:
+        if not hasattr(os, "symlink"):
+            self.skipTest("platform does not support os.symlink")
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            assets = root / "Assets"
+            assets.mkdir()
+            prefab = assets / "Real.prefab"
+            prefab.write_text("%YAML 1.1\n", encoding="utf-8")
+            outside = root / "Outside.prefab"
+            outside.write_text("outside content must not be scanned\n", encoding="utf-8")
+            symlinked_prefab = assets / "Escape.prefab"
+            try:
+                os.symlink(outside, symlinked_prefab)
+            except OSError as exc:
+                self.skipTest(f"symlink creation not permitted: {exc}")
+
+            service = ReferenceResolverService(project_root=root)
+            self.assertEqual([prefab], service.collect_scope_files(assets))
+
     def test_preload_and_read_populates_cache(self) -> None:
         """preload_texts + read_text uses _text_cache."""
         with tempfile.TemporaryDirectory() as td:
@@ -714,6 +730,7 @@ guid: 1111111111111111111111111111aaaa
                 "broken_occurrences": 0,
                 "categories": {"missing_asset": 0, "missing_local_id": 0},
                 "categories_occurrences": {"missing_asset": 0, "missing_local_id": 0},
+                "diagnostic_keys": [],
                 "ignored_missing_asset_occurrences": 0,
                 "ignored_missing_asset_unique_count": 0,
                 "returned_diagnostics": 0,
@@ -809,6 +826,27 @@ guid: 2222222222222222222222222222bbbb
                 "broken_occurrences": 2,
                 "categories": {"missing_asset": 1, "missing_local_id": 1},
                 "categories_occurrences": {"missing_asset": 1, "missing_local_id": 1},
+                "diagnostic_keys": [
+                    {
+                        "key": f"missing_asset_guid:{MISSING_GUID}",
+                        "severity": "error",
+                        "message": "missing_asset",
+                        "data": {
+                            "category": "missing_asset",
+                            "guid": MISSING_GUID,
+                        },
+                    },
+                    {
+                        "key": "missing_local_id_local:Assets/Variant.prefab:999999",
+                        "severity": "error",
+                        "message": "missing_local_id",
+                        "data": {
+                            "category": "missing_local_id",
+                            "source_path": "Assets/Variant.prefab",
+                            "file_id": "999999",
+                        },
+                    },
+                ],
                 "ignored_missing_asset_occurrences": 0,
                 "ignored_missing_asset_unique_count": 0,
                 "returned_diagnostics": 0,
@@ -884,6 +922,36 @@ guid: 2222222222222222222222222222bbbb
             message_match=r"does not exist",
             data={
                 "scope": "Assets/Does/Not/Exist",
+                "read_only": True,
+            },
+        )
+
+
+    def test_scan_broken_references_scope_status_error_emits_ref404(self) -> None:
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            scope_path = root / "Assets"
+            scope_path.mkdir()
+            svc = ReferenceResolverService(project_root=root)
+            original_exists = type(scope_path).exists
+
+            def raise_for_scope(self):
+                if self == scope_path:
+                    raise OSError("permission denied")
+                return original_exists(self)
+
+            with patch.object(type(scope_path), "exists", raise_for_scope):
+                response = svc.scan_broken_references("Assets")
+
+        assert_error_envelope(
+            response,
+            code="REF404",
+            severity="error",
+            message_match=r"does not exist",
+            data={
+                "scope": "Assets",
                 "read_only": True,
             },
         )

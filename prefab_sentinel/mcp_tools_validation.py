@@ -6,6 +6,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+from prefab_sentinel.diagnostics_baseline import load_diagnostics_baseline
 from prefab_sentinel.ignore_guids_io import (
     IGNORE_GUIDS_RELATIVE_PATH,
     load_ignore_guids_file,
@@ -96,8 +97,11 @@ def register_validation_tools(server: FastMCP, session: ProjectSession) -> None:
                 when the file fired.  Malformed entries surface through
                 the existing service-layer ``REF001`` envelope.
         """
-        orch = session.get_orchestrator()
         resolved_scope = session.resolve_scope(scope) or scope
+        baseline_result = load_diagnostics_baseline(session.project_root)
+        if baseline_result.error is not None:
+            return baseline_result.error.to_dict()
+        orch = session.get_orchestrator()
 
         # Issue #237: union the caller-supplied list with the
         # conventional file's entries.  Loader returns ``[]`` when the
@@ -116,6 +120,7 @@ def register_validation_tools(server: FastMCP, session: ProjectSession) -> None:
             snapshot_diff=snapshot_diff,
             refresh_guid_index=refresh_guid_index,
             ignore_asset_guids=merged,
+            diagnostics_baseline=baseline_result.baseline,
         )
         payload = resp.to_dict()
 
@@ -146,6 +151,7 @@ def register_validation_tools(server: FastMCP, session: ProjectSession) -> None:
         page_size: int = INSPECT_WIRING_PAGE_SIZE_DEFAULT,
         summary_only: bool = False,
         script_filter: str = "",
+        include_out_of_scope_diagnostics: bool = False,
     ) -> dict[str, Any]:
         """Analyze MonoBehaviour field wiring in a Prefab or Scene.
 
@@ -176,7 +182,12 @@ def register_validation_tools(server: FastMCP, session: ProjectSession) -> None:
                 ``[1, 500]``; default ``50``).
             summary_only: Return only diagnostic counts.
             script_filter: Class-name filter (bare or dotted).
+            include_out_of_scope_diagnostics: Include diagnostic rows
+                for components outside ``script_filter``.
         """
+        baseline_result = load_diagnostics_baseline(session.project_root)
+        if baseline_result.error is not None:
+            return baseline_result.error.to_dict()
         orch = session.get_orchestrator()
         resp = orch.inspect_wiring(
             target_path=asset_path,
@@ -185,6 +196,8 @@ def register_validation_tools(server: FastMCP, session: ProjectSession) -> None:
             page_size=page_size,
             summary_only=summary_only,
             script_filter=script_filter,
+            include_out_of_scope_diagnostics=include_out_of_scope_diagnostics,
+            diagnostics_baseline=baseline_result.baseline,
         )
         return resp.to_dict()
 

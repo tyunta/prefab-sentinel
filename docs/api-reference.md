@@ -96,6 +96,7 @@ wire `severity` の決定規則（issue #4）: `Diagnostic` dataclass は任意�
 | `EDITOR_CTRL_UDON_ADD_PROGRAM_NOT_COMPILED` | `editor_add_udonsharp_component` の対象型の UdonSharpProgramAsset は存在するが未コンパイルの場合（issue #46）。`severity="error"`。メッセージは `editor_recompile` で再コンパイルする次手順を明示する。 |
 | `EDITOR_CTRL_HANDLER_EXCEPTION` | Bridge dispatch の action switch 内で handler が内部捕捉しなかった例外を送出した場合（issue #51）。`severity="error"`。envelope は dispatch された action 名を構造化フィールド `data.action` として運び（メッセージ文字列だけに埋めない）、例外は型名のみに redact する（メッセージにスタックトレースを載せない）。`EDITOR_BRIDGE_ERROR` は真の watch-loop / pre-dispatch 失敗専用に残す。 |
 | `IGNORE_GUIDS_FILE_LOADED` | `validate_refs` MCP ツールの `<scope>/config/ignore_guids.txt` auto-load が寄与した場合に `diagnostics` に付与される info diagnostic（issue #237）。`data.path` に解決後の絶対パス、`data.count` に取り込まれた件数を含める。ファイルが存在しない・読み取り不能の場合は発火しない。 |
+| `DIAGNOSTICS_BASELINE_INVALID` | project root の `config/diagnostics_baseline.json` が invalid JSON または schema 不一致だった場合。`validate_refs` / `inspect_wiring` MCP wrapper は orchestrator を呼ぶ前に `success=false`, `severity="error"` で停止し、`data.path` と `data.read_only=true` を返す。 |
 | `EDITOR_CTRL_INVALID_ORDER` | `editor_console` の `order` が `newest_first` / `oldest_first` 以外の場合（issue #113）。`severity="error"`、メッセージで受理可能な値を列挙。 |
 | `EDITOR_CTRL_INVALID_CURSOR` | `editor_console` の `cursor` が現在の取り込み済み範囲外、もしくは Bridge のフォーマット (`seq:<long>`) に合致しない場合（issue #113）。`severity="error"`、メッセージで原因を明示。 |
 | `EDITOR_CTRL_SET_PROP_QUATERNION_NOT_NORMALIZED` | `editor_set_property` で `SerializedPropertyType.Quaternion` に与えた xyzw 4 要素のノルムが `1.0 ± 1e-4` の許容範囲外だった場合（issue #111）。`severity="error"`、メッセージに供給値とノルムを明示。Bridge 側では自動 normalize しない。Component 数が 4 でない（例えば 3 要素の euler を渡した）場合は既存の `EDITOR_CTRL_SET_PROP_TYPE_MISMATCH` で 4 要素必須を案内。 |
@@ -139,6 +140,43 @@ wire `severity` の決定規則（issue #4）: `Diagnostic` dataclass は任意�
 | `EDITOR_CTRL_ANIMATION_CLIP_NOT_FOUND` / `..._TARGET_NOT_FOUND` / `..._WRITE_FAILED` / `..._APPLY_FAILED` | AnimationClip 検査・編集系の Bridge 失敗（issue #243）。`severity="error"`。`_NOT_FOUND` は clip asset 不在、`_TARGET_NOT_FOUND` は curve の binding 先 GameObject 不在、`_WRITE_FAILED` / `_APPLY_FAILED` は AssetDatabase 書き込み / Animator 反映の失敗。 |
 | `EDITOR_CTRL_FORCE_REFRESH_FAILED` | `force_scene_view_refresh` が player-loop tick 内で例外を観測した場合（issue #242）。`severity="error"`、Bridge 側で発火。 |
 | `INSPECT_HIERARCHY_RECT_PARENT_UNRESOLVED` | `inspect_hierarchy` で stretched anchor を持つ RectTransform の親 rect chain が未解決の場合（issue #238）。`severity="warning"`、`Diagnostic.detail` に当該識別子。 |
+
+## diagnostics baseline metadata
+
+`validate_refs` と `inspect_wiring` は、project root に `config/diagnostics_baseline.json` が存在する場合、current diagnostics を stable key で `new` / `known` / `resolved` に分類する。baseline file が存在しない場合も、classification が要求される呼び出しでは `status="absent"` または `status="not_loaded_no_project_root"` として空 baseline を返す。
+
+`data.diagnostics_baseline` の形:
+
+| field | 説明 |
+|-------|------|
+| `status` | `loaded` / `absent` / `not_loaded_no_project_root` / `invalid`。invalid は error envelope 側で返る。 |
+| `path` | baseline file path。project root が無い場合は `null`。 |
+| `new_count` / `known_count` / `resolved_count` | current diagnostics と baseline-only diagnostics の分類件数。 |
+| `new[]` / `known[]` / `resolved[]` | stable key, severity, message, data を持つ diagnostic key records。 |
+
+`validate_refs` の current key 例:
+
+- `missing_asset_guid:<guid>`
+- `missing_local_id_external:<target_path>:<file_id>`
+- `missing_local_id_local:<source_path>:<file_id>`
+
+`inspect_wiring` の current key 例:
+
+- `inspect_wiring:null_reference:<source_prefab-or-target>:<component_file_id>:<field_name>`
+- `inspect_wiring:internal_broken_ref:<source_prefab-or-target>:<component_file_id>:<field_name>`
+- `inspect_wiring:duplicate_reference:<source_prefab-or-target>:<component_file_id>:<field_name>`
+
+## `inspect_wiring` filtered diagnostics
+
+`script_filter` が non-empty の場合、`inspect_wiring` は component list だけでなく diagnostics も filtered component と out-of-scope component に分ける。
+
+- top-level `success` / `severity` は filtered diagnostics だけから決まる。filtered component が clean なら、out-of-scope warning があっても `success=true`, `severity="info"`。
+- top-level `diagnostics[]` は backward compatibility のため従来どおり全体 diagnostics を保持する。
+- `data.diagnostic_counts.filtered` / `data.diagnostic_counts.out_of_scope` は severity 別件数を返す。
+- `data.filtered_diagnostics[]` は filtered component に属する diagnostics の wire rows。
+- `data.out_of_scope_diagnostics[]` は `include_out_of_scope_diagnostics=true` のときだけ返る。既定では counts のみ返す。
+- `summary_only=true` でも `data.diagnostic_counts` は返り、`components` / `filtered_diagnostics` / `out_of_scope_diagnostics` の detail arrays は抑制される。
+- `include_out_of_scope_diagnostics` は `script_filter` が空のとき detail flag としては無視され、out-of-scope partition は作られない。
 
 ### severity 境界: `critical` と `error` の使い分け
 

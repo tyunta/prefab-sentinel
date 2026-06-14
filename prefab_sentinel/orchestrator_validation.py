@@ -10,6 +10,11 @@ from prefab_sentinel.contracts import (
     ToolResponse,
     max_severity,
 )
+from prefab_sentinel.diagnostics_baseline import (
+    DiagnosticKeyRecord,
+    DiagnosticsBaseline,
+    classify_current_keys,
+)
 from prefab_sentinel.orchestrator_variant import read_target_file
 from prefab_sentinel.services.prefab_variant import PrefabVariantService
 from prefab_sentinel.services.reference_resolver import ReferenceResolverService
@@ -108,6 +113,14 @@ def _handle_snapshot_modes(
             return _snapshot_error(
                 "VALIDATE_REFS_SNAPSHOT_BAD_NAME",
                 str(exc),
+                scope=scope,
+                snapshot_save=snapshot_save,
+                snapshot_diff=snapshot_diff,
+            )
+        except SnapshotPayloadError as exc:
+            return _snapshot_error(
+                "VALIDATE_REFS_SNAPSHOT_BAD_NAME",
+                f"snapshot file is malformed: {exc}",
                 scope=scope,
                 snapshot_save=snapshot_save,
                 snapshot_diff=snapshot_diff,
@@ -215,6 +228,30 @@ def _detect_stale_cache_resolutions(
     return sum(1 for guid in unique_missing_guids if guid in fresh_index)
 
 
+def _diagnostic_key_records_from_scan(
+    scan_data: dict[str, object],
+) -> tuple[DiagnosticKeyRecord, ...]:
+    raw_records = scan_data["diagnostic_keys"]
+    if not isinstance(raw_records, list):
+        raise TypeError("scan_data['diagnostic_keys'] must be a list")
+    records: list[DiagnosticKeyRecord] = []
+    for raw_record in raw_records:
+        if not isinstance(raw_record, dict):
+            raise TypeError("diagnostic key records must be dictionaries")
+        raw_data = raw_record["data"]
+        if not isinstance(raw_data, dict):
+            raise TypeError("diagnostic key record data must be a dictionary")
+        records.append(
+            DiagnosticKeyRecord(
+                key=str(raw_record["key"]),
+                severity=str(raw_record["severity"]),
+                message=str(raw_record["message"]),
+                data=raw_data,
+            )
+        )
+    return tuple(records)
+
+
 def validate_refs(
     reference_resolver: ReferenceResolverService,
     scope: str,
@@ -227,6 +264,7 @@ def validate_refs(
     snapshot_save: str = "",
     snapshot_diff: str = "",
     refresh_guid_index: bool = False,
+    diagnostics_baseline: DiagnosticsBaseline | None = None,
 ) -> ToolResponse:
     if snapshot_save and snapshot_diff:
         return ToolResponse(
@@ -306,29 +344,36 @@ def validate_refs(
         top_success = step.success
         top_severity = step.severity
         top_message = "validate.refs pipeline completed (read-only)."
+    response_data = {
+        "scope": scope,
+        "read_only": True,
+        "ignore_asset_guids": list(ignore_asset_guids),
+        "missing_asset_unique_count": missing_asset_unique,
+        "steps": [
+            {
+                "step": "scan_broken_references",
+                "result": {
+                    "success": step.success,
+                    "severity": step.severity.value,
+                    "code": step.code,
+                    "message": step.message,
+                    "data": step.data,
+                },
+            }
+        ],
+    }
+    if diagnostics_baseline is not None and "diagnostic_keys" in step_data:
+        response_data["diagnostics_baseline"] = classify_current_keys(
+            _diagnostic_key_records_from_scan(step_data),
+            diagnostics_baseline,
+        ).to_dict()
+
     return ToolResponse(
         success=top_success,
         severity=top_severity,
         code=top_code,
         message=top_message,
-        data={
-            "scope": scope,
-            "read_only": True,
-            "ignore_asset_guids": list(ignore_asset_guids),
-            "missing_asset_unique_count": missing_asset_unique,
-            "steps": [
-                {
-                    "step": "scan_broken_references",
-                    "result": {
-                        "success": step.success,
-                        "severity": step.severity.value,
-                        "code": step.code,
-                        "message": step.message,
-                        "data": step.data,
-                    },
-                }
-            ],
-        },
+        data=response_data,
         diagnostics=diagnostics,
     )
 

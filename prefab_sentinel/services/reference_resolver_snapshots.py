@@ -76,6 +76,20 @@ def snapshot_path(name: str, project_root: Path) -> Path:
     return base / f"{name}.json"
 
 
+def _ensure_regular_snapshot_path(path: Path) -> bool:
+    try:
+        if path.is_symlink():
+            raise SnapshotPayloadError(f"snapshot file {path} is not a regular file")
+        exists = path.exists()
+        if not exists:
+            return False
+        if not path.is_file():
+            raise SnapshotPayloadError(f"snapshot file {path} is not a regular file")
+        return True
+    except OSError as exc:
+        raise SnapshotPayloadError(f"snapshot file {path} is not accessible: {exc}") from exc
+
+
 def save_snapshot(name: str, scan_data: dict, project_root: Path) -> Path:
     """Persist ``scan_data`` under the named snapshot for the project.
 
@@ -84,21 +98,29 @@ def save_snapshot(name: str, scan_data: dict, project_root: Path) -> Path:
     optional ``referenced_from``, missing-local-id rows).
     """
     target = snapshot_path(name, project_root)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(scan_data, sort_keys=True), encoding="utf-8")
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        _ensure_regular_snapshot_path(target)
+        target.write_text(json.dumps(scan_data, sort_keys=True), encoding="utf-8")
+    except OSError as exc:
+        raise SnapshotPayloadError(f"snapshot file {target} is not writable: {exc}") from exc
     return target
 
 
 def load_snapshot(name: str, project_root: Path) -> dict | None:
     """Return the saved scan-data payload, or None if absent."""
     target = snapshot_path(name, project_root)
-    if not target.exists():
+    if not _ensure_regular_snapshot_path(target):
         return None
     try:
         loaded = json.loads(target.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise SnapshotPayloadError(
             f"snapshot file {target} is not valid JSON: {exc}"
+        ) from exc
+    except (OSError, UnicodeDecodeError) as exc:
+        raise SnapshotPayloadError(
+            f"snapshot file {target} could not be read: {exc}"
         ) from exc
     if not isinstance(loaded, dict):
         raise SnapshotPayloadError(

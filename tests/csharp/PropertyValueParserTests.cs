@@ -97,8 +97,8 @@ public class PropertyValueParserTests
         bool ok = PropertyValueParser.TryParse(
             SerializedPropertyKind.Color, "0.1,0.2,0.3", out ParsedPropertyValue value);
 
-        Assert.True(ok);
-        Assert.Equal(1f, value.Components[3]);
+        Assert.Equal((true, SerializedPropertyKind.Color), (ok, value.Kind));
+        Assert.Equal(new[] { 0.1f, 0.2f, 0.3f, 1f }, value.Components);
     }
 
     [Fact]
@@ -108,8 +108,8 @@ public class PropertyValueParserTests
             SerializedPropertyKind.Color, "0.1,0.2,0.3,nope",
             out ParsedPropertyValue value);
 
-        Assert.True(ok);
-        Assert.Equal(1f, value.Components[3]);
+        Assert.Equal((true, SerializedPropertyKind.Color), (ok, value.Kind));
+        Assert.Equal(new[] { 0.1f, 0.2f, 0.3f, 1f }, value.Components);
     }
 
     [Fact]
@@ -119,8 +119,8 @@ public class PropertyValueParserTests
             SerializedPropertyKind.Color, "0.1,0.2,0.3,0.5",
             out ParsedPropertyValue value);
 
-        Assert.True(ok);
-        Assert.Equal(0.5f, value.Components[3]);
+        Assert.Equal((true, SerializedPropertyKind.Color), (ok, value.Kind));
+        Assert.Equal(new[] { 0.1f, 0.2f, 0.3f, 0.5f }, value.Components);
     }
 
     [Fact]
@@ -138,7 +138,7 @@ public class PropertyValueParserTests
         bool ok = PropertyValueParser.TryParse(
             SerializedPropertyKind.Vector3, "1,2,3", out ParsedPropertyValue value);
 
-        Assert.True(ok);
+        Assert.Equal((true, SerializedPropertyKind.Vector3), (ok, value.Kind));
         Assert.Equal(new[] { 1f, 2f, 3f }, value.Components);
     }
 
