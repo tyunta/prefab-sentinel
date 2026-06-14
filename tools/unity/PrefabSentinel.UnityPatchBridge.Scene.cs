@@ -52,7 +52,49 @@ namespace PrefabSentinel
                 for (int i = 0; i < request.ops.Length; i++)
                 {
                     PatchOp op = request.ops[i];
-                    string opName = (op?.op ?? string.Empty).Trim();
+                    if (op == null)
+                    {
+                        diagnostics.Add(
+                            new BridgeDiagnostic
+                            {
+                                path = request.target,
+                                location = $"ops[{i}]",
+                                detail = "schema_error",
+                                evidence = "operation is null"
+                            }
+                        );
+                        return BuildError(
+                            "UNITY_BRIDGE_SCHEMA",
+                            "Invalid scene plan.",
+                            request.target,
+                            request.ops.Length,
+                            executed: false,
+                            applied: applied,
+                            diagnostics: diagnostics.ToArray()
+                        );
+                    }
+                    if (op.op == null)
+                    {
+                        diagnostics.Add(
+                            new BridgeDiagnostic
+                            {
+                                path = request.target,
+                                location = $"ops[{i}].op",
+                                detail = "schema_error",
+                                evidence = "op is null"
+                            }
+                        );
+                        return BuildError(
+                            "UNITY_BRIDGE_SCHEMA",
+                            "Invalid scene plan.",
+                            request.target,
+                            request.ops.Length,
+                            executed: false,
+                            applied: applied,
+                            diagnostics: diagnostics.ToArray()
+                        );
+                    }
+                    string opName = op.op.Trim();
                     if (i == 0)
                     {
                         if (!string.Equals(opName, requiredInitialOp, StringComparison.Ordinal))
@@ -564,7 +606,21 @@ namespace PrefabSentinel
                                 diagnostics: diagnostics.ToArray()
                             );
                         }
-                        string resultHandle = NormalizeHandle(op.result);
+                        if (!TryNormalizeResultHandle(
+                                op.result, request.target, i, diagnostics,
+                                out string resultHandle))
+                        {
+                            UnityEngine.Object.DestroyImmediate(addedComponent);
+                            return BuildError(
+                                "UNITY_BRIDGE_SCHEMA",
+                                "Invalid scene plan.",
+                                request.target,
+                                request.ops.Length,
+                                executed: false,
+                                applied: applied,
+                                diagnostics: diagnostics.ToArray()
+                            );
+                        }
                         if (!TrySetupUdonSharpBacking(
                             targetObject, addedComponent, componentType, handles,
                             resultHandle, request.target, i, diagnostics))

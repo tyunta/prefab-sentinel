@@ -83,6 +83,7 @@ wire `severity` の決定規則（issue #4）: `Diagnostic` dataclass は任意�
 | `EDITOR_CTRL_INVALID_ORDER` | `editor_console` の `order` が `newest_first` / `oldest_first` 以外の場合（issue #113）。`severity="error"`、メッセージで受理可能な値を列挙。 |
 | `EDITOR_CTRL_INVALID_CURSOR` | `editor_console` の `cursor` が現在の取り込み済み範囲外、もしくは Bridge のフォーマット (`seq:<long>`) に合致しない場合（issue #113）。`severity="error"`、メッセージで原因を明示。 |
 | `EDITOR_CTRL_SET_PROP_QUATERNION_NOT_NORMALIZED` | `editor_set_property` で `SerializedPropertyType.Quaternion` に与えた xyzw 4 要素のノルムが `1.0 ± 1e-4` の許容範囲外だった場合（issue #111）。`severity="error"`、メッセージに供給値とノルムを明示。Bridge 側では自動 normalize しない。Component 数が 4 でない（例えば 3 要素の euler を渡した）場合は既存の `EDITOR_CTRL_SET_PROP_TYPE_MISMATCH` で 4 要素必須を案内。 |
+| `EDITOR_CTRL_SET_PROP_NULL_INPUT` | `editor_set_property` の Quaternion 入力が `null` だった場合（issue #118）。未設定を空文字として補完せず、caller contract violation として `severity="error"` の typed failure にする。明示的な空文字は従来通り `EDITOR_CTRL_SET_PROP_TYPE_MISMATCH`。 |
 | `COMPILE_TIMEOUT_OUT_OF_RANGE` | `editor_run_script` の `compile_timeout_ms` が許容範囲 `[1, 120000]`（ミリ秒、両端含む）の外だった場合（issue #127）。`severity="error"`、Bridge へは送信せず Python の入口で拒否。メッセージに供給値・両端境界値を含める（CLAMP しない）。 |
 | `MAX_ENTRIES_OUT_OF_RANGE` / `EDITOR_CTRL_MAX_ENTRIES_OUT_OF_RANGE` | `editor_console` の `max_entries` が許容範囲 `[1, ConsoleLogBuffer.DefaultCapacity]`（既定 1000、両端含む）の外だった場合（issue #131）。`severity="error"`。Python 側 (`MAX_ENTRIES_OUT_OF_RANGE`) は Bridge に送る前に拒否し、C# Bridge 側 (`EDITOR_CTRL_MAX_ENTRIES_OUT_OF_RANGE`) は buffer を見る前に拒否する。上限の根拠は「Bridge は ring buffer に保持している件数以上は返せない」という不変条件で、C# `ConsoleLogBuffer.DefaultCapacity` と Python `bridge_constants.CONSOLE_LOG_BUFFER_MAX_ENTRIES` は `scripts/check_bridge_constants.py` の drift detector で同期する。 |
 | `EDITOR_CTRL_RECOMPILE_TIMEOUT` | 同期 recompile ツール `editor_recompile`（issue #54 改名前は `editor_recompile_and_wait`。bridge action 名は不変）が `timeout_sec`（既定 60 秒）以内に `CompilationPipeline.compilationFinished` イベント、もしくは事後の `AssemblyReloadCount` 増加を観測できなかった、純粋な deadline 経過の場合（issue #118 / issue #203 / issue #204）。`severity="error"`。Bridge 内の async runner は `compiledAny=true` の場合のみ SessionState ミラーで domain reload を跨いで継続する（NOOP / FAILED は同期で返るので永続化エントリは作らない）。Editor 側が `RequestScriptCompilation` を拒否した schedule-failure 経路では本コードは返らず、`EDITOR_CTRL_RECOMPILE_SCHEDULE_FAILED` を返す。 |
@@ -209,6 +210,7 @@ issue #113 で `editor_console` の既定値とページング契約を**破壊�
 `editor_set_property` は `SerializedPropertyType.Quaternion`（例: `m_LocalRotation`）に対して xyzw 4 要素のリテラル文字列のみを受け付ける。Euler 入力は対象外（既存の euler hint 専用 SerializedProperty 経由で設定する）。
 
 - 入力: カンマ区切りの 4 要素 `"x,y,z,w"`（順序は xyzw 固定）。
+- `null` 入力は `EDITOR_CTRL_SET_PROP_NULL_INPUT`。未設定を空文字へ丸めない。
 - 4 要素以外（例えば 3 要素の euler）は `EDITOR_CTRL_SET_PROP_TYPE_MISMATCH`。メッセージに「4 要素必須」を明示。
 - ノルムが `1.0 ± 1e-4` の許容範囲外なら `EDITOR_CTRL_SET_PROP_QUATERNION_NOT_NORMALIZED`（`severity="error"`）。Bridge 側で自動 normalize はしない。許容幅は Unity の Transform.localRotation が float32 でやり取りされる際の丸め誤差を吸収する目的。
 - 同一トランザクションで euler hint を同期する副作用は持たない（要件は呼び出し側に委ねる）。

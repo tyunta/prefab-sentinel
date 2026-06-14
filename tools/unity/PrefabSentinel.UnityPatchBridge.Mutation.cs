@@ -29,9 +29,21 @@ namespace PrefabSentinel
                 );
                 return false;
             }
-            string opName = op.op ?? string.Empty;
+            if (op.op == null)
+            {
+                diagnostics.Add(
+                    new BridgeDiagnostic
+                    {
+                        path = target,
+                        location = $"ops[{opIndex}].op",
+                        detail = "schema_error",
+                        evidence = "op is null"
+                    }
+                );
+                return false;
+            }
+            string opName = op.op.Trim();
 
-            // ── add_component: resolve GO by hierarchy path → AddComponent ──
             if (string.Equals(opName, "add_component", StringComparison.Ordinal))
             {
                 if (string.IsNullOrWhiteSpace(op.type))
@@ -120,10 +132,25 @@ namespace PrefabSentinel
                 return true;
             }
 
-            // ── remove_component: resolve via TryFindUniqueComponent → DestroyImmediate ──
             if (string.Equals(opName, "remove_component", StringComparison.Ordinal))
             {
-                if (string.IsNullOrWhiteSpace(op.component))
+                if (op.component == null)
+                {
+                    Component nullRemoveTarget;
+                    string nullRemoveError;
+                    TryFindUniqueComponent(prefabRoot, op.component, out nullRemoveTarget, out nullRemoveError);
+                    diagnostics.Add(
+                        new BridgeDiagnostic
+                        {
+                            path = target,
+                            location = $"ops[{opIndex}].component",
+                            detail = "schema_error",
+                            evidence = nullRemoveError
+                        }
+                    );
+                    return false;
+                }
+                if (op.component.Trim().Length == 0)
                 {
                     diagnostics.Add(
                         new BridgeDiagnostic
@@ -168,7 +195,6 @@ namespace PrefabSentinel
                 return true;
             }
 
-            // ── mutation ops: set / insert_array_element / remove_array_element ──
             if (
                 !string.Equals(opName, "set", StringComparison.Ordinal)
                 && !string.Equals(opName, "insert_array_element", StringComparison.Ordinal)
@@ -192,7 +218,7 @@ namespace PrefabSentinel
             bool isSetOp = string.Equals(opName, "set", StringComparison.Ordinal);
             Component component;
             string componentError;
-            if (isSetOp && !string.IsNullOrWhiteSpace(op.file_id))
+            if (isSetOp && op.file_id != null && op.file_id.Trim().Length > 0)
             {
                 if (!TryResolveComponentByFileId(
                         prefabRoot, op.file_id, out component, out componentError))
@@ -209,7 +235,22 @@ namespace PrefabSentinel
                     return false;
                 }
             }
-            else if (!string.IsNullOrWhiteSpace(op.component))
+            else if (op.component == null)
+            {
+                TryFindUniqueComponent(
+                    prefabRoot, op.component, out component, out componentError);
+                diagnostics.Add(
+                    new BridgeDiagnostic
+                    {
+                        path = target,
+                        location = $"ops[{opIndex}].component",
+                        detail = "schema_error",
+                        evidence = componentError
+                    }
+                );
+                return false;
+            }
+            else if (op.component.Trim().Length > 0)
             {
                 if (!TryFindUniqueComponent(
                         prefabRoot, op.component, out component, out componentError))
@@ -280,7 +321,7 @@ namespace PrefabSentinel
             }
 
             SerializedObject serialized = new SerializedObject(targetObject);
-            string opName = (op.op ?? string.Empty).Trim();
+            string opName = op.op.Trim();
             if (string.Equals(opName, "set", StringComparison.Ordinal))
             {
                 SerializedProperty property = serialized.FindProperty(op.path);
@@ -353,7 +394,7 @@ namespace PrefabSentinel
                 }
                 arrayProperty.InsertArrayElementAtIndex(op.index);
                 SerializedProperty inserted = arrayProperty.GetArrayElementAtIndex(op.index);
-                if (!string.IsNullOrWhiteSpace(op.value_kind))
+                if (op.value_kind == null || op.value_kind.Trim().Length > 0)
                 {
                     string insertValueError;
                     if (!TryAssignPropertyValue(inserted, op, out insertValueError))
@@ -527,7 +568,12 @@ namespace PrefabSentinel
         )
         {
             error = string.Empty;
-            string valueKind = (op.value_kind ?? string.Empty).Trim();
+            if (op.value_kind == null)
+            {
+                error = "value_kind is null";
+                return false;
+            }
+            string valueKind = op.value_kind.Trim();
             switch (property.propertyType)
             {
                 case SerializedPropertyType.Integer:
@@ -573,7 +619,12 @@ namespace PrefabSentinel
                 case SerializedPropertyType.String:
                     if (string.Equals(valueKind, "string", StringComparison.Ordinal))
                     {
-                        property.stringValue = op.value_string ?? string.Empty;
+                        if (op.value_string == null)
+                        {
+                            error = "string property value_string is null";
+                            return false;
+                        }
+                        property.stringValue = op.value_string;
                         return true;
                     }
                     if (string.Equals(valueKind, "null", StringComparison.Ordinal))
@@ -745,10 +796,9 @@ namespace PrefabSentinel
                             error = "handle-based ObjectReference is only supported in create mode";
                             return false;
                         }
-                        string handleName = (op.value_string ?? string.Empty).Trim();
                         UnityEngine.Object handleObj;
                         string handleError;
-                        if (!TryResolveHandle(handleName, s_currentHandles, out handleObj, out handleError))
+                        if (!TryResolveHandle(op.value_string, s_currentHandles, out handleObj, out handleError))
                         {
                             error = $"ObjectReference handle resolution failed: {handleError}";
                             return false;
@@ -773,10 +823,9 @@ namespace PrefabSentinel
                             error = "handle-based ExposedReference is only supported in create mode";
                             return false;
                         }
-                        string handleName = (op.value_string ?? string.Empty).Trim();
                         UnityEngine.Object handleObj;
                         string handleError;
-                        if (!TryResolveHandle(handleName, s_currentHandles, out handleObj, out handleError))
+                        if (!TryResolveHandle(op.value_string, s_currentHandles, out handleObj, out handleError))
                         {
                             error = $"ExposedReference handle resolution failed: {handleError}";
                             return false;
@@ -876,7 +925,12 @@ namespace PrefabSentinel
             }
             if (string.Equals(valueKind, "string", StringComparison.Ordinal))
             {
-                string raw = op.value_string ?? string.Empty;
+                if (op.value_string == null)
+                {
+                    error = "character property value_string is null";
+                    return false;
+                }
+                string raw = op.value_string;
                 if (raw.Length != 1)
                 {
                     error = "character property requires single-character value_string";
@@ -920,6 +974,11 @@ namespace PrefabSentinel
             }
             if (string.Equals(valueKind, "string", StringComparison.Ordinal))
             {
+                if (op.value_string == null)
+                {
+                    error = "integer property value_string is null";
+                    return false;
+                }
                 if (int.TryParse(op.value_string, NumberStyles.Integer, CultureInfo.InvariantCulture, out value))
                 {
                     return true;
@@ -956,6 +1015,11 @@ namespace PrefabSentinel
             }
             if (string.Equals(valueKind, "string", StringComparison.Ordinal))
             {
+                if (op.value_string == null)
+                {
+                    error = "float property value_string is null";
+                    return false;
+                }
                 if (
                     float.TryParse(
                         op.value_string,
@@ -994,6 +1058,11 @@ namespace PrefabSentinel
             }
             if (string.Equals(valueKind, "string", StringComparison.Ordinal))
             {
+                if (op.value_string == null)
+                {
+                    error = "boolean property value_string is null";
+                    return false;
+                }
                 if (bool.TryParse(op.value_string, out value))
                 {
                     return true;
@@ -1026,7 +1095,12 @@ namespace PrefabSentinel
             }
             else if (string.Equals(valueKind, "string", StringComparison.Ordinal))
             {
-                string raw = op.value_string ?? string.Empty;
+                if (op.value_string == null)
+                {
+                    error = "enum property value_string is null";
+                    return false;
+                }
+                string raw = op.value_string;
                 for (int i = 0; i < property.enumDisplayNames.Length; i++)
                 {
                     if (
@@ -1065,6 +1139,11 @@ namespace PrefabSentinel
             error = string.Empty;
             if (string.Equals(valueKind, "string", StringComparison.Ordinal))
             {
+                if (op.value_string == null)
+                {
+                    error = "color property value_string is null";
+                    return false;
+                }
                 if (ColorUtility.TryParseHtmlString(op.value_string, out value))
                 {
                     return true;
@@ -1667,7 +1746,13 @@ namespace PrefabSentinel
                 return false;
             }
 
-            string guid = (payload.guid ?? string.Empty).Trim();
+            if (payload.guid == null)
+            {
+                error = "ObjectReference value_json guid is null";
+                return false;
+            }
+
+            string guid = payload.guid.Trim();
             if (string.IsNullOrWhiteSpace(guid))
             {
                 error = "ObjectReference value_json requires non-empty guid";
@@ -1828,8 +1913,13 @@ namespace PrefabSentinel
         {
             type = null;
             error = string.Empty;
-            string candidate = (rawTypeName ?? string.Empty).Trim();
-            if (string.IsNullOrWhiteSpace(candidate))
+            if (rawTypeName == null)
+            {
+                error = "type name is null";
+                return false;
+            }
+            string candidate = rawTypeName.Trim();
+            if (candidate.Length == 0)
             {
                 error = "type name is empty";
                 return false;
@@ -1888,6 +1978,11 @@ namespace PrefabSentinel
         {
             value = null;
             error = string.Empty;
+            if (raw == null)
+            {
+                error = "value_json is null";
+                return false;
+            }
             if (string.IsNullOrWhiteSpace(raw))
             {
                 error = "value_json is empty";
@@ -1938,6 +2033,11 @@ namespace PrefabSentinel
         {
             payload = null;
             error = string.Empty;
+            if (raw == null)
+            {
+                error = "value_json is null";
+                return false;
+            }
             if (string.IsNullOrWhiteSpace(raw))
             {
                 error = "value_json is empty";
