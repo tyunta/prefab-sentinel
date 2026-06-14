@@ -1631,6 +1631,53 @@ class TestUdonSharpActionWiring(unittest.TestCase):
                 self.assertIn(handler, body)
 
 
+class EditorControlBridgeDeleteSourceTests(unittest.TestCase):
+    """Issue #114 delete_assets bridge invariants that cannot run without Unity."""
+
+    def test_delete_assets_handler_rejects_malformed_payload_before_assetdatabase_call(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleDeleteAssets")
+        parse_failure = body.find("DELETE_ASSETS_BAD_PAYLOAD")
+        delete_call = body.find("AssetDatabase.DeleteAssets")
+        self.assertNotEqual(-1, parse_failure, msg="delete_assets bad payload code missing")
+        self.assertNotEqual(-1, delete_call, msg="AssetDatabase.DeleteAssets call missing")
+        self.assertLess(
+            parse_failure,
+            delete_call,
+            msg="malformed delete payload must be rejected before AssetDatabase.DeleteAssets",
+        )
+
+    def test_delete_assets_handler_rejects_non_assets_paths_before_assetdatabase_call(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleDeleteAssets")
+        path_rejection = body.find("DELETE_ASSETS_UNSUPPORTED_PATH")
+        delete_call = body.find("AssetDatabase.DeleteAssets")
+        self.assertNotEqual(-1, path_rejection, msg="delete_assets path rejection code missing")
+        self.assertNotEqual(-1, delete_call, msg="AssetDatabase.DeleteAssets call missing")
+        self.assertLess(
+            path_rejection,
+            delete_call,
+            msg="unsupported delete paths must be rejected before AssetDatabase.DeleteAssets",
+        )
+
+    def test_delete_assets_handler_uses_assetdatabase_without_filesystem_delete(self) -> None:
+        source = _read(TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.AssetDelete.cs")
+        self.assertIn("AssetDatabase.DeleteAssets", source)
+        for forbidden in ("File.Delete", "Directory.Delete", "System.IO.File", "System.IO.Directory"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, source)
+
+    def test_delete_assets_dispatcher_routes_to_handler(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "DispatchAction")
+        self.assertIn('"delete_assets"', body)
+        self.assertIn("HandleDeleteAssets", body)
+
+    def test_editor_control_request_carries_delete_batch_payload(self) -> None:
+        source = _read(TOOLS_DIR / "PrefabSentinel.Dispatch.EditorControlRequest.cs")
+        self.assertIn("asset_paths_json", source)
+
+
 class TestAddUdonSharpComponentHandler(unittest.TestCase):
     """Issue #119 — ``HandleAddUdonSharpComponent`` must perform an
     upsert with prior validation, reuse the existing UdonSharp setup

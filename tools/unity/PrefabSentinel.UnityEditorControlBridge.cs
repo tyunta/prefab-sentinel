@@ -19,7 +19,7 @@ namespace PrefabSentinel
     public static partial class UnityEditorControlBridge
     {
         public const int ProtocolVersion = 1;
-        public const string BridgeVersion = "0.7.3";
+        public const string BridgeVersion = "0.7.4";
 
         /// <summary>Actions that write their response file asynchronously (not on return).</summary>
         // Issue H-8: the membership sets are owned by ``ActionRegistry`` as the
@@ -158,6 +158,8 @@ namespace PrefabSentinel
             public string selected_object = string.Empty;
             public string instantiated_object = string.Empty;
             public string deleted_object = string.Empty;
+            public string[] deleted_paths = Array.Empty<string>();
+            public string[] failed_paths = Array.Empty<string>();
             public int deleted_child_count = 0;
             public int total_entries = 0;
             public int component_count = 0;
@@ -590,6 +592,9 @@ private static string DeriveTransportRequestId(string requestPath)
                     break;
                 case "delete_object":
                     response = HandleDeleteObject(request);
+                    break;
+                case "delete_assets":
+                    response = HandleDeleteAssets(request);
                     break;
                 case "list_children":
                     response = HandleListChildren(request);

@@ -56,6 +56,8 @@
 | `editor_set_material_property` | ✅ | — |
 | `copy_asset` | ✅ | — |
 | `rename_asset` | ✅ | — |
+| `delete_asset` | ✅ | — |
+| `delete_assets` | ✅ | — |
 | `revert_overrides` | ✅ | — |
 | `patch_apply` | ✅ | ✅ |
 | `vrcsdk_upload` | ✅ | — |

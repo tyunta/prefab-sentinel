@@ -1,13 +1,13 @@
 # MCP ツール一覧
 
-`prefab-sentinel-mcp` が公開する全 MCP ツール（現在 87 件 / 16 カテゴリ）の正本カタログ。各カテゴリは `prefab_sentinel/mcp_tools_*.py` の 1 モジュールに対応する。エンベロープ仕様は [api-reference.md「レスポンスフォーマット」](./api-reference.md#レスポンスフォーマット)、エラーコードの正本は [api-reference.md「エラーコード規約」](./api-reference.md#エラーコード規約) を参照。
+`prefab-sentinel-mcp` が公開する全 MCP ツール（現在 89 件 / 16 カテゴリ）の正本カタログ。各カテゴリは `prefab_sentinel/mcp_tools_*.py` の 1 モジュールに対応する。エンベロープ仕様は [api-reference.md「レスポンスフォーマット」](./api-reference.md#レスポンスフォーマット)、エラーコードの正本は [api-reference.md「エラーコード規約」](./api-reference.md#エラーコード規約) を参照。
 
 ## 用途索引
 
 カテゴリ別の「いつ使うか」ガイド。最初に触れる場合はここからスキルへ繋ぐ。
 
 - **components** — open / create モードでコンポーネントを増減・コピーする (`/prefab-sentinel:variant-safe-edit`)
-- **patch** — マテリアル・アセット・パッチ計画 (`patch_apply`) を確定書き込みする
+- **patch** — マテリアル・アセット・削除 dry-run / 確定削除・パッチ計画 (`patch_apply`) を扱う
 - **set_property** — シンボルパス + コンポーネント型でフィールド値を狙い撃ち編集する
 - **validation** — broken reference / 配線 / 構造 / 命名整合 / ランタイムを read-only で診断する (`/prefab-sentinel:prefab-reference-repair` の起点)
 - **symbols** — 人間可読パスで Unity オブジェクトをアドレッシングする
@@ -25,7 +25,7 @@
 
 ## 全ツール一覧（カテゴリ別）
 
-各カテゴリ表のカラム: ツール / 区分 / 簡潔説明 / 関連 issue / 種別（read-only / write）。`write` はプロジェクト / Editor / アセット状態に副作用を持つことを示す表示で、`confirm=True` + 非空 `change_reason` を引数として要求する audit-pair 対象はこの中の部分集合（`patch` / `components` / `set_property` の各カテゴリ全体と、`vrcsdk_upload` / `editor_run_script` / `editor_run_script_submit` / `editor_create_animation_clip` / `editor_execute_menu_item` / `editor_safe_save_prefab` / `editor_create_udon_program_asset` / `editor_set_material_property` / `editor_add_udonsharp_component` / `editor_set_udonsharp_field` / `editor_wire_persistent_listener` / `editor_create_scene` / `editor_save_scene` / `editor_close_prefab`）に限られる。正本一覧は [CONFIGURATION.md](../CONFIGURATION.md#confirm--change_reason-必須対象一覧)。それ以外の `write` ツール（例: `editor_select` / `editor_rename` / `editor_set_blend_shape` / `editor_set_property` / `editor_batch_*` / `editor_batch_set_blend_shape` / `editor_apply_animation_clip` 等）は audit-pair なしで呼び出す（`confirm` / `change_reason` を引数に渡すと `TypeError` で拒否される）。issue #49 で `editor_execute_menu_item` / `editor_safe_save_prefab` / `editor_create_udon_program_asset` / `editor_create_scene` / `editor_save_scene` が audit-pair 側へ、`editor_batch_set_blend_shape` / `editor_apply_animation_clip` が非 audit 側へ再分類された（逆不可逆性原理の適用）。
+各カテゴリ表のカラム: ツール / 区分 / 簡潔説明 / 関連 issue / 種別（read-only / write）。`write` はプロジェクト / Editor / アセット状態に副作用を持つことを示す表示で、`confirm=True` + 非空 `change_reason` を引数として要求する audit-pair 対象はこの中の部分集合（`patch` / `components` / `set_property` の各カテゴリ全体と、`vrcsdk_upload` / `editor_run_script` / `editor_run_script_submit` / `editor_create_animation_clip` / `editor_execute_menu_item` / `editor_safe_save_prefab` / `editor_create_udon_program_asset` / `editor_set_material_property` / `editor_add_udonsharp_component` / `editor_set_udonsharp_field` / `editor_wire_persistent_listener` / `editor_create_scene` / `editor_save_scene` / `editor_close_prefab`）に限られる。正本一覧は [CONFIGURATION.md](../CONFIGURATION.md#confirm--change_reason-必須対象一覧)。それ以外の `write` ツール（例: `editor_select` / `editor_rename` / `editor_set_blend_shape` / `editor_set_property` / `editor_batch_*` / `editor_batch_set_blend_shape` / `editor_apply_animation_clip` 等）は audit-pair なしで呼び出す（`confirm` / `change_reason` を引数に渡すと `TypeError` で拒否される）。issue #49 で `editor_execute_menu_item` / `editor_safe_save_prefab` / `editor_create_udon_program_asset` / `editor_create_scene` / `editor_save_scene` が audit-pair 側へ、`editor_batch_set_blend_shape` / `editor_apply_animation_clip` が非 audit 側へ再分類された（逆不可逆性原理の適用）。issue #114 で `delete_asset` / `delete_assets` は dry-run 既定、確定適用時は AssetDatabase 経由 + audit-pair 必須の patch ツールとして追加された。
 
 ### components
 
@@ -46,6 +46,8 @@
 | `set_material_property` | patch | `.mat` ファイルのプロパティをオフライン YAML 編集 | — | write |
 | `copy_asset` | patch | アセットファイルをコピーし `m_Name` と `.meta` を自動同期 | — | write |
 | `rename_asset` | patch | アセットファイルをリネームし `m_Name` と `.meta` を追従 | — | write |
+| `delete_asset` | patch | 1 件の project asset 削除を dry-run で影響確認し、`confirm` + `change_reason` で Unity AssetDatabase 経由に適用 | #114 | write |
+| `delete_assets` | patch | 複数 project asset 削除を一括 dry-run / AssetDatabase 確定適用し、削除後 broken-reference delta を返す | #114 | write |
 | `patch_apply` | patch | パッチ計画（v2 スキーマ）の dry-run / confirm 適用。`change_reason` + `out_report` 必須 | — | write |
 | `revert_overrides` | patch | Variant から指定 propertyPath の override を YAML レベルで削除 | — | write |
 

@@ -194,7 +194,7 @@ class ReferenceResolverService:
             return cached
         try:
             text = decode_text_file(path)
-        except UnicodeDecodeError:
+        except (OSError, UnicodeDecodeError):
             self._unreadable_paths.add(path)
             self._text_cache[path] = None
             return None
@@ -205,7 +205,7 @@ class ReferenceResolverService:
         """Read file text without touching caches (for parallel preload)."""
         try:
             return decode_text_file(path)
-        except UnicodeDecodeError:
+        except (OSError, UnicodeDecodeError):
             return None
 
     def preload_texts(
@@ -769,7 +769,8 @@ class ReferenceResolverService:
         if looks_like_guid(asset_or_guid):
             guid = normalize_guid(asset_or_guid)
             asset_path = self._guid_map(scan_project_root).get(guid)
-            if asset_path is None:
+            asset_missing = asset_path is None
+            if asset_missing and scan_scope_path is None:
                 return error_response(
                     "REF001",
                     "GUID was not found in project meta files.",
@@ -792,7 +793,7 @@ class ReferenceResolverService:
                 )
             try:
                 guid = extract_meta_guid(meta_path) or ""
-            except UnicodeDecodeError:
+            except (OSError, UnicodeDecodeError):
                 guid = ""
             if not looks_like_guid(guid):
                 return error_response(
@@ -801,6 +802,7 @@ class ReferenceResolverService:
                     data={"asset_or_guid": asset_or_guid, "read_only": True},
                 )
             asset_path = candidate
+            asset_missing = False
 
         usages: list[dict[str, str | int]] = []
         if scan_scope_path is None:
@@ -835,13 +837,18 @@ class ReferenceResolverService:
         else:
             severity = Severity.WARNING
 
+        response_asset_path = None
+        if asset_path is not None:
+            response_asset_path = self._relative(asset_path)
+
         return success_response(
             "REF_WHERE_USED",
             "Reference usage scan completed.",
             severity=severity,
             data={
                 "guid": guid,
-                "asset_path": self._relative(asset_path),
+                "asset_path": response_asset_path,
+                "asset_missing": asset_missing,
                 "scope": self._relative(scan_scope_path),
                 "scan_project_root": self._relative(scan_project_root),
                 "usage_count": len(usages) + truncated_usages,

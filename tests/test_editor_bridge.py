@@ -316,6 +316,8 @@ class TestSupportedActions(unittest.TestCase):
             "get_transform",
             "get_bounds",
             "measure_distance",
+            # Issue #114: AssetDatabase-backed asset deletion.
+            "delete_assets",
         }
         self.assertEqual(expected, SUPPORTED_ACTIONS)
 

@@ -21,9 +21,17 @@ MCP ツールが返す応答エンベロープの形状とエラーコードの�
 {
   "matches": [ ... ],
   "target": "queried_asset_or_guid",
-  "metadata": { "total_count": 3, "truncated": false, "scope": "Assets/..." }
+  "metadata": {
+    "total_count": 3,
+    "truncated": false,
+    "scope": "Assets/...",
+    "asset_path": "Assets/Player.prefab",
+    "asset_missing": false
+  }
 }
 ```
+
+32 文字 GUID が project meta index に無く、`scope` が指定されている場合も `find_referencing_assets` / `where_used` は usage-list 形状を維持する。この missing target では `metadata.asset_path`（または service data の `asset_path`）は `null`、`asset_missing` は `true` になる。`scope` 無しの missing GUID は従来通り `REF001`。
 
 該当なしは空配列（`"matches": []`）で表現する。インフラエラー（ファイル不在等）は MCP `ToolError` で伝播。
 
@@ -65,6 +73,14 @@ wire `severity` の決定規則（issue #4）: `Diagnostic` dataclass は任意�
 | `RUN001` | Udon runtime exception |
 | `RUN002` | ClientSim startup failure |
 | `CHANGE_REASON_REQUIRED` | `confirm=True` で呼ばれた書き込み系ツールが `change_reason` を欠いた場合。`editor_run_script` は `confirm=False` や空文字の `change_reason` も同コードで拒否する（監査トレイル強制）。 |
+| `ASSET_DELETE_DRY_RUN` | `delete_asset` / `delete_assets` の dry-run 計画成功。`data.targets[]` に asset / `.meta` / reference impact、`data.pre_delete_broken_references` に削除前 baseline、`data.related_candidates[]` に deterministic UdonSharp generated program 候補、`data.decision_required[]` に ambiguous UdonSharp generated program 候補の判断材料を返す。 |
+| `ASSET_DELETE_APPLIED` | Unity Editor Bridge の `delete_assets` action が AssetDatabase delete を完了した成功応答。`data.broken_reference_delta` を必ず返し、delta 増加時も AssetDatabase 成功なら failure に変換しない。 |
+| `ASSET_DELETE_NOT_FOUND` | 削除対象の `Assets/...` asset が存在しないため dry-run / apply を拒否した場合。 |
+| `ASSET_DELETE_META_UNREADABLE` | 削除対象 asset の `.meta` が読み取れない、または UTF-8 として decode できないため dry-run / apply を拒否した場合。 |
+| `ASSET_DELETE_EXTERNAL_PACKAGE_UNSUPPORTED` | `Packages/`、`Library/`、project 外、または package-cache 相当の path が削除対象に指定された場合。 |
+| `ASSET_DELETE_UNSUPPORTED` | Unity Editor Bridge / AssetDatabase delete action が未設定・未対応・利用不能なため、confirmed apply を拒否した場合。raw filesystem delete への fallback は行わない。 |
+| `ASSET_DELETE_FAILED` | AssetDatabase delete action が `failed_paths` を返した場合。 |
+| `ASSET_DELETE_DECISION_REQUIRED` | UdonSharp generated program asset 候補が複数または曖昧で、自動削除候補として扱えない場合の diagnostic code。`delete_asset` / `delete_assets` dry-run では `data.decision_required[]` に `detail` と候補 `asset_paths[]` を返す。 |
 | `SER003` | `set_properties` が dry-run 段階でチェーン上に解決できない property path を検出した場合（issue #109）。`severity="error"`、`data.suggestions` に近似候補（最大 5 件）、`diagnostics[].detail` に `property_not_found` を載せる。issue #41 で `set_properties` は `symbol_path` を直接 component に解決するため、component 不在は `SYMBOL_NOT_FOUND` で表面化する（`SER003` の `component_not_found` 経路は廃止）。 |
 | `SER_APPLY_REJECTED` | `patch_apply` の Prefab 経路で `SerializedObject.ApplyModifiedPropertiesWithoutUndo()` 直前のバリデーション（`TryApplyOp`）が op を拒否した場合（issue #298）。`severity="error"`。`diagnostics` 配列には各失敗 op の `BridgeDiagnostic` に加え、`property_path` / `component_type` / `attempted_value` を `evidence` に埋めた summary 行が末尾に追加される。`AudioSource.m_Priority` 等の既知トラップを応答だけで診断できることが目的。issue #37 以降、`set` op の `file_id` ターゲットがアセット内のどの component にも解決しない場合も、この経路で `apply_error` diagnostic（未解決 fileID を `evidence` に明示、`location` は `ops[N].file_id`）として fail-fast で表面化する。Editor 例外路は `UNITY_BRIDGE_APPLY_EXCEPTION` のまま（未捕捉例外と rejection を別コードで区別）。 |
 | `BRIDGE_LEGACY_SCHEMA_REJECTED` | `unity_patch_bridge` がレガシー形状（トップレベル `target` キー）のリクエストを受け取った場合。v2 スキーマ（`{plan_version, resources, ops}`）のみを受け入れる。互換レイヤは存在しない。 |

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from prefab_sentinel import (
+    orchestrator_delete,
     orchestrator_fields,
     orchestrator_inspect,
     orchestrator_patch,
@@ -464,6 +465,26 @@ class Phase1Orchestrator:
         return orchestrator_write.rename_asset(
             self, asset_path, new_name,
             dry_run=dry_run, change_reason=change_reason,
+        )
+
+
+    def delete_assets(
+        self,
+        asset_paths: list[str],
+        *,
+        scope: str | None = None,
+        dry_run: bool = True,
+        confirm: bool = False,
+        change_reason: str | None = None,
+    ) -> ToolResponse:
+        """Delete Unity assets through the audited AssetDatabase bridge path."""
+        return orchestrator_delete.delete_assets(
+            self,
+            asset_paths,
+            scope=scope,
+            dry_run=dry_run,
+            confirm=confirm,
+            change_reason=change_reason,
         )
 
     # ------------------------------------------------------------------
