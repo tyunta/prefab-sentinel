@@ -13,6 +13,7 @@ from prefab_sentinel.contracts import (
     error_response,
     success_response,
 )
+from prefab_sentinel.diagnostics_baseline import DiagnosticKeyRecord
 from prefab_sentinel.unity_assets import (
     DEFAULT_EXCLUDED_DIR_NAMES,
     collect_project_guid_index,
@@ -29,6 +30,40 @@ from prefab_sentinel.unity_assets import (
 )
 from prefab_sentinel.unity_assets_path import relative_to_root, resolve_scope_path
 
+
+def _diagnostic_key_record(
+    issue_key: tuple[str, ...],
+    category: str,
+) -> DiagnosticKeyRecord:
+    kind = issue_key[0]
+    if kind == "missing_asset_guid":
+        return DiagnosticKeyRecord(
+            key=":".join(issue_key),
+            severity="error",
+            message=category,
+            data={"category": category, "guid": issue_key[1]},
+        )
+    if kind == "missing_local_id_external":
+        return DiagnosticKeyRecord(
+            key=":".join(issue_key),
+            severity="error",
+            message=category,
+            data={
+                "category": category,
+                "target_path": issue_key[1],
+                "file_id": issue_key[2],
+            },
+        )
+    return DiagnosticKeyRecord(
+        key=":".join(issue_key),
+        severity="error",
+        message=category,
+        data={
+            "category": category,
+            "source_path": issue_key[1],
+            "file_id": issue_key[2],
+        },
+    )
 
 def _build_top_missing_entry(
     guid: str,
@@ -277,6 +312,14 @@ class ReferenceResolverService:
             for pattern in exclude_patterns
         )
 
+    def _is_regular_scope_asset(self, path: Path) -> bool:
+        if not is_unity_text_asset(path):
+            return False
+        try:
+            return path.is_file() and not path.is_symlink()
+        except OSError:
+            return False
+
     def _collect_scope_files(
         self,
         scope_path: Path,
@@ -284,7 +327,7 @@ class ReferenceResolverService:
     ) -> list[Path]:
         if scope_path.is_file():
             if (
-                is_unity_text_asset(scope_path)
+                self._is_regular_scope_asset(scope_path)
                 and not self._is_excluded(scope_path, scope_path.parent, exclude_patterns)
             ):
                 return [scope_path]
@@ -301,7 +344,7 @@ class ReferenceResolverService:
 
             for filename in filenames:
                 path = root_path / filename
-                if not is_unity_text_asset(path):
+                if not self._is_regular_scope_asset(path):
                     continue
                 if self._is_excluded(path, scope_path, exclude_patterns):
                     continue
@@ -453,7 +496,11 @@ class ReferenceResolverService:
             ``data.top_missing_asset_guids``, and optionally ``diagnostics``.
         """
         scope_path = resolve_scope_path(scope, self.project_root)
-        if not scope_path.exists():
+        try:
+            scope_exists = scope_path.exists()
+        except OSError:
+            scope_exists = False
+        if not scope_exists:
             return error_response(
                 "REF404",
                 "Scope path does not exist.",
@@ -483,6 +530,7 @@ class ReferenceResolverService:
         raw_counts = Counter()
         unique_counts = Counter()
         unique_issue_keys: set[tuple[str, ...]] = set()
+        diagnostic_key_records: list[DiagnosticKeyRecord] = []
         missing_asset_guid_occurrences = Counter()
         ignored_missing_asset_guid_occurrences = Counter()
         # Issue #198: per-(missing GUID, source path) occurrence counter,
@@ -516,6 +564,7 @@ class ReferenceResolverService:
             unique_issue_keys.add(issue_key)
             unique_counts[category] += 1
             total_broken += 1
+            diagnostic_key_records.append(_diagnostic_key_record(issue_key, category))
             if not include_diagnostics:
                 return
             if len(diagnostics) >= max_diagnostics:
@@ -678,6 +727,9 @@ class ReferenceResolverService:
                 "missing_asset": raw_counts["missing_asset"],
                 "missing_local_id": raw_counts["missing_local_id"],
             },
+            "diagnostic_keys": [
+                record.to_dict() for record in diagnostic_key_records
+            ],
             "top_missing_asset_guids": [
                 _build_top_missing_entry(
                     guid,

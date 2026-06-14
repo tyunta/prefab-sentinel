@@ -67,8 +67,8 @@
 | ツール | 区分 | 簡潔説明 | 関連 issue | 種別 |
 |--------|------|----------|-----------|------|
 | `find_referencing_assets` | validation | GUID / パスの参照元アセット検索 | — | read-only |
-| `validate_refs` | validation | 壊れた GUID / fileID 参照のスキャン。`ignore_asset_guids` / snapshot diff / `refresh_guid_index` 対応 | #198, #199, #229, #237 | read-only |
-| `inspect_wiring` | validation | MonoBehaviour フィールド配線の分析。pagination / `script_filter` / `summary_only` 対応 | #197, #227 | read-only |
+| `validate_refs` | validation | 壊れた GUID / fileID 参照のスキャン。`ignore_asset_guids` / snapshot diff / `refresh_guid_index` / diagnostics baseline 分類対応 | #100, #198, #199, #229, #237 | read-only |
+| `inspect_wiring` | validation | MonoBehaviour フィールド配線の分析。pagination / `script_filter` / `summary_only` / `include_out_of_scope_diagnostics` / diagnostics baseline 分類対応 | #100, #197, #227 | read-only |
 | `inspect_variant` | validation | Prefab Variant の override チェーン分析 | — | read-only |
 | `diff_unity_symbols` | validation | Variant と Base の差分のみ返す | — | read-only |
 | `list_serialized_fields` | validation | C# スクリプトのシリアライズ対象フィールド一覧 | — | read-only |

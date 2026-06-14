@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import cast
 
 from prefab_sentinel.contracts import (
     Diagnostic,
@@ -11,6 +12,11 @@ from prefab_sentinel.contracts import (
     ToolResponse,
     error_response,
     success_response,
+)
+from prefab_sentinel.diagnostics_baseline import (
+    DiagnosticKeyRecord,
+    DiagnosticsBaseline,
+    classify_current_keys,
 )
 from prefab_sentinel.orchestrator_variant import read_target_file, resolve_variant_base
 from prefab_sentinel.services.prefab_variant import PrefabVariantService
@@ -223,6 +229,165 @@ def _parse_inspect_wiring_cursor(
     return position
 
 
+def _diagnostic_wire_rows(
+    diagnostics: list[Diagnostic],
+    default_severity: Severity,
+) -> list[dict[str, object]]:
+    wire_diagnostics = ToolResponse(
+        success=True,
+        severity=default_severity,
+        code="INSPECT_WIRING_DIAGNOSTICS",
+        message="diagnostics",
+        data={},
+        diagnostics=diagnostics,
+    ).to_dict()["diagnostics"]
+    return cast(list[dict[str, object]], wire_diagnostics)
+
+
+def _diagnostic_severity(diag: Diagnostic, default_severity: Severity) -> str:
+    if diag.severity is not None:
+        return diag.severity
+    if diag.detail.startswith("Null reference: "):
+        return Severity.WARNING.value
+    if diag.detail.startswith("Internal fileID not found: "):
+        return Severity.ERROR.value
+    if diag.detail.startswith("[same-component] "):
+        return Severity.WARNING.value
+    if diag.detail.startswith("[cross-component] "):
+        return Severity.INFO.value
+    return default_severity.value
+
+
+def _diagnostic_counts(
+    diagnostics: list[Diagnostic],
+    default_severity: Severity,
+) -> dict[str, int]:
+    counts = {"total": len(diagnostics), "info": 0, "warning": 0, "error": 0, "critical": 0}
+    for diag in diagnostics:
+        severity = _diagnostic_severity(diag, default_severity)
+        if severity in counts:
+            counts[severity] += 1
+    return counts
+
+
+def _max_diagnostic_severity(
+    diagnostics: list[Diagnostic],
+    default_severity: Severity,
+) -> Severity:
+    if not diagnostics:
+        return Severity.INFO
+    rank = {
+        Severity.INFO.value: 0,
+        Severity.WARNING.value: 1,
+        Severity.ERROR.value: 2,
+        Severity.CRITICAL.value: 3,
+    }
+    worst = max(
+        (_diagnostic_severity(diag, default_severity) for diag in diagnostics),
+        key=lambda severity: rank.get(severity, 0),
+    )
+    return Severity(worst) if worst in rank else Severity.INFO
+
+
+def _copy_diagnostics_with_default_severity(
+    diagnostics: list[Diagnostic],
+    default_severity: Severity,
+) -> list[Diagnostic]:
+    return [
+        Diagnostic(
+            path=diag.path,
+            location=diag.location,
+            detail=diag.detail,
+            evidence=diag.evidence,
+            severity=_diagnostic_severity(diag, default_severity),
+        )
+        for diag in diagnostics
+    ]
+
+
+def _component_field_names(component: dict[str, object]) -> set[str]:
+    fields = component.get("fields", [])
+    if not isinstance(fields, list):
+        return set()
+    return {str(field["name"]) for field in fields if isinstance(field, dict) and "name" in field}
+
+
+def _match_component_diagnostic(
+    diag: Diagnostic,
+    components: list[dict[str, object]],
+    target_path: str,
+) -> tuple[dict[str, object], str, str] | None:
+    prefixes = (
+        ("Null reference: ", "null_reference"),
+        ("Internal fileID not found: ", "internal_broken_ref"),
+    )
+    for prefix, kind in prefixes:
+        if not diag.detail.startswith(prefix):
+            continue
+        remainder = diag.detail[len(prefix):]
+        owner, _, field_name = remainder.partition(".")
+        field_name = field_name.split(" ", 1)[0]
+        for component in components:
+            if component.get("game_object_name") != owner:
+                continue
+            if field_name in _component_field_names(component):
+                return component, kind, field_name
+    for component in components:
+        file_id = str(component.get("file_id", ""))
+        if file_id and f"fileID:{file_id}." in diag.detail:
+            branch = ""
+            if diag.detail.startswith("["):
+                label, separator, _ = diag.detail.partition("]")
+                if separator:
+                    branch = label.removeprefix("[")
+            target = diag.location or diag.evidence
+            field_name = f"{branch}:{target}" if branch and target else target
+            return component, "duplicate_reference", field_name
+    return None
+
+
+def _diagnostic_key_for_component(
+    target_path: str,
+    component: dict[str, object],
+    kind: str,
+    field_name: str,
+) -> str:
+    source = str(component.get("source_prefab") or target_path)
+    return f"inspect_wiring:{kind}:{source}:{component.get('file_id')}:{field_name}"
+
+
+def _partition_component_diagnostics(
+    diagnostics: list[Diagnostic],
+    components: list[dict[str, object]],
+    target_path: str,
+    default_severity: Severity,
+) -> tuple[list[Diagnostic], list[Diagnostic], tuple[DiagnosticKeyRecord, ...]]:
+    filtered: list[Diagnostic] = []
+    out_of_scope: list[Diagnostic] = []
+    records: list[DiagnosticKeyRecord] = []
+    for diag in diagnostics:
+        match = _match_component_diagnostic(diag, components, target_path)
+        if match is None:
+            out_of_scope.append(diag)
+            continue
+        component, kind, field_name = match
+        filtered.append(diag)
+        records.append(
+            DiagnosticKeyRecord(
+                key=_diagnostic_key_for_component(target_path, component, kind, field_name),
+                severity=_diagnostic_severity(diag, default_severity),
+                message=diag.detail,
+                data={
+                    "category": kind,
+                    "target_path": target_path,
+                    "source_prefab": component.get("source_prefab", ""),
+                    "component_file_id": str(component.get("file_id", "")),
+                    "field_name": field_name,
+                },
+            )
+        )
+    return filtered, out_of_scope, tuple(records)
+
 def inspect_wiring(
     prefab_variant: PrefabVariantService,
     reference_resolver: ReferenceResolverService,
@@ -233,6 +398,8 @@ def inspect_wiring(
     page_size: int = INSPECT_WIRING_PAGE_SIZE_DEFAULT,
     summary_only: bool = False,
     script_filter: str = "",
+    include_out_of_scope_diagnostics: bool = False,
+    diagnostics_baseline: DiagnosticsBaseline | None = None,
 ) -> ToolResponse:
     # Issue #197: validate page_size before any I/O so a misconfigured
     # caller short-circuits before the YAML scan.
@@ -286,7 +453,6 @@ def inspect_wiring(
         + result.internal_broken_refs
         + result.duplicate_references
     )
-    success = result.max_severity not in (Severity.ERROR, Severity.CRITICAL)
 
     proj_root: Path | None = None
     guid_index: dict[str, Path] = {}
@@ -324,6 +490,14 @@ def inspect_wiring(
             nested_null_refs.extend(nr.null_references)
             nested_broken_refs.extend(nr.internal_broken_refs)
             nested_dup_refs.extend(nr.duplicate_references)
+            diagnostics.extend(
+                _copy_diagnostics_with_default_severity(
+                    nr.null_references
+                    + nr.internal_broken_refs
+                    + nr.duplicate_references,
+                    nr.max_severity,
+                )
+            )
 
     # Default total counts before the optional script-class filter so the
     # filter logic can reduce them in-place against the filtered subset.
@@ -336,6 +510,21 @@ def inspect_wiring(
     duplicate_reference_count = (
         len(result.duplicate_references) + len(nested_dup_refs)
     )
+
+    response_default_severity = _max_diagnostic_severity(
+        diagnostics,
+        result.max_severity,
+    )
+    success = response_default_severity not in (Severity.ERROR, Severity.CRITICAL)
+    filtered_diagnostics = list(diagnostics)
+    out_of_scope_diagnostics: list[Diagnostic] = []
+    diagnostic_key_records: tuple[DiagnosticKeyRecord, ...] = ()
+    diagnostic_counts: dict[str, dict[str, int]] | None = None
+    response_success = success
+    response_severity = response_default_severity
+    response_diagnostics = diagnostics
+    filtered_default_severity = response_default_severity
+    out_of_scope_default_severity = response_default_severity
 
     # Issue #227: when a script-class filter is supplied, narrow the
     # merged component list to those whose recorded ``script_name`` (the
@@ -372,6 +561,10 @@ def inspect_wiring(
                     "null_reference_count": 0,
                     "internal_broken_ref_count": 0,
                     "duplicate_reference_count": 0,
+                    "diagnostic_counts": {
+                        "filtered": _diagnostic_counts([], Severity.INFO),
+                        "out_of_scope": _diagnostic_counts([], Severity.INFO),
+                    },
                 },
                 diagnostics=diagnostics,
             )
@@ -416,6 +609,44 @@ def inspect_wiring(
                 for fid in survivor_file_ids
             )
         )
+        (
+            filtered_diagnostics,
+            out_of_scope_diagnostics,
+            diagnostic_key_records,
+        ) = _partition_component_diagnostics(
+            diagnostics,
+            filtered,
+            target_path,
+            Severity.INFO,
+        )
+        filtered_default_severity = _max_diagnostic_severity(
+            filtered_diagnostics,
+            Severity.INFO,
+        )
+        out_of_scope_default_severity = _max_diagnostic_severity(
+            out_of_scope_diagnostics,
+            Severity.INFO,
+        )
+        diagnostic_counts = {
+            "filtered": _diagnostic_counts(filtered_diagnostics, filtered_default_severity),
+            "out_of_scope": _diagnostic_counts(
+                out_of_scope_diagnostics,
+                out_of_scope_default_severity,
+            ),
+        }
+        response_severity = filtered_default_severity
+        response_success = response_severity not in (Severity.ERROR, Severity.CRITICAL)
+        response_diagnostics = _copy_diagnostics_with_default_severity(
+            diagnostics,
+            response_default_severity,
+        )
+    elif diagnostics_baseline is not None:
+        _, _, diagnostic_key_records = _partition_component_diagnostics(
+            diagnostics,
+            component_summaries,
+            target_path,
+            response_default_severity,
+        )
 
     # Issue #227: summary mode shapes the response to keep it under the
     # MCP token cap by suppressing the per-component slice and the
@@ -434,12 +665,23 @@ def inspect_wiring(
         }
         if filter_active:
             data["script_filter"] = script_filter
+            data["diagnostic_counts"] = diagnostic_counts
+            if diagnostics_baseline is not None:
+                data["diagnostics_baseline"] = classify_current_keys(
+                    diagnostic_key_records,
+                    diagnostics_baseline,
+                ).to_dict()
+        elif diagnostics_baseline is not None:
+            data["diagnostics_baseline"] = classify_current_keys(
+                diagnostic_key_records,
+                diagnostics_baseline,
+            ).to_dict()
         if is_variant:
             data["is_variant"] = True
             data["base_prefab_path"] = base_prefab_path
         return ToolResponse(
-            success=success,
-            severity=result.max_severity,
+            success=response_success,
+            severity=response_severity,
             code="INSPECT_WIRING_RESULT",
             message="inspect.wiring completed (read-only).",
             data=data,
@@ -478,17 +720,37 @@ def inspect_wiring(
     }
     if filter_active:
         data["script_filter"] = script_filter
+        data["diagnostic_counts"] = diagnostic_counts
+        data["filtered_diagnostics"] = _diagnostic_wire_rows(
+            filtered_diagnostics,
+            filtered_default_severity,
+        )
+        if include_out_of_scope_diagnostics:
+            data["out_of_scope_diagnostics"] = _diagnostic_wire_rows(
+                out_of_scope_diagnostics,
+                out_of_scope_default_severity,
+            )
+        if diagnostics_baseline is not None:
+            data["diagnostics_baseline"] = classify_current_keys(
+                diagnostic_key_records,
+                diagnostics_baseline,
+            ).to_dict()
+    elif diagnostics_baseline is not None:
+        data["diagnostics_baseline"] = classify_current_keys(
+            diagnostic_key_records,
+            diagnostics_baseline,
+        ).to_dict()
     if is_variant:
         data["is_variant"] = True
         data["base_prefab_path"] = base_prefab_path
 
     return ToolResponse(
-        success=success,
-        severity=result.max_severity,
+        success=response_success,
+        severity=response_severity,
         code="INSPECT_WIRING_RESULT",
         message="inspect.wiring completed (read-only).",
         data=data,
-        diagnostics=diagnostics,
+        diagnostics=response_diagnostics,
     )
 
 

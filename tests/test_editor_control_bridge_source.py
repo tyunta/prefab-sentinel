@@ -993,6 +993,8 @@ class TestRecompileAndWaitDomainReloadResume(unittest.TestCase):
             "ResumePendingAsyncRunners must contain the "
             "editor_recompile_and_wait branch",
         )
+        if branch_match is None:
+            self.fail("ResumePendingAsyncRunners editor_recompile_and_wait branch not found")
         branch_body = branch_match.group(1)
         call_match = re.search(
             r"BuildRecompileReloadWaitPoll\s*\(([^;]*)\)\s*;",
@@ -1003,6 +1005,8 @@ class TestRecompileAndWaitDomainReloadResume(unittest.TestCase):
             call_match,
             "Resumer branch must call BuildRecompileReloadWaitPoll",
         )
+        if call_match is None:
+            self.fail("Resumer branch must call BuildRecompileReloadWaitPoll")
         # The poll builder signature is
         # ``(responsePath, deadlineMs, reloadCountThreshold, timeoutDetail)``;
         # the third positional argument is the threshold literal.
@@ -2250,7 +2254,14 @@ class TestEditorAsmdefUiReferences(unittest.TestCase):
 
     def _references(self) -> list[str]:
         manifest = json.loads(self._ASMDEF.read_text(encoding="utf-8"))
-        return manifest["references"]
+        if not isinstance(manifest, dict):
+            self.fail("PrefabSentinel.Editor.asmdef root must be an object")
+        references = manifest.get("references")
+        if not isinstance(references, list) or not all(
+            isinstance(item, str) for item in references
+        ):
+            self.fail("PrefabSentinel.Editor.asmdef references must be a string list")
+        return references
 
     def test_textmeshpro_reference_present(self) -> None:
         self.assertIn("Unity.TextMeshPro", self._references())
@@ -2389,6 +2400,8 @@ class TestCompileBarrierSource(unittest.TestCase):
         self.assertIsNotNone(
             match, "the barrier must catch a failing compile trigger"
         )
+        if match is None:
+            self.fail("the barrier must catch a failing compile trigger")
         catch_body = _extract_braced_block(
             body, match.end(), "ScheduleCompileBarrier schedule-failure catch"
         )
@@ -2413,6 +2426,8 @@ class TestCompileBarrierSource(unittest.TestCase):
         self.assertIsNotNone(
             match, "HandleRecompileAndWait must supply an onScheduleFailure action"
         )
+        if match is None:
+            self.fail("HandleRecompileAndWait must supply an onScheduleFailure action")
         action = _extract_braced_block(
             body, match.end(), "recompile onScheduleFailure action"
         )
@@ -2713,6 +2728,8 @@ class TestHandleGetEditorStateReadsFiveFlags(unittest.TestCase):
         self.assertIsNotNone(
             match, msg="EditorStateSnapshot class declaration not found"
         )
+        if match is None:
+            self.fail("EditorStateSnapshot class declaration not found")
         snapshot_body = _extract_braced_block(
             body, match.end(), "EditorStateSnapshot body"
         )
@@ -2792,6 +2809,8 @@ class TestRunFromPathsExceptionBoundary(unittest.TestCase):
             catch_match,
             msg="handler-exception catch guarding DispatchAction not found",
         )
+        if catch_match is None:
+            self.fail("handler-exception catch guarding DispatchAction not found")
         catch_var = catch_match.group(1)
         catch_body = _extract_braced_block(
             body, catch_match.end(), "RunFromPaths handler-exception catch"
@@ -5130,6 +5149,8 @@ class TestAddComponentInitialPropertyDiagnostics(unittest.TestCase):
             match,
             "properties_json parse catch block not found in HandleEditorAddComponent",
         )
+        if match is None:
+            self.fail("properties_json parse catch block not found in HandleEditorAddComponent")
         catch_body = _extract_braced_block(
             body, match.end(), "properties_json parse catch block"
         )

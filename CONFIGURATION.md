@@ -32,12 +32,32 @@
 - malformed エントリ（GUID として無効な行）は既存の `REF001` envelope で表面化する。
 - ファイルパスは `--scope` で指定した scope の `config/ignore_guids.txt` を自動解決する。固定パスは持たない。ファイル auto-load とは別に caller が GUID を直接指定したい場合は `validate_refs` の `ignore_asset_guids` 引数を使う。
 
+## diagnostics_baseline.json 形式仕様
+
+`config/diagnostics_baseline.json` は activate 済み project root 直下の `config/` に置く diagnostics 分類用 baseline。`ignore_guids.txt` と異なり scope ごとには解決しない。
+
+```json
+{
+  "version": 1,
+  "known_diagnostics": [
+    "missing_asset_guid:0123456789abcdef0123456789abcdef"
+  ]
+}
+```
+
+- `version` は `1` のみ受理する。
+- `known_diagnostics` は空でない文字列 key の配列。key は `validate_refs` / `inspect_wiring` が返す stable diagnostic key をそのまま記録する。
+- ファイルが存在しない場合、または project root が未設定の場合は baseline なしとして実行する。
+- JSON が壊れている、root が object でない、schema が違う、空文字列 key が含まれる場合は `DIAGNOSTICS_BASELINE_INVALID` の error envelope を返し、対象 tool は orchestrator を呼ばない。
+- このファイルは read-only に扱う。tool 実行中に自動作成・自動更新しない。
+
 ## scope config 規約
 
 `<scope>/config/*.txt` 系の設定ファイルはすべて `--scope` 起点で相対解決する。固定パスは持たない。
 
 - 走査対象（`--scope`）は実行時に明示する。`activate_project` の `project_root` 引数と独立して、検査ごとに scope を切り替えられる。
 - `<scope>/config/ignore_guids.txt` は `validate_refs` / `find_referencing_assets` の各 entry point から auto-load される。
+- project-level `config/diagnostics_baseline.json` は scope config ではない。`validate_refs` / `inspect_wiring` の diagnostics 分類で使う場合も、常に activate 済み project root から解決する。
 - ファイルが存在しない場合は黙って無視する（fail にも warning にもしない）。明示要求のない absent file は単に「適用なし」を意味する。
 - scope の区切り文字は `/` と `\` のどちらでも受け付け、内部で `/` に正規化される。WSL 環境のパス変換は `prefab_sentinel/wsl_compat.py` が担う。
 - ベンチマーク・smoke batch・regression report 等の出力先パスは scope 配下の `reports/` / `benchmark_*.json` を慣例として使うが、本ファイルは scope 規約の正本としては扱わない（個別スクリプトの引数仕様は [docs/execution-reference.md](./docs/execution-reference.md) を参照）。

@@ -107,6 +107,8 @@ Routine CI / agent validation では `validate_runtime(profile="compile_only")` 
 
 read-only 検査（`validate_*` / `inspect_*` / `find_*`）は Unity 不要、`editor_*` 系と `patch_apply` の confirm 適用は Editor Bridge 常駐が前提。
 
+`validate_refs` と `inspect_wiring` は project root の `config/diagnostics_baseline.json` を読むと diagnostics を `new` / `known` / `resolved` に分類する。baseline は読み取り専用で、自動生成・自動更新はしない。`inspect_wiring(script_filter=...)` は対象 script に関係する diagnostics と out-of-scope diagnostics を分離し、詳細行は `include_out_of_scope_diagnostics=true` のときだけ返す。baseline file 形式は [CONFIGURATION.md](./CONFIGURATION.md)、応答形状は [docs/api-reference.md](./docs/api-reference.md) を正本とする。
+
 推奨フロー: `validate_refs` で参照破損を早期検出 → `inspect_variant` で override 衝突を実効値として可視化 → `patch_apply` の dry-run → `confirm=True` + `change_reason` + `out_report` で監査ログ付きの適用。
 
 ## VRChat エコシステムナレッジ

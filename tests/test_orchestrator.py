@@ -718,7 +718,7 @@ class ValidateAllWiringTests(unittest.TestCase):
             resp = result.to_dict()
             self.assertTrue(resp["success"])
             self.assertEqual(1, resp["data"]["files_scanned"])
-            self.assertGreaterEqual(resp["data"]["total_components"], 1)
+            self.assertEqual(1, resp["data"]["total_components"])
 
     def test_no_scope_returns_error(self) -> None:
         orch = _make_orchestrator()
@@ -757,6 +757,34 @@ class ValidateRefsTests(unittest.TestCase):
         orch.validate_refs("Assets/", ignore_asset_guids=("guid1", "guid2"))
         call_kwargs = orch.reference_resolver.scan_broken_references.call_args[1]
         self.assertEqual(("guid1", "guid2"), call_kwargs["ignore_asset_guids"])
+
+    def test_inspect_wiring_forwards_out_of_scope_flag_and_baseline(self) -> None:
+        from prefab_sentinel.diagnostics_baseline import DiagnosticsBaseline
+        from prefab_sentinel.orchestrator import orchestrator_wiring
+
+        baseline = DiagnosticsBaseline(
+            known_diagnostics=frozenset({"inspect_wiring:null_reference:Assets/Base.prefab:40:targetRef"}),
+            path="/project/config/diagnostics_baseline.json",
+            status="loaded",
+        )
+        orch = _make_orchestrator()
+        expected = _ok_response("INSPECT_WIRING_RESULT", {"component_count": 0})
+
+        with patch.object(orchestrator_wiring, "inspect_wiring", return_value=expected) as mocked:
+            result = orch.inspect_wiring(
+                "Assets/Base.prefab",
+                include_out_of_scope_diagnostics=True,
+                diagnostics_baseline=baseline,
+            )
+
+        self.assertIs(result, expected)
+        self.assertEqual(
+            (True, baseline),
+            (
+                mocked.call_args.kwargs["include_out_of_scope_diagnostics"],
+                mocked.call_args.kwargs["diagnostics_baseline"],
+            ),
+        )
 
 
 class ValidateRuntimeTests(unittest.TestCase):
@@ -2177,16 +2205,110 @@ class TestNestedWiringTraversal(unittest.TestCase):
                 result = orch.inspect_wiring(str(base_path))
 
             self.assertEqual("INSPECT_WIRING_RESULT", result.code)
-            self.assertGreaterEqual(
-                result.data["component_count"], 1,
-                "Expected at least 1 component from nested prefab",
+            self.assertEqual(1, result.data["component_count"])
+            self.assertEqual(
+                [
+                    (
+                        "Assets/Child.prefab",
+                        "3",
+                        "ChildObj",
+                        _SCRIPT_GUID_CUSTOM,
+                    )
+                ],
+                [
+                    (
+                        c["source_prefab"],
+                        c["file_id"],
+                        c["game_object_name"],
+                        c["script_guid"],
+                    )
+                    for c in result.data["components"]
+                ],
             )
-            has_source_prefab = any(
-                "source_prefab" in c for c in result.data["components"]
+
+
+    def test_nested_diagnostics_are_emitted_and_classified(self) -> None:
+        from prefab_sentinel.diagnostics_baseline import DiagnosticsBaseline
+        from tests.yaml_helpers import (
+            YAML_HEADER,
+            make_gameobject,
+            make_monobehaviour,
+            make_prefab_instance,
+            make_transform,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            assets_dir = tmp_path / "Assets"
+            assets_dir.mkdir()
+
+            child_text = (
+                YAML_HEADER
+                + make_gameobject("1", "ChildObj", ["2", "3"])
+                + make_transform("2", "1")
+                + make_monobehaviour(
+                    "3",
+                    "1",
+                    guid=_SCRIPT_GUID_CUSTOM,
+                    fields={"childRef": "{fileID: 999}"},
+                )
             )
-            self.assertTrue(
-                has_source_prefab,
-                "Expected at least one component with source_prefab key",
+            _write_prefab_with_meta(
+                assets_dir, "Child.prefab", _CHILD_WIRING_GUID, child_text,
+            )
+
+            base_text = (
+                YAML_HEADER
+                + make_gameobject("10", "BaseRoot", ["20"])
+                + make_transform("20", "10")
+                + make_prefab_instance("30", _CHILD_WIRING_GUID)
+            )
+            base_path = _write_prefab_with_meta(
+                assets_dir, "Base.prefab", "66666666666666666666666666666666", base_text,
+            )
+            known_key = "inspect_wiring:internal_broken_ref:Assets/Child.prefab:3:childRef"
+            baseline = DiagnosticsBaseline(
+                known_diagnostics=(known_key,),
+                path=str(tmp_path / "config" / "diagnostics_baseline.json"),
+                status="loaded",
+            )
+
+            orch = _make_orchestrator()
+            orch.prefab_variant.project_root = tmp_path
+            with patch(
+                "prefab_sentinel.orchestrator_wiring.collect_project_guid_index",
+                return_value={
+                    _CHILD_WIRING_GUID: assets_dir / "Child.prefab",
+                    _SCRIPT_GUID_CUSTOM: assets_dir / "CustomBehaviour.cs",
+                },
+            ):
+                result = orch.inspect_wiring(
+                    str(base_path),
+                    script_filter="CustomBehaviour",
+                    diagnostics_baseline=baseline,
+                )
+
+            self.assertEqual("INSPECT_WIRING_RESULT", result.code)
+            self.assertEqual(
+                (
+                    False,
+                    Severity.ERROR,
+                    1,
+                    1,
+                    ["Internal fileID not found: ChildObj.childRef -> fileID:999"],
+                    [known_key],
+                ),
+                (
+                    result.success,
+                    result.severity,
+                    result.data["internal_broken_ref_count"],
+                    result.data["diagnostic_counts"]["filtered"]["total"],
+                    [row["code"] for row in result.data["filtered_diagnostics"]],
+                    [
+                        item["key"]
+                        for item in result.data["diagnostics_baseline"]["known"]
+                    ],
+                ),
             )
 
     def test_udon_only_filter_with_nested(self) -> None:
@@ -2249,17 +2371,19 @@ class TestNestedWiringTraversal(unittest.TestCase):
             nested_components = [
                 c for c in result.data["components"] if "source_prefab" in c
             ]
-            # Must have at least 1 nested component (the UdonSharp one from Child)
-            self.assertGreaterEqual(
-                len(nested_components), 1,
-                "Expected at least 1 nested component after udon_only filter",
+            self.assertEqual(1, result.data["component_count"])
+            self.assertEqual(
+                [("Assets/Child.prefab", "4", _SCRIPT_GUID_UDON_SHARP, True)],
+                [
+                    (
+                        c["source_prefab"],
+                        c["file_id"],
+                        c["script_guid"],
+                        c["is_udon_sharp"],
+                    )
+                    for c in nested_components
+                ],
             )
-            # Only the UdonSharp component should remain (custom filtered out)
-            for comp in nested_components:
-                self.assertTrue(
-                    comp["is_udon_sharp"],
-                    f"Expected only UdonSharp components with udon_only=True, got {comp}",
-                )
 
     def test_base_and_nested_components_distinguished(self) -> None:
         """Base has a direct MonoBehaviour; Child also has one.

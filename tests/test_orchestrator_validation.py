@@ -128,6 +128,27 @@ guid: {VARIANT_GUID}
     )
 
 
+def _create_project_with_missing_guid_and_local_id(root: Path) -> None:
+    _create_project_with_missing_guid(root)
+    write_file(
+        root / "Assets" / "LocalBroken.prefab",
+        f"""%YAML 1.1
+--- !u!1 &100
+GameObject:
+  m_Name: LocalBroken
+--- !u!114 &200
+MonoBehaviour:
+  m_GameObject: {{fileID: 100}}
+  m_Script: {{fileID: 11500000, guid: {MISSING_GUID}, type: 3}}
+  localRef: {{fileID: 999999}}
+""",
+    )
+    write_file(
+        root / "Assets" / "LocalBroken.prefab.meta",
+        "fileFormatVersion: 2\nguid: 33333333333333333333333333333333\n",
+    )
+
+
 def _create_clean_project(root: Path) -> None:
     write_file(
         root / "Assets" / "Base.prefab",
@@ -167,6 +188,7 @@ class MissingGuidContractTests(unittest.TestCase):
             "broken_occurrences": 0,
             "categories": {"missing_asset": 0, "missing_local_id": 0},
             "categories_occurrences": {"missing_asset": 0, "missing_local_id": 0},
+            "diagnostic_keys": [],
             "ignored_missing_asset_occurrences": 0,
             "ignored_missing_asset_unique_count": 0,
             "returned_diagnostics": 0,
@@ -200,6 +222,14 @@ class MissingGuidContractTests(unittest.TestCase):
             "broken_occurrences": 1,
             "categories": {"missing_asset": 1, "missing_local_id": 0},
             "categories_occurrences": {"missing_asset": 1, "missing_local_id": 0},
+            "diagnostic_keys": [
+                {
+                    "key": f"missing_asset_guid:{MISSING_GUID}",
+                    "severity": "error",
+                    "message": "missing_asset",
+                    "data": {"category": "missing_asset", "guid": MISSING_GUID},
+                }
+            ],
             "ignored_missing_asset_occurrences": 0,
             "ignored_missing_asset_unique_count": 0,
             "returned_diagnostics": 0,
@@ -307,6 +337,194 @@ class MissingGuidContractTests(unittest.TestCase):
             },
             response.data,
         )
+
+
+class DiagnosticsKeyContractTests(unittest.TestCase):
+    def test_broken_reference_scan_reports_stable_keys_without_details(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_project_with_missing_guid_and_local_id(root)
+            resolver = ReferenceResolverService(project_root=root)
+
+            without_details = resolver.scan_broken_references(
+                scope="Assets",
+                include_diagnostics=False,
+            )
+            with_details = resolver.scan_broken_references(
+                scope="Assets",
+                include_diagnostics=True,
+            )
+
+        expected_keys = [
+            {
+                "key": f"missing_asset_guid:{MISSING_GUID}",
+                "severity": "error",
+                "message": "missing_asset",
+                "data": {"category": "missing_asset", "guid": MISSING_GUID},
+            },
+            {
+                "key": "missing_local_id_local:Assets/LocalBroken.prefab:999999",
+                "severity": "error",
+                "message": "missing_local_id",
+                "data": {
+                    "category": "missing_local_id",
+                    "source_path": "Assets/LocalBroken.prefab",
+                    "file_id": "999999",
+                },
+            },
+        ]
+        for response in (without_details, with_details):
+            self.assertEqual(
+                (2, {"missing_asset": 1, "missing_local_id": 1}),
+                (response.data["broken_count"], response.data["categories"]),
+            )
+            self.assertEqual(expected_keys, response.data.get("diagnostic_keys"))
+
+
+class DiagnosticsBaselineValidateRefsTests(unittest.TestCase):
+    SECOND_MISSING_GUID = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+
+    def test_validate_refs_classifies_current_keys_without_downgrading_ref001(self) -> None:
+        from prefab_sentinel.diagnostics_baseline import DiagnosticsBaseline
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_project_with_missing_guid(root)
+            write_file(
+                root / "Assets" / "SecondMissing.prefab",
+                f"""%YAML 1.1
+--- !u!1 &100
+GameObject:
+  m_Name: SecondMissing
+--- !u!114 &200
+MonoBehaviour:
+  m_GameObject: {{fileID: 100}}
+  m_Script: {{fileID: 11500000, guid: {self.SECOND_MISSING_GUID}, type: 3}}
+""",
+            )
+            write_file(
+                root / "Assets" / "SecondMissing.prefab.meta",
+                "fileFormatVersion: 2\nguid: 44444444444444444444444444444444\n",
+            )
+            resolver = ReferenceResolverService(project_root=root)
+            baseline = DiagnosticsBaseline(
+                known_diagnostics=(f"missing_asset_guid:{MISSING_GUID}",),
+                path=str(root / "config" / "diagnostics_baseline.json"),
+                status="loaded",
+            )
+
+            response = validate_refs(
+                resolver,
+                scope="Assets",
+                diagnostics_baseline=baseline,
+            )
+
+        scan_data = response.data["steps"][0]["result"]["data"]
+        self.assertEqual((False, "REF001", Severity.ERROR), (response.success, response.code, response.severity))
+        self.assertEqual((2, {"missing_asset": 2, "missing_local_id": 0}), (scan_data["broken_count"], scan_data["categories"]))
+        self.assertEqual(
+            {
+                "new_count": 1,
+                "known_count": 1,
+                "resolved_count": 0,
+                "new_keys": [f"missing_asset_guid:{self.SECOND_MISSING_GUID}"],
+                "known_keys": [f"missing_asset_guid:{MISSING_GUID}"],
+                "resolved_keys": [],
+            },
+            {
+                "new_count": response.data.get("diagnostics_baseline", {}).get("new_count"),
+                "known_count": response.data.get("diagnostics_baseline", {}).get("known_count"),
+                "resolved_count": response.data.get("diagnostics_baseline", {}).get("resolved_count"),
+                "new_keys": [
+                    item["key"]
+                    for item in response.data.get("diagnostics_baseline", {}).get("new", [])
+                ],
+                "known_keys": [
+                    item["key"]
+                    for item in response.data.get("diagnostics_baseline", {}).get("known", [])
+                ],
+                "resolved_keys": [
+                    item["key"]
+                    for item in response.data.get("diagnostics_baseline", {}).get("resolved", [])
+                ],
+            },
+        )
+
+    def test_validate_refs_with_baseline_preserves_invalid_ignore_guid_error(self) -> None:
+        from prefab_sentinel.diagnostics_baseline import DiagnosticsBaseline
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_project_with_missing_guid(root)
+            resolver = ReferenceResolverService(project_root=root)
+            baseline = DiagnosticsBaseline(
+                known_diagnostics=(),
+                path=str(root / "config" / "diagnostics_baseline.json"),
+                status="loaded",
+            )
+
+            try:
+                response = validate_refs(
+                    resolver,
+                    scope="Assets",
+                    ignore_asset_guids=("not-a-guid",),
+                    diagnostics_baseline=baseline,
+                )
+            except KeyError as exc:
+                self.fail(
+                    "validate_refs must preserve invalid-ignore scan errors "
+                    f"instead of raising {exc!r}"
+                )
+
+        step_result = response.data["steps"][0]["result"]
+        self.assertEqual((False, Severity.ERROR), (response.success, response.severity))
+        self.assertEqual(
+            (
+                "REF001",
+                {
+                    "scope": "Assets",
+                    "invalid_ignore_asset_guids": ["not-a-guid"],
+                    "read_only": True,
+                },
+            ),
+            (step_result["code"], step_result["data"]),
+        )
+        self.assertNotIn("diagnostics_baseline", response.data)
+
+    def test_validate_refs_with_baseline_preserves_missing_scope_error(self) -> None:
+        from prefab_sentinel.diagnostics_baseline import DiagnosticsBaseline
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            resolver = ReferenceResolverService(project_root=root)
+            baseline = DiagnosticsBaseline(
+                known_diagnostics=(),
+                path=str(root / "config" / "diagnostics_baseline.json"),
+                status="loaded",
+            )
+
+            try:
+                response = validate_refs(
+                    resolver,
+                    scope="Assets/Does/Not/Exist",
+                    diagnostics_baseline=baseline,
+                )
+            except KeyError as exc:
+                self.fail(
+                    "validate_refs must preserve missing-scope scan errors "
+                    f"instead of raising {exc!r}"
+                )
+
+        step_result = response.data["steps"][0]["result"]
+        self.assertEqual((False, Severity.ERROR), (response.success, response.severity))
+        self.assertEqual(
+            (
+                "REF404",
+                {"scope": "Assets/Does/Not/Exist", "read_only": True},
+            ),
+            (step_result["code"], step_result["data"]),
+        )
+        self.assertNotIn("diagnostics_baseline", response.data)
 
 
 class InspectStructureContractTests(unittest.TestCase):
@@ -1140,6 +1358,88 @@ GameObject:
                     svc,
                     scope=str(root / "Assets"),
                     snapshot_diff="corrupt",
+                )
+            finally:
+                os.environ.pop("PREFAB_SENTINEL_SNAPSHOT_DIR", None)
+
+        self.assertFalse(resp.success)
+        self.assertEqual("VALIDATE_REFS_SNAPSHOT_BAD_NAME", resp.code)
+        self.assertEqual(Severity.ERROR, resp.severity)
+        self.assertIn("malformed", resp.message)
+
+
+    def test_snapshot_save_rejects_symlink_target(self) -> None:
+        if not hasattr(os, "symlink"):
+            self.skipTest("platform does not support os.symlink")
+
+        from prefab_sentinel.services.reference_resolver_snapshots import (
+            snapshot_path,
+        )
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            snap_dir = root / "snapshots"
+            _create_clean_project(root)
+            svc = ReferenceResolverService(project_root=root)
+
+            os.environ["PREFAB_SENTINEL_SNAPSHOT_DIR"] = str(snap_dir)
+            try:
+                target = snapshot_path("blocked", root)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                outside = root / "outside.json"
+                outside.write_text("unchanged", encoding="utf-8")
+                try:
+                    os.symlink(outside, target)
+                except OSError as exc:
+                    self.skipTest(f"symlink creation not permitted: {exc}")
+
+                resp = validate_refs(
+                    svc,
+                    scope=str(root / "Assets"),
+                    snapshot_save="blocked",
+                )
+                outside_text = outside.read_text(encoding="utf-8")
+            finally:
+                os.environ.pop("PREFAB_SENTINEL_SNAPSHOT_DIR", None)
+
+        self.assertFalse(resp.success)
+        self.assertEqual("VALIDATE_REFS_SNAPSHOT_BAD_NAME", resp.code)
+        self.assertEqual(Severity.ERROR, resp.severity)
+        self.assertIn("malformed", resp.message)
+        self.assertEqual("unchanged", outside_text)
+
+    def test_snapshot_diff_rejects_symlink_source(self) -> None:
+        if not hasattr(os, "symlink"):
+            self.skipTest("platform does not support os.symlink")
+
+        from prefab_sentinel.services.reference_resolver_snapshots import (
+            snapshot_path,
+        )
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            snap_dir = root / "snapshots"
+            _create_clean_project(root)
+            svc = ReferenceResolverService(project_root=root)
+
+            os.environ["PREFAB_SENTINEL_SNAPSHOT_DIR"] = str(snap_dir)
+            try:
+                target = snapshot_path("linked", root)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                outside = root / "outside.json"
+                outside.write_text(
+                    json.dumps({"top_missing_asset_guids": [{"guid": self.MISSING_A}]}),
+                    encoding="utf-8",
+                )
+                try:
+                    os.symlink(outside, target)
+                except OSError as exc:
+                    self.skipTest(f"symlink creation not permitted: {exc}")
+
+                resp = validate_refs(
+                    svc,
+                    scope=str(root / "Assets"),
+                    snapshot_diff="linked",
                 )
             finally:
                 os.environ.pop("PREFAB_SENTINEL_SNAPSHOT_DIR", None)

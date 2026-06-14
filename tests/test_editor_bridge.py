@@ -174,41 +174,67 @@ class TestSendAction(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             watch_dir = Path(tmpdir)
             seen_request_id: dict[str, str] = {}
-
-            def fake_send():
-                """Write a fake response before polling starts."""
-                import time
-
-                time.sleep(0.1)
-                for f in watch_dir.iterdir():
-                    if f.name.endswith(".request.json"):
-                        base = f.name.replace(".request.json", "")
-                        seen_request_id["value"] = base
-                        resp_path = watch_dir / f"{base}.response.json"
-                        resp = {
-                            "protocol_version": PROTOCOL_VERSION,
-                            "success": True,
-                            "severity": "info",
-                            "code": "EDITOR_CTRL_SCREENSHOT_OK",
-                            "message": "Screenshot captured",
-                            "data": {
-                                "output_path": "/tmp/test.png",
-                                "view": "scene",
-                                "width": 800,
-                                "height": 600,
-                                "executed": True,
-                            },
-                            "diagnostics": [],
-                        }
-                        resp_path.write_text(json.dumps(resp), encoding="utf-8")
-                        break
+            responder_errors: list[BaseException] = []
 
             import threading
 
-            with patch.dict(
-                os.environ,
-                {BRIDGE_WATCH_DIR_ENV: tmpdir},
-                clear=False,
+            request_ready = threading.Condition()
+            observed_request: dict[str, Path] = {}
+            original_rename = Path.rename
+
+            def notifying_rename(self_path: Path, target: str | Path) -> Path:
+                renamed_path = original_rename(self_path, target)
+                target_path = Path(target)
+                if (
+                    target_path.parent == watch_dir
+                    and target_path.name.endswith(".request.json")
+                ):
+                    with request_ready:
+                        observed_request["path"] = target_path
+                        request_ready.notify_all()
+                return renamed_path
+
+            def fake_send():
+                """Write a fake response after observing the request file."""
+                with request_ready:
+                    request_seen = request_ready.wait_for(
+                        lambda: "path" in observed_request,
+                        timeout=2,
+                    )
+                if not request_seen:
+                    responder_errors.append(
+                        AssertionError("Expected request file before fake Unity response")
+                    )
+                    return
+
+                request_file = observed_request["path"]
+                base = request_file.name.replace(".request.json", "")
+                seen_request_id["value"] = base
+                resp_path = watch_dir / f"{base}.response.json"
+                resp = {
+                    "protocol_version": PROTOCOL_VERSION,
+                    "success": True,
+                    "severity": "info",
+                    "code": "EDITOR_CTRL_SCREENSHOT_OK",
+                    "message": "Screenshot captured",
+                    "data": {
+                        "output_path": "/tmp/test.png",
+                        "view": "scene",
+                        "width": 800,
+                        "height": 600,
+                        "executed": True,
+                    },
+                    "diagnostics": [],
+                }
+                resp_path.write_text(json.dumps(resp), encoding="utf-8")
+
+            with (
+                patch.dict(
+                    os.environ,
+                    {BRIDGE_WATCH_DIR_ENV: tmpdir},
+                    clear=False,
+                ),
+                patch.object(Path, "rename", notifying_rename),
             ):
                 t = threading.Thread(target=fake_send)
                 t.start()
@@ -221,10 +247,13 @@ class TestSendAction(unittest.TestCase):
                 )
                 t.join()
 
+                self.assertEqual([], responder_errors)
                 self.assertTrue(result["success"])
                 self.assertEqual("EDITOR_CTRL_SCREENSHOT_OK", result["code"])
                 self.assertEqual("/tmp/test.png", result["data"]["output_path"])
                 self.assertEqual(seen_request_id["value"], result["request_id"])
+
+
 
 
 class TestEditorBridgeSupportedActions(unittest.TestCase):
