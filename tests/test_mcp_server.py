@@ -175,7 +175,7 @@ class TestToolRegistration(unittest.TestCase):
             "deploy_bridge",
             # Inspection + orchestrator tools
             "inspect_materials", "inspect_material_asset", "set_material_property",
-            "copy_asset", "rename_asset",
+            "copy_asset", "rename_asset", "delete_asset", "delete_assets",
             "validate_structure", "revert_overrides", "vrcsdk_upload",
             "inspect_hierarchy", "validate_runtime", "validate_all_wiring",
             "patch_apply",
@@ -215,8 +215,9 @@ class TestToolRegistration(unittest.TestCase):
         # #233 / #236 / #240 / #242 / #243 add 9 more tools, bringing
         # the surface to 85; issue #71 retired the fire-and-return
         # ``editor_recompile_async`` tool, leaving 84; issue #98 adds
-        # three live geometry tools, bringing the surface to 87.
-        self.assertEqual(87, len(tools))
+        # three live geometry tools, bringing the surface to 87; issue
+        # #114 adds delete_asset and delete_assets, bringing it to 89.
+        self.assertEqual(89, len(tools))
 
 
 class TestToolsCatalogDoc(unittest.TestCase):
@@ -2212,6 +2213,46 @@ class TestFindReferencingAssetsDirectPayload(unittest.TestCase):
         # No envelope keys
         self.assertNotIn("success", result)
         self.assertNotIn("severity", result)
+
+
+    def test_missing_target_metadata_stays_in_direct_payload(self) -> None:
+        server = create_server()
+        usages = [{"path": "Assets/Referrer.prefab", "line": 4, "column": 11}]
+        mock_step = ToolResponse(
+            success=True,
+            severity=Severity.INFO,
+            code="REF_WHERE_USED",
+            message="Reference usage scan completed.",
+            data={
+                "usages": usages,
+                "usage_count": 1,
+                "returned_usages": 1,
+                "truncated_usages": 0,
+                "scanned_files": 1,
+                "asset_path": None,
+                "asset_missing": True,
+            },
+            diagnostics=[],
+        )
+        with patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_cls:
+            mock_orch = mock_cls.default.return_value
+            mock_orch.reference_resolver.where_used.return_value = mock_step
+            _, result = _run(server.call_tool(
+                "find_referencing_assets",
+                {"asset_or_guid": "f" * 32},
+            ))
+
+        self.assertEqual(usages, result["matches"])
+        self.assertEqual(
+            {
+                "total_count": 1,
+                "truncated": False,
+                "scope": None,
+                "asset_path": None,
+                "asset_missing": True,
+            },
+            result["metadata"],
+        )
 
     def test_truncated_metadata(self) -> None:
         server = create_server()
@@ -4653,6 +4694,109 @@ class TestRenameAssetTool(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertEqual("CHANGE_REASON_REQUIRED", result["code"])
         mock_orch.rename_asset.assert_not_called()
+
+
+class PatchAssetDeleteToolTests(unittest.TestCase):
+    """Tests for delete_asset and delete_assets MCP tools."""
+
+    def test_delete_asset_delegates_single_path_as_batch(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.to_dict.return_value = {"success": True, "data": {"targets": []}}
+        mock_orch = MagicMock()
+        mock_orch.delete_assets.return_value = mock_resp
+
+        server = create_server()
+        with patch.object(
+            ProjectSession, "get_orchestrator", return_value=mock_orch,
+        ):
+            _, result = _run(server.call_tool(
+                "delete_asset", {"asset_path": "Assets/Foo.prefab"},
+            ))
+
+        self.assertTrue(result["success"])
+        mock_orch.delete_assets.assert_called_once_with(
+            ["Assets/Foo.prefab"],
+            scope=None,
+            dry_run=True,
+            confirm=False,
+            change_reason=None,
+        )
+
+    def test_delete_assets_defaults_to_dry_run(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.to_dict.return_value = {"success": True, "data": {"targets": []}}
+        mock_orch = MagicMock()
+        mock_orch.delete_assets.return_value = mock_resp
+
+        server = create_server()
+        with patch.object(
+            ProjectSession, "get_orchestrator", return_value=mock_orch,
+        ):
+            _, result = _run(server.call_tool(
+                "delete_assets", {"asset_paths": ["Assets/Foo.prefab"]},
+            ))
+
+        self.assertTrue(result["success"])
+        mock_orch.delete_assets.assert_called_once_with(
+            ["Assets/Foo.prefab"],
+            scope=None,
+            dry_run=True,
+            confirm=False,
+            change_reason=None,
+        )
+
+    def test_delete_assets_confirmed_apply_passes_resolved_scope_and_reason(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.to_dict.return_value = {"success": True, "data": {"deleted_paths": []}}
+        mock_orch = MagicMock()
+        mock_orch.delete_assets.return_value = mock_resp
+
+        server = create_server()
+        with (
+            patch.object(ProjectSession, "get_orchestrator", return_value=mock_orch),
+            patch.object(ProjectSession, "resolve_scope", return_value="Assets/Resolved"),
+        ):
+            _, result = _run(server.call_tool(
+                "delete_assets",
+                {
+                    "asset_paths": ["Assets/Foo.prefab"],
+                    "scope": "feature",
+                    "dry_run": False,
+                    "confirm": True,
+                    "change_reason": "remove obsolete asset",
+                },
+            ))
+
+        self.assertTrue(result["success"])
+        mock_orch.delete_assets.assert_called_once_with(
+            ["Assets/Foo.prefab"],
+            scope="Assets/Resolved",
+            dry_run=False,
+            confirm=True,
+            change_reason="remove obsolete asset",
+        )
+
+    def test_delete_assets_confirmed_apply_requires_change_reason(self) -> None:
+        mock_orch = MagicMock()
+        server = create_server()
+        with patch.object(
+            ProjectSession, "get_orchestrator", return_value=mock_orch,
+        ):
+            _, result = _run(server.call_tool(
+                "delete_assets",
+                {
+                    "asset_paths": ["Assets/Foo.prefab"],
+                    "dry_run": False,
+                    "confirm": True,
+                    "change_reason": "",
+                },
+            ))
+
+        self.assertEqual(
+            (False, "CHANGE_REASON_REQUIRED"),
+            (result["success"], result["code"]),
+        )
+        mock_orch.delete_assets.assert_not_called()
 
 
 class TestSetMaterialPropertyTool(unittest.TestCase):

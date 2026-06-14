@@ -46,6 +46,7 @@ SUPPORTED_ACTIONS = frozenset(
         "refresh_asset_database",
         "set_material",
         "delete_object",
+        "delete_assets",
         "list_children",
         "list_materials",
         "get_camera",

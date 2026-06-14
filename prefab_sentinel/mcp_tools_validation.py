@@ -52,6 +52,8 @@ def register_validation_tools(server: FastMCP, session: ProjectSession) -> None:
                 "total_count": step.data.get("usage_count", len(usages)),
                 "truncated": step.data.get("truncated_usages", 0) > 0,
                 "scope": str(resolved_scope) if resolved_scope else None,
+                "asset_path": step.data.get("asset_path"),
+                "asset_missing": step.data.get("asset_missing", False),
             },
         }
 

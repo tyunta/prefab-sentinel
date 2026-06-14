@@ -24,6 +24,14 @@ public class ActionRegistryTests
         Assert.DoesNotContain("select_object", ActionRegistry.Async);
     }
 
+
+    [Fact]
+    public void Delete_Assets_Action_Is_Supported_With_The_Async_Flag_Clear()
+    {
+        Assert.Contains("delete_assets", ActionRegistry.Supported);
+        Assert.DoesNotContain("delete_assets", ActionRegistry.Async);
+    }
+
     [Fact]
     public void An_Unknown_Action_Is_Not_Supported()
     {

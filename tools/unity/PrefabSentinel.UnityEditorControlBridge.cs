@@ -158,6 +158,8 @@ namespace PrefabSentinel
             public string selected_object = string.Empty;
             public string instantiated_object = string.Empty;
             public string deleted_object = string.Empty;
+            public string[] deleted_paths = Array.Empty<string>();
+            public string[] failed_paths = Array.Empty<string>();
             public int deleted_child_count = 0;
             public int total_entries = 0;
             public int component_count = 0;
@@ -590,6 +592,9 @@ private static string DeriveTransportRequestId(string requestPath)
                     break;
                 case "delete_object":
                     response = HandleDeleteObject(request);
+                    break;
+                case "delete_assets":
+                    response = HandleDeleteAssets(request);
                     break;
                 case "list_children":
                     response = HandleListChildren(request);

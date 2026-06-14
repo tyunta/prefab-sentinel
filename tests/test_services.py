@@ -941,6 +941,7 @@ guid: 2222222222222222222222222222bbbb
             {
                 "guid": BASE_GUID,
                 "asset_path": "Assets/Base.prefab",
+                "asset_missing": False,
                 "scope": "Assets",
                 "scan_project_root": ".",
                 "usage_count": 6,
@@ -1027,15 +1028,14 @@ guid: 2222222222222222222222222222bbbb
         )
 
     def test_where_used_unknown_guid_emits_ref001(self) -> None:
-        """A well-formed but unknown GUID returns ``REF001`` with the
-        offending input echoed under ``data.asset_or_guid``."""
+        """Unscoped well-formed unknown GUIDs still stop with ``REF001``."""
         from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
 
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             _create_sample_project(root)
             svc = ReferenceResolverService(project_root=root)
-            response = svc.where_used(MISSING_GUID, scope="Assets")
+            response = svc.where_used(MISSING_GUID)
 
         assert_error_envelope(
             response,
