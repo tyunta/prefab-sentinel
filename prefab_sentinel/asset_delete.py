@@ -125,8 +125,9 @@ def _scan_data(response: Any) -> dict[str, Any]:
 
 
 def _scan_failure_response(response: Any) -> dict[str, Any] | None:
+    wire: dict[str, Any]
     if hasattr(response, "to_dict"):
-        wire = response.to_dict()
+        wire = dict(response.to_dict())
     elif isinstance(response, Mapping):
         wire = dict(response)
     else:

@@ -172,10 +172,11 @@ def _bridge_failure_response(
 
 def _scan_after_delete(orch: Any, *, scope: str | None) -> ToolResponse:
     _invalidate_delete_caches(orch)
-    return orch.reference_resolver.scan_broken_references(
+    response: ToolResponse = orch.reference_resolver.scan_broken_references(
         scope=scope if scope is not None else "Assets",
         include_diagnostics=False,
     )
+    return response
 
 
 def _invalidate_delete_caches(orch: Any) -> None:
