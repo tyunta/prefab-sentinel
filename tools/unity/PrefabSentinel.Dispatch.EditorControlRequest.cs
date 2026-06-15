@@ -167,6 +167,7 @@ namespace PrefabSentinel
         public string target_mode = "auto";
         public float padding_ratio = 0.10f;
         public string projection = "auto";
+        public string fit_mode = "max_axis";
 
         // Issue #241: caller-supplied pagination knobs for ``get_blend_shapes``.
         public int offset = 0;

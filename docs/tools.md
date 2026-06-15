@@ -110,12 +110,12 @@
 
 | ツール | 区分 | 簡潔説明 | 関連 issue | 種別 |
 |--------|------|----------|-----------|------|
-| `editor_screenshot` | editor_view | Scene / Game ビューのスクリーンショット取得。`width` / `height` は `0`（現在 view サイズ）または `[1, 4096]` の範囲だけ受理する。renderer target capture は `angle`（`SCREENSHOT_ANGLE_PRESETS`: front/back/left/right/top/three_quarter; UI-only current_camera）を保持し、`target_mode=world_space_ui` / `projection` / `padding_ratio` で World Space UI の RectTransform bounds を SceneView に orthographic framing できる（UI angle: front/back/current_camera） | #249, #259, #84, #95 | read-only |
+| `editor_screenshot` | editor_view | Scene / Game ビューのスクリーンショット取得。`width` / `height` は `0`（現在 view サイズ）または `[1, 4096]` の範囲だけ受理する。renderer target capture は `target` + `angle`（`SCREENSHOT_ANGLE_PRESETS`: front/back/left/right/top/three_quarter; UI-only current_camera）と `fit_mode`（`max_axis` 既定 / `both_axes`）を保持する。`angle` 省略時は renderer target が `three_quarter`、`target_mode=world_space_ui` が `front` を使う。`fit_mode=both_axes,width=0,height=0` は target bounds と preset から出力 aspect を求め、明示 `width` + `height` はその aspect を使い、片側指定は supplied side + default other side に留める。`target_mode=auto` は active RectTransform contributors が World Space Canvas 配下なら World Space UI branch を使い、RectTransform contributor が無い場合は renderer capture にフォールバックする。`target_mode=world_space_ui` / `projection` / `padding_ratio` で World Space UI の RectTransform bounds を SceneView に orthographic framing できる（UI angle: front/back/current_camera） | #249, #259, #84, #90, #95 | read-only |
 | `editor_force_scene_view_refresh` | editor_view | 全 SkinnedMeshRenderer の `forceMatrixRecalculationPerRender` を立てて player-loop を 1 tick 進める | #242, #268 | write |
 | `editor_select` | editor_view | Hierarchy 内の GameObject を選択（Prefab Stage 対応） | — | write |
 | `editor_frame` | editor_view | 選択オブジェクトを Scene ビューでフレーミング | — | write |
 | `editor_get_camera` | editor_view | Scene ビューのカメラ状態取得（position / rotation / pivot / size / orthographic） | — | read-only |
-| `editor_set_camera` | editor_view | Scene ビューのカメラ設定。pivot orbit / position / reset_to_defaults の 3 モード相互排他 | #112 | write |
+| `editor_set_camera` | editor_view | Scene ビューのカメラ設定。pivot orbit / position / reset_to_defaults の 3 モード相互排他。position mode は projection transition 中に `EDITOR_CTRL_CAMERA_PROJECTION_TRANSITION` で fail-fast する | #76, #112 | write |
 | `editor_list_children` | editor_view | GameObject の子オブジェクト一覧（`active` / `tag` 付き） | — | read-only |
 | `editor_list_materials` | editor_view | ランタイムレンダラーのマテリアルスロット一覧 | — | read-only |
 | `editor_list_roots` | editor_view | 現在の Scene / Prefab Stage のルートオブジェクト一覧 | — | read-only |

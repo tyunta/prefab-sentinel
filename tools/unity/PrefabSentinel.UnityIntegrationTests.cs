@@ -122,6 +122,15 @@ namespace PrefabSentinel
         }
 
         [Serializable]
+        private sealed class CropBoundsEntryReadback
+        {
+            public int x = 0;
+            public int y = 0;
+            public int w = 0;
+            public int h = 0;
+        }
+
+        [Serializable]
         private sealed class ConsoleLogEntryReadback
         {
             public string message = string.Empty;
@@ -169,6 +178,10 @@ namespace PrefabSentinel
             public string distance_mode = string.Empty;
             public float[] from_point = null;
             public float[] to_point = null;
+            public int width = 0;
+            public int height = 0;
+            public string crop_roi_applied = string.Empty;
+            public CropBoundsEntryReadback crop_bounds = null;
 
             // Run-script diagnostics and result channels
             public string stdout = string.Empty;
@@ -352,6 +365,8 @@ namespace PrefabSentinel
                     ("Set_OpenMode_UnsupportedOpRejected", Test_Set_OpenMode_UnsupportedOpRejected),
                     // EditorControl: Editor-resident actions
                     ("EditorCtrl_RefreshAssetDatabase", Test_EditorCtrl_RefreshAssetDatabase),
+                    ("EditorCtrl_TargetScreenshot_OmittedDefaultsDispatch",
+                        Test_EditorCtrl_TargetScreenshot_OmittedDefaultsDispatch),
                     ("EditorCtrl_ListRoots", Test_EditorCtrl_ListRoots),
                     ("EditorCtrl_InstantiateToScene", Test_EditorCtrl_InstantiateToScene),
                     ("EditorCtrl_InstantiateToScene_ParentNotFound", Test_EditorCtrl_InstantiateToScene_ParentNotFound),
@@ -2285,6 +2300,59 @@ namespace PrefabSentinel
             const string name = "EditorCtrl_RefreshAssetDatabase";
             var resp = RunEditorControlBridge(BuildEditorControlRequest("refresh_asset_database"));
             return AssertEditorControlSuccess(name, resp) ?? Pass(name);
+        }
+
+        private static TestCaseResult Test_EditorCtrl_TargetScreenshot_OmittedDefaultsDispatch(
+            string prefabPath, string materialPath)
+        {
+            const string name = "EditorCtrl_TargetScreenshot_OmittedDefaultsDispatch";
+            var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            go.name = "TargetScreenshotDefaults_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+            go.transform.localScale = new Vector3(0.25f, 1f, 0.5f);
+            try
+            {
+                SceneView sceneView = SceneView.lastActiveSceneView;
+                if (sceneView == null)
+                    return Fail(name, "No active SceneView found for default dimension assertion.");
+                int expectedWidth = (int)sceneView.position.width;
+                int expectedHeight = (int)sceneView.position.height;
+                if (expectedWidth <= 0 || expectedHeight <= 0)
+                    return Fail(name, $"SceneView dimensions must be positive, got {expectedWidth}x{expectedHeight}.");
+
+                string targetPath = "/" + go.name;
+                string extra = "\"target\":\"" + EscapeJsonString(targetPath) + "\","
+                             + "\"angle\":\"front\"";
+                var resp = RunEditorControlBridge(BuildEditorControlRequest("capture_screenshot", extra));
+                if (resp != null && resp.code == "SCREENSHOT_FIT_MODE_INVALID")
+                    return Fail(name, "Omitted fit_mode did not preserve the max_axis default.");
+                if (resp != null && resp.code == "EDITOR_CTRL_CROP_ROI_INVALID")
+                    return Fail(name, "Omitted crop_roi did not preserve the empty-string default.");
+                var err = AssertEditorControlSuccess(name, resp);
+                if (err != null) return err;
+                if (resp.code != "EDITOR_CTRL_SCREENSHOT_OK")
+                    return Fail(name, $"code={resp.code}, expected EDITOR_CTRL_SCREENSHOT_OK.");
+                if (!resp.data.executed)
+                    return Fail(name, "Screenshot response did not mark execution true.");
+                if (resp.data.bounds_center == null || resp.data.bounds_extents == null)
+                    return Fail(name, "Target screenshot did not report renderer bounds.");
+                if (resp.data.width != expectedWidth || resp.data.height != expectedHeight)
+                {
+                    return Fail(
+                        name,
+                        $"Omitted width/height with max_axis default produced "
+                        + $"{resp.data.width}x{resp.data.height}, expected SceneView defaults "
+                        + $"{expectedWidth}x{expectedHeight}.");
+                }
+                if (resp.data.crop_roi_applied != string.Empty)
+                    return Fail(name, $"Omitted crop_roi applied '{resp.data.crop_roi_applied}'.");
+                if (resp.data.crop_bounds != null)
+                    return Fail(name, "Omitted crop_roi unexpectedly returned crop_bounds.");
+                return Pass(name);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(go);
+            }
         }
 
         private static TestCaseResult Test_EditorCtrl_ListRoots(string prefabPath, string materialPath)

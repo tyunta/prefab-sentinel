@@ -52,6 +52,9 @@
     <Compile Include="..\..\tools\unity\PrefabSentinel.Screenshot.ObjectCaptureFramingMath.cs">
       <Link>Bridge\PrefabSentinel.Screenshot.ObjectCaptureFramingMath.cs</Link>
     </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.Camera.ProjectionStateStability.cs">
+      <Link>Bridge\PrefabSentinel.Camera.ProjectionStateStability.cs</Link>
+    </Compile>
     <Compile Include="..\..\tools\unity\PrefabSentinel.Screenshot.DimensionBounds.cs">
       <Link>Bridge\PrefabSentinel.Screenshot.DimensionBounds.cs</Link>
     </Compile>

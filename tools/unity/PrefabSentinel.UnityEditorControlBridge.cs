@@ -491,7 +491,8 @@ private static string DeriveTransportRequestId(string requestPath)
                 try
                 {
                     string json = File.ReadAllText(requestPath);
-                    request = JsonUtility.FromJson<EditorControlRequest>(json);
+                    request = new EditorControlRequest();
+                    JsonUtility.FromJsonOverwrite(json, request);
                 }
                 catch (Exception ex)
                 {
