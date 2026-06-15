@@ -96,6 +96,9 @@ MCP サーバーは Plugin 内部で `uv` / `uvx` 経由でローカル起動さ
 | `validate_structure` | YAML 内部構造の検証（fileID 重複・Transform 整合性） |
 | `inspect_wiring` | MonoBehaviour フィールド配線の分析（null 参照の分類付き） |
 | `inspect_variant` | Prefab Variant の override チェーン分析 |
+| `inspect_hierarchy` | saved YAML の GameObject 階層表示。`expand_prefab_instances` で effective nested PrefabInstance 階層を read-only 展開 |
+| `inspect_transform_effective_values` | offline `asset_path` + `symbol_path` の Transform default / override / effective 値を local/world で比較 |
+| `inspect_unity_event_listeners` | Button / Slider / Toggle の UnityEvent persistent listener entries と UdonSharp 診断を 1 応答で取得 |
 | `find_referencing_assets` | GUID / パスの参照元アセット検索 |
 | `patch_apply` | パッチ計画の検証・適用（dry-run / confirm ゲート付き） |
 | `delete_asset` / `delete_assets` | AssetDatabase-backed asset 削除の dry-run / confirm。削除後 broken-reference delta を返す |

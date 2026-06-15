@@ -2486,6 +2486,57 @@ class InspectHierarchyVariantClassificationTests(unittest.TestCase):
         self.assertEqual(1, len(roots))
         self.assertEqual("Outer", roots[0]["name"])
 
+    def test_expanded_variant_hierarchy_uses_variant_layer_effective_state(self) -> None:
+        from prefab_sentinel.orchestrator_inspect import inspect_hierarchy
+        from prefab_sentinel.services.prefab_variant import PrefabVariantService
+        from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_transform
+
+        base_guid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        variant_guid = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            assets = root / "Assets"
+            assets.mkdir(parents=True, exist_ok=True)
+            base_text = (
+                YAML_HEADER
+                + make_gameobject("100", "SourceRoot", ["200"])
+                + make_transform("200", "100")
+            )
+            variant_instance = InspectHierarchyPrefabInstanceExpansionTests._prefab_instance(
+                "9000",
+                base_guid,
+                modifications=[("100", "m_Name", "VariantRoot")],
+            )
+            variant_text = YAML_HEADER + variant_instance.replace(
+                "m_TransformParent: {fileID: 2000}",
+                "m_TransformParent: {fileID: 0}",
+            )
+            _write_prefab_with_meta(assets, "Source.prefab", base_guid, base_text)
+            _write_prefab_with_meta(assets, "Variant.prefab", variant_guid, variant_text)
+            svc = PrefabVariantService(project_root=root)
+
+            response = inspect_hierarchy(
+                svc,
+                "Assets/Variant.prefab",
+                expand_prefab_instances=True,
+            )
+
+        self.assertEqual(
+            (
+                True,
+                True,
+                "Assets/Source.prefab",
+                "VariantRoot",
+            ),
+            (
+                response.success,
+                response.data.get("is_variant"),
+                response.data.get("base_prefab_path"),
+                response.data["roots"][0]["name"],
+            ),
+            msg=f"expanded variant hierarchy must preserve the variant layer effective root: {response.to_dict()!r}",
+        )
+
     def test_inspect_hierarchy_actual_variant_still_resolves_base(self) -> None:
         from prefab_sentinel.orchestrator_inspect import inspect_hierarchy
         from prefab_sentinel.services.prefab_variant import PrefabVariantService
@@ -2660,6 +2711,35 @@ class TestInspectHierarchyExpand(unittest.TestCase):
         # Response data records the expand mode active.
         self.assertEqual(True, response.data["expand_monobehaviour"])
 
+    def test_prefab_instance_expansion_also_substitutes_script_class_name(self) -> None:
+        from prefab_sentinel.orchestrator_inspect import inspect_hierarchy
+        from prefab_sentinel.services.prefab_variant import PrefabVariantService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_project_with_script(root)
+            svc = PrefabVariantService(project_root=root)
+
+            response = inspect_hierarchy(
+                svc,
+                "Assets/Test.prefab",
+                expand_monobehaviour=True,
+                expand_prefab_instances=True,
+            )
+
+        self.assertTrue(response.success, msg=response.message)
+        tree = response.data["tree"]
+        self.assertEqual(
+            (True, True, True, False),
+            (
+                response.data["expand_prefab_instances"],
+                response.data["expand_monobehaviour"],
+                "MyController" in tree,
+                "MonoBehaviour" in tree,
+            ),
+            msg=f"expanded hierarchy must preserve script-class expansion metadata and labels; response={response.to_dict()!r}",
+        )
+
     def test_expand_flag_off_keeps_generic_monobehaviour_label(self) -> None:
         from prefab_sentinel.orchestrator_inspect import inspect_hierarchy
         from prefab_sentinel.services.prefab_variant import PrefabVariantService
@@ -2699,6 +2779,282 @@ class TestInspectHierarchyExpand(unittest.TestCase):
         # Fallback: rendered tree carries the plain MonoBehaviour label.
         tree = response.data["tree"]
         self.assertIn("MonoBehaviour", tree)
+
+    def test_non_expanded_rect_parent_diagnostic_promotes_response_warning(self) -> None:
+        from prefab_sentinel.orchestrator_inspect import inspect_hierarchy
+        from prefab_sentinel.services.prefab_variant import PrefabVariantService
+        from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_transform
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            assets = root / "Assets"
+            assets.mkdir(parents=True)
+            prefab = assets / "Rect.prefab"
+            prefab.write_text(
+                YAML_HEADER
+                + make_gameobject("100", "Canvas", ["200"])
+                + make_transform(
+                    "200",
+                    "100",
+                    is_rect=True,
+                    anchor_min=(0.0, 0.0),
+                    anchor_max=(1.0, 1.0),
+                    size_delta=(0.0, 0.0),
+                ),
+                encoding="utf-8",
+            )
+            (assets / "Rect.prefab.meta").write_text(
+                "fileFormatVersion: 2\nguid: bbbb1111bbbb1111bbbb1111bbbb1111\n",
+                encoding="utf-8",
+            )
+            svc = PrefabVariantService(project_root=root)
+
+            response = inspect_hierarchy(svc, "Assets/Rect.prefab")
+
+        diagnostic_codes = [diagnostic.detail for diagnostic in response.diagnostics]
+        root_rect = response.data["roots"][0]["rect_transform"]
+        self.assertEqual(
+            (True, Severity.WARNING, "INSPECT_HIERARCHY_RESULT", "unresolved"),
+            (
+                response.success,
+                response.severity,
+                response.code,
+                root_rect["effective_world_size_basis"],
+            ),
+        )
+        self.assertIn(
+            "INSPECT_HIERARCHY_RECT_PARENT_UNRESOLVED",
+            diagnostic_codes,
+        )
+
+
+
+
+class InspectHierarchyPrefabInstanceExpansionTests(unittest.TestCase):
+    SOURCE_GUID = "11111111222222223333333344444444"
+    HOST_GUID = "55555555666666667777777788888888"
+
+    def _write_project(self, root: Path) -> None:
+        from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_transform
+
+        assets = root / "Assets"
+        assets.mkdir(parents=True, exist_ok=True)
+        source_text = (
+            YAML_HEADER
+            + make_gameobject("100", "NestedRoot", ["200"])
+            + make_transform("200", "100", children_file_ids=["201"])
+            + make_gameobject("101", "NestedLeaf", ["201"])
+            + make_transform("201", "101", father_file_id="200")
+        )
+        host_text = (
+            YAML_HEADER
+            + make_gameobject("1000", "HostRoot", ["2000"])
+            + make_transform("2000", "1000")
+            + self._prefab_instance(
+                "9000",
+                self.SOURCE_GUID,
+                modifications=[("100", "m_Name", "HostNestedRoot")],
+            )
+        )
+        _write_prefab_with_meta(assets, "Nested.prefab", self.SOURCE_GUID, source_text)
+        _write_prefab_with_meta(assets, "Host.prefab", self.HOST_GUID, host_text)
+
+    @staticmethod
+    def _prefab_instance(
+        file_id: str,
+        source_guid: str,
+        *,
+        modifications: list[tuple[str, str, str]] | None = None,
+    ) -> str:
+        if modifications:
+            modification_lines = "\n".join(
+                "\n".join(
+                    [
+                        f"    - target: {{fileID: {target_file_id}, guid: {source_guid}, type: 3}}",
+                        f"      propertyPath: {property_path}",
+                        f"      value: {value}",
+                        "      objectReference: {fileID: 0}",
+                    ]
+                )
+                for target_file_id, property_path, value in modifications
+            )
+            modifications_block = f"    m_Modifications:\n{modification_lines}\n"
+        else:
+            modifications_block = "    m_Modifications: []\n"
+        return (
+            f"--- !u!1001 &{file_id}\n"
+            "PrefabInstance:\n"
+            "  m_Modification:\n"
+            "    m_TransformParent: {fileID: 2000}\n"
+            f"{modifications_block}"
+            f"  m_SourcePrefab: {{fileID: 100100000, guid: {source_guid}, type: 3}}\n"
+        )
+
+    def test_non_expanded_mode_keeps_prefab_instance_leaf_contract(self) -> None:
+        from prefab_sentinel.orchestrator_inspect import inspect_hierarchy
+        from prefab_sentinel.services.prefab_variant import PrefabVariantService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_project(root)
+            svc = PrefabVariantService(project_root=root)
+
+            response = inspect_hierarchy(svc, "Assets/Host.prefab")
+
+        roots = response.data["roots"]
+        self.assertEqual(
+            (True, "HostRoot", []),
+            (response.success, roots[0]["name"], roots[0]["children"]),
+            msg=f"non-expanded inspect_hierarchy must not expand prefab children: {response.to_dict()!r}",
+        )
+
+    def test_expanded_mode_returns_effective_prefab_instance_children(self) -> None:
+        from prefab_sentinel.orchestrator_inspect import inspect_hierarchy
+        from prefab_sentinel.services.prefab_variant import PrefabVariantService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_project(root)
+            svc = PrefabVariantService(project_root=root)
+
+            try:
+                response = inspect_hierarchy(
+                    svc, "Assets/Host.prefab", expand_prefab_instances=True
+                )
+            except TypeError as exc:
+                self.fail(
+                    "expected expand_prefab_instances=True to return effective hierarchy; "
+                    f"observed TypeError: {exc}"
+                )
+
+        nested = response.data["roots"][0]["children"][0]
+        self.assertEqual(
+            (
+                True,
+                "INSPECT_HIERARCHY_RESULT",
+                True,
+                "HostNestedRoot",
+                "NestedLeaf",
+                "Assets/Nested.prefab",
+                ["m_Name"],
+            ),
+            (
+                response.success,
+                response.code,
+                response.data["expand_prefab_instances"],
+                nested["name"],
+                nested["children"][0]["name"],
+                nested["origin"]["source"]["asset_path"],
+                nested["origin"]["override_host"]["property_paths"],
+            ),
+            msg=f"expanded inspect_hierarchy lost effective metadata: {response.to_dict()!r}",
+        )
+
+    def test_non_gameobject_asset_warning_remains_when_expansion_requested(self) -> None:
+        text = "--- !u!74 &100\nAnimationClip:\n  m_Name: Test\n"
+        with tempfile.NamedTemporaryFile(suffix=".anim", mode="w", delete=False) as f:
+            f.write(text)
+            f.flush()
+            orch = _make_orchestrator()
+            try:
+                result = orch.inspect_hierarchy(f.name, expand_prefab_instances=True)
+            except TypeError as exc:
+                self.fail(
+                    "expected expand_prefab_instances=True to preserve non-GameObject warning; "
+                    f"observed TypeError: {exc}"
+                )
+        self.assertEqual(
+            (True, Severity.WARNING, "INSPECT_HIERARCHY_NO_GAMEOBJECTS", ".anim"),
+            (result.success, result.severity, result.code, result.data["file_type"]),
+            msg=f"non-GameObject hierarchy guard changed under expansion: {result.to_dict()!r}",
+        )
+
+
+class EffectiveInspectorDelegationTests(unittest.TestCase):
+    def test_inspect_hierarchy_forwards_prefab_instance_expansion_flag(self) -> None:
+        orch = _make_orchestrator()
+        delegated = _ok_response("INSPECT_HIERARCHY_RESULT", {"read_only": True})
+        with patch("prefab_sentinel.orchestrator_inspect.inspect_hierarchy") as inspect:
+            inspect.return_value = delegated
+            try:
+                result = orch.inspect_hierarchy(
+                    "Assets/Host.prefab",
+                    max_depth=2,
+                    show_components=False,
+                    expand_monobehaviour=True,
+                    expand_prefab_instances=True,
+                )
+            except TypeError as exc:
+                self.fail(
+                    "expected Phase1Orchestrator.inspect_hierarchy to forward expand_prefab_instances; "
+                    f"observed TypeError: {exc}"
+                )
+
+        self.assertIs(result, delegated)
+        inspect.assert_called_once_with(
+            orch.prefab_variant,
+            "Assets/Host.prefab",
+            max_depth=2,
+            show_components=False,
+            expand_monobehaviour=True,
+            expand_prefab_instances=True,
+        )
+
+
+    def test_inspect_transform_effective_values_delegates_to_helper(self) -> None:
+        orch = _make_orchestrator()
+        delegated = _ok_response("INSPECT_TRANSFORM_VALUES", {"read_only": True})
+        with patch(
+            "prefab_sentinel.effective_transform_inspector.inspect_transform_effective_values"
+        ) as inspect:
+            inspect.return_value = delegated
+            try:
+                result = orch.inspect_transform_effective_values(
+                    "Assets/Host.prefab",
+                    "HostRoot/NestedRoot",
+                )
+            except AttributeError as exc:
+                self.fail(
+                    "expected Phase1Orchestrator.inspect_transform_effective_values to delegate; "
+                    f"observed AttributeError: {exc}"
+                )
+
+        self.assertIs(result, delegated)
+        inspect.assert_called_once_with(
+            orch.prefab_variant,
+            "Assets/Host.prefab",
+            "HostRoot/NestedRoot",
+        )
+
+
+    def test_inspect_unity_event_listeners_delegates_to_helper(self) -> None:
+        orch = _make_orchestrator()
+        delegated = _ok_response("INSPECT_UNITY_EVENT_LISTENERS", {"read_only": True})
+        with patch(
+            "prefab_sentinel.unity_event_listener_inspector.inspect_unity_event_listeners"
+        ) as inspect:
+            inspect.return_value = delegated
+            try:
+                result = orch.inspect_unity_event_listeners(
+                    "Assets/Control.prefab",
+                    "Control",
+                    "Button",
+                    "onClick",
+                )
+            except AttributeError as exc:
+                self.fail(
+                    "expected Phase1Orchestrator.inspect_unity_event_listeners to delegate; "
+                    f"observed AttributeError: {exc}"
+                )
+
+        self.assertIs(result, delegated)
+        inspect.assert_called_once_with(
+            orch.prefab_variant,
+            "Assets/Control.prefab",
+            "Control",
+            "Button",
+            "onClick",
+        )
 
 
 if __name__ == "__main__":

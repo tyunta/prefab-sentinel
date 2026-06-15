@@ -352,6 +352,7 @@ def register_validation_tools(server: FastMCP, session: ProjectSession) -> None:
         depth: int | None = None,
         show_components: bool = True,
         expand_monobehaviour: bool = False,
+        expand_prefab_instances: bool = False,
     ) -> dict[str, Any]:
         """Display the GameObject hierarchy tree of a Unity asset.
 
@@ -363,6 +364,9 @@ def register_validation_tools(server: FastMCP, session: ProjectSession) -> None:
                 generic ``MonoBehaviour`` label by resolving each
                 component's script GUID through the project GUID index
                 (issue #196, default: False).
+            expand_prefab_instances: Expand nested PrefabInstance source
+                children into the saved-YAML effective hierarchy (issue #96,
+                default: False).
         """
         orch = session.get_orchestrator()
         resp = orch.inspect_hierarchy(
@@ -370,6 +374,39 @@ def register_validation_tools(server: FastMCP, session: ProjectSession) -> None:
             max_depth=depth,
             show_components=show_components,
             expand_monobehaviour=expand_monobehaviour,
+            expand_prefab_instances=expand_prefab_instances,
+        )
+        return resp.to_dict()
+
+
+    @server.tool()
+    def inspect_transform_effective_values(
+        asset_path: str,
+        symbol_path: str,
+    ) -> dict[str, Any]:
+        """Inspect Transform default, override, and effective values."""
+        orch = session.get_orchestrator()
+        resp = orch.inspect_transform_effective_values(
+            asset_path=asset_path,
+            symbol_path=symbol_path,
+        )
+        return resp.to_dict()
+
+
+    @server.tool()
+    def inspect_unity_event_listeners(
+        asset_path: str,
+        symbol_path: str,
+        component_type: str,
+        property_name: str,
+    ) -> dict[str, Any]:
+        """Inspect supported uGUI UnityEvent persistent listeners."""
+        orch = session.get_orchestrator()
+        resp = orch.inspect_unity_event_listeners(
+            asset_path=asset_path,
+            symbol_path=symbol_path,
+            component_type=component_type,
+            property_name=property_name,
         )
         return resp.to_dict()
 

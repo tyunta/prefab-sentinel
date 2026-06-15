@@ -1,6 +1,6 @@
 # MCP ツール一覧
 
-`prefab-sentinel-mcp` が公開する全 MCP ツール（現在 89 件 / 16 カテゴリ）の正本カタログ。各カテゴリは `prefab_sentinel/mcp_tools_*.py` の 1 モジュールに対応する。エンベロープ仕様は [api-reference.md「レスポンスフォーマット」](./api-reference.md#レスポンスフォーマット)、エラーコードの正本は [api-reference.md「エラーコード規約」](./api-reference.md#エラーコード規約) を参照。
+`prefab-sentinel-mcp` が公開する全 MCP ツール（現在 91 件 / 16 カテゴリ）の正本カタログ。各カテゴリは `prefab_sentinel/mcp_tools_*.py` の 1 モジュールに対応する。エンベロープ仕様は [api-reference.md「レスポンスフォーマット」](./api-reference.md#レスポンスフォーマット)、エラーコードの正本は [api-reference.md「エラーコード規約」](./api-reference.md#エラーコード規約) を参照。
 
 ## 用途索引
 
@@ -77,7 +77,9 @@
 | `inspect_materials` | validation | レンダラーごとのマテリアルスロット表示（override / inherited マーカー） | — | read-only |
 | `inspect_material_asset` | validation | `.mat` ファイルのシェーダー・プロパティ・テクスチャ参照を構造化データで返す | — | read-only |
 | `validate_structure` | validation | YAML 内部構造の検証（fileID 重複・Transform 整合） | — | read-only |
-| `inspect_hierarchy` | validation | GameObject 階層ツリー表示。`expand_monobehaviour` でスクリプトクラス名展開 | #196, #238 | read-only |
+| `inspect_hierarchy` | validation | GameObject 階層ツリー表示。`expand_monobehaviour` でスクリプトクラス名展開、`expand_prefab_instances` で saved YAML の effective nested PrefabInstance 階層を展開 | #96, #196, #238 | read-only |
+| `inspect_transform_effective_values` | validation | offline `asset_path` + `symbol_path` の Transform local/world position・rotation・scale を source default / host override / effective 列で比較 | #97 | read-only |
+| `inspect_unity_event_listeners` | validation | Button.onClick / Slider.onValueChanged / Toggle.onValueChanged の persistent listener entries と UdonSharp 診断を 1 応答で返す | #110 | read-only |
 | `validate_all_wiring` | validation | スコープ内の全 `.prefab` / `.unity` の null 参照を一括スキャン | — | read-only |
 | `validate_runtime` | validation | `compile_only` / `editor_console_only` / `clientsim` profile で runtime 検証。既定は Play Mode に入らない `compile_only`、ClientSim は明示 profile + audit pair 必須 | #92 | read-only |
 

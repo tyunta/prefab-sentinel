@@ -337,6 +337,7 @@ class Phase1Orchestrator:
         max_depth: int | None = None,
         show_components: bool = True,
         expand_monobehaviour: bool = False,
+        expand_prefab_instances: bool = False,
     ) -> ToolResponse:
         """Build the GameObject/Transform hierarchy tree (read-only).
 
@@ -347,6 +348,8 @@ class Phase1Orchestrator:
             expand_monobehaviour: Substitute script class names for the
                 generic MonoBehaviour label when the script GUID resolves
                 through the project GUID index (issue #196).
+            expand_prefab_instances: Expand nested PrefabInstance source
+                children into an effective saved-YAML hierarchy (issue #96).
 
         Returns:
             ``ToolResponse`` with ``data.tree`` (formatted text) and
@@ -358,6 +361,45 @@ class Phase1Orchestrator:
             max_depth=max_depth,
             show_components=show_components,
             expand_monobehaviour=expand_monobehaviour,
+            expand_prefab_instances=expand_prefab_instances,
+        )
+
+
+    def inspect_transform_effective_values(
+        self,
+        asset_path: str,
+        symbol_path: str,
+    ) -> ToolResponse:
+        """Delegate Transform default/override/effective inspection."""
+        from prefab_sentinel.effective_transform_inspector import (
+            inspect_transform_effective_values,
+        )
+
+        return inspect_transform_effective_values(
+            self.prefab_variant,
+            asset_path,
+            symbol_path,
+        )
+
+
+    def inspect_unity_event_listeners(
+        self,
+        asset_path: str,
+        symbol_path: str,
+        component_type: str,
+        property_name: str,
+    ) -> ToolResponse:
+        """Delegate supported uGUI UnityEvent listener inspection."""
+        from prefab_sentinel.unity_event_listener_inspector import (
+            inspect_unity_event_listeners,
+        )
+
+        return inspect_unity_event_listeners(
+            self.prefab_variant,
+            asset_path,
+            symbol_path,
+            component_type,
+            property_name,
         )
 
     def inspect_materials(

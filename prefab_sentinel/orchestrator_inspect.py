@@ -12,6 +12,11 @@ from prefab_sentinel.contracts import (
     error_response,
     success_response,
 )
+from prefab_sentinel.effective_hierarchy import (
+    EffectiveHierarchyNode,
+    EffectiveHierarchyResult,
+    build_effective_hierarchy,
+)
 from prefab_sentinel.hierarchy import HierarchyNode, analyze_hierarchy, format_tree
 from prefab_sentinel.material_asset_inspector import (
     format_material_asset,
@@ -48,6 +53,43 @@ def _build_script_name_resolver(
     return _resolve
 
 
+
+
+def _format_effective_tree(
+    result: EffectiveHierarchyResult,
+    *,
+    max_depth: int | None,
+    show_components: bool,
+    monobehaviour_resolver: Callable[[str], str | None] | None = None,
+) -> str:
+    lines: list[str] = []
+
+    def _resolved_labels(node: EffectiveHierarchyNode) -> list[str]:
+        if not node.component_descriptors:
+            return list(node.components)
+        labels: list[str] = []
+        for descriptor in node.component_descriptors:
+            if monobehaviour_resolver is not None and descriptor.script_guid:
+                resolved = monobehaviour_resolver(descriptor.script_guid)
+                if resolved:
+                    labels.append(resolved)
+                    continue
+            labels.append(descriptor.label)
+        return labels
+
+    def _render(node: EffectiveHierarchyNode, prefix: str) -> None:
+        if max_depth is not None and node.depth > max_depth:
+            return
+        labels = _resolved_labels(node) if show_components else []
+        suffix = f" [{', '.join(labels)}]" if show_components and labels else ""
+        lines.append(f"{prefix}{node.name}{suffix}")
+        for child in node.children:
+            _render(child, f"{prefix}  ")
+
+    for root in result.roots:
+        _render(root, "")
+    return "\n".join(lines)
+
 def inspect_hierarchy(
     prefab_variant: PrefabVariantService,
     target_path: str,
@@ -55,11 +97,13 @@ def inspect_hierarchy(
     max_depth: int | None = None,
     show_components: bool = True,
     expand_monobehaviour: bool = False,
+    expand_prefab_instances: bool = False,
 ) -> ToolResponse:
     text_or_error = read_target_file(prefab_variant, target_path, "INSPECT_HIERARCHY")
     if isinstance(text_or_error, ToolResponse):
         return text_or_error
     text = text_or_error
+    host_text = text
 
     suffix = Path(target_path).suffix.lower()
     if suffix not in GAMEOBJECT_BEARING_SUFFIXES:
@@ -89,7 +133,6 @@ def inspect_hierarchy(
             override_counts = counts
         diagnostics.extend(overrides_response.diagnostics)
 
-    result = analyze_hierarchy(text, override_counts=override_counts)
     monobehaviour_resolver: Callable[[str], str | None] | None = None
     script_index_unavailable = False
     if expand_monobehaviour:
@@ -107,6 +150,42 @@ def inspect_hierarchy(
                     evidence=f"project GUID index unavailable: {exc}",
                 )
             )
+
+    if expand_prefab_instances:
+        effective = build_effective_hierarchy(
+            prefab_variant.project_root,
+            target_path,
+            host_text,
+            max_depth=max_depth,
+        )
+        diagnostics.extend(effective.diagnostics)
+        effective_data = effective.to_dict()
+        effective_data.pop("diagnostics", None)
+        effective_data["target_path"] = target_path
+        effective_data["root_count"] = len(effective.roots)
+        effective_data["tree"] = _format_effective_tree(
+            effective,
+            max_depth=max_depth,
+            show_components=show_components,
+            monobehaviour_resolver=monobehaviour_resolver,
+        )
+        effective_data["expand_prefab_instances"] = True
+        if expand_monobehaviour:
+            effective_data["expand_monobehaviour"] = True
+            if script_index_unavailable:
+                effective_data["script_index_unavailable"] = True
+        if is_variant:
+            effective_data["is_variant"] = True
+            effective_data["base_prefab_path"] = base_prefab_path
+        return success_response(
+            "INSPECT_HIERARCHY_RESULT",
+            "inspect.hierarchy completed (read-only).",
+            severity=Severity.WARNING if diagnostics else Severity.INFO,
+            data=effective_data,
+            diagnostics=diagnostics,
+        )
+
+    result = analyze_hierarchy(text, override_counts=override_counts)
     tree_text = format_tree(
         result,
         max_depth=max_depth,
@@ -138,16 +217,10 @@ def inspect_hierarchy(
         anchor = node.rect_anchor
         if anchor is None:
             return ((0.0, 0.0), "unresolved")
-        # ``self`` basis: zero-span anchors mean ``size_delta`` is the
-        # absolute pixel size; no parent chain consultation needed.
         spans_x = anchor.anchor_min[0] != anchor.anchor_max[0]
         spans_y = anchor.anchor_min[1] != anchor.anchor_max[1]
         if not spans_x and not spans_y:
             return (anchor.size_delta, "self")
-        # Stretched: walk the parent rect chain. Use the first rect
-        # ancestor with a ``self``-basis size as the resolved parent
-        # extent (no recursion through additional stretch indirection;
-        # spec only requires the immediate-parent chain).
         cursor = parent_by_node_id.get(id(node))
         while cursor is not None:
             parent_anchor = cursor.rect_anchor
@@ -156,10 +229,6 @@ def inspect_hierarchy(
                 parent_spans_y = parent_anchor.anchor_min[1] != parent_anchor.anchor_max[1]
                 if not parent_spans_x and not parent_spans_y:
                     parent_w, parent_h = parent_anchor.size_delta
-                    # On the stretched axis the child's ``size_delta`` is
-                    # an inset around the parent extent; on a non-stretch
-                    # axis the child's own ``size_delta`` is the absolute
-                    # pixel size.
                     if spans_x:
                         eff_w = (
                             parent_w * (anchor.anchor_max[0] - anchor.anchor_min[0])
@@ -206,9 +275,6 @@ def inspect_hierarchy(
                 rect_unresolved_paths.append(path_by_node_id.get(id(node), node.name))
         return d
 
-    # Serialise nodes first so the ``rect_unresolved_paths`` list is
-    # populated before constructing the diagnostics list — node walk has
-    # side effects on the path collector by design (single traversal).
     serialized_roots = [_serialize_node(r) for r in result.roots]
     for unresolved_path in rect_unresolved_paths:
         diagnostics.append(
@@ -240,7 +306,7 @@ def inspect_hierarchy(
         if script_index_unavailable:
             data["script_index_unavailable"] = True
 
-    severity = Severity.WARNING if script_index_unavailable else Severity.INFO
+    severity = Severity.WARNING if diagnostics else Severity.INFO
     return success_response(
         "INSPECT_HIERARCHY_RESULT",
         "inspect.hierarchy completed (read-only).",
