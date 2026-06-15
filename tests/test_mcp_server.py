@@ -178,7 +178,8 @@ class TestToolRegistration(unittest.TestCase):
             "inspect_materials", "inspect_material_asset", "set_material_property",
             "copy_asset", "rename_asset", "delete_asset", "delete_assets",
             "validate_structure", "revert_overrides", "vrcsdk_upload",
-            "inspect_hierarchy", "validate_runtime", "validate_all_wiring",
+            "inspect_hierarchy", "inspect_transform_effective_values",
+            "inspect_unity_event_listeners", "validate_runtime", "validate_all_wiring",
             "patch_apply",
             "copy_component_fields",
             "set_properties",
@@ -217,8 +218,9 @@ class TestToolRegistration(unittest.TestCase):
         # the surface to 85; issue #71 retired the fire-and-return
         # ``editor_recompile_async`` tool, leaving 84; issue #98 adds
         # three live geometry tools, bringing the surface to 87; issue
-        # #114 adds delete_asset and delete_assets, bringing it to 89.
-        self.assertEqual(89, len(tools))
+        # #114 adds delete_asset and delete_assets, bringing it to 89;
+        # issues #96 / #97 / #110 add two read-only effective inspectors.
+        self.assertEqual(91, len(tools))
 
 
 class TestToolsCatalogDoc(unittest.TestCase):
@@ -3960,6 +3962,7 @@ class TestInspectHierarchyTool(unittest.TestCase):
             max_depth=None,
             show_components=True,
             expand_monobehaviour=False,
+            expand_prefab_instances=False,
         )
 
     def test_passes_optional_params(self) -> None:
@@ -3981,6 +3984,87 @@ class TestInspectHierarchyTool(unittest.TestCase):
             max_depth=2,
             show_components=False,
             expand_monobehaviour=False,
+            expand_prefab_instances=False,
+        )
+
+    def test_passes_prefab_instance_expansion_option(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.to_dict.return_value = {"success": True, "data": {"roots": []}}
+        mock_orch = MagicMock()
+        mock_orch.inspect_hierarchy.return_value = mock_resp
+
+        server = create_server()
+        with patch.object(
+            ProjectSession, "get_orchestrator", return_value=mock_orch,
+        ):
+            _, result = _run(server.call_tool("inspect_hierarchy", {
+                "asset_path": "Assets/A.prefab", "expand_prefab_instances": True,
+            }))
+
+        self.assertEqual(
+            (True, True),
+            (result["success"], mock_orch.inspect_hierarchy.call_args.kwargs["expand_prefab_instances"]),
+            msg="inspect_hierarchy MCP wrapper must forward expand_prefab_instances=True unchanged.",
+        )
+
+
+class TestEffectiveInspectorTools(unittest.TestCase):
+    def test_transform_inspector_delegates_to_orchestrator(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.to_dict.return_value = {"success": True, "code": "INSPECT_TRANSFORM_VALUES"}
+        mock_orch = MagicMock()
+        mock_orch.inspect_transform_effective_values.return_value = mock_resp
+
+        server = create_server()
+        with patch.object(
+            ProjectSession, "get_orchestrator", return_value=mock_orch,
+        ):
+            _, result = _run(server.call_tool(
+                "inspect_transform_effective_values",
+                {"asset_path": "Assets/Host.prefab", "symbol_path": "Root/Child"},
+            ))
+
+        self.assertEqual(
+            (True, "INSPECT_TRANSFORM_VALUES"),
+            (result["success"], result["code"]),
+            msg=f"Transform inspector MCP wrapper should pass through orchestrator response; observed result={result!r}",
+        )
+        mock_orch.inspect_transform_effective_values.assert_called_once_with(
+            asset_path="Assets/Host.prefab",
+            symbol_path="Root/Child",
+        )
+
+
+    def test_unity_event_listener_inspector_delegates_to_orchestrator(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.to_dict.return_value = {"success": True, "code": "INSPECT_UNITY_EVENT_LISTENERS"}
+        mock_orch = MagicMock()
+        mock_orch.inspect_unity_event_listeners.return_value = mock_resp
+
+        server = create_server()
+        with patch.object(
+            ProjectSession, "get_orchestrator", return_value=mock_orch,
+        ):
+            _, result = _run(server.call_tool(
+                "inspect_unity_event_listeners",
+                {
+                    "asset_path": "Assets/Control.prefab",
+                    "symbol_path": "Control",
+                    "component_type": "Button",
+                    "property_name": "onClick",
+                },
+            ))
+
+        self.assertEqual(
+            (True, "INSPECT_UNITY_EVENT_LISTENERS"),
+            (result["success"], result["code"]),
+            msg=f"UnityEvent inspector MCP wrapper should pass through orchestrator response; observed result={result!r}",
+        )
+        mock_orch.inspect_unity_event_listeners.assert_called_once_with(
+            asset_path="Assets/Control.prefab",
+            symbol_path="Control",
+            component_type="Button",
+            property_name="onClick",
         )
 
 
