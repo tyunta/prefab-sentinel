@@ -8,7 +8,6 @@ from typing import Any
 from prefab_sentinel.services.prefab_variant import PrefabVariantService
 from tests.yaml_helpers import YAML_HEADER, make_gameobject
 
-
 SOURCE_GUID = "11111111111111111111111111111111"
 HOST_GUID = "22222222222222222222222222222222"
 

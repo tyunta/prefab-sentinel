@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from prefab_sentinel.contracts import Diagnostic, Severity
-from prefab_sentinel.hierarchy import CLASS_NAMES
+from prefab_sentinel.hierarchy import CLASS_NAMES, ComponentDescriptor
 from prefab_sentinel.services.prefab_variant.overrides import OverrideEntry, parse_overrides
 from prefab_sentinel.unity_assets import (
     SOURCE_PREFAB_PATTERN,
@@ -30,8 +30,6 @@ from prefab_sentinel.unity_yaml_parser import (
     split_yaml_blocks,
 )
 
-
-from prefab_sentinel.hierarchy import ComponentDescriptor
 _TRANSFORM_PARENT_PATTERN = re.compile(
     r"m_TransformParent:\s*\{fileID:\s*(-?\d+)"
 )

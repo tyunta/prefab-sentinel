@@ -9,7 +9,6 @@ from prefab_sentinel.services.prefab_variant import PrefabVariantService
 from prefab_sentinel.udon_wiring_parser import UDON_BEHAVIOUR_GUID
 from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_transform
 
-
 SOURCE_GUID = "44444444444444444444444444444444"
 HOST_GUID = "55555555555555555555555555555555"
 BUTTON_GUID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"

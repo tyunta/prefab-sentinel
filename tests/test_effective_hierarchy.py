@@ -7,7 +7,6 @@ from typing import Any
 
 from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_transform
 
-
 SOURCE_GUID = "11111111222222223333333344444444"
 SECOND_SOURCE_GUID = "55555555666666667777777788888888"
 MISSING_GUID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"

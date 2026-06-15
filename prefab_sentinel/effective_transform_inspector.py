@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from math import sqrt
-from typing import Any
+from typing import Any, TypedDict
 
 from prefab_sentinel.contracts import (
     Diagnostic,
@@ -17,9 +17,6 @@ from prefab_sentinel.effective_hierarchy import (
 from prefab_sentinel.orchestrator_variant import read_target_file
 from prefab_sentinel.services.prefab_variant import PrefabVariantService
 from prefab_sentinel.services.prefab_variant.overrides import OverrideEntry
-
-
-from typing import TypedDict
 
 
 class _TransformNumericParseError(ValueError):
@@ -222,7 +219,9 @@ def _world_column(
 ) -> dict[str, Any]:
     override = {
         axis: _clean_float(effective)
-        for axis, default, effective in zip(axes, default_values, effective_values)
+        for axis, default, effective in zip(
+            axes, default_values, effective_values, strict=True
+        )
         if _clean_float(default) != _clean_float(effective)
     }
     return {
@@ -328,7 +327,9 @@ def _apply_axis_overrides(
     overrides: dict[str, float],
     axes: tuple[str, ...],
 ) -> tuple[float, ...]:
-    return tuple(overrides.get(axis, value) for axis, value in zip(axes, values))
+    return tuple(
+        overrides.get(axis, value) for axis, value in zip(axes, values, strict=True)
+    )
 
 
 def _nodes_by_symbol(
