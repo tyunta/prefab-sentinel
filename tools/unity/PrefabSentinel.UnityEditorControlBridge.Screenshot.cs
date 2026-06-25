@@ -235,7 +235,7 @@ namespace PrefabSentinel
                     int w = request.width > 0 ? request.width : (int)sceneView.position.width;
                     int h = request.height > 0 ? request.height : (int)sceneView.position.height;
 
-                    Camera cam = sceneView.camera;
+                    UnityEngine.Camera cam = sceneView.camera;
                     if (cam == null)
                         return BuildError("EDITOR_CTRL_NO_SCENE_CAMERA", "SceneView camera is null.");
 
@@ -430,7 +430,7 @@ namespace PrefabSentinel
         /// caller owns the returned ``RenderTexture`` and is responsible
         /// for ``DestroyImmediate``-ing it.
         /// </summary>
-        private static RenderTexture RenderSceneViewToTexture(Camera cam, int width, int height)
+        private static RenderTexture RenderSceneViewToTexture(UnityEngine.Camera cam, int width, int height)
         {
             var smrs = UnityEngine.Object.FindObjectsOfType<SkinnedMeshRenderer>();
             foreach (var smr in smrs)

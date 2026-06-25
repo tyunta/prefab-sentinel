@@ -50,7 +50,7 @@ namespace PrefabSentinel
             EditorControlRequest request,
             string outputPath,
             SceneView sceneView,
-            Camera cam,
+            UnityEngine.Camera cam,
             GameObject target,
             string angle)
         {

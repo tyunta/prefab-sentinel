@@ -4342,6 +4342,22 @@ class ScreenshotWorldSpaceUiSourceTests(unittest.TestCase):
         )
 
 
+class UnityCameraTypeQualificationSourceTests(unittest.TestCase):
+    def test_screenshot_partials_fully_qualify_unity_camera_type(self):
+        files = [
+            "PrefabSentinel.UnityEditorControlBridge.Screenshot.cs",
+            "PrefabSentinel.UnityEditorControlBridge.Screenshot.TargetCapture.cs",
+            "PrefabSentinel.UnityEditorControlBridge.Screenshot.TargetCapture.WorldSpaceUi.cs",
+            "PrefabSentinel.UnityIntegrationTests.cs",
+        ]
+
+        for filename in files:
+            source = _strip_cs_comments(_read(TOOLS_DIR / filename))
+            self.assertNotRegex(source, r"(?<![\w.])Camera\s+cam\b", filename)
+            self.assertNotIn("RenderSceneViewToTexture(Camera ", source, filename)
+            self.assertNotIn("GetComponent<Camera>", source, filename)
+
+
 class HandleSetCameraSizeFieldSourceTests(unittest.TestCase):
     """Issue #81 — the orbit-radius argument is named ``size`` end-to-end
     (Python wrapper, kwargs builder, wire DTO, bridge handler).  This T3

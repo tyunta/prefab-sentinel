@@ -69,7 +69,7 @@ namespace PrefabSentinel
             SceneView sceneView = SceneView.lastActiveSceneView;
             if (sceneView == null)
                 return BuildError("EDITOR_CTRL_NO_SCENE_VIEW", "No active SceneView found.");
-            Camera cam = sceneView.camera;
+            UnityEngine.Camera cam = sceneView.camera;
             if (cam == null)
                 return BuildError("EDITOR_CTRL_NO_SCENE_CAMERA", "SceneView camera is null.");
 

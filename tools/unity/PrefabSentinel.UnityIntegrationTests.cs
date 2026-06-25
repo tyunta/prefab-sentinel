@@ -1905,7 +1905,7 @@ namespace PrefabSentinel
 
             var go = AssetDatabase.LoadAssetAtPath<GameObject>(target);
             if (go == null) return Fail(name, "Prefab not found after save.");
-            var cam = go.GetComponent<Camera>();
+            var cam = go.GetComponent<UnityEngine.Camera>();
             if (cam == null) return Fail(name, "Camera not found.");
             var r = cam.rect;
             if (Mathf.Abs(r.x - 0.1f) > 0.01f || Mathf.Abs(r.y - 0.2f) > 0.01f
