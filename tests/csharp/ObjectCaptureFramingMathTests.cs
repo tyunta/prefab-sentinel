@@ -68,7 +68,7 @@ public class ObjectCaptureFramingMathTests
         }
     }
 
-    // -------- Preset → camera direction (front) --------
+    // -------- Preset camera direction (front) --------
 
     [Fact]
     public void Front_Preset_Composes_To_The_Issue_Body_Authored_Seed_Direction()
@@ -81,7 +81,7 @@ public class ObjectCaptureFramingMathTests
         AssertDirectionsEqual(ExpectedLocalDirection(0f, -5f), dir, "front");
     }
 
-    // -------- Preset → camera direction (each non-default preset) --------
+    // -------- Preset camera direction (each non-default preset) --------
 
     [Theory]
     [InlineData("three_quarter", 35f, -10f)]
@@ -159,6 +159,54 @@ public class ObjectCaptureFramingMathTests
             }
         }
         return arr;
+    }
+
+
+    private static double Dot(float x, float y, float z, float[] axis)
+    {
+        return x * axis[0] + y * axis[1] + z * axis[2];
+    }
+
+    private static double MaxAxisBindingPressure(
+        float[] corners,
+        float[] axis,
+        float[] cameraDirection,
+        float[] pivot,
+        float cameraDistance)
+    {
+        double centerX = 0.0;
+        double centerY = 0.0;
+        double centerZ = 0.0;
+        for (int i = 0; i < 8; i++)
+        {
+            centerX += corners[i * 3 + 0];
+            centerY += corners[i * 3 + 1];
+            centerZ += corners[i * 3 + 2];
+        }
+        centerX /= 8.0;
+        centerY /= 8.0;
+        centerZ /= 8.0;
+
+        double pivotOffset = Dot(
+            (float)(pivot[0] - centerX),
+            (float)(pivot[1] - centerY),
+            (float)(pivot[2] - centerZ),
+            axis);
+        double maxPressure = 0.0;
+        for (int i = 0; i < 8; i++)
+        {
+            float dx = (float)(corners[i * 3 + 0] - centerX);
+            float dy = (float)(corners[i * 3 + 1] - centerY);
+            float dz = (float)(corners[i * 3 + 2] - centerZ);
+            double depth = cameraDistance - Dot(dx, dy, dz, cameraDirection);
+            if (depth <= 0.0)
+            {
+                throw new InvalidOperationException("Framing pressure requires positive corner depth.");
+            }
+            double lateral = Dot(dx, dy, dz, axis) - pivotOffset;
+            maxPressure = Math.Max(maxPressure, Math.Abs(lateral / depth));
+        }
+        return maxPressure;
     }
 
     // -------- Framing solver — cubic AABB centered --------
@@ -423,14 +471,14 @@ public class ObjectCaptureFramingMathTests
     // -------- Outlier filter per-axis box = extents + max(0.30 * extents, 0.1) --------
 
     [Theory]
-    // Core (1.0, 0.5, 0.5) → allow (1.3, 0.65, 0.65); test each axis.
+    // Core expansion: (1.0, 0.5, 0.5) to (1.3, 0.65, 0.65); test each axis.
     [InlineData(1.0f, 1.29f, 0f, 0f, true)]   // x 1.29 < 1.3
     [InlineData(1.0f, 1.31f, 0f, 0f, false)]  // x 1.31 > 1.3
     [InlineData(1.0f, 0f, 0.64f, 0f, true)]   // y 0.64 < 0.65
     [InlineData(1.0f, 0f, 0.66f, 0f, false)]  // y 0.66 > 0.65
     [InlineData(1.0f, 0f, 0f, 0.64f, true)]   // z 0.64 < 0.65
     [InlineData(1.0f, 0f, 0f, 0.66f, false)]  // z 0.66 > 0.65
-    // Tiny core (0.01, 0.005, 0.005) → floor 0.1 m kicks in on every
+    // Tiny core (0.01, 0.005, 0.005): floor 0.1 m kicks in on every
     // axis; allow ≈ (0.11, 0.105, 0.105).
     [InlineData(0.01f, 0.10f, 0f, 0f, true)]
     [InlineData(0.01f, 0.12f, 0f, 0f, false)]
@@ -467,9 +515,9 @@ public class ObjectCaptureFramingMathTests
     [Fact]
     public void Wider_Aspect_Reduces_The_Required_SceneView_Size()
     {
-        // Hold the AABB / direction / fov constant, vary aspect 1.0 → 2.0.
+        // Hold the AABB / direction / fov constant, vary aspect from 1.0 to 2.0.
         // Aspect 2.0 doubles the horizontal frame budget, so the X-binding
-        // axis can satisfy the constraint at a smaller D → smaller size.
+        // axis can satisfy the constraint at a smaller distance and size.
         const float fov = 60f;
         const float margin = 1f;
         float[] corners = CuboidCorners(1f, 0.5f, 0.5f);
@@ -495,5 +543,194 @@ public class ObjectCaptureFramingMathTests
             $"Expected size(aspect=2.0)={sizeWide} < size(aspect=1.0)="
             + $"{sizeNarrow}; a wider rendered frame requires less "
             + $"SceneView half-width to bound the same AABB.");
+    }
+
+
+    [Fact]
+    public void Both_Axes_Aspect_For_Narrow_Depth_Tall_Target_Balances_Binding_Pressure()
+    {
+        const float fov = 60f;
+        const float margin = 1f;
+        float[] corners = CuboidCorners(0.25f, 1f, 0.5f);
+
+        bool aspectOk = ObjectCaptureFramingMath.TryResolveBothAxesAspectForAabb(
+            corners,
+            CameraRightAlongMinusZ(),
+            CameraUpAlongMinusZ(),
+            CameraDirectionAlongPlusZ(),
+            fov,
+            margin,
+            out float aspect,
+            out string aspectFailureReason);
+
+        Assert.True(aspectOk, $"Both-axis aspect solver failed: '{aspectFailureReason}'.");
+        Assert.True(
+            aspect is > 0f and < 1f,
+            $"Expected portrait aspect in range (0, 1), got {aspect}.");
+
+        bool framingOk = ObjectCaptureFramingMath.TrySolveFramingForAabb(
+            corners,
+            CameraRightAlongMinusZ(),
+            CameraUpAlongMinusZ(),
+            CameraDirectionAlongPlusZ(),
+            fov,
+            aspect,
+            margin,
+            ObjectCaptureFramingMath.RecenteringIterationCount,
+            out float[] pivot,
+            out float size,
+            out string framingFailureReason);
+
+        Assert.True(framingOk, $"Framing solver failed at aspect {aspect}: '{framingFailureReason}'.");
+
+        double sinHalfFov = Math.Sin(fov * 0.5 * Math.PI / 180.0);
+        double cameraDistance = size / sinHalfFov;
+        double horizontalPressure = MaxAxisBindingPressure(
+            corners,
+            CameraRightAlongMinusZ(),
+            CameraDirectionAlongPlusZ(),
+            pivot,
+            (float)cameraDistance) / aspect;
+        double verticalPressure = MaxAxisBindingPressure(
+            corners,
+            CameraUpAlongMinusZ(),
+            CameraDirectionAlongPlusZ(),
+            pivot,
+            (float)cameraDistance);
+        Assert.InRange(horizontalPressure, verticalPressure - 1e-3, verticalPressure + 1e-3);
+    }
+
+
+
+    [Fact]
+    public void Both_Axes_Output_Size_With_No_Explicit_Dimensions_Preserves_Default_Long_Edge()
+    {
+        bool ok = ObjectCaptureFramingMath.ResolveOutputSizeForFitMode(
+            "both_axes",
+            requestWidth: 0,
+            requestHeight: 0,
+            defaultWidth: 1000,
+            defaultHeight: 600,
+            bothAxesAspect: 0.25f,
+            out int width,
+            out int height,
+            out float aspect,
+            out string reason);
+
+        Assert.Equal((true, 250, 1000, 0.25f, string.Empty), (ok, width, height, aspect, reason));
+    }
+
+    [Fact]
+    public void Both_Axes_Output_Size_With_Explicit_Dimensions_Uses_Caller_Aspect()
+    {
+        bool ok = ObjectCaptureFramingMath.ResolveOutputSizeForFitMode(
+            "both_axes",
+            requestWidth: 480,
+            requestHeight: 1920,
+            defaultWidth: 1000,
+            defaultHeight: 600,
+            bothAxesAspect: 0.5f,
+            out int width,
+            out int height,
+            out float aspect,
+            out string reason);
+
+        Assert.Equal((true, 480, 1920, 0.25f, string.Empty), (ok, width, height, aspect, reason));
+    }
+
+    [Fact]
+    public void Both_Axes_Output_Size_With_One_Explicit_Side_Keeps_The_Default_Other_Side()
+    {
+        bool ok = ObjectCaptureFramingMath.ResolveOutputSizeForFitMode(
+            "both_axes",
+            requestWidth: 480,
+            requestHeight: 0,
+            defaultWidth: 600,
+            defaultHeight: 1000,
+            bothAxesAspect: 0.25f,
+            out int width,
+            out int height,
+            out float aspect,
+            out string reason);
+
+        Assert.Equal((true, 480, 1000, 0.48f, string.Empty), (ok, width, height, aspect, reason));
+    }
+
+    [Fact]
+    public void Unknown_Fit_Mode_Is_Rejected_By_Output_Size_Resolution()
+    {
+        bool ok = ObjectCaptureFramingMath.ResolveOutputSizeForFitMode(
+            "fill",
+            requestWidth: 0,
+            requestHeight: 0,
+            defaultWidth: 1000,
+            defaultHeight: 600,
+            bothAxesAspect: 0.25f,
+            out int width,
+            out int height,
+            out float aspect,
+            out string reason);
+
+        Assert.Equal((false, 0, 0, 0f), (ok, width, height, aspect));
+        Assert.Contains("fill", reason, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(0, 600, 0.25f, "default")]
+    [InlineData(1000, 0, 0.25f, "default")]
+    [InlineData(1000, 600, 0f, "bothAxesAspect")]
+    public void Invalid_Output_Size_Prerequisites_Are_Rejected(
+        int defaultWidth,
+        int defaultHeight,
+        float bothAxesAspect,
+        string expectedReasonFragment)
+    {
+        bool ok = ObjectCaptureFramingMath.ResolveOutputSizeForFitMode(
+            "both_axes",
+            requestWidth: 0,
+            requestHeight: 0,
+            defaultWidth,
+            defaultHeight,
+            bothAxesAspect,
+            out int width,
+            out int height,
+            out float aspect,
+            out string reason);
+
+        Assert.Equal((false, 0, 0, 0f), (ok, width, height, aspect));
+        Assert.Contains(expectedReasonFragment, reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Malformed_Both_Axes_Aabb_Raises_The_Same_Vector_Length_Error_As_The_Frame_Solver()
+    {
+        ArgumentException error = Assert.Throws<ArgumentException>(() =>
+            ObjectCaptureFramingMath.TryResolveBothAxesAspectForAabb(
+                new float[3],
+                CameraRightAlongMinusZ(),
+                CameraUpAlongMinusZ(),
+                CameraDirectionAlongPlusZ(),
+                60f,
+                1f,
+                out _,
+                out _));
+
+        Assert.Equal("cornersWorld", error.ParamName);
+    }
+
+    [Fact]
+    public void Degenerate_Both_Axes_Aabb_Returns_A_Typed_Failure_Instead_Of_An_Aspect()
+    {
+        bool ok = ObjectCaptureFramingMath.TryResolveBothAxesAspectForAabb(
+            new float[24],
+            CameraRightAlongMinusZ(),
+            CameraUpAlongMinusZ(),
+            CameraDirectionAlongPlusZ(),
+            60f,
+            1f,
+            out float aspect,
+            out string reason);
+
+        Assert.Equal((false, 0f, ObjectCaptureFramingMath.FailureDegenerateAabb), (ok, aspect, reason));
     }
 }

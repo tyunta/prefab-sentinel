@@ -23,9 +23,9 @@ __all__ = [
     "SCREENSHOT_CROP_ROI_PRESETS",
     "SCREENSHOT_VIEW_ALLOWLIST",
     "SCREENSHOT_ANGLE_PRESETS",
-    "SCREENSHOT_ANGLE_DEFAULT",
     "SCREENSHOT_TARGET_MODE_ALLOWLIST",
     "SCREENSHOT_PROJECTION_ALLOWLIST",
+    "SCREENSHOT_FIT_MODE_ALLOWLIST",
 ]
 
 # Issue #249: canonical screenshot region preset allowlist.  Mirrors the
@@ -53,11 +53,6 @@ SCREENSHOT_ANGLE_PRESETS: tuple[str, ...] = (
     "current_camera",
 )
 
-# Default preset used when the caller supplies ``target`` without
-# ``angle``.  Issue #84 body: ``three_quarter`` is the documented
-# default angle for the target-oriented capture mode.
-SCREENSHOT_ANGLE_DEFAULT: str = "three_quarter"
-
 # Issue #259: canonical view-selector allowlist for ``editor_screenshot``.
 # The selector is interpolated into the output filename on the bridge
 # side, so an unvalidated value would let a caller compose path
@@ -75,6 +70,10 @@ SCREENSHOT_PROJECTION_ALLOWLIST: tuple[str, ...] = (
     "auto",
     "perspective",
     "orthographic",
+)
+SCREENSHOT_FIT_MODE_ALLOWLIST: tuple[str, ...] = (
+    "max_axis",
+    "both_axes",
 )
 
 # Issue #131: inclusive size bounds shared by the editor-console MCP tool
@@ -379,6 +378,23 @@ def _screenshot_projection_invalid_envelope(value: str) -> dict[str, Any]:
     }
 
 
+def _screenshot_fit_mode_invalid_envelope(value: str) -> dict[str, Any]:
+    return {
+        "success": False,
+        "severity": "error",
+        "code": "SCREENSHOT_FIT_MODE_INVALID",
+        "message": (
+            f"fit_mode={value!r} is not one of "
+            f"({', '.join(SCREENSHOT_FIT_MODE_ALLOWLIST)})."
+        ),
+        "data": {
+            "supplied": value,
+            "allowed_fit_modes": list(SCREENSHOT_FIT_MODE_ALLOWLIST),
+        },
+        "diagnostics": [],
+    }
+
+
 def _screenshot_padding_ratio_invalid_envelope(value: float) -> dict[str, Any]:
     return {
         "success": False,
@@ -430,6 +446,11 @@ def _is_valid_pixel_rect(value: str) -> bool:
     return True
 
 
+
+
+
+
+
 def editor_screenshot(
     view: str = "scene",
     width: int = 0,
@@ -437,10 +458,11 @@ def editor_screenshot(
     refresh: bool = True,
     crop_roi: str = "",
     target: str = "",
-    angle: str = SCREENSHOT_ANGLE_DEFAULT,
+    angle: str = "",
     target_mode: str = "auto",
     padding_ratio: float = 0.10,
     projection: str = "auto",
+    fit_mode: str = "max_axis",
 ) -> dict[str, Any]:
     """Capture a screenshot of the Unity Editor (issues #249, #259, #84, #95)."""
     if view not in SCREENSHOT_VIEW_ALLOWLIST:
@@ -449,6 +471,8 @@ def editor_screenshot(
         return _screenshot_target_mode_invalid_envelope(target_mode)
     if projection not in SCREENSHOT_PROJECTION_ALLOWLIST:
         return _screenshot_projection_invalid_envelope(projection)
+    if fit_mode not in SCREENSHOT_FIT_MODE_ALLOWLIST:
+        return _screenshot_fit_mode_invalid_envelope(fit_mode)
     if padding_ratio < 0.0 or padding_ratio > 1.0:
         return _screenshot_padding_ratio_invalid_envelope(padding_ratio)
     if (
@@ -465,7 +489,7 @@ def editor_screenshot(
     ):
         return _crop_roi_invalid_envelope(crop_roi)
     if target:
-        if angle not in SCREENSHOT_ANGLE_PRESETS:
+        if angle and angle not in SCREENSHOT_ANGLE_PRESETS:
             return _screenshot_angle_invalid_envelope(angle)
         if view != "scene":
             return _screenshot_target_invalid_view_envelope(view)
@@ -485,10 +509,12 @@ def editor_screenshot(
         kwargs["crop_roi"] = crop_roi
     if target:
         kwargs["target"] = target
-        kwargs["angle"] = angle
+        if angle:
+            kwargs["angle"] = angle
         kwargs["target_mode"] = target_mode
         kwargs["padding_ratio"] = padding_ratio
         kwargs["projection"] = projection
+        kwargs["fit_mode"] = fit_mode
     return send_action(**kwargs)
 
 
@@ -548,10 +574,11 @@ def register_editor_view_tools(server: FastMCP) -> None:
         refresh: bool = True,
         crop_roi: str = "",
         target: str = "",
-        angle: str = SCREENSHOT_ANGLE_DEFAULT,
+        angle: str = "",
         target_mode: str = "auto",
         padding_ratio: float = 0.10,
         projection: str = "auto",
+        fit_mode: str = "max_axis",
     ) -> dict[str, Any]:
         """Capture a screenshot of the Unity Editor."""
         return editor_screenshot(
@@ -561,6 +588,7 @@ def register_editor_view_tools(server: FastMCP) -> None:
             target_mode=target_mode,
             padding_ratio=padding_ratio,
             projection=projection,
+            fit_mode=fit_mode,
         )
 
     @server.tool(name="editor_force_scene_view_refresh")

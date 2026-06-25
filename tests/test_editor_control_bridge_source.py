@@ -3535,9 +3535,19 @@ class ScreenshotViewAllowlistSourceTests(unittest.TestCase):
 
 class TestScreenshotCropBoundsSource(unittest.TestCase):
     _SCREENSHOT = TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Screenshot.cs"
+    _TARGET_CAPTURE = (
+        TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Screenshot.TargetCapture.cs"
+    )
 
     def _method_body(self, method_name: str) -> str:
         return _extract_method(_read(self._SCREENSHOT), method_name)
+
+    def _target_method_body(self, method_name: str) -> str:
+        self.assertTrue(
+            self._TARGET_CAPTURE.exists(),
+            msg="Screenshot.TargetCapture partial must exist before reading target capture methods.",
+        )
+        return _extract_method(_read(self._TARGET_CAPTURE), method_name)
 
     def test_crop_roi_null_is_rejected_before_empty_no_crop_path(self) -> None:
         resolver_body = self._method_body("TryResolveCropRoi")
@@ -3548,7 +3558,7 @@ class TestScreenshotCropBoundsSource(unittest.TestCase):
         self.assertNotIn("string.IsNullOrEmpty(value)", resolver_body)
 
     def test_object_capture_null_crop_roi_is_rejected_before_no_crop_path(self) -> None:
-        body = self._method_body("ResolveTargetPixelCrop")
+        body = self._target_method_body("ResolveTargetPixelCrop")
         null_guard_index = body.index("if (request.crop_roi == null)")
         empty_guard_index = body.index("if (request.crop_roi.Length == 0)")
 
@@ -3559,7 +3569,7 @@ class TestScreenshotCropBoundsSource(unittest.TestCase):
         )
 
     def test_object_capture_pixel_crop_delegates_before_render_and_read(self) -> None:
-        object_body = self._method_body("HandleObjectCaptureScreenshot")
+        object_body = self._target_method_body("HandleObjectCaptureScreenshot")
         crop_index = object_body.find("ResolveTargetPixelCrop(")
         render_index = object_body.find("RenderSceneViewToTexture")
         read_index = object_body.find("ReadPixels")
@@ -3596,7 +3606,7 @@ class TestScreenshotCropBoundsSource(unittest.TestCase):
             ),
         )
 
-        resolver_body = self._method_body("ResolveTargetPixelCrop")
+        resolver_body = self._target_method_body("ResolveTargetPixelCrop")
         self.assertIn(
             "ScreenshotCropBounds.FitsWithinFrame",
             resolver_body,
@@ -3636,26 +3646,22 @@ class TestScreenshotCropBoundsSource(unittest.TestCase):
 
 
 class ScreenshotObjectCaptureSourceTests(unittest.TestCase):
-    """Issue #84 — bridge-side source-text invariants for the
-    target-oriented capture branch on ``HandleCaptureScreenshot``.
+    """Issue #84/#87/#90 — bridge-side source-text invariants for the
+    target-oriented capture branch.
 
-    The new branch reads ``request.target`` and ``request.angle``,
-    delegates target resolution to the existing stage-aware resolver
-    ``TryResolveGameObjectInActiveStage`` (so the ambiguous-hierarchy
-    envelope ``EDITOR_CTRL_HIERARCHY_PATH_AMBIGUOUS`` surfaces
-    unchanged), invokes the Unity-free framing math via
-    ``ObjectCaptureFramingMath``, and surfaces the three new bridge
-    error codes for "no match", "no renderers", and "unknown preset".
+    The dispatcher still lives in ``HandleCaptureScreenshot``. Target-specific
+    capture behavior lives in ``Screenshot.TargetCapture`` so the stage-aware
+    resolver, World Space UI branch, renderer framing, and target pixel crop
+    behavior can evolve without growing the generic screenshot partial.
 
-    The dispatcher routing for ``capture_screenshot`` is unchanged
-    (the action already exists); this class also pins the literal
-    presence of ``capture_screenshot`` in the dispatcher and the
-    ActionRegistry so a future routing rewrite is caught.
-
-    T3 source-text invariant: the bridge runs inside the Unity Editor;
-    the Python harness cannot drive the SceneView (justified in
-    spec.md Tier 3 Justification).
+    T3 source-text invariant: the bridge runs inside the Unity Editor; the
+    Python harness cannot drive the SceneView (justified in the spec's Tier 3
+    entries for target capture).
     """
+
+    _TARGET_CAPTURE_PARTIAL = (
+        TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Screenshot.TargetCapture.cs"
+    )
 
     _BRIDGE_CODES = (
         "EDITOR_CTRL_SCREENSHOT_TARGET_NOT_FOUND",
@@ -3672,15 +3678,17 @@ class ScreenshotObjectCaptureSourceTests(unittest.TestCase):
     )
 
     def _screenshot_partial_body(self) -> str:
-        # The object-capture branch lives in the Screenshot partial
-        # (``PrefabSentinel.UnityEditorControlBridge.Screenshot.cs``);
-        # the partial may dispatch from ``HandleCaptureScreenshot`` to a
-        # private helper, so this T3 net inspects the full partial body
-        # (comments stripped) rather than a single method extraction.
-        partial = (
-            TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Screenshot.cs"
+        self.assertTrue(
+            self._TARGET_CAPTURE_PARTIAL.exists(),
+            msg="Screenshot.TargetCapture partial must exist for target capture split.",
         )
-        return _strip_cs_comments(partial.read_text(encoding="utf-8"))
+        return _strip_cs_comments(_read(self._TARGET_CAPTURE_PARTIAL))
+
+    def _object_capture_body(self) -> str:
+        return _extract_method(
+            self._screenshot_partial_body(),
+            "HandleObjectCaptureScreenshot",
+        )
 
     def test_handler_branches_on_request_target(self) -> None:
         body = _extract_method(_read(BRIDGE), "HandleCaptureScreenshot")
@@ -3694,21 +3702,35 @@ class ScreenshotObjectCaptureSourceTests(unittest.TestCase):
             ),
         )
 
+    def test_target_capture_partial_is_split_from_screenshot_dispatcher(self) -> None:
+        self.assertTrue(
+            self._TARGET_CAPTURE_PARTIAL.exists(),
+            msg="Screenshot.TargetCapture partial must exist for issue #87 split.",
+        )
+        screenshot_body = _strip_cs_comments(
+            _read(TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Screenshot.cs")
+        )
+        dispatch_body = _extract_method(screenshot_body, "HandleCaptureScreenshot")
+        self.assertIn(
+            "HandleObjectCaptureScreenshot(request, outputPath)",
+            dispatch_body,
+            msg="Screenshot.cs must keep target dispatch wired to the moved helper.",
+        )
+        self.assertNotIn(
+            "private static EditorControlResponse HandleObjectCaptureScreenshot",
+            screenshot_body,
+            msg="Target object capture must move out of Screenshot.cs into Screenshot.TargetCapture.cs.",
+        )
+
     def test_handler_routes_target_through_stage_aware_resolver(self) -> None:
         body = self._screenshot_partial_body()
-        # The object-capture branch must route through the existing
-        # stage-aware resolver so the ambiguous-hierarchy envelope
-        # surfaces unchanged; an independent hierarchy walk would
-        # silently first-pick a same-named sibling.
         self.assertIn(
             "TryResolveGameObjectInActiveStage",
             body,
             msg=(
-                "The Screenshot partial's object-capture branch must "
-                "delegate target resolution to "
+                "The target-capture partial must delegate target resolution to "
                 "TryResolveGameObjectInActiveStage so the existing "
-                "EDITOR_CTRL_HIERARCHY_PATH_AMBIGUOUS envelope surfaces "
-                "unchanged (#84)."
+                "EDITOR_CTRL_HIERARCHY_PATH_AMBIGUOUS envelope surfaces unchanged (#84)."
             ),
         )
 
@@ -3718,11 +3740,151 @@ class ScreenshotObjectCaptureSourceTests(unittest.TestCase):
             "ObjectCaptureFramingMath",
             body,
             msg=(
-                "The Screenshot partial's object-capture branch must "
-                "invoke the Unity-free ObjectCaptureFramingMath helper "
-                "(#84)."
+                "The target-capture partial must invoke the Unity-free "
+                "ObjectCaptureFramingMath helper (#84/#90)."
             ),
         )
+
+    def test_handler_uses_shared_renderer_bounds_before_framing_math(self) -> None:
+        body = self._object_capture_body()
+        helper_index = body.find("TryResolveRendererFramingBounds")
+        solver_index = body.find("TrySolveFramingForAabb")
+        success_index = body.find("BuildSuccess")
+        self.assertNotEqual(
+            -1,
+            helper_index,
+            msg="HandleObjectCaptureScreenshot must call TryResolveRendererFramingBounds.",
+        )
+        self.assertNotEqual(
+            -1,
+            solver_index,
+            msg="HandleObjectCaptureScreenshot must call TrySolveFramingForAabb.",
+        )
+        self.assertLess(
+            helper_index,
+            solver_index,
+            msg="Renderer bounds must be resolved before framing math runs.",
+        )
+        for forbidden in (
+            "GetComponentsInChildren<SkinnedMeshRenderer>",
+            ".BakeMesh(",
+            "SelectFramingRenderers",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(
+                    forbidden,
+                    body,
+                    msg="HandleObjectCaptureScreenshot must not duplicate the shared renderer-bounds model.",
+                )
+        for token in ("bounds_center", "bounds_extents"):
+            with self.subTest(token=token):
+                token_index = body.find(token, helper_index)
+                self.assertNotEqual(
+                    -1,
+                    token_index,
+                    msg=f"Successful object capture must report aggregate {token}.",
+                )
+                self.assertLess(
+                    success_index,
+                    token_index,
+                    msg=f"Aggregate {token} must be populated in the success payload.",
+                )
+
+    def test_handler_rejects_invalid_fit_mode_before_renderer_framing_and_render(self) -> None:
+        body = self._object_capture_body()
+        fit_error_index = body.find("SCREENSHOT_FIT_MODE_INVALID")
+        helper_index = body.find("TryResolveRendererFramingBounds")
+        render_index = body.find("RenderSceneViewToTexture")
+        self.assertNotEqual(
+            -1,
+            fit_error_index,
+            msg="Bridge-side invalid fit_mode must return SCREENSHOT_FIT_MODE_INVALID.",
+        )
+        self.assertLess(
+            fit_error_index,
+            helper_index,
+            msg="Invalid fit_mode must be rejected before renderer framing.",
+        )
+        self.assertLess(
+            fit_error_index,
+            render_index,
+            msg="Invalid fit_mode must be rejected before file rendering.",
+        )
+        for token in ("request.fit_mode", "max_axis", "both_axes"):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+
+    def test_omitted_angle_defaults_after_world_space_ui_routing(self) -> None:
+        body = self._object_capture_body()
+        self.assertNotIn(
+            "string angle = string.IsNullOrEmpty(request.angle)",
+            body,
+            msg="request.angle must not resolve to the renderer default before UI routing.",
+        )
+        raw_angle_index = body.find("string angle = request.angle;")
+        ui_branch_index = body.find("ShouldUseWorldSpaceUiCapture")
+        ui_default_index = body.find("string uiAngle = string.IsNullOrEmpty(angle)", ui_branch_index)
+        renderer_default_index = body.find("angle = string.IsNullOrEmpty(angle)", ui_branch_index)
+        preset_index = body.find("ObjectCaptureFramingMath.PresetNames")
+        for label, index in (
+            ("raw angle assignment", raw_angle_index),
+            ("UI routing branch", ui_branch_index),
+            ("UI omitted-angle default", ui_default_index),
+            ("renderer omitted-angle default", renderer_default_index),
+            ("renderer preset validation", preset_index),
+        ):
+            with self.subTest(label=label):
+                self.assertNotEqual(-1, index)
+        self.assertLess(raw_angle_index, ui_branch_index)
+        self.assertLess(ui_branch_index, ui_default_index)
+        self.assertLess(ui_default_index, renderer_default_index)
+        self.assertLess(renderer_default_index, preset_index)
+        self.assertIn('"front"', body[ui_default_index:renderer_default_index])
+        self.assertIn('"three_quarter"', body[renderer_default_index:preset_index])
+
+    def test_handler_reports_no_renderers_before_solver_and_output(self) -> None:
+        body = self._object_capture_body()
+        helper_index = body.find("TryResolveRendererFramingBounds")
+        no_renderer_index = body.find("EDITOR_CTRL_SCREENSHOT_TARGET_NO_RENDERERS", helper_index)
+        solver_index = body.find("TrySolveFramingForAabb")
+        render_index = body.find("RenderSceneViewToTexture")
+        self.assertNotEqual(-1, helper_index)
+        self.assertNotEqual(
+            -1,
+            no_renderer_index,
+            msg="No renderer contributors must return EDITOR_CTRL_SCREENSHOT_TARGET_NO_RENDERERS.",
+        )
+        self.assertLess(no_renderer_index, solver_index)
+        self.assertLess(no_renderer_index, render_index)
+
+    def test_handler_reports_solver_failures_before_success_output(self) -> None:
+        body = self._object_capture_body()
+        for token in (
+            "TryResolveBothAxesAspectForAabb",
+            "ResolveOutputSizeForFitMode",
+            "TrySolveFramingForAabb",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+        success_index = body.find("BuildSuccess")
+        aspect_call_index = body.find("TryResolveBothAxesAspectForAabb")
+        aspect_failure_index = body.find("EDITOR_CTRL_SCREENSHOT_FAILED", aspect_call_index)
+        framing_call_index = body.find("TrySolveFramingForAabb")
+        framing_failure_index = body.find("EDITOR_CTRL_SCREENSHOT_FAILED", framing_call_index)
+        self.assertNotEqual(
+            -1,
+            aspect_failure_index,
+            msg="Both-axis aspect failure must return EDITOR_CTRL_SCREENSHOT_FAILED.",
+        )
+        self.assertNotEqual(
+            -1,
+            framing_failure_index,
+            msg="Framing solver failure must return EDITOR_CTRL_SCREENSHOT_FAILED.",
+        )
+        self.assertLess(aspect_failure_index, success_index)
+        self.assertLess(framing_failure_index, success_index)
+        self.assertIn("aspectReason", body)
+        self.assertIn("framingReason", body)
 
     def test_handler_emits_new_bridge_error_codes(self) -> None:
         body = self._screenshot_partial_body()
@@ -3731,15 +3893,12 @@ class ScreenshotObjectCaptureSourceTests(unittest.TestCase):
                 self.assertIn(
                     f'"{code}"', body,
                     msg=(
-                        f"The Screenshot partial must reference the "
+                        f"The target-capture partial must reference the "
                         f"bridge-side error code literal {code!r} (#84)."
                     ),
                 )
 
     def test_dispatcher_routes_capture_screenshot_unchanged(self) -> None:
-        # Issue #84: the dispatcher already routes ``capture_screenshot``;
-        # this row pins the routing so an accidental rewrite breaks the
-        # new mode.
         source = _read(BRIDGE)
         body = _extract_method(source, "DispatchAction")
         self.assertIn('case "capture_screenshot":', body)
@@ -3776,6 +3935,152 @@ class ScreenshotObjectCaptureSourceTests(unittest.TestCase):
                 )
 
 
+class CameraScreenshotFramingDocsTests(unittest.TestCase):
+    _DOCS_API_REFERENCE = (
+        Path(__file__).resolve().parent.parent / "docs" / "api-reference.md"
+    )
+    _DOCS_TOOLS = (
+        Path(__file__).resolve().parent.parent / "docs" / "tools.md"
+    )
+
+    def test_api_reference_documents_fit_mode_and_new_diagnostics(self) -> None:
+        docs = self._DOCS_API_REFERENCE.read_text(encoding="utf-8")
+        for token in (
+            "SCREENSHOT_FIT_MODE_INVALID",
+            "EDITOR_CTRL_CAMERA_PROJECTION_TRANSITION",
+            "fit_mode",
+            "both_axes",
+            "max_axis",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, docs)
+
+    def test_api_reference_documents_auto_world_space_ui_routing(self) -> None:
+        docs = self._DOCS_API_REFERENCE.read_text(encoding="utf-8")
+        self.assertIn(
+            'target_mode="auto"',
+            docs,
+            msg="API reference must name the auto target-mode selector explicitly.",
+        )
+        self.assertIn(
+            "World Space Canvas",
+            docs,
+            msg="Auto routing docs must state the World Space Canvas eligibility condition.",
+        )
+        self.assertNotIn(
+            "auto renderer path",
+            docs,
+            msg="API reference must not describe auto as renderer-only after UI auto routing is intentional.",
+        )
+
+    def test_tools_reference_documents_screenshot_fit_mode(self) -> None:
+        docs = self._DOCS_TOOLS.read_text(encoding="utf-8")
+        editor_screenshot_row = next(
+            line for line in docs.splitlines() if line.startswith("| `editor_screenshot`")
+        )
+        for token in ("fit_mode", "both_axes", "max_axis", "width", "height", "target"):
+            with self.subTest(token=token):
+                self.assertIn(token, editor_screenshot_row)
+
+
+class EditorFrameRendererFramingSourceTests(unittest.TestCase):
+    """Issue #85 — editor_frame must use the shared renderer bounds model."""
+
+    def _handle_frame_selected_body(self) -> str:
+        return _extract_method(_read(BRIDGE), "HandleFrameSelected")
+
+    def test_frame_selected_uses_shared_renderer_bounds_before_rect_transform_fallback(self) -> None:
+        body = self._handle_frame_selected_body()
+        helper_index = body.find("TryResolveRendererFramingBounds")
+        rect_index = body.find("GetComponent<RectTransform>")
+        self.assertNotEqual(
+            -1,
+            helper_index,
+            msg="HandleFrameSelected must call TryResolveRendererFramingBounds for renderer targets.",
+        )
+        self.assertNotEqual(
+            -1,
+            rect_index,
+            msg="HandleFrameSelected must preserve the RectTransform fallback branch.",
+        )
+        self.assertLess(
+            helper_index,
+            rect_index,
+            msg="Renderer bounds must be attempted before the RectTransform fallback.",
+        )
+
+    def test_frame_selected_has_no_single_renderer_bounds_path(self) -> None:
+        body = self._handle_frame_selected_body()
+        self.assertNotIn(
+            "GetComponentInChildren<Renderer>()",
+            body,
+            msg="HandleFrameSelected must not frame only the first child Renderer.",
+        )
+        self.assertNotIn(
+            "renderer.bounds",
+            body,
+            msg="HandleFrameSelected must not carry a separate Renderer.bounds path.",
+        )
+
+
+class RendererFramingBoundsSourceTests(unittest.TestCase):
+    """Issue #85 — source invariants for the shared renderer bounds helper."""
+
+    _HELPER_PATH = TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.RendererFramingBounds.cs"
+
+    def _helper_source(self) -> str:
+        self.assertTrue(
+            self._HELPER_PATH.exists(),
+            msg="RendererFramingBounds partial must exist as the shared #85 bounds model.",
+        )
+        return _strip_cs_comments(self._HELPER_PATH.read_text(encoding="utf-8"))
+
+    def test_helper_collects_active_enabled_renderer_contributors(self) -> None:
+        source = self._helper_source()
+        body = _extract_method(source, "TryResolveRendererFramingBounds")
+        for literal in (
+            "GetComponentsInChildren<Renderer>(false)",
+            "renderer.enabled",
+            "ObjectCaptureFramingMath.SelectFramingRenderers",
+        ):
+            with self.subTest(literal=literal):
+                self.assertIn(
+                    literal,
+                    body,
+                    msg=f"TryResolveRendererFramingBounds must contain {literal!r}.",
+                )
+
+    def test_helper_bakes_skinned_meshes_and_destroys_temporary_meshes(self) -> None:
+        source = self._helper_source()
+        body = _extract_method(source, "TryResolveRendererFramingBounds")
+        for literal in (
+            "SkinnedMeshRenderer",
+            ".BakeMesh(",
+            "Object.DestroyImmediate",
+        ):
+            with self.subTest(literal=literal):
+                self.assertIn(
+                    literal,
+                    body,
+                    msg=f"TryResolveRendererFramingBounds must contain {literal!r}.",
+                )
+
+    def test_helper_reports_no_bounds_when_no_renderer_records_are_kept(self) -> None:
+        source = self._helper_source()
+        body = _extract_method(source, "TryResolveRendererFramingBounds")
+        for literal in (
+            "keptRecords = new List<ObjectCaptureFramingMath.RendererBoundsRecord>()",
+            "keptRecords.Count == 0",
+            "return false",
+        ):
+            with self.subTest(literal=literal):
+                self.assertIn(
+                    literal,
+                    body,
+                    msg=f"TryResolveRendererFramingBounds must contain {literal!r}.",
+                )
+
+
 class GeometryMeasureDistanceSourceTests(unittest.TestCase):
     def test_measure_distance_validates_bounds_source_before_pivot_shortcut(self) -> None:
         source = _read(TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Geometry.cs")
@@ -3801,12 +4106,30 @@ class GeometryMeasureDistanceSourceTests(unittest.TestCase):
 
 
 class ScreenshotWorldSpaceUiSourceTests(unittest.TestCase):
-    def _screenshot_partial_body(self) -> str:
-        return _read(TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Screenshot.cs")
+    _TARGET_CAPTURE_PARTIAL = (
+        TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Screenshot.TargetCapture.cs"
+    )
+    _WORLD_SPACE_UI_PARTIAL = (
+        TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Screenshot.TargetCapture.WorldSpaceUi.cs"
+    )
+
+    def _target_capture_body(self) -> str:
+        self.assertTrue(
+            self._TARGET_CAPTURE_PARTIAL.exists(),
+            msg="Screenshot.TargetCapture partial must exist for renderer target capture.",
+        )
+        return _read(self._TARGET_CAPTURE_PARTIAL)
+
+    def _world_space_ui_body(self) -> str:
+        self.assertTrue(
+            self._WORLD_SPACE_UI_PARTIAL.exists(),
+            msg="Screenshot.TargetCapture.WorldSpaceUi partial must exist for world_space_ui target capture.",
+        )
+        return _read(self._WORLD_SPACE_UI_PARTIAL)
 
     def test_ui_capture_supports_front_back_current_camera_and_rejects_other_angles(self) -> None:
         body = _extract_method(
-            self._screenshot_partial_body(),
+            self._world_space_ui_body(),
             "HandleWorldSpaceUiCaptureScreenshot",
         )
         self.assertIn("angle != \"front\" && angle != \"back\" && angle != \"current_camera\"", body)
@@ -3817,7 +4140,7 @@ class ScreenshotWorldSpaceUiSourceTests(unittest.TestCase):
 
     def test_ui_capture_front_uses_readable_side_of_rect_transform(self) -> None:
         body = _extract_method(
-            self._screenshot_partial_body(),
+            self._world_space_ui_body(),
             "HandleWorldSpaceUiCaptureScreenshot",
         )
         self.assertIn(
@@ -3838,12 +4161,18 @@ class ScreenshotWorldSpaceUiSourceTests(unittest.TestCase):
 
     def test_object_capture_validates_renderer_angle_after_ui_branch(self) -> None:
         body = _extract_method(
-            self._screenshot_partial_body(),
+            self._target_capture_body(),
             "HandleObjectCaptureScreenshot",
         )
         ui_selector_index = body.index("ShouldUseWorldSpaceUiCapture")
+        renderer_helper_index = body.index("TryResolveRendererFramingBounds")
         renderer_preset_index = body.index("ObjectCaptureFramingMath.PresetNames")
         renderer_error_index = body.index("EDITOR_CTRL_SCREENSHOT_ANGLE_INVALID", renderer_preset_index)
+        self.assertLess(
+            ui_selector_index,
+            renderer_helper_index,
+            msg="World Space UI dispatch must run before renderer bounds are resolved.",
+        )
         self.assertLess(
             ui_selector_index,
             renderer_preset_index,
@@ -3858,7 +4187,7 @@ class ScreenshotWorldSpaceUiSourceTests(unittest.TestCase):
 
     def test_ui_capture_reports_required_framing_metadata(self) -> None:
         body = _extract_method(
-            self._screenshot_partial_body(),
+            self._world_space_ui_body(),
             "HandleWorldSpaceUiCaptureScreenshot",
         )
         for token in (
@@ -3874,9 +4203,51 @@ class ScreenshotWorldSpaceUiSourceTests(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, body)
 
+    def test_ui_capture_derives_framing_aspect_from_final_output_size(self) -> None:
+        body = _extract_method(
+            self._world_space_ui_body(),
+            "HandleWorldSpaceUiCaptureScreenshot",
+        )
+        width_index = body.find(
+            "int w = request.width > 0 ? request.width : (int)sceneView.position.width;"
+        )
+        height_index = body.find(
+            "int h = request.height > 0 ? request.height : (int)sceneView.position.height;"
+        )
+        aspect_index = body.find("float aspect = (float)w / (float)h;")
+        padded_index = body.find(
+            "float paddedHalfHeight = Math.Max(extents.y, extents.x / Math.Max(aspect, 0.001f))"
+        )
+
+        self.assertNotEqual(
+            -1,
+            aspect_index,
+            msg="World Space UI framing aspect must derive from the final output size.",
+        )
+        self.assertLess(
+            width_index,
+            aspect_index,
+            msg="World Space UI width must be finalized before framing aspect is computed.",
+        )
+        self.assertLess(
+            height_index,
+            aspect_index,
+            msg="World Space UI height must be finalized before framing aspect is computed.",
+        )
+        self.assertLess(
+            aspect_index,
+            padded_index,
+            msg="World Space UI padded framing must consume the final output aspect.",
+        )
+        self.assertNotIn(
+            "cam.aspect",
+            body[width_index:padded_index],
+            msg="World Space UI one-sided output sizes must not frame against stale camera aspect.",
+        )
+
     def test_ui_capture_applies_target_pixel_rectangle_crop(self) -> None:
         body = _extract_method(
-            self._screenshot_partial_body(),
+            self._world_space_ui_body(),
             "HandleWorldSpaceUiCaptureScreenshot",
         )
         crop_index = body.index("ResolveTargetPixelCrop(")
@@ -3895,7 +4266,7 @@ class ScreenshotWorldSpaceUiSourceTests(unittest.TestCase):
 
     def test_explicit_world_space_ui_without_rect_transform_is_handled_error(self) -> None:
         body = _extract_method(
-            self._screenshot_partial_body(),
+            self._world_space_ui_body(),
             "ShouldUseWorldSpaceUiCapture",
         )
         error_index = body.index("has no active RectTransform contributors")
@@ -3911,9 +4282,46 @@ class ScreenshotWorldSpaceUiSourceTests(unittest.TestCase):
             msg="only auto mode may fall back to renderer capture when RectTransform contributors are absent",
         )
 
+    def test_auto_world_space_canvas_with_rect_transform_routes_to_ui_capture(self) -> None:
+        body = _extract_method(
+            self._world_space_ui_body(),
+            "ShouldUseWorldSpaceUiCapture",
+        )
+        renderer_short_circuit_index = body.index(
+            'if (request.target_mode == "renderer") return false;'
+        )
+        canvas_index = body.index("Canvas canvas = ResolveRelevantCanvas(target);")
+        rect_index = body.index("bool hasRect =")
+        no_rect_auto_fallback_index = body.index("if (!wantsUi) return false;")
+        canvas_guard_index = body.index(
+            "canvas == null || canvas.renderMode != RenderMode.WorldSpace"
+        )
+        final_ui_route_index = body.rfind("return true;")
+
+        self.assertLess(
+            renderer_short_circuit_index,
+            canvas_index,
+            msg="Explicit renderer target_mode must remain the only early renderer route.",
+        )
+        self.assertLess(
+            rect_index,
+            no_rect_auto_fallback_index,
+            msg="Auto fallback to renderer must be scoped to missing RectTransform contributors.",
+        )
+        self.assertLess(
+            no_rect_auto_fallback_index,
+            canvas_guard_index,
+            msg="Auto fallback must occur before the World Space Canvas eligibility check.",
+        )
+        self.assertNotIn(
+            "if (!wantsUi) return false;",
+            body[canvas_guard_index:final_ui_route_index],
+            msg="Eligible auto targets under a World Space Canvas must route to UI capture.",
+        )
+
     def test_ui_capture_anchor_resolution_avoids_null_coalescing_on_unity_objects(self) -> None:
         body = _extract_method(
-            self._screenshot_partial_body(),
+            self._world_space_ui_body(),
             "HandleWorldSpaceUiCaptureScreenshot",
         )
         self.assertIn("RectTransform anchor = target.GetComponent<RectTransform>();", body)
@@ -3932,6 +4340,22 @@ class ScreenshotWorldSpaceUiSourceTests(unittest.TestCase):
             body,
             msg="UnityEngine.Object references must not use ?? for RectTransform fallback.",
         )
+
+
+class UnityCameraTypeQualificationSourceTests(unittest.TestCase):
+    def test_screenshot_partials_fully_qualify_unity_camera_type(self):
+        files = [
+            "PrefabSentinel.UnityEditorControlBridge.Screenshot.cs",
+            "PrefabSentinel.UnityEditorControlBridge.Screenshot.TargetCapture.cs",
+            "PrefabSentinel.UnityEditorControlBridge.Screenshot.TargetCapture.WorldSpaceUi.cs",
+            "PrefabSentinel.UnityIntegrationTests.cs",
+        ]
+
+        for filename in files:
+            source = _strip_cs_comments(_read(TOOLS_DIR / filename))
+            self.assertNotRegex(source, r"(?<![\w.])Camera\s+cam\b", filename)
+            self.assertNotIn("RenderSceneViewToTexture(Camera ", source, filename)
+            self.assertNotIn("GetComponent<Camera>", source, filename)
 
 
 class HandleSetCameraSizeFieldSourceTests(unittest.TestCase):
@@ -5605,6 +6029,104 @@ class TestSetCameraGeometrySource(unittest.TestCase):
         self.assertIn("sv.orthographic", body)
         self.assertIn("sv.pivot", body)
         self.assertIn("sv.rotation", body)
+
+
+class SetCameraProjectionTransitionGuardSourceTests(unittest.TestCase):
+    def _handle_set_camera_body(self) -> str:
+        return _extract_method(_read(BRIDGE), "HandleSetCamera")
+
+    def _position_branch_body(self) -> str:
+        body = self._handle_set_camera_body()
+        match = re.search(r"if \(hasPosition\)\s*\{", body)
+        self.assertIsNotNone(
+            match,
+            msg="HandleSetCamera must retain a position-mode branch.",
+        )
+        return _extract_braced_block(body, match.end(), "HandleSetCamera hasPosition branch")
+
+    def test_position_mode_checks_projection_stability_before_fov_geometry(self) -> None:
+        body = self._handle_set_camera_body()
+        position_match = re.search(r"if \(hasPosition\)\s*\{", body)
+        self.assertIsNotNone(position_match, msg="HandleSetCamera must retain position mode.")
+        position_body = self._position_branch_body()
+        guard_index = position_body.find("ProjectionStateStability.IsStableForPositionMode")
+        sin_index = position_body.find("Mathf.Sin")
+        look_at_index = position_body.find("sceneView.LookAt")
+        self.assertNotEqual(
+            -1,
+            guard_index,
+            msg="Position mode must call ProjectionStateStability.IsStableForPositionMode.",
+        )
+        self.assertLess(
+            guard_index,
+            sin_index,
+            msg="Projection stability must be checked before position-mode fov geometry.",
+        )
+        self.assertLess(
+            guard_index,
+            look_at_index,
+            msg="Projection stability must be checked before position-mode LookAt mutation.",
+        )
+        self.assertNotIn(
+            "ProjectionStateStability.IsStableForPositionMode",
+            body[: position_match.start()],
+            msg="Reset/conflict/projection-switch setup must not reject non-position modes.",
+        )
+
+    def test_unstable_position_mode_returns_transition_error_before_lookat(self) -> None:
+        position_body = self._position_branch_body()
+        guard_index = position_body.find("!ProjectionStateStability.IsStableForPositionMode")
+        restore_index = position_body.find("RestoreSceneViewCameraState(previous);")
+        transition_index = position_body.find("EDITOR_CTRL_CAMERA_PROJECTION_TRANSITION")
+        look_at_index = position_body.find("sceneView.LookAt")
+        self.assertNotEqual(
+            -1,
+            guard_index,
+            msg="Transition rejection must be guarded by a false stability classifier result.",
+        )
+        self.assertNotEqual(
+            -1,
+            restore_index,
+            msg="Rejected projection-transition calls must restore the captured SceneView state.",
+        )
+        self.assertNotEqual(
+            -1,
+            transition_index,
+            msg="Unstable position mode must return EDITOR_CTRL_CAMERA_PROJECTION_TRANSITION.",
+        )
+        self.assertLess(
+            guard_index,
+            restore_index,
+            msg="State restoration must live inside the classifier-false branch.",
+        )
+        self.assertLess(
+            restore_index,
+            transition_index,
+            msg="SceneView state must be restored before the transition diagnostic returns.",
+        )
+        self.assertLess(
+            transition_index,
+            look_at_index,
+            msg="Transition diagnostic must return before position-mode LookAt is applied.",
+        )
+
+    def test_projection_guard_uses_public_state_without_reflection_or_wait(self) -> None:
+        sources = (
+            self._handle_set_camera_body()
+            + _read(TOOLS_DIR / "PrefabSentinel.Camera.ProjectionStateStability.cs")
+        )
+        for forbidden in (
+            "m_Ortho",
+            "perspectiveFov",
+            "BindingFlags",
+            "GetField",
+            "EditorApplication.delayCall",
+            "EditorApplication.update",
+            "Thread.Sleep",
+            "Task.Delay",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, sources)
 
 
 class TestGenericCollectionUsingDirective(unittest.TestCase):

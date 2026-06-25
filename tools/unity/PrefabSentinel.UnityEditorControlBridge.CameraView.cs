@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using PrefabSentinel.Camera;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -261,10 +262,8 @@ namespace PrefabSentinel
             float[] boundsExtents = null;
             bool haveBounds = false;
             Bounds frameBounds = new Bounds(selectedGo.transform.position, Vector3.one);
-            Renderer renderer = selectedGo.GetComponentInChildren<Renderer>();
-            if (renderer != null)
+            if (TryResolveRendererFramingBounds(selectedGo, out frameBounds, out _))
             {
-                frameBounds = renderer.bounds;
                 haveBounds = true;
             }
             else
@@ -412,6 +411,18 @@ namespace PrefabSentinel
 
             if (hasPosition)
             {
+                if (!ProjectionStateStability.IsStableForPositionMode(
+                        sceneView.orthographic,
+                        sceneView.camera.orthographic,
+                        fov))
+                {
+                    RestoreSceneViewCameraState(previous);
+                    return BuildError(
+                        "EDITOR_CTRL_CAMERA_PROJECTION_TRANSITION",
+                        "SceneView projection is still settling; retry after "
+                        + "the projection transition completes before using position mode.");
+                }
+
                 Vector3 cameraPos = new Vector3(
                     request.camera_position[0],
                     request.camera_position[1],

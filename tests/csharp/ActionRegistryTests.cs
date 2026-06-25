@@ -62,6 +62,7 @@ public class EditorControlRequestTests
         Assert.Equal(0, request.protocol_version);
         Assert.Equal(string.Empty, request.action);
         Assert.Equal("scene", request.view);
+        Assert.Equal("max_axis", request.fit_mode);
         Assert.Equal(0, request.width);
         Assert.Equal(string.Empty, request.hierarchy_path);
         Assert.Equal(200, request.max_entries);

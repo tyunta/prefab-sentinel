@@ -510,8 +510,8 @@ class EditorScreenshotTargetForwardingTests(unittest.TestCase):
     * Default screenshot call carries neither ``target`` nor ``angle``
       on the bridge kwargs (no silent forwarding of the default
       ``angle="three_quarter"`` when ``target`` is empty).
-    * Object-capture forwarding: both ``target`` and ``angle`` reach
-      the bridge action verbatim.
+    * Object-capture forwarding: both ``target`` and explicit ``angle``
+      reach the bridge action verbatim.
     * ``view="game"`` + ``target`` is rejected pre-bridge with
       ``SCREENSHOT_TARGET_INVALID_VIEW``.
     * ``target`` + face-feature ``crop_roi`` preset is rejected with
@@ -561,6 +561,20 @@ class EditorScreenshotTargetForwardingTests(unittest.TestCase):
                 "reach the bridge unchanged on the capture_screenshot "
                 "action."
             ),
+        )
+
+    def test_target_with_omitted_angle_leaves_bridge_default_unresolved(self) -> None:
+        with patch.object(
+            mcp_tools_editor_view, "send_action", return_value=self._BRIDGE_OK,
+        ) as send:
+            mcp_tools_editor_view.editor_screenshot(target="/Avatar/Body", refresh=False)
+
+        send.assert_called_once()
+        kwargs = send.call_args.kwargs
+        self.assertEqual(
+            ("capture_screenshot", "/Avatar/Body", False),
+            (kwargs["action"], kwargs["target"], "angle" in kwargs),
+            msg="omitted target angle must stay unresolved until bridge target-mode routing.",
         )
 
     def test_view_game_with_target_is_rejected_pre_bridge(self) -> None:
@@ -638,6 +652,112 @@ class EditorScreenshotTargetForwardingTests(unittest.TestCase):
         )
 
 
+class EditorScreenshotFitModeTests(unittest.TestCase):
+    """Issue #90 — target screenshot fit-mode validation and forwarding."""
+
+    _BRIDGE_OK = _success_envelope()
+
+    def test_invalid_fit_mode_is_rejected_before_refresh_or_capture(self) -> None:
+        with patch.object(
+            mcp_tools_editor_view, "send_action", return_value=self._BRIDGE_OK,
+        ) as send:
+            response = mcp_tools_editor_view.editor_screenshot(
+                target="/Avatar", fit_mode="fill", refresh=True,
+            )
+        send.assert_not_called()
+        observed = (
+            response["success"],
+            response["severity"],
+            response["code"],
+            response["data"]["supplied"],
+            response["data"]["allowed_fit_modes"],
+            "fill" in response["message"],
+            "max_axis" in response["message"],
+            "both_axes" in response["message"],
+        )
+        self.assertEqual(
+            (
+                False,
+                "error",
+                "SCREENSHOT_FIT_MODE_INVALID",
+                "fill",
+                ["max_axis", "both_axes"],
+                True,
+                True,
+                True,
+            ),
+            observed,
+            msg=(
+                "Invalid fit_mode must fail at the wrapper boundary with "
+                "the supplied value and the exact allowed selector set."
+            ),
+        )
+
+    def test_target_fit_mode_reaches_target_capture_payload(self) -> None:
+        with patch.object(
+            mcp_tools_editor_view, "send_action", return_value=self._BRIDGE_OK,
+        ) as send:
+            mcp_tools_editor_view.editor_screenshot(
+                target="/Avatar", angle="right", fit_mode="both_axes", refresh=False,
+            )
+        send.assert_called_once()
+        kwargs = send.call_args.kwargs
+        self.assertEqual(
+            ("capture_screenshot", "/Avatar", "right", "both_axes"),
+            (kwargs["action"], kwargs["target"], kwargs["angle"], kwargs["fit_mode"]),
+            msg="target screenshot fit_mode must be forwarded unchanged to the bridge.",
+        )
+
+    def test_no_target_screenshot_does_not_forward_fit_mode(self) -> None:
+        with patch.object(
+            mcp_tools_editor_view, "send_action", return_value=self._BRIDGE_OK,
+        ) as send:
+            mcp_tools_editor_view.editor_screenshot(fit_mode="both_axes", refresh=False)
+        send.assert_called_once()
+        kwargs = send.call_args.kwargs
+        self.assertEqual(
+            ("capture_screenshot", False),
+            (kwargs["action"], "fit_mode" in kwargs),
+            msg="scene/game screenshot payloads must not receive target-only fit_mode.",
+        )
+
+    def test_registered_tool_surface_forwards_fit_mode_unchanged(self) -> None:
+        registered_tools = {}
+
+        class RecordingServer:
+            def tool(self, name: str | None = None):
+                def register(func):
+                    registered_tools[name or func.__name__] = func
+                    return func
+
+                return register
+
+        with patch.object(
+            mcp_tools_editor_view,
+            "editor_screenshot",
+            return_value=self._BRIDGE_OK,
+        ) as editor_screenshot:
+            mcp_tools_editor_view.register_editor_view_tools(RecordingServer())
+            response = registered_tools["editor_screenshot"](
+                target="/Avatar", angle="right", fit_mode="both_axes", refresh=False,
+            )
+
+        self.assertIs(response, self._BRIDGE_OK)
+        editor_screenshot.assert_called_once_with(
+            view="scene",
+            width=0,
+            height=0,
+            refresh=False,
+            crop_roi="",
+            target="/Avatar",
+            angle="right",
+            target_mode="auto",
+            padding_ratio=0.10,
+            projection="auto",
+            fit_mode="both_axes",
+        )
+
+
 class EditorScreenshotUiFramingTests(unittest.TestCase):
     def test_world_space_ui_target_selectors_reach_bridge(self) -> None:
         with patch.object(
@@ -671,6 +791,27 @@ class EditorScreenshotUiFramingTests(unittest.TestCase):
                 send.call_args.kwargs["angle"],
             ),
             msg=f"UI screenshot selectors were not forwarded: {send.call_args.kwargs!r}",
+        )
+
+    def test_world_space_ui_omitted_angle_leaves_bridge_default_unresolved(self) -> None:
+        with patch.object(
+            mcp_tools_editor_view, "send_action", return_value=_SCREENSHOT_BRIDGE_OK,
+        ) as send:
+            mcp_tools_editor_view.editor_screenshot(
+                target="/Canvas/WatchingButton",
+                target_mode="world_space_ui",
+                refresh=False,
+            )
+
+        send.assert_called_once()
+        self.assertEqual(
+            ("capture_screenshot", "world_space_ui", False),
+            (
+                send.call_args.kwargs["action"],
+                send.call_args.kwargs["target_mode"],
+                "angle" in send.call_args.kwargs,
+            ),
+            msg="world_space_ui omitted angle must stay unresolved until bridge target-mode routing.",
         )
 
     def test_world_space_ui_current_camera_selector_and_metadata_are_preserved(self) -> None:
