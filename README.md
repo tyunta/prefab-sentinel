@@ -10,7 +10,7 @@ Unity / VRChat プロジェクトの Prefab / Scene / Asset を安全に検査�
 
 read-only 経路（`validate_refs` / `inspect_*` / `find_*` 等）は Unity を起動せず YAML 直読みで完結する。書き込み経路（`patch_apply` / `set_property` / `editor_*` 等）は常駐 Editor Bridge との file-IPC で動き、`confirm=True` + 非空 `change_reason` の監査ペアを欠く呼び出しは `CHANGE_REASON_REQUIRED` で拒否される。
 
-本 README は各専門ドキュメントへの入口（[ドキュメントマップ](#ドキュメントマップ) 参照）。仕様の正本は専門ドキュメント群、運用ルールの正本は [CLAUDE.md](./CLAUDE.md)。
+本 README は各専門ドキュメントへの入口（[ドキュメントマップ](#ドキュメントマップ) 参照）。仕様の正本は専門ドキュメント群、運用ルールの正本は [AGENTS.md](./AGENTS.md)。
 
 ## やること / やらないこと
 
@@ -133,6 +133,6 @@ read-only 検査（`validate_*` / `inspect_*` / `find_*`）は Unity 不要、`e
 | [CONFIGURATION.md](./CONFIGURATION.md) | `UNITYTOOL_*` 環境変数・`ignore_guids.txt`・scope config 規約 |
 | [DEBUGGING.md](./DEBUGGING.md) | Bridge エンベロープ / Unity Console / broken reference の調査手順 |
 | [CONTRIBUTING.md](./CONTRIBUTING.md) | 開発環境・MCP サーバーの直接起動・テスト・コミット規約・PR フロー |
-| [CLAUDE.md](./CLAUDE.md) | 運用ルールと判断基準の正本 |
+| [AGENTS.md](./AGENTS.md) | 運用ルールと判断基準の正本 |
 | [AGENT_GUIDE.md](./AGENT_GUIDE.md) | AI エージェント向け onboarding（最初の参照点） |
 | [CHANGELOG.md](./CHANGELOG.md) | 変更履歴 |

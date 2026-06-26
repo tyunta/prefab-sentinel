@@ -16,6 +16,7 @@ namespace PrefabSentinel
         {
             unsupported = null;
             bool wantsUi = request.target_mode == "world_space_ui";
+            if (request.target_mode == "object") return false;
             if (request.target_mode == "renderer") return false;
 
             Canvas canvas = ResolveRelevantCanvas(target);

@@ -322,3 +322,26 @@ class EffectiveHierarchyUnitySmokeFixtureTests(unittest.TestCase):
             ),
             msg=f"Unity-style fixture lost effective hierarchy metadata: {nested!r}",
         )
+
+
+class EffectiveHierarchyPackageSplitTests(unittest.TestCase):
+    def test_public_imports_are_served_by_package_init(self) -> None:
+        import prefab_sentinel.effective_hierarchy as package
+        from prefab_sentinel.effective_hierarchy import (
+            EffectiveHierarchyNode,
+            EffectiveHierarchyResult,
+            build_effective_hierarchy,
+        )
+
+        self.assertEqual("__init__.py", Path(package.__file__).name)
+        self.assertEqual(
+            (
+                "EffectiveHierarchyNode",
+                "EffectiveHierarchyResult",
+                "build_effective_hierarchy",
+            ),
+            tuple(package.__all__),
+        )
+        self.assertIs(package.EffectiveHierarchyNode, EffectiveHierarchyNode)
+        self.assertIs(package.EffectiveHierarchyResult, EffectiveHierarchyResult)
+        self.assertIs(package.build_effective_hierarchy, build_effective_hierarchy)

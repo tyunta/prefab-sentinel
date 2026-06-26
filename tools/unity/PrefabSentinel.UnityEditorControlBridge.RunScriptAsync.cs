@@ -236,6 +236,7 @@ namespace PrefabSentinel
                                 path_hints = inner.data.path_hints ?? Array.Empty<WslPathHint>(),
                             },
                             diagnostics = inner.diagnostics ?? Array.Empty<EditorControlDiagnostic>(),
+                            operator_context = inner.operator_context,
                         };
                         if (response.diagnostics.Length > 0 && response.success) response.severity = "warning";
                         return response;

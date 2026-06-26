@@ -95,6 +95,16 @@ def _build_top_missing_entry(
     return entry
 
 
+def _path_status_exists(path: Path) -> tuple[bool, OSError | None]:
+    try:
+        path.stat()
+    except FileNotFoundError:
+        return False, None
+    except OSError as exc:
+        return False, exc
+    return True, None
+
+
 class ReferenceResolverService:
     """Read-only reference validation service."""
 
@@ -810,7 +820,14 @@ class ReferenceResolverService:
         scan_project_root = self.project_root
         if scope:
             scan_scope_path = resolve_scope_path(scope, self.project_root)
-            if not scan_scope_path.exists():
+            scope_exists, scope_error = _path_status_exists(scan_scope_path)
+            if scope_error is not None:
+                return error_response(
+                    "REF404",
+                    f"scope path status could not be read: {scope_error}",
+                    data={"scope": scope, "read_only": True},
+                )
+            if not scope_exists:
                 return error_response(
                     "REF404",
                     "Scope path does not exist.",
@@ -830,14 +847,28 @@ class ReferenceResolverService:
                 )
         else:
             candidate = resolve_scope_path(asset_or_guid, self.project_root)
-            if not candidate.exists():
+            candidate_exists, candidate_error = _path_status_exists(candidate)
+            if candidate_error is not None:
+                return error_response(
+                    "REF404",
+                    f"target asset path status could not be read: {candidate_error}",
+                    data={"asset_or_guid": asset_or_guid, "read_only": True},
+                )
+            if not candidate_exists:
                 return error_response(
                     "REF404",
                     "Target asset path does not exist.",
                     data={"asset_or_guid": asset_or_guid, "read_only": True},
                 )
             meta_path = candidate.with_suffix(candidate.suffix + ".meta")
-            if not meta_path.exists():
+            meta_exists, meta_error = _path_status_exists(meta_path)
+            if meta_error is not None:
+                return error_response(
+                    "REF001",
+                    f"target meta path status could not be read: {meta_error}",
+                    data={"asset_or_guid": asset_or_guid, "read_only": True},
+                )
+            if not meta_exists:
                 return error_response(
                     "REF001",
                     "Target asset has no .meta GUID file.",
@@ -845,8 +876,12 @@ class ReferenceResolverService:
                 )
             try:
                 guid = extract_meta_guid(meta_path) or ""
-            except (OSError, UnicodeDecodeError):
-                guid = ""
+            except (OSError, UnicodeDecodeError) as exc:
+                return error_response(
+                    "REF001",
+                    f"target meta metadata could not be read: {exc}",
+                    data={"asset_or_guid": asset_or_guid, "read_only": True},
+                )
             if not looks_like_guid(guid):
                 return error_response(
                     "REF001",

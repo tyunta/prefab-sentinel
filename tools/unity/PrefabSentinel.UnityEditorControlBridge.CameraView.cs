@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using PrefabSentinel.Camera;
 using UnityEditor;
@@ -241,35 +242,34 @@ namespace PrefabSentinel
             SceneView sceneView = SceneView.lastActiveSceneView;
             if (sceneView == null)
                 return BuildError("EDITOR_CTRL_NO_SCENE_VIEW", "No active SceneView found.");
+            if (!IsSupportedRendererBoundsPolicy(request.bounds_policy))
+                return BuildBoundsPolicyInvalidError(request.bounds_policy);
 
             string objectName = selectedGo.name;
-
-            // Pre-bounds synchronization (issue #115): bring UGUI canvas
-            // state, RectTransform layout, and physics transforms up to
-            // date before reading bounds so post-edit framing is accurate.
             SynchronizeBoundsSourcesForFrame(selectedGo);
 
-            // Issue #75: resolve a concrete Bounds so the frame can be
-            // driven through SceneView.Frame(bounds, instant:true). The
-            // animated FrameSelected() leaves pivot and size un-advanced
-            // when CaptureCameraState reads them in the same dispatch
-            // frame, so the response reported the entire pre-frame camera
-            // snapshot. boundsCenter/Extents stay null for an object with
-            // neither a Renderer nor a RectTransform — preserving the
-            // response's existing "bounds unavailable" contract — while a
-            // unit-size fallback Bounds still drives the instant frame.
             float[] boundsCenter = null;
             float[] boundsExtents = null;
             bool haveBounds = false;
+            bool usedRendererBounds = false;
+            bool usedRectTransformBounds = false;
             Bounds frameBounds = new Bounds(selectedGo.transform.position, Vector3.one);
-            if (TryResolveRendererFramingBounds(selectedGo, out frameBounds, out _))
+            IList<ObjectCaptureFramingMath.RendererBoundsRecord> includedRecords =
+                new List<ObjectCaptureFramingMath.RendererBoundsRecord>();
+            IList<ObjectCaptureFramingMath.RendererBoundsRecord> excludedRecords =
+                new List<ObjectCaptureFramingMath.RendererBoundsRecord>();
+            if (TryResolveRendererFramingBounds(
+                selectedGo,
+                request.bounds_policy,
+                out frameBounds,
+                out includedRecords,
+                out excludedRecords))
             {
                 haveBounds = true;
+                usedRendererBounds = true;
             }
             else
             {
-                // RectTransform fallback: frame the world-space AABB of the
-                // selected RectTransform when no Renderer is in the subtree.
                 var rect = selectedGo.GetComponent<RectTransform>();
                 if (rect != null)
                 {
@@ -283,6 +283,7 @@ namespace PrefabSentinel
                     }
                     frameBounds = new Bounds((min + max) * 0.5f, max - min);
                     haveBounds = true;
+                    usedRectTransformBounds = true;
                 }
             }
             if (haveBounds)
@@ -293,24 +294,29 @@ namespace PrefabSentinel
                     { frameBounds.extents.x, frameBounds.extents.y, frameBounds.extents.z };
             }
 
-            // Frame synchronously (issue #75): SceneView.Frame with
-            // instant:true settles pivot and size in this dispatch frame,
-            // unlike the animated FrameSelected().
             sceneView.Frame(frameBounds, instant: true);
             if (request.zoom > 0f)
                 sceneView.size = request.zoom;
             ForceRenderAndRepaint(sceneView);
 
             CameraSnapshot cam = CaptureCameraState(sceneView);
-            // Issue #74 / #75: camera.transform.position is recomputed by
-            // Unity only on its next camera refresh, so resolve it
-            // synchronously from the now-settled pivot/rotation/size.
             cam.position = ResolveSyncedCameraPosition(
                 sceneView, sceneView.camera.fieldOfView);
             var data = BuildCameraData(cam);
             data.selected_object = objectName;
             data.bounds_center = boundsCenter;
             data.bounds_extents = boundsExtents;
+            if (usedRendererBounds)
+            {
+                data.bounds_source = "renderer";
+                data.bounds_policy = request.bounds_policy;
+                data.contributor_count = includedRecords.Count;
+                data.excluded_count = excludedRecords.Count;
+                data.bounds_contributors = ToContributorEntries(includedRecords);
+                data.excluded_renderers = ToContributorEntries(excludedRecords);
+            }
+            if (usedRectTransformBounds)
+                data.bounds_source = "rect_transform";
 
             return BuildSuccess("EDITOR_CTRL_FRAME_OK",
                 $"Framed: {objectName}" + (request.zoom > 0f ? $" (zoom={request.zoom})" : ""),

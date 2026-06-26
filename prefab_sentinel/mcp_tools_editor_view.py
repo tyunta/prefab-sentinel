@@ -26,6 +26,7 @@ __all__ = [
     "SCREENSHOT_TARGET_MODE_ALLOWLIST",
     "SCREENSHOT_PROJECTION_ALLOWLIST",
     "SCREENSHOT_FIT_MODE_ALLOWLIST",
+    "SCREENSHOT_BOUNDS_POLICY_ALLOWLIST",
 ]
 
 # Issue #249: canonical screenshot region preset allowlist.  Mirrors the
@@ -63,6 +64,7 @@ SCREENSHOT_ANGLE_PRESETS: tuple[str, ...] = (
 SCREENSHOT_VIEW_ALLOWLIST: tuple[str, ...] = ("scene", "game")
 SCREENSHOT_TARGET_MODE_ALLOWLIST: tuple[str, ...] = (
     "auto",
+    "object",
     "renderer",
     "world_space_ui",
 )
@@ -74,6 +76,10 @@ SCREENSHOT_PROJECTION_ALLOWLIST: tuple[str, ...] = (
 SCREENSHOT_FIT_MODE_ALLOWLIST: tuple[str, ...] = (
     "max_axis",
     "both_axes",
+)
+SCREENSHOT_BOUNDS_POLICY_ALLOWLIST: tuple[str, ...] = (
+    "all_visible_renderers",
+    "focus_core",
 )
 
 # Issue #131: inclusive size bounds shared by the editor-console MCP tool
@@ -395,6 +401,23 @@ def _screenshot_fit_mode_invalid_envelope(value: str) -> dict[str, Any]:
     }
 
 
+def _bounds_policy_invalid_envelope(value: str) -> dict[str, Any]:
+    return {
+        "success": False,
+        "severity": "error",
+        "code": "BOUNDS_POLICY_INVALID",
+        "message": (
+            f"bounds_policy={value!r} is not one of "
+            f"({', '.join(SCREENSHOT_BOUNDS_POLICY_ALLOWLIST)})."
+        ),
+        "data": {
+            "supplied": value,
+            "allowed_bounds_policies": list(SCREENSHOT_BOUNDS_POLICY_ALLOWLIST),
+        },
+        "diagnostics": [],
+    }
+
+
 def _screenshot_padding_ratio_invalid_envelope(value: float) -> dict[str, Any]:
     return {
         "success": False,
@@ -463,6 +486,7 @@ def editor_screenshot(
     padding_ratio: float = 0.10,
     projection: str = "auto",
     fit_mode: str = "max_axis",
+    bounds_policy: str = "all_visible_renderers",
 ) -> dict[str, Any]:
     """Capture a screenshot of the Unity Editor (issues #249, #259, #84, #95)."""
     if view not in SCREENSHOT_VIEW_ALLOWLIST:
@@ -473,6 +497,8 @@ def editor_screenshot(
         return _screenshot_projection_invalid_envelope(projection)
     if fit_mode not in SCREENSHOT_FIT_MODE_ALLOWLIST:
         return _screenshot_fit_mode_invalid_envelope(fit_mode)
+    if bounds_policy not in SCREENSHOT_BOUNDS_POLICY_ALLOWLIST:
+        return _bounds_policy_invalid_envelope(bounds_policy)
     if padding_ratio < 0.0 or padding_ratio > 1.0:
         return _screenshot_padding_ratio_invalid_envelope(padding_ratio)
     if (
@@ -515,6 +541,7 @@ def editor_screenshot(
         kwargs["padding_ratio"] = padding_ratio
         kwargs["projection"] = projection
         kwargs["fit_mode"] = fit_mode
+        kwargs["bounds_policy"] = bounds_policy
     return send_action(**kwargs)
 
 
@@ -579,6 +606,7 @@ def register_editor_view_tools(server: FastMCP) -> None:
         padding_ratio: float = 0.10,
         projection: str = "auto",
         fit_mode: str = "max_axis",
+        bounds_policy: str = "all_visible_renderers",
     ) -> dict[str, Any]:
         """Capture a screenshot of the Unity Editor."""
         return editor_screenshot(
@@ -589,6 +617,7 @@ def register_editor_view_tools(server: FastMCP) -> None:
             padding_ratio=padding_ratio,
             projection=projection,
             fit_mode=fit_mode,
+            bounds_policy=bounds_policy,
         )
 
     @server.tool(name="editor_force_scene_view_refresh")
@@ -621,6 +650,7 @@ def register_editor_view_tools(server: FastMCP) -> None:
     @server.tool()
     def editor_frame(
         zoom: float = 0.0,
+        bounds_policy: str = "all_visible_renderers",
     ) -> dict[str, Any]:
         """Frame the selected object in Scene view.
 
@@ -631,8 +661,15 @@ def register_editor_view_tools(server: FastMCP) -> None:
         Args:
             zoom: Scene view distance factor (SceneView.size). 0 = keep current.
                 Larger values zoom OUT, smaller values zoom IN. Typical: 0.1-5.0.
+            bounds_policy: Renderer bounds aggregation policy.
         """
-        return send_action(action="frame_selected", zoom=zoom)
+        if bounds_policy not in SCREENSHOT_BOUNDS_POLICY_ALLOWLIST:
+            return _bounds_policy_invalid_envelope(bounds_policy)
+        return send_action(
+            action="frame_selected",
+            zoom=zoom,
+            bounds_policy=bounds_policy,
+        )
 
     @server.tool()
     def editor_get_camera() -> dict[str, Any]:

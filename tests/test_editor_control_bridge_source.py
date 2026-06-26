@@ -1349,7 +1349,7 @@ class TestBridgePartialLayout(unittest.TestCase):
     """
 
     # Names of partials that earlier splits removed.  These must be
-    # absent from disk so the CLAUDE.md inventory and the actual file
+    # absent from disk so the AGENTS.md inventory and the actual file
     # set agree.
     _DELETED_PARTIAL_NAMES = (
         "PrefabSentinel.UnityEditorControlBridge.HierarchyComponents.cs",
@@ -1405,7 +1405,7 @@ class TestBridgePartialLayout(unittest.TestCase):
 
     def test_deleted_partials_are_absent(self) -> None:
         """The legacy oversized partials must be gone from disk so the
-        CLAUDE.md inventory and the live file set match.
+        AGENTS.md inventory and the live file set match.
         """
         for name in self._DELETED_PARTIAL_NAMES:
             with self.subTest(name=name):
@@ -1536,14 +1536,14 @@ class TestBridgePartialSizing(unittest.TestCase):
 
 
 class TestOperationalRulesPartialInventory(unittest.TestCase):
-    """Issue #138 — the project's operational rules file (``CLAUDE.md``)
+    """Issue #138 — the project's operational rules file (``AGENTS.md``)
     must list every present per-concern partial and list no absent
     partial in its partial-inventory line. The inventory line is the
     single source of truth on disk for the partial layout.
     """
 
     _PROJECT_ROOT = Path(__file__).resolve().parent.parent
-    _CLAUDE_MD = _PROJECT_ROOT / "CLAUDE.md"
+    _AGENTS_MD = _PROJECT_ROOT / "AGENTS.md"
     _PARTIAL_GLOB = "PrefabSentinel.UnityEditorControlBridge*.cs"
 
     def _disk_partial_concerns(self) -> set[str]:
@@ -1563,20 +1563,20 @@ class TestOperationalRulesPartialInventory(unittest.TestCase):
         return concerns
 
     def test_inventory_line_lists_every_present_partial(self) -> None:
-        text = self._CLAUDE_MD.read_text(encoding="utf-8")
+        text = self._AGENTS_MD.read_text(encoding="utf-8")
         for concern in sorted(self._disk_partial_concerns()):
             with self.subTest(concern=concern):
                 self.assertIn(
                     concern,
                     text,
-                    f"CLAUDE.md inventory line is missing concern '{concern}'.",
+                    f"AGENTS.md inventory line is missing concern '{concern}'.",
                 )
 
     def test_inventory_line_lists_no_absent_partial(self) -> None:
         """The legacy partial concern names that issue #138 removed must
-        not appear in CLAUDE.md, otherwise the inventory advertises files
+        not appear in AGENTS.md, otherwise the inventory advertises files
         that no longer exist on disk."""
-        text = self._CLAUDE_MD.read_text(encoding="utf-8")
+        text = self._AGENTS_MD.read_text(encoding="utf-8")
         for absent in ("HierarchyComponents", "UdonSharp.cs"):
             with self.subTest(absent=absent):
                 # ``UdonSharp`` alone is a substring of UdonSharp* names,
@@ -1584,7 +1584,7 @@ class TestOperationalRulesPartialInventory(unittest.TestCase):
                 self.assertNotIn(
                     absent,
                     text,
-                    f"CLAUDE.md still references the deleted partial '{absent}'.",
+                    f"AGENTS.md still references the deleted partial '{absent}'.",
                 )
 
 
@@ -2717,9 +2717,6 @@ class TestHandleGetEditorStateReadsFiveFlags(unittest.TestCase):
         )
 
     def test_snapshot_class_declares_five_flag_fields(self) -> None:
-        # The EditorStateSnapshot DTO must declare exactly five bool
-        # flag fields; the unsaved-changes flag is additive on top of
-        # the original four.
         body = _read(BRIDGE)
         match = re.search(
             r"class\s+EditorStateSnapshot\s*\{",
@@ -2733,22 +2730,107 @@ class TestHandleGetEditorStateReadsFiveFlags(unittest.TestCase):
         snapshot_body = _extract_braced_block(
             body, match.end(), "EditorStateSnapshot body"
         )
-        bool_fields = re.findall(r"public\s+bool\s+(\w+)\s*=", snapshot_body)
+        bool_fields = set(re.findall(r"public\s+bool\s+(\w+)\s*=", snapshot_body))
+        expected_flags = {
+            "is_playing",
+            "is_will_change_playmode",
+            "is_compiling",
+            "is_building_player",
+            "has_unsaved_changes",
+        }
         self.assertEqual(
-            5,
-            len(bool_fields),
+            expected_flags,
+            expected_flags & bool_fields,
             msg=(
-                "EditorStateSnapshot must declare exactly five bool flag "
-                f"fields; found {bool_fields}"
+                "EditorStateSnapshot must carry the five play/compile/dirty "
+                f"flags; found {sorted(bool_fields)}"
             ),
         )
-        self.assertIn(
-            "has_unsaved_changes",
-            bool_fields,
-            msg=(
-                "EditorStateSnapshot must carry the unsaved-changes flag "
-                "(issue #40)."
+
+
+class TestHandleGetEditorStateOperatorContextSource(unittest.TestCase):
+    def test_snapshot_and_response_declare_operator_identity_and_stage_fields(self) -> None:
+        source = _strip_cs_comments(_read(BRIDGE))
+        snapshot_body = _extract_class_body(source, "EditorStateSnapshot")
+        response_body = _extract_class_body(source, "EditorControlResponse")
+        context_body = _extract_class_body(source, "EditorOperatorContext")
+
+        snapshot_checks = {
+            "active_stage_kind": "public string active_stage_kind" in snapshot_body,
+            "active_scene_path": "public string active_scene_path" in snapshot_body,
+            "active_scene_name": "public string active_scene_name" in snapshot_body,
+            "prefab_stage_asset_path": "public string prefab_stage_asset_path" in snapshot_body,
+            "prefab_stage_root_name": "public string prefab_stage_root_name" in snapshot_body,
+            "prefab_stage_is_dirty": "public bool prefab_stage_is_dirty" in snapshot_body,
+            "open_scenes": "public EditorSceneStatus[] open_scenes" in snapshot_body,
+        }
+        context_checks = {
+            "response_context": "public EditorOperatorContext operator_context" in response_body,
+            "project_root": "public string project_root" in context_body,
+            "bridge_session_id": "public string bridge_session_id" in context_body,
+            "bridge_instance_id": "public string bridge_instance_id" in context_body,
+            "bridge_version": "public string bridge_version" in context_body,
+            "plugin_version": "public string plugin_version" in context_body,
+        }
+        self.assertEqual(
+            {key: True for key in snapshot_checks},
+            snapshot_checks,
+            msg=f"EditorStateSnapshot stage/dirty fields missing: {snapshot_checks}",
+        )
+        self.assertEqual(
+            {key: True for key in context_checks},
+            context_checks,
+            msg=f"Editor operator context fields missing: {context_checks}",
+        )
+
+    def test_get_editor_state_populates_identity_and_does_not_mutate_editor_state(self) -> None:
+        source = _strip_cs_comments(_read(BRIDGE))
+        body = _extract_method(source, "HandleGetEditorState")
+        required_tokens = {
+            "operator_context = BuildEditorOperatorContext()": (
+                "operator_context = BuildEditorOperatorContext()" in source
             ),
+            "PopulateActiveSceneStatus": "PopulateActiveSceneStatus(snapshot, diagnostics)" in body,
+            "PopulatePrefabStageStatus": "PopulatePrefabStageStatus(snapshot, diagnostics)" in body,
+            "open_scenes": "open_scenes" in body,
+            "active_stage_kind": "active_stage_kind" in source,
+            "prefab_stage": 'active_stage_kind = "prefab_stage"' in source,
+        }
+        forbidden_tokens = {
+            "EditorSceneManager.Save": "EditorSceneManager.Save" in body,
+            "SaveCurrentModifiedScenesIfUserWantsTo": (
+                "SaveCurrentModifiedScenesIfUserWantsTo" in body
+            ),
+            "StageUtility.GoToMainStage": "StageUtility.GoToMainStage" in body,
+            "ClearDirtiness": "ClearDirtiness" in body,
+        }
+        self.assertEqual(
+            {key: True for key in required_tokens},
+            required_tokens,
+            msg=f"HandleGetEditorState missing identity/stage population: {required_tokens}",
+        )
+        self.assertEqual(
+            {key: False for key in forbidden_tokens},
+            forbidden_tokens,
+            msg=f"HandleGetEditorState must be read-only: {forbidden_tokens}",
+        )
+
+    def test_get_editor_state_limited_enumeration_diagnostic_is_successful_warning(self) -> None:
+        source = _strip_cs_comments(_read(BRIDGE))
+        body = _extract_method(source, "HandleGetEditorState")
+        checks = {
+            "diagnostic_code": "EDITOR_STATE_ENUMERATION_LIMITED" in source,
+            "warning_severity": 'severity = "warning"' in source,
+            "success_response": "BuildSuccess(" in body,
+            "response_severity_gate": (
+                'if (diagnostics.Count > 0) response.severity = "warning";' in body
+            ),
+            "catch_exception": "catch (Exception" in source,
+        }
+        self.assertEqual(
+            {key: True for key in checks},
+            checks,
+            msg=f"HandleGetEditorState limited-enumeration diagnostic missing: {checks}",
         )
 
 
@@ -2923,6 +3005,17 @@ class TestRecompileNoOpImporterWarning(unittest.TestCase):
             msg=(
                 "the warning response must list the detected importer "
                 "errors as diagnostics."
+            ),
+        )
+
+    def test_noop_importer_response_carries_operator_context(self) -> None:
+        body = _extract_method(_read(BRIDGE), "WriteRecompileNoOpResponse")
+        self.assertIn(
+            "operator_context = BuildEditorOperatorContext()",
+            body,
+            msg=(
+                "The successful no-op warning response must carry operator "
+                "context so expected-root verification can accept the response."
             ),
         )
 
@@ -3330,6 +3423,17 @@ class TestRunScriptCompilePendingResponseDeadlinePath(unittest.TestCase):
         )
         self.assertIn(
             'TimeoutCode = "EDITOR_RUN_SCRIPT_COMPILE_TIMEOUT"', source
+        )
+
+    def test_recovery_response_carries_operator_context(self) -> None:
+        body = _extract_method(_read(BRIDGE), "RunScriptCompilePendingResponse")
+        self.assertIn(
+            "operator_context = BuildEditorOperatorContext()",
+            body,
+            msg=(
+                "Manual recovery responses must carry operator context like "
+                "the central bridge response builders."
+            ),
         )
 
 
@@ -4023,25 +4127,41 @@ class EditorFrameRendererFramingSourceTests(unittest.TestCase):
         )
 
 
-class RendererFramingBoundsSourceTests(unittest.TestCase):
-    """Issue #85 — source invariants for the shared renderer bounds helper."""
+class RendererFramingBoundsPolicySourceTests(unittest.TestCase):
+    """Issue #85 — source invariants for renderer bounds policy selection."""
 
     _HELPER_PATH = TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.RendererFramingBounds.cs"
 
-    def _helper_source(self) -> str:
+    def _helper_body(self) -> str:
         self.assertTrue(
             self._HELPER_PATH.exists(),
             msg="RendererFramingBounds partial must exist as the shared #85 bounds model.",
         )
-        return _strip_cs_comments(self._HELPER_PATH.read_text(encoding="utf-8"))
+        return _extract_method(
+            _strip_cs_comments(self._HELPER_PATH.read_text(encoding="utf-8")),
+            "TryResolveRendererFramingBounds",
+        )
+
+    def test_helper_signature_exposes_policy_and_included_excluded_records(self) -> None:
+        body = self._helper_body()
+        for literal in (
+            "string boundsPolicy",
+            "out IList<ObjectCaptureFramingMath.RendererBoundsRecord> includedRecords",
+            "out IList<ObjectCaptureFramingMath.RendererBoundsRecord> excludedRecords",
+        ):
+            with self.subTest(literal=literal):
+                self.assertIn(
+                    literal,
+                    body,
+                    msg=f"TryResolveRendererFramingBounds must expose {literal!r}.",
+                )
 
     def test_helper_collects_active_enabled_renderer_contributors(self) -> None:
-        source = self._helper_source()
-        body = _extract_method(source, "TryResolveRendererFramingBounds")
+        body = self._helper_body()
         for literal in (
             "GetComponentsInChildren<Renderer>(false)",
             "renderer.enabled",
-            "ObjectCaptureFramingMath.SelectFramingRenderers",
+            "records.Add(ToRendererBoundsRecord(bounds))",
         ):
             with self.subTest(literal=literal):
                 self.assertIn(
@@ -4051,12 +4171,11 @@ class RendererFramingBoundsSourceTests(unittest.TestCase):
                 )
 
     def test_helper_bakes_skinned_meshes_and_destroys_temporary_meshes(self) -> None:
-        source = self._helper_source()
-        body = _extract_method(source, "TryResolveRendererFramingBounds")
+        body = self._helper_body()
         for literal in (
             "SkinnedMeshRenderer",
             ".BakeMesh(",
-            "Object.DestroyImmediate",
+            "UnityEngine.Object.DestroyImmediate",
         ):
             with self.subTest(literal=literal):
                 self.assertIn(
@@ -4065,20 +4184,192 @@ class RendererFramingBoundsSourceTests(unittest.TestCase):
                     msg=f"TryResolveRendererFramingBounds must contain {literal!r}.",
                 )
 
-    def test_helper_reports_no_bounds_when_no_renderer_records_are_kept(self) -> None:
-        source = self._helper_source()
-        body = _extract_method(source, "TryResolveRendererFramingBounds")
+    def test_all_visible_branch_aggregates_records_without_core_filter(self) -> None:
+        body = self._helper_body()
+        all_visible_index = body.find('boundsPolicy == "all_visible_renderers"')
+        focus_core_index = body.find('boundsPolicy == "focus_core"')
+        selector_index = body.find("ObjectCaptureFramingMath.SelectFramingRenderers")
+        self.assertNotEqual(
+            -1,
+            all_visible_index,
+            msg="TryResolveRendererFramingBounds must branch on all_visible_renderers.",
+        )
+        self.assertNotEqual(
+            -1,
+            focus_core_index,
+            msg="TryResolveRendererFramingBounds must branch on focus_core.",
+        )
+        self.assertLess(
+            all_visible_index,
+            focus_core_index,
+            msg="The default all_visible_renderers branch must be evaluated before focus_core.",
+        )
+        self.assertNotIn(
+            "ObjectCaptureFramingMath.SelectFramingRenderers",
+            body[all_visible_index:focus_core_index],
+            msg="all_visible_renderers must aggregate gathered records without core selection.",
+        )
+        self.assertIn(
+            "includedRecords = records",
+            body[all_visible_index:focus_core_index],
+            msg="all_visible_renderers must include every gathered renderer record.",
+        )
+        self.assertLess(
+            focus_core_index,
+            selector_index,
+            msg="SelectFramingRenderers must be confined to the focus_core branch.",
+        )
+
+    def test_focus_core_branch_records_selector_exclusions(self) -> None:
+        body = self._helper_body()
+        focus_core_index = body.find('boundsPolicy == "focus_core"')
+        self.assertNotEqual(-1, focus_core_index, msg="focus_core branch missing.")
+        focus_core_body = body[focus_core_index:]
         for literal in (
-            "keptRecords = new List<ObjectCaptureFramingMath.RendererBoundsRecord>()",
-            "keptRecords.Count == 0",
-            "return false",
+            "ObjectCaptureFramingMath.SelectFramingRenderers(records)",
+            "excludedRecords",
+            "includedRecords",
+        ):
+            with self.subTest(literal=literal):
+                self.assertIn(
+                    literal,
+                    focus_core_body,
+                    msg=f"focus_core branch must contain {literal!r}.",
+                )
+
+
+class ObjectCaptureBoundsEvidenceSourceTests(unittest.TestCase):
+    _TARGET_CAPTURE_PARTIAL = (
+        TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Screenshot.TargetCapture.cs"
+    )
+
+    def _object_capture_body(self) -> str:
+        self.assertTrue(
+            self._TARGET_CAPTURE_PARTIAL.exists(),
+            msg="Screenshot.TargetCapture partial must exist for renderer target capture.",
+        )
+        return _extract_method(
+            _strip_cs_comments(self._TARGET_CAPTURE_PARTIAL.read_text(encoding="utf-8")),
+            "HandleObjectCaptureScreenshot",
+        )
+
+    def test_data_contract_declares_bounds_policy_and_exclusion_fields(self) -> None:
+        source = _read(BRIDGE)
+        for literal in (
+            "public string bounds_policy = string.Empty",
+            "public int excluded_count = 0",
+            "public GeometryBoundsContributorEntry[] excluded_renderers",
+        ):
+            with self.subTest(literal=literal):
+                self.assertIn(literal, source, msg=f"EditorControlData must declare {literal!r}.")
+
+    def test_object_capture_success_payload_assigns_bounds_evidence(self) -> None:
+        body = self._object_capture_body()
+        for literal in (
+            "request.bounds_policy",
+            "includedRecords",
+            "excludedRecords",
+            "bounds_policy = request.bounds_policy",
+            "bounds_center = new float[]",
+            "bounds_extents = new float[]",
+            "contributor_count = includedRecords.Count",
+            "excluded_count = excludedRecords.Count",
+            "bounds_contributors = ToContributorEntries(includedRecords)",
+            "excluded_renderers = ToContributorEntries(excludedRecords)",
         ):
             with self.subTest(literal=literal):
                 self.assertIn(
                     literal,
                     body,
-                    msg=f"TryResolveRendererFramingBounds must contain {literal!r}.",
+                    msg=f"HandleObjectCaptureScreenshot must assign {literal!r}.",
                 )
+
+
+class ObjectCaptureBoundsPolicyErrorSourceTests(unittest.TestCase):
+    _TARGET_CAPTURE_PARTIAL = (
+        TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Screenshot.TargetCapture.cs"
+    )
+
+    def _object_capture_body(self) -> str:
+        return _extract_method(
+            _strip_cs_comments(self._TARGET_CAPTURE_PARTIAL.read_text(encoding="utf-8")),
+            "HandleObjectCaptureScreenshot",
+        )
+
+    def test_invalid_policy_error_precedes_renderer_success(self) -> None:
+        body = self._object_capture_body()
+        error_index = body.find("BuildBoundsPolicyInvalidError(request.bounds_policy)")
+        success_index = body.find("EDITOR_CTRL_SCREENSHOT_OK")
+        self.assertNotEqual(
+            -1,
+            error_index,
+            msg="HandleObjectCaptureScreenshot must call the bounds-policy error helper.",
+        )
+        self.assertLess(
+            error_index,
+            success_index,
+            msg="Invalid bounds_policy must be rejected before screenshot success.",
+        )
+        source = _read(BRIDGE)
+        helper_body = _extract_method(source, "BuildBoundsPolicyInvalidError")
+        for literal in (
+            "EDITOR_CTRL_BOUNDS_POLICY_INVALID",
+            "all_visible_renderers",
+            "focus_core",
+        ):
+            with self.subTest(literal=literal):
+                self.assertIn(literal, helper_body)
+
+
+class FrameSelectedBoundsEvidenceSourceTests(unittest.TestCase):
+    def _handle_frame_selected_body(self) -> str:
+        return _extract_method(_read(BRIDGE), "HandleFrameSelected")
+
+    def test_frame_selected_success_payload_assigns_bounds_evidence(self) -> None:
+        body = self._handle_frame_selected_body()
+        for literal in (
+            "request.bounds_policy",
+            "includedRecords",
+            "excludedRecords",
+            "sceneView.Frame(frameBounds, instant: true)",
+            "data.bounds_policy = request.bounds_policy",
+            "data.contributor_count = includedRecords.Count",
+            "data.excluded_count = excludedRecords.Count",
+            "data.bounds_contributors = ToContributorEntries(includedRecords)",
+            "data.excluded_renderers = ToContributorEntries(excludedRecords)",
+            "data.bounds_source = \"rect_transform\"",
+        ):
+            with self.subTest(literal=literal):
+                self.assertIn(
+                    literal,
+                    body,
+                    msg=f"HandleFrameSelected must contain {literal!r}.",
+                )
+
+
+class FrameSelectedBoundsPolicyErrorSourceTests(unittest.TestCase):
+    def test_invalid_policy_error_precedes_frame_success(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleFrameSelected")
+        error_index = body.find("BuildBoundsPolicyInvalidError(request.bounds_policy)")
+        success_index = body.find("EDITOR_CTRL_FRAME_OK")
+        self.assertNotEqual(
+            -1,
+            error_index,
+            msg="HandleFrameSelected must call the bounds-policy error helper.",
+        )
+        self.assertLess(
+            error_index,
+            success_index,
+            msg="Invalid bounds_policy must be rejected before frame success.",
+        )
+        helper_body = _extract_method(_read(BRIDGE), "BuildBoundsPolicyInvalidError")
+        for literal in (
+            "EDITOR_CTRL_BOUNDS_POLICY_INVALID",
+            "all_visible_renderers",
+            "focus_core",
+        ):
+            with self.subTest(literal=literal):
+                self.assertIn(literal, helper_body)
 
 
 class GeometryMeasureDistanceSourceTests(unittest.TestCase):
@@ -4543,7 +4834,7 @@ class MenuHasEditorScriptChangedSinceSegmentExclusionTests(unittest.TestCase):
 
     def test_temp_exclusion_constant_literal_value_unchanged(self) -> None:
         # The constant value is part of the public operating convention
-        # (CLAUDE.md / README.md); a rename would silently break the
+        # (AGENTS.md / README.md); a rename would silently break the
         # temp-exclusion contract with the run-script handler that writes
         # there. The literal now lives on EditorScriptPathClassifier.
         source = _strip_cs_comments(EDITOR_SCRIPT_PATH_CLASSIFIER.read_text(encoding="utf-8"))
@@ -5332,7 +5623,7 @@ class MenuScriptWatchSplitSourceInvariantTests(unittest.TestCase):
     """Issue #262 — the editor-script mtime detector and its three
     standalone constants now live in a dedicated partial; the Menu
     partial no longer declares the detector.  These invariants pin
-    the post-split layout end-to-end (filesystem, source, CLAUDE.md
+    the post-split layout end-to-end (filesystem, source, AGENTS.md
     inventory).
     """
 
@@ -5342,8 +5633,8 @@ class MenuScriptWatchSplitSourceInvariantTests(unittest.TestCase):
     _MENU_PARTIAL = (
         TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Menu.cs"
     )
-    _CLAUDE_MD = (
-        Path(__file__).resolve().parent.parent / "CLAUDE.md"
+    _AGENTS_MD = (
+        Path(__file__).resolve().parent.parent / "AGENTS.md"
     )
 
     def test_dedicated_partial_declares_detector_with_documented_signature(
@@ -5422,13 +5713,13 @@ class MenuScriptWatchSplitSourceInvariantTests(unittest.TestCase):
             with self.subTest(constant=constant):
                 self.assertIn(constant, text)
 
-    def test_claude_md_inventory_lists_menuscriptwatch(self) -> None:
-        text = self._CLAUDE_MD.read_text(encoding="utf-8")
+    def test_agents_md_inventory_lists_menuscriptwatch(self) -> None:
+        text = self._AGENTS_MD.read_text(encoding="utf-8")
         self.assertIn(
             "MenuScriptWatch",
             text,
             msg=(
-                "CLAUDE.md partial inventory must list the new "
+                "AGENTS.md partial inventory must list the new "
                 "MenuScriptWatch partial (issue #262)."
             ),
         )
@@ -5806,6 +6097,18 @@ class TestRunScriptPollFailureEnvelopeSource(unittest.TestCase):
             msg="Failed async poll completion must keep structured exception payloads.",
         )
 
+    def test_completed_poll_preserves_inner_operator_context(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleRunScriptPoll")
+        self.assertIn(
+            "operator_context = inner.operator_context",
+            body,
+            msg=(
+                "Async poll completion must preserve the completed bridge "
+                "operator_context so root verification accepts valid success "
+                "responses."
+            ),
+        )
+
 
 class TestClientSimSideEffectAssetCandidatesSource(unittest.TestCase):
     def test_clientsim_report_uses_snapshot_asset_candidates(self) -> None:
@@ -6139,7 +6442,7 @@ class TestGenericCollectionUsingDirective(unittest.TestCase):
     ``List<>`` references in ``PrefabSentinel.UnityEditorControlBridge
     .Screenshot.cs`` without that using directive. CI compiles neither
     the ``tools/unity/`` Unity-dependent ``.cs`` files (no Unity
-    reference assemblies in CI per CLAUDE.md §"Bridge C# コンパイル
+    reference assemblies in CI per AGENTS.md §"Bridge C# コンパイル
     検証") nor the xUnit-hosted ``tests/csharp`` mirror that excludes
     them, so the resulting ``CS0246`` only surfaced when the bridge was
     deployed into a real Unity project. This text-level invariant

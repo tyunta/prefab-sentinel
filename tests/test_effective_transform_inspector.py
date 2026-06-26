@@ -418,3 +418,18 @@ class EffectiveTransformErrorTests(unittest.TestCase):
             ),
             msg=f"asset read failures should be typed read-only errors without values; missing={missing!r} read_error={read_error!r}",
         )
+
+
+class EffectiveTransformInspectorPackageSplitTests(unittest.TestCase):
+    def test_public_import_is_served_by_package_init(self) -> None:
+        import prefab_sentinel.effective_transform_inspector as package
+        from prefab_sentinel.effective_transform_inspector import (
+            inspect_transform_effective_values,
+        )
+
+        self.assertEqual("__init__.py", Path(package.__file__).name)
+        self.assertEqual(("inspect_transform_effective_values",), tuple(package.__all__))
+        self.assertIs(
+            package.inspect_transform_effective_values,
+            inspect_transform_effective_values,
+        )

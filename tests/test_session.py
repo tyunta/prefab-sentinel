@@ -368,15 +368,24 @@ class TestStatus(unittest.TestCase):
         session = ProjectSession()
         s = session.status()
 
-        # Pin every documented status field as a single dict-equality so
-        # one mutation of any flag/value names every divergent field in
-        # one failure message.  ``bridge`` is provider-specific and is
-        # excluded from the pin to keep the test independent of
-        # bridge_status() internals.
         observed = {k: v for k, v in s.items() if k != "bridge"}
+        session_id = observed.pop("session_id")
+        self.assertIsInstance(session_id, str)
+        self.assertEqual(
+            32,
+            len(session_id),
+            f"session_id should be a 32-character hex value, got {session_id!r}",
+        )
+        self.assertEqual(session_id.lower(), session_id)
+        try:
+            int(session_id, 16)
+        except ValueError as exc:
+            raise AssertionError(f"session_id should be hex, got {session_id!r}") from exc
+
         self.assertEqual(
             {
                 "project_root": None,
+                "expected_project_root": None,
                 "scope": None,
                 "orchestrator_cached": False,
                 "script_map_size": 0,

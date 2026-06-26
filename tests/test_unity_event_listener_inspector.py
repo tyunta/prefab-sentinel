@@ -824,3 +824,18 @@ class UnityEventListenerErrorTests(unittest.TestCase):
             ),
             msg=f"UnityEvent read failures should be typed read-only errors without listeners; missing={missing!r} read_error={read_error!r}",
         )
+
+
+class UnityEventListenerInspectorPackageSplitTests(unittest.TestCase):
+    def test_public_import_is_served_by_package_init(self) -> None:
+        import prefab_sentinel.unity_event_listener_inspector as package
+        from prefab_sentinel.unity_event_listener_inspector import (
+            inspect_unity_event_listeners,
+        )
+
+        self.assertEqual("__init__.py", Path(package.__file__).name)
+        self.assertEqual(("inspect_unity_event_listeners",), tuple(package.__all__))
+        self.assertIs(
+            package.inspect_unity_event_listeners,
+            inspect_unity_event_listeners,
+        )

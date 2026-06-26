@@ -755,6 +755,182 @@ class EditorScreenshotFitModeTests(unittest.TestCase):
             padding_ratio=0.10,
             projection="auto",
             fit_mode="both_axes",
+            bounds_policy="all_visible_renderers",
+        )
+
+
+class EditorScreenshotBoundsPolicyTests(unittest.TestCase):
+    """Issue #85 screenshot bounds-policy behavior."""
+
+    _BRIDGE_OK = _success_envelope()
+
+    def test_target_screenshot_defaults_to_all_visible_renderer_bounds(self) -> None:
+        with patch.object(
+            mcp_tools_editor_view, "send_action", return_value=self._BRIDGE_OK,
+        ) as send:
+            mcp_tools_editor_view.editor_screenshot(
+                target="/Root", target_mode="object", refresh=False,
+            )
+
+        send.assert_called_once()
+        kwargs = send.call_args.kwargs
+        observed = (
+            kwargs["action"],
+            kwargs["target"],
+            kwargs["target_mode"],
+            kwargs["projection"],
+            kwargs["fit_mode"],
+            kwargs.get("bounds_policy"),
+        )
+        self.assertEqual(
+            (
+                "capture_screenshot",
+                "/Root",
+                "object",
+                "auto",
+                "max_axis",
+                "all_visible_renderers",
+            ),
+            observed,
+            msg=(
+                "Target screenshot capture must forward the default "
+                "bounds_policy='all_visible_renderers' with existing target "
+                "fit/projection options."
+            ),
+        )
+
+    def test_target_screenshot_rejects_unknown_bounds_policy_pre_bridge(self) -> None:
+        with patch.object(
+            mcp_tools_editor_view, "send_action", return_value=self._BRIDGE_OK,
+        ) as send:
+            try:
+                response = mcp_tools_editor_view.editor_screenshot(
+                    target="/Root", bounds_policy="exclude_outliers", refresh=False,
+                )
+            except TypeError as exc:
+                self.fail(
+                    "editor_screenshot must accept bounds_policy before validation; "
+                    f"observed TypeError: {exc}"
+                )
+
+        send.assert_not_called()
+        observed = (
+            response["success"],
+            response["severity"],
+            response["code"],
+            response["data"]["supplied"],
+            response["data"]["allowed_bounds_policies"],
+            "exclude_outliers" in response["message"],
+            "all_visible_renderers" in response["message"],
+            "focus_core" in response["message"],
+        )
+        self.assertEqual(
+            (
+                False,
+                "error",
+                "BOUNDS_POLICY_INVALID",
+                "exclude_outliers",
+                ["all_visible_renderers", "focus_core"],
+                True,
+                True,
+                True,
+            ),
+            observed,
+            msg=(
+                "Invalid screenshot bounds_policy must fail at the wrapper "
+                "boundary with the supplied value and exact allowed policies."
+            ),
+        )
+
+
+class EditorFrameBoundsPolicyTests(unittest.TestCase):
+    """Issue #85 frame-selected bounds-policy behavior."""
+
+    _BRIDGE_OK = _success_envelope()
+
+    def test_registered_editor_frame_forwards_default_bounds_policy_and_zoom(self) -> None:
+        registered_tools = {}
+
+        class RecordingServer:
+            def tool(self, name: str | None = None):
+                def register(func):
+                    registered_tools[name or func.__name__] = func
+                    return func
+
+                return register
+
+        with patch.object(
+            mcp_tools_editor_view, "send_action", return_value=self._BRIDGE_OK,
+        ) as send:
+            mcp_tools_editor_view.register_editor_view_tools(RecordingServer())
+            registered_tools["editor_frame"](zoom=0.5)
+
+        send.assert_called_once()
+        self.assertEqual(
+            ("frame_selected", 0.5, "all_visible_renderers"),
+            (
+                send.call_args.kwargs["action"],
+                send.call_args.kwargs["zoom"],
+                send.call_args.kwargs.get("bounds_policy"),
+            ),
+            msg=(
+                "editor_frame must forward zoom and the default "
+                "bounds_policy='all_visible_renderers'."
+            ),
+        )
+
+    def test_registered_editor_frame_rejects_unknown_bounds_policy_pre_bridge(self) -> None:
+        registered_tools = {}
+
+        class RecordingServer:
+            def tool(self, name: str | None = None):
+                def register(func):
+                    registered_tools[name or func.__name__] = func
+                    return func
+
+                return register
+
+        with patch.object(
+            mcp_tools_editor_view, "send_action", return_value=self._BRIDGE_OK,
+        ) as send:
+            mcp_tools_editor_view.register_editor_view_tools(RecordingServer())
+            try:
+                response = registered_tools["editor_frame"](
+                    zoom=0.5, bounds_policy="exclude_outliers",
+                )
+            except TypeError as exc:
+                self.fail(
+                    "editor_frame must accept bounds_policy before validation; "
+                    f"observed TypeError: {exc}"
+                )
+
+        send.assert_not_called()
+        observed = (
+            response["success"],
+            response["severity"],
+            response["code"],
+            response["data"]["supplied"],
+            response["data"]["allowed_bounds_policies"],
+            "exclude_outliers" in response["message"],
+            "all_visible_renderers" in response["message"],
+            "focus_core" in response["message"],
+        )
+        self.assertEqual(
+            (
+                False,
+                "error",
+                "BOUNDS_POLICY_INVALID",
+                "exclude_outliers",
+                ["all_visible_renderers", "focus_core"],
+                True,
+                True,
+                True,
+            ),
+            observed,
+            msg=(
+                "Invalid editor_frame bounds_policy must fail at the wrapper "
+                "boundary with the supplied value and exact allowed policies."
+            ),
         )
 
 

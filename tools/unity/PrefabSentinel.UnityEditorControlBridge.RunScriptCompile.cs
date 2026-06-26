@@ -488,6 +488,7 @@ namespace PrefabSentinel
                         + "no-op may be masking an import failure.",
                     data = new EditorControlData { executed = true },
                     diagnostics = importerErrors.ToArray(),
+                    operator_context = BuildEditorOperatorContext(),
                 });
                 return;
             }
@@ -890,6 +891,7 @@ namespace PrefabSentinel
                     code = code,
                     message = "Script compile appeared stuck; ran recovery cleanup. Retry the script.",
                     data = recovered,
+                    operator_context = BuildEditorOperatorContext(),
                 };
             }
 

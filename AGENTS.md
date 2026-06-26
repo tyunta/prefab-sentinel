@@ -10,7 +10,7 @@
 - 根拠優先: 前提・不変条件・判断理由を明文化する。
 - 検証可能性: 設定値と結果の対応を説明できる実装のみ採用する。
 - 必須参照の欠落は補完せず `error` で停止する（fail-fast）。
-- ファイルサイズ目安（200〜400 行）は **partial 単位**で評価する。1 ファイル合計ではなく `partial class` ごとの責務単位で行数を判定する。partial 構成は disk 上のファイル名（`tools/unity/PrefabSentinel.Unity*Bridge.<Concern>.cs`）が正本で、test が CLAUDE.md inventory との drift を検出する（`tests/test_editor_control_bridge_source.py::TestOperationalRulesPartialInventory` / `tests/test_unity_patch_bridge_source.py::TestPatchBridgeOperationalRulesInventory`）。
+- ファイルサイズ目安（200〜400 行）は **partial 単位**で評価する。1 ファイル合計ではなく `partial class` ごとの責務単位で行数を判定する。partial 構成は disk 上のファイル名（`tools/unity/PrefabSentinel.Unity*Bridge.<Concern>.cs`）が正本で、test が AGENTS.md inventory との drift を検出する（`tests/test_editor_control_bridge_source.py::TestOperationalRulesPartialInventory` / `tests/test_unity_patch_bridge_source.py::TestPatchBridgeOperationalRulesInventory`）。
 - 現在の per-concern token inventory（test 用、追加・削除時に同期）:
   - `UnityEditorControlBridge`: AnimationClip / AssetDelete / BlendShape / CameraView / CompileBarrier / Components / ConsoleCapture / Geometry / GeometryContributors / Helpers / Hierarchy / MaterialBatch / MaterialQuery / MaterialWrite / Menu / MenuScriptWatch / PrefabStage / Properties / PropertyObjectReference / PropertyWrite / RendererFramingBounds / RunScriptAsync / RunScriptCompile / SaveInstantiate / Screenshot / Screenshot.TargetCapture / Screenshot.TargetCapture.WorldSpaceUi / UdonSharpAddComponent / UdonSharpArrayWrite / UdonSharpFieldWrite / UdonSharpInvocation / UdonSharpListenerWiring / UiElement
   - `UnityPatchBridge`: Payloads / Prefab / Asset / Scene / Resolve / Mutation / ManagedReference / Diagnostics
@@ -48,7 +48,7 @@
 - **操作系・検証系ツール**（`set_property`, `validate_refs`, `validate_field_rename`, `check_field_coverage`, `activate_project` 等）: `success / severity / code / message / data / diagnostics` エンベロープを返す。`diagnostics` が意味のあるデータを運ぶため。
 - **参照系ツール**（`get_unity_symbols`, `find_unity_symbol`, `find_referencing_assets`）: ペイロードを直接返す（エンベロープなし）。該当なしは空 `matches` 配列で表現し、エラーとしない。インフラエラー（ファイル不在等）は MCP `ToolError` で伝播。
 - **orchestrator 系ツール**（`inspect_wiring`, `inspect_variant` 等）: `ToolResponse.to_dict()` 経由でエンベロープを返す。
-- エラーコードの正本は `docs/api-reference.md`。CLAUDE.md には掲載しない（新規コードを追加した場合も `docs/api-reference.md` へ追記する）。
+- エラーコードの正本は `docs/api-reference.md`。AGENTS.md には掲載しない（新規コードを追加した場合も `docs/api-reference.md` へ追記する）。
 - `severity` は `info | warning | error | critical` を使用する。
 - MCP レベルの例外（`ToolError`）はインフラエラー（ファイル不在、import 失敗）のみ。
 

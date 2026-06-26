@@ -2,9 +2,8 @@
 
 A wheel built from the source tree must ship every ``knowledge/*.md``
 document under the package-internal ``_knowledge_files`` sub-path so
-``_resolve_knowledge_dir`` (in ``prefab_sentinel.mcp_server``) finds
-the bundled directory on a wheel-based install and the MCP server
-registers one resource per document.
+wheel installs keep the same packaged knowledge corpus that source-tree
+checkouts validate.
 
 The build is comparatively slow and depends on the project's build
 tool being on PATH, so the test is opted in by the ``wheel_build``
@@ -42,9 +41,7 @@ pytestmark = [pytest.mark.wheel_build, pytest.mark.source_text_invariant]
 
 
 class TestWheelKnowledgeBundling(unittest.TestCase):
-    """The built wheel's manifest enumerates every source-tree knowledge
-    markdown file under the ``_knowledge_files`` package-internal path.
-    """
+    """The wheel manifest mirrors source-tree knowledge markdown files."""
 
     def setUp(self) -> None:
         if shutil.which("uv") is None:
