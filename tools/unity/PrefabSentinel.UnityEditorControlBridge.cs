@@ -216,6 +216,7 @@ namespace PrefabSentinel
             public float[] target_bounds_center = null;
             public float[] target_bounds_extents = null;
 
+            public string serialized_property_json = string.Empty;
             public bool read_only = true;
             public bool executed = false;
 
@@ -654,6 +655,15 @@ private static string DeriveTransportRequestId(string requestPath)
                     break;
                 case "editor_set_property":
                     response = HandleEditorSetProperty(request);
+                    break;
+                case "editor_serialized_property_read":
+                    response = HandleSerializedPropertyRead(request);
+                    break;
+                case "editor_serialized_property_list":
+                    response = HandleSerializedPropertyList(request);
+                    break;
+                case "editor_serialized_property_write":
+                    response = HandleSerializedPropertyWrite(request);
                     break;
                 case "safe_save_prefab":
                     response = HandleSafeSaveAsPrefab(request);

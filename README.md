@@ -104,6 +104,7 @@ MCP サーバーは Plugin 内部で `uv` / `uvx` 経由でローカル起動さ
 | `delete_asset` / `delete_assets` | AssetDatabase-backed asset 削除の dry-run / confirm。削除後 broken-reference delta を返す |
 | `validate_runtime` | 既定 `compile_only` の UdonSharp compile 検証。ClientSim は `profile="clientsim"` + audit pair で明示 opt-in |
 | `editor_get_transform` / `editor_get_bounds` / `editor_measure_distance` | Editor Bridge 経由の read-only live geometry 検査 |
+| `editor_serialized_property_read` / `editor_serialized_property_list` / `editor_serialized_property_write` | SerializedObject-backed generic inspector / writer API。公開ツール一覧は [docs/tools.md](./docs/tools.md)、payload とエラーコードは [docs/api-reference.md](./docs/api-reference.md) を正本とする |
 | `editor_*` | Editor Bridge 経由の Scene / Hierarchy / Component / BlendShape / Animation 編集、スクリーンショット、Console、UdonSharp field / array write |
 
 Routine CI / agent validation では `validate_runtime(profile="compile_only")` または `validate_runtime(profile="editor_console_only")` を使う。ClientSim は submission scene 向けの明示 opt-in で、`profile="clientsim"` + audit pair が揃った場合だけ実行する。

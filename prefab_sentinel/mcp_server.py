@@ -34,6 +34,9 @@ from prefab_sentinel.mcp_tools_editor_ops import register_editor_ops_tools
 from prefab_sentinel.mcp_tools_editor_prefab_stage import (
     register_editor_prefab_stage_tools,
 )
+from prefab_sentinel.mcp_tools_editor_serialized_property import (
+    register_editor_serialized_property_tools,
+)
 from prefab_sentinel.mcp_tools_editor_udonsharp import (
     register_editor_udonsharp_tools,
 )
@@ -157,6 +160,7 @@ def create_server(
     register_editor_write_tools(server)
     register_editor_batch_tools(server)
     register_editor_ops_tools(server)
+    register_editor_serialized_property_tools(server)
     register_editor_advanced_tools(server)
     register_editor_exec_tools(server)
     register_editor_geometry_tools(server)

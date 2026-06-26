@@ -164,6 +164,9 @@ class TestToolRegistration(unittest.TestCase):
             "editor_create_udon_program_asset",
             "editor_set_property", "editor_safe_save_prefab",
             "editor_set_parent",
+            "editor_serialized_property_read",
+            "editor_serialized_property_list",
+            "editor_serialized_property_write",
             "editor_create_empty", "editor_create_primitive",
             "editor_create_ui_element",
             "editor_batch_create", "editor_batch_set_property",
@@ -219,8 +222,9 @@ class TestToolRegistration(unittest.TestCase):
         # ``editor_recompile_async`` tool, leaving 84; issue #98 adds
         # three live geometry tools, bringing the surface to 87; issue
         # #114 adds delete_asset and delete_assets, bringing it to 89;
-        # issues #96 / #97 / #110 add two read-only effective inspectors.
-        self.assertEqual(91, len(tools))
+        # issues #96 / #97 / #110 add two read-only effective inspectors;
+        # issue #112 adds three generic serialized-property tools.
+        self.assertEqual(94, len(tools))
 
 
 class TestToolsCatalogDoc(unittest.TestCase):
@@ -2929,6 +2933,258 @@ class TestEditorSetPropertyValueSemantics(unittest.TestCase):
         kwargs = mock_send.call_args.kwargs
         self.assertFalse(kwargs["property_value_present"])
         self.assertNotIn("property_value", kwargs)
+
+
+class TestEditorSerializedPropertyTools(unittest.TestCase):
+    """Issue #112 serialized-property MCP wrappers."""
+
+    def setUp(self) -> None:
+        os.environ.pop("UNITYTOOL_BRIDGE_WATCH_DIR", None)
+
+    def test_read_forwards_raw_property_path_and_expands_payload(self) -> None:
+        server = create_server()
+        bridge_response = {
+            "success": True,
+            "severity": "info",
+            "code": "EDITOR_CTRL_SERIALIZED_PROPERTY_READ_OK",
+            "message": "Read serialized property.",
+            "data": {
+                "serialized_property_json": json.dumps({
+                    "property_path": "m_Name",
+                    "value_kind": "string",
+                }),
+            },
+            "diagnostics": [],
+        }
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_serialized_property.send_action",
+            return_value=bridge_response,
+        ) as mock_send:
+            _, result = _run(server.call_tool(
+                "editor_serialized_property_read",
+                {
+                    "hierarchy_path": "/Obj",
+                    "component_type": "ExampleComponent",
+                    "component_index": 2,
+                    "property_path": "m_Name",
+                },
+            ))
+
+        mock_send.assert_called_once_with(
+            action="editor_serialized_property_read",
+            hierarchy_path="/Obj",
+            component_type="ExampleComponent",
+            component_index=2,
+            property_path="m_Name",
+        )
+        self.assertEqual("EDITOR_CTRL_SERIALIZED_PROPERTY_READ_OK", result["code"])
+        self.assertEqual("m_Name", result["data"]["serialized_property"]["property_path"])
+
+    def test_read_preserves_malformed_serialized_property_json(self) -> None:
+        server = create_server()
+        bridge_response = {
+            "success": True,
+            "severity": "info",
+            "code": "EDITOR_CTRL_SERIALIZED_PROPERTY_READ_OK",
+            "message": "Read serialized property.",
+            "data": {"serialized_property_json": "{not-json"},
+            "diagnostics": [],
+        }
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_serialized_property.send_action",
+            return_value=bridge_response,
+        ) as mock_send:
+            _, result = _run(server.call_tool(
+                "editor_serialized_property_read",
+                {
+                    "hierarchy_path": "/Obj",
+                    "component_type": "ExampleComponent",
+                    "property_path": "m_Name",
+                },
+            ))
+
+        mock_send.assert_called_once_with(
+            action="editor_serialized_property_read",
+            hierarchy_path="/Obj",
+            component_type="ExampleComponent",
+            property_path="m_Name",
+        )
+        self.assertEqual("{not-json", result["data"]["serialized_property_json"])
+        self.assertNotIn("serialized_property", result["data"])
+
+    def test_read_rejects_required_address_fields_before_transport(self) -> None:
+        server = create_server()
+        cases = [
+            (
+                {"hierarchy_path": "", "component_type": "C", "property_path": "m_Name"},
+                "EDITOR_CTRL_SERIALIZED_PROPERTY_NO_PATH",
+            ),
+            (
+                {"hierarchy_path": "/Obj", "component_type": "", "property_path": "m_Name"},
+                "EDITOR_CTRL_SERIALIZED_PROPERTY_NO_COMPONENT_TYPE",
+            ),
+            (
+                {"hierarchy_path": "/Obj", "component_type": "C", "property_path": ""},
+                "EDITOR_CTRL_SERIALIZED_PROPERTY_NO_PROPERTY_PATH",
+            ),
+        ]
+        with patch("prefab_sentinel.mcp_tools_editor_serialized_property.send_action") as mock_send:
+            for payload, expected_code in cases:
+                with self.subTest(expected_code=expected_code):
+                    _, result = _run(server.call_tool("editor_serialized_property_read", payload))
+                    self.assertEqual((False, expected_code), (result["success"], result["code"]))
+        mock_send.assert_not_called()
+
+    def test_list_defaults_and_cursor_are_forwarded(self) -> None:
+        server = create_server()
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_serialized_property.send_action",
+            return_value={"success": True, "code": "EDITOR_CTRL_SERIALIZED_PROPERTY_LIST_OK"},
+        ) as mock_send:
+            _, default_result = _run(server.call_tool(
+                "editor_serialized_property_list",
+                {"hierarchy_path": "/Obj", "component_type": "ExampleComponent"},
+            ))
+            _, cursor_result = _run(server.call_tool(
+                "editor_serialized_property_list",
+                {
+                    "hierarchy_path": "/Obj",
+                    "component_type": "ExampleComponent",
+                    "cursor": "42",
+                },
+            ))
+
+        self.assertEqual(
+            (
+                "EDITOR_CTRL_SERIALIZED_PROPERTY_LIST_OK",
+                "EDITOR_CTRL_SERIALIZED_PROPERTY_LIST_OK",
+            ),
+            (default_result["code"], cursor_result["code"]),
+        )
+        self.assertEqual(
+            [
+                call(
+                    action="editor_serialized_property_list",
+                    hierarchy_path="/Obj",
+                    component_type="ExampleComponent",
+                    depth=1,
+                    cap=50,
+                ),
+                call(
+                    action="editor_serialized_property_list",
+                    hierarchy_path="/Obj",
+                    component_type="ExampleComponent",
+                    depth=1,
+                    cap=50,
+                    cursor="42",
+                ),
+            ],
+            mock_send.call_args_list,
+        )
+
+    def test_list_invalid_traversal_inputs_stop_before_transport(self) -> None:
+        server = create_server()
+        cases = [
+            ({"depth": -1}, "EDITOR_CTRL_SERIALIZED_PROPERTY_LIST_LIMIT_INVALID"),
+            ({"cap": 201}, "EDITOR_CTRL_SERIALIZED_PROPERTY_LIST_LIMIT_INVALID"),
+            ({"cursor": "next"}, "EDITOR_CTRL_SERIALIZED_PROPERTY_CURSOR_INVALID"),
+            ({"cursor": "+1"}, "EDITOR_CTRL_SERIALIZED_PROPERTY_CURSOR_INVALID"),
+            ({"cursor": " 1"}, "EDITOR_CTRL_SERIALIZED_PROPERTY_CURSOR_INVALID"),
+            ({"cursor": "1_0"}, "EDITOR_CTRL_SERIALIZED_PROPERTY_CURSOR_INVALID"),
+        ]
+        base = {"hierarchy_path": "/Obj", "component_type": "ExampleComponent"}
+        with patch("prefab_sentinel.mcp_tools_editor_serialized_property.send_action") as mock_send:
+            for extra, expected_code in cases:
+                payload = {**base, **extra}
+                with self.subTest(expected_code=expected_code, payload=payload):
+                    _, result = _run(server.call_tool("editor_serialized_property_list", payload))
+                    self.assertEqual((False, expected_code), (result["success"], result["code"]))
+        mock_send.assert_not_called()
+
+    def test_write_preserves_false_zero_and_empty_string_presence_markers(self) -> None:
+        server = create_server()
+        calls = [
+            ({"bool_value": False}, "serialized_property_bool_value_present", "serialized_property_bool_value", False),
+            ({"int_value": 0}, "serialized_property_int_value_present", "serialized_property_int_value", 0),
+            ({"string_value": ""}, "serialized_property_string_value_present", "serialized_property_string_value", ""),
+        ]
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_serialized_property.send_action",
+            return_value={"success": True, "data": {"executed": False}},
+        ) as mock_send:
+            for extra, present_key, value_key, expected_value in calls:
+                payload = {
+                    "hierarchy_path": "/Obj",
+                    "component_type": "ExampleComponent",
+                    "property_path": "m_Name",
+                    **extra,
+                }
+                _run(server.call_tool("editor_serialized_property_write", payload))
+                kwargs = mock_send.call_args.kwargs
+                self.assertTrue(kwargs[present_key])
+                self.assertEqual(expected_value, kwargs[value_key])
+                self.assertFalse(kwargs["confirm"])
+
+    def test_write_rejects_value_conflicts_and_missing_values_before_transport(self) -> None:
+        server = create_server()
+        cases = [
+            ({}, "EDITOR_CTRL_SERIALIZED_PROPERTY_VALUE_REQUIRED"),
+            ({"bool_value": False, "int_value": 0}, "EDITOR_CTRL_SERIALIZED_PROPERTY_VALUE_CONFLICT"),
+            ({"array_size": -1}, "EDITOR_CTRL_SERIALIZED_PROPERTY_ARRAY_SIZE_INVALID"),
+        ]
+        base = {
+            "hierarchy_path": "/Obj",
+            "component_type": "ExampleComponent",
+            "property_path": "m_Name",
+        }
+        with patch("prefab_sentinel.mcp_tools_editor_serialized_property.send_action") as mock_send:
+            for extra, expected_code in cases:
+                payload = {**base, **extra}
+                with self.subTest(expected_code=expected_code):
+                    _, result = _run(server.call_tool("editor_serialized_property_write", payload))
+                    self.assertEqual((False, expected_code), (result["success"], result["code"]))
+        mock_send.assert_not_called()
+
+    def test_confirmed_write_requires_trimmed_change_reason(self) -> None:
+        server = create_server()
+        base = {
+            "hierarchy_path": "/Obj",
+            "component_type": "ExampleComponent",
+            "property_path": "m_Name",
+            "int_value": 3,
+            "confirm": True,
+        }
+        with patch("prefab_sentinel.mcp_tools_editor_serialized_property.send_action") as mock_send:
+            _, rejected = _run(server.call_tool(
+                "editor_serialized_property_write",
+                {**base, "change_reason": "   "},
+            ))
+            self.assertEqual(
+                (False, "EDITOR_CTRL_SERIALIZED_PROPERTY_CHANGE_REASON_REQUIRED"),
+                (rejected["success"], rejected["code"]),
+            )
+            mock_send.assert_not_called()
+
+            mock_send.return_value = {
+                "success": True,
+                "code": "EDITOR_CTRL_SERIALIZED_PROPERTY_WRITE_OK",
+            }
+            _, accepted = _run(server.call_tool(
+                "editor_serialized_property_write",
+                {**base, "change_reason": "  audit reason  "},
+            ))
+
+        self.assertEqual("EDITOR_CTRL_SERIALIZED_PROPERTY_WRITE_OK", accepted["code"])
+        mock_send.assert_called_once_with(
+            action="editor_serialized_property_write",
+            hierarchy_path="/Obj",
+            component_type="ExampleComponent",
+            property_path="m_Name",
+            confirm=True,
+            serialized_property_int_value=3,
+            serialized_property_int_value_present=True,
+            change_reason="audit reason",
+        )
 
 
 class TestEditorSetUdonSharpFieldValueSemantics(unittest.TestCase):

@@ -59,6 +59,22 @@ MCP ツールが返す応答エンベロープの形状とエラーコードの�
 
 wire `severity` の決定規則（issue #4）: `Diagnostic` dataclass は任意の per-item `severity`（`str | None`、既定 `None`）を持つ。`_diagnostic_to_wire` は **diagnostic 自身の `severity` が設定されていればそれを優先**し、`None` のときはエンベロープの `severity` を継承する（`diag.severity or default_severity`）。これにより 1 つのエンベロープ内で個々の diagnostic が異なる severity を運べる（例: envelope が `error` でも一部 diagnostic は `warning`）。per-item `severity` は `Severity` 語彙に対して検証されない任意文字列であり、設定しない限り wire 出力は従来と byte-identical。
 
+## SerializedProperty editor payload (issue #112)
+
+`editor_serialized_property_read` / `editor_serialized_property_list` / `editor_serialized_property_write` は live Editor Bridge の標準エンベロープを返す。Bridge からの raw carrier は `data.serialized_property_json` で、Python MCP wrapper は可能な場合に decode して `data.serialized_property` に同じ payload を格納する。decode できない carrier は envelope の `data.serialized_property_json` として残し、インフラ例外に丸めない。
+
+`serialized_property` payload は raw `SerializedProperty.propertyPath` を正本にし、少なくとも `property_path` / `display_name` / `property_type` / `value_kind` / typed value fields（`bool_value` / `int_value` / `long_value` / `float_value` / `string_value` / `enum_name` / `enum_index`）/ `state` を運ぶ。ObjectReference では null / asset path / GUID / hierarchy path / type evidence、配列では `array_size` と子要素 summary、list では任意の `root_property_path` を起点にした `items` / `next_cursor` / `truncated`、write dry-run では `current` / `proposed` / `would_change` / dirty target / UdonSharp sync plan を含める。confirmed changed writes は Undo label、ApplyModifiedProperties 後の dirty state、Prefab override recording、outermost root / prefab asset path、UdonSharp sync result を evidence として返す。no-op writes は Undo / dirty / override / sync を実行しない evidence を返す。
+
+成功コード:
+
+| コード | 説明 |
+|--------|------|
+| `EDITOR_CTRL_SERIALIZED_PROPERTY_READ_OK` | read が対象 property を解決して payload を返した。 |
+| `EDITOR_CTRL_SERIALIZED_PROPERTY_LIST_OK` | list が traversal 結果を返した。 |
+| `EDITOR_CTRL_SERIALIZED_PROPERTY_DRY_RUN_OK` | unconfirmed write が target と値を検証し、副作用なしの dry-run payload を返した。 |
+| `EDITOR_CTRL_SERIALIZED_PROPERTY_NO_CHANGE` | requested value が現在値と同一で、Undo / dirty / override / sync を作らなかった。 |
+| `EDITOR_CTRL_SERIALIZED_PROPERTY_WRITE_OK` | confirmed changed write が SerializedObject 経由で適用され、dirty / override / sync evidence を返した。 |
+
 ## エラーコード規約
 
 | コード | 説明 |
@@ -96,6 +112,18 @@ wire `severity` の決定規則（issue #4）: `Diagnostic` dataclass は任意�
 | `EDITOR_CTRL_UDON_ADD_NO_PROGRAM_ASSET` | `editor_add_udonsharp_component` が対象型の UdonSharpProgramAsset を見つけられなかった場合（issue #46）。`severity="error"`。メッセージは `editor_create_udon_program_asset` で生成し再コンパイルする次手順を明示する。raw な `NullReferenceException` 文字列を漏らさない。 |
 | `EDITOR_CTRL_UDON_ADD_PROGRAM_NOT_COMPILED` | `editor_add_udonsharp_component` の対象型の UdonSharpProgramAsset は存在するが未コンパイルの場合（issue #46）。`severity="error"`。メッセージは `editor_recompile` で再コンパイルする次手順を明示する。 |
 | `EDITOR_CTRL_HANDLER_EXCEPTION` | Bridge dispatch の action switch 内で handler が内部捕捉しなかった例外を送出した場合（issue #51）。`severity="error"`。envelope は dispatch された action 名を構造化フィールド `data.action` として運び（メッセージ文字列だけに埋めない）、例外は型名のみに redact する（メッセージにスタックトレースを載せない）。`EDITOR_BRIDGE_ERROR` は真の watch-loop / pre-dispatch 失敗専用に残す。 |
+| `EDITOR_CTRL_SERIALIZED_PROPERTY_NO_PATH` / `..._NO_COMPONENT_TYPE` / `..._NO_PROPERTY_PATH` | `editor_serialized_property_*` が必須の `hierarchy_path` / `component_type` / `property_path` を欠いた場合。list は root 未指定を許す。 |
+| `EDITOR_CTRL_SERIALIZED_PROPERTY_OBJECT_NOT_FOUND` | live scene / active Prefab Stage で `hierarchy_path` が解決できない場合。direct prefab asset load/edit へフォールバックしない。 |
+| `EDITOR_CTRL_SERIALIZED_PROPERTY_COMPONENT_NOT_FOUND` / `EDITOR_CTRL_SERIALIZED_PROPERTY_COMPONENT_AMBIGUOUS` | 対象 GameObject に指定 component が無い、または同型 component が複数あり `component_index` で一意化されていない場合。曖昧時は candidate evidence を返し first component を選ばない。 |
+| `EDITOR_CTRL_SERIALIZED_PROPERTY_NOT_FOUND` | raw `propertyPath` または `editor_serialized_property_list(root_property_path=...)` の root が対象 component の SerializedObject に存在しない場合。`data.suggestions` に同じ component から採取した raw property path 候補を返し、list は component root へ fallback しない。 |
+| `EDITOR_CTRL_SERIALIZED_PROPERTY_LIST_LIMIT_INVALID` / `EDITOR_CTRL_SERIALIZED_PROPERTY_CURSOR_INVALID` | list の `depth` / `cap` / `cursor` が境界外または不正形式の場合。`cap` は 1..200。 |
+| `EDITOR_CTRL_SERIALIZED_PROPERTY_VALUE_REQUIRED` / `..._VALUE_CONFLICT` | write が値 intent を 1 つも持たない、または複数の値 intent を同時指定した場合。false / 0 / empty string は存在マーカーとして有効な値であり欠落扱いしない。 |
+| `EDITOR_CTRL_SERIALIZED_PROPERTY_CHANGE_REASON_REQUIRED` | `editor_serialized_property_write(confirm=True)` が非空 `change_reason` を欠いた場合。 |
+| `EDITOR_CTRL_SERIALIZED_PROPERTY_ARRAY_SIZE_INVALID` | `array_size` が負、または配列でない property に指定された場合。 |
+| `EDITOR_CTRL_SERIALIZED_PROPERTY_TYPE_MISMATCH` / `EDITOR_CTRL_SERIALIZED_PROPERTY_UNSIGNED_RANGE` / `EDITOR_CTRL_SERIALIZED_PROPERTY_UNSUPPORTED_WRITE` | 指定値が property type に合わない、unsigned integer 系の範囲を外れる、または対象 property kind が writer 非対応の場合。 |
+| `EDITOR_CTRL_SERIALIZED_PROPERTY_ENUM_VALUE_NOT_FOUND` | enum 名 / index が対象 enum の候補に一致しない場合。 |
+| `EDITOR_CTRL_SERIALIZED_PROPERTY_OBJECT_REF_NOT_FOUND` / `EDITOR_CTRL_SERIALIZED_PROPERTY_OBJECT_REF_TYPE_MISMATCH` / `EDITOR_CTRL_SERIALIZED_PROPERTY_OBJECT_REF_AMBIGUOUS` | object reference の asset / hierarchy path が解決できない、解決した Unity object が対象 field 型へ assign できない、または hierarchy path が複数の assignable component に一致する場合。空 asset/hierarchy path は missing reference として拒否し、null reference に丸めない。曖昧時は candidate evidence を返し first component を選ばない。 |
+| `EDITOR_CTRL_SERIALIZED_PROPERTY_UDON_SYNC_WARNING` | confirmed changed write は完了したが、UdonSharp proxy-to-backing sync の best-effort step が失敗または未確認だった場合の warning diagnostic。 |
 | `IGNORE_GUIDS_FILE_LOADED` | `validate_refs` MCP ツールの `<scope>/config/ignore_guids.txt` auto-load が寄与した場合に `diagnostics` に付与される info diagnostic（issue #237）。`data.path` に解決後の絶対パス、`data.count` に取り込まれた件数を含める。ファイルが存在しない・読み取り不能の場合は発火しない。 |
 | `DIAGNOSTICS_BASELINE_INVALID` | project root の `config/diagnostics_baseline.json` が invalid JSON または schema 不一致だった場合。`validate_refs` / `inspect_wiring` MCP wrapper は orchestrator を呼ぶ前に `success=false`, `severity="error"` で停止し、`data.path` と `data.read_only=true` を返す。 |
 | `EDITOR_CTRL_INVALID_ORDER` | `editor_console` の `order` が `newest_first` / `oldest_first` 以外の場合（issue #113）。`severity="error"`、メッセージで受理可能な値を列挙。 |
