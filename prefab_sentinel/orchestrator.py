@@ -8,6 +8,7 @@ from prefab_sentinel import (
     orchestrator_delete,
     orchestrator_fields,
     orchestrator_inspect,
+    orchestrator_material_validation,
     orchestrator_patch,
     orchestrator_postcondition,
     orchestrator_validation,
@@ -438,6 +439,19 @@ class Phase1Orchestrator:
         """
         return orchestrator_inspect.inspect_material_asset(
             self.prefab_variant, target_path,
+        )
+
+
+    def validate_materials(
+        self,
+        scope: str,
+        include_details: bool = False,
+    ) -> ToolResponse:
+        """Run static material/shader/TMP/icon-font validation (read-only)."""
+        return orchestrator_material_validation.validate_materials(
+            self.reference_resolver,
+            scope,
+            include_details=include_details,
         )
 
     # ------------------------------------------------------------------

@@ -144,7 +144,7 @@ class TestToolRegistration(unittest.TestCase):
             # Existing 15 tools
             "activate_project", "get_project_status",
             "get_unity_symbols", "find_unity_symbol", "find_referencing_assets",
-            "validate_refs", "inspect_wiring", "inspect_variant",
+            "validate_refs", "validate_materials", "inspect_wiring", "inspect_variant",
             "diff_unity_symbols", "set_property",
             "add_component", "remove_component",
             "list_serialized_fields", "validate_field_rename", "check_field_coverage",
@@ -224,8 +224,9 @@ class TestToolRegistration(unittest.TestCase):
         # three live geometry tools, bringing the surface to 87; issue
         # #114 adds delete_asset and delete_assets, bringing it to 89;
         # issues #96 / #97 / #110 add two read-only effective inspectors;
-        # issue #112 adds three generic serialized-property tools.
-        self.assertEqual(94, len(tools))
+        # issue #112 adds three generic serialized-property tools; issue
+        # #99 adds the read-only material validation surface.
+        self.assertEqual(95, len(tools))
 
 
 class TestToolsCatalogDoc(unittest.TestCase):

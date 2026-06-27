@@ -21,7 +21,7 @@ import tempfile
 import unittest
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 from prefab_sentinel.contracts import ToolResponse
@@ -196,6 +196,41 @@ def _success_resp() -> ToolResponse:
     )
 
 
+def _material_success_resp() -> ToolResponse:
+    from prefab_sentinel.contracts import Severity
+
+    return ToolResponse(
+        success=True,
+        severity=Severity.INFO,
+        code="MATERIAL_VALIDATION_OK",
+        message="Material validation completed.",
+        data={"summary": {"scanned_files": 1}},
+        diagnostics=[],
+    )
+
+
+def _registered_validation_tool(
+    session: ProjectSession,
+    name: str,
+) -> Callable[..., dict[str, Any]]:
+    from prefab_sentinel.mcp_tools_validation import register_validation_tools
+
+    registered: dict[str, Callable[..., dict[str, Any]]] = {}
+
+    class _Server:
+        def tool(self_inner) -> Callable[..., Any]:  # noqa: N805
+            def deco(fn: Callable[..., Any]) -> Callable[..., Any]:
+                registered[fn.__name__] = fn
+                return fn
+
+            return deco
+
+    register_validation_tools(cast(Any, _Server()), session)
+    if name not in registered:
+        raise AssertionError(f"{name} should be registered as a validation MCP tool")
+    return registered[name]
+
+
 class _ScopedSessionFixture:
     """Helper that builds a ProjectSession + registered tool callable.
 
@@ -247,7 +282,8 @@ class _ScopedSessionFixture:
         # build returned; we replace the cache's lazy builder so it
         # hands back ``orch_mock`` regardless of the cache's path.
         session = ProjectSession(project_root=project_root)
-        session._cache.get_orchestrator = MagicMock(return_value=orch_mock)
+        cache = cast(Any, session._cache)
+        cache.get_orchestrator = MagicMock(return_value=orch_mock)
 
         asyncio.run(session.activate(str(scope), project_root=str(project_root)))
 
@@ -267,7 +303,7 @@ class _ScopedSessionFixture:
 
                 return deco
 
-        register_validation_tools(_Server(), session)
+        register_validation_tools(cast(Any, _Server()), session)
         validate_refs = registered["validate_refs"]
 
         return scope, orch_mock, validate_refs
@@ -468,6 +504,104 @@ class ValidationToolForwardingTests(unittest.TestCase):
                 response["code"],
                 response["severity"],
                 response["data"]["invalid_ignore_asset_guids"],
+            ),
+        )
+
+
+class ValidateMaterialsToolForwardingTests(unittest.TestCase):
+    def test_omitted_scope_without_session_scope_returns_error_before_orchestrator(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            (project_root / "Assets").mkdir()
+            orch_mock = MagicMock()
+            session = ProjectSession(project_root=project_root)
+            cache = cast(Any, session._cache)
+            cache.get_orchestrator = MagicMock(return_value=orch_mock)
+            validate_materials = _registered_validation_tool(session, "validate_materials")
+
+            response = validate_materials()
+
+        self.assertEqual(
+            (False, "error", "MATERIAL_VALIDATION_SCOPE_REQUIRED", 0),
+            (
+                response["success"],
+                response["severity"],
+                response["code"],
+                orch_mock.validate_materials.call_count,
+            ),
+        )
+
+    def test_blank_scope_without_session_scope_returns_error_before_orchestrator(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            (project_root / "Assets").mkdir()
+            orch_mock = MagicMock()
+            session = ProjectSession(project_root=project_root)
+            cache = cast(Any, session._cache)
+            cache.get_orchestrator = MagicMock(return_value=orch_mock)
+            validate_materials = _registered_validation_tool(session, "validate_materials")
+
+            for blank_scope in ("", "   "):
+                with self.subTest(scope=repr(blank_scope)):
+                    orch_mock.reset_mock()
+
+                    response = validate_materials(scope=blank_scope)
+
+                    self.assertEqual(
+                        (False, "error", "MATERIAL_VALIDATION_SCOPE_REQUIRED", 0),
+                        (
+                            response["success"],
+                            response["severity"],
+                            response["code"],
+                            orch_mock.validate_materials.call_count,
+                        ),
+                    )
+
+    def test_explicit_scope_and_details_are_forwarded_to_orchestrator(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            (project_root / "Assets").mkdir()
+            orch_mock = MagicMock()
+            orch_mock.validate_materials.return_value = _material_success_resp()
+            session = ProjectSession(project_root=project_root)
+            cache = cast(Any, session._cache)
+            cache.get_orchestrator = MagicMock(return_value=orch_mock)
+            validate_materials = _registered_validation_tool(session, "validate_materials")
+
+            response = validate_materials(scope="Assets/UI", include_details=True)
+
+        kwargs = orch_mock.validate_materials.call_args.kwargs
+        self.assertEqual(
+            ("Assets/UI", True, "MATERIAL_VALIDATION_OK", {"summary": {"scanned_files": 1}}),
+            (
+                kwargs["scope"],
+                kwargs["include_details"],
+                response["code"],
+                response["data"],
+            ),
+        )
+
+    def test_activated_session_scope_is_used_when_explicit_scope_is_omitted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            (project_root / "Assets").mkdir()
+            orch_mock = MagicMock()
+            orch_mock.validate_materials.return_value = _material_success_resp()
+            session = ProjectSession(project_root=project_root)
+            session._scope = Path("Assets/Scoped")
+            cache = cast(Any, session._cache)
+            cache.get_orchestrator = MagicMock(return_value=orch_mock)
+            validate_materials = _registered_validation_tool(session, "validate_materials")
+
+            response = validate_materials()
+
+        kwargs = orch_mock.validate_materials.call_args.kwargs
+        self.assertEqual(
+            ("Assets/Scoped", False, True),
+            (
+                kwargs["scope"],
+                kwargs["include_details"],
+                response["success"],
             ),
         )
 

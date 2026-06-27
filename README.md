@@ -8,7 +8,7 @@ Unity / VRChat プロジェクトの Prefab / Scene / Asset を安全に検査�
 
 `Variant` の override 衝突、`Broken PPtr` / missing fileID、Udon / ClientSim ランタイム例外を構造化された応答で診断し、手作業 YAML 編集を経由せずに修復する。AI エージェント前提の設計。
 
-read-only 経路（`validate_refs` / `inspect_*` / `find_*` 等）は Unity を起動せず YAML 直読みで完結する。書き込み経路（`patch_apply` / `set_property` / `editor_*` 等）は常駐 Editor Bridge との file-IPC で動き、`confirm=True` + 非空 `change_reason` の監査ペアを欠く呼び出しは `CHANGE_REASON_REQUIRED` で拒否される。
+read-only 経路（`validate_refs` / `validate_materials` / `inspect_*` / `find_*` 等）は Unity を起動せず YAML 直読みで完結する。書き込み経路（`patch_apply` / `set_property` / `editor_*` 等）は常駐 Editor Bridge との file-IPC で動き、`confirm=True` + 非空 `change_reason` の監査ペアを欠く呼び出しは `CHANGE_REASON_REQUIRED` で拒否される。
 
 本 README は各専門ドキュメントへの入口（[ドキュメントマップ](#ドキュメントマップ) 参照）。仕様の正本は専門ドキュメント群、運用ルールの正本は [AGENTS.md](./AGENTS.md)。
 
@@ -93,6 +93,7 @@ MCP サーバーは Plugin 内部で `uv` / `uvx` 経由でローカル起動さ
 |--------|------|
 | `activate_project` | プロジェクトスコープ設定 + キャッシュ warm（セッション開始時に呼ぶ） |
 | `validate_refs` | 壊れた GUID / fileID 参照のスキャン |
+| `validate_materials` | `.mat` / renderer slot / TMP material preset / folder policy の静的検証。任意ルールは [CONFIGURATION.md](./CONFIGURATION.md#material_validation_rulesjson-形式仕様) を正本とする |
 | `validate_structure` | YAML 内部構造の検証（fileID 重複・Transform 整合性） |
 | `inspect_wiring` | MonoBehaviour フィールド配線の分析（null 参照の分類付き） |
 | `inspect_variant` | Prefab Variant の override チェーン分析 |
