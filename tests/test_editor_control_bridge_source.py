@@ -5521,7 +5521,7 @@ class EditorSerializedPropertyUnitySmokeSourceTests(unittest.TestCase):
             "EDITOR_CTRL_SERIALIZED_PROPERTY_NO_CHANGE",
             "EDITOR_CTRL_SERIALIZED_PROPERTY_WRITE_OK",
             "root_property_path",
-            "numbers",
+            "m_LocalPosition",
             "missingRoot",
             "EDITOR_CTRL_SERIALIZED_PROPERTY_NOT_FOUND",
         ):
