@@ -27,15 +27,15 @@ _INVALID_CODE = "MATERIAL_RULES_INVALID"
 class ShaderNamePolicy:
     id: str
     scope: str
-    hierarchy_prefix: str
     expected_shader: str
+    hierarchy_prefix: str = ""
 
 
 @dataclass(frozen=True, slots=True)
 class SharedMaterialGroup:
     id: str
     scope: str
-    hierarchy_prefix: str
+    hierarchy_prefix: str = ""
     expected_material: str | None = None
 
 
@@ -155,12 +155,10 @@ def _parse_shader_name_policies(
         ShaderNamePolicy(
             id=_required_string(entry, "id", "shader_name_policies"),
             scope=_required_string(entry, "scope", "shader_name_policies"),
-            hierarchy_prefix=_required_string(
-                entry, "hierarchy_prefix", "shader_name_policies",
-            ),
             expected_shader=_required_string(
                 entry, "expected_shader", "shader_name_policies",
             ),
+            hierarchy_prefix=_optional_string(entry, "hierarchy_prefix") or "",
         )
         for entry in _optional_mapping_sequence(root, "shader_name_policies")
     )
@@ -173,9 +171,7 @@ def _parse_shared_material_groups(
         SharedMaterialGroup(
             id=_required_string(entry, "id", "shared_material_groups"),
             scope=_required_string(entry, "scope", "shared_material_groups"),
-            hierarchy_prefix=_required_string(
-                entry, "hierarchy_prefix", "shared_material_groups",
-            ),
+            hierarchy_prefix=_optional_string(entry, "hierarchy_prefix") or "",
             expected_material=_optional_string(entry, "expected_material"),
         )
         for entry in _optional_mapping_sequence(root, "shared_material_groups")

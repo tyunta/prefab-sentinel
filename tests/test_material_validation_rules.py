@@ -163,6 +163,70 @@ class TestMaterialValidationRules(unittest.TestCase):
             msg="empty selector lists are an explicit no-op, not a schema error",
         )
 
+    def test_shader_and_shared_rules_accept_omitted_hierarchy_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            _write_rules_config(
+                project_root,
+                {
+                    "version": 1,
+                    "shader_name_policies": [
+                        {
+                            "id": "all-ui-shader",
+                            "scope": "Assets/UI",
+                            "expected_shader": "UI/Overlay/AlwaysOnTop",
+                        }
+                    ],
+                    "shared_material_groups": [
+                        {
+                            "id": "all-ui-shared-materials",
+                            "scope": "Assets/UI",
+                        }
+                    ],
+                },
+            )
+
+            result = load_material_validation_rules(project_root)
+
+        rules = result.rules
+        self.assertIsNotNone(
+            rules,
+            msg="omitted hierarchy_prefix should load as a scope-wide policy",
+        )
+        if rules is None:
+            raise AssertionError("omitted hierarchy_prefix should load")
+        self.assertEqual(
+            (
+                "loaded",
+                (("all-ui-shader", "Assets/UI", "", "UI/Overlay/AlwaysOnTop"),),
+                (("all-ui-shared-materials", "Assets/UI", "", None),),
+                (),
+            ),
+            (
+                result.status,
+                tuple(
+                    (
+                        policy.id,
+                        policy.scope,
+                        policy.hierarchy_prefix,
+                        policy.expected_shader,
+                    )
+                    for policy in rules.shader_name_policies
+                ),
+                tuple(
+                    (
+                        group.id,
+                        group.scope,
+                        group.hierarchy_prefix,
+                        group.expected_material,
+                    )
+                    for group in rules.shared_material_groups
+                ),
+                result.diagnostics,
+            ),
+            msg="missing hierarchy_prefix should be normalized to an empty prefix",
+        )
+
     def test_valid_config_loads_all_supported_rule_families(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project_root = Path(tmp)
