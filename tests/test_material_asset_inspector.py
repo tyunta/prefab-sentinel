@@ -130,7 +130,7 @@ class TestInspectMaterialAsset(unittest.TestCase):
         with self.assertRaises(ValueError) as cm:
             inspect_material_asset(str(FIXTURES / "malformed.mat"))
         # ``ValueError`` is not on the project's infrastructure-exception
-        # allow-list, so the value-pin rule (CLAUDE.md L118) requires an
+        # allow-list, so the value-pin rule (AGENTS.md L118) requires an
         # assertion on the exception text in the same method.  Tighten
         # the previous "non-empty" pin to a substring regex on the
         # production message at ``material_asset_inspector.py:182``

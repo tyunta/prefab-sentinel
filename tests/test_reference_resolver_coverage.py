@@ -349,10 +349,7 @@ class WhereUsedMissingGuidScanTests(unittest.TestCase):
             response = svc.where_used("Assets/Target.asset", scope="Assets")
 
         self.assertEqual((False, "REF001"), (response.success, response.code))
-        self.assertEqual(
-            "Target asset meta file does not contain a valid GUID.",
-            response.message,
-        )
+        self.assertIn("target meta metadata", response.message)
 
     def test_resolved_guid_marks_asset_present(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

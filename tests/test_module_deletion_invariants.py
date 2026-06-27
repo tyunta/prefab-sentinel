@@ -128,14 +128,14 @@ class BatchmodeRemovalInvariants(unittest.TestCase):
 
     def test_docs_reference_batchmode_only_in_historical_phrasing(self) -> None:
         """Every surviving ``batchmode`` mention in ``README.md`` /
-        ``CLAUDE.md`` is in a sentence that explicitly marks the
+        ``AGENTS.md`` is in a sentence that explicitly marks the
         construct as removed (``削除済み`` or ``旧``).  Plain present-tense
         references would re-introduce the deleted dispatch path.
         """
         # Historical markers anchor each surviving mention to the
         # deletion event so future readers know batchmode is gone.
         historical_markers = ("削除済み", "旧")
-        for filename in ("README.md", "CLAUDE.md"):
+        for filename in ("README.md", "AGENTS.md"):
             path = _REPO_ROOT / filename
             text = path.read_text(encoding="utf-8")
             for line_number, line in enumerate(text.splitlines(), start=1):
@@ -147,15 +147,15 @@ class BatchmodeRemovalInvariants(unittest.TestCase):
                     f"historical marker ({historical_markers}): {line!r}",
                 )
 
-    def test_claude_md_contains_issue_268_migration_note(self) -> None:
-        """``CLAUDE.md`` carries the issue #268 / post-#264 migration
+    def test_agents_md_contains_issue_268_migration_note(self) -> None:
+        """``AGENTS.md`` carries the issue #268 / post-#264 migration
         note for ``editor_force_scene_view_refresh``: the Prefab Stage
         ``NOT_FOUND`` behaviour and the ``editor_close_prefab`` workaround
         must both be discoverable. (#356 slimmed the README to a pointer
-        doc; the tool operational note now lives in CLAUDE.md's Editor
+        doc; the tool operational note now lives in AGENTS.md's Editor
         remote-operation rules.)
         """
-        text = (_REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+        text = (_REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
         self.assertIn("issue #268", text)
         self.assertIn("NOT_FOUND", text)
         self.assertIn("editor_close_prefab", text)

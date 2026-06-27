@@ -50,7 +50,7 @@ def _stable_validate_refs_snapshot(response) -> dict:
         "step_severity": step_result["severity"],
         "step_code": step_result["code"],
         # Per-category counts: broken_pptr / udon_runtime / variant_override
-        # are the published quality-gate keys (CLAUDE.md "Quality Gates").
+        # are the published quality-gate keys (AGENTS.md "Quality Gates").
         # The reference scan reports under the "categories" map which uses
         # different names; we project them onto the published keys here.
         "categories": {

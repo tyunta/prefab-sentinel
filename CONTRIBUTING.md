@@ -1,6 +1,6 @@
 # Contributing to Prefab Sentinel
 
-Thanks for taking the time to contribute. This file is the entry point for code, documentation, and infrastructure changes. [README.md](./README.md) is the documentation map; the spec of record lives in the per-area satellite docs it links (ARCHITECTURE.md, docs/api-reference.md, docs/execution-reference.md, TESTING.md, CONFIGURATION.md), and the operational rules of record are [CLAUDE.md](./CLAUDE.md). When a change touches behavior or rules documented there, update the same section in the same PR.
+Thanks for taking the time to contribute. This file is the entry point for code, documentation, and infrastructure changes. [README.md](./README.md) is the documentation map; the spec of record lives in the per-area satellite docs it links (ARCHITECTURE.md, docs/api-reference.md, docs/execution-reference.md, TESTING.md, CONFIGURATION.md), and the operational rules of record are [AGENTS.md](./AGENTS.md). When a change touches behavior or rules documented there, update the same section in the same PR.
 
 ## Development setup
 
@@ -59,7 +59,7 @@ With `core.hooksPath` set, Git ignores `.git/hooks/` and uses the tracked hook d
 1. Branch off `main`. Branch names are free-form; descriptive names such as `fix/broken-pptr-detection` or `docs/readme-pypi-reconcile` are preferred.
 2. Make focused commits. Squashing happens at merge time, but a clean commit-by-commit story helps review.
 3. Open the PR using the [`.github/PULL_REQUEST_TEMPLATE.md`](./.github/PULL_REQUEST_TEMPLATE.md) (GitHub loads it automatically). Fill in `Summary`, `Related issues`, and the `Checklist` honestly — empty checkboxes are a stronger review signal than unchecked truths.
-4. Reviewers verify: tests pass and exercise the changed surface; the relevant spec docs and CLAUDE.md are in sync with the diff when applicable; `CHANGELOG.md [Unreleased]` carries an entry for user-visible changes; the closing-issue link reflects what shipped.
+4. Reviewers verify: tests pass and exercise the changed surface; the relevant spec docs and AGENTS.md are in sync with the diff when applicable; `CHANGELOG.md [Unreleased]` carries an entry for user-visible changes; the closing-issue link reflects what shipped.
 5. CI must be green at merge. If a hook or check is flaky, fix the root cause rather than re-running until it passes.
 
 A reviewer's first read tends to be the spec-doc sections that the diff touches, then the new tests, then the code. Order the PR description and commits to support that path.

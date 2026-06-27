@@ -10,7 +10,7 @@ per-concern partials.  These tests enforce the layout itself:
   the public ``ProtocolVersion`` constant and the ``[ThreadStatic]``
   per-request handle slot — so external callers and shared state stay
   bound to the canonical file;
-* the operational rules file (``CLAUDE.md``) lists every per-concern
+* the operational rules file (``AGENTS.md``) lists every per-concern
   partial token currently on disk.
 
 The patch bridge is C# whose behavioural contract is exercised by the
@@ -35,7 +35,7 @@ pytestmark = pytest.mark.source_text_invariant
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _TOOLS_DIR = _PROJECT_ROOT / "tools" / "unity"
-_CLAUDE_MD = _PROJECT_ROOT / "CLAUDE.md"
+_AGENTS_MD = _PROJECT_ROOT / "AGENTS.md"
 
 
 # C# block comments may not nest, so a single non-greedy ``/* ... */`` scrub
@@ -238,7 +238,7 @@ class TestPatchBridgeCoreConstantsPresent(unittest.TestCase):
 
 
 class TestPatchBridgeOperationalRulesInventory(unittest.TestCase):
-    """``CLAUDE.md`` is the single human-readable source of truth for
+    """``AGENTS.md`` is the single human-readable source of truth for
     the partial layout.  Every per-concern token currently on disk must
     appear in the operational rules file; absent tokens advertised in
     the rules file would describe a layout that no longer matches disk.
@@ -261,13 +261,13 @@ class TestPatchBridgeOperationalRulesInventory(unittest.TestCase):
         return concerns
 
     def test_operational_rules_list_every_present_partial_concern(self) -> None:
-        text = _CLAUDE_MD.read_text(encoding="utf-8")
+        text = _AGENTS_MD.read_text(encoding="utf-8")
         for concern in sorted(self._disk_partial_concerns()):
             with self.subTest(concern=concern):
                 self.assertIn(
                     concern,
                     text,
-                    f"CLAUDE.md inventory line is missing patch-bridge "
+                    f"AGENTS.md inventory line is missing patch-bridge "
                     f"concern '{concern}'.",
                 )
 

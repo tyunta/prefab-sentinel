@@ -1,17 +1,17 @@
 # Configuration
 
-`UNITYTOOL_*` 環境変数・`ignore_guids.txt` ファイル・`<scope>/config/` 規約・書き込み系ツールの監査ペアの正本。実行・bridge 連携の仕様は [docs/execution-reference.md](./docs/execution-reference.md)、運用ルールの正本は [CLAUDE.md](./CLAUDE.md)。本ファイルは設定項目を 1 箇所に集約して、新規・既存いずれのコントリビュータが「何を設定すれば動くか / 何を設定しないと止まるか」を一覧で確認できるようにする。
+`UNITYTOOL_*` 環境変数・`ignore_guids.txt` ファイル・`<scope>/config/` 規約・書き込み系ツールの監査ペアの正本。実行・bridge 連携の仕様は [docs/execution-reference.md](./docs/execution-reference.md)、運用ルールの正本は [AGENTS.md](./AGENTS.md)。本ファイルは設定項目を 1 箇所に集約して、新規・既存いずれのコントリビュータが「何を設定すれば動くか / 何を設定しないと止まるか」を一覧で確認できるようにする。
 
 ## 環境変数一覧
 
-`UNITYTOOL_*` プレフィックスの環境変数は Unity Editor Bridge 連携・CI 連携・テストゲーティングに使用する。`種別` 列の値は **active**（実運用で active に読まれる）/ **test-only**（テストの opt-in ゲートにのみ使用）/ **planned**（CLAUDE.md / README.md で仕様化済みだが現コードベースでは未参照）/ **legacy**（旧経路用で現コードでは未参照、docstring または ideas doc にのみ残る）。
+`UNITYTOOL_*` プレフィックスの環境変数は Unity Editor Bridge 連携・CI 連携・テストゲーティングに使用する。`種別` 列の値は **active**（実運用で active に読まれる）/ **test-only**（テストの opt-in ゲートにのみ使用）/ **planned**（AGENTS.md / README.md で仕様化済みだが現コードベースでは未参照）/ **legacy**（旧経路用で現コードでは未参照、docstring または ideas doc にのみ残る）。
 
 | 変数名 | 既定値 | 用途 | 種別 | 関連 issue |
 |--------|--------|------|------|-----------|
 | `UNITYTOOL_BRIDGE_E2E_LIVE` | （未設定） | 値 `"1"` で `tests/test_mcp_server.py` の live Editor Bridge E2E テストを有効化する opt-in ゲート。未設定時は該当テストが skip される。 | test-only | #270 |
 | `UNITYTOOL_BRIDGE_WATCH_DIR` | （未設定 = fail-fast） | 常駐 Editor Bridge との file-IPC watch ディレクトリ。Python 側が `{uuid}.request.json` を書き込み、Editor Bridge が `{uuid}.response.json` をアトミック書き出しで返す。未設定時は `BRIDGE_WATCH_DIR_MISSING` で fail-fast 停止する。 | active | #88, #89, #270 |
-| `UNITYTOOL_CI_BRANCH` | （未設定。`GITHUB_REF_NAME` をフォールバック） | CI 上の現在ブランチ名。`<scope>/config/ignore_guids.txt` の auto-update（`suggest ignore-guids --out-ignore-guid-file`）の許可ブランチ判定で参照される想定。現コードベースでは `suggest ignore-guids --out-ignore-guid-file` 自体が未実装のため、参照箇所はまだ存在しない（CLAUDE.md / README.md の仕様記述のみ）。 | planned | #237 |
-| `UNITYTOOL_IGNORE_GUID_ALLOW_BRANCHES` | `main,release/*` | ignore-guid file の auto-update を許可するブランチパターンのカンマ区切り上書き。明示指定時のみ、許可ブランチ上でのみ ignore-guid file が更新される想定。現コードベースでは未参照（CLAUDE.md / README.md の仕様記述のみ）。 | planned | #237 |
+| `UNITYTOOL_CI_BRANCH` | （未設定。`GITHUB_REF_NAME` をフォールバック） | CI 上の現在ブランチ名。`<scope>/config/ignore_guids.txt` の auto-update（`suggest ignore-guids --out-ignore-guid-file`）の許可ブランチ判定で参照される想定。現コードベースでは `suggest ignore-guids --out-ignore-guid-file` 自体が未実装のため、参照箇所はまだ存在しない（AGENTS.md / README.md の仕様記述のみ）。 | planned | #237 |
+| `UNITYTOOL_IGNORE_GUID_ALLOW_BRANCHES` | `main,release/*` | ignore-guid file の auto-update を許可するブランチパターンのカンマ区切り上書き。明示指定時のみ、許可ブランチ上でのみ ignore-guid file が更新される想定。現コードベースでは未参照（AGENTS.md / README.md の仕様記述のみ）。 | planned | #237 |
 | `UNITYTOOL_PATCH_BRIDGE` | （未設定） | 非 JSON resource（`.prefab` / `.unity` / `.mat` / `.asset` / `.anim` / `.controller`）の patch 適用に使う外部 bridge コマンドを `shlex` 形式で指定する。未設定で非 JSON resource を扱おうとすると `SER_UNSUPPORTED_TARGET` で停止する。受理コマンドは allowlist（`python` / `uv` / `prefab-sentinel-unity-bridge` 等）に限定される。 | active | — |
 | `UNITYTOOL_UNITY_COMMAND` | （未設定） | 旧 Unity batchmode 経路の Unity 実行コマンド。issue #270 で batchmode 経路が削除され、現行コードでは参照されない。導入当時は Editor headless 経路を MCP 統合と並行で運用していたが、常駐 Editor Bridge への一本化に伴い削除された経緯がある。 | legacy | #270 |
 | `UNITYTOOL_UNITY_EXECUTE_METHOD` | （未設定） | 旧 Unity batchmode 経路の `-executeMethod` エンドポイント。issue #270 で削除済みで、現行コードでは参照されない。`tools/unity/PrefabSentinel.UnityPatchBridge.cs` の docstring コメントにのみ残る。 | legacy | #270 |

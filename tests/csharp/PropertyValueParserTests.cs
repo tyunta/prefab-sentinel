@@ -142,13 +142,36 @@ public class PropertyValueParserTests
         Assert.Equal(new[] { 1f, 2f, 3f }, value.Components);
     }
 
+    [Fact]
+
+    public void Missing_Private_TryParse_Helper_Names_Reflection_Contract()
+    {
+        Exception failure = Record.Exception(() =>
+            InvokePrivateTryParse(
+                "TryParseMissingForDiagnostics",
+                new object?[] { "1,2,3", default(ParsedPropertyValue) }));
+        Assert.IsAssignableFrom<Xunit.Sdk.XunitException>(failure);
+        string message = failure.Message;
+
+        Assert.Contains("TryParseMissingForDiagnostics", message);
+        Assert.Contains("PropertyValueParser", message);
+        Assert.Contains("NonPublic", message);
+        Assert.Contains("Static", message);
+        Assert.Contains("bool", message);
+        Assert.Contains("private TryParse", message);
+    }
+
     private static bool InvokePrivateTryParse(string methodName, object?[] args)
     {
-        var method = typeof(PropertyValueParser).GetMethod(
-            methodName,
-            System.Reflection.BindingFlags.NonPublic
-            | System.Reflection.BindingFlags.Static);
-        Assert.NotNull(method);
+        var bindingFlags = System.Reflection.BindingFlags.NonPublic
+            | System.Reflection.BindingFlags.Static;
+        var method = typeof(PropertyValueParser).GetMethod(methodName, bindingFlags);
+        Assert.True(
+            method is not null,
+            "Missing private TryParse helper '" + methodName
+            + "' on PropertyValueParser. Expected NonPublic | Static "
+            + "BindingFlags, bool return, and the private TryParse "
+            + "reflection helper contract.");
         return (bool)method!.Invoke(null, args)!;
     }
 }

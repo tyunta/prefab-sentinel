@@ -38,6 +38,8 @@ live editor の scene または active Prefab Stage 上の GameObject を `/` �
 
 live geometry (`editor_get_transform` / `editor_get_bounds` / `editor_measure_distance`) と target screenshot (`editor_screenshot(target=...)`) は同じ hierarchy-path authority を使う。geometry は read-only で、missing / ambiguous path は typed envelope で fail-fast する。routine geometry inspection は dedicated geometry tool を使い、`editor_run_script` snippets を第一選択にしない。
 
+`editor_frame` と `editor_screenshot(target=...)` の renderer framing は `bounds_policy` を共有する。既定の `all_visible_renderers` は対象 GameObject 配下の active enabled child Renderers をすべて集約する。`focus_core` は明示 opt-in の policy で、core-focused framing に戻したい場合だけ指定する。policy 名を省略して implicit filtering に戻す経路は持たない。
+
 ### 1.5 patch-selector
 
 patch v2 スキーマの op 内でコンポーネントを指す文字列フォーマット `TypeName@/hierarchy/path`（例: `MeshRenderer@/Body/Head`）。引数ではなく op フィールドの値なので §2.1 の引数命名規約の対象外。

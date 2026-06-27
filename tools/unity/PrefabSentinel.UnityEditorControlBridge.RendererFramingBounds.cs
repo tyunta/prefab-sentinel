@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -8,11 +9,14 @@ namespace PrefabSentinel
     {
         private static bool TryResolveRendererFramingBounds(
             GameObject target,
+            string boundsPolicy,
             out Bounds aggregated,
-            out IList<ObjectCaptureFramingMath.RendererBoundsRecord> keptRecords)
+            out IList<ObjectCaptureFramingMath.RendererBoundsRecord> includedRecords,
+            out IList<ObjectCaptureFramingMath.RendererBoundsRecord> excludedRecords)
         {
             aggregated = new Bounds(target.transform.position, Vector3.zero);
-            keptRecords = new List<ObjectCaptureFramingMath.RendererBoundsRecord>();
+            includedRecords = new List<ObjectCaptureFramingMath.RendererBoundsRecord>();
+            excludedRecords = new List<ObjectCaptureFramingMath.RendererBoundsRecord>();
 
             var records = new List<ObjectCaptureFramingMath.RendererBoundsRecord>();
             var bakedMeshes = new List<Mesh>();
@@ -40,14 +44,36 @@ namespace PrefabSentinel
                     records.Add(ToRendererBoundsRecord(bounds));
                 }
 
-                keptRecords = ObjectCaptureFramingMath.SelectFramingRenderers(records);
-                if (keptRecords.Count == 0)
+                if (records.Count == 0)
                     return false;
 
-                aggregated = ToBounds(keptRecords[0]);
-                for (int i = 1; i < keptRecords.Count; i++)
+                if (boundsPolicy == "all_visible_renderers")
                 {
-                    aggregated.Encapsulate(ToBounds(keptRecords[i]));
+                    includedRecords = records;
+                }
+                else if (boundsPolicy == "focus_core")
+                {
+                    includedRecords = ObjectCaptureFramingMath.SelectFramingRenderers(records);
+                    var excluded = new List<ObjectCaptureFramingMath.RendererBoundsRecord>();
+                    foreach (var record in records)
+                    {
+                        if (!includedRecords.Contains(record))
+                            excluded.Add(record);
+                    }
+                    excludedRecords = excluded;
+                }
+                else
+                {
+                    return false;
+                }
+
+                if (includedRecords.Count == 0)
+                    return false;
+
+                aggregated = ToBounds(includedRecords[0]);
+                for (int i = 1; i < includedRecords.Count; i++)
+                {
+                    aggregated.Encapsulate(ToBounds(includedRecords[i]));
                 }
 
                 return true;
@@ -57,7 +83,7 @@ namespace PrefabSentinel
                 foreach (var mesh in bakedMeshes)
                 {
                     if (mesh != null)
-                        Object.DestroyImmediate(mesh);
+                        UnityEngine.Object.DestroyImmediate(mesh);
                 }
             }
         }
@@ -68,6 +94,41 @@ namespace PrefabSentinel
             return new ObjectCaptureFramingMath.RendererBoundsRecord(
                 new[] { bounds.center.x, bounds.center.y, bounds.center.z },
                 new[] { bounds.extents.x, bounds.extents.y, bounds.extents.z });
+        }
+
+
+        private static bool IsSupportedRendererBoundsPolicy(string boundsPolicy)
+        {
+            return boundsPolicy == "all_visible_renderers" || boundsPolicy == "focus_core";
+        }
+
+        private static EditorControlResponse BuildBoundsPolicyInvalidError(string boundsPolicy)
+        {
+            return BuildError(
+                "EDITOR_CTRL_BOUNDS_POLICY_INVALID",
+                $"bounds_policy='{boundsPolicy}' is not one of all_visible_renderers, focus_core.");
+        }
+
+        private static GeometryBoundsContributorEntry[] ToContributorEntries(
+            IList<ObjectCaptureFramingMath.RendererBoundsRecord> records)
+        {
+            if (records == null || records.Count == 0)
+                return Array.Empty<GeometryBoundsContributorEntry>();
+
+            var entries = new List<GeometryBoundsContributorEntry>();
+            foreach (var record in records)
+            {
+                Bounds bounds = ToBounds(record);
+                entries.Add(new GeometryBoundsContributorEntry
+                {
+                    source = "renderer",
+                    center = Vector3ToArray(bounds.center),
+                    extents = Vector3ToArray(bounds.extents),
+                    min = Vector3ToArray(bounds.min),
+                    max = Vector3ToArray(bounds.max),
+                });
+            }
+            return entries.ToArray();
         }
 
         private static Bounds TransformBoundsToWorld(Bounds local, Transform transform)

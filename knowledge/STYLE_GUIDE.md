@@ -15,7 +15,7 @@
 | `last_updated` | 最終更新日。`2026-03-26` の ISO-8601 形式 |
 | `confidence` | `low` / `medium` / `high` のいずれか。`high` は inspect 実測値で裏取り済み、`medium` は再現確認済み、`low` は推測または単発観察 |
 
-`confidence: low` のナレッジを判断材料にする場合は、判断時にその旨をユーザーに伝える運用（[CLAUDE.md `## VRChat エコシステムナレッジの自動適用`](../CLAUDE.md#vrchat-エコシステムナレッジの自動適用) 参照）。inspect 実測値で裏取りができたら `confidence: high` に昇格し、同時に `version_tested` / `last_updated` を更新する。
+`confidence: low` のナレッジを判断材料にする場合は、判断時にその旨をユーザーに伝える運用（[AGENTS.md `## VRChat エコシステムナレッジの自動適用`](../AGENTS.md#vrchat-エコシステムナレッジの自動適用) 参照）。inspect 実測値で裏取りができたら `confidence: high` に昇格し、同時に `version_tested` / `last_updated` を更新する。
 
 frontmatter のフィールド順は表の通り（`tool` → `version_tested` → `last_updated` → `confidence`）を推奨する。追加のフィールドを足したい場合は本ガイドに追記してから既存ファイルを更新する（個別ファイル単独で項目を追加しない）。
 
@@ -36,7 +36,7 @@ frontmatter のフィールド順は表の通り（`tool` → `version_tested` �
 - 単一の作業 / 単一の incident に固有の状況（再利用価値がないため knowledge には残さない）
 - 「今回は〜してみた」「〜の PR で対応した」のような work-log 表現
 - プロジェクト固有アセットの GUID / fileID（特定プロジェクトの prefab・スクリプト・シーンの識別子。再利用価値がない）。SDK / パッケージ由来の安定 GUID は逆に「書く」側
-- ユーザーの好み・プロジェクト固有の事情（→ `memory/` に置く、[CLAUDE.md `### memory との棲み分け`](../CLAUDE.md#memory-との棲み分け) 参照）
+- ユーザーの好み・プロジェクト固有の事情（→ `memory/` に置く、[AGENTS.md `### memory との棲み分け`](../AGENTS.md#memory-との棲み分け) 参照）
 
 迷ったら「半年後の自分 / 他のエージェントが、同じツールを別プロジェクトで触るときに役に立つか」で判定する。No なら `knowledge/` ではない。
 

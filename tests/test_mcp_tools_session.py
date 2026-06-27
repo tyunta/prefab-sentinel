@@ -306,6 +306,186 @@ class StatusEditorStateBlock(unittest.TestCase):
         )
 
 
+class ProjectStatusOperatorContextTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.project_root, self.scope = _make_project(self._tmp)
+
+    def _run_status(self, bridge_envelope: dict[str, object]) -> tuple[dict[str, object], object]:
+        session = ProjectSession(project_root=self.project_root)
+        registered = _register_session_tools(session)
+        get_status = registered["get_project_status"]
+        with (
+            patch.object(
+                mcp_tools_session,
+                "bridge_status",
+                return_value={"connected": True, "mode": "editor", "watch_dir": "/tmp"},
+            ),
+            patch.object(
+                mcp_tools_session,
+                "send_action",
+                return_value=bridge_envelope,
+            ) as send,
+        ):
+            return get_status(), send
+
+    def _bridge_envelope(self, actual_root: str) -> dict[str, object]:
+        return {
+            "success": True,
+            "severity": "info",
+            "code": "EDITOR_CTRL_EDITOR_STATE_OK",
+            "message": "ok",
+            "data": {
+                "editor_state": {
+                    "is_playing": False,
+                    "is_will_change_playmode": False,
+                    "is_compiling": False,
+                    "is_building_player": False,
+                    "has_unsaved_changes": True,
+                    "active_stage_kind": "prefab_stage",
+                    "active_scene_path": "Assets/Scenes/Main.unity",
+                    "active_scene_name": "Main",
+                    "prefab_stage_asset_path": "Assets/Prefabs/Avatar.prefab",
+                    "prefab_stage_root_name": "Avatar",
+                    "prefab_stage_is_dirty": True,
+                    "open_scenes": [
+                        {
+                            "path": "Assets/Scenes/Main.unity",
+                            "name": "Main",
+                            "is_dirty": False,
+                        }
+                    ],
+                }
+            },
+            "operator_context": {
+                "project_root": actual_root,
+                "bridge_session_id": "bridge-session-1",
+                "bridge_instance_id": "bridge-instance-1",
+                "bridge_version": "0.7.0",
+                "plugin_version": "0.7.0",
+            },
+            "diagnostics": [],
+        }
+
+    def test_matching_actual_root_reports_consistent_operator_context(self) -> None:
+        bridge_envelope = self._bridge_envelope(str(self.project_root))
+        response, send = self._run_status(bridge_envelope)
+        data = response["data"]
+
+        self.assertEqual(True, response["success"], response)
+        self.assertEqual(str(self.project_root), data["expected_project_root"])
+        self.assertIn("actual_project_root", data, data)
+        self.assertEqual(str(self.project_root), data["actual_project_root"])
+        self.assertIn("project_root_consistent", data, data)
+        self.assertEqual(True, data["project_root_consistent"])
+        self.assertEqual("prefab_stage", data["active_stage_kind"])
+        self.assertEqual("Assets/Scenes/Main.unity", data["active_scene_path"])
+        self.assertEqual("bridge-session-1", data["bridge_session_id"])
+        self.assertEqual("bridge-instance-1", data["bridge_instance_id"])
+        self.assertEqual("0.7.0", data["plugin_version"])
+        send.assert_called_once_with(action="get_editor_state", expected_project_root=None)
+
+    def test_bridge_warning_diagnostics_are_merged_into_status(self) -> None:
+        bridge_envelope = self._bridge_envelope(str(self.project_root))
+        bridge_envelope["severity"] = "warning"
+        bridge_envelope["diagnostics"] = [
+            {
+                "severity": "warning",
+                "code": "EDITOR_STATE_ENUMERATION_LIMITED",
+                "detail": "Open scene enumeration failed.",
+                "location": "open_scenes",
+            }
+        ]
+
+        response, send = self._run_status(bridge_envelope)
+        diagnostics = [
+            diagnostic for diagnostic in response["diagnostics"]
+            if diagnostic.get("code") == "EDITOR_STATE_ENUMERATION_LIMITED"
+        ]
+        diagnostic = diagnostics[0] if diagnostics else {}
+
+        self.assertEqual("warning", response["severity"], response)
+        self.assertEqual(1, len(diagnostics), response["diagnostics"])
+        self.assertEqual("warning", diagnostic.get("severity"))
+        self.assertEqual("Open scene enumeration failed.", diagnostic.get("message"))
+        self.assertEqual("open_scenes", diagnostic.get("data", {}).get("location"))
+        send.assert_called_once_with(action="get_editor_state", expected_project_root=None)
+
+    def test_mismatching_actual_root_reports_warning_without_failing_status(self) -> None:
+        actual_root = str(self.project_root.parent / "OtherProject")
+        bridge_envelope = self._bridge_envelope(actual_root)
+        response, send = self._run_status(bridge_envelope)
+        data = response["data"]
+
+        self.assertEqual(True, response["success"], response)
+        self.assertEqual(str(self.project_root), data["expected_project_root"])
+        self.assertIn("actual_project_root", data, data)
+        self.assertEqual(actual_root, data["actual_project_root"])
+        self.assertIn("project_root_consistent", data, data)
+        self.assertEqual(False, data["project_root_consistent"])
+        diagnostics = [
+            diagnostic for diagnostic in response["diagnostics"]
+            if diagnostic.get("code") == "EDITOR_BRIDGE_PROJECT_ROOT_MISMATCH"
+        ]
+        self.assertEqual(1, len(diagnostics), response["diagnostics"])
+        self.assertEqual("warning", diagnostics[0]["severity"])
+        self.assertEqual(str(self.project_root), diagnostics[0]["data"]["expected_project_root"])
+        self.assertEqual(actual_root, diagnostics[0]["data"]["actual_project_root"])
+        send.assert_called_once_with(action="get_editor_state", expected_project_root=None)
+
+
+class ActivateProjectExpectedRootTests(unittest.TestCase):
+    def test_activate_project_retains_expected_root_in_returned_and_subsequent_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_root = Path(tmpdir)
+            scope = project_root / "Assets" / "MyScope"
+            scope.mkdir(parents=True)
+            session = ProjectSession()
+            patches = _patch_session_layer()
+
+            with patch.dict(os.environ, {"UNITYTOOL_UNITY_PROJECT_PATH": ""}, clear=False):
+                with patches[0], patches[1]:
+                    returned = asyncio.run(
+                        session.activate(str(scope), project_root=str(project_root))
+                    )
+
+            self.assertIn("expected_project_root", returned, returned)
+            self.assertEqual(str(project_root.resolve()), returned["expected_project_root"])
+            current = session.status()
+            self.assertIn("expected_project_root", current, current)
+            self.assertEqual(str(project_root.resolve()), current["expected_project_root"])
+            self.assertEqual(str(scope.resolve()), returned["scope"])
+
+
+class ProjectSessionStatusIdentityTests(unittest.TestCase):
+    def test_status_exposes_expected_root_and_stable_session_identity_without_bridge(self) -> None:
+        session = ProjectSession()
+        inactive = session.status()
+
+        self.assertIn("expected_project_root", inactive, inactive)
+        self.assertIsNone(inactive["expected_project_root"])
+        self.assertIn("session_id", inactive, inactive)
+        self.assertIsInstance(inactive["session_id"], str)
+        self.assertRegex(inactive["session_id"], r"^[0-9a-f]{32}$")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_root = Path(tmpdir)
+            scope = project_root / "Assets" / "MyScope"
+            scope.mkdir(parents=True)
+            patches = _patch_session_layer()
+
+            with patch.dict(os.environ, {"UNITYTOOL_UNITY_PROJECT_PATH": ""}, clear=False):
+                with patches[0], patches[1]:
+                    active = asyncio.run(
+                        session.activate(str(scope), project_root=str(project_root))
+                    )
+
+        self.assertEqual(str(project_root.resolve()), active["expected_project_root"])
+        self.assertEqual(inactive["session_id"], active["session_id"])
+        self.assertEqual(active["session_id"], session.status()["session_id"])
+
+
 class TestEditorStateFreshnessMarker(unittest.TestCase):
     """T-40: the offline symbol-reference tools attach a freshness marker
     only when the Editor Bridge is connected and reports unsaved changes

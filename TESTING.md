@@ -1,6 +1,6 @@
 # Testing
 
-PR を上げる前にローカルで走らせるテストの実行手順とテスト戦略の正本。ユニット / 統合 / 回帰 / mutmut の 4 系統と、CI（`ci.yml`）が回す内容、`source_text_invariant` マーカー、C# xUnit ハーネスの扱いを 1 箇所に集約する。運用ルールの正本は [CLAUDE.md](./CLAUDE.md)。
+PR を上げる前にローカルで走らせるテストの実行手順とテスト戦略の正本。ユニット / 統合 / 回帰 / mutmut の 4 系統と、CI（`ci.yml`）が回す内容、`source_text_invariant` マーカー、C# xUnit ハーネスの扱いを 1 箇所に集約する。運用ルールの正本は [AGENTS.md](./AGENTS.md)。
 
 ## Quickstart
 
@@ -13,6 +13,8 @@ uv run --extra test --extra mcp python scripts/run_unit_tests.py
 ## ユニットテスト
 
 `scripts/run_unit_tests.py` が `unittest_parallel` のラッパーで、3 段の preflight（stale `mutants/` 検出 → `mcp` extra 検出 → `unittest_parallel` 検出）を順に通してからテストを発火する。
+
+mutmut sanity tests は repository root ではなく一時コピーした isolated project root を `cwd` として実行する。これにより sanity 実行中の `mutants/` artifact は temp tree 側へ閉じ込められ、既定の `unittest_parallel` worker が repository-root `mutants/` を import 対象として観測する race を作らない。repository root に既存 `mutants/` がある場合の stale preflight は引き続き exit code 3 で停止する。
 
 ```bash
 # 全テスト（並列、verbose）— `--extra mcp` は MCP サーバーをインポートする ~14 テストの collection エラー回避に必須（issue #217）
@@ -106,7 +108,7 @@ uv run mutmut results
 uv run python scripts/mutmut_score_report.py --audited-only --format markdown
 ```
 
-`mutants/` は mutmut の作業ツリーで、`.gitignore` と `[tool.ruff].extend-exclude` で除外済み（走行後の `git status` / `ruff check` には現れない）。survived は critical / trivial / equivalent の三分類で四半期レポートに記録する：critical はテストでキル、trivial は四半期 survivor 分類に証跡を残すにとどめる（`do_not_mutate` はファイルパスグロブで構造単位の trivial mutant を抑制できないため追加しない）、equivalent も四半期レポートで証跡を残す。詳細運用カデンスは [CLAUDE.md の Mutation testing 運用](./CLAUDE.md#mutation-testing-運用) を参照。
+`mutants/` は mutmut の作業ツリーで、`.gitignore` と `[tool.ruff].extend-exclude` で除外済み（走行後の `git status` / `ruff check` には現れない）。survived は critical / trivial / equivalent の三分類で四半期レポートに記録する：critical はテストでキル、trivial は四半期 survivor 分類に証跡を残すにとどめる（`do_not_mutate` はファイルパスグロブで構造単位の trivial mutant を抑制できないため追加しない）、equivalent も四半期レポートで証跡を残す。詳細運用カデンスは [AGENTS.md の Mutation testing 運用](./AGENTS.md#mutation-testing-運用) を参照。
 
 並列ワーカー数 `--max-children 180` は固定値で運用する：開発機の物理コア数（最大 64 想定）の約 3 倍に取り、CPU バウンド・I/O 待ち混在の走行で待ち時間を埋めつつ、ワーカー間で `pytest` プロセスがスラッシングしない値として実測で選定した。`mutmut` の走行状態は実行間で永続化されないため、集計は `mutmut results` を同じ走行直後に呼ぶ。
 
@@ -118,7 +120,7 @@ uv run python scripts/mutmut_score_report.py --audited-only --format markdown
 
 **非監査 low-score モジュールの監査保留** — `prefab_sentinel.watcher`（`watchfiles` 依存と Editor Bridge file-IPC ポーリングループにより unit 環境で再現できない経路を多数含む）と `prefab_sentinel.editor_bridge`（file-IPC 経由でしか執行できないハンドラ群）は監査対象 6 モジュールに含めず、`[tool.mutmut].do_not_mutate` 拡張または untestable-mark を次サイクルで議論する（issue #211）。
 
-**テストの書き方（envelope value-pinning）** — 新規テストは `tests._assertion_helpers.assert_error_envelope` を使い、code / severity / field / message-pattern を値で固定する。「例外が出る」だけのアサートはミューテーションが拾えない。`assertRaises` 系も同様に値固定が必須で、`tests/test_assertion_density.py` がリポジトリ全体を AST で歩いて全 `assertRaises` サイトにこのルールを meta-test として強制する。同じルールは [CLAUDE.md の Mutation testing 運用](./CLAUDE.md#mutation-testing-運用) にも置かれている。
+**テストの書き方（envelope value-pinning）** — 新規テストは `tests._assertion_helpers.assert_error_envelope` を使い、code / severity / field / message-pattern を値で固定する。「例外が出る」だけのアサートはミューテーションが拾えない。`assertRaises` 系も同様に値固定が必須で、`tests/test_assertion_density.py` がリポジトリ全体を AST で歩いて全 `assertRaises` サイトにこのルールを meta-test として強制する。同じルールは [AGENTS.md の Mutation testing 運用](./AGENTS.md#mutation-testing-運用) にも置かれている。
 
 ### 四半期 run チェックリスト
 
@@ -161,7 +163,7 @@ import pytest
 pytestmark = pytest.mark.source_text_invariant
 ```
 
-宣言だけで `[tool.mutmut].pytest_add_cli_args_test_selection` の `-m "not source_text_invariant"` 単一フィルタから一括除外される。per-file の `--ignore=` を増やす必要はない。新規のリポジトリ同期テスト（CLAUDE.md inventory との drift 検出など）を追加する際もこのマーカーで対応する。
+宣言だけで `[tool.mutmut].pytest_add_cli_args_test_selection` の `-m "not source_text_invariant"` 単一フィルタから一括除外される。per-file の `--ignore=` を増やす必要はない。新規のリポジトリ同期テスト（AGENTS.md inventory との drift 検出など）を追加する際もこのマーカーで対応する。
 
 ### Tier 3 — 構造不変条件のみ
 

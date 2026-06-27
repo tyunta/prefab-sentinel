@@ -8,7 +8,7 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
-from scripts.check_module_line_limits import DEFAULT_LIMIT, check, main
+from scripts.check_module_line_limits import DEFAULT_LIMIT, DEFAULT_PACKAGE_ROOTS, check, main
 
 
 class CheckFunctionTests(unittest.TestCase):
@@ -80,6 +80,42 @@ class DefaultLimitBoundaryTests(unittest.TestCase):
             [(str(path), DEFAULT_LIMIT + 1)],
             offenders,
         )
+
+
+class InspectorModuleBoundaryTests(unittest.TestCase):
+    def test_default_roots_include_inspector_packages(self) -> None:
+        package_names = {root.name for root in DEFAULT_PACKAGE_ROOTS}
+        self.assertEqual(
+            {
+                "effective_hierarchy",
+                "effective_transform_inspector",
+                "unity_event_listener_inspector",
+            },
+            {
+                name
+                for name in package_names
+                if name
+                in {
+                    "effective_hierarchy",
+                    "effective_transform_inspector",
+                    "unity_event_listener_inspector",
+                }
+            },
+        )
+
+    def test_split_inspector_modules_stay_under_default_limit(self) -> None:
+        inspector_roots = [
+            root
+            for root in DEFAULT_PACKAGE_ROOTS
+            if root.name
+            in {
+                "effective_hierarchy",
+                "effective_transform_inspector",
+                "unity_event_listener_inspector",
+            }
+        ]
+        offenders = check(inspector_roots, limit=DEFAULT_LIMIT)
+        self.assertEqual([], offenders)
 
 
 class MainCliTests(unittest.TestCase):

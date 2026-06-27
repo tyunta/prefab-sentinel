@@ -43,7 +43,7 @@ def register_validation_tools(server: FastMCP, session: ProjectSession) -> None:
         )
         if not step.success:
             from mcp.server.fastmcp.exceptions import ToolError
-            raise ToolError(step.message)
+            raise ToolError(f"{step.code}: {step.message}")
 
         usages = step.data.get("usages", [])
         return {

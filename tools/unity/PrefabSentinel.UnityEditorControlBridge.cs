@@ -19,7 +19,9 @@ namespace PrefabSentinel
     public static partial class UnityEditorControlBridge
     {
         public const int ProtocolVersion = 1;
-        public const string BridgeVersion = "0.7.6";
+        public const string BridgeVersion = "0.7.7";
+        private static readonly string BridgeSessionId = Guid.NewGuid().ToString("N");
+        private static readonly string BridgeInstanceId = Guid.NewGuid().ToString("N");
 
         /// <summary>Actions that write their response file asynchronously (not on return).</summary>
         // Issue H-8: the membership sets are owned by ``ActionRegistry`` as the
@@ -89,6 +91,32 @@ namespace PrefabSentinel
             public bool is_compiling = false;
             public bool is_building_player = false;
             public bool has_unsaved_changes = false;
+            public string active_stage_kind = string.Empty;
+            public string active_scene_path = string.Empty;
+            public string active_scene_name = string.Empty;
+            public string prefab_stage_asset_path = string.Empty;
+            public string prefab_stage_root_name = string.Empty;
+            public bool prefab_stage_is_dirty = false;
+            public EditorSceneStatus[] open_scenes = Array.Empty<EditorSceneStatus>();
+        }
+
+
+        [Serializable]
+        public sealed class EditorSceneStatus
+        {
+            public string path = string.Empty;
+            public string name = string.Empty;
+            public bool is_dirty = false;
+        }
+
+        [Serializable]
+        public sealed class EditorOperatorContext
+        {
+            public string project_root = string.Empty;
+            public string bridge_session_id = string.Empty;
+            public string bridge_instance_id = string.Empty;
+            public string bridge_version = BridgeVersion;
+            public string plugin_version = BridgeVersion;
         }
 
         [Serializable]
@@ -201,12 +229,16 @@ namespace PrefabSentinel
             public bool active_self = false;
             public bool active_in_hierarchy = false;
             public string bounds_source = string.Empty;
+            public string bounds_policy = string.Empty;
             public string target_mode = string.Empty;
             public string projection = string.Empty;
             public float[] ui_normal = null;
             public bool include_children = false;
             public int contributor_count = 0;
+            public int excluded_count = 0;
             public GeometryBoundsContributorEntry[] bounds_contributors =
+                Array.Empty<GeometryBoundsContributorEntry>();
+            public GeometryBoundsContributorEntry[] excluded_renderers =
                 Array.Empty<GeometryBoundsContributorEntry>();
             public string target_path = string.Empty;
             public float distance = 0f;
@@ -469,6 +501,7 @@ namespace PrefabSentinel
             public string message = string.Empty;
             public EditorControlData data = new EditorControlData();
             public EditorControlDiagnostic[] diagnostics = Array.Empty<EditorControlDiagnostic>();
+            public EditorOperatorContext operator_context = new EditorOperatorContext();
         }
 
         // ── Entry Point ──
@@ -1337,8 +1370,114 @@ private static string DeriveTransportRequestId(string requestPath)
         /// shared with ``EditorStateSnapshot`` and the Python tool's
         /// ``editor_state`` field.
         /// </summary>
+private static EditorOperatorContext BuildEditorOperatorContext()
+        {
+            return new EditorOperatorContext
+            {
+                project_root = CurrentProjectRoot(),
+                bridge_session_id = BridgeSessionId,
+                bridge_instance_id = BridgeInstanceId,
+                bridge_version = BridgeVersion,
+                plugin_version = BridgeVersion,
+            };
+        }
+
+        private static string CurrentProjectRoot()
+        {
+            return Path.GetFullPath(Path.Combine(Application.dataPath, ".."))
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        }
+
+        private static EditorControlDiagnostic LimitedEditorStateDiagnostic(
+            string location,
+            Exception ex)
+        {
+            return new EditorControlDiagnostic
+            {
+                code = "EDITOR_STATE_ENUMERATION_LIMITED",
+                severity = "warning",
+                location = location,
+                detail = ex.Message,
+            };
+        }
+
+        private static EditorSceneStatus[] CollectOpenSceneStatuses(
+            List<EditorControlDiagnostic> diagnostics)
+        {
+            try
+            {
+                var scenes = new List<EditorSceneStatus>();
+                for (int i = 0; i < EditorSceneManager.sceneCount; i++)
+                {
+                    var scene = EditorSceneManager.GetSceneAt(i);
+                    scenes.Add(new EditorSceneStatus
+                    {
+                        path = scene.path ?? string.Empty,
+                        name = scene.name ?? string.Empty,
+                        is_dirty = scene.isDirty,
+                    });
+                }
+                return scenes.ToArray();
+            }
+            catch (Exception ex)
+            {
+                diagnostics.Add(LimitedEditorStateDiagnostic("open_scenes", ex));
+                return Array.Empty<EditorSceneStatus>();
+            }
+        }
+
+        private static void PopulateActiveSceneStatus(
+            EditorStateSnapshot snapshot,
+            List<EditorControlDiagnostic> diagnostics)
+        {
+            try
+            {
+                var activeScene = EditorSceneManager.GetActiveScene();
+                snapshot.active_scene_path = activeScene.path ?? string.Empty;
+                snapshot.active_scene_name = activeScene.name ?? string.Empty;
+            }
+            catch (Exception ex)
+            {
+                diagnostics.Add(LimitedEditorStateDiagnostic("active_scene", ex));
+            }
+        }
+
+        private static void PopulatePrefabStageStatus(
+            EditorStateSnapshot snapshot,
+            List<EditorControlDiagnostic> diagnostics)
+        {
+            try
+            {
+                var stage = PrefabStageUtility.GetCurrentPrefabStage();
+                if (EditorApplication.isPlayingOrWillChangePlaymode)
+                {
+                    snapshot.active_stage_kind = "play_mode";
+                }
+                else if (stage != null)
+                {
+                    snapshot.active_stage_kind = "prefab_stage";
+                    snapshot.prefab_stage_asset_path = stage.assetPath ?? string.Empty;
+                    snapshot.prefab_stage_root_name = stage.prefabContentsRoot != null
+                        ? stage.prefabContentsRoot.name
+                        : string.Empty;
+                    snapshot.prefab_stage_is_dirty = stage.scene.isDirty;
+                }
+                else
+                {
+                    snapshot.active_stage_kind = "scene";
+                }
+            }
+            catch (Exception ex)
+            {
+                diagnostics.Add(LimitedEditorStateDiagnostic("prefab_stage", ex));
+                if (string.IsNullOrEmpty(snapshot.active_stage_kind))
+                    snapshot.active_stage_kind = "scene";
+            }
+        }
+
         private static EditorControlResponse HandleGetEditorState()
         {
+            var diagnostics = new List<EditorControlDiagnostic>();
             var snapshot = new EditorStateSnapshot
             {
                 is_playing = EditorApplication.isPlaying,
@@ -1347,7 +1486,11 @@ private static string DeriveTransportRequestId(string requestPath)
                 is_building_player = BuildPipeline.isBuildingPlayer,
                 has_unsaved_changes = HasUnsavedEditorChanges(),
             };
-            return BuildSuccess(
+            PopulateActiveSceneStatus(snapshot, diagnostics);
+            PopulatePrefabStageStatus(snapshot, diagnostics);
+            snapshot.open_scenes = CollectOpenSceneStatuses(diagnostics);
+
+            var response = BuildSuccess(
                 "EDITOR_CTRL_EDITOR_STATE_OK",
                 "Editor state snapshot captured.",
                 new EditorControlData
@@ -1355,6 +1498,9 @@ private static string DeriveTransportRequestId(string requestPath)
                     executed = true,
                     editor_state = snapshot,
                 });
+            response.diagnostics = diagnostics.ToArray();
+            if (diagnostics.Count > 0) response.severity = "warning";
+            return response;
         }
 
         /// <summary>
@@ -1390,7 +1536,8 @@ private static string DeriveTransportRequestId(string requestPath)
                 severity = "info",
                 code = code,
                 message = message,
-                data = data ?? new EditorControlData { executed = true }
+                data = data ?? new EditorControlData { executed = true },
+                operator_context = BuildEditorOperatorContext()
             };
         }
 
@@ -1403,7 +1550,8 @@ private static string DeriveTransportRequestId(string requestPath)
                 severity = "error",
                 code = code,
                 message = message,
-                data = new EditorControlData()
+                data = new EditorControlData(),
+                operator_context = BuildEditorOperatorContext()
             };
         }
 
@@ -1416,7 +1564,8 @@ private static string DeriveTransportRequestId(string requestPath)
                 severity = "error",
                 code = code,
                 message = message,
-                data = data
+                data = data,
+                operator_context = BuildEditorOperatorContext()
             };
         }
 

@@ -12,10 +12,11 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, call, patch
 
+import prefab_sentinel.editor_bridge as editor_bridge
 from prefab_sentinel.contracts import Severity, ToolResponse
 from prefab_sentinel.diagnostics_baseline import DiagnosticsBaseline
-from prefab_sentinel.mcp_helpers import KNOWLEDGE_URI_PREFIX
-from prefab_sentinel.mcp_server import _resolve_knowledge_dir, create_server
+from prefab_sentinel.editor_bridge import BRIDGE_WATCH_DIR_ENV, PROTOCOL_VERSION
+from prefab_sentinel.mcp_server import create_server
 from prefab_sentinel.mcp_validation import require_change_reason
 from prefab_sentinel.session import ProjectSession
 from prefab_sentinel.symbol_tree_builder import build_symbol_tree
@@ -2382,8 +2383,8 @@ class TestFindReferencingAssetsDirectPayload(unittest.TestCase):
         mock_step = ToolResponse(
             success=False,
             severity=Severity.ERROR,
-            code="REF_ERR",
-            message="Scope not found",
+            code="REF404",
+            message="Scope path status could not be read.",
             data={},
             diagnostics=[],
         )
@@ -2395,7 +2396,11 @@ class TestFindReferencingAssetsDirectPayload(unittest.TestCase):
                     "find_referencing_assets",
                     {"asset_or_guid": "x" * 32},
                 ))
-            self.assertIn("Scope not found", str(ctx.exception))
+            message = str(ctx.exception)
+            self.assertIn("REF404", message)
+            self.assertIn("Scope path status could not be read.", message)
+            self.assertNotIn("PermissionError", message)
+            self.assertNotIn("OSError", message)
 
 
 class TestEditorReadOnlyTools(unittest.TestCase):
@@ -2470,13 +2475,21 @@ class TestEditorReadOnlyTools(unittest.TestCase):
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_frame", {"zoom": 2.5}))
-        mock_send.assert_called_once_with(action="frame_selected", zoom=2.5)
+        mock_send.assert_called_once_with(
+            action="frame_selected",
+            zoom=2.5,
+            bounds_policy="all_visible_renderers",
+        )
 
     def test_editor_frame_defaults(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_frame", {}))
-        mock_send.assert_called_once_with(action="frame_selected", zoom=0.0)
+        mock_send.assert_called_once_with(
+            action="frame_selected",
+            zoom=0.0,
+            bounds_policy="all_visible_renderers",
+        )
 
     def test_editor_frame_preserves_bounds_payload(self) -> None:
         """Issue #115 — Python continuous-integration coverage for the
@@ -4551,19 +4564,19 @@ class TestPatchApplyTool(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# activate_project suggested_reads
+# activate_project batch scope
 # ---------------------------------------------------------------------------
 
 
-class TestActivateProjectSuggestedReads(unittest.TestCase):
-    """activate_project response includes suggested_reads."""
+class TestActivateProjectBatchScope(unittest.TestCase):
+    """activate_project exposes only the batch-scoped session payload."""
 
     @patch("prefab_sentinel.session_cache.collect_project_guid_index")
     @patch("prefab_sentinel.session_cache.build_script_name_map")
     @patch("prefab_sentinel.session_cache.Phase1Orchestrator")
     @patch("prefab_sentinel.session.resolve_scope_path")
     @patch("prefab_sentinel.session.find_project_root")
-    def test_response_contains_suggested_reads(
+    def test_response_omits_unscoped_knowledge_fields(
         self,
         mock_find: MagicMock,
         mock_resolve: MagicMock,
@@ -4577,34 +4590,12 @@ class TestActivateProjectSuggestedReads(unittest.TestCase):
         mock_guid.return_value = {}
         server = create_server()
         _, result = _run(server.call_tool("activate_project", {"scope": "Assets/MyScope"}))
-        self.assertIn("suggested_reads", result["data"])
-        self.assertIsInstance(result["data"]["suggested_reads"], list)
-        self.assertTrue(
-            any("prefab-sentinel" in r for r in result["data"]["suggested_reads"])
-        )
 
-    @patch("prefab_sentinel.session_cache.collect_project_guid_index")
-    @patch("prefab_sentinel.session_cache.build_script_name_map")
-    @patch("prefab_sentinel.session_cache.Phase1Orchestrator")
-    @patch("prefab_sentinel.session.resolve_scope_path")
-    @patch("prefab_sentinel.session.find_project_root")
-    def test_response_contains_knowledge_hint(
-        self,
-        mock_find: MagicMock,
-        mock_resolve: MagicMock,
-        mock_orch: MagicMock,
-        mock_build: MagicMock,
-        mock_guid: MagicMock,
-    ) -> None:
-        mock_find.return_value = Path("/unity")
-        mock_resolve.return_value = Path("/unity/Assets/MyScope")
-        mock_build.return_value = {}
-        mock_guid.return_value = {}
-        server = create_server()
-        _, result = _run(server.call_tool("activate_project", {"scope": "Assets/MyScope"}))
-        self.assertIn("knowledge_hint", result["data"])
-
-        self.assertIn(KNOWLEDGE_URI_PREFIX, result["data"]["knowledge_hint"])
+        self.assertEqual(True, result["success"], result)
+        self.assertNotIn("suggested_reads", result["data"])
+        self.assertNotIn("knowledge_hint", result["data"])
+        self.assertEqual("/unity", result["data"]["expected_project_root"])
+        self.assertEqual("/unity/Assets/MyScope", result["data"]["scope"])
 
 
 # ---------------------------------------------------------------------------
@@ -4612,153 +4603,145 @@ class TestActivateProjectSuggestedReads(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
-class TestKnowledgeDirResolution(unittest.TestCase):
-    """Issue #309 — ``_resolve_knowledge_dir`` prefers the wheel-bundled
-    ``_knowledge_files`` location, falls back to the source-tree
-    ``knowledge`` sibling, and yields ``None`` when neither is present.
-    The behavior mirrors ``deploy_bridge``'s plugin_tools resolution so
-    wheel-installed deployments expose every knowledge document and
-    source-tree checkouts continue to work unchanged.
-    """
-
-    def setUp(self) -> None:
-        self._tmp = Path(tempfile.mkdtemp())
-        self._pkg_dir = self._tmp / "prefab_sentinel"
-        self._pkg_dir.mkdir()
-
-    def tearDown(self) -> None:
-        shutil.rmtree(self._tmp, ignore_errors=True)
-
-    def test_resolver_prefers_bundled_when_both_present(self) -> None:
-        bundled = self._pkg_dir / "_knowledge_files"
-        bundled.mkdir()
-        sibling = self._tmp / "knowledge"
-        sibling.mkdir()
-
-        resolved = _resolve_knowledge_dir(self._pkg_dir)
-
-        self.assertEqual(bundled, resolved)
-
-    def test_resolver_falls_back_to_source_tree_when_bundled_absent(self) -> None:
-        sibling = self._tmp / "knowledge"
-        sibling.mkdir()
-
-        resolved = _resolve_knowledge_dir(self._pkg_dir)
-
-        self.assertEqual(sibling, resolved)
-
-    def test_resolver_returns_none_when_neither_candidate_exists(self) -> None:
-        resolved = _resolve_knowledge_dir(self._pkg_dir)
-
-        self.assertIsNone(resolved)
 
 
-class TestKnowledgeResourcesRegistrationFromResolvedDir(unittest.TestCase):
-    """K-4 / K-5: ``create_server`` registers one MCP resource per
-    markdown file under the resolved knowledge directory when a directory
-    was resolved, and registers zero knowledge resources without raising
-    when the resolver yields ``None``.
-    """
 
-    def setUp(self) -> None:
-        self._tmp = Path(tempfile.mkdtemp())
+class TestKnowledgeResourcesNotRegisteredForBatch(unittest.TestCase):
+    """The current issue batch does not publish knowledge MCP resources."""
 
-    def tearDown(self) -> None:
-        shutil.rmtree(self._tmp, ignore_errors=True)
+    def test_create_server_registers_no_knowledge_resources(self) -> None:
+        server = create_server()
+        resources = _run(server.list_resources())
 
-    def test_registers_one_resource_per_markdown_file(self) -> None:
-        knowledge_dir = self._tmp / "knowledge"
-        knowledge_dir.mkdir()
-        # Three deterministic markdown files; non-.md companions must
-        # not turn into MCP resources.
-        for name in ("alpha", "beta", "gamma"):
-            (knowledge_dir / f"{name}.md").write_text(
-                "---\ndescription: test\n---\n# body\n",
-                encoding="utf-8",
-            )
-        (knowledge_dir / "ignored.txt").write_text("noise", encoding="utf-8")
-        # The ``with patch(...)`` context manager replaces the
-        # module-level binding with a real ``Path`` for the duration of
-        # the call; the registration loop calls ``glob`` on it which
-        # must walk the temporary tree.
-        with patch("prefab_sentinel.mcp_server._KNOWLEDGE_DIR", knowledge_dir):
-            server = create_server()
-            resources = _run(server.list_resources())
-
-        knowledge_uris = [
-            str(r.uri) for r in resources if "knowledge/" in str(r.uri)
-        ]
-
-        self.assertEqual(
-            sorted([
-                f"{KNOWLEDGE_URI_PREFIX}alpha.md",
-                f"{KNOWLEDGE_URI_PREFIX}beta.md",
-                f"{KNOWLEDGE_URI_PREFIX}gamma.md",
-            ]),
-            sorted(knowledge_uris),
-        )
-
-    def test_registers_zero_resources_when_resolver_returns_none(self) -> None:
-        with patch("prefab_sentinel.mcp_server._KNOWLEDGE_DIR", None):
-            server = create_server()
-            resources = _run(server.list_resources())
-
-        knowledge_uris = [
-            str(r.uri) for r in resources if "knowledge/" in str(r.uri)
-        ]
+        knowledge_uris = [str(r.uri) for r in resources if "knowledge/" in str(r.uri)]
         self.assertEqual([], knowledge_uris)
 
 
-class TestKnowledgeResources(unittest.TestCase):
-    """knowledge/*.md files are registered as MCP Resources."""
+class TestExpectedRootProviderLifespan(unittest.TestCase):
+    """Session lifespan owns the bridge expected-root guard."""
 
-    def test_resources_registered(self) -> None:
-        """At least one knowledge resource is registered."""
-        server = create_server()
-        resources = _run(server.list_resources())
-        uris = [r.uri for r in resources]
-        knowledge_uris = [u for u in uris if "knowledge/" in str(u)]
-        self.assertGreater(len(knowledge_uris), 0)
+    def _send_with_fake_response(
+        self,
+        response_payload: dict[str, object],
+    ) -> tuple[dict[str, object], str]:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            watch_dir = Path(tmpdir)
+            seen_request_id: dict[str, str] = {}
+            responder_errors: list[BaseException] = []
 
-    def test_resource_uri_scheme(self) -> None:
-        """All knowledge resources use the expected URI scheme."""
+            import threading
 
-        server = create_server()
-        resources = _run(server.list_resources())
-        for r in resources:
-            uri_str = str(r.uri)
-            if "knowledge/" in uri_str:
-                self.assertTrue(
-                    uri_str.startswith(KNOWLEDGE_URI_PREFIX),
-                    f"Unexpected URI: {uri_str}",
+            request_ready = threading.Condition()
+            observed_request: dict[str, Path] = {}
+            original_rename = Path.rename
+
+            def notifying_rename(self_path: Path, target: str | Path) -> Path:
+                renamed_path = original_rename(self_path, target)
+                target_path = Path(target)
+                if target_path.parent == watch_dir and target_path.name.endswith(
+                    ".request.json"
+                ):
+                    with request_ready:
+                        observed_request["path"] = target_path
+                        request_ready.notify_all()
+                return renamed_path
+
+            def fake_send() -> None:
+                with request_ready:
+                    request_seen = request_ready.wait_for(
+                        lambda: "path" in observed_request,
+                        timeout=2,
+                    )
+                if not request_seen:
+                    responder_errors.append(
+                        AssertionError("Expected request file before fake Unity response")
+                    )
+                    return
+
+                request_file = observed_request["path"]
+                request_id = request_file.name.removesuffix(".request.json")
+                seen_request_id["value"] = request_id
+                response = dict(response_payload)
+                response.setdefault("protocol_version", PROTOCOL_VERSION)
+                (watch_dir / f"{request_id}.response.json").write_text(
+                    json.dumps(response),
+                    encoding="utf-8",
                 )
-                self.assertTrue(uri_str.endswith(".md"), f"Not .md: {uri_str}")
 
-    def test_resource_read_returns_content(self) -> None:
-        """Reading a knowledge resource returns non-empty markdown text."""
-        server = create_server()
-        resources = _run(server.list_resources())
-        knowledge_resources = [
-            r for r in resources if "knowledge/" in str(r.uri)
-        ]
-        self.assertGreater(len(knowledge_resources), 0)
-        # Read the first one
-        uri = str(knowledge_resources[0].uri)
-        content = _run(server.read_resource(uri))
-        # content is a list with one item (text or blob)
-        text = content[0].content if hasattr(content[0], "content") else str(content[0])
-        self.assertGreater(len(text), 0)
-
-    def test_resource_has_description(self) -> None:
-        """Each knowledge resource has a non-empty description."""
-        server = create_server()
-        resources = _run(server.list_resources())
-        for r in resources:
-            if "knowledge/" in str(r.uri):
-                self.assertTrue(
-                    r.description and len(r.description) > 0,
-                    f"Missing description for {r.uri}",
+            with (
+                patch.dict(os.environ, {BRIDGE_WATCH_DIR_ENV: tmpdir}, clear=False),
+                patch.object(Path, "rename", notifying_rename),
+            ):
+                t = threading.Thread(target=fake_send)
+                t.start()
+                result = editor_bridge.send_action(
+                    action="get_editor_state",
+                    timeout_sec=5,
                 )
+                t.join()
+
+        self.assertEqual([], responder_errors)
+        return result, seen_request_id["value"]
+
+    def _successful_editor_state(self, actual_root: str) -> dict[str, object]:
+        return {
+            "success": True,
+            "severity": "info",
+            "code": "EDITOR_CTRL_STATE_OK",
+            "message": "Editor state captured",
+            "data": {},
+            "diagnostics": [],
+            "operator_context": {"project_root": actual_root},
+        }
+
+    def _clear_provider_for_failed_red_run(self) -> None:
+        editor_bridge._set_expected_project_root_provider(None)
+
+    def test_lifespan_session_root_guards_unannotated_bridge_action(self) -> None:
+        expected_root = "/workspace/ExpectedProject"
+        actual_root = "/workspace/OtherProject"
+
+        async def exercise() -> dict[str, object]:
+            server = create_server(project_root=expected_root)
+            async with server._mcp_server.lifespan(server):
+                result, _ = self._send_with_fake_response(
+                    self._successful_editor_state(actual_root)
+                )
+            return result
+
+        result = _run(exercise())
+
+        self.assertEqual(False, result["success"], result)
+        self.assertEqual("EDITOR_BRIDGE_PROJECT_ROOT_MISMATCH", result["code"])
+        self.assertEqual(expected_root, result["data"]["expected_project_root"])
+        self.assertEqual(actual_root, result["data"]["actual_project_root"])
+
+    def test_lifespan_clears_expected_root_before_shutdown(self) -> None:
+        expected_root = "/workspace/ExpectedProject"
+        actual_root = "/workspace/OtherProject"
+
+        async def fail_shutdown(_session: ProjectSession) -> None:
+            raise RuntimeError("shutdown failed")
+
+        async def exercise_failed_shutdown() -> None:
+            server = create_server(project_root=expected_root)
+            with patch("prefab_sentinel.session.ProjectSession.shutdown", fail_shutdown):
+                with self.assertRaisesRegex(RuntimeError, "shutdown failed"):
+                    async with server._mcp_server.lifespan(server):
+                        pass
+
+        _run(exercise_failed_shutdown())
+        try:
+            result, _ = self._send_with_fake_response(
+                self._successful_editor_state(actual_root)
+            )
+            self.assertEqual(True, result["success"], result)
+            self.assertEqual("EDITOR_CTRL_STATE_OK", result["code"])
+        finally:
+            self._clear_provider_for_failed_red_run()
+
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -4779,9 +4762,14 @@ class TestDeployBridgeCleanup(unittest.TestCase):
     def tearDown(self) -> None:
         shutil.rmtree(self._tmp, ignore_errors=True)
 
+    @staticmethod
+    def _mock_successful_refresh(mock_send: MagicMock) -> None:
+        mock_send.return_value = {"success": True}
+
     @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_removes_old_files_from_parent(self, _mock: MagicMock) -> None:
+    def test_removes_old_files_from_parent(self, mock_send: MagicMock) -> None:
         """Old PrefabSentinel.*.cs in parent dir are removed before deploy."""
+        self._mock_successful_refresh(mock_send)
         parent = self._target.parent
         old_cs = parent / "PrefabSentinel.EditorBridge.cs"
         old_meta = parent / "PrefabSentinel.EditorBridge.cs.meta"
@@ -4801,8 +4789,9 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertFalse(old_meta.exists())
 
     @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_no_old_files_no_removal(self, _mock: MagicMock) -> None:
+    def test_no_old_files_no_removal(self, mock_send: MagicMock) -> None:
         """When parent has no old files, removed_old_files is empty."""
+        self._mock_successful_refresh(mock_send)
         server = create_server(project_root=str(self._project_root))
         _, result = _run(server.call_tool(
             "deploy_bridge",
@@ -4813,8 +4802,9 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertEqual(result["data"]["removed_old_files"], [])
 
     @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_first_deploy_no_old_files(self, _mock: MagicMock) -> None:
+    def test_first_deploy_no_old_files(self, mock_send: MagicMock) -> None:
         """First deploy to a new path has no old files to clean up."""
+        self._mock_successful_refresh(mock_send)
         deep_target = self._project_root / "Assets" / "NewDir" / "SubDir" / "Bridge"
         server = create_server(project_root=str(self._project_root))
         _, result = _run(server.call_tool(
@@ -4826,8 +4816,9 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertEqual(result["data"]["removed_old_files"], [])
 
     @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_upload_handler_always_deployed(self, _mock: MagicMock) -> None:
+    def test_upload_handler_always_deployed(self, mock_send: MagicMock) -> None:
         """VRCSDKUploadHandler.cs is always copied unconditionally."""
+        self._mock_successful_refresh(mock_send)
         server = create_server(project_root=str(self._project_root))
         _, result = _run(server.call_tool(
             "deploy_bridge",
@@ -4839,8 +4830,9 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertTrue((self._target / "PrefabSentinel.VRCSDKUploadHandler.cs").exists())
 
     @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_asmdef_deployed(self, _mock: MagicMock) -> None:
+    def test_asmdef_deployed(self, mock_send: MagicMock) -> None:
         """PrefabSentinel.Editor.asmdef is copied alongside C# files."""
+        self._mock_successful_refresh(mock_send)
         server = create_server(project_root=str(self._project_root))
         _, result = _run(server.call_tool(
             "deploy_bridge",
@@ -4852,8 +4844,9 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertTrue((self._target / "PrefabSentinel.Editor.asmdef").exists())
 
     @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_no_skipped_files_in_response(self, _mock: MagicMock) -> None:
+    def test_no_skipped_files_in_response(self, mock_send: MagicMock) -> None:
         """Response data must not contain skipped_files key."""
+        self._mock_successful_refresh(mock_send)
         server = create_server(project_root=str(self._project_root))
         _, result = _run(server.call_tool(
             "deploy_bridge",
@@ -4864,8 +4857,9 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertNotIn("skipped_files", result["data"])
 
     @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_diagnostics_warn_on_old_file_removal(self, _mock: MagicMock) -> None:
+    def test_diagnostics_warn_on_old_file_removal(self, mock_send: MagicMock) -> None:
         """Diagnostics include warning when old files are removed."""
+        self._mock_successful_refresh(mock_send)
         parent = self._target.parent
         (parent / "PrefabSentinel.EditorBridge.cs").write_text("// old", encoding="utf-8")
 
@@ -4879,8 +4873,32 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertTrue(any("old Bridge" in d["message"] for d in warnings))
 
     @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_clean_redeploy_removes_all_target_files(self, _mock: MagicMock) -> None:
+    def test_cleanup_warning_sets_success_envelope_severity(
+        self,
+        mock_send: MagicMock,
+    ) -> None:
+        self._mock_successful_refresh(mock_send)
+        parent = self._target.parent
+        (parent / "PrefabSentinel.Legacy.cs").write_text("// old", encoding="utf-8")
+
+        server = create_server(project_root=str(self._project_root))
+        _, result = _run(server.call_tool(
+            "deploy_bridge",
+            {"target_dir": str(self._target)},
+        ))
+
+        self.assertTrue(result["success"])
+        self.assertEqual("warning", result["severity"])
+        warnings = [d for d in result["diagnostics"] if d["severity"] == "warning"]
+        self.assertTrue(any(
+            d["code"] == "DEPLOY_REMOVED_OLD_BRIDGE_FILES"
+            for d in warnings
+        ))
+
+    @patch("prefab_sentinel.mcp_tools_session.send_action")
+    def test_clean_redeploy_removes_all_target_files(self, mock_send: MagicMock) -> None:
         """All pre-existing files in target_dir are removed before deploy."""
+        self._mock_successful_refresh(mock_send)
         (self._target / "Dummy.cs").write_text("// dummy", encoding="utf-8")
         (self._target / "Dummy.cs.meta").write_text("guid: dummy", encoding="utf-8")
 
@@ -4895,8 +4913,9 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertFalse((self._target / "Dummy.cs.meta").exists())
 
     @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_clean_redeploy_preserves_subdirectories(self, _mock: MagicMock) -> None:
+    def test_clean_redeploy_preserves_subdirectories(self, mock_send: MagicMock) -> None:
         """Subdirectories inside target_dir survive the clean phase."""
+        self._mock_successful_refresh(mock_send)
         subdir = self._target / "subdir"
         subdir.mkdir()
         (subdir / "keep.txt").write_text("keep", encoding="utf-8")
@@ -4913,8 +4932,9 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertIsInstance(result["data"]["removed_stale_files"], list)
 
     @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_removed_stale_files_in_response(self, _mock: MagicMock) -> None:
+    def test_removed_stale_files_in_response(self, mock_send: MagicMock) -> None:
         """Stale files removed during clean phase appear in response data."""
+        self._mock_successful_refresh(mock_send)
         (self._target / "OldFile.cs").write_text("// old", encoding="utf-8")
 
         server = create_server(project_root=str(self._project_root))
@@ -4927,8 +4947,9 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertIn("OldFile.cs", result["data"]["removed_stale_files"])
 
     @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_clean_redeploy_diagnostic_message(self, _mock: MagicMock) -> None:
+    def test_clean_redeploy_diagnostic_message(self, mock_send: MagicMock) -> None:
         """Clearing files produces an info diagnostic with 'Cleared' message."""
+        self._mock_successful_refresh(mock_send)
         (self._target / "Stale.cs").write_text("// stale", encoding="utf-8")
 
         server = create_server(project_root=str(self._project_root))
@@ -4941,8 +4962,9 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertTrue(any("Cleared" in d["message"] for d in infos))
 
     @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_first_deploy_empty_removed_stale(self, _mock: MagicMock) -> None:
+    def test_first_deploy_empty_removed_stale(self, mock_send: MagicMock) -> None:
         """First deploy to empty target_dir has empty removed_stale_files."""
+        self._mock_successful_refresh(mock_send)
         fresh_target = self._project_root / "Assets" / "Editor" / "FreshDeploy"
         server = create_server(project_root=str(self._project_root))
         _, result = _run(server.call_tool(
@@ -4954,8 +4976,31 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertEqual(result["data"]["removed_stale_files"], [])
 
     @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_uses_bridge_files_dir_when_available(self, _mock: MagicMock) -> None:
+    def test_returns_refresh_failure_envelope(self, mock_send: MagicMock) -> None:
+        """A failed post-copy refresh is the deploy result."""
+        refresh_failure = {
+            "success": False,
+            "severity": "error",
+            "code": "EDITOR_BRIDGE_PROJECT_ROOT_MISMATCH",
+            "message": "expected root did not match reached Unity project",
+            "data": {"action": "refresh_asset_database"},
+            "diagnostics": [],
+        }
+        mock_send.return_value = refresh_failure
+
+        server = create_server(project_root=str(self._project_root))
+        _, result = _run(server.call_tool(
+            "deploy_bridge",
+            {"target_dir": str(self._target)},
+        ))
+
+        mock_send.assert_called_once_with(action="refresh_asset_database")
+        self.assertEqual(refresh_failure, result)
+
+    @patch("prefab_sentinel.mcp_tools_session.send_action")
+    def test_uses_bridge_files_dir_when_available(self, mock_send: MagicMock) -> None:
         """When _bridge_files/ exists (wheel install), uses it over tools/unity/."""
+        self._mock_successful_refresh(mock_send)
         # Create _bridge_files in a temp dir and patch __file__ to point there
         fake_pkg = self._tmp / "fake_pkg" / "prefab_sentinel"
         fake_pkg.mkdir(parents=True)
@@ -4984,50 +5029,8 @@ class TestDeployBridgeCleanup(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# _extract_description
-# ---------------------------------------------------------------------------
 
 
-class TestExtractDescription(unittest.TestCase):
-    """_extract_description handles various frontmatter formats."""
-
-    def _extract(self, content: str) -> str:
-        """Write content to a temp file and extract description."""
-        with tempfile.NamedTemporaryFile(
-            suffix=".md", mode="w", delete=False, encoding="utf-8"
-        ) as f:
-            f.write(content)
-            f.flush()
-            path = Path(f.name)
-        try:
-            from prefab_sentinel.mcp_server import _extract_description
-            return _extract_description(path)
-        finally:
-            path.unlink(missing_ok=True)
-
-    def test_with_description_field(self) -> None:
-        content = "---\ntool: foo\ndescription: A helpful guide\n---\n# Title\n"
-        self.assertEqual("A helpful guide", self._extract(content))
-
-    def test_with_tool_field_only(self) -> None:
-        content = "---\ntool: liltoon\nversion_tested: 1.0\n---\n# Title\n"
-        self.assertEqual("liltoon knowledge", self._extract(content))
-
-    def test_no_frontmatter(self) -> None:
-        content = "# Just a markdown file\nSome content.\n"
-        result = self._extract(content)
-        # Returns the file stem (temp file name)
-        self.assertIsInstance(result, str)
-        self.assertGreater(len(result), 0)
-
-    def test_incomplete_frontmatter(self) -> None:
-        content = "---\ntool: broken\n# No closing delimiter\n"
-        result = self._extract(content)
-        self.assertIsInstance(result, str)
-
-    def test_quoted_values_stripped(self) -> None:
-        content = '---\ntool: "udonsharp"\n---\n# Title\n'
-        self.assertEqual("udonsharp knowledge", self._extract(content))
 
 
 class TestCopyAssetTool(unittest.TestCase):

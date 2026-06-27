@@ -168,7 +168,7 @@ namespace PrefabSentinel
             }
             catch (Exception ex)
             {
-                // Issue #195 / CLAUDE.md Unity rules: never swallow a
+                // Issue #195 / AGENTS.md Unity rules: never swallow a
                 // failure silently. The Python side always emits valid
                 // JSON via ``dump_json``, so reaching this branch means
                 // an unexpected Bridge input — log enough to diagnose.

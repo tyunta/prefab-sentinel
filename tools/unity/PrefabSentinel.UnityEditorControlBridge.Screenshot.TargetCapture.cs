@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using UnityEditor;
 using UnityEngine;
@@ -94,6 +95,10 @@ namespace PrefabSentinel
                     "SCREENSHOT_FIT_MODE_INVALID",
                     $"fit_mode='{request.fit_mode}' is not one of max_axis, both_axes.");
             }
+            if (!IsSupportedRendererBoundsPolicy(request.bounds_policy))
+            {
+                return BuildBoundsPolicyInvalidError(request.bounds_policy);
+            }
 
             if (ShouldUseWorldSpaceUiCapture(request, target, out EditorControlResponse uiUnsupported))
             {
@@ -125,7 +130,12 @@ namespace PrefabSentinel
                     + $"({string.Join(", ", ObjectCaptureFramingMath.PresetNames)}).");
             }
 
-            if (!TryResolveRendererFramingBounds(target, out Bounds aggregated, out _))
+            if (!TryResolveRendererFramingBounds(
+                target,
+                request.bounds_policy,
+                out Bounds aggregated,
+                out IList<ObjectCaptureFramingMath.RendererBoundsRecord> includedRecords,
+                out IList<ObjectCaptureFramingMath.RendererBoundsRecord> excludedRecords))
             {
                 return BuildError(
                     "EDITOR_CTRL_SCREENSHOT_TARGET_NO_RENDERERS",
@@ -260,8 +270,16 @@ namespace PrefabSentinel
                             width = readW,
                             height = readH,
                             executed = true,
+                            bounds_source = "renderer",
+                            bounds_policy = request.bounds_policy,
+                            target_mode = request.target_mode,
+                            projection = request.projection,
                             bounds_center = new float[] { c.x, c.y, c.z },
                             bounds_extents = new float[] { e.x, e.y, e.z },
+                            contributor_count = includedRecords.Count,
+                            excluded_count = excludedRecords.Count,
+                            bounds_contributors = ToContributorEntries(includedRecords),
+                            excluded_renderers = ToContributorEntries(excludedRecords),
                             crop_roi_applied = pixelRectApplied != null ? "pixel_rect" : string.Empty,
                             crop_bounds = pixelRectApplied,
                         });
@@ -289,12 +307,13 @@ namespace PrefabSentinel
             EditorControlRequest request)
         {
             if (request.target_mode != "auto"
+                && request.target_mode != "object"
                 && request.target_mode != "renderer"
                 && request.target_mode != "world_space_ui")
             {
                 return BuildError(
                     "SCREENSHOT_TARGET_MODE_INVALID",
-                    $"target_mode='{request.target_mode}' is not one of auto, renderer, world_space_ui.");
+                    $"target_mode='{request.target_mode}' is not one of auto, object, renderer, world_space_ui.");
             }
             if (request.projection != "auto"
                 && request.projection != "perspective"

@@ -52,7 +52,7 @@ after that run.
 Notes:
 
 - The "Threshold" column is the audited-module operational target documented
-  in `CLAUDE.md` ("Mutation testing 運用").
+  in `AGENTS.md` ("Mutation testing 運用").
 - A module that drops below its threshold relative to the prior quarter is
   raised as a regression bullet in §5 (Action items).
 - A module that rises above its threshold for two consecutive quarters is
@@ -134,7 +134,7 @@ suppression-impact analysis (§3), and the next quarterly run.
 ## 6. Glossary
 
 - **Audited module** — one of the six modules listed in §2 (also documented
-  in `TESTING.md` and `CLAUDE.md`).
+  in `TESTING.md` and `AGENTS.md`).
 - **Mutation score** — `(killed + timeout) / (killed + survived + timeout)`;
   `not_checked` mutants are excluded from the denominator.
 - **do_not_mutate entry** — entry in `[tool.mutmut].do_not_mutate`, evaluated
