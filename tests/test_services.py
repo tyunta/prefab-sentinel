@@ -26,6 +26,7 @@ from prefab_sentinel.services.serialized_object.before_cache import (
     UnresolvedReason,
 )
 from prefab_sentinel.services.serialized_object.patch_validator import validate_op
+from tests._typing_helpers import require_mapping, require_str
 from tests.bridge_test_helpers import write_file
 
 BASE_GUID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -494,7 +495,7 @@ PrefabInstance:
             service.preload_texts([prefab])
             self.assertIn(prefab, service._text_cache)
             text = service.read_text(prefab)
-            self.assertIn("m_Name: A", text)
+            self.assertIn("m_Name: A", require_str(text, "cached prefab text"))
 
     def test_collect_scope_files_invalidated(self) -> None:
         """After invalidation, re-walk picks up new files."""
@@ -5352,7 +5353,10 @@ class TestNumericComponentWarning(unittest.TestCase):
             )
             fileid_diags = [d for d in response.diagnostics if d.detail == "likely_fileid"]
             self.assertEqual(len(fileid_diags), 1)
-            self.assertIn("type name", fileid_diags[0].evidence)
+            self.assertIn(
+                "type name",
+                require_str(fileid_diags[0].evidence, "diagnostic evidence"),
+            )
 
     def test_negative_numeric_also_warns(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -5362,12 +5366,15 @@ class TestNumericComponentWarning(unittest.TestCase):
             prefab.write_text("%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Root\n")
 
             svc = SerializedObjectService(project_root=project_root)
-            diagnostics: list = []
-            result = validate_op(
-                svc,
-                "Assets/Test.prefab", 0,
-                {"op": "set", "component": "-42", "path": "m_IsActive", "value": 1},
-                diagnostics,
+            diagnostics: list[Diagnostic] = []
+            result = require_mapping(
+                validate_op(
+                    svc,
+                    "Assets/Test.prefab", 0,
+                    {"op": "set", "component": "-42", "path": "m_IsActive", "value": 1},
+                    diagnostics,
+                ),
+                "validate_op result",
             )
             fileid_diags = [d for d in diagnostics if d.detail == "likely_fileid"]
             self.assertEqual(len(fileid_diags), 1)
@@ -5387,12 +5394,15 @@ class TestNumericComponentWarning(unittest.TestCase):
             prefab.write_text("%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Root\n")
 
             svc = SerializedObjectService(project_root=project_root)
-            diagnostics: list = []
-            result = validate_op(
-                svc,
-                "Assets/Test.prefab", 0,
-                {"op": "set", "component": "SkinnedMeshRenderer", "path": "m_IsActive", "value": 1},
-                diagnostics,
+            diagnostics: list[Diagnostic] = []
+            result = require_mapping(
+                validate_op(
+                    svc,
+                    "Assets/Test.prefab", 0,
+                    {"op": "set", "component": "SkinnedMeshRenderer", "path": "m_IsActive", "value": 1},
+                    diagnostics,
+                ),
+                "validate_op result",
             )
             fileid_diags = [d for d in diagnostics if d.detail == "likely_fileid"]
             self.assertEqual(len(fileid_diags), 0)
@@ -5428,14 +5438,27 @@ class TestBeforeValueResolution(unittest.TestCase):
         meta.write_text("guid: cccccccccccccccccccccccccccccccc\n")
         return project_root
 
+    def _validate_op(
+        self,
+        svc: SerializedObjectService,
+        target: str,
+        index: int,
+        op: dict[str, Any],
+        diagnostics: list[Diagnostic],
+    ) -> dict[str, Any]:
+        return require_mapping(
+            validate_op(svc, target, index, op, diagnostics),
+            "validate_op result",
+        )
+
     def test_before_shows_existing_override_value(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project_root = self._make_variant(tmp)
             pv = PrefabVariantService(project_root=project_root)
             svc = SerializedObjectService(project_root=project_root, prefab_variant=pv)
 
-            diagnostics: list = []
-            result = validate_op(
+            diagnostics: list[Diagnostic] = []
+            result = self._validate_op(
                 svc,
                 "Assets/Variant.prefab",
                 0,
@@ -5445,7 +5468,10 @@ class TestBeforeValueResolution(unittest.TestCase):
             # The before value should be the objectReference from the override
             self.assertNotIsInstance(result["before"], UnresolvedReason)
             # Should contain the GUID reference
-            self.assertIn("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", result["before"])
+            self.assertIn(
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                require_str(result["before"], "before value"),
+            )
 
     def test_before_shows_base_default_for_unoverridden_property(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -5453,8 +5479,8 @@ class TestBeforeValueResolution(unittest.TestCase):
             pv = PrefabVariantService(project_root=project_root)
             svc = SerializedObjectService(project_root=project_root, prefab_variant=pv)
 
-            diagnostics: list = []
-            result = validate_op(
+            diagnostics: list[Diagnostic] = []
+            result = self._validate_op(
                 svc,
                 "Assets/Variant.prefab",
                 0,
@@ -5468,8 +5494,8 @@ class TestBeforeValueResolution(unittest.TestCase):
             project_root = self._make_variant(tmp)
             svc = SerializedObjectService(project_root=project_root)
 
-            diagnostics: list = []
-            result = validate_op(
+            diagnostics: list[Diagnostic] = []
+            result = self._validate_op(
                 svc,
                 "Assets/Variant.prefab",
                 0,
@@ -5489,8 +5515,8 @@ class TestBeforeValueResolution(unittest.TestCase):
             pv = PrefabVariantService(project_root=project_root)
             svc = SerializedObjectService(project_root=project_root, prefab_variant=pv)
 
-            diagnostics: list = []
-            result = validate_op(
+            diagnostics: list[Diagnostic] = []
+            result = self._validate_op(
                 svc,
                 "Assets/Base.prefab",
                 0,
@@ -5582,6 +5608,19 @@ class TestChainBeforeValueResolution(unittest.TestCase):
 
         return project_root
 
+    def _validate_op(
+        self,
+        svc: SerializedObjectService,
+        target: str,
+        index: int,
+        op: dict[str, Any],
+        diagnostics: list[Diagnostic],
+    ) -> dict[str, Any]:
+        return require_mapping(
+            validate_op(svc, target, index, op, diagnostics),
+            "validate_op result",
+        )
+
     def test_chain_resolves_parent_override(self) -> None:
         """Property overridden in parent variant is found via chain walk."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -5590,7 +5629,7 @@ class TestChainBeforeValueResolution(unittest.TestCase):
             svc = SerializedObjectService(project_root=project_root, prefab_variant=pv)
 
             diagnostics: list = []
-            result = validate_op(
+            result = self._validate_op(
                 svc,
                 "Assets/Leaf.prefab",
                 0,
@@ -5598,7 +5637,10 @@ class TestChainBeforeValueResolution(unittest.TestCase):
                 diagnostics,
             )
             # data[0] is overridden in Mid variant -> should find that value
-            self.assertIn("33333333333333333333333333333333", result["before"])
+            self.assertIn(
+                "33333333333333333333333333333333",
+                require_str(result["before"], "before value"),
+            )
 
     def test_chain_resolves_leaf_override(self) -> None:
         """Property overridden in the leaf variant itself takes precedence."""
@@ -5608,7 +5650,7 @@ class TestChainBeforeValueResolution(unittest.TestCase):
             svc = SerializedObjectService(project_root=project_root, prefab_variant=pv)
 
             diagnostics: list = []
-            result = validate_op(
+            result = self._validate_op(
                 svc,
                 "Assets/Leaf.prefab",
                 0,
@@ -5616,7 +5658,10 @@ class TestChainBeforeValueResolution(unittest.TestCase):
                 diagnostics,
             )
             # data[1] is overridden in the Leaf itself -> should find that value
-            self.assertIn("44444444444444444444444444444444", result["before"])
+            self.assertIn(
+                "44444444444444444444444444444444",
+                require_str(result["before"], "before value"),
+            )
 
     def test_chain_resolves_base_prefab_value(self) -> None:
         """Property not overridden in any variant is read from the base prefab."""
@@ -5626,7 +5671,7 @@ class TestChainBeforeValueResolution(unittest.TestCase):
             svc = SerializedObjectService(project_root=project_root, prefab_variant=pv)
 
             diagnostics: list = []
-            result = validate_op(
+            result = self._validate_op(
                 svc,
                 "Assets/Leaf.prefab",
                 0,
@@ -5652,7 +5697,7 @@ class TestChainBeforeValueResolution(unittest.TestCase):
             svc = SerializedObjectService(project_root=project_root, prefab_variant=pv)
 
             diagnostics: list = []
-            result = validate_op(
+            result = self._validate_op(
                 svc,
                 "Assets/Orphan.prefab",
                 0,
@@ -5701,7 +5746,10 @@ class TestChainBeforeValueResolution(unittest.TestCase):
             values = pv.resolve_chain_values("Assets/Top.prefab")
 
             # Top overrides data[0] -> should shadow Mid's override
-            self.assertIn("55555555555555555555555555555555", values["42:m_Materials.Array.data[0]"])
+            self.assertIn(
+                "55555555555555555555555555555555",
+                values["42:m_Materials.Array.data[0]"],
+            )
 
     # ----- Type-name lookup paths (component addressed by Unity type name) -----
 
@@ -5717,7 +5765,7 @@ class TestChainBeforeValueResolution(unittest.TestCase):
                 project_root=project_root, prefab_variant=pv
             )
 
-            by_id = validate_op(
+            by_id = self._validate_op(
                 svc_by_id,
                 "Assets/Leaf.prefab",
                 0,
@@ -5725,7 +5773,7 @@ class TestChainBeforeValueResolution(unittest.TestCase):
                  "path": "m_Materials.Array.data[0]", "value": "x"},
                 [],
             )
-            by_name = validate_op(
+            by_name = self._validate_op(
                 svc_by_name,
                 "Assets/Leaf.prefab",
                 0,
@@ -5773,7 +5821,7 @@ class TestChainBeforeValueResolution(unittest.TestCase):
             pv = PrefabVariantService(project_root=project_root)
             svc = SerializedObjectService(project_root=project_root, prefab_variant=pv)
 
-            result = validate_op(
+            result = self._validate_op(
                 svc,
                 "Assets/Leaf.prefab",
                 0,
@@ -5791,7 +5839,7 @@ class TestChainBeforeValueResolution(unittest.TestCase):
             pv = PrefabVariantService(project_root=project_root)
             svc = SerializedObjectService(project_root=project_root, prefab_variant=pv)
 
-            result = validate_op(
+            result = self._validate_op(
                 svc,
                 "Assets/Leaf.prefab",
                 0,

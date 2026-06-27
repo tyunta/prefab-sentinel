@@ -7,7 +7,7 @@ import json
 import os
 import unittest
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from prefab_sentinel.mcp_server import create_server
 
@@ -168,6 +168,7 @@ class McpSmokeExternalTests(unittest.TestCase):
     """
 
     server: Any
+    project_root: ClassVar[str]
 
     @classmethod
     def setUpClass(cls) -> None:

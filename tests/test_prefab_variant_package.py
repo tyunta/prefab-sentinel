@@ -29,6 +29,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 
 import prefab_sentinel.services.prefab_variant as prefab_variant_pkg
 from prefab_sentinel.services.prefab_variant import PrefabVariantService
@@ -43,6 +44,7 @@ from prefab_sentinel.services.prefab_variant.service import (
     PrefabVariantService as _ServicePrefabVariantService,
 )
 from tests._assertion_helpers import assert_error_envelope
+from tests._typing_helpers import require_list, require_mapping
 from tests.bridge_test_helpers import write_file
 
 _BASE_GUID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -154,14 +156,15 @@ class OverrideEntryDiscriminantTests(unittest.TestCase):
 class ListOverridesResponseShapeTests(unittest.TestCase):
     """End-to-end pinning of the override entry payload returned by ``list_overrides``."""
 
-    def _list_overrides_payload(self, modifications: str) -> list[dict]:
+    def _list_overrides_payload(self, modifications: str) -> list[dict[str, Any]]:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             target = _write_variant(root, modifications)
             svc = PrefabVariantService(project_root=root)
             response = svc.list_overrides(target)
         self.assertTrue(response.success, response)
-        return response.data["overrides"]
+        overrides = require_list(response.data["overrides"], "overrides")
+        return [require_mapping(entry, "override entry") for entry in overrides]
 
     # Each row drives one ``list_overrides`` call against a one-line
     # modifications block whose ``propertyPath`` / value / reference

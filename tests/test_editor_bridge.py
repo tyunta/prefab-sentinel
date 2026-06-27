@@ -8,6 +8,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 from prefab_sentinel.editor_bridge import (
@@ -20,6 +21,7 @@ from prefab_sentinel.editor_bridge import (
 )
 from prefab_sentinel.editor_bridge_builders import build_create_empty_kwargs, build_set_camera_kwargs
 from prefab_sentinel.unity_assets_path import resolve_asset_path
+from tests._typing_helpers import require_mapping
 
 
 class TestCheckEditorBridgeEnv(unittest.TestCase):
@@ -262,7 +264,7 @@ class BridgeProjectRootMismatchTests(unittest.TestCase):
         response_payload: dict[str, object],
         *,
         expected_project_root: str | None | object = _OMIT_EXPECTED_ROOT,
-    ) -> tuple[dict[str, object], str]:
+    ) -> tuple[dict[str, Any], str]:
         with tempfile.TemporaryDirectory() as tmpdir:
             watch_dir = Path(tmpdir)
             seen_request_id: dict[str, str] = {}
@@ -310,20 +312,24 @@ class BridgeProjectRootMismatchTests(unittest.TestCase):
                 )
                 tmp_response_file.rename(response_file)
 
-            kwargs: dict[str, object] = {
-                "action": "get_editor_state",
-                "timeout_sec": 5,
-            }
-            if expected_project_root is not self._OMIT_EXPECTED_ROOT:
-                kwargs["expected_project_root"] = expected_project_root
-
             with (
                 patch.dict(os.environ, {BRIDGE_WATCH_DIR_ENV: tmpdir}, clear=False),
                 patch.object(Path, "rename", notifying_rename),
             ):
                 t = threading.Thread(target=fake_send)
                 t.start()
-                result = send_action(**kwargs)
+                if expected_project_root is self._OMIT_EXPECTED_ROOT:
+                    result = send_action(action="get_editor_state", timeout_sec=5)
+                else:
+                    if not isinstance(expected_project_root, str):
+                        raise AssertionError(
+                            "expected_project_root must be a string when provided"
+                        )
+                    result = send_action(
+                        action="get_editor_state",
+                        timeout_sec=5,
+                        expected_project_root=expected_project_root,
+                    )
                 t.join()
 
         self.assertEqual([], responder_errors)
@@ -354,12 +360,13 @@ class BridgeProjectRootMismatchTests(unittest.TestCase):
         self.assertEqual("error", result["severity"])
         self.assertIn(expected_root, result["message"])
         self.assertIn(actual_root, result["message"])
-        self.assertEqual("get_editor_state", result["data"]["action"])
-        self.assertEqual(request_id, result["data"]["request_id"])
-        self.assertEqual(expected_root, result["data"]["expected_project_root"])
-        self.assertEqual(actual_root, result["data"]["actual_project_root"])
-        self.assertEqual("bridge-session-1", result["data"]["bridge_session_id"])
-        self.assertEqual("bridge-instance-1", result["data"]["bridge_instance_id"])
+        data = require_mapping(result["data"], "mismatch data")
+        self.assertEqual("get_editor_state", data["action"])
+        self.assertEqual(request_id, data["request_id"])
+        self.assertEqual(expected_root, data["expected_project_root"])
+        self.assertEqual(actual_root, data["actual_project_root"])
+        self.assertEqual("bridge-session-1", data["bridge_session_id"])
+        self.assertEqual("bridge-instance-1", data["bridge_instance_id"])
 
     def test_expected_root_requires_actual_root_identity(self) -> None:
         expected_root = "/workspace/ExpectedProject"
@@ -383,9 +390,10 @@ class BridgeProjectRootMismatchTests(unittest.TestCase):
         self.assertEqual("EDITOR_BRIDGE_PROJECT_ROOT_MISMATCH", result["code"])
         self.assertIn("actual Unity project root", result["message"])
         self.assertIn(expected_root, result["message"])
-        self.assertEqual(request_id, result["data"]["request_id"])
-        self.assertEqual(expected_root, result["data"]["expected_project_root"])
-        self.assertNotIn("actual_project_root", result["data"])
+        data = require_mapping(result["data"], "mismatch data")
+        self.assertEqual(request_id, data["request_id"])
+        self.assertEqual(expected_root, data["expected_project_root"])
+        self.assertNotIn("actual_project_root", data)
 
     def test_matching_project_root_preserves_success_payload(self) -> None:
         expected_root = "/workspace/ExpectedProject"
@@ -409,8 +417,12 @@ class BridgeProjectRootMismatchTests(unittest.TestCase):
         self.assertEqual(True, result["success"], result)
         self.assertEqual("EDITOR_CTRL_STATE_OK", result["code"])
         self.assertEqual(request_id, result["request_id"])
-        self.assertEqual(expected_root, result["operator_context"]["project_root"])
-        self.assertEqual(False, result["data"]["is_playing"])
+        operator_context = require_mapping(
+            result["operator_context"], "operator context"
+        )
+        data = require_mapping(result["data"], "success data")
+        self.assertEqual(expected_root, operator_context["project_root"])
+        self.assertEqual(False, data["is_playing"])
 
 
 

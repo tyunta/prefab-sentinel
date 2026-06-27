@@ -25,6 +25,8 @@ from unittest import mock
 
 import pytest
 
+from tests._typing_helpers import load_json_object
+
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _TOOLS_DIR = _PROJECT_ROOT / "tools"
 _PATCH_BRIDGE_PATH = _TOOLS_DIR / "unity_patch_bridge.py"
@@ -65,7 +67,7 @@ def _invoke_main(stdin_text: str, env: dict[str, str]) -> dict[str, Any]:
     # The bridge writes one JSON envelope per request; the failure
     # paths under test exit before secondary writes, so the first line
     # is the response of interest.
-    return json.loads(raw[0])
+    return load_json_object(raw[0], "patch bridge response")
 
 
 class TestPatchBridgeWireCodeRegression(unittest.TestCase):

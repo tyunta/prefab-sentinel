@@ -205,10 +205,13 @@ class CsharpHarnessCollectionSkipTests(unittest.TestCase):
 
 | job | トリガ | 内容 |
 |-----|--------|------|
-| `lint` | 全 push / PR | `ruff check` → `mypy` → モジュール行数ゲート（`scripts/check_module_line_limits.py`） |
-| `unit-tests` | 全 push / PR | `uv sync --extra test --extra mcp` → `uv run python scripts/run_unit_tests.py` |
-| `changes` | 全 push / PR | `tools/unity/**` / `tests/csharp/**` / `global.json` / `ci.yml` 自身の変更を `dorny/paths-filter@v3` で検出し、`csharp` 出力フラグを立てる |
-| `csharp-tests` | `changes.outputs.csharp == 'true'` のみ起動 | `.NET SDK setup`（`global.json` で pin）→ `dotnet restore --locked-mode` → `dotnet build --no-restore --configuration Release` → `dotnet test --no-build` で `tests/csharp/` の sanity Fact を実行 |
+| `lint` | 全 push / PR / manual / weekly | `ruff check` → production-only `mypy prefab_sentinel/` → モジュール行数ゲート（`scripts/check_module_line_limits.py`） |
+| `typecheck-tests` | 全 push / PR / manual / weekly | `uv sync --extra lint --extra test --extra mcp` → full test-target `uv run mypy prefab_sentinel tests --show-error-codes` |
+| `unit-tests` | 全 push / PR / manual / weekly | `uv sync --extra test --extra mcp` → `uv run python scripts/run_unit_tests.py` |
+| `changes` | 全 push / PR / manual / weekly | `tools/unity/**` / `tests/csharp/**` / `global.json` / `ci.yml` 自身の変更を `dorny/paths-filter@v3` で検出し、`csharp` 出力フラグを立てる |
+| `csharp-tests` | `changes.outputs.csharp == 'true'` または manual | `.NET SDK setup`（`global.json` で pin）→ `dotnet restore --locked-mode` → `dotnet build --no-restore --configuration Release` → `dotnet test --no-build` で `tests/csharp/` の sanity Fact を実行 |
+
+Full test-target mypy は test 依存と MCP 依存も含むため、pre-commit には入れない。local / TAKT 検証では `uv run --extra lint mypy prefab_sentinel tests --show-error-codes` を走らせ、CI では `typecheck-tests` job が同じ対象を通常 gate として検証する。
 
 `csharp-tests` は監視対象外の PR では skip され、branch protection 上では `skipped` 状態が success として扱われる（issue #290）。
 

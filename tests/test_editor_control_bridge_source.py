@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._typing_helpers import require_not_none
+
 # Issue #167: this module reads the C# bridge sources from the
 # un-mutated ``tools/unity`` tree to verify structural and source-text
 # invariants; its assertions are insensitive to mutations applied to
@@ -6821,12 +6823,14 @@ class SetCameraProjectionTransitionGuardSourceTests(unittest.TestCase):
             match,
             msg="HandleSetCamera must retain a position-mode branch.",
         )
+        match = require_not_none(match, "HandleSetCamera hasPosition branch")
         return _extract_braced_block(body, match.end(), "HandleSetCamera hasPosition branch")
 
     def test_position_mode_checks_projection_stability_before_fov_geometry(self) -> None:
         body = self._handle_set_camera_body()
         position_match = re.search(r"if \(hasPosition\)\s*\{", body)
         self.assertIsNotNone(position_match, msg="HandleSetCamera must retain position mode.")
+        position_match = require_not_none(position_match, "HandleSetCamera position mode")
         position_body = self._position_branch_body()
         guard_index = position_body.find("ProjectionStateStability.IsStableForPositionMode")
         sin_index = position_body.find("Mathf.Sin")

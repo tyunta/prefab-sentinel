@@ -15,6 +15,7 @@ from prefab_sentinel.wsl_compat import (
     to_windows_path,
     to_wsl_path,
 )
+from tests._typing_helpers import require_tool_response
 
 
 class TestIsWsl(unittest.TestCase):
@@ -358,7 +359,10 @@ class TestReadTargetFileWsl(unittest.TestCase):
             serialized_object=MagicMock(),
         )
         orch.prefab_variant.project_root = Path("/fake")
-        result = orch._read_target_file("D:/Project/file.prefab", "TEST")
+        result = require_tool_response(
+            orch._read_target_file("D:/Project/file.prefab", "TEST"),
+            "read target result",
+        )
         mock_resolve.assert_called_once_with("D:/Project/file.prefab", Path("/fake"))
         # Should return error ToolResponse since file doesn't exist
         self.assertFalse(result.success)

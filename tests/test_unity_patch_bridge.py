@@ -10,6 +10,7 @@ from pathlib import Path
 
 from prefab_sentinel.bridge_constants import PROTOCOL_VERSION as _EDITOR_CONTROL_PROTOCOL
 from tests._assertion_helpers import assert_error_envelope
+from tests._typing_helpers import require_mapping
 from tests.bridge_test_helpers import EditorBridgeResponder
 from tools.unity_patch_bridge import main as _bridge_main
 
@@ -49,11 +50,11 @@ def _invoke_bridge(
         with redirect_stdout(captured):
             exit_code = _bridge_main(stdin=io.StringIO(json.dumps(payload)))
     finally:
-        for key, value in saved.items():
-            if value is None:
+        for key, saved_value in saved.items():
+            if saved_value is None:
                 os.environ.pop(key, None)
             else:
-                os.environ[key] = value
+                os.environ[key] = saved_value
 
     text = captured.getvalue()
     parsed = json.loads(text)
@@ -77,13 +78,16 @@ def _run_bridge(
 
 def _success_response(request_payload: dict[str, object]) -> dict[str, object]:
     """Build the canonical editor-bridge success envelope."""
+    ops = request_payload.get("ops", [])
+    if not isinstance(ops, list):
+        raise AssertionError(f"ops must be a list, got {type(ops).__name__}")
     return {
         "protocol_version": 2,
         "success": True,
         "severity": "info",
         "code": "SER_APPLY_OK",
         "message": "Applied via editor bridge.",
-        "data": {"applied": len(request_payload.get("ops", []))},
+        "data": {"applied": len(ops)},
         "diagnostics": [],
     }
 
@@ -301,12 +305,13 @@ class UnityPatchBridgeTests(unittest.TestCase):
                     },
                 )
 
+        data = require_mapping(result["data"], "round-trip response data")
         self.assertEqual(
             ("SER_APPLY_OK", 1, "editor"),
             (
                 result["code"],
-                result["data"]["applied"],
-                result["data"]["bridge_mode"],
+                data["applied"],
+                data["bridge_mode"],
             ),
             msg=(
                 "round trip must yield SER_APPLY_OK with applied=1 and "

@@ -15,11 +15,15 @@ import asyncio
 import os
 import tempfile
 import unittest
+from collections.abc import Callable, Coroutine
 from pathlib import Path
-from unittest.mock import patch
+from typing import Any
+from unittest.mock import MagicMock, patch
 
 from prefab_sentinel import mcp_tools_session
 from prefab_sentinel.session import ProjectSession
+from tests._mcp_tool_recorder import ToolRecorderServer, record_tools
+from tests._typing_helpers import require_list, require_magic_mock, require_mapping
 
 
 def _make_project(tmp: tempfile.TemporaryDirectory) -> tuple[Path, Path]:
@@ -41,20 +45,8 @@ def _write_bridge_cs(project_root: Path, version: str) -> None:
     )
 
 
-def _register_session_tools(session: ProjectSession) -> dict[str, callable]:
-    """Register session tools against a recording stub server."""
-    registered: dict[str, callable] = {}
-
-    class _Server:
-        def tool(self_inner) -> callable:  # noqa: N805
-            def deco(fn: callable) -> callable:
-                registered[fn.__name__] = fn
-                return fn
-
-            return deco
-
-    mcp_tools_session.register_session_tools(_Server(), session)
-    return registered
+def _register_session_tools(session: ProjectSession) -> ToolRecorderServer:
+    return record_tools(mcp_tools_session.register_session_tools, session)
 
 
 def _patch_session_layer():
@@ -89,13 +81,23 @@ class ActivationSeverityBlock(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
 
-    def _run_activate(self) -> dict:
+    def _run_activate(self) -> dict[str, object]:
         session = ProjectSession(project_root=self.project_root)
         registered = _register_session_tools(session)
-        activate = registered["activate_project"]
-        return asyncio.run(
-            activate(scope=str(self.scope), project_root=str(self.project_root)),
+        activate: Callable[..., Coroutine[object, object, object]] = registered.get(
+            "activate_project"
         )
+        return require_mapping(asyncio.run(
+            activate(scope="Assets/Avatar"),
+        ), "activate_project response")
+
+    def _diagnostics(self, response: dict[str, object]) -> list[dict[str, object]]:
+        return [
+            require_mapping(diagnostic, "activation diagnostic")
+            for diagnostic in require_list(
+                response["diagnostics"], "activation diagnostics"
+            )
+        ]
 
     def test_version_mismatch_escalates_envelope_severity(self) -> None:
         # Plant a bridge .cs with a version that won't match the
@@ -103,7 +105,8 @@ class ActivationSeverityBlock(unittest.TestCase):
         # escalate to warning severity and surface the diagnostic.
         _write_bridge_cs(self.project_root, "0.0.1")
         response = self._run_activate()
-        codes = [d.get("code") for d in response["diagnostics"]]
+        diagnostics = self._diagnostics(response)
+        codes = [d.get("code") for d in diagnostics]
         self.assertEqual(
             (True, "warning", True),
             (
@@ -118,7 +121,8 @@ class ActivationSeverityBlock(unittest.TestCase):
         # envelope must escalate to warning severity and surface the
         # BRIDGE_NOT_FOUND diagnostic.
         response = self._run_activate()
-        codes = [d.get("code") for d in response["diagnostics"]]
+        diagnostics = self._diagnostics(response)
+        codes = [d.get("code") for d in diagnostics]
         self.assertEqual(
             (True, "warning", True),
             (
@@ -134,8 +138,9 @@ class ActivationSeverityBlock(unittest.TestCase):
         # that entry must carry the unified four-key wire shape so MCP
         # clients observe a consistent shape through the activation path.
         response = self._run_activate()
+        diagnostics = self._diagnostics(response)
         missing = [
-            d for d in response["diagnostics"]
+            d for d in diagnostics
             if d.get("code") == "BRIDGE_NOT_FOUND"
         ]
         self.assertEqual(
@@ -143,7 +148,7 @@ class ActivationSeverityBlock(unittest.TestCase):
             len(missing),
             msg=(
                 "activation response must surface exactly one "
-                f"BRIDGE_NOT_FOUND diagnostic; got {response['diagnostics']!r}"
+                f"BRIDGE_NOT_FOUND diagnostic; got {diagnostics!r}"
             ),
         )
         self.assertEqual(
@@ -176,7 +181,8 @@ class ActivationSeverityBlock(unittest.TestCase):
 
         _write_bridge_cs(self.project_root, version("prefab-sentinel"))
         response = self._run_activate()
-        codes = [d.get("code") for d in response["diagnostics"]]
+        diagnostics = self._diagnostics(response)
+        codes = [d.get("code") for d in diagnostics]
         self.assertEqual(
             (
                 True,
@@ -201,11 +207,11 @@ class StatusEditorStateBlock(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         self.project_root, self.scope = _make_project(self._tmp)
 
-    def _run_status(self) -> dict:
+    def _run_status(self) -> dict[str, Any]:
         session = ProjectSession(project_root=self.project_root)
         registered = _register_session_tools(session)
-        get_status = registered["get_project_status"]
-        return get_status()
+        get_status: Callable[[], object] = registered.get("get_project_status")
+        return require_mapping(get_status(), "get_project_status response")
 
     def test_disconnected_bridge_yields_absent_editor_state(self) -> None:
         # When bridge_status() reports disconnected, the tool must not
@@ -312,10 +318,12 @@ class ProjectStatusOperatorContextTests(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         self.project_root, self.scope = _make_project(self._tmp)
 
-    def _run_status(self, bridge_envelope: dict[str, object]) -> tuple[dict[str, object], object]:
+    def _run_status(
+        self, bridge_envelope: dict[str, object],
+    ) -> tuple[dict[str, Any], MagicMock]:
         session = ProjectSession(project_root=self.project_root)
         registered = _register_session_tools(session)
-        get_status = registered["get_project_status"]
+        get_status: Callable[[], object] = registered.get("get_project_status")
         with (
             patch.object(
                 mcp_tools_session,
@@ -328,7 +336,10 @@ class ProjectStatusOperatorContextTests(unittest.TestCase):
                 return_value=bridge_envelope,
             ) as send,
         ):
-            return get_status(), send
+            return (
+                require_mapping(get_status(), "get_project_status response"),
+                require_magic_mock(send, "send_action mock"),
+            )
 
     def _bridge_envelope(self, actual_root: str) -> dict[str, object]:
         return {
@@ -517,23 +528,13 @@ class TestEditorStateFreshnessMarker(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def _register(self) -> dict:
+    def _register(self) -> ToolRecorderServer:
         from prefab_sentinel import mcp_tools_symbols
 
-        registered: dict = {}
-
-        class _Server:
-            def tool(self_inner):  # noqa: N805
-                def deco(fn):
-                    registered[fn.__name__] = fn
-                    return fn
-
-                return deco
-
-        mcp_tools_symbols.register_symbol_tools(
-            _Server(), ProjectSession(project_root=None),
+        return record_tools(
+            mcp_tools_symbols.register_symbol_tools,
+            ProjectSession(project_root=None),
         )
-        return registered
 
     def _editor_state_envelope(self, *, unsaved: bool) -> dict:
         return {
@@ -557,7 +558,9 @@ class TestEditorStateFreshnessMarker(unittest.TestCase):
         """T-40-1: get_unity_symbols carries the marker when live edits are unsaved."""
         from prefab_sentinel import mcp_tools_symbols
 
-        get_unity_symbols = self._register()["get_unity_symbols"]
+        get_unity_symbols: Callable[..., object] = self._register().get(
+            "get_unity_symbols"
+        )
         with patch.object(
             mcp_tools_symbols, "bridge_status",
             return_value={"connected": True, "watch_dir": "/tmp"},
@@ -565,22 +568,28 @@ class TestEditorStateFreshnessMarker(unittest.TestCase):
             mcp_tools_symbols, "send_action",
             return_value=self._editor_state_envelope(unsaved=True),
         ):
-            payload = get_unity_symbols(asset_path=str(self.prefab))
+            payload = require_mapping(
+                get_unity_symbols(asset_path=str(self.prefab)),
+                "get_unity_symbols payload",
+            )
         self.assertIn("freshness", payload)
-        self.assertEqual("last_saved_disk", payload["freshness"]["source"])
+        freshness = require_mapping(payload["freshness"], "freshness marker")
+        self.assertEqual("last_saved_disk", freshness["source"])
 
     def test_no_marker_without_bridge_connection(self) -> None:
         """T-40-2: find_unity_symbol carries no marker with no Bridge connection."""
         from prefab_sentinel import mcp_tools_symbols
 
-        find_unity_symbol = self._register()["find_unity_symbol"]
+        find_unity_symbol: Callable[..., object] = self._register().get(
+            "find_unity_symbol"
+        )
         with patch.object(
             mcp_tools_symbols, "bridge_status",
             return_value={"connected": False, "watch_dir": None},
         ), patch.object(mcp_tools_symbols, "send_action") as send:
-            payload = find_unity_symbol(
+            payload = require_mapping(find_unity_symbol(
                 asset_path=str(self.prefab), symbol_path="Cube",
-            )
+            ), "find_unity_symbol payload")
         # No Bridge round-trip and no marker — the offline no-Unity-required
         # property is preserved.
         send.assert_not_called()
@@ -590,7 +599,9 @@ class TestEditorStateFreshnessMarker(unittest.TestCase):
         """T-40-3: no marker when the connected Bridge reports no unsaved changes."""
         from prefab_sentinel import mcp_tools_symbols
 
-        get_unity_symbols = self._register()["get_unity_symbols"]
+        get_unity_symbols: Callable[..., object] = self._register().get(
+            "get_unity_symbols"
+        )
         with patch.object(
             mcp_tools_symbols, "bridge_status",
             return_value={"connected": True, "watch_dir": "/tmp"},
@@ -598,7 +609,10 @@ class TestEditorStateFreshnessMarker(unittest.TestCase):
             mcp_tools_symbols, "send_action",
             return_value=self._editor_state_envelope(unsaved=False),
         ):
-            payload = get_unity_symbols(asset_path=str(self.prefab))
+            payload = require_mapping(
+                get_unity_symbols(asset_path=str(self.prefab)),
+                "get_unity_symbols payload",
+            )
         self.assertNotIn("freshness", payload)
 
 

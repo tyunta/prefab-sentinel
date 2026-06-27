@@ -13,12 +13,19 @@ plugin manifests.
 
 from __future__ import annotations
 
-import json
 import tomllib
 import unittest
 from pathlib import Path
+from typing import Any
 
 import pytest
+
+from tests._typing_helpers import (
+    load_json_object,
+    require_list,
+    require_mapping,
+    require_str,
+)
 
 pytestmark = pytest.mark.source_text_invariant
 
@@ -30,7 +37,8 @@ _PYPROJECT_PATH = _PROJECT_ROOT / "pyproject.toml"
 
 def _canonical_project_version() -> str:
     data = tomllib.loads(_PYPROJECT_PATH.read_text(encoding="utf-8"))
-    return data["project"]["version"]
+    project = require_mapping(data["project"], "pyproject project")
+    return require_str(project["version"], "project version")
 
 
 class TestCodexPluginManifest(unittest.TestCase):
@@ -38,8 +46,11 @@ class TestCodexPluginManifest(unittest.TestCase):
     install-path fields and does not declare an ``interface`` block.
     """
 
-    def _load_manifest(self) -> dict:
-        return json.loads(_CODEX_PLUGIN_PATH.read_text(encoding="utf-8"))
+    def _load_manifest(self) -> dict[str, Any]:
+        return load_json_object(
+            _CODEX_PLUGIN_PATH.read_text(encoding="utf-8"),
+            str(_CODEX_PLUGIN_PATH),
+        )
 
     def test_identity_equals_documented_plugin_name(self) -> None:
         manifest = self._load_manifest()
@@ -62,14 +73,14 @@ class TestCodexPluginManifest(unittest.TestCase):
         )
 
     def test_mcp_servers_file_carries_non_empty_command(self) -> None:
-        rel = self._load_manifest()["mcpServers"]
+        rel = require_str(self._load_manifest()["mcpServers"], "mcpServers")
         mcp_path = _PROJECT_ROOT / rel
         self.assertTrue(mcp_path.is_file(), f"missing MCP config: {mcp_path}")
-        config = json.loads(mcp_path.read_text(encoding="utf-8"))
+        config = load_json_object(mcp_path.read_text(encoding="utf-8"), str(mcp_path))
         # Codex accepts a direct server map or a ``mcp_servers`` wrapper.
-        servers = config.get("mcp_servers", config)
-        invocation = servers["prefab-sentinel"]
-        command = invocation.get("command", "")
+        servers = require_mapping(config.get("mcp_servers", config), "mcp servers")
+        invocation = require_mapping(servers["prefab-sentinel"], "prefab invocation")
+        command = require_str(invocation.get("command", ""), "prefab command")
         self.assertNotEqual("", command, f"command empty: {invocation!r}")
         # Codex launches a plugin MCP server with the workspace as cwd,
         # sets no plugin-root env var, does not expand ${...} templates
@@ -77,7 +88,8 @@ class TestCodexPluginManifest(unittest.TestCase):
         # the plugin root (all confirmed by probe, issue #1). Every arg
         # must therefore be self-contained — no template, no path that
         # depends on the install location.
-        for arg in invocation.get("args", []):
+        for arg in require_list(invocation.get("args", []), "prefab args"):
+            arg = require_str(arg, "prefab arg")
             self.assertNotIn(
                 "${",
                 arg,

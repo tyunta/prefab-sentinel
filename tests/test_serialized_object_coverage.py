@@ -688,7 +688,7 @@ class AssetOpenOpsAdditionalCoverageTests(unittest.TestCase):
         diagnostics, _ = validate_asset_open_ops(
             target="Assets/Foo.asset",
             kind="asset",
-            ops=["not a dict"],
+            ops=["not a dict"],  # type: ignore[list-item]  # intentional non-dict operation
         )
         self.assertIn(
             "operation must be an object",
