@@ -271,6 +271,8 @@ Unity の `internal` メンバを参照する必要が生じた段階で初め�
 
 Unity 依存 Bridge C#（`tools/unity/` の `UnityEditor` / VRChat SDK 参照ファイル）を変更したら、`deploy_bridge` で実 Unity 2022.3 + VRChat SDK プロジェクトに配置し、Unity のコンパイルがエラー 0 件であることを手動で確認する。これが現状唯一のコンパイル検証経路。pure-logic を新規抽出して Unity 非依存にできた分は xUnit ハーネス（`<Compile Include>`）へ取り込み、検証対象を段階的に CI 側へ移すことで、この未検証 surface を縮小していく。
 
+issue #112 の `editor_serialized_property_read` / `editor_serialized_property_list` / `editor_serialized_property_write` は `UnityEditorControlBridge.SerializedProperty` partial に実装されるため、Unity real-device validation はこの手動 deploy コンパイル確認の対象になる。`UnityIntegrationTests` には `SerializedPropertySmokeSupport` と `EditorCtrl_SerializedProperty_ReadListWriteDryRunNoOp` probe を置き、read / list / dry-run / confirmed write / no-op を同じ temporary GameObject で検証する。TAKT 内では source invariant までを自動確認し、実 Unity 2022.3 + VRChat SDK project で `deploy_bridge` 後に `editor_run_tests` から probe を実行することを follow-up 条件にする。
+
 ### 安全網: dev 経路での visual 検証
 
 コンパイルが 0 件でも、Unity 依存箇所の振る舞いは実機 SceneView で動かさないと確認できない（`SceneView.LookAt(instant:true)` の camera 同期挙動、`BakeMesh` の現ポーズ bounds、preset 角度の見え方など。issue #84 で実証）。リリース前に main / public mirror を待たず、dev 作業ブランチの資材だけで visual 検証する経路を残す。

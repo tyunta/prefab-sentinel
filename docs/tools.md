@@ -1,6 +1,6 @@
 # MCP ツール一覧
 
-`prefab-sentinel-mcp` が公開する全 MCP ツール（現在 91 件 / 16 カテゴリ）の正本カタログ。各カテゴリは `prefab_sentinel/mcp_tools_*.py` の 1 モジュールに対応する。エンベロープ仕様は [api-reference.md「レスポンスフォーマット」](./api-reference.md#レスポンスフォーマット)、エラーコードの正本は [api-reference.md「エラーコード規約」](./api-reference.md#エラーコード規約) を参照。
+`prefab-sentinel-mcp` が公開する全 MCP ツール（現在 94 件 / 17 カテゴリ）の正本カタログ。各カテゴリは `prefab_sentinel/mcp_tools_*.py` の 1 モジュールに対応する。エンベロープ仕様は [api-reference.md「レスポンスフォーマット」](./api-reference.md#レスポンスフォーマット)、エラーコードの正本は [api-reference.md「エラーコード規約」](./api-reference.md#エラーコード規約) を参照。
 
 ## 用途索引
 
@@ -16,6 +16,7 @@
 - **editor_geometry** — Transform / Bounds / Distance を dedicated read-only API で取得する
 - **editor_write** — Editor Bridge 経由で Hierarchy / Component / BlendShape / Menu を write する
 - **editor_ops** — `editor_set_property` / `editor_safe_save_prefab` 等の compound 編集を行う
+- **editor_serialized_property** — live component の raw `SerializedProperty.propertyPath` を SerializedObject-backed に inspect / list / dry-run / write する
 - **editor_advanced** — VRC SDK アップロード / 任意リフレクション呼び出し
 - **editor_animation** — AnimationClip の inspect / create / apply プリミティブ
 - **editor_batch** — 複数オブジェクト・プロパティ・マテリアルを 1 Undo グループで一括処理する
@@ -25,7 +26,7 @@
 
 ## 全ツール一覧（カテゴリ別）
 
-各カテゴリ表のカラム: ツール / 区分 / 簡潔説明 / 関連 issue / 種別（read-only / write）。`write` はプロジェクト / Editor / アセット状態に副作用を持つことを示す表示で、`confirm=True` + 非空 `change_reason` を引数として要求する audit-pair 対象はこの中の部分集合（`patch` / `components` / `set_property` の各カテゴリ全体と、`vrcsdk_upload` / `editor_run_script` / `editor_run_script_submit` / `editor_create_animation_clip` / `editor_execute_menu_item` / `editor_safe_save_prefab` / `editor_create_udon_program_asset` / `editor_set_material_property` / `editor_add_udonsharp_component` / `editor_set_udonsharp_field` / `editor_wire_persistent_listener` / `editor_create_scene` / `editor_save_scene` / `editor_close_prefab`）に限られる。正本一覧は [CONFIGURATION.md](../CONFIGURATION.md#confirm--change_reason-必須対象一覧)。それ以外の `write` ツール（例: `editor_select` / `editor_rename` / `editor_set_blend_shape` / `editor_set_property` / `editor_batch_*` / `editor_batch_set_blend_shape` / `editor_apply_animation_clip` 等）は audit-pair なしで呼び出す（`confirm` / `change_reason` を引数に渡すと `TypeError` で拒否される）。issue #49 で `editor_execute_menu_item` / `editor_safe_save_prefab` / `editor_create_udon_program_asset` / `editor_create_scene` / `editor_save_scene` が audit-pair 側へ、`editor_batch_set_blend_shape` / `editor_apply_animation_clip` が非 audit 側へ再分類された（逆不可逆性原理の適用）。issue #114 で `delete_asset` / `delete_assets` は dry-run 既定、確定適用時は AssetDatabase 経由 + audit-pair 必須の patch ツールとして追加された。
+各カテゴリ表のカラム: ツール / 区分 / 簡潔説明 / 関連 issue / 種別（read-only / write）。`write` はプロジェクト / Editor / アセット状態に副作用を持つことを示す表示で、`confirm=True` + 非空 `change_reason` を引数として要求する audit-pair 対象はこの中の部分集合（`patch` / `components` / `set_property` の各カテゴリ全体と、`vrcsdk_upload` / `editor_run_script` / `editor_run_script_submit` / `editor_create_animation_clip` / `editor_execute_menu_item` / `editor_safe_save_prefab` / `editor_create_udon_program_asset` / `editor_set_material_property` / `editor_serialized_property_write` / `editor_add_udonsharp_component` / `editor_set_udonsharp_field` / `editor_wire_persistent_listener` / `editor_create_scene` / `editor_save_scene` / `editor_close_prefab`）に限られる。正本一覧は [CONFIGURATION.md](../CONFIGURATION.md#confirm--change_reason-必須対象一覧)。それ以外の `write` ツール（例: `editor_select` / `editor_rename` / `editor_set_blend_shape` / `editor_set_property` / `editor_batch_*` / `editor_batch_set_blend_shape` / `editor_apply_animation_clip` 等）は audit-pair なしで呼び出す（`confirm` / `change_reason` を引数に渡すと `TypeError` で拒否される）。issue #49 で `editor_execute_menu_item` / `editor_safe_save_prefab` / `editor_create_udon_program_asset` / `editor_create_scene` / `editor_save_scene` が audit-pair 側へ、`editor_batch_set_blend_shape` / `editor_apply_animation_clip` が非 audit 側へ再分類された（逆不可逆性原理の適用）。issue #114 で `delete_asset` / `delete_assets` は dry-run 既定、確定適用時は AssetDatabase 経由 + audit-pair 必須の patch ツールとして追加された。issue #112 で `editor_serialized_property_write` は raw `propertyPath` 汎用 writer として audit-pair 対象に追加された。
 
 ### components
 
@@ -165,6 +166,18 @@
 | `editor_set_properties` | editor_ops | 単一コンポーネントの複数プロパティを 1 リクエストで一括設定（Undo グループ）。各 entry は `property_name` キー + `value_present` マーカーを持つ | #41, #52 | write |
 | `editor_safe_save_prefab` | editor_ops | シーン上の GameObject を Prefab / Variant として保存。`protect_components` / raw-save mode 対応 | #193, #228 | write |
 | `editor_set_parent` | editor_ops | 既存 GameObject の親子関係を変更（Undo 対応） | — | write |
+
+### editor_serialized_property
+
+`prefab_sentinel/mcp_tools_editor_serialized_property.py`。Unity の live `SerializedObject` / raw `SerializedProperty.propertyPath` を使う汎用 inspector / writer。Inspector 表示名ではなく raw property path を指定する。
+
+| ツール | 区分 | 簡潔説明 | 関連 issue | 種別 |
+|--------|------|----------|-----------|------|
+| `editor_serialized_property_read` | editor_serialized_property | live component の raw `propertyPath` を 1 件読み取り、型・値・object reference・array・state evidence を返す | #112 | read-only |
+| `editor_serialized_property_list` | editor_serialized_property | live component の raw `propertyPath` ツリーを任意の `root_property_path` / depth / cap / cursor 付きで列挙する | #112 | read-only |
+| `editor_serialized_property_write` | editor_serialized_property | raw `propertyPath` に primitive / enum / object reference / explicit null / array size を dry-run または confirm + `change_reason` で書く | #112 | write |
+
+`editor_serialized_property_list` は `root_property_path` 省略時に component root を列挙し、指定時はその raw property path 配下だけを列挙する。指定された root が存在しない場合は `EDITOR_CTRL_SERIALIZED_PROPERTY_NOT_FOUND` と raw `propertyPath` suggestion evidence を返し、component root へ暗黙 fallback しない。
 
 ### editor_advanced
 

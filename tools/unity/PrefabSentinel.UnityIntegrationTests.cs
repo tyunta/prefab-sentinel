@@ -15,6 +15,17 @@ namespace PrefabSentinel
     /// through ApplyFromPaths, and verifies both the bridge response and
     /// the actual serialized property values.
     /// </summary>
+
+    internal static class SerializedPropertySmokeSupport
+    {
+        public static Transform CreateTargetTransform(GameObject go)
+        {
+            Transform transform = go.transform;
+            transform.localPosition = new Vector3(3f, 2f, 1f);
+            return transform;
+        }
+    }
+
     public static class UnityIntegrationTests
     {
         private const string TestArgOutputPath = "-sentinelTestOutputPath";
@@ -200,6 +211,9 @@ namespace PrefabSentinel
             // Issue #113: opaque continuation token returned by the
             // capture_console_logs handler when more matching entries
             // remain past the requested page.
+            public bool saved = false;
+            public string serialized_property_json = string.Empty;
+
             public string next_cursor = string.Empty;
         }
 
@@ -420,6 +434,8 @@ namespace PrefabSentinel
                         Test_EditorCtrl_SetProperty_Quaternion_NonUnitRejected),
                     ("EditorCtrl_SetProperty_Quaternion_WrongComponentCountRejected",
                         Test_EditorCtrl_SetProperty_Quaternion_WrongComponentCountRejected),
+                    ("EditorCtrl_SerializedProperty_ReadListWriteDryRunNoOp",
+                        Test_EditorCtrl_SerializedProperty_ReadListWriteDryRunNoOp),
                     // Issues #92/#93/#94/#95/#98/#101/#102 live opt-in probes.
                     ("Live_ClientSim_Profile_Reports_Side_Effects",
                         Test_Live_ClientSim_Profile_Reports_Side_Effects),
@@ -1257,7 +1273,7 @@ namespace PrefabSentinel
         }
 
         // ----------------------------------------------------------------
-        // Test cases: persistence (save → reopen)
+        // Persistence coverage across save and reopen.
         // ----------------------------------------------------------------
 
         private static TestCaseResult Test_Set_SaveReopen_Preserves(string prefabPath, string materialPath)
@@ -2831,7 +2847,7 @@ namespace PrefabSentinel
             string prefabPath, string materialPath)
         {
             const string name = "EditorCtrl_FrameSelected_UsesPostUpdateBoundsForRectTransform";
-            // Construct a UGUI subtree: Canvas → Image with anchored position
+            // Use a UGUI subtree with anchored position changes
             // mutated via SerializedObject so the framing must trigger a
             // layout rebuild before reading bounds.
             var canvasGo = new GameObject("Canvas",
@@ -2939,7 +2955,7 @@ namespace PrefabSentinel
             if (string.IsNullOrEmpty(first.data.diagnostic_last_domain_reload))
                 return Fail(name, "First compile-pending response missing diagnostic_last_domain_reload.");
 
-            // Second consecutive stuck call → with a pinned temp_id and the
+            // With a pinned temp_id and the identical snippet on a second
             // identical snippet, the stuck-detection counter increments to 2
             // (≥ RunScriptStuckThreshold) and the bridge deterministically
             // returns EDITOR_CTRL_RUN_SCRIPT_RECOVERY after clearing the
@@ -3324,7 +3340,7 @@ namespace PrefabSentinel
         {
             const string name = "EditorCtrl_CaptureConsoleLogs_RejectsMalformedCursor";
             UnityEditorControlBridge.ConsoleLogBuffer.StartCapture();
-            // No "seq:" prefix → the prefix gate rejects before any range
+            // A cursor without the "seq:" prefix is rejected before range
             // check, regardless of the buffer state.
             var resp = RunEditorControlBridge(BuildEditorControlRequest(
                 "capture_console_logs", "\"cursor\":\"not-a-seq-token\""));
@@ -3422,6 +3438,115 @@ namespace PrefabSentinel
                     "editor_set_property", extra));
                 return AssertEditorControlFailure(name, resp,
                     "EDITOR_CTRL_SET_PROP_TYPE_MISMATCH") ?? Pass(name);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(go);
+            }
+        }
+
+        private static TestCaseResult Test_EditorCtrl_SerializedProperty_ReadListWriteDryRunNoOp(
+            string prefabPath, string materialPath)
+        {
+            const string name = "EditorCtrl_SerializedProperty_ReadListWriteDryRunNoOp";
+            var go = new GameObject("SerializedPropertySmokeTarget");
+            Transform transform = SerializedPropertySmokeSupport.CreateTargetTransform(go);
+            try
+            {
+                string goPath = "/" + go.name;
+                string componentType = typeof(Transform).FullName;
+                string address = "\"hierarchy_path\":\"" + EscapeJsonString(goPath) + "\"," +
+                               "\"component_type\":\"" + EscapeJsonString(componentType) + "\",";
+
+                var readResp = RunEditorControlBridge(BuildEditorControlRequest(
+                    "editor_serialized_property_read",
+                    address + "\"property_path\":\"m_LocalPosition.x\""));
+                var readErr = AssertEditorControlSuccess(name, readResp);
+                if (readErr != null) return readErr;
+                if (readResp.code != "EDITOR_CTRL_SERIALIZED_PROPERTY_READ_OK"
+                    || readResp.data.serialized_property_json.IndexOf("m_LocalPosition.x", StringComparison.Ordinal) < 0)
+                    return Fail(name, "Serialized property read did not report m_LocalPosition.x evidence.");
+
+                var listResp = RunEditorControlBridge(BuildEditorControlRequest(
+                    "editor_serialized_property_list",
+                    address + "\"depth\":1,\"cap\":50"));
+                var listErr = AssertEditorControlSuccess(name, listResp);
+                if (listErr != null) return listErr;
+                if (listResp.code != "EDITOR_CTRL_SERIALIZED_PROPERTY_LIST_OK"
+                    || listResp.data.serialized_property_json.IndexOf("m_LocalPosition", StringComparison.Ordinal) < 0)
+                    return Fail(name, "Serialized property list did not report Transform position fields.");
+
+                var rootListResp = RunEditorControlBridge(BuildEditorControlRequest(
+                    "editor_serialized_property_list",
+                    address
+                    + "\"root_property_path\":\"m_LocalPosition\","
+                    + "\"depth\":1,\"cap\":50"));
+                var rootListErr = AssertEditorControlSuccess(name, rootListResp);
+                if (rootListErr != null) return rootListErr;
+                if (rootListResp.code != "EDITOR_CTRL_SERIALIZED_PROPERTY_LIST_OK"
+                    || rootListResp.data.serialized_property_json.IndexOf("m_LocalPosition.x", StringComparison.Ordinal) < 0)
+                    return Fail(name, "Serialized property root list did not report Transform position children.");
+
+                var missingRootResp = RunEditorControlBridge(BuildEditorControlRequest(
+                    "editor_serialized_property_list",
+                    address
+                    + "\"root_property_path\":\"missingRoot\","
+                    + "\"depth\":1,\"cap\":50"));
+                var missingRootErr = AssertEditorControlFailure(
+                    name,
+                    missingRootResp,
+                    "EDITOR_CTRL_SERIALIZED_PROPERTY_NOT_FOUND");
+                if (missingRootErr != null) return missingRootErr;
+                if (missingRootResp.data.serialized_property_json.IndexOf("suggestions", StringComparison.Ordinal) < 0)
+                    return Fail(name, "Serialized property missing root did not report suggestion evidence.");
+
+                var dryRunResp = RunEditorControlBridge(BuildEditorControlRequest(
+                    "editor_serialized_property_write",
+                    address
+                    + "\"property_path\":\"m_LocalPosition.x\","
+                    + "\"serialized_property_float_value\":41.0,"
+                    + "\"serialized_property_float_value_present\":true,"
+                    + "\"confirm\":false"));
+                var dryRunErr = AssertEditorControlSuccess(name, dryRunResp);
+                if (dryRunErr != null) return dryRunErr;
+                if (dryRunResp.code != "EDITOR_CTRL_SERIALIZED_PROPERTY_DRY_RUN_OK")
+                    return Fail(name, "Dry-run returned code " + dryRunResp.code + ".");
+                if (Math.Abs(transform.localPosition.x - 3f) > 0.0001f)
+                    return Fail(name, "Dry-run mutated localPosition.x.");
+
+                var writeResp = RunEditorControlBridge(BuildEditorControlRequest(
+                    "editor_serialized_property_write",
+                    address
+                    + "\"property_path\":\"m_LocalPosition.x\","
+                    + "\"serialized_property_float_value\":41.0,"
+                    + "\"serialized_property_float_value_present\":true,"
+                    + "\"confirm\":true,"
+                    + "\"change_reason\":\"issue112 serialized property smoke\""));
+                var writeErr = AssertEditorControlSuccess(name, writeResp);
+                if (writeErr != null) return writeErr;
+                if (writeResp.code != "EDITOR_CTRL_SERIALIZED_PROPERTY_WRITE_OK")
+                    return Fail(name, "Write returned code " + writeResp.code + ".");
+                if (Math.Abs(transform.localPosition.x - 41f) > 0.0001f)
+                    return Fail(name, "Confirmed write did not mutate localPosition.x.");
+                if (writeResp.data.saved)
+                    return Fail(name, "Serialized property write must not auto-save.");
+
+                var noChangeResp = RunEditorControlBridge(BuildEditorControlRequest(
+                    "editor_serialized_property_write",
+                    address
+                    + "\"property_path\":\"m_LocalPosition.x\","
+                    + "\"serialized_property_float_value\":41.0,"
+                    + "\"serialized_property_float_value_present\":true,"
+                    + "\"confirm\":true,"
+                    + "\"change_reason\":\"issue112 no-op smoke\""));
+                var noChangeErr = AssertEditorControlSuccess(name, noChangeResp);
+                if (noChangeErr != null) return noChangeErr;
+                if (noChangeResp.code != "EDITOR_CTRL_SERIALIZED_PROPERTY_NO_CHANGE")
+                    return Fail(name, "No-op returned code " + noChangeResp.code + ".");
+                if (Math.Abs(transform.localPosition.x - 41f) > 0.0001f)
+                    return Fail(name, "No-op changed localPosition.x.");
+
+                return Pass(name);
             }
             finally
             {

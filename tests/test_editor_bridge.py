@@ -463,6 +463,9 @@ class TestSupportedActions(unittest.TestCase):
             "editor_remove_component",
             "create_udon_program_asset",
             "editor_set_property",
+            "editor_serialized_property_read",
+            "editor_serialized_property_list",
+            "editor_serialized_property_write",
             # Issue #193: ``safe_save_prefab`` is the sole public prefab-save action.
             "safe_save_prefab",
             "editor_set_parent",

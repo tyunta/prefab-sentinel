@@ -87,6 +87,9 @@
     <Compile Include="..\..\tools\unity\PrefabSentinel.Properties.TypedPropertyValues.cs">
       <Link>Bridge\PrefabSentinel.Properties.TypedPropertyValues.cs</Link>
     </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.SerializedProperty.ValueIntent.cs">
+      <Link>Bridge\PrefabSentinel.SerializedProperty.ValueIntent.cs</Link>
+    </Compile>
     <Compile Include="..\..\tools\unity\PrefabSentinel.UiElement.Allowlist.cs">
       <Link>Bridge\PrefabSentinel.UiElement.Allowlist.cs</Link>
     </Compile>

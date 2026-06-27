@@ -1338,6 +1338,24 @@ def _bridge_partial_filenames() -> list[str]:
     return sorted(p.name for p in TOOLS_DIR.glob(_BRIDGE_PARTIAL_GLOB))
 
 
+def _read_serialized_property_partials() -> str:
+    filenames = [
+        "PrefabSentinel.UnityEditorControlBridge.SerializedProperty.cs",
+        "PrefabSentinel.UnityEditorControlBridge.SerializedProperty.ObjectReference.cs",
+        "PrefabSentinel.UnityEditorControlBridge.SerializedProperty.Payload.cs",
+        "PrefabSentinel.UnityEditorControlBridge.SerializedProperty.Target.cs",
+        "PrefabSentinel.UnityEditorControlBridge.SerializedProperty.Traversal.cs",
+        "PrefabSentinel.UnityEditorControlBridge.SerializedProperty.Write.cs",
+    ]
+    present = set(_bridge_partial_filenames())
+    missing = [name for name in filenames if name not in present]
+    if missing:
+        raise AssertionError(
+            f"SerializedProperty bridge partial family is missing: {missing!r}"
+        )
+    return "\n".join(_read(TOOLS_DIR / name) for name in filenames)
+
+
 class TestBridgePartialLayout(unittest.TestCase):
     """Issue #123 / #266 — every bridge partial source on disk must
     declare the same partial class.  The contract set is derived from
@@ -4890,6 +4908,30 @@ class EditorControlBridgeRequestSchemaTests(unittest.TestCase):
         "values_json",
         "values_json_present",
         "expected_length",
+        "property_path",
+        "root_property_path",
+        "cap",
+        "serialized_property_bool_value",
+        "serialized_property_bool_value_present",
+        "serialized_property_int_value",
+        "serialized_property_int_value_present",
+        "serialized_property_long_value",
+        "serialized_property_long_value_present",
+        "serialized_property_float_value",
+        "serialized_property_float_value_present",
+        "serialized_property_string_value",
+        "serialized_property_string_value_present",
+        "serialized_property_enum_name",
+        "serialized_property_enum_name_present",
+        "serialized_property_enum_index",
+        "serialized_property_enum_index_present",
+        "serialized_property_object_reference_asset_path",
+        "serialized_property_object_reference_asset_path_present",
+        "serialized_property_object_reference_hierarchy_path",
+        "serialized_property_object_reference_hierarchy_path_present",
+        "serialized_property_object_reference_null",
+        "serialized_property_array_size",
+        "serialized_property_array_size_present",
     )
 
     _NEW_RESPONSE_FIELDS = (
@@ -4937,6 +4979,7 @@ class EditorControlBridgeRequestSchemaTests(unittest.TestCase):
         "field_name",
         "element_index",
         "expected_type",
+        "serialized_property_json",
     )
 
     def test_request_dto_declares_every_new_field(self) -> None:
@@ -5054,6 +5097,9 @@ class EditorControlBridgeDispatcherRoutingTests(unittest.TestCase):
         "get_transform",
         "get_bounds",
         "measure_distance",
+        "editor_serialized_property_read",
+        "editor_serialized_property_list",
+        "editor_serialized_property_write",
         "inspect_animation_clip",
         "create_animation_clip",
         "apply_animation_clip",
@@ -5069,6 +5115,9 @@ class EditorControlBridgeDispatcherRoutingTests(unittest.TestCase):
         "get_transform": "HandleGetTransform",
         "get_bounds": "HandleGetBounds",
         "measure_distance": "HandleMeasureDistance",
+        "editor_serialized_property_read": "HandleSerializedPropertyRead",
+        "editor_serialized_property_list": "HandleSerializedPropertyList",
+        "editor_serialized_property_write": "HandleSerializedPropertyWrite",
         "inspect_animation_clip": "HandleInspectAnimationClip",
         "create_animation_clip": "HandleCreateAnimationClip",
         "apply_animation_clip": "HandleApplyAnimationClip",
@@ -5111,6 +5160,433 @@ class EditorControlBridgeDispatcherRoutingTests(unittest.TestCase):
         for action in self._NEW_ACTIONS:
             with self.subTest(action=action):
                 self.assertIn(action, SUPPORTED_ACTIONS)
+
+    def test_dispatcher_default_branch_keeps_unknown_action_envelope(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "DispatchAction")
+
+        self.assertIn("default:", body)
+        self.assertIn('"EDITOR_CTRL_UNKNOWN_ACTION"', body)
+        self.assertIn("Unknown action:", body)
+
+
+class EditorSerializedPropertyBridgeSourceTests(unittest.TestCase):
+    _PARTIAL = TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.SerializedProperty.cs"
+
+    def _source(self) -> str:
+        return _read_serialized_property_partials()
+
+    def _method(self, method_name: str) -> str:
+        return _extract_method(self._source(), method_name)
+
+    def test_read_handler_uses_canonical_serialized_property_surface(self) -> None:
+        body = self._method("HandleSerializedPropertyRead")
+        for token in (
+            "ResolveSerializedPropertyTarget",
+            "new SerializedObject",
+            "FindProperty(request.property_path)",
+            "BuildSerializedPropertyJson",
+            "serialized_property_json",
+            "BuildPropertyNotFoundError",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+
+    def test_list_handler_normalizes_traversal_and_retains_no_snapshot_store(self) -> None:
+        source = self._source()
+        body = _extract_method(source, "HandleSerializedPropertyList")
+        for token in (
+            "SerializedPropertyTraversalOptions.Parse",
+            "GetIterator",
+            "next_cursor",
+            "truncated",
+            "CollectSerializedPropertyList",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+        list_builder = _extract_method(source, "BuildSerializedPropertyListJson")
+        self.assertIn('\\\"items\\\"', list_builder)
+        self.assertNotIn('\\\"properties\\\"', list_builder)
+        collector = _extract_method(source, "CollectSerializedPropertyList")
+        self.assertIn("SerializedPropertyTraversalOptions.Parse(1, 1, string.Empty)", collector)
+        self.assertIn(
+            "int maxRelativeDepth = root != null ? options.Depth : options.Depth + 1;",
+            collector,
+        )
+        self.assertIn("if (relativeDepth > maxRelativeDepth) continue;", collector)
+        self.assertNotIn("if (relativeDepth > options.Depth + 1) continue;", collector)
+        for token in ("NextVisible", "unsupported"):
+            with self.subTest(token=token):
+                self.assertIn(token, source)
+        for forbidden in ("static Dictionary", "static List", "snapshot"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, source)
+
+    def test_serialized_property_helpers_do_not_keep_unused_state(self) -> None:
+        value_intent = _strip_cs_comments(
+            (TOOLS_DIR / "PrefabSentinel.SerializedProperty.ValueIntent.cs").read_text(
+                encoding="utf-8"
+            )
+        )
+        target = _strip_cs_comments(
+            (
+                TOOLS_DIR
+                / "PrefabSentinel.UnityEditorControlBridge.SerializedProperty.Target.cs"
+            ).read_text(encoding="utf-8")
+        )
+        for token in ("ObjectReferencePath", "HasCursor"):
+            with self.subTest(token=token):
+                self.assertNotIn(token, value_intent)
+        for token in ("public int ComponentIndex", "ComponentIndex = selectedIndex"):
+            with self.subTest(token=token):
+                self.assertNotIn(token, target)
+
+    def test_payload_builder_reports_required_property_evidence(self) -> None:
+        source = self._source()
+        body = _extract_method(source, "BuildSerializedPropertyJson")
+        for token in (
+            "property.propertyPath",
+            "property.displayName",
+            "property.propertyType",
+            "value_kind",
+            "AppendPropertyValueFields",
+            "children",
+            "unsupported",
+            "state",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+        value_fields = _extract_method(source, "AppendPropertyValueFields")
+        for token in ("object_reference", "array_size"):
+            with self.subTest(token=token):
+                self.assertIn(token, value_fields)
+        object_reference = _extract_method(source, "BuildObjectReferenceJson")
+        for token in ("hierarchy_path", "GetHierarchyPath", "AssetDatabase.GetAssetPath"):
+            with self.subTest(token=token):
+                self.assertIn(token, object_reference)
+
+    def test_property_not_found_suggestions_use_raw_property_paths(self) -> None:
+        source = self._source()
+        body = self._method("BuildPropertyNotFoundError")
+        for token in (
+            "SuggestionRanker.SuggestSimilar",
+            "propertyPath",
+            "BuildSuggestionJson",
+            "truncated",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_NOT_FOUND",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+        suggestion_builder = _extract_method(source, "BuildSuggestionJson")
+        for token in ("displayName", "propertyType", "depth"):
+            with self.subTest(token=token):
+                self.assertIn(token, suggestion_builder)
+
+    def test_component_selection_rejects_ambiguous_matches_with_candidates(self) -> None:
+        source = self._source()
+        body = self._method("ResolveSerializedPropertyTarget")
+        for token in (
+            "GetComponents",
+            "component_index",
+            "BuildComponentAmbiguityError",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+        ambiguity = _extract_method(source, "BuildComponentAmbiguityError")
+        for token in (
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_COMPONENT_AMBIGUOUS",
+            "candidate",
+            "component_index",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, ambiguity)
+        self.assertNotIn("GetComponent(", body)
+
+    def test_state_evidence_distinguishes_scene_and_prefab_stage(self) -> None:
+        body = self._method("BuildSerializedPropertyStateEvidence")
+        for token in (
+            "PrefabStageUtility.GetCurrentPrefabStage",
+            '"prefab_stage"',
+            '"scene"',
+            "prefab_asset_path",
+            "scene_path",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+
+
+class EditorSerializedPropertyWriterScopeTests(unittest.TestCase):
+    _PARTIAL = TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.SerializedProperty.cs"
+
+    def _source(self) -> str:
+        return _read_serialized_property_partials()
+
+    def _method(self, method_name: str) -> str:
+        return _extract_method(self._source(), method_name)
+
+    def test_write_handler_separates_dry_run_noop_and_apply_side_effects(self) -> None:
+        source = self._source()
+        body = _extract_method(source, "HandleSerializedPropertyWrite")
+        dry_run = body.find("EDITOR_CTRL_SERIALIZED_PROPERTY_DRY_RUN_OK")
+        no_change = body.find("EDITOR_CTRL_SERIALIZED_PROPERTY_NO_CHANGE")
+        undo = body.find("Undo.RecordObject")
+        apply = body.find("ApplyModifiedProperties")
+        for label, index in (
+            ("dry-run branch", dry_run),
+            ("no-change branch", no_change),
+            ("Undo apply branch", undo),
+            ("SerializedObject apply branch", apply),
+        ):
+            with self.subTest(label=label):
+                self.assertNotEqual(-1, index, msg=f"Missing {label}.")
+        self.assertLess(dry_run, undo)
+        self.assertLess(no_change, undo)
+        self.assertLess(undo, apply)
+        for token in (
+            "MarkSerializedPropertyTargetDirty",
+            "RecordSerializedPropertyPrefabOverride",
+            "saved = false",
+            "executed = true",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+        write_result_builder = _extract_method(source, "BuildWriteResultJson")
+        self.assertIn(
+            "dirty_target",
+            write_result_builder,
+            msg="Write result payload must report the dirty target evidence required by #112 dry-run/apply responses.",
+        )
+        for token in (
+            "EditorSceneManager.MarkSceneDirty",
+            "PrefabUtility.RecordPrefabInstancePropertyModifications",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, source)
+
+    def test_writer_scope_rejects_structs_mismatches_unsigned_and_bad_enums(self) -> None:
+        source = self._source()
+        for token in (
+            "SerializedPropertyType.Vector3",
+            "SerializedPropertyType.Color",
+            "SerializedPropertyType.Quaternion",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_UNSUPPORTED_WRITE",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_TYPE_MISMATCH",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_UNSIGNED_RANGE",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_ENUM_VALUE_NOT_FOUND",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, source)
+        range_helper = self._method("ResolveSerializedPropertyIntegerRange")
+        for token in (
+            "property.numericType",
+            "SerializedPropertyNumericType.Int64",
+            "SerializedPropertyNumericType.UInt64",
+            "ulong.MaxValue",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, range_helper)
+        value_fields = self._method("AppendPropertyValueFields")
+        for token in (
+            "SerializedPropertyNumericType.UInt64",
+            "ulong_value",
+            "property.ulongValue",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, value_fields)
+        integer_writer = self._method("ApplyIntegerValue")
+        self.assertIn('BuildScalarJson("ulong_value", property.ulongValue)', integer_writer)
+        error_plan = self._method("WritePlanError")
+        for token in ("CurrentJson", "ProposedJson", "BuildCurrentPropertyValueJson", "BuildErrorProposalJson"):
+            with self.subTest(token=token):
+                self.assertIn(token, error_plan)
+        write_body = self._method("HandleSerializedPropertyWrite")
+        self.assertIn("BuildWriteResultJson(", write_body)
+
+    def test_object_reference_writes_resolve_paths_null_and_identity(self) -> None:
+        body = self._method("ResolveSerializedPropertyObjectReference")
+        for token in (
+            "serialized_property_object_reference_asset_path",
+            "AssetDatabase.LoadAssetAtPath",
+            "serialized_property_object_reference_hierarchy_path",
+            "serialized_property_object_reference_null",
+            "TryResolveGameObjectInActiveStage",
+            "ambiguity.code",
+            "ambiguity.message",
+            "GetComponents",
+            "candidates",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_OBJECT_REF_AMBIGUOUS",
+            "property.objectReferenceValue != resolved",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_OBJECT_REF_NOT_FOUND",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_OBJECT_REF_TYPE_MISMATCH",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+        self.assertNotIn("ReferenceEquals", body)
+        self.assertNotIn("ambiguity != null ? ambiguity.message", body)
+        ambiguity = self._method("BuildObjectReferenceAmbiguityJson")
+        for token in (
+            "object_reference_hierarchy_path",
+            "candidates",
+            "candidate",
+            "component_index",
+            "AppendJsonString",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, ambiguity)
+        self.assertNotIn("go.GetComponent(expected.Type)", body)
+
+    def test_array_resize_reports_resulting_size_and_changed_evidence(self) -> None:
+        body = self._method("ApplySerializedPropertyValueIntent")
+        for token in (
+            "arraySize",
+            "resulting_array_size",
+            "would_change",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_ARRAY_SIZE_INVALID",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+
+
+class EditorSerializedPropertyUdonSyncSourceTests(unittest.TestCase):
+    _PARTIAL = TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.SerializedProperty.cs"
+
+    def _source(self) -> str:
+        return _read_serialized_property_partials()
+
+    def _method(self, method_name: str) -> str:
+        return _extract_method(self._source(), method_name)
+
+    def test_confirmed_changed_write_attempts_udonsharp_sync_after_apply(self) -> None:
+        body = self._method("HandleSerializedPropertyWrite")
+        apply = body.find("ApplyModifiedProperties")
+        sync = body.find("BuildUdonSharpSyncStatus")
+        self.assertNotEqual(-1, apply, msg="Write handler must apply the SerializedObject.")
+        self.assertNotEqual(-1, sync, msg="Write handler must build UdonSharp sync status.")
+        self.assertLess(apply, sync)
+        self.assertIn("InvokeUdonSharpCopyProxyToUdon", self._source())
+
+    def test_sync_detection_uses_component_assembly_and_backing_behaviour(self) -> None:
+        body = self._method("BuildUdonSharpSyncStatus")
+        for token in (
+            "component.GetType().Assembly",
+            "UdonSharp",
+            "GetComponent",
+            "UdonBehaviour",
+            "not_applicable",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+        self.assertIn("if (!typeLooksUdonSharp || backing == null)", body)
+
+    def test_sync_warning_preserves_completed_write_success_code(self) -> None:
+        body = self._method("HandleSerializedPropertyWrite")
+        for token in (
+            'severity = "warning"',
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_WRITE_OK",
+            "diagnostics",
+            "sync_status",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+
+
+class EditorSerializedPropertyUnitySmokeSourceTests(unittest.TestCase):
+    _UNITY_INTEGRATION = TOOLS_DIR / "PrefabSentinel.UnityIntegrationTests.cs"
+
+    def _source(self) -> str:
+        return _strip_cs_comments(self._UNITY_INTEGRATION.read_text(encoding="utf-8"))
+
+    def test_unity_smoke_fixture_registers_serialized_property_probe(self) -> None:
+        source = self._source()
+        run_suite = _extract_method(source, "RunTestSuite")
+        self.assertIn("SerializedPropertySmokeSupport", source)
+        for token in (
+            "Test_EditorCtrl_SerializedProperty_ReadListWriteDryRunNoOp",
+            "EditorCtrl_SerializedProperty_ReadListWriteDryRunNoOp",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, source)
+                self.assertIn(token, run_suite)
+
+    def test_unity_smoke_probe_exercises_three_serialized_property_actions(self) -> None:
+        body = _extract_method(
+            self._source(),
+            "Test_EditorCtrl_SerializedProperty_ReadListWriteDryRunNoOp",
+        )
+        for token in (
+            "editor_serialized_property_read",
+            "editor_serialized_property_list",
+            "editor_serialized_property_write",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_DRY_RUN_OK",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_NO_CHANGE",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_WRITE_OK",
+            "root_property_path",
+            "m_LocalPosition",
+            "missingRoot",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_NOT_FOUND",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+
+
+class EditorSerializedPropertyDocsTests(unittest.TestCase):
+    _PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+    def _doc(self, relative: str) -> str:
+        return (self._PROJECT_ROOT / relative).read_text(encoding="utf-8")
+
+    def test_readme_routes_serialized_property_surface_to_specialized_docs(self) -> None:
+        text = self._doc("README.md")
+        self.assertIn("SerializedObject-backed", text)
+        self.assertIn("editor_serialized_property_read", text)
+        self.assertIn("docs/tools.md", text)
+        self.assertIn("docs/api-reference.md", text)
+
+    def test_tools_catalog_lists_all_serialized_property_tools(self) -> None:
+        text = self._doc("docs/tools.md")
+        for tool in (
+            "editor_serialized_property_read",
+            "editor_serialized_property_list",
+            "editor_serialized_property_write",
+            "root_property_path",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_NOT_FOUND",
+        ):
+            with self.subTest(tool=tool):
+                self.assertIn(tool, text)
+
+    def test_api_reference_documents_payload_and_error_codes(self) -> None:
+        text = self._doc("docs/api-reference.md")
+        for token in (
+            "serialized_property_json",
+            "value_kind",
+            "bool_value",
+            "int_value",
+            "long_value",
+            "float_value",
+            "string_value",
+            "enum_name",
+            "enum_index",
+            "root_property_path",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_READ_OK",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_DRY_RUN_OK",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_NO_CHANGE",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_WRITE_OK",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_NOT_FOUND",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_COMPONENT_AMBIGUOUS",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_OBJECT_REF_AMBIGUOUS",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_UNSIGNED_RANGE",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, text)
+        self.assertNotIn(" / `value` / ", text)
+
+    def test_operational_docs_cover_audit_and_unity_validation_boundary(self) -> None:
+        config = self._doc("CONFIGURATION.md")
+        testing = self._doc("TESTING.md")
+        self.assertIn("editor_serialized_property_write", config)
+        self.assertIn("SerializedPropertySmokeSupport", testing)
+        self.assertIn("Unity real-device validation", testing)
+        self.assertIn("editor_serialized_property_write", testing)
 
 
 class PrefabStagePersistFixSourceInvariantTests(unittest.TestCase):

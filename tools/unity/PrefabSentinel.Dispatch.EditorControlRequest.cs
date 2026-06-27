@@ -95,6 +95,32 @@ namespace PrefabSentinel
         // Phase 5: SetProperty + SaveAsPrefab
         public string object_reference = string.Empty;
 
+        // Issue #112: generic SerializedObject-backed property tools.
+        public string property_path = string.Empty;
+        public string root_property_path = string.Empty;
+        public int cap = 50;
+        public bool serialized_property_bool_value = false;
+        public bool serialized_property_bool_value_present = false;
+        public int serialized_property_int_value = 0;
+        public bool serialized_property_int_value_present = false;
+        public long serialized_property_long_value = 0L;
+        public bool serialized_property_long_value_present = false;
+        public float serialized_property_float_value = 0f;
+        public bool serialized_property_float_value_present = false;
+        public string serialized_property_string_value = string.Empty;
+        public bool serialized_property_string_value_present = false;
+        public string serialized_property_enum_name = string.Empty;
+        public bool serialized_property_enum_name_present = false;
+        public int serialized_property_enum_index = 0;
+        public bool serialized_property_enum_index_present = false;
+        public string serialized_property_object_reference_asset_path = string.Empty;
+        public bool serialized_property_object_reference_asset_path_present = false;
+        public string serialized_property_object_reference_hierarchy_path = string.Empty;
+        public bool serialized_property_object_reference_hierarchy_path_present = false;
+        public bool serialized_property_object_reference_null = false;
+        public int serialized_property_array_size = 0;
+        public bool serialized_property_array_size_present = false;
+
         // Phase 6: Batch Operations + Scene
         public string primitive_type = string.Empty;
         public string scale = string.Empty;

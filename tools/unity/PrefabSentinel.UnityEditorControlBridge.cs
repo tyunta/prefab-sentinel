@@ -19,7 +19,7 @@ namespace PrefabSentinel
     public static partial class UnityEditorControlBridge
     {
         public const int ProtocolVersion = 1;
-        public const string BridgeVersion = "0.7.7";
+        public const string BridgeVersion = "0.7.8";
         private static readonly string BridgeSessionId = Guid.NewGuid().ToString("N");
         private static readonly string BridgeInstanceId = Guid.NewGuid().ToString("N");
 
@@ -248,6 +248,7 @@ namespace PrefabSentinel
             public float[] target_bounds_center = null;
             public float[] target_bounds_extents = null;
 
+            public string serialized_property_json = string.Empty;
             public bool read_only = true;
             public bool executed = false;
 
@@ -687,6 +688,15 @@ private static string DeriveTransportRequestId(string requestPath)
                     break;
                 case "editor_set_property":
                     response = HandleEditorSetProperty(request);
+                    break;
+                case "editor_serialized_property_read":
+                    response = HandleSerializedPropertyRead(request);
+                    break;
+                case "editor_serialized_property_list":
+                    response = HandleSerializedPropertyList(request);
+                    break;
+                case "editor_serialized_property_write":
+                    response = HandleSerializedPropertyWrite(request);
                     break;
                 case "safe_save_prefab":
                     response = HandleSafeSaveAsPrefab(request);
