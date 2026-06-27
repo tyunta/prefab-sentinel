@@ -468,6 +468,44 @@ class CollectProjectGuidIndexTests(unittest.TestCase):
         self.assertIn("abcdef01234567890abcdef012345678", index)
         self.assertEqual(index["abcdef01234567890abcdef012345678"].name, "test.cs")
 
+    def test_symlinked_meta_file_is_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir, tempfile.TemporaryDirectory() as outside_tmp:
+            root = Path(tmpdir)
+            outside_meta = Path(outside_tmp) / "Escaped.mat.meta"
+            outside_meta.write_text(
+                "guid: abcdef01234567890abcdef012345678\n",
+                encoding="utf-8",
+            )
+            meta = root / "Escaped.mat.meta"
+            try:
+                meta.symlink_to(outside_meta)
+            except (OSError, NotImplementedError):
+                self.skipTest("platform does not support symlink creation")
+
+            index = collect_project_guid_index(root)
+
+        self.assertNotIn("abcdef01234567890abcdef012345678", index)
+
+    def test_symlinked_asset_target_is_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir, tempfile.TemporaryDirectory() as outside_tmp:
+            root = Path(tmpdir)
+            outside_asset = Path(outside_tmp) / "Escaped.mat"
+            outside_asset.write_text("outside", encoding="utf-8")
+            asset = root / "Escaped.mat"
+            try:
+                asset.symlink_to(outside_asset)
+            except (OSError, NotImplementedError):
+                self.skipTest("platform does not support symlink creation")
+            meta = root / "Escaped.mat.meta"
+            meta.write_text(
+                "guid: abcdef01234567890abcdef012345678\n",
+                encoding="utf-8",
+            )
+
+            index = collect_project_guid_index(root)
+
+        self.assertNotIn("abcdef01234567890abcdef012345678", index)
+
     def test_excludes_default_dirs(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

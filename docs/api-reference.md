@@ -61,6 +61,43 @@ MCP ツールが返す応答エンベロープの形状とエラーコードの�
 
 wire `severity` の決定規則（issue #4）: `Diagnostic` dataclass は任意の per-item `severity`（`str | None`、既定 `None`）を持つ。`_diagnostic_to_wire` は **diagnostic 自身の `severity` が設定されていればそれを優先**し、`None` のときはエンベロープの `severity` を継承する（`diag.severity or default_severity`）。これにより 1 つのエンベロープ内で個々の diagnostic が異なる severity を運べる（例: envelope が `error` でも一部 diagnostic は `warning`）。per-item `severity` は `Severity` 語彙に対して検証されない任意文字列であり、設定しない限り wire 出力は従来と byte-identical。
 
+## `validate_materials` response
+
+`validate_materials(scope: str | None = None, include_details: bool = False)` は read-only の静的 Material / shader / TMP / icon-font validator。`scope` は file または directory を受け付け、明示 scope が無い場合だけ activate 済み session scope を使う。明示 scope と session scope のどちらも無い場合は project root scan にフォールバックせず、`MATERIAL_VALIDATION_SCOPE_REQUIRED` を返す。
+
+成功・失敗コード:
+
+| コード | success | severity | 意味 |
+|--------|---------|----------|------|
+| `MATERIAL_VALIDATION_OK` | `true` | `info` | scope 内の supported Unity text targets を読み終え、validation findings が無い。supported target が 0 件の既存 scope もこのコードで返る。 |
+| `MATERIAL_VALIDATION_FINDINGS` | `false` | `warning` | generic risk または declarative rule finding が 1 件以上ある。schema/read error は無い。 |
+| `MATERIAL_VALIDATION_SCOPE_REQUIRED` | `false` | `error` | MCP wrapper で明示 scope も activate 済み session scope も無い。orchestrator は呼ばれない。 |
+| `MATERIAL_VALIDATION_SCOPE_NOT_FOUND` | `false` | `error` | resolved scope が存在しない、project root 外、または usable scope として扱えない。 |
+| `MATERIAL_RULES_INVALID` | `false` | `error` | project root の `config/material_validation_rules.json` が invalid JSON または schema 不一致。validation scan は実行しない。 |
+| `MATERIAL_VALIDATION_READ_ERROR` | `false` | `error` | in-scope supported Unity text asset の読み取りで validation の信頼性を保てない failure があった。 |
+
+`data` の基本形:
+
+| field | 説明 |
+|-------|------|
+| `summary` | scanned file / material / renderer slot / TMP evidence / folder entry 件数。 |
+| `rule_config` | `status` (`absent` / `loaded` / `invalid`), `path`, loaded rule family counts。absent config は error ではなく、generic checks のみを意味する。 |
+| `read_only` | 常に `true`。asset repair や patch application は行わない。 |
+| `details` | `include_details=true` のときだけ返る。material asset evidence、renderer slot evidence、TMP/font evidence、folder evidence を含む。TMP の ZTest / atlas など静的に読めない optional fields は合成せず省略する。 |
+
+diagnostic code:
+
+| コード | severity | 説明 |
+|--------|----------|------|
+| `MATERIAL_SHADER_MISSING` | `warning` | `.mat` の shader reference が serialized evidence 上で欠落している。 |
+| `MATERIAL_SHADER_UNRESOLVED` | `warning` | `.mat` の shader GUID が project meta index で解決できない。 |
+| `MATERIAL_SLOT_UNRESOLVED` | `warning` | renderer material slot の material GUID が project meta index で解決できない。 |
+| `MATERIAL_SHADER_POLICY_MISMATCH` | `warning` | loaded `shader_name_policies` の expected shader と evidence source の shader 名が一致しない。 |
+| `MATERIAL_SHARED_GROUP_MISMATCH` | `warning` | loaded `shared_material_groups.expected_material` と selected renderer slot material が一致しない。 |
+| `MATERIAL_SHARED_GROUP_DRIFT` | `warning` | loaded `shared_material_groups` が expected material 無しで複数 candidate material を検出した。winner は宣言しない。 |
+| `MATERIAL_FOLDER_POLICY_VIOLATION` | `warning` | loaded `folder_policies` の disallowed extension または classifiable asset kind に該当した。unknown kind は silent。 |
+| `MATERIAL_VALIDATION_READ_ERROR` | `error` | supported Unity text asset を UTF-8 text として読めない等の per-file read failure。 |
+
 ## SerializedProperty editor payload (issue #112)
 
 `editor_serialized_property_read` / `editor_serialized_property_list` / `editor_serialized_property_write` は live Editor Bridge の標準エンベロープを返す。Bridge からの raw carrier は `data.serialized_property_json` で、Python MCP wrapper は可能な場合に decode して `data.serialized_property` に同じ payload を格納する。decode できない carrier は envelope の `data.serialized_property_json` として残し、インフラ例外に丸めない。
@@ -89,6 +126,12 @@ wire `severity` の決定規則（issue #4）: `Diagnostic` dataclass は任意�
 | `REF001` | Missing asset guid / unreadable target metadata — `patch_apply` / `revert_overrides` / `validate_refs` は、参照されたアセットの GUID が 1 件でもプロジェクト内に見つからない場合、**fail-fast** で全体を中断し `success=False`, `severity="error"`, `code="REF001"` を返す。`where_used` / `find_referencing_assets` では target `.meta` の status failure または metadata read/decode failure も `REF001` の typed failure として返す。部分適用や書き込みは一切行わない。 |
 | `REF002` | Missing local fileID |
 | `REF404` | Reference lookup path unavailable — `where_used` / `find_referencing_assets` の `scope` path status failure または target asset path status failure。`severity="error"`、message は `scope path status` または `target asset path status` を含み、raw filesystem exception は公開境界へ出さない。 |
+| `MATERIAL_VALIDATION_OK` | `validate_materials` が supported Unity text targets を read-only scan し、generic risk / loaded rule finding / schema-read error が無かった場合。`severity="info"`。 |
+| `MATERIAL_VALIDATION_FINDINGS` | `validate_materials` が generic material shader risk、renderer slot risk、または loaded declarative rule finding を検出した場合。`success=false`, `severity="warning"`。 |
+| `MATERIAL_VALIDATION_SCOPE_REQUIRED` | `validate_materials` MCP wrapper が明示 scope も activate 済み session scope も受け取れなかった場合。project root fallback は行わず、orchestrator を呼ばない。`severity="error"`。 |
+| `MATERIAL_VALIDATION_SCOPE_NOT_FOUND` | `validate_materials` の resolved scope が存在しない、project root 外、または usable scope として扱えない場合。`severity="error"`。 |
+| `MATERIAL_RULES_INVALID` | project root の `config/material_validation_rules.json` が unreadable / invalid JSON / schema 不一致だった場合。`validate_materials` は validation scan を開始せず `severity="error"` で停止する。 |
+| `MATERIAL_VALIDATION_READ_ERROR` | `validate_materials` が in-scope supported Unity text asset の read/decode failure を検出し、validation の信頼性を保てない場合。`severity="error"`。 |
 | `RUN001` | Udon runtime exception |
 | `RUN002` | ClientSim startup failure |
 | `CHANGE_REASON_REQUIRED` | `confirm=True` で呼ばれた書き込み系ツールが `change_reason` を欠いた場合。`editor_run_script` は `confirm=False` や空文字の `change_reason` も同コードで拒否する（監査トレイル強制）。 |

@@ -6,6 +6,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+from prefab_sentinel.contracts import Severity, ToolResponse
 from prefab_sentinel.diagnostics_baseline import load_diagnostics_baseline
 from prefab_sentinel.ignore_guids_io import (
     IGNORE_GUIDS_RELATIVE_PATH,
@@ -142,6 +143,38 @@ def register_validation_tools(server: FastMCP, session: ProjectSession) -> None:
                 },
             })
         return payload
+
+    @server.tool()
+    def validate_materials(
+        scope: str | None = None,
+        include_details: bool = False,
+    ) -> dict[str, Any]:
+        """Run static material/shader/TMP/icon-font validation for a scope.
+
+        Args:
+            scope: File or directory scope. Uses the activated session scope
+                when omitted.
+            include_details: Include detailed static evidence when true.
+        """
+        resolved_scope = None if scope is not None and not scope.strip() else session.resolve_scope(scope)
+        if resolved_scope is None:
+            return ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code="MATERIAL_VALIDATION_SCOPE_REQUIRED",
+                message=(
+                    "validate_materials requires an explicit scope or an "
+                    "activated session scope."
+                ),
+                data={"read_only": True, "scope": None},
+                diagnostics=[],
+            ).to_dict()
+
+        orch = session.get_orchestrator()
+        return orch.validate_materials(
+            scope=resolved_scope,
+            include_details=include_details,
+        ).to_dict()
 
     @server.tool()
     def inspect_wiring(

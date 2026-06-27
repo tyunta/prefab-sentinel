@@ -51,6 +51,47 @@
 - JSON が壊れている、root が object でない、schema が違う、空文字列 key が含まれる場合は `DIAGNOSTICS_BASELINE_INVALID` の error envelope を返し、対象 tool は orchestrator を呼ばない。
 - このファイルは read-only に扱う。tool 実行中に自動作成・自動更新しない。
 
+## material_validation_rules.json 形式仕様
+
+`config/material_validation_rules.json` は project root 直下の `config/` に置く、`validate_materials` 用の任意の宣言的ルールファイル。ファイルが存在しない場合、`validate_materials` は generic static checks のみを実行し、shader 名・folder・shared material の project-specific policy は一切仮定しない。ファイルが存在して JSON/schema が invalid な場合は `MATERIAL_RULES_INVALID` の error envelope で停止し、validation scan は開始しない。
+
+```json
+{
+  "version": 1,
+  "shader_name_policies": [
+    {
+      "id": "ui-overlay-shader",
+      "scope": "Assets/UI",
+      "hierarchy_prefix": "Canvas/Overlay",
+      "expected_shader": "UI/Overlay/AlwaysOnTop"
+    }
+  ],
+  "shared_material_groups": [
+    {
+      "id": "nameplate-icons",
+      "scope": "Assets/UI",
+      "hierarchy_prefix": "Canvas/Overlay/Icons",
+      "expected_material": "Assets/UI/Materials/Icon.mat"
+    }
+  ],
+  "folder_policies": [
+    {
+      "id": "no-material-assets-in-fonts",
+      "folder": "Assets/Fonts",
+      "disallowed_extensions": [".mat"],
+      "disallowed_asset_kinds": ["Material"]
+    }
+  ]
+}
+```
+
+- `version` は `1` のみ受理する。
+- `shader_name_policies[]` は `id`、適用対象 `scope`、任意の renderer hierarchy prefix `hierarchy_prefix`、期待 shader 名 `expected_shader` を持つ。`.mat` asset、renderer slot 経由で解決した material、TMP material preset 経由で解決した material evidence に適用される。
+- `shared_material_groups[]` は `id`、適用対象 `scope`、任意の renderer hierarchy prefix `hierarchy_prefix` を持つ。`expected_material` は任意で、指定時は一致しない slot だけを `MATERIAL_SHARED_GROUP_MISMATCH` にする。未指定時に複数 material candidate が見つかった場合は `MATERIAL_SHARED_GROUP_DRIFT` を返すが、正解 material は宣言しない。
+- `folder_policies[]` は `id`、project-relative folder `folder`、任意の `disallowed_extensions[]`、任意の `disallowed_asset_kinds[]` を持つ。unknown kind は policy violation として扱わない。
+- 各配列は省略可。省略された rule family は空として扱う。
+- このファイルは read-only に扱う。tool 実行中に自動作成・自動更新しない。
+
 ## scope config 規約
 
 `<scope>/config/*.txt` 系の設定ファイルはすべて `--scope` 起点で相対解決する。固定パスは持たない。
