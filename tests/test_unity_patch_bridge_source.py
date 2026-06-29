@@ -26,6 +26,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._typing_helpers import require_not_none
+
 # The patch-bridge layout invariants are read-only inspections of the
 # un-mutated ``tools/unity`` tree; they cannot observe mutations applied
 # to ``prefab_sentinel/`` so they are excluded from the mutmut run via
@@ -318,6 +320,7 @@ class TestPatchSelectorNResolverDelegation(unittest.TestCase):
         self.assertIsNotNone(
             match, msg="TryFindUniqueComponent declaration not found"
         )
+        match = require_not_none(match, "TryFindUniqueComponent declaration")
         source = self._resolve_source()
         start = match.start()
         depth = 0

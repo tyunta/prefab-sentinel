@@ -12,7 +12,8 @@ real Editor Bridge is required.
 from __future__ import annotations
 
 import unittest
-from unittest.mock import patch
+from contextlib import AbstractContextManager
+from unittest.mock import MagicMock, patch
 
 from prefab_sentinel import mcp_tools_editor_exec, mcp_tools_editor_view
 
@@ -26,7 +27,7 @@ class EditorRunScriptTests(unittest.TestCase):
         "}"
     )
 
-    def _patch_bridge(self) -> object:
+    def _patch_bridge(self) -> AbstractContextManager[MagicMock]:
         """Return a patch of ``send_action`` that also records calls.
 
         Returning the patcher lets each test control the mock's return

@@ -8,6 +8,11 @@ from unittest.mock import MagicMock, patch
 from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse
 from prefab_sentinel.orchestrator import Phase1Orchestrator
 from prefab_sentinel.services.reference_resolver import ReferenceResolverService
+from tests._orchestrator_mocks import (
+    MockedPhase1Orchestrator,
+    make_mocked_orchestrator,
+)
+from tests._typing_helpers import require_str, require_tool_response
 
 
 def _ok_response(code: str = "OK", data: dict | None = None) -> ToolResponse:
@@ -54,13 +59,10 @@ def _make_runtime_mock() -> MagicMock:
     return mock
 
 
-def _make_orchestrator() -> Phase1Orchestrator:
-    return Phase1Orchestrator(
-        reference_resolver=MagicMock(),
-        prefab_variant=MagicMock(),
-        runtime_validation=_make_runtime_mock(),
-        serialized_object=MagicMock(),
-    )
+def _make_orchestrator() -> MockedPhase1Orchestrator:
+    orch = make_mocked_orchestrator()
+    orch.runtime_validation = _make_runtime_mock()
+    return orch
 
 
 class InspectVariantTests(unittest.TestCase):
@@ -291,7 +293,7 @@ class ReadTargetFilePathResolutionTests(unittest.TestCase):
 
             result = orch._read_target_file("Assets/Test.prefab", "TEST")
             self.assertIsInstance(result, str)
-            self.assertIn("m_Name: X", result)
+            self.assertIn("m_Name: X", require_str(result, "target file text"))
 
     def test_absolute_path_still_works(self) -> None:
 
@@ -305,7 +307,7 @@ class ReadTargetFilePathResolutionTests(unittest.TestCase):
 
             result = orch._read_target_file(str(target), "TEST")
             self.assertIsInstance(result, str)
-            self.assertIn("m_Name: Y", result)
+            self.assertIn("m_Name: Y", require_str(result, "target file text"))
 
     def test_nonexistent_relative_path_returns_error(self) -> None:
 
@@ -316,8 +318,9 @@ class ReadTargetFilePathResolutionTests(unittest.TestCase):
 
             result = orch._read_target_file("Assets/NoSuch.prefab", "TEST")
             self.assertIsInstance(result, ToolResponse)
-            self.assertFalse(result.success)
-            self.assertEqual("TEST_FILE_NOT_FOUND", result.code)
+            response = require_tool_response(result, "missing file response")
+            self.assertFalse(response.success)
+            self.assertEqual("TEST_FILE_NOT_FOUND", response.code)
 
 
 class FileTypeGuardTests(unittest.TestCase):
@@ -763,7 +766,9 @@ class ValidateRefsTests(unittest.TestCase):
         from prefab_sentinel.orchestrator import orchestrator_wiring
 
         baseline = DiagnosticsBaseline(
-            known_diagnostics=frozenset({"inspect_wiring:null_reference:Assets/Base.prefab:40:targetRef"}),
+            known_diagnostics=(
+                "inspect_wiring:null_reference:Assets/Base.prefab:40:targetRef",
+            ),
             path="/project/config/diagnostics_baseline.json",
             status="loaded",
         )
@@ -1440,7 +1445,7 @@ class PatchApplyTests(unittest.TestCase):
             "postconditions": [],
         }
 
-    def _make_orch_with_dry_run(self) -> Phase1Orchestrator:
+    def _make_orch_with_dry_run(self) -> MockedPhase1Orchestrator:
         orch = _make_orchestrator()
         orch.serialized_object.dry_run_resource_plan.return_value = _ok_response(
             "DRY_RUN_OK"
@@ -2099,13 +2104,8 @@ class TestCheckFieldCoverage(unittest.TestCase):
 class TestInvalidationDelegation(unittest.TestCase):
     """Orchestrator invalidation delegates to services."""
 
-    def _make_orchestrator(self) -> Phase1Orchestrator:
-        return Phase1Orchestrator(
-            reference_resolver=MagicMock(),
-            prefab_variant=MagicMock(),
-            runtime_validation=MagicMock(),
-            serialized_object=MagicMock(),
-        )
+    def _make_orchestrator(self) -> MockedPhase1Orchestrator:
+        return make_mocked_orchestrator()
 
     def test_invalidate_text_cache_delegates(self) -> None:
         orch = self._make_orchestrator()

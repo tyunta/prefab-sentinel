@@ -39,9 +39,13 @@ import tempfile
 import tomllib
 import unittest
 from pathlib import Path
+from typing import Any, cast
 from unittest import mock
 
 import pytest
+
+from scripts.mutmut_score_report import AUDITED_MODULES as AUDITED_MODULES_FOR_HISTORY
+from tests._typing_helpers import require_mapping
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT_PATH = PROJECT_ROOT / "pyproject.toml"
@@ -50,27 +54,19 @@ CONTRIBUTING_PATH = PROJECT_ROOT / "CONTRIBUTING.md"
 TESTING_PATH = PROJECT_ROOT / "TESTING.md"
 QUARTERLY_TEMPLATE_PATH = PROJECT_ROOT / "docs" / "quarterly_mutmut_report_template.md"
 
-# Make ``scripts/mutmut_score_report.py`` importable so the audited
-# module list can be re-exported instead of duplicated in this file.
-_SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-if str(_SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS_DIR))
 
-from mutmut_score_report import AUDITED_MODULES as AUDITED_MODULES_FOR_HISTORY  # noqa: E402
-
-
-def _load_pyproject() -> dict:
+def _load_pyproject() -> dict[str, Any]:
     return tomllib.loads(PYPROJECT_PATH.read_text(encoding="utf-8"))
 
 
-def _load_mutmut_section() -> dict:
-    return _load_pyproject().get("tool", {}).get("mutmut", {})
+def _load_mutmut_section() -> dict[str, Any]:
+    tool = require_mapping(_load_pyproject().get("tool", {}), "pyproject tool")
+    return require_mapping(tool.get("mutmut", {}), "mutmut config")
 
 
 def _import_run_unit_tests():
-    # Local import shared by every preflight test class.  ``scripts`` is on
-    # ``sys.path`` (added at module load above) so the runner module can be
-    # imported here without mutating the importer's ``__init__`` surface.
+    # Local import shared by every preflight test class without mutating the
+    # runner module's import surface.
     from scripts import run_unit_tests  # noqa: PLC0415
 
     return run_unit_tests
@@ -478,7 +474,8 @@ class MutmutSanityIsolationTests(unittest.TestCase):
             destination_root.mkdir(parents=True)
 
         def _fake_run(*_args: object, **kwargs: object) -> _FakeCompletedProcess:
-            recorded_cwds.append(Path(kwargs["cwd"]))
+            cwd = cast(str | os.PathLike[str], kwargs["cwd"])
+            recorded_cwds.append(Path(cwd))
             (recorded_cwds[-1] / "mutants").mkdir()
             return _FakeCompletedProcess()
 

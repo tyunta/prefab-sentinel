@@ -18,7 +18,6 @@ prefix.
 from __future__ import annotations
 
 import asyncio
-import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -39,6 +38,7 @@ from prefab_sentinel.services.serialized_object.patch_preview import (
 from prefab_sentinel.services.serialized_object.service import (
     SerializedObjectService as _ServiceSerializedObjectService,
 )
+from tests._typing_helpers import load_json_object
 
 
 def _run_call_tool(coro: Any) -> dict[str, Any]:
@@ -47,7 +47,7 @@ def _run_call_tool(coro: Any) -> dict[str, Any]:
     if isinstance(raw, tuple) and len(raw) == 2 and isinstance(raw[1], dict):
         return raw[1]
     if isinstance(raw, list) and raw and hasattr(raw[0], "text"):
-        return json.loads(raw[0].text)
+        return load_json_object(raw[0].text, "call_tool response")
     raise RuntimeError("Unexpected call_tool return shape")
 
 

@@ -9,7 +9,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock, call, patch
 
 import prefab_sentinel.editor_bridge as editor_bridge
@@ -3028,7 +3028,7 @@ class TestEditorSerializedPropertyTools(unittest.TestCase):
 
     def test_read_rejects_required_address_fields_before_transport(self) -> None:
         server = create_server()
-        cases = [
+        cases: list[tuple[dict[str, object], str]] = [
             (
                 {"hierarchy_path": "", "component_type": "C", "property_path": "m_Name"},
                 "EDITOR_CTRL_SERIALIZED_PROPERTY_NO_PATH",
@@ -3098,7 +3098,7 @@ class TestEditorSerializedPropertyTools(unittest.TestCase):
 
     def test_list_invalid_traversal_inputs_stop_before_transport(self) -> None:
         server = create_server()
-        cases = [
+        cases: list[tuple[dict[str, object], str]] = [
             ({"depth": -1}, "EDITOR_CTRL_SERIALIZED_PROPERTY_LIST_LIMIT_INVALID"),
             ({"cap": 201}, "EDITOR_CTRL_SERIALIZED_PROPERTY_LIST_LIMIT_INVALID"),
             ({"cursor": "next"}, "EDITOR_CTRL_SERIALIZED_PROPERTY_CURSOR_INVALID"),
@@ -3106,7 +3106,7 @@ class TestEditorSerializedPropertyTools(unittest.TestCase):
             ({"cursor": " 1"}, "EDITOR_CTRL_SERIALIZED_PROPERTY_CURSOR_INVALID"),
             ({"cursor": "1_0"}, "EDITOR_CTRL_SERIALIZED_PROPERTY_CURSOR_INVALID"),
         ]
-        base = {"hierarchy_path": "/Obj", "component_type": "ExampleComponent"}
+        base: dict[str, object] = {"hierarchy_path": "/Obj", "component_type": "ExampleComponent"}
         with patch("prefab_sentinel.mcp_tools_editor_serialized_property.send_action") as mock_send:
             for extra, expected_code in cases:
                 payload = {**base, **extra}
@@ -3117,7 +3117,7 @@ class TestEditorSerializedPropertyTools(unittest.TestCase):
 
     def test_write_preserves_false_zero_and_empty_string_presence_markers(self) -> None:
         server = create_server()
-        calls = [
+        calls: list[tuple[dict[str, object], str, str, object]] = [
             ({"bool_value": False}, "serialized_property_bool_value_present", "serialized_property_bool_value", False),
             ({"int_value": 0}, "serialized_property_int_value_present", "serialized_property_int_value", 0),
             ({"string_value": ""}, "serialized_property_string_value_present", "serialized_property_string_value", ""),
@@ -4704,7 +4704,7 @@ class TestExpectedRootProviderLifespan(unittest.TestCase):
 
         async def exercise() -> dict[str, object]:
             server = create_server(project_root=expected_root)
-            async with server._mcp_server.lifespan(server):
+            async with server._mcp_server.lifespan(cast(Any, server)):
                 result, _ = self._send_with_fake_response(
                     self._successful_editor_state(actual_root)
                 )
@@ -4728,7 +4728,7 @@ class TestExpectedRootProviderLifespan(unittest.TestCase):
             server = create_server(project_root=expected_root)
             with patch("prefab_sentinel.session.ProjectSession.shutdown", fail_shutdown):
                 with self.assertRaisesRegex(RuntimeError, "shutdown failed"):
-                    async with server._mcp_server.lifespan(server):
+                    async with server._mcp_server.lifespan(cast(Any, server)):
                         pass
 
         _run(exercise_failed_shutdown())

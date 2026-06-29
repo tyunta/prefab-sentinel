@@ -19,6 +19,7 @@ from prefab_sentinel.csharp_fields_resolve import (
     resolve_inherited_fields,
     resolve_script_fields,
 )
+from tests._typing_helpers import require_not_none
 
 
 class TestParseSerializedFields(unittest.TestCase):
@@ -478,7 +479,7 @@ class TestParseClassInfo(unittest.TestCase):
         info = parse_class_info(source)
 
         self.assertIsNotNone(info)
-        assert info is not None
+        info = require_not_none(info, "class info")
         # Pin the documented four-tuple (name, base_class, field_count,
         # first_field_name) in a single equality.
         self.assertEqual(
@@ -490,6 +491,7 @@ class TestParseClassInfo(unittest.TestCase):
         source = "public class HelperData {\n    public int value;\n}\n"
         info = parse_class_info(source)
         self.assertIsNotNone(info)
+        info = require_not_none(info, "class info")
         self.assertEqual("HelperData", info.name)
         self.assertEqual("", info.base_class)
 
@@ -497,6 +499,7 @@ class TestParseClassInfo(unittest.TestCase):
         source = "public abstract class BaseUnit : MonoBehaviour {\n    public float hp;\n}\n"
         info = parse_class_info(source)
         self.assertIsNotNone(info)
+        info = require_not_none(info, "class info")
         self.assertEqual("BaseUnit", info.name)
         self.assertEqual("MonoBehaviour", info.base_class)
 
@@ -504,6 +507,7 @@ class TestParseClassInfo(unittest.TestCase):
         source = "sealed class Final : BaseUnit {\n    public int rank;\n}\n"
         info = parse_class_info(source)
         self.assertIsNotNone(info)
+        info = require_not_none(info, "class info")
         self.assertEqual("Final", info.name)
         self.assertEqual("BaseUnit", info.base_class)
 
@@ -511,6 +515,7 @@ class TestParseClassInfo(unittest.TestCase):
         source = "public class Pool : GenericBase<int> {\n    public int size;\n}\n"
         info = parse_class_info(source)
         self.assertIsNotNone(info)
+        info = require_not_none(info, "class info")
         self.assertEqual("Pool", info.name)
         self.assertEqual("GenericBase", info.base_class)  # generic stripped
 
@@ -518,12 +523,14 @@ class TestParseClassInfo(unittest.TestCase):
         source = "public class Foo : UnityEngine.MonoBehaviour {\n}\n"
         info = parse_class_info(source)
         self.assertIsNotNone(info)
+        info = require_not_none(info, "class info")
         self.assertEqual("UnityEngine.MonoBehaviour", info.base_class)
 
     def test_class_with_interfaces(self) -> None:
         source = "public class Bar : MonoBehaviour, IDisposable {\n    public int x;\n}\n"
         info = parse_class_info(source)
         self.assertIsNotNone(info)
+        info = require_not_none(info, "class info")
         self.assertEqual("Bar", info.name)
         self.assertEqual("MonoBehaviour", info.base_class)
 
@@ -539,6 +546,7 @@ class TestParseClassInfo(unittest.TestCase):
         )
         info = parse_class_info(source, hint_name="TargetClass")
         self.assertIsNotNone(info)
+        info = require_not_none(info, "class info")
         self.assertEqual("TargetClass", info.name)
         self.assertEqual("MonoBehaviour", info.base_class)
 
@@ -546,12 +554,14 @@ class TestParseClassInfo(unittest.TestCase):
         source = "class Alpha {\n    public int a;\n}\nclass Beta {\n    public int b;\n}\n"
         info = parse_class_info(source, hint_name="Gamma")
         self.assertIsNotNone(info)
+        info = require_not_none(info, "class info")
         self.assertEqual("Alpha", info.name)
 
     def test_partial_class(self) -> None:
         source = "public partial class SyncedBehaviour : UdonSharpBehaviour {\n    public int val;\n}\n"
         info = parse_class_info(source)
         self.assertIsNotNone(info)
+        info = require_not_none(info, "class info")
         self.assertEqual("SyncedBehaviour", info.name)
         self.assertEqual("UdonSharpBehaviour", info.base_class)
 
@@ -565,6 +575,7 @@ class TestParseClassInfo(unittest.TestCase):
         )
         info = parse_class_info(source)
         self.assertIsNotNone(info)
+        info = require_not_none(info, "class info")
         names = {f.name for f in info.fields}
         self.assertEqual({"visible"}, names)
 

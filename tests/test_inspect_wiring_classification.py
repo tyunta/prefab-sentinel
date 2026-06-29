@@ -20,6 +20,7 @@ from prefab_sentinel.udon_wiring import (
     NullFieldClassification,
     analyze_wiring,
 )
+from tests._typing_helpers import require_list, require_mapping
 
 # ---------------------------------------------------------------------------
 # Fixture YAML — one MonoBehaviour with one null reference field.
@@ -175,9 +176,12 @@ class TestWiringResponseSerialization(unittest.TestCase):
             f"total; got {wire['null_ratio']!r}",
         )
         # New classification list under the documented key, three-key entries.
-        classifications = wire["null_field_classifications"]
+        classifications = require_list(
+            wire["null_field_classifications"],
+            "null field classifications",
+        )
         self.assertEqual(1, len(classifications))
-        entry = classifications[0]
+        entry = require_mapping(classifications[0], "null field classification")
         self.assertEqual(
             {"name", "kind", "evidence"},
             set(entry.keys()),

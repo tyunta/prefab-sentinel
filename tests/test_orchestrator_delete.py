@@ -146,7 +146,7 @@ class OrchestratorDeleteTests(unittest.TestCase):
             "EDITOR_BRIDGE_WATCH_DIR_NOT_FOUND",
         ):
             with self.subTest(bridge_code=bridge_code):
-                bridge_response = {
+                bridge_response: dict[str, object] = {
                     "success": False,
                     "code": bridge_code,
                     "message": "watch dir missing",

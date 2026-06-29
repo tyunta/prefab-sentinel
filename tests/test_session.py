@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 
 from prefab_sentinel.bridge_constants import UNITY_PROJECT_PATH_ENV
 from prefab_sentinel.session import InvalidProjectRootError, ProjectSession
+from tests._typing_helpers import require_not_none
 from tests.yaml_helpers import (
     YAML_HEADER,
     make_gameobject,
@@ -197,7 +198,6 @@ class TestSymbolTreeCaching(unittest.TestCase):
 
     def test_cache_miss_on_mtime_change(self) -> None:
         import os
-        import time
 
         with _tmp_prefab() as path:
             session = ProjectSession()
@@ -205,9 +205,8 @@ class TestSymbolTreeCaching(unittest.TestCase):
 
             tree1 = session.get_symbol_tree(path, text)
 
-            # Touch the file to change mtime
-            time.sleep(0.05)
-            os.utime(path, None)
+            updated_mtime = path.stat().st_mtime + 1.0
+            os.utime(path, (updated_mtime, updated_mtime))
 
             tree2 = session.get_symbol_tree(path, text)
             self.assertIsNot(tree1, tree2)
@@ -765,6 +764,7 @@ class TestBridgeVersionDetection(unittest.TestCase):
             session = ProjectSession(project_root=root)
             diag = session.check_bridge_version()
             self.assertIsNotNone(diag)
+            diag = require_not_none(diag, "bridge mismatch diagnostic")
             self.assertEqual("BRIDGE_VERSION_MISMATCH", diag["code"])
 
     def test_check_bridge_not_found_carries_unified_four_key_shape(self) -> None:
@@ -777,6 +777,7 @@ class TestBridgeVersionDetection(unittest.TestCase):
             (root / "Assets").mkdir()
             session = ProjectSession(project_root=root)
             diag = session.check_bridge_version()
+            diag = require_not_none(diag, "bridge diagnostic")
             self.assertEqual(
                 {"severity", "code", "message", "data"},
                 set(diag),

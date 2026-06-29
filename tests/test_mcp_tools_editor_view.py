@@ -11,9 +11,12 @@ Pins:
 from __future__ import annotations
 
 import unittest
+from collections.abc import Callable
 from unittest.mock import patch
 
 from prefab_sentinel import mcp_tools_editor_view
+from tests._mcp_tool_recorder import record_tools
+from tests._typing_helpers import require_mapping, require_str
 
 
 def _success_envelope() -> dict:
@@ -722,23 +725,16 @@ class EditorScreenshotFitModeTests(unittest.TestCase):
         )
 
     def test_registered_tool_surface_forwards_fit_mode_unchanged(self) -> None:
-        registered_tools = {}
-
-        class RecordingServer:
-            def tool(self, name: str | None = None):
-                def register(func):
-                    registered_tools[name or func.__name__] = func
-                    return func
-
-                return register
-
         with patch.object(
             mcp_tools_editor_view,
             "editor_screenshot",
             return_value=self._BRIDGE_OK,
         ) as editor_screenshot:
-            mcp_tools_editor_view.register_editor_view_tools(RecordingServer())
-            response = registered_tools["editor_screenshot"](
+            server = record_tools(mcp_tools_editor_view.register_editor_view_tools)
+            editor_screenshot_tool: Callable[..., object] = server.get(
+                "editor_screenshot"
+            )
+            response = editor_screenshot_tool(
                 target="/Avatar", angle="right", fit_mode="both_axes", refresh=False,
             )
 
@@ -849,21 +845,12 @@ class EditorFrameBoundsPolicyTests(unittest.TestCase):
     _BRIDGE_OK = _success_envelope()
 
     def test_registered_editor_frame_forwards_default_bounds_policy_and_zoom(self) -> None:
-        registered_tools = {}
-
-        class RecordingServer:
-            def tool(self, name: str | None = None):
-                def register(func):
-                    registered_tools[name or func.__name__] = func
-                    return func
-
-                return register
-
         with patch.object(
             mcp_tools_editor_view, "send_action", return_value=self._BRIDGE_OK,
         ) as send:
-            mcp_tools_editor_view.register_editor_view_tools(RecordingServer())
-            registered_tools["editor_frame"](zoom=0.5)
+            server = record_tools(mcp_tools_editor_view.register_editor_view_tools)
+            editor_frame: Callable[..., object] = server.get("editor_frame")
+            editor_frame(zoom=0.5)
 
         send.assert_called_once()
         self.assertEqual(
@@ -880,22 +867,13 @@ class EditorFrameBoundsPolicyTests(unittest.TestCase):
         )
 
     def test_registered_editor_frame_rejects_unknown_bounds_policy_pre_bridge(self) -> None:
-        registered_tools = {}
-
-        class RecordingServer:
-            def tool(self, name: str | None = None):
-                def register(func):
-                    registered_tools[name or func.__name__] = func
-                    return func
-
-                return register
-
         with patch.object(
             mcp_tools_editor_view, "send_action", return_value=self._BRIDGE_OK,
         ) as send:
-            mcp_tools_editor_view.register_editor_view_tools(RecordingServer())
+            server = record_tools(mcp_tools_editor_view.register_editor_view_tools)
+            editor_frame: Callable[..., object] = server.get("editor_frame")
             try:
-                response = registered_tools["editor_frame"](
+                response = editor_frame(
                     zoom=0.5, bounds_policy="exclude_outliers",
                 )
             except TypeError as exc:
@@ -905,15 +883,18 @@ class EditorFrameBoundsPolicyTests(unittest.TestCase):
                 )
 
         send.assert_not_called()
+        response = require_mapping(response, "editor_frame response")
+        data = require_mapping(response["data"], "editor_frame response data")
+        message = require_str(response["message"], "editor_frame response message")
         observed = (
             response["success"],
             response["severity"],
             response["code"],
-            response["data"]["supplied"],
-            response["data"]["allowed_bounds_policies"],
-            "exclude_outliers" in response["message"],
-            "all_visible_renderers" in response["message"],
-            "focus_core" in response["message"],
+            data["supplied"],
+            data["allowed_bounds_policies"],
+            "exclude_outliers" in message,
+            "all_visible_renderers" in message,
+            "focus_core" in message,
         )
         self.assertEqual(
             (
@@ -1025,7 +1006,7 @@ class EditorScreenshotUiFramingTests(unittest.TestCase):
         self.assertEqual(bridge_response, response)
 
     def test_ui_selector_validation_errors_are_typed(self) -> None:
-        cases = [
+        cases: list[tuple[dict[str, object], str, str]] = [
             (
                 {"target": "/Canvas", "target_mode": "screen_space"},
                 "SCREENSHOT_TARGET_MODE_INVALID",
@@ -1047,10 +1028,36 @@ class EditorScreenshotUiFramingTests(unittest.TestCase):
         ) as send:
             for kwargs, expected_code, expected_message_part in cases:
                 with self.subTest(expected_code=expected_code):
-                    response = mcp_tools_editor_view.editor_screenshot(
-                        refresh=False,
-                        **kwargs,
-                    )
+                    kwargs_map = require_mapping(kwargs, "selector kwargs")
+                    target = require_str(kwargs_map["target"], "selector target")
+                    if "target_mode" in kwargs_map:
+                        response = mcp_tools_editor_view.editor_screenshot(
+                            refresh=False,
+                            target=target,
+                            target_mode=require_str(
+                                kwargs_map["target_mode"], "selector target_mode"
+                            ),
+                        )
+                    elif "projection" in kwargs_map:
+                        response = mcp_tools_editor_view.editor_screenshot(
+                            refresh=False,
+                            target=target,
+                            projection=require_str(
+                                kwargs_map["projection"], "selector projection"
+                            ),
+                        )
+                    else:
+                        padding_ratio = kwargs_map["padding_ratio"]
+                        if not isinstance(padding_ratio, float):
+                            raise AssertionError(
+                                "selector padding_ratio expected float, "
+                                f"got {type(padding_ratio).__name__}"
+                            )
+                        response = mcp_tools_editor_view.editor_screenshot(
+                            refresh=False,
+                            target=target,
+                            padding_ratio=padding_ratio,
+                        )
                     self.assertEqual(
                         (False, "error", expected_code, True),
                         (

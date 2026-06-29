@@ -482,7 +482,7 @@ class BuildTopMissingEntryTests(unittest.TestCase):
         insertion order or in the wrong shape."""
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw).resolve()
-            counter = Counter()
+            counter: Counter[str] = Counter()
             counter["Assets/Low.prefab"] = 1
             counter["Assets/High.prefab"] = 2
             entry = _build_top_missing_entry(
