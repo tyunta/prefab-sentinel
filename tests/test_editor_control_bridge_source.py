@@ -4934,6 +4934,10 @@ class EditorControlBridgeRequestSchemaTests(unittest.TestCase):
         "serialized_property_object_reference_null",
         "serialized_property_array_size",
         "serialized_property_array_size_present",
+        "asset_type",
+        "source_asset_path",
+        "destination_asset_path",
+        "parameters",
     )
 
     _NEW_RESPONSE_FIELDS = (
@@ -4982,6 +4986,33 @@ class EditorControlBridgeRequestSchemaTests(unittest.TestCase):
         "element_index",
         "expected_type",
         "serialized_property_json",
+        "asset_type",
+        "unity_type",
+        "guid",
+        "would_create",
+        "created",
+        "dry_run",
+        "refreshed",
+        "dirty_before",
+        "dirty_after",
+        "name",
+        "applied_parameters",
+        "source_asset_path",
+        "destination_asset_path",
+        "before_guid",
+        "after_guid",
+        "guid_preserved",
+        "would_move",
+        "moved",
+        "old_name",
+        "new_name",
+        "name_changed",
+        "phase",
+        "exception_type",
+        "exception_message",
+        "unity_error",
+        "meta_exists",
+        "state_unknown",
     )
 
     def test_request_dto_declares_every_new_field(self) -> None:
@@ -5102,6 +5133,8 @@ class EditorControlBridgeDispatcherRoutingTests(unittest.TestCase):
         "editor_serialized_property_read",
         "editor_serialized_property_list",
         "editor_serialized_property_write",
+        "create_generated_asset",
+        "move_asset",
         "inspect_animation_clip",
         "create_animation_clip",
         "apply_animation_clip",
@@ -5120,6 +5153,8 @@ class EditorControlBridgeDispatcherRoutingTests(unittest.TestCase):
         "editor_serialized_property_read": "HandleSerializedPropertyRead",
         "editor_serialized_property_list": "HandleSerializedPropertyList",
         "editor_serialized_property_write": "HandleSerializedPropertyWrite",
+        "create_generated_asset": "HandleCreateGeneratedAsset",
+        "move_asset": "HandleMoveAsset",
         "inspect_animation_clip": "HandleInspectAnimationClip",
         "create_animation_clip": "HandleCreateAnimationClip",
         "apply_animation_clip": "HandleApplyAnimationClip",
@@ -5170,6 +5205,126 @@ class EditorControlBridgeDispatcherRoutingTests(unittest.TestCase):
         self.assertIn("default:", body)
         self.assertIn('"EDITOR_CTRL_UNKNOWN_ACTION"', body)
         self.assertIn("Unknown action:", body)
+
+
+class AssetOpsSourceTests(unittest.TestCase):
+    _ASSET_OPS = TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.AssetOps.cs"
+
+    def _source(self) -> str:
+        return "\n".join(
+            _read(path)
+            for path in sorted(
+                TOOLS_DIR.glob("PrefabSentinel.UnityEditorControlBridge.AssetOps*.cs")
+            )
+        )
+
+    def test_asset_ops_partial_exists_and_declares_partial_class(self) -> None:
+        self.assertTrue(self._ASSET_OPS.exists(), "AssetOps partial file is missing")
+        source = self._source()
+        self.assertIn("public static partial class UnityEditorControlBridge", source)
+
+    def test_create_handler_uses_required_unity_apis_and_avoids_forbidden_paths(self) -> None:
+        source = self._source()
+        required = (
+            "HandleCreateGeneratedAsset",
+            "AssetOpsPathValidation.ValidateGeneratedAssetPath",
+            "new RenderTexture(",
+            ".filterMode",
+            ".useMipMap",
+            ".wrapMode",
+            "AssetDatabase.CreateAsset",
+            "AssetDatabase.SaveAssets",
+            "AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport)",
+            "AssetDatabase.AssetPathToGUID",
+            "AssetDatabase.LoadMainAssetAtPath",
+            "AssetDatabase.IsValidFolder",
+            "EditorUtility.IsDirty",
+        )
+        for token in required:
+            with self.subTest(token=token):
+                self.assertIn(token, source)
+        forbidden = (
+            "RenderTexture.Create(",
+            "RenderTextureDescriptor",
+            "graphicsFormat",
+            "autoGenerateMips",
+            "wrapModeU",
+            "wrapModeV",
+            "wrapModeW",
+            "AssetDatabase.CreateFolder",
+            "File.Move(",
+            "File.Write",
+            "EditorUtility.SetDirty(renderTexture",
+        )
+        for token in forbidden:
+            with self.subTest(token=token):
+                self.assertNotIn(token, source)
+
+    def test_move_handler_uses_assetdatabase_move_and_name_dirty_policy(self) -> None:
+        source = self._source()
+        required = (
+            "HandleMoveAsset",
+            "AssetOpsPathValidation.ValidateMoveAssetPaths",
+            "AssetDatabase.MoveAsset",
+            "unity_error",
+            "name_changed",
+            "EditorUtility.SetDirty(asset",
+            "AssetDatabase.SaveAssets",
+            "AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport)",
+            "AssetDatabase.AssetPathToGUID",
+            "AssetDatabase.LoadMainAssetAtPath",
+            "AssetDatabase.IsValidFolder",
+            "EditorUtility.IsDirty",
+        )
+        for token in required:
+            with self.subTest(token=token):
+                self.assertIn(token, source)
+        self.assertNotIn("File.Move(", source)
+        self.assertNotIn("AssetDatabase.CreateFolder", source)
+
+    def test_create_handler_declares_required_error_codes_and_partial_diagnostic(self) -> None:
+        source = self._source()
+        save_refresh = _extract_method(source, "SaveAndRefreshCreate")
+        for code in (
+            "GENERATED_ASSET_DESTINATION_EXISTS",
+            "GENERATED_ASSET_DESTINATION_META_EXISTS",
+            "GENERATED_ASSET_PARENT_NOT_FOUND",
+            "GENERATED_ASSET_PARENT_NOT_FOLDER",
+            "GENERATED_ASSET_CREATE_FAILED",
+            "GENERATED_ASSET_SAVE_OR_REFRESH_FAILED",
+            "GENERATED_ASSET_POSTCHECK_FAILED",
+            "GENERATED_ASSET_DIRTY_POSTCHECK_FAILED",
+            "PARTIAL_SIDE_EFFECT_REQUIRES_REVIEW",
+        ):
+            with self.subTest(code=code):
+                self.assertIn(code, source)
+        for phase in ('data.phase = "save";', 'data.phase = "refresh";'):
+            with self.subTest(phase=phase):
+                self.assertIn(phase, save_refresh)
+
+    def test_move_handler_declares_required_error_codes_and_partial_diagnostic(self) -> None:
+        source = self._source()
+        save_refresh = _extract_method(source, "SaveAndRefreshMove")
+        for code in (
+            "ASSET_SOURCE_NOT_FOUND",
+            "ASSET_SOURCE_LOAD_FAILED",
+            "ASSET_SOURCE_IS_FOLDER",
+            "ASSET_DESTINATION_EXISTS",
+            "ASSET_DESTINATION_META_EXISTS",
+            "ASSET_DESTINATION_PARENT_NOT_FOUND",
+            "ASSET_DESTINATION_PARENT_NOT_FOLDER",
+            "ASSET_MOVE_FAILED",
+            "ASSET_MOVE_SAVE_OR_REFRESH_FAILED",
+            "ASSET_MOVE_POSTCHECK_FAILED",
+            "ASSET_MOVE_DIRTY_POSTCHECK_FAILED",
+            "PARTIAL_SIDE_EFFECT_REQUIRES_REVIEW",
+            "meta_exists",
+        ):
+            with self.subTest(code=code):
+                self.assertIn(code, source)
+        for phase in ('data.phase = "save";', 'data.phase = "refresh";'):
+            with self.subTest(phase=phase):
+                self.assertIn(phase, save_refresh)
 
 
 class EditorSerializedPropertyBridgeSourceTests(unittest.TestCase):
@@ -5589,6 +5744,140 @@ class EditorSerializedPropertyDocsTests(unittest.TestCase):
         self.assertIn("SerializedPropertySmokeSupport", testing)
         self.assertIn("Unity real-device validation", testing)
         self.assertIn("editor_serialized_property_write", testing)
+
+
+class EditorAssetOpsDocsTests(unittest.TestCase):
+    _PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+    def _doc(self, relative: str) -> str:
+        return (self._PROJECT_ROOT / relative).read_text(encoding="utf-8")
+
+    def test_tools_catalog_lists_editor_asset_category_and_tools(self) -> None:
+        text = self._doc("docs/tools.md")
+        for token in (
+            "現在 97 件",
+            "18 カテゴリ",
+            "**editor_assets**",
+            "### editor_assets",
+            "prefab_sentinel/mcp_tools_editor_assets.py",
+            "`editor_create_generated_asset`",
+            "`editor_move_asset`",
+            "render_texture",
+            "AssetDatabase.MoveAsset",
+            "`copy_asset` / `rename_asset`",
+            "`delete_assets` は削除 surface",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, text)
+        self.assertNotIn("editor_delete_assets", text)
+
+    def test_configuration_lists_confirm_report_requirements(self) -> None:
+        text = self._doc("CONFIGURATION.md")
+        for tool in ("editor_create_generated_asset", "editor_move_asset"):
+            rows = [
+                line for line in text.splitlines()
+                if f"`{tool}`" in line and line.startswith("|")
+            ]
+            self.assertEqual(1, len(rows), msg=f"missing audit row for {tool}")
+            self.assertIn("✅", rows[0], msg=f"{tool} must require change_reason")
+            self.assertIn("`out_report`", rows[0], msg=f"{tool} must require out_report")
+        self.assertIn("dry-run", text)
+        self.assertIn("OUT_REPORT_REQUIRED", text)
+
+    def test_tool_conventions_document_dry_run_and_asset_boundaries(self) -> None:
+        text = self._doc("docs/tool-conventions.md")
+        for token in (
+            "editor_create_generated_asset",
+            "editor_move_asset",
+            "confirm=True",
+            "out_report",
+            "dry-run",
+            "AssetDatabase",
+            "copy_asset",
+            "rename_asset",
+            "delete_assets",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, text)
+
+    def test_api_reference_documents_asset_ops_contract(self) -> None:
+        text = self._doc("docs/api-reference.md")
+        for token in (
+            "editor_create_generated_asset",
+            "editor_move_asset",
+            "asset_type",
+            "asset_path",
+            "parameters",
+            "source_asset_path",
+            "destination_asset_path",
+            "applied_parameters",
+            "format",
+            "read_write",
+            "unity_type",
+            "guid_preserved",
+            "UNITY_BRIDGE_INVALID_RESPONSE",
+            "PARTIAL_SIDE_EFFECT_REQUIRES_REVIEW",
+            "OUT_REPORT_WRITE_FAILED",
+            "UNSUPPORTED_GENERATED_ASSET_TYPE",
+            "GENERATED_ASSET_DESTINATION_EXISTS",
+            "GENERATED_ASSET_SAVE_OR_REFRESH_FAILED",
+            "ASSET_SOURCE_NOT_FOUND",
+            "ASSET_DESTINATION_PARENT_NOT_FOUND",
+            "ASSET_MOVE_FAILED",
+            "ASSET_MOVE_DIRTY_POSTCHECK_FAILED",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, text)
+        self.assertIn(
+            "`applied_parameters` は snake_case `width`, `height`, `depth`, `format`, `read_write`, `filter_mode`, `wrap_mode`, `mip_map`",
+            text,
+        )
+        self.assertIn(
+            "Bridge success payload は `source_asset_path`, `destination_asset_path`, `unity_type`, `before_guid`",
+            text,
+        )
+        for stale_token in (
+            "graphics_format",
+            "ASSET_MOVE_SOURCE_NOT_FOUND",
+            "ASSET_MOVE_DESTINATION_EXISTS",
+            "ASSET_MOVE_PARENT_NOT_FOUND",
+            "ASSET_MOVE_GUID_CHANGED",
+        ):
+            with self.subTest(stale_token=stale_token):
+                self.assertNotIn(stale_token, text)
+
+    def test_testing_doc_records_deferred_unity_smoke_sequence(self) -> None:
+        text = self._doc("TESTING.md")
+        for token in (
+            "Issue #116",
+            "editor_create_generated_asset",
+            "editor_move_asset",
+            "create dry-run",
+            "create confirm",
+            "move dry-run",
+            "move confirm",
+            "lowercase `.rendertexture`",
+            "case-only move",
+            "report equality",
+            "delete_assets",
+            "Unity 2022.3",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, text)
+        self.assertNotIn("editor_delete_assets", text)
+
+    def test_readme_routes_editor_asset_tools_to_specialized_docs(self) -> None:
+        text = self._doc("README.md")
+        for token in (
+            "editor_create_generated_asset",
+            "editor_move_asset",
+            "docs/tools.md",
+            "docs/api-reference.md",
+            "CONFIGURATION.md",
+            "TESTING.md",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, text)
 
 
 class PrefabStagePersistFixSourceInvariantTests(unittest.TestCase):

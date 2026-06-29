@@ -120,6 +120,8 @@
 | `rename_asset` | ✅ | — |
 | `delete_asset` | ✅ | — |
 | `delete_assets` | ✅ | — |
+| `editor_create_generated_asset` | ✅ | ✅ `out_report` |
+| `editor_move_asset` | ✅ | ✅ `out_report` |
 | `revert_overrides` | ✅ | — |
 | `patch_apply` | ✅ | ✅ |
 | `vrcsdk_upload` | ✅ | — |
@@ -141,3 +143,5 @@ issue #49 で `editor_execute_menu_item` / `editor_safe_save_prefab` / `editor_c
 `validate_runtime(profile="clientsim")` も ClientSim が Play Mode と scene dirty state に触れうるため `confirm=True` + 非空 `change_reason` を要求する。既定 profile は `compile_only` で、ClientSim は明示 profile なしには実行されない。
 
 `editor_serialized_property_read` / `editor_serialized_property_list` は read-only なので audit pair 対象外。`editor_serialized_property_write` は dry-run 既定だが、`confirm=True` の確定書き込みでは Undo / dirty / Prefab override state に触れるため `change_reason` を必須にする。
+
+`editor_create_generated_asset` / `editor_move_asset` は issue #116 の AssetDatabase-backed project asset 操作で、`confirm=False` dry-run は Bridge に到達して AssetDatabase state を読むが `project_root` / `out_report` / `change_reason` を検証しない。`confirm=True` では Python 境界で `project_root` → `out_report` → `change_reason` の順に検証し、`OUT_REPORT_REQUIRED` などの監査/report error は Bridge 呼び出し前に返す。成功・失敗どちらでも、最終 MCP response と同一 JSON を `out_report` に排他作成で書く。

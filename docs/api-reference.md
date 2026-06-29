@@ -114,6 +114,16 @@ diagnostic code:
 | `EDITOR_CTRL_SERIALIZED_PROPERTY_NO_CHANGE` | requested value が現在値と同一で、Undo / dirty / override / sync を作らなかった。 |
 | `EDITOR_CTRL_SERIALIZED_PROPERTY_WRITE_OK` | confirmed changed write が SerializedObject 経由で適用され、dirty / override / sync evidence を返した。 |
 
+## Editor asset operations (issue #116)
+
+`editor_create_generated_asset` / `editor_move_asset` は live Editor Bridge の標準エンベロープを Python 境界で検証・射影して返す。成功時 `diagnostics[]` は `{severity, code, message, data}` の 4 キー wire shape に正規化され、Bridge root/data の余剰キーは成功 payload からは公開しない。Bridge の成功 shape が壊れている場合は `UNITY_BRIDGE_INVALID_RESPONSE` と `PARTIAL_SIDE_EFFECT_REQUIRES_REVIEW` diagnostic を返す。確定適用後の report write failure は rollback せず、`OUT_REPORT_WRITE_FAILED` に元 operation result/error を含める。
+
+`editor_create_generated_asset` の入力は `asset_type`, `asset_path`, `parameters`, `confirm`, 任意の `project_root`, `out_report`, `change_reason`。`asset_type` は現状 `render_texture` のみを受理し、Bridge success payload は `unity_type`, `asset_path`, `guid`, `would_create`, `created`, `dry_run`, `saved`, `refreshed`, `dirty_before`, `dirty_after`, `name`, `applied_parameters` を返す。`applied_parameters` は snake_case `width`, `height`, `depth`, `format`, `read_write`, `filter_mode`, `wrap_mode`, `mip_map` を持つ。
+
+`editor_move_asset` の入力は `source_asset_path`, `destination_asset_path`, `confirm`, 任意の `project_root`, `out_report`, `change_reason`。Bridge success payload は `source_asset_path`, `destination_asset_path`, `unity_type`, `before_guid`, `after_guid`, `guid_preserved`, `would_move`, `moved`, `dry_run`, `saved`, `refreshed`, `dirty_before`, `dirty_after`, `old_name`, `new_name`, `name_changed` を返す。
+
+どちらの tool も `confirm=False` dry-run では audit/report 引数を検証せず Bridge に AssetDatabase state を問い合わせる。`confirm=True` では Python 境界で `project_root` → `out_report` → `change_reason` の順に検証し、`out_report` へ最終 response と同一 JSON を排他作成する。
+
 ## エラーコード規約
 
 | コード | 説明 |
@@ -143,6 +153,18 @@ diagnostic code:
 | `ASSET_DELETE_UNSUPPORTED` | Unity Editor Bridge / AssetDatabase delete action が未設定・未対応・利用不能なため、confirmed apply を拒否した場合。raw filesystem delete への fallback は行わない。 |
 | `ASSET_DELETE_FAILED` | AssetDatabase delete action が `failed_paths` を返した場合。 |
 | `ASSET_DELETE_DECISION_REQUIRED` | UdonSharp generated program asset 候補が複数または曖昧で、自動削除候補として扱えない場合の diagnostic code。`delete_asset` / `delete_assets` dry-run では `data.decision_required[]` に `detail` と候補 `asset_paths[]` を返す。 |
+| `INVALID_CONFIRM_VALUE` | `editor_create_generated_asset` / `editor_move_asset` の `confirm` が JSON bool でない場合。Bridge 呼び出しと report write は行わない。 |
+| `PROJECT_ROOT_INVALID` / `OUT_REPORT_REQUIRED` / `OUT_REPORT_INVALID` / `OUT_REPORT_PARENT_NOT_FOUND` / `OUT_REPORT_EXISTS` / `CHANGE_REASON_REQUIRED` / `CHANGE_REASON_TOO_LONG` | #116 editor asset tools の confirmed call audit/report validation failure。検証順は project_root → out_report → change_reason。 |
+| `UNSUPPORTED_GENERATED_ASSET_TYPE` | generated asset creation が `render_texture` 以外の `asset_type` を受け取った場合。`data.unity_type` は返さない。 |
+| `GENERATED_ASSET_INVALID_PATH` / `GENERATED_ASSET_PATH_IS_META_FILE` | create destination が `Assets/...` project path、case-sensitive `.renderTexture` extension、非空 stem、または non-`.meta` path の lexical rule に反する場合。 |
+| `GENERATED_ASSET_INVALID_PARAMETER` | RenderTexture `parameters` が object でない、required `width` / `height` を欠く、unknown key を持つ、型・範囲・allowlist に反する場合。 |
+| `GENERATED_ASSET_DESTINATION_EXISTS` / `GENERATED_ASSET_DESTINATION_META_EXISTS` / `GENERATED_ASSET_PARENT_NOT_FOUND` / `GENERATED_ASSET_PARENT_NOT_FOLDER` | Bridge create dry-run / confirm が AssetDatabase destination または parent folder state で拒否した場合。 |
+| `GENERATED_ASSET_CREATE_FAILED` / `GENERATED_ASSET_SAVE_OR_REFRESH_FAILED` / `GENERATED_ASSET_POSTCHECK_FAILED` / `GENERATED_ASSET_DIRTY_POSTCHECK_FAILED` | Confirm create 開始後の constructor/CreateAsset、SaveAssets/Refresh、または final AssetDatabase postcheck failure。残存または不明状態は `PARTIAL_SIDE_EFFECT_REQUIRES_REVIEW` warning diagnostic を伴う。 |
+| `ASSET_SOURCE_INVALID_PATH` / `ASSET_DESTINATION_INVALID_PATH` / `ASSET_SOURCE_IS_META_FILE` / `ASSET_DESTINATION_IS_META_FILE` / `ASSET_EXTENSION_MISMATCH` / `ASSET_MOVE_SAME_PATH` / `ASSET_MOVE_CASE_ONLY_RENAME_UNSUPPORTED` | move source/destination の lexical rule failure。Python 境界で拒否され Bridge は呼ばない。 |
+| `ASSET_SOURCE_NOT_FOUND` / `ASSET_SOURCE_LOAD_FAILED` / `ASSET_SOURCE_IS_FOLDER` / `ASSET_DESTINATION_EXISTS` / `ASSET_DESTINATION_META_EXISTS` / `ASSET_DESTINATION_PARENT_NOT_FOUND` / `ASSET_DESTINATION_PARENT_NOT_FOLDER` | Bridge move dry-run / confirm が AssetDatabase source/destination/parent state で拒否した場合。source `.meta` だけが存在する場合は `ASSET_SOURCE_NOT_FOUND` と `data.meta_exists` で evidence を返す。 |
+| `ASSET_MOVE_FAILED` / `ASSET_MOVE_SAVE_OR_REFRESH_FAILED` / `ASSET_MOVE_POSTCHECK_FAILED` / `ASSET_MOVE_DIRTY_POSTCHECK_FAILED` | Confirm move 開始後の AssetDatabase.MoveAsset error string、SaveAssets/Refresh exception、GUID/name/load/dirty final postcheck failure。残存または不明状態は `PARTIAL_SIDE_EFFECT_REQUIRES_REVIEW` warning diagnostic を伴う。 |
+| `UNITY_BRIDGE_INVALID_RESPONSE` | #116 Python projector が Bridge root/envelope/diagnostics/success data の malformed response を検出した場合。`data.state_unknown=true` と `PARTIAL_SIDE_EFFECT_REQUIRES_REVIEW` diagnostic を返す。 |
+| `OUT_REPORT_WRITE_FAILED` | #116 confirmed operation は完了したが report file の exclusive final-response write に失敗した場合。元 operation result/error を `data.operation_result` または `data.operation_error` に保持し、rollback は行わない。 |
 | `SER003` | `set_properties` が dry-run 段階でチェーン上に解決できない property path を検出した場合（issue #109）。`severity="error"`、`data.suggestions` に近似候補（最大 5 件）、`diagnostics[].detail` に `property_not_found` を載せる。issue #41 で `set_properties` は `symbol_path` を直接 component に解決するため、component 不在は `SYMBOL_NOT_FOUND` で表面化する（`SER003` の `component_not_found` 経路は廃止）。 |
 | `SER_APPLY_REJECTED` | `patch_apply` の Prefab 経路で `SerializedObject.ApplyModifiedPropertiesWithoutUndo()` 直前のバリデーション（`TryApplyOp`）が op を拒否した場合（issue #298）。`severity="error"`。`diagnostics` 配列には各失敗 op の `BridgeDiagnostic` に加え、`property_path` / `component_type` / `attempted_value` を `evidence` に埋めた summary 行が末尾に追加される。`AudioSource.m_Priority` 等の既知トラップを応答だけで診断できることが目的。issue #37 以降、`set` op の `file_id` ターゲットがアセット内のどの component にも解決しない場合も、この経路で `apply_error` diagnostic（未解決 fileID を `evidence` に明示、`location` は `ops[N].file_id`）として fail-fast で表面化する。Editor 例外路は `UNITY_BRIDGE_APPLY_EXCEPTION` のまま（未捕捉例外と rejection を別コードで区別）。 |
 | `BRIDGE_LEGACY_SCHEMA_REJECTED` | `unity_patch_bridge` がレガシー形状（トップレベル `target` キー）のリクエストを受け取った場合。v2 スキーマ（`{plan_version, resources, ops}`）のみを受け入れる。互換レイヤは存在しない。 |

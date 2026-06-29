@@ -117,6 +117,9 @@
     <Compile Include="..\..\tools\unity\PrefabSentinel.Dispatch.ActionRegistry.cs">
       <Link>Bridge\PrefabSentinel.Dispatch.ActionRegistry.cs</Link>
     </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.AssetOpsPathValidation.cs">
+      <Link>Bridge\PrefabSentinel.AssetOpsPathValidation.cs</Link>
+    </Compile>
     <Compile Include="..\..\tools\unity\PrefabSentinel.Dispatch.EditorControlRequest.cs">
       <Link>Bridge\PrefabSentinel.Dispatch.EditorControlRequest.cs</Link>
     </Compile>

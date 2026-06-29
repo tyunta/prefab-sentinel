@@ -103,6 +103,7 @@ MCP サーバーは Plugin 内部で `uv` / `uvx` 経由でローカル起動さ
 | `find_referencing_assets` | GUID / パスの参照元アセット検索 |
 | `patch_apply` | パッチ計画の検証・適用（dry-run / confirm ゲート付き） |
 | `delete_asset` / `delete_assets` | AssetDatabase-backed asset 削除の dry-run / confirm。削除後 broken-reference delta を返す |
+| `editor_create_generated_asset` / `editor_move_asset` | RenderTexture generated asset 作成と AssetDatabase.MoveAsset-backed asset 移動。公開ツール一覧は [docs/tools.md](./docs/tools.md)、payload/error は [docs/api-reference.md](./docs/api-reference.md)、confirm audit/report requirements は [CONFIGURATION.md](./CONFIGURATION.md)、live Unity smoke は [TESTING.md](./TESTING.md) を正本とする |
 | `validate_runtime` | 既定 `compile_only` の UdonSharp compile 検証。ClientSim は `profile="clientsim"` + audit pair で明示 opt-in |
 | `editor_get_transform` / `editor_get_bounds` / `editor_measure_distance` | Editor Bridge 経由の read-only live geometry 検査 |
 | `editor_serialized_property_read` / `editor_serialized_property_list` / `editor_serialized_property_write` | SerializedObject-backed generic inspector / writer API。公開ツール一覧は [docs/tools.md](./docs/tools.md)、payload とエラーコードは [docs/api-reference.md](./docs/api-reference.md) を正本とする |

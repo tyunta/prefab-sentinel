@@ -24,6 +24,8 @@ scene 側スキーム（symbol-path / hierarchy-path / patch-selector）では�
 
 `.prefab` / `.unity` / `.asset` / `.mat` / `.cs` / `.anim` 等、project 内の asset ファイルを相対パスで指す（例: `Assets/Prefabs/Mic.prefab`）。offline ツールと editor_* ツールの双方が使う。
 
+`editor_create_generated_asset` の `asset_path` は case-sensitive `.renderTexture` generated asset の destination を表し、`editor_move_asset` の `source_asset_path` / `destination_asset_path` は AssetDatabase.MoveAsset に渡す project-relative asset path を表す。どちらも `.meta` path を対象にせず、Editor Bridge 側で AssetDatabase state を確認する。
+
 ### 1.2 asset-guid
 
 asset ファイルを 32 文字 hex の GUID で指す。asset-path の代替表現であり、同一の asset を指す 2 つの方法。path と GUID の両方を受けるツールは「どちらか一方を指定」とする。
@@ -101,9 +103,11 @@ patch v2 スキーマの op 内でコンポーネントを指す文字列フォ�
 |------|----|------|
 | 監査側 | `editor_run_script` / `editor_run_script_submit` / `editor_execute_menu_item` | (a) |
 | 監査側 | `vrcsdk_upload` | (b) |
-| 監査側 | `delete_asset` / `delete_assets` / `editor_create_animation_clip` / `editor_safe_save_prefab` / `editor_create_udon_program_asset` / `editor_create_scene` / `editor_save_scene` / `editor_close_prefab`(save=True) | (c) |
+| 監査側 | `delete_asset` / `delete_assets` / `editor_create_generated_asset` / `editor_move_asset` / `editor_create_animation_clip` / `editor_safe_save_prefab` / `editor_create_udon_program_asset` / `editor_create_scene` / `editor_save_scene` / `editor_close_prefab`(save=True) | (c) |
 | 監査側 | offline write（`patch_apply` / `set_property` / `add_component` 等） | (c) disk YAML 書き込み |
 | 非監査側 | `editor_set_property` / `editor_set_blend_shape` / `editor_batch_set_property` / `editor_batch_set_blend_shape` / `editor_apply_animation_clip` 等 | Undo 可能な scene / live 変更 |
 | 条件付き監査 | `validate_runtime(profile="clientsim")` | ClientSim は Play Mode / dirty scene state に触れうるため明示 profile + audit pair を要求する。`compile_only` / `editor_console_only` は read-only profile。 |
 
 `delete_asset` / `delete_assets` は dry-run が既定で、確定適用時だけ `confirm=True` + 非空 `change_reason` を要求する。適用経路は Unity `AssetDatabase` を持つ Editor Bridge action に限定し、Bridge / AssetDatabase が使えない場合は typed error を返して filesystem delete へ迂回しない。削除後に broken reference が増えた場合も、tool は可否判断をせず `broken_reference_delta` として報告する。
+
+`editor_create_generated_asset` / `editor_move_asset` は dry-run が AssetDatabase state を読むため Bridge に到達するが、audit/report 引数は検証しない。確定適用時だけ `confirm=True` + 非空 `change_reason` + `out_report` を要求し、final response と同一 JSON を report に書く。`copy_asset` / `rename_asset` は offline file/YAML 操作のまま、`delete_assets` は削除専用の AssetDatabase-backed patch tool のままで、issue #116 の create/move 操作へ責務を統合しない。

@@ -265,6 +265,35 @@ namespace PrefabSentinel
             public string phase = string.Empty;           // "validated" or "complete"
             public float elapsed_sec = 0f;
 
+            // Issue #116: AssetDatabase-backed generated asset create/move.
+            public string asset_type = string.Empty;
+            public string unity_type = string.Empty;
+            public string guid = string.Empty;
+            public bool would_create = false;
+            public bool created = false;
+            public bool dry_run = false;
+            public bool refreshed = false;
+            public bool dirty_before = false;
+            public bool dirty_after = false;
+            public string name = string.Empty;
+            public RenderTextureParameters applied_parameters =
+                new RenderTextureParameters();
+            public string source_asset_path = string.Empty;
+            public string destination_asset_path = string.Empty;
+            public string before_guid = string.Empty;
+            public string after_guid = string.Empty;
+            public bool guid_preserved = false;
+            public bool would_move = false;
+            public bool moved = false;
+            public string old_name = string.Empty;
+            public string new_name = string.Empty;
+            public bool name_changed = false;
+            public string exception_type = string.Empty;
+            public string exception_message = string.Empty;
+            public string unity_error = string.Empty;
+            public bool meta_exists = false;
+            public bool state_unknown = false;
+
             // multi-platform upload results
             public string platform_results_json = string.Empty;
             public bool original_target_restored = false;
@@ -291,9 +320,9 @@ namespace PrefabSentinel
             // Phase 8: Reflection
             public string reflect_result_json = string.Empty;
 
-            // Phase 9: Editor script exec (#74) — populated by run_script handler.
+            // Phase 9: Editor script exec (#74) - populated by run_script handler.
             // Issue #216: the bridge response carries no exception text in
-            // the structured payload — every script-runner catch site
+            // the structured payload - every script-runner catch site
             // returns a fixed message and routes ``ex`` to the Unity
             // console via ``Debug.LogWarning``. The MCP client sees only
             // ``stdout`` (set on success), ``errors`` (compile errors),
@@ -378,7 +407,7 @@ namespace PrefabSentinel
             public string crop_roi_applied = string.Empty;
             public CropBoundsEntry crop_bounds = null;
 
-            // Issue #242: scene-view refresh primitive response — count
+            // Issue #242: scene-view refresh primitive response - count
             // of SkinnedMeshRenderers whose force-recalculate flag was
             // toggled in the round-trip.
             public int renderers_touched = 0;
@@ -630,6 +659,12 @@ private static string DeriveTransportRequestId(string requestPath)
                     break;
                 case "delete_assets":
                     response = HandleDeleteAssets(request);
+                    break;
+                case "create_generated_asset":
+                    response = HandleCreateGeneratedAsset(request);
+                    break;
+                case "move_asset":
+                    response = HandleMoveAsset(request);
                     break;
                 case "list_children":
                     response = HandleListChildren(request);
