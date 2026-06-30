@@ -122,7 +122,6 @@ namespace PrefabSentinel
                 renderTexture.filterMode = filterMode;
                 renderTexture.useMipMap = request.parameters.mip_map;
                 renderTexture.wrapMode = wrapMode;
-                data.dirty_before = EditorUtility.IsDirty(renderTexture);
                 AssetDatabase.CreateAsset(renderTexture, validation.Path);
                 data.created = true;
             }

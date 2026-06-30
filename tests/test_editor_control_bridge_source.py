@@ -5223,6 +5223,14 @@ class AssetOpsSourceTests(unittest.TestCase):
         source = self._source()
         self.assertIn("public static partial class UnityEditorControlBridge", source)
 
+    def test_asset_ops_validation_results_avoid_record_syntax_for_unity(self) -> None:
+        source = _read(TOOLS_DIR / "PrefabSentinel.AssetOpsPathValidation.cs")
+        self.assertNotIn(
+            "record ",
+            source,
+            msg="Unity 2022.3 does not provide IsExternalInit for C# record types.",
+        )
+
     def test_create_handler_uses_required_unity_apis_and_avoids_forbidden_paths(self) -> None:
         source = self._source()
         required = (
@@ -5255,6 +5263,7 @@ class AssetOpsSourceTests(unittest.TestCase):
             "File.Move(",
             "File.Write",
             "EditorUtility.SetDirty(renderTexture",
+            "EditorUtility.IsDirty(renderTexture",
         )
         for token in forbidden:
             with self.subTest(token=token):

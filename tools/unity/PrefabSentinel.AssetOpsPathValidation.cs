@@ -6,6 +6,8 @@ using System.Text.RegularExpressions;
 namespace PrefabSentinel
 {
 
+#nullable enable
+
 internal static class AssetOpsPathValidation
 {
     private const string RenderTextureExtension = ".renderTexture";
@@ -168,14 +170,31 @@ internal static class AssetOpsPathValidation
     }
 }
 
-internal sealed record AssetOpsPathValidationResult(
-    bool IsValid,
-    string Code,
-    string Reason,
-    string Path,
-    string Stem,
-    string Extension)
+internal sealed class AssetOpsPathValidationResult
 {
+    private AssetOpsPathValidationResult(
+        bool isValid,
+        string code,
+        string reason,
+        string path,
+        string stem,
+        string extension)
+    {
+        IsValid = isValid;
+        Code = code;
+        Reason = reason;
+        Path = path;
+        Stem = stem;
+        Extension = extension;
+    }
+
+    internal bool IsValid { get; }
+    internal string Code { get; }
+    internal string Reason { get; }
+    internal string Path { get; }
+    internal string Stem { get; }
+    internal string Extension { get; }
+
     internal static AssetOpsPathValidationResult Invalid(string code, string reason)
     {
         return new AssetOpsPathValidationResult(
@@ -202,16 +221,37 @@ internal sealed record AssetOpsPathValidationResult(
     }
 }
 
-internal sealed record AssetOpsMovePathValidationResult(
-    bool IsValid,
-    string Code,
-    string Reason,
-    string SourcePath,
-    string DestinationPath,
-    string SourceStem,
-    string DestinationStem,
-    string Extension)
+internal sealed class AssetOpsMovePathValidationResult
 {
+    private AssetOpsMovePathValidationResult(
+        bool isValid,
+        string code,
+        string reason,
+        string sourcePath,
+        string destinationPath,
+        string sourceStem,
+        string destinationStem,
+        string extension)
+    {
+        IsValid = isValid;
+        Code = code;
+        Reason = reason;
+        SourcePath = sourcePath;
+        DestinationPath = destinationPath;
+        SourceStem = sourceStem;
+        DestinationStem = destinationStem;
+        Extension = extension;
+    }
+
+    internal bool IsValid { get; }
+    internal string Code { get; }
+    internal string Reason { get; }
+    internal string SourcePath { get; }
+    internal string DestinationPath { get; }
+    internal string SourceStem { get; }
+    internal string DestinationStem { get; }
+    internal string Extension { get; }
+
     internal static AssetOpsMovePathValidationResult Invalid(string code, string reason)
     {
         return new AssetOpsMovePathValidationResult(
