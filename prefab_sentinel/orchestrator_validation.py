@@ -43,6 +43,7 @@ STALE_GUID_INDEX_HINT_DETAIL = "STALE_GUID_INDEX_HINT"
 def inspect_structure(
     prefab_variant: PrefabVariantService,
     target_path: str,
+    diagnostics_baseline: DiagnosticsBaseline | None = None,
 ) -> ToolResponse:
     text_or_error = read_target_file(prefab_variant, target_path, "VALIDATE_STRUCTURE")
     if isinstance(text_or_error, ToolResponse):
@@ -69,24 +70,74 @@ def inspect_structure(
         checks_skipped = ["transform_consistency", "missing_components", "orphaned_transforms"]
         skip_reason = f"File type {suffix} has no GameObject/Transform structure"
 
+    data: dict[str, object] = {
+        "target_path": target_path,
+        "read_only": True,
+        "duplicate_file_id_count": len(result.duplicate_file_ids),
+        "transform_inconsistency_count": len(result.transform_inconsistencies),
+        "missing_component_count": len(result.missing_components),
+        "orphaned_transform_count": len(result.orphaned_transforms),
+        "checks_performed": checks_performed,
+        "checks_skipped": checks_skipped,
+        "skip_reason": skip_reason,
+    }
+    if diagnostics_baseline is not None:
+        data["diagnostics_baseline"] = classify_current_keys(
+            _structure_diagnostic_key_records(
+                target_path,
+                diagnostics,
+                result.max_severity,
+            ),
+            diagnostics_baseline,
+        ).to_dict()
+
     return ToolResponse(
         success=success,
         severity=result.max_severity,
         code="VALIDATE_STRUCTURE_RESULT",
         message="validate.structure completed (read-only).",
-        data={
-            "target_path": target_path,
-            "read_only": True,
-            "duplicate_file_id_count": len(result.duplicate_file_ids),
-            "transform_inconsistency_count": len(result.transform_inconsistencies),
-            "missing_component_count": len(result.missing_components),
-            "orphaned_transform_count": len(result.orphaned_transforms),
-            "checks_performed": checks_performed,
-            "checks_skipped": checks_skipped,
-            "skip_reason": skip_reason,
-        },
+        data=data,
         diagnostics=diagnostics,
     )
+
+
+def _structure_diagnostic_key_records(
+    target_path: str,
+    diagnostics: list[Diagnostic],
+    default_severity: Severity,
+) -> tuple[DiagnosticKeyRecord, ...]:
+    records: list[DiagnosticKeyRecord] = []
+    for diagnostic in diagnostics:
+        category = _structure_diagnostic_category(diagnostic)
+        records.append(
+            DiagnosticKeyRecord(
+                key=(
+                    f"validate_structure:{category}:{target_path}:"
+                    f"{diagnostic.location}:{diagnostic.evidence}"
+                ),
+                severity=diagnostic.severity or default_severity.value,
+                message=diagnostic.detail,
+                data={
+                    "category": category,
+                    "target_path": target_path,
+                    "path": diagnostic.path,
+                    "location": diagnostic.location,
+                    "evidence": diagnostic.evidence,
+                },
+            )
+        )
+    return tuple(records)
+
+
+def _structure_diagnostic_category(diagnostic: Diagnostic) -> str:
+    detail = diagnostic.detail
+    if detail.startswith("Duplicate fileID:"):
+        return "duplicate_file_id"
+    if "references missing component:" in detail:
+        return "missing_component"
+    if detail.startswith("Orphaned transform:"):
+        return "orphaned_transform"
+    return "transform_consistency"
 
 
 def _handle_snapshot_modes(

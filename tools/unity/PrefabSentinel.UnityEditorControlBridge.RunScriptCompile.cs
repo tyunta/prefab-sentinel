@@ -111,7 +111,8 @@ namespace PrefabSentinel
                     };
                     EditorApplication.CallbackFunction reloadPoll =
                         BuildRecompileReloadWaitPoll(
-                            responsePath, deadlineMs, callTimeReloadCount,
+                            responsePath, callTimeMs, deadlineMs,
+                            callTimeReloadCount, "editor_refresh",
                             "editor_refresh: timed out waiting for the "
                             + "post-reload AssemblyReloadCount tick after a "
                             + "compile-aware refresh.",
@@ -120,6 +121,22 @@ namespace PrefabSentinel
                 },
                 onDeadlineExceeded = () =>
                 {
+                    long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                    bool? editorFocused = ObserveEditorFocused();
+                    if (BackgroundCompileDeferralClassifier.Classify(
+                        editorFocused, deadlineElapsed: true))
+                    {
+                        PendingAsyncRunner.Complete(responsePath);
+                        WriteResponse(responsePath,
+                            BuildCompileDeferredBackgroundResponse(
+                                "editor_refresh",
+                                (nowMs - callTimeMs) / 1000f,
+                                (deadlineMs - callTimeMs) / 1000f,
+                                EditorApplication.isCompiling,
+                                jobRetained: false,
+                                cleanupPerformed: false));
+                        return;
+                    }
                     PendingAsyncRunner.Complete(responsePath);
                     WriteResponse(responsePath, BuildError(
                         "EDITOR_CTRL_REFRESH_COMPILE_TIMEOUT",
@@ -243,8 +260,10 @@ namespace PrefabSentinel
         /// </summary>
         private static EditorApplication.CallbackFunction BuildRecompileReloadWaitPoll(
             string responsePath,
+            long callTimeMs,
             long deadlineMs,
             int reloadCountThreshold,
+            string operation,
             string timeoutDetail,
             Action onReloadComplete)
         {
@@ -254,6 +273,21 @@ namespace PrefabSentinel
                 long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                 if (RecompileDeadline.HasElapsed(nowMs, deadlineMs))
                 {
+                    bool? editorFocused = ObserveEditorFocused();
+                    if (BackgroundCompileDeferralClassifier.Classify(
+                        editorFocused, deadlineElapsed: true))
+                    {
+                        PendingAsyncRunner.Complete(responsePath);
+                        WriteResponse(responsePath,
+                            BuildCompileDeferredBackgroundResponse(
+                                operation,
+                                (nowMs - callTimeMs) / 1000f,
+                                (deadlineMs - callTimeMs) / 1000f,
+                                EditorApplication.isCompiling,
+                                jobRetained: false,
+                                cleanupPerformed: false));
+                        return;
+                    }
                     PendingAsyncRunner.Complete(responsePath);
                     WriteResponse(responsePath, BuildError(
                         "EDITOR_CTRL_RECOMPILE_TIMEOUT",
@@ -427,8 +461,10 @@ namespace PrefabSentinel
                     EditorApplication.CallbackFunction reloadPoll =
                         BuildRecompileReloadWaitPoll(
                             responsePath,
+                            callTimeMs,
                             deadlineMs,
                             callTimeReloadCount,
+                            "editor_recompile_and_wait",
                             $"editor_recompile_and_wait: timed out after "
                             + $"{budgetSec:F1}s waiting for the post-reload "
                             + "AssemblyReloadCount tick.",
@@ -437,6 +473,22 @@ namespace PrefabSentinel
                 },
                 onDeadlineExceeded = () =>
                 {
+                    long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                    bool? editorFocused = ObserveEditorFocused();
+                    if (BackgroundCompileDeferralClassifier.Classify(
+                        editorFocused, deadlineElapsed: true))
+                    {
+                        PendingAsyncRunner.Complete(responsePath);
+                        WriteResponse(responsePath,
+                            BuildCompileDeferredBackgroundResponse(
+                                "editor_recompile_and_wait",
+                                (nowMs - callTimeMs) / 1000f,
+                                (deadlineMs - callTimeMs) / 1000f,
+                                EditorApplication.isCompiling,
+                                jobRetained: false,
+                                cleanupPerformed: false));
+                        return;
+                    }
                     PendingAsyncRunner.Complete(responsePath);
                     WriteResponse(responsePath, BuildError(
                         "EDITOR_CTRL_RECOMPILE_TIMEOUT",
@@ -587,10 +639,6 @@ namespace PrefabSentinel
                 transportRequestId = transportRequestId,
             };
 
-            // Compile did not produce a runnable assembly within budget:
-            // tear down the staging area and write the compile-pending
-            // response (shared by the no-assembly-compiled and the
-            // deadline-exceeded outcomes).
             Action writeCompilePending = () =>
             {
                 PendingAsyncRunner.Complete(responsePath);
@@ -603,6 +651,28 @@ namespace PrefabSentinel
                     + "still cannot be located, run the snippet through "
                     + "`editor_execute_menu_item` against a persistent editor "
                     + "helper script committed under `Assets/Editor/`."));
+            };
+
+            Action writeCompileDeadline = () =>
+            {
+                long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                bool? editorFocused = ObserveEditorFocused();
+                if (BackgroundCompileDeferralClassifier.Classify(
+                    editorFocused, deadlineElapsed: true))
+                {
+                    PendingAsyncRunner.Complete(responsePath);
+                    CleanupRunScriptTempFiles(scriptAbs, metaAbs);
+                    WriteResponse(responsePath,
+                        BuildCompileDeferredBackgroundResponse(
+                            "run_script",
+                            (nowMs - callTimeMs) / 1000f,
+                            (deadlineMs - callTimeMs) / 1000f,
+                            EditorApplication.isCompiling,
+                            jobRetained: false,
+                            cleanupPerformed: true));
+                    return;
+                }
+                writeCompilePending();
             };
 
             ScheduleCompileBarrier(new CompileBarrierSpec
@@ -635,7 +705,7 @@ namespace PrefabSentinel
                 // which resolves the temp type and invokes ``Run()``.
                 onCompiled = () => { },
                 onNoAssemblyCompiled = writeCompilePending,
-                onDeadlineExceeded = writeCompilePending,
+                onDeadlineExceeded = writeCompileDeadline,
                 onScheduleFailure = () =>
                 {
                     PendingAsyncRunner.Complete(responsePath);
@@ -676,18 +746,52 @@ namespace PrefabSentinel
 
             if (nowMs > entry.deadlineUnixMs)
             {
-                PendingAsyncRunner.Complete(responsePath);
-                CleanupRunScriptTempFiles(scriptAbs, metaAbs);
-                EditorControlResponse pending = RunScriptCompilePendingResponse(
-                    stuckKey, tempId, tempDirAbs,
-                    "Script compilation did not complete within the bounded poll; " +
-                    "a domain reload may still be pending or the freshly compiled type " +
-                    "could not be located. Retry after Unity finishes compiling. " +
-                    "If the freshly compiled type still cannot be located, run the snippet " +
-                    "through `editor_execute_menu_item` against a persistent editor helper " +
-                    "script committed under `Assets/Editor/`.");
-                WriteResponse(responsePath, pending);
-                return;
+                bool? editorFocused = ObserveEditorFocused();
+                bool backgroundDeferredNow = BackgroundCompileDeferralClassifier.Classify(
+                    editorFocused, deadlineElapsed: true);
+                bool backgroundDeferredBefore = PendingAsyncRunner.IsBackgroundDeferred(responsePath);
+                if (entry.action == "run_script_submit"
+                    && backgroundDeferredBefore
+                    && editorFocused == true)
+                {
+                    PendingAsyncRunner.ClearBackgroundDeferred(responsePath);
+                }
+                else if (entry.action == "run_script_submit"
+                    && (backgroundDeferredNow || backgroundDeferredBefore))
+                {
+                    if (backgroundDeferredNow)
+                        PendingAsyncRunner.MarkBackgroundDeferred(responsePath);
+                    return;
+                }
+                else if (backgroundDeferredNow)
+                {
+                    PendingAsyncRunner.Complete(responsePath);
+                    CleanupRunScriptTempFiles(scriptAbs, metaAbs);
+                    WriteResponse(responsePath,
+                        BuildCompileDeferredBackgroundResponse(
+                            "run_script",
+                            (nowMs - entry.callTimeUnixMs) / 1000f,
+                            (entry.deadlineUnixMs - entry.callTimeUnixMs) / 1000f,
+                            EditorApplication.isCompiling,
+                            jobRetained: false,
+                            cleanupPerformed: true));
+                    return;
+                }
+                else
+                {
+                    PendingAsyncRunner.Complete(responsePath);
+                    CleanupRunScriptTempFiles(scriptAbs, metaAbs);
+                    EditorControlResponse pending = RunScriptCompilePendingResponse(
+                        stuckKey, tempId, tempDirAbs,
+                        "Script compilation did not complete within the bounded poll; " +
+                        "a domain reload may still be pending or the freshly compiled type " +
+                        "could not be located. Retry after Unity finishes compiling. " +
+                        "If the freshly compiled type still cannot be located, run the snippet " +
+                        "through `editor_execute_menu_item` against a persistent editor helper " +
+                        "script committed under `Assets/Editor/`.");
+                    WriteResponse(responsePath, pending);
+                    return;
+                }
             }
 
             if (EditorApplication.isCompiling) return;
@@ -1110,8 +1214,10 @@ namespace PrefabSentinel
                         string menuPath = req != null ? req.menu_path : "";
                         EditorApplication.CallbackFunction poll = BuildRecompileReloadWaitPoll(
                             entry.responsePath,
+                            entry.callTimeUnixMs,
                             entry.deadlineUnixMs,
                             -1,
+                            "execute_menu_item",
                             "execute_menu_item: timed out after domain reload.",
                             BuildMenuExecuteReloadComplete(menuPath, entry.responsePath));
                         PendingAsyncRunner.RehydrateEntry(entry, poll);
@@ -1136,8 +1242,10 @@ namespace PrefabSentinel
                         // or after the ``afterAssemblyReload`` increment.
                         EditorApplication.CallbackFunction poll = BuildRecompileReloadWaitPoll(
                             entry.responsePath,
+                            entry.callTimeUnixMs,
                             entry.deadlineUnixMs,
                             -1,
+                            "editor_recompile_and_wait",
                             "editor_recompile_and_wait: timed out after domain reload.",
                             BuildRecompileAndWaitReloadComplete(entry.responsePath));
                         PendingAsyncRunner.RehydrateEntry(entry, poll);
@@ -1152,8 +1260,10 @@ namespace PrefabSentinel
                         // recompile-and-wait branch above).
                         EditorApplication.CallbackFunction poll = BuildRecompileReloadWaitPoll(
                             entry.responsePath,
+                            entry.callTimeUnixMs,
                             entry.deadlineUnixMs,
                             -1,
+                            "editor_refresh",
                             "editor_refresh: timed out after domain reload "
                             + "waiting for the AssemblyReloadCount tick.",
                             BuildRefreshCompileSuccessReloadComplete(entry.responsePath));

@@ -177,6 +177,78 @@ def test_non_regular_project_config_returns_schema_error_without_reading(tmp_pat
     assert (result.baseline.status, result.baseline.known_diagnostics) == ("invalid", ())
 
 
+
+def test_broken_config_symlink_returns_schema_error_without_reading(tmp_path, monkeypatch) -> None:
+    config_path = tmp_path / "config"
+    baseline_path = config_path / "diagnostics_baseline.json"
+    config_path.symlink_to(tmp_path / "missing-config-target", target_is_directory=True)
+
+    def fail_if_read(*_args, **_kwargs):
+        raise AssertionError("broken config symlink baseline path must not be read")
+
+    monkeypatch.setattr(type(baseline_path), "read_text", fail_if_read)
+
+    result = load_diagnostics_baseline(tmp_path)
+
+    assert result.error is not None
+    assert_error_envelope(
+        result.error,
+        code="DIAGNOSTICS_BASELINE_INVALID",
+        message_match="non-empty string",
+        data={"path": str(baseline_path), "read_only": True},
+    )
+    assert (result.baseline.status, result.baseline.known_diagnostics) == ("invalid", ())
+    assert config_path.is_symlink()
+
+
+def test_config_symlink_swap_after_validation_returns_invalid_without_foreign_read(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import shutil
+
+    import prefab_sentinel.diagnostics_baseline as diagnostics_baseline_module
+
+    config_path = tmp_path / "config"
+    config_path.mkdir()
+    baseline_path = config_path / "diagnostics_baseline.json"
+    baseline_path.write_text(
+        json.dumps({"version": 1, "known_diagnostics": []}),
+        encoding="utf-8",
+    )
+    outside_config = tmp_path / "outside-config"
+    outside_config.mkdir()
+    outside_baseline = outside_config / "diagnostics_baseline.json"
+    outside_baseline.write_text(
+        json.dumps({"version": 1, "known_diagnostics": ["secret"]}),
+        encoding="utf-8",
+    )
+    original_path_check = diagnostics_baseline_module.diagnostics_baseline_path
+
+    def swap_config_after_validation(project_root):
+        result = original_path_check(project_root)
+        shutil.rmtree(config_path)
+        config_path.symlink_to(outside_config, target_is_directory=True)
+        return result
+
+    monkeypatch.setattr(
+        diagnostics_baseline_module,
+        "diagnostics_baseline_path",
+        swap_config_after_validation,
+    )
+
+    result = diagnostics_baseline_module.load_diagnostics_baseline(tmp_path)
+
+    assert result.error is not None
+    assert_error_envelope(
+        result.error,
+        code="DIAGNOSTICS_BASELINE_INVALID",
+        message_match="non-empty string",
+        data={"path": str(baseline_path), "read_only": True},
+    )
+    assert (result.baseline.status, result.baseline.known_diagnostics) == ("invalid", ())
+    assert config_path.is_symlink()
+
 def test_classification_preserves_current_order_and_reports_resolved_baseline_keys() -> None:
     baseline = DiagnosticsBaseline(
         known_diagnostics=("known", "resolved"),

@@ -609,6 +609,88 @@ class InspectStructureContractTests(unittest.TestCase):
         self.assertIn(".mat", response.data["skip_reason"])
 
 
+class InspectStructureDiagnosticsBaselineTests(unittest.TestCase):
+    def test_baseline_keys_exclude_human_structure_messages(self) -> None:
+        from prefab_sentinel.diagnostics_baseline import DiagnosticsBaseline
+        from prefab_sentinel.orchestrator_validation import inspect_structure
+        from prefab_sentinel.services.prefab_variant import PrefabVariantService
+
+        duplicate_key = (
+            "validate_structure:duplicate_file_id:Assets/Broken.prefab:"
+            "fileID:20:{fileID: 20}"
+        )
+        missing_component_key = (
+            "validate_structure:missing_component:Assets/Broken.prefab:"
+            "fileID:10:component: {fileID: 999}"
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            write_file(
+                root / "Assets" / "Broken.prefab",
+                """%YAML 1.1
+--- !u!1 &10
+GameObject:
+  m_Name: Broken
+  m_Component:
+  - component: {fileID: 20}
+  - component: {fileID: 999}
+--- !u!4 &20
+Transform:
+  m_GameObject: {fileID: 10}
+  m_Father: {fileID: 0}
+  m_Children: []
+--- !u!114 &20
+MonoBehaviour:
+  m_GameObject: {fileID: 10}
+""",
+            )
+            write_file(
+                root / "Assets" / "Broken.prefab.meta",
+                f"fileFormatVersion: 2\nguid: {BASE_GUID}\n",
+            )
+            svc = PrefabVariantService(project_root=root)
+            baseline = DiagnosticsBaseline(
+                known_diagnostics=(duplicate_key,),
+                path=str(root / "config" / "diagnostics_baseline.json"),
+                status="loaded",
+            )
+
+            try:
+                response = inspect_structure(
+                    svc,
+                    "Assets/Broken.prefab",
+                    diagnostics_baseline=baseline,
+                )
+            except TypeError as exc:
+                self.fail(
+                    "inspect_structure must accept diagnostics_baseline for baseline classification: "
+                    f"{exc}"
+                )
+
+        classification = response.data.get("diagnostics_baseline")
+        if classification is None:
+            self.fail("inspect_structure must attach diagnostics_baseline classification")
+        self.assertEqual(
+            (1, 1, [missing_component_key], [duplicate_key]),
+            (
+                classification["new_count"],
+                classification["known_count"],
+                [r["key"] for r in classification["new"]],
+                [r["key"] for r in classification["known"]],
+            ),
+        )
+        human_messages = {
+            "Duplicate fileID: 20 appears 2 times",
+            "GameObject 'Broken' references missing component: fileID:999",
+        }
+        sampled_text = "\n".join(
+            [r["key"] for r in classification["new"] + classification["known"]]
+            + [str(r["data"]) for r in classification["new"] + classification["known"]]
+        )
+        for message in human_messages:
+            self.assertNotIn(message, sampled_text)
+
+
 class OpLabelCodePinTests(unittest.TestCase):
     """Issue #208 — ``inspect_structure`` op-label code prefix pin.
 

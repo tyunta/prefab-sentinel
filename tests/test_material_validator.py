@@ -933,6 +933,92 @@ class TestMaterialValidatorReadFailures(unittest.TestCase):
         )
 
 
+
+class TestMaterialValidatorDiagnosticsBaseline(unittest.TestCase):
+    def test_baseline_classification_keys_are_stable_across_details(self) -> None:
+        from prefab_sentinel.diagnostics_baseline import DiagnosticsBaseline
+
+        with _project() as tmp:
+            project_root = _project_root(tmp)
+            _write_asset(
+                project_root,
+                "Assets/UI/Missing.mat",
+                _material_yaml("Missing", shader_guid=None),
+            )
+            _write_asset(
+                project_root,
+                "Assets/UI/Unresolved.mat",
+                _material_yaml("Unresolved", shader_guid=UNRESOLVED_GUID),
+            )
+            resolver = ReferenceResolverService(project_root=project_root)
+            known_key = (
+                "validate_materials:MATERIAL_SHADER_MISSING:"
+                "Assets/UI/Missing.mat:material:Assets/UI/Missing.mat"
+            )
+            baseline = DiagnosticsBaseline(
+                known_diagnostics=(known_key,),
+                path=str(project_root / "config" / "diagnostics_baseline.json"),
+                status="loaded",
+            )
+
+            try:
+                default = _response_dict(
+                    orchestrate_validate(
+                        resolver,
+                        "Assets/UI",
+                        include_details=False,
+                        diagnostics_baseline=baseline,
+                    )
+                )
+                detailed = _response_dict(
+                    orchestrate_validate(
+                        resolver,
+                        "Assets/UI",
+                        include_details=True,
+                        diagnostics_baseline=baseline,
+                    )
+                )
+            except TypeError as exc:
+                self.fail(
+                    "validate_materials must accept diagnostics_baseline for baseline classification: "
+                    f"{exc}"
+                )
+
+        default_baseline = default["data"].get("diagnostics_baseline")
+        detailed_baseline = detailed["data"].get("diagnostics_baseline")
+        self.assertEqual(
+            (
+                "MATERIAL_VALIDATION_FINDINGS",
+                1,
+                1,
+                0,
+                [
+                    "validate_materials:MATERIAL_SHADER_UNRESOLVED:"
+                    "Assets/UI/Unresolved.mat:material:Assets/UI/Unresolved.mat"
+                ],
+                [known_key],
+            ),
+            (
+                default["code"],
+                None if default_baseline is None else default_baseline["new_count"],
+                None if default_baseline is None else default_baseline["known_count"],
+                None if default_baseline is None else default_baseline["resolved_count"],
+                [] if default_baseline is None else [r["key"] for r in default_baseline["new"]],
+                [] if default_baseline is None else [r["key"] for r in default_baseline["known"]],
+            ),
+        )
+        self.assertEqual(
+            (
+                [r["key"] for r in default_baseline["new"]],
+                [r["key"] for r in default_baseline["known"]],
+            ),
+            (
+                [r["key"] for r in detailed_baseline["new"]],
+                [r["key"] for r in detailed_baseline["known"]],
+            ),
+            msg="include_details must not affect material diagnostics baseline key identity.",
+        )
+
 class TestPhase1OrchestratorMaterialValidation(unittest.TestCase):
     def test_orchestrator_validate_materials_delegates_reference_resolver_and_details(self) -> None:
         expected = ToolResponse(

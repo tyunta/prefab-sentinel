@@ -759,6 +759,7 @@ def validate_all_wiring(
     reference_resolver: ReferenceResolverService,
     *,
     target_path: str = "",
+    diagnostics_baseline: DiagnosticsBaseline | None = None,
 ) -> ToolResponse:
     if target_path:
         paths = [Path(target_path)]
@@ -775,15 +776,31 @@ def validate_all_wiring(
         )
 
     if not paths:
+        data: dict[str, object] = {
+            "files_scanned": 0,
+            "total_components": 0,
+            "total_null_refs": 0,
+        }
+        if diagnostics_baseline is not None:
+            data["diagnostics_baseline"] = classify_current_keys(
+                (),
+                diagnostics_baseline,
+            ).to_dict()
         return success_response(
             "VALIDATE_WIRING_EMPTY",
             "No .prefab or .unity files found in scope.",
-            data={"files_scanned": 0, "total_components": 0, "total_null_refs": 0},
+            data=data,
         )
 
     total_components = 0
     total_null_refs = 0
     null_refs_by_file: list[dict[str, object]] = []
+    diagnostic_key_records: list[DiagnosticKeyRecord] = []
+    baseline_key_set_complete = True
+    collection_baseline = (
+        DiagnosticsBaseline((), diagnostics_baseline.path, diagnostics_baseline.status)
+        if diagnostics_baseline is not None else None
+    )
 
     for p in paths:
         try:
@@ -794,18 +811,38 @@ def validate_all_wiring(
             result = inspect_wiring(
                 prefab_variant, reference_resolver, target_path=str(p),
                 page_size=INSPECT_WIRING_PAGE_SIZE_MAX,
+                diagnostics_baseline=collection_baseline,
             )
             resp_dict = result.to_dict()
             if not resp_dict.get("success", False):
+                baseline_key_set_complete = False
                 continue
-            components = resp_dict.get("data", {}).get("components", [])
+            response_data = resp_dict.get("data")
+            if not isinstance(response_data, dict):
+                baseline_key_set_complete = False
+                continue
+            raw_components = response_data.get("components", [])
+            if not isinstance(raw_components, list):
+                baseline_key_set_complete = False
+                continue
+            components = [
+                component
+                for component in raw_components
+                if isinstance(component, dict)
+            ]
             comp_count = len(components)
             null_count = sum(
-                len(c.get("null_field_names") or [])
-                for c in components
+                len(raw_names)
+                for component in components
+                for raw_names in (component.get("null_field_names"),)
+                if isinstance(raw_names, list)
             )
             total_components += comp_count
             total_null_refs += null_count
+            if diagnostics_baseline is not None:
+                diagnostic_key_records.extend(
+                    _diagnostic_key_records_from_classification(response_data)
+                )
             if null_count > 0:
                 null_refs_by_file.append({
                     "file": str(p),
@@ -813,19 +850,56 @@ def validate_all_wiring(
                     "components": comp_count,
                 })
         except Exception as exc:
+            baseline_key_set_complete = False
             logging.getLogger(__name__).debug(
                 "validate_all_wiring: skipped %s: %s", p, exc,
             )
             continue
 
+    data = {
+        "files_scanned": len(paths),
+        "total_components": total_components,
+        "total_null_refs": total_null_refs,
+        "null_refs_by_file": null_refs_by_file,
+    }
+    if diagnostics_baseline is not None and baseline_key_set_complete:
+        # A skipped child scan cannot prove any known baseline key is resolved.
+        data["diagnostics_baseline"] = classify_current_keys(
+            tuple(diagnostic_key_records),
+            diagnostics_baseline,
+        ).to_dict()
+
     return success_response(
         "VALIDATE_WIRING_OK",
         f"Scanned {len(paths)} files: "
         f"{total_components} components, {total_null_refs} null references",
-        data={
-            "files_scanned": len(paths),
-            "total_components": total_components,
-            "total_null_refs": total_null_refs,
-            "null_refs_by_file": null_refs_by_file,
-        },
+        data=data,
     )
+
+
+def _diagnostic_key_records_from_classification(
+    data: object,
+) -> tuple[DiagnosticKeyRecord, ...]:
+    if not isinstance(data, dict):
+        return ()
+    raw_classification = data.get("diagnostics_baseline")
+    if not isinstance(raw_classification, dict):
+        return ()
+    raw_records = raw_classification.get("new")
+    if not isinstance(raw_records, list):
+        return ()
+
+    records: list[DiagnosticKeyRecord] = []
+    for raw_record in raw_records:
+        if not isinstance(raw_record, dict):
+            continue
+        raw_data = raw_record.get("data")
+        records.append(
+            DiagnosticKeyRecord(
+                key=str(raw_record.get("key", "")),
+                severity=str(raw_record.get("severity", "warning")),
+                message=str(raw_record.get("message", "")),
+                data=raw_data if isinstance(raw_data, dict) else {},
+            )
+        )
+    return tuple(record for record in records if record.key)

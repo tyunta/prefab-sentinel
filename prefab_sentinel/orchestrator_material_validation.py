@@ -6,6 +6,11 @@ from pathlib import Path
 from typing import cast
 
 from prefab_sentinel.contracts import Severity, ToolResponse, error_response
+from prefab_sentinel.diagnostics_baseline import (
+    DiagnosticKeyRecord,
+    DiagnosticsBaseline,
+    classify_current_keys,
+)
 from prefab_sentinel.material_validation_rules import (
     MaterialValidationRulesLoadResult,
     load_material_validation_rules,
@@ -22,6 +27,7 @@ def validate_materials(
     scope: str,
     *,
     include_details: bool = False,
+    diagnostics_baseline: DiagnosticsBaseline | None = None,
 ) -> ToolResponse:
     project_root = reference_resolver.project_root.resolve()
     scope_path = resolve_scope_path(scope, project_root)
@@ -56,12 +62,52 @@ def validate_materials(
             diagnostics=list(rules_result.diagnostics),
         ))
 
-    return cast(ToolResponse, validate_materials_core(
+    response = cast(ToolResponse, validate_materials_core(
         reference_resolver,
         scope_path,
         rules,
         include_details=include_details,
     ))
+    if diagnostics_baseline is None:
+        return response
+
+    data = dict(response.data)
+    data["diagnostics_baseline"] = classify_current_keys(
+        _material_diagnostic_key_records(scope, response),
+        diagnostics_baseline,
+    ).to_dict()
+    return ToolResponse(
+        success=response.success,
+        severity=response.severity,
+        code=response.code,
+        message=response.message,
+        data=data,
+        diagnostics=response.diagnostics,
+    )
+
+
+def _material_diagnostic_key_records(
+    scope: str,
+    response: ToolResponse,
+) -> tuple[DiagnosticKeyRecord, ...]:
+    records: list[DiagnosticKeyRecord] = []
+    for diagnostic in response.diagnostics:
+        path = diagnostic.path or scope
+        location = diagnostic.location
+        records.append(
+            DiagnosticKeyRecord(
+                key=f"validate_materials:{diagnostic.detail}:{path}:{location}",
+                severity=diagnostic.severity or response.severity.value,
+                message=diagnostic.evidence or diagnostic.detail,
+                data={
+                    "code": diagnostic.detail,
+                    "scope": scope,
+                    "path": path,
+                    "location": location,
+                },
+            )
+        )
+    return tuple(records)
 
 
 def _is_inside_project(scope_path: Path, project_root: Path) -> bool:

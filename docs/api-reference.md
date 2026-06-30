@@ -194,7 +194,15 @@ diagnostic code:
 | `EDITOR_CTRL_SERIALIZED_PROPERTY_OBJECT_REF_NOT_FOUND` / `EDITOR_CTRL_SERIALIZED_PROPERTY_OBJECT_REF_TYPE_MISMATCH` / `EDITOR_CTRL_SERIALIZED_PROPERTY_OBJECT_REF_AMBIGUOUS` | object reference の asset / hierarchy path が解決できない、解決した Unity object が対象 field 型へ assign できない、または hierarchy path が複数の assignable component に一致する場合。空 asset/hierarchy path は missing reference として拒否し、null reference に丸めない。曖昧時は candidate evidence を返し first component を選ばない。 |
 | `EDITOR_CTRL_SERIALIZED_PROPERTY_UDON_SYNC_WARNING` | confirmed changed write は完了したが、UdonSharp proxy-to-backing sync の best-effort step が失敗または未確認だった場合の warning diagnostic。 |
 | `IGNORE_GUIDS_FILE_LOADED` | `validate_refs` MCP ツールの `<scope>/config/ignore_guids.txt` auto-load が寄与した場合に `diagnostics` に付与される info diagnostic（issue #237）。`data.path` に解決後の絶対パス、`data.count` に取り込まれた件数を含める。ファイルが存在しない・読み取り不能の場合は発火しない。 |
-| `DIAGNOSTICS_BASELINE_INVALID` | project root の `config/diagnostics_baseline.json` が invalid JSON または schema 不一致だった場合。`validate_refs` / `inspect_wiring` MCP wrapper は orchestrator を呼ぶ前に `success=false`, `severity="error"` で停止し、`data.path` と `data.read_only=true` を返す。 |
+| `DIAGNOSTICS_BASELINE_INVALID` | project root の `config/diagnostics_baseline.json` が invalid JSON または schema 不一致だった場合。baseline 対応 validation と `update_diagnostics_baseline` は source/orchestrator を呼ぶ前に `success=false`, `severity="error"` で停止し、`data.path` と `data.read_only=true` を返す。 |
+| `DIAGNOSTICS_BASELINE_UPDATE_PREVIEW` | `update_diagnostics_baseline(mode="preview")` が source validation の `data.diagnostics_baseline` から次の baseline を計算した場合。`success=true`, `severity="info"`。`data.written=false` で、file system へは書き込まない。 |
+| `DIAGNOSTICS_BASELINE_UPDATE_WRITTEN` | `update_diagnostics_baseline(mode="write", confirm=True, change_reason=...)` が project root の `config/diagnostics_baseline.json` を schema v1 JSON として書いた場合。`success=true`, `severity="info"`。 |
+| `DIAGNOSTICS_BASELINE_WRITE_FAILED` | `update_diagnostics_baseline(mode="write")` が audit 通過後に baseline file の作成・一時 file 書き込み・置換に失敗した場合。`success=false`, `severity="error"` で停止し、`data.path` と `data.read_only=false` を返す。 |
+| `DIAGNOSTICS_BASELINE_PROJECT_ROOT_REQUIRED` | `update_diagnostics_baseline` が activate 済み project root なしで呼ばれた場合。source validation は実行せず、file write もしない。 |
+| `DIAGNOSTICS_BASELINE_SOURCE_INVALID` | `update_diagnostics_baseline.source` が `validate_refs` / `inspect_wiring` / `validate_all_wiring` / `validate_structure` / `validate_materials` 以外だった場合。source validation は実行せず、file write もしない。 |
+| `DIAGNOSTICS_BASELINE_MODE_INVALID` | `update_diagnostics_baseline.mode` が `preview` / `write` 以外だった場合。source validation は実行せず、file write もしない。 |
+| `DIAGNOSTICS_BASELINE_SOURCE_FAILED` | `update_diagnostics_baseline` が実行した source validation が `success=false` を返した場合。`data.source_response` に source envelope を含め、baseline file は書かない。 |
+| `DIAGNOSTICS_BASELINE_SOURCE_MISSING_CLASSIFICATION` | `update_diagnostics_baseline` が実行した source validation が `success=true` だが `data.diagnostics_baseline` を持たない、または update 計算に必要な `new[]` / `resolved[]` key record が malformed の場合。baseline file は書かない。 |
 | `EDITOR_CTRL_INVALID_ORDER` | `editor_console` の `order` が `newest_first` / `oldest_first` 以外の場合（issue #113）。`severity="error"`、メッセージで受理可能な値を列挙。 |
 | `EDITOR_CTRL_INVALID_CURSOR` | `editor_console` の `cursor` が現在の取り込み済み範囲外、もしくは Bridge のフォーマット (`seq:<long>`) に合致しない場合（issue #113）。`severity="error"`、メッセージで原因を明示。 |
 | `EDITOR_CTRL_SET_PROP_QUATERNION_NOT_NORMALIZED` | `editor_set_property` で `SerializedPropertyType.Quaternion` に与えた xyzw 4 要素のノルムが `1.0 ± 1e-4` の許容範囲外だった場合（issue #111）。`severity="error"`、メッセージに供給値とノルムを明示。Bridge 側では自動 normalize しない。Component 数が 4 でない（例えば 3 要素の euler を渡した）場合は既存の `EDITOR_CTRL_SET_PROP_TYPE_MISMATCH` で 4 要素必須を案内。 |
@@ -209,6 +217,7 @@ diagnostic code:
 | `EDITOR_CTRL_REFRESH_COMPILE_FAILED` | コンパイル待機を要求した `editor_refresh` が、refresh で誘発したコンパイルで `CompilerMessageType.Error` を 1 件以上観測した場合（issue #70）。`severity="error"`、`data.errors` に実コンパイラ診断列を返す。 |
 | `EDITOR_CTRL_REFRESH_COMPILE_TIMEOUT` | コンパイル待機を要求した `editor_refresh` が deadline 以内に誘発コンパイルの完了を観測できなかった、純粋な deadline 経過の場合（issue #70）。`severity="error"`。 |
 | `EDITOR_CTRL_REFRESH_SCHEDULE_FAILED` | コンパイル待機を要求した `editor_refresh` の `AssetDatabase.Refresh()` 呼び出しを Editor が例外で拒否した schedule-failure 経路（issue #70）。`severity="error"`。例外本文は Unity Console にのみ出力され、MCP 応答には乗らない。 |
+| `EDITOR_COMPILE_DEFERRED_BACKGROUND` | `editor_recompile` / `editor_refresh` / `editor_run_script` / `editor_run_script_poll` / `editor_execute_menu_item` の compile/reload wait が deadline に達し、Bridge が Unity Editor の focus を background / non-focused と明示観測した場合（issue #72）。`success=false`, `severity="warning"`。`data.operation`, `data.editor_focused=false`, `data.deferred_reason="editor_background_compile_reload"`, `data.elapsed_sec`, `data.budget_sec`, `data.diagnostic_compiling`, `data.job_retained`, `data.cleanup_performed` を返す。focused / focus unknown の deadline は従来の `EDITOR_CTRL_RECOMPILE_TIMEOUT` / `EDITOR_CTRL_REFRESH_COMPILE_TIMEOUT` / `EDITOR_RUN_SCRIPT_COMPILE_TIMEOUT` / `EDITOR_RUN_SCRIPT_SUBMIT_TIMEOUT` に残す。transport / file-IPC timeout (`EDITOR_BRIDGE_TIMEOUT` → `EDITOR_RUN_SCRIPT_TRANSPORT_TIMEOUT`) はこのコードへ reclassify しない。 |
 | `EDITOR_CTRL_CREATE_UI_NO_NAME` / `..._BAD_TYPE` / `..._PARENT_NOT_FOUND` / `..._TMP_FONT_MISSING` / `..._OK` | `editor_create_ui_element` の応答コード（issue #195）。`..._BAD_TYPE` は `data.suggestions` に `Image` / `TextMeshProUGUI` / `Button` / `Slider` / `Toggle` の正規許容セットを含める。`..._TMP_FONT_MISSING` は warning（`success=false`）で、GameObject は作成されるが TextMeshPro の font は未代入。 |
 | `INSPECT_WIRING_INVALID_CURSOR` / `INSPECT_WIRING_PAGE_SIZE_OUT_OF_RANGE` | `inspect_wiring` の pagination ガード（issue #197）。前者は `cursor` が `pos:<offset>` 形式でない、もしくは `[0, total]` の範囲外の場合に `severity="error"` を返す。後者は `page_size` が `[1, 500]` の外の場合に `severity="error"` を返す。 |
 | `INSPECT_WIRING_EMPTY_FILTER_RESULT` | `inspect_wiring` の `script_filter` が non-empty にもかかわらずマッチするコンポーネントが 1 件もなかった場合（issue #227）。`severity="warning"`、メッセージに供給フィルタと正規化後のサフィックスを含める。caller が「filter のスペルミス」と「対象に MonoBehaviour がそもそも無い」を区別できるようにするため `INSPECT_WIRING_NO_MONOBEHAVIOURS` とは別コードに分離している。 |
@@ -255,7 +264,7 @@ diagnostic code:
 
 ## diagnostics baseline metadata
 
-`validate_refs` と `inspect_wiring` は、project root に `config/diagnostics_baseline.json` が存在する場合、current diagnostics を stable key で `new` / `known` / `resolved` に分類する。baseline file が存在しない場合も、classification が要求される呼び出しでは `status="absent"` または `status="not_loaded_no_project_root"` として空 baseline を返す。
+`validate_refs` / `inspect_wiring` / `validate_all_wiring` / `validate_structure` / `validate_materials` は、project root に `config/diagnostics_baseline.json` が存在する場合、current diagnostics を stable key で `new` / `known` / `resolved` に分類する。baseline file が存在しない場合も、classification が要求される呼び出しでは `status="absent"` または `status="not_loaded_no_project_root"` として空 baseline を返す。
 
 `data.diagnostics_baseline` の形:
 
@@ -277,6 +286,45 @@ diagnostic code:
 - `inspect_wiring:null_reference:<source_prefab-or-target>:<component_file_id>:<field_name>`
 - `inspect_wiring:internal_broken_ref:<source_prefab-or-target>:<component_file_id>:<field_name>`
 - `inspect_wiring:duplicate_reference:<source_prefab-or-target>:<component_file_id>:<field_name>`
+
+`validate_all_wiring` は aggregate summary key を作らず、各 file の `inspect_wiring` field-level key を集約して分類する。
+
+`validate_structure` の current key 例:
+
+- `validate_structure:duplicate_file_id:<target_path>:fileID:<file_id>:<evidence>`
+- `validate_structure:missing_component:<target_path>:fileID:<gameobject_file_id>:<evidence>`
+
+`validate_materials` の current key 例:
+
+- `validate_materials:<diagnostic_code>:<asset_or_scope_path>:<stable_location>`
+
+## `update_diagnostics_baseline` response
+
+`update_diagnostics_baseline(source, target, mode="preview", prune_resolved=False, confirm=False, change_reason="", details=False, include_details=False)` は supported source validation を再実行し、その応答の `data.diagnostics_baseline.new[]` と `resolved[]` から project root の `config/diagnostics_baseline.json` に入る次の key set を計算する。
+
+Supported source:
+
+- `validate_refs`: `target` を `scope` として渡し、`details` をそのまま渡す。
+- `inspect_wiring`: `target` を `asset_path` / `target_path` として渡す。
+- `validate_all_wiring`: `target` を scan scope または file target として渡す。
+- `validate_structure`: `target` を `asset_path` / `target_path` として渡す。
+- `validate_materials`: `target` を `scope` として渡し、`include_details` をそのまま渡す。
+
+成功時の `data` は以下を含む。
+
+| field | 説明 |
+|-------|------|
+| `path` | project root の `config/diagnostics_baseline.json`。 |
+| `mode` | `preview` または `write`。 |
+| `baseline_status` | update 前 baseline の loader status。 |
+| `written` | preview は `false`。write 成功時だけ `true`。 |
+| `would_create` | update 前に baseline file が無く、write すれば新規作成になる場合 `true`。 |
+| `known_count_before` / `known_count_after` | update 前後の key 数。 |
+| `added_count` / `pruned_count` | `new[]` から追加された key 数と、`prune_resolved=True` で削除された key 数。 |
+| `added_sample` / `pruned_sample` | 既定 20 件で capped された key sample。 |
+| `known_diagnostics` | sorted / deduped な update 後 key set。 |
+
+`mode="preview"` は `config/` を作らず、file write もしない。`mode="write"` は `confirm=True` と非空 `change_reason` を要求し、条件を満たした場合だけ schema v1 JSON を indent 2、UTF-8、末尾 newline で書く。`prune_resolved=False` が既定で、resolved key は明示指定がない限り保持される。
 
 ## `inspect_wiring` filtered diagnostics
 
@@ -318,8 +366,11 @@ diagnostic code:
 - `compile_timeout_ms` の許容範囲は **`[1, 120000]` ミリ秒（両端含む、120 秒上限）**（issue #127）。範囲外を渡すと Bridge へは送信せず Python の入口で `COMPILE_TIMEOUT_OUT_OF_RANGE`（`severity="error"`）を返す。clamp はしない。上限はワーストケースで Editor Bridge の poll を 1 リクエストあたり 120 秒に制限するためのセキュリティガード。下限は 0 / 負値（busy loop / 即時エラー）を排除する。
 - スタック検出: 同一スニペット（`temp_id`、もしくは省略時はコード本文の安定ハッシュ）が連続して `..._COMPILE` 拒否となった場合、2 回目で Bridge が temp ディレクトリを再掃除して `AssetDatabase.Refresh` を要求し、`EDITOR_CTRL_RUN_SCRIPT_RECOVERY`（severity=warning）を返す。次回呼び出しでは Bridge を再起動せずに復帰できる。
 - すべての `..._COMPILE` / `..._RECOVERY` 応答に診断 (`diagnostic_compiling`, `diagnostic_temp_files`, `diagnostic_last_domain_reload`) が添付される。
+- `EDITOR_COMPILE_DEFERRED_BACKGROUND` は compile/reload wait 中に Unity Editor が background / non-focused と明示観測された場合の retryable warning。同期 `editor_run_script` は temp staging を掃除して返すため、Unity を foreground に戻して同じ snippet を再実行する。非同期 `editor_run_script_submit` は background deadline では job を保持し、`editor_run_script_poll(cleanup_on_timeout=True)` が `job_retained=true`, `cleanup_performed=false` を返した場合は同じ `request_id` を foreground 後に再 poll する。
 - エラーコード: `EDITOR_CTRL_RUN_SCRIPT_OK` / `..._COMPILE` / `..._RUNTIME` / `..._BAD_ID` / `..._RECOVERY`。
 - 応答 `data` は `stdout`（テキスト出力）、`return_value`（JSON-safe primitive または null）、`outputs`（snippet が `Output.Add(key, value)` で明示した primitive / primitive-array map）、`exception`（型名・短い message・redacted stack）、`path_hints`（WSL `/mnt/<drive>/...` に対する Windows path / `Assets/...` / `Application.dataPath` guidance）を分離して返す。snippet source は自動変換しない。
+
+Issue #72 の live Unity 確認は TAKT 後に `deploy_bridge` で Bridge C# を配置し、Unity compile error 0 件、foreground true-timeout、background deferred timeout、async submit/poll retention を同じ Unity プロジェクトで確認する。Source tests は Bridge の field / builder / callsite wiring を固定するが、Unity version ごとの focus/reload runtime 差はこの live 確認で補完する。
 
 ## Editor camera modes (`editor_set_camera`)
 

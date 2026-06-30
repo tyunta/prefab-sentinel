@@ -117,6 +117,19 @@ namespace PrefabSentinel
                     + "snippet once Unity finishes compiling."));
             };
 
+            Action writeCompileDeadline = () =>
+            {
+                bool? editorFocused = ObserveEditorFocused();
+                if (BackgroundCompileDeferralClassifier.Classify(
+                    editorFocused, deadlineElapsed: true))
+                {
+                    entry.deferredCompileBackground = true;
+                    PendingAsyncRunner.MarkBackgroundDeferred(completionFile);
+                    return;
+                }
+                writeCompilePending();
+            };
+
             // The compile trigger runs synchronously inside
             // ScheduleCompileBarrier, so a rejected ``AssetDatabase.Refresh``
             // resolves before this method returns.  A schedule failure must
@@ -149,7 +162,7 @@ namespace PrefabSentinel
                 },
                 onCompiled = () => { },
                 onNoAssemblyCompiled = writeCompilePending,
-                onDeadlineExceeded = writeCompilePending,
+                onDeadlineExceeded = writeCompileDeadline,
                 onScheduleFailure = () =>
                 {
                     scheduleFailed = true;
@@ -176,6 +189,9 @@ namespace PrefabSentinel
                     status = "pending",
                 });
         }
+
+
+
 
         private static EditorControlResponse HandleRunScriptPoll(
             EditorControlRequest request, string responsePath)
@@ -234,6 +250,14 @@ namespace PrefabSentinel
                                 unsupported_output_key = inner.data.unsupported_output_key ?? string.Empty,
                                 exception = inner.data.exception,
                                 path_hints = inner.data.path_hints ?? Array.Empty<WslPathHint>(),
+                                operation = inner.data.operation ?? string.Empty,
+                                editor_focused = inner.data.editor_focused,
+                                deferred_reason = inner.data.deferred_reason ?? string.Empty,
+                                elapsed_sec = inner.data.elapsed_sec,
+                                budget_sec = inner.data.budget_sec,
+                                diagnostic_compiling = inner.data.diagnostic_compiling,
+                                job_retained = inner.data.job_retained,
+                                cleanup_performed = inner.data.cleanup_performed,
                             },
                             diagnostics = inner.diagnostics ?? Array.Empty<EditorControlDiagnostic>(),
                             operator_context = inner.operator_context,
@@ -263,6 +287,47 @@ namespace PrefabSentinel
             }
             if (request.cleanup_on_timeout)
             {
+                bool? editorFocused = ObserveEditorFocused();
+                bool backgroundDeferredNow = BackgroundCompileDeferralClassifier.Classify(
+                    editorFocused, deadlineElapsed: true);
+                bool backgroundDeferredBefore = PendingAsyncRunner.IsBackgroundDeferred(completionFile);
+                if (backgroundDeferredBefore && editorFocused == true)
+                {
+                    return BuildSuccess(
+                        "EDITOR_CTRL_RUN_SCRIPT_POLL_PENDING",
+                        "run_script_poll: job is still pending.",
+                        data: new EditorControlData
+                        {
+                            executed = false,
+                            request_id = request.request_id,
+                            status = "pending",
+                        });
+                }
+                if (backgroundDeferredNow || backgroundDeferredBefore)
+                {
+                    if (backgroundDeferredNow)
+                        PendingAsyncRunner.MarkBackgroundDeferred(completionFile);
+                    float elapsedSec = 0f;
+                    float budgetSec = 0f;
+                    if (PendingAsyncRunner.TryGet(completionFile, out var entry))
+                    {
+                        long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                        elapsedSec = Math.Max(
+                            0f, (nowMs - entry.callTimeUnixMs) / 1000f);
+                        budgetSec = Math.Max(
+                            0f, (entry.deadlineUnixMs - entry.callTimeUnixMs) / 1000f);
+                    }
+                    var deferred = BuildCompileDeferredBackgroundResponse(
+                        "run_script_poll",
+                        elapsedSec: elapsedSec,
+                        budgetSec: budgetSec,
+                        compiling: EditorApplication.isCompiling,
+                        jobRetained: true,
+                        cleanupPerformed: false);
+                    deferred.data.request_id = request.request_id;
+                    deferred.data.status = "pending";
+                    return deferred;
+                }
                 string tempDirAbs = Path.Combine(
                     Directory.GetCurrentDirectory(),
                     RunScriptTempDir.Replace('/', Path.DirectorySeparatorChar));

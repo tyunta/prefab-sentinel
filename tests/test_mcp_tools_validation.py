@@ -17,6 +17,7 @@ Test files patch the orchestrator / session symbols at the
 from __future__ import annotations
 
 import asyncio
+import json
 import tempfile
 import unittest
 from collections.abc import Callable
@@ -209,26 +210,47 @@ def _material_success_resp() -> ToolResponse:
     )
 
 
+
+def _baseline_update_source_resp(
+    *,
+    success: bool = True,
+    code: str = "SOURCE_OK",
+    new: tuple[str, ...] = ("source/new",),
+    resolved: tuple[str, ...] = (),
+    include_classification: bool = True,
+) -> ToolResponse:
+    from prefab_sentinel.contracts import Severity
+
+    data: dict[str, Any] = {}
+    if include_classification:
+        data["diagnostics_baseline"] = {
+            "status": "loaded",
+            "path": "/project/config/diagnostics_baseline.json",
+            "new_count": len(new),
+            "known_count": 0,
+            "resolved_count": len(resolved),
+            "new": [{"key": key} for key in new],
+            "known": [],
+            "resolved": [{"key": key} for key in resolved],
+        }
+    return ToolResponse(
+        success=success,
+        severity=Severity.INFO if success else Severity.ERROR,
+        code=code,
+        message="source completed" if success else "source failed",
+        data=data,
+        diagnostics=[],
+    )
+
+
 def _registered_validation_tool(
     session: ProjectSession,
     name: str,
 ) -> Callable[..., dict[str, Any]]:
     from prefab_sentinel.mcp_tools_validation import register_validation_tools
+    from tests._mcp_tool_recorder import record_tools
 
-    registered: dict[str, Callable[..., dict[str, Any]]] = {}
-
-    class _Server:
-        def tool(self_inner) -> Callable[..., Any]:  # noqa: N805
-            def deco(fn: Callable[..., Any]) -> Callable[..., Any]:
-                registered[fn.__name__] = fn
-                return fn
-
-            return deco
-
-    register_validation_tools(cast(Any, _Server()), session)
-    if name not in registered:
-        raise AssertionError(f"{name} should be registered as a validation MCP tool")
-    return registered[name]
+    return record_tools(register_validation_tools, session).get(name)
 
 
 class _ScopedSessionFixture:
@@ -287,24 +309,12 @@ class _ScopedSessionFixture:
 
         asyncio.run(session.activate(str(scope), project_root=str(project_root)))
 
-        # Register the validation tools against a FastMCP-shaped stub
-        # that records registrations.  We don't need a real FastMCP
-        # instance here — only the registered callable, which we extract
-        # from the captured registration.
         from prefab_sentinel.mcp_tools_validation import register_validation_tools
+        from tests._mcp_tool_recorder import record_tools
 
-        registered: dict[str, Callable[..., dict[str, Any]]] = {}
-
-        class _Server:
-            def tool(self_inner) -> Callable[..., Any]:  # noqa: N805
-                def deco(fn: Callable[..., Any]) -> Callable[..., Any]:
-                    registered[fn.__name__] = fn
-                    return fn
-
-                return deco
-
-        register_validation_tools(cast(Any, _Server()), session)
-        validate_refs = registered["validate_refs"]
+        validate_refs: Callable[..., dict[str, Any]] = record_tools(
+            register_validation_tools, session
+        ).get("validate_refs")
 
         return scope, orch_mock, validate_refs
 
@@ -312,6 +322,24 @@ class _ScopedSessionFixture:
         for p in reversed(self._patches):
             p.stop()
         self._tmp.cleanup()
+
+
+class ValidationRecorderSourceInvariantTests(unittest.TestCase):
+    def test_validation_registration_uses_shared_tool_recorder(self) -> None:
+        source = Path(__file__).read_text(encoding="utf-8")
+        local_server_stub = "class " + "_Server"
+        local_cast_stub = "cast" + "(Any, " + "_Server())"
+
+        self.assertNotIn(
+            local_server_stub,
+            source,
+            msg="Validation registration tests must not define local _Server recorder stubs.",
+        )
+        self.assertNotIn(
+            local_cast_stub,
+            source,
+            msg="Validation registration tests must delegate registration to record_tools.",
+        )
 
 
 class ValidationToolForwardingTests(unittest.TestCase):
@@ -603,6 +631,565 @@ class ValidateMaterialsToolForwardingTests(unittest.TestCase):
                 kwargs["include_details"],
                 response["success"],
             ),
+        )
+
+
+class ValidationDiagnosticsBaselineForwardingTests(unittest.TestCase):
+    def test_new_validation_surfaces_load_and_forward_project_baseline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            (project_root / "Assets").mkdir()
+            baseline_path = project_root / "config" / "diagnostics_baseline.json"
+            baseline_path.parent.mkdir(parents=True, exist_ok=True)
+            baseline_path.write_text(
+                '{"version": 1, "known_diagnostics": ["known-key"]}',
+                encoding="utf-8",
+            )
+            orch_mock = MagicMock()
+            orch_mock.validate_materials.return_value = _material_success_resp()
+            orch_mock.inspect_structure.return_value = _success_resp()
+            orch_mock.validate_all_wiring.return_value = _success_resp()
+            session = ProjectSession(project_root=project_root)
+            cache = cast(Any, session._cache)
+            cache.get_orchestrator = MagicMock(return_value=orch_mock)
+
+            validate_materials = _registered_validation_tool(session, "validate_materials")
+            validate_structure = _registered_validation_tool(session, "validate_structure")
+            validate_all_wiring = _registered_validation_tool(session, "validate_all_wiring")
+
+            validate_materials(scope="Assets", include_details=True)
+            validate_structure(asset_path="Assets/Broken.prefab")
+            validate_all_wiring(asset_path="Assets/Broken.prefab")
+
+        forwarded = (
+            orch_mock.validate_materials.call_args.kwargs.get("diagnostics_baseline"),
+            orch_mock.inspect_structure.call_args.kwargs.get("diagnostics_baseline"),
+            orch_mock.validate_all_wiring.call_args.kwargs.get("diagnostics_baseline"),
+        )
+        self.assertEqual(
+            (("known-key",), ("known-key",), ("known-key",)),
+            tuple(None if item is None else item.known_diagnostics for item in forwarded),
+        )
+        self.assertEqual(
+            (True, "Assets/Broken.prefab", "Assets/Broken.prefab"),
+            (
+                orch_mock.validate_materials.call_args.kwargs["include_details"],
+                orch_mock.inspect_structure.call_args.kwargs["target_path"],
+                orch_mock.validate_all_wiring.call_args.kwargs["target_path"],
+            ),
+        )
+
+    def test_invalid_project_baseline_fails_before_new_validation_surfaces(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            (project_root / "Assets").mkdir()
+            baseline_path = project_root / "config" / "diagnostics_baseline.json"
+            baseline_path.parent.mkdir(parents=True, exist_ok=True)
+            baseline_path.write_text("{", encoding="utf-8")
+            orch_mock = MagicMock()
+            session = ProjectSession(project_root=project_root)
+            cache = cast(Any, session._cache)
+            cache.get_orchestrator = MagicMock(return_value=orch_mock)
+            calls = (
+                (
+                    _registered_validation_tool(session, "validate_materials"),
+                    {"scope": "Assets"},
+                    orch_mock.validate_materials,
+                ),
+                (
+                    _registered_validation_tool(session, "validate_structure"),
+                    {"asset_path": "Assets/Broken.prefab"},
+                    orch_mock.inspect_structure,
+                ),
+                (
+                    _registered_validation_tool(session, "validate_all_wiring"),
+                    {"asset_path": "Assets/Broken.prefab"},
+                    orch_mock.validate_all_wiring,
+                ),
+            )
+
+            observed = []
+            for tool, kwargs, orchestrator_method in calls:
+                response = tool(**kwargs)
+                observed.append(
+                    (
+                        response["code"],
+                        response["severity"],
+                        response["data"],
+                        orchestrator_method.call_count,
+                    )
+                )
+
+        self.assertEqual(
+            [
+                (
+                    "DIAGNOSTICS_BASELINE_INVALID",
+                    "error",
+                    {"path": str(baseline_path), "read_only": True},
+                    0,
+                ),
+                (
+                    "DIAGNOSTICS_BASELINE_INVALID",
+                    "error",
+                    {"path": str(baseline_path), "read_only": True},
+                    0,
+                ),
+                (
+                    "DIAGNOSTICS_BASELINE_INVALID",
+                    "error",
+                    {"path": str(baseline_path), "read_only": True},
+                    0,
+                ),
+            ],
+            observed,
+        )
+
+
+class UpdateDiagnosticsBaselineToolTests(unittest.TestCase):
+    def test_preview_dispatches_supported_sources_with_target_and_detail_knobs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            (project_root / "Assets").mkdir()
+            orch_mock = MagicMock()
+            session = ProjectSession(project_root=project_root)
+            cache = cast(Any, session._cache)
+            cache.get_orchestrator = MagicMock(return_value=orch_mock)
+            tool = _registered_validation_tool(session, "update_diagnostics_baseline")
+            cases = (
+                (
+                    "validate_refs",
+                    orch_mock.validate_refs,
+                    {"scope": "Assets/Target.prefab", "details": True},
+                ),
+                (
+                    "inspect_wiring",
+                    orch_mock.inspect_wiring,
+                    {"target_path": "Assets/Target.prefab"},
+                ),
+                (
+                    "validate_all_wiring",
+                    orch_mock.validate_all_wiring,
+                    {"target_path": "Assets/Target.prefab"},
+                ),
+                (
+                    "validate_structure",
+                    orch_mock.inspect_structure,
+                    {"target_path": "Assets/Target.prefab"},
+                ),
+                (
+                    "validate_materials",
+                    orch_mock.validate_materials,
+                    {"scope": "Assets/Target.prefab", "include_details": True},
+                ),
+            )
+
+            observed = []
+            for source, method, expected_kwargs in cases:
+                method.reset_mock()
+                method.return_value = _baseline_update_source_resp(new=(f"{source}/new",))
+                response = tool(
+                    source=source,
+                    target="Assets/Target.prefab",
+                    details=True,
+                    include_details=True,
+                )
+                call_kwargs = method.call_args.kwargs
+                observed.append(
+                    (
+                        source,
+                        response["code"],
+                        response["data"]["added_count"],
+                        response["data"]["written"],
+                        tuple(
+                            None if key == "diagnostics_baseline"
+                            else call_kwargs.get(key)
+                            for key in expected_kwargs
+                        ),
+                        call_kwargs["diagnostics_baseline"].known_diagnostics,
+                    )
+                )
+
+        self.assertEqual(
+            [
+                (
+                    "validate_refs",
+                    "DIAGNOSTICS_BASELINE_UPDATE_PREVIEW",
+                    1,
+                    False,
+                    ("Assets/Target.prefab", True),
+                    (),
+                ),
+                (
+                    "inspect_wiring",
+                    "DIAGNOSTICS_BASELINE_UPDATE_PREVIEW",
+                    1,
+                    False,
+                    ("Assets/Target.prefab",),
+                    (),
+                ),
+                (
+                    "validate_all_wiring",
+                    "DIAGNOSTICS_BASELINE_UPDATE_PREVIEW",
+                    1,
+                    False,
+                    ("Assets/Target.prefab",),
+                    (),
+                ),
+                (
+                    "validate_structure",
+                    "DIAGNOSTICS_BASELINE_UPDATE_PREVIEW",
+                    1,
+                    False,
+                    ("Assets/Target.prefab",),
+                    (),
+                ),
+                (
+                    "validate_materials",
+                    "DIAGNOSTICS_BASELINE_UPDATE_PREVIEW",
+                    1,
+                    False,
+                    ("Assets/Target.prefab", True),
+                    (),
+                ),
+            ],
+            observed,
+        )
+
+    def test_validate_refs_source_replay_uses_scope_ignore_guid_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            scope = project_root / "Assets" / "ReplayScope"
+            ignore_file = scope / IGNORE_GUIDS_RELATIVE_PATH
+            ignore_file.parent.mkdir(parents=True)
+            ignore_file.write_text(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
+                encoding="utf-8",
+            )
+            orch_mock = MagicMock()
+            orch_mock.validate_refs.return_value = _baseline_update_source_resp(new=("scope/new",))
+            session = ProjectSession(project_root=project_root)
+            cache = cast(Any, session._cache)
+            cache.get_orchestrator = MagicMock(return_value=orch_mock)
+            tool = _registered_validation_tool(session, "update_diagnostics_baseline")
+
+            response = tool(
+                source="validate_refs",
+                target=str(scope),
+                details=True,
+            )
+
+        kwargs = orch_mock.validate_refs.call_args.kwargs
+        self.assertEqual(
+            (
+                "DIAGNOSTICS_BASELINE_UPDATE_PREVIEW",
+                ("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+                str(scope),
+                True,
+                1,
+            ),
+            (
+                response["code"],
+                tuple(kwargs["ignore_asset_guids"]),
+                kwargs["scope"],
+                kwargs["details"],
+                response["data"]["added_count"],
+            ),
+        )
+
+    def test_write_creates_sorted_unique_json_only_when_audited(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            (project_root / "Assets").mkdir()
+            baseline_path = project_root / "config" / "diagnostics_baseline.json"
+            orch_mock = MagicMock()
+            orch_mock.validate_refs.return_value = _baseline_update_source_resp(
+                new=("zeta", "alpha", "alpha")
+            )
+            session = ProjectSession(project_root=project_root)
+            cache = cast(Any, session._cache)
+            cache.get_orchestrator = MagicMock(return_value=orch_mock)
+            tool = _registered_validation_tool(session, "update_diagnostics_baseline")
+
+            response = tool(
+                source="validate_refs",
+                target="Assets",
+                mode="write",
+                confirm=True,
+                change_reason="accept diagnostics baseline",
+            )
+            content = baseline_path.read_text(encoding="utf-8")
+
+        self.assertEqual(
+            (
+                True,
+                "DIAGNOSTICS_BASELINE_UPDATE_WRITTEN",
+                True,
+                True,
+                2,
+                ["alpha", "zeta"],
+            ),
+            (
+                response["success"],
+                response["code"],
+                response["data"]["written"],
+                response["data"]["would_create"],
+                response["data"]["added_count"],
+                response["data"]["known_diagnostics"],
+            ),
+        )
+        self.assertEqual(
+            json.dumps(
+                {"version": 1, "known_diagnostics": ["alpha", "zeta"]},
+                indent=2,
+                sort_keys=True,
+            ) + "\n",
+            content,
+        )
+
+
+    def test_write_failure_returns_structured_error(self) -> None:
+        import os
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            (project_root / "Assets").mkdir()
+            baseline_path = project_root / "config" / "diagnostics_baseline.json"
+            orch_mock = MagicMock()
+            orch_mock.validate_refs.return_value = _baseline_update_source_resp(new=("alpha",))
+            session = ProjectSession(project_root=project_root)
+            cache = cast(Any, session._cache)
+            cache.get_orchestrator = MagicMock(return_value=orch_mock)
+            tool = _registered_validation_tool(session, "update_diagnostics_baseline")
+
+            with patch.object(os, "replace", side_effect=OSError("boom")):
+                response = tool(
+                    source="validate_refs",
+                    target="Assets",
+                    mode="write",
+                    confirm=True,
+                    change_reason="accept diagnostics baseline",
+                )
+
+        self.assertEqual(
+            (
+                False,
+                "DIAGNOSTICS_BASELINE_WRITE_FAILED",
+                "error",
+                {"path": str(baseline_path), "read_only": False},
+            ),
+            (
+                response["success"],
+                response["code"],
+                response["severity"],
+                response["data"],
+            ),
+        )
+
+    def test_write_rejects_symlinked_project_baseline_before_source_dispatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            (project_root / "Assets").mkdir()
+            outside = project_root / "outside.json"
+            outside.write_text("outside", encoding="utf-8")
+            baseline_path = project_root / "config" / "diagnostics_baseline.json"
+            baseline_path.parent.mkdir()
+            baseline_path.symlink_to(outside)
+            orch_mock = MagicMock()
+            session = ProjectSession(project_root=project_root)
+            cache = cast(Any, session._cache)
+            cache.get_orchestrator = MagicMock(return_value=orch_mock)
+            tool = _registered_validation_tool(session, "update_diagnostics_baseline")
+
+            response = tool(
+                source="validate_refs",
+                target="Assets",
+                mode="write",
+                confirm=True,
+                change_reason="accept diagnostics baseline",
+            )
+            outside_content = outside.read_text(encoding="utf-8")
+
+        self.assertEqual(
+            (
+                "DIAGNOSTICS_BASELINE_INVALID",
+                "error",
+                {"path": str(baseline_path), "read_only": True},
+                0,
+                "outside",
+            ),
+            (
+                response["code"],
+                response["severity"],
+                response["data"],
+                orch_mock.validate_refs.call_count,
+                outside_content,
+            ),
+        )
+
+    def test_write_rejects_broken_config_symlink_before_source_dispatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            (project_root / "Assets").mkdir()
+            config_path = project_root / "config"
+            baseline_path = config_path / "diagnostics_baseline.json"
+            config_path.symlink_to(
+                project_root / "missing-config-target",
+                target_is_directory=True,
+            )
+            orch_mock = MagicMock()
+            session = ProjectSession(project_root=project_root)
+            cache = cast(Any, session._cache)
+            cache.get_orchestrator = MagicMock(return_value=orch_mock)
+            tool = _registered_validation_tool(session, "update_diagnostics_baseline")
+
+            response = tool(
+                source="validate_refs",
+                target="Assets",
+                mode="write",
+                confirm=True,
+                change_reason="accept diagnostics baseline",
+            )
+
+        self.assertEqual(
+            (
+                "DIAGNOSTICS_BASELINE_INVALID",
+                "error",
+                {"path": str(baseline_path), "read_only": True},
+                0,
+            ),
+            (
+                response["code"],
+                response["severity"],
+                response["data"],
+                orch_mock.validate_refs.call_count,
+            ),
+        )
+
+    def test_source_failure_and_missing_classification_do_not_write(self) -> None:
+        cases = (
+            (
+                _baseline_update_source_resp(success=False, code="SOURCE_FAILED"),
+                "DIAGNOSTICS_BASELINE_SOURCE_FAILED",
+            ),
+            (
+                _baseline_update_source_resp(include_classification=False),
+                "DIAGNOSTICS_BASELINE_SOURCE_MISSING_CLASSIFICATION",
+            ),
+        )
+        observed = []
+        for source_response, expected_code in cases:
+            with self.subTest(expected_code=expected_code):
+                with tempfile.TemporaryDirectory() as tmp:
+                    project_root = Path(tmp)
+                    (project_root / "Assets").mkdir()
+                    baseline_path = project_root / "config" / "diagnostics_baseline.json"
+                    orch_mock = MagicMock()
+                    orch_mock.validate_refs.return_value = source_response
+                    session = ProjectSession(project_root=project_root)
+                    cache = cast(Any, session._cache)
+                    cache.get_orchestrator = MagicMock(return_value=orch_mock)
+                    tool = _registered_validation_tool(session, "update_diagnostics_baseline")
+
+                    response = tool(
+                        source="validate_refs",
+                        target="Assets",
+                        mode="write",
+                        confirm=True,
+                        change_reason="attempt baseline update",
+                    )
+                    observed.append(
+                        (
+                            response["code"],
+                            response["severity"],
+                            baseline_path.exists(),
+                            response["data"].get("source_response", {}).get("code"),
+                        )
+                    )
+
+        self.assertEqual(
+            [
+                (
+                    "DIAGNOSTICS_BASELINE_SOURCE_FAILED",
+                    "error",
+                    False,
+                    "SOURCE_FAILED",
+                ),
+                (
+                    "DIAGNOSTICS_BASELINE_SOURCE_MISSING_CLASSIFICATION",
+                    "error",
+                    False,
+                    None,
+                ),
+            ],
+            observed,
+        )
+
+    def test_preconditions_fail_before_source_or_write(self) -> None:
+        cases = (
+            (
+                ProjectSession(),
+                {"source": "validate_refs", "target": "Assets"},
+                "DIAGNOSTICS_BASELINE_PROJECT_ROOT_REQUIRED",
+            ),
+            (
+                None,
+                {"source": "report_json", "target": "Assets"},
+                "DIAGNOSTICS_BASELINE_SOURCE_INVALID",
+            ),
+            (
+                None,
+                {"source": "validate_refs", "target": "Assets", "mode": "replace"},
+                "DIAGNOSTICS_BASELINE_MODE_INVALID",
+            ),
+            (
+                None,
+                {"source": "validate_refs", "target": "Assets", "mode": "write"},
+                "CHANGE_REASON_REQUIRED",
+            ),
+            (
+                None,
+                {
+                    "source": "validate_refs",
+                    "target": "Assets",
+                    "mode": "write",
+                    "confirm": True,
+                    "change_reason": "",
+                },
+                "CHANGE_REASON_REQUIRED",
+            ),
+        )
+        observed = []
+        for supplied_session, kwargs, expected_code in cases:
+            with self.subTest(expected_code=expected_code):
+                with tempfile.TemporaryDirectory() as tmp:
+                    project_root = Path(tmp)
+                    (project_root / "Assets").mkdir()
+                    session = supplied_session or ProjectSession(project_root=project_root)
+                    orch_mock = MagicMock()
+                    cache = cast(Any, session._cache)
+                    cache.get_orchestrator = MagicMock(return_value=orch_mock)
+                    tool = _registered_validation_tool(session, "update_diagnostics_baseline")
+
+                    response = tool(**kwargs)
+                    observed.append(
+                        (
+                            response["code"],
+                            response["severity"],
+                            orch_mock.validate_refs.call_count,
+                            (project_root / "config").exists(),
+                        )
+                    )
+
+        self.assertEqual(
+            [
+                ("DIAGNOSTICS_BASELINE_PROJECT_ROOT_REQUIRED", "error", 0, False),
+                ("DIAGNOSTICS_BASELINE_SOURCE_INVALID", "error", 0, False),
+                ("DIAGNOSTICS_BASELINE_MODE_INVALID", "error", 0, False),
+                ("CHANGE_REASON_REQUIRED", "error", 0, False),
+                ("CHANGE_REASON_REQUIRED", "error", 0, False),
+            ],
+            observed,
         )
 
 

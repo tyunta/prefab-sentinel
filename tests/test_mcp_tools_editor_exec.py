@@ -18,6 +18,30 @@ from unittest.mock import MagicMock, patch
 from prefab_sentinel import mcp_tools_editor_exec, mcp_tools_editor_view
 
 
+def _background_deferred_envelope(
+    operation: str,
+    **data_overrides: object,
+) -> dict:
+    data: dict[str, object] = {
+        "operation": operation,
+        "editor_focused": False,
+        "deferred_reason": "editor_background_compile_reload",
+        "elapsed_sec": 15.0,
+        "budget_sec": 15.0,
+        "diagnostic_compiling": True,
+        "job_retained": False,
+        "cleanup_performed": False,
+    }
+    data.update(data_overrides)
+    return {
+        "success": False,
+        "severity": "warning",
+        "code": "EDITOR_COMPILE_DEFERRED_BACKGROUND",
+        "message": "background compile deferred",
+        "data": data,
+        "diagnostics": [],
+    }
+
 class EditorRunScriptTests(unittest.TestCase):
     """Contract tests for ``editor_run_script``."""
 
@@ -961,6 +985,147 @@ class EditorRunScriptCompileTimeoutPassThroughTests(unittest.TestCase):
         self.assertIn(
             str(mcp_tools_editor_exec.COMPILE_TIMEOUT_MAX_MS),
             resp["message"],
+        )
+
+
+class EditorRunScriptBackgroundDeferredPassThroughTests(unittest.TestCase):
+    """Issue #72: run-script wrappers preserve the deferred compile class."""
+
+    _SNIPPET = (
+        "public static class PrefabSentinelTempScript {"
+        "  public static void Run() { }"
+        "}"
+    )
+    _VALID_ID = "0123456789abcdef0123456789abcdef"
+
+    def test_run_script_deferred_envelope_passes_through_unchanged(self) -> None:
+        bridge_envelope = _background_deferred_envelope("run_script")
+        with patch.object(mcp_tools_editor_exec, "send_action") as send:
+            send.return_value = bridge_envelope
+            response = mcp_tools_editor_exec.editor_run_script(
+                code=self._SNIPPET,
+                confirm=True,
+                change_reason="background compile deferral",
+                compile_timeout_ms=15000,
+            )
+        self.assertEqual(
+            (
+                "EDITOR_COMPILE_DEFERRED_BACKGROUND", False, "warning",
+                "run_script", False, "editor_background_compile_reload",
+            ),
+            (
+                response["code"], response["success"], response["severity"],
+                response["data"]["operation"],
+                response["data"]["editor_focused"],
+                response["data"]["deferred_reason"],
+            ),
+            msg=(
+                "editor_run_script must preserve the bridge's background "
+                "compile deferral envelope instead of rewriting it as a "
+                "transport timeout or generic compile timeout."
+            ),
+        )
+
+    def test_submit_deferred_envelope_passes_through_unchanged(self) -> None:
+        bridge_envelope = _background_deferred_envelope("run_script_submit")
+        with patch.object(mcp_tools_editor_exec, "send_action") as send:
+            send.return_value = bridge_envelope
+            response = mcp_tools_editor_exec.editor_run_script_submit(
+                code=self._SNIPPET,
+                confirm=True,
+                change_reason="background compile deferral",
+                compile_timeout_ms=15000,
+            )
+        self.assertEqual(
+            (
+                "EDITOR_COMPILE_DEFERRED_BACKGROUND", False, "warning",
+                "run_script_submit", False,
+            ),
+            (
+                response["code"], response["success"], response["severity"],
+                response["data"]["operation"],
+                response["data"]["editor_focused"],
+            ),
+            msg=(
+                "editor_run_script_submit must return a deferred bridge "
+                "envelope unchanged when the bridge supplies one."
+            ),
+        )
+
+    def test_poll_deferred_envelope_keeps_retention_fields(self) -> None:
+        bridge_envelope = _background_deferred_envelope(
+            "run_script_poll",
+            job_retained=True,
+            cleanup_performed=False,
+        )
+        with patch.object(mcp_tools_editor_exec, "send_action") as send:
+            send.return_value = bridge_envelope
+            response = mcp_tools_editor_exec.editor_run_script_poll(
+                request_id=self._VALID_ID,
+                cleanup_on_timeout=True,
+            )
+        self.assertEqual(
+            (
+                "EDITOR_COMPILE_DEFERRED_BACKGROUND", False, "warning",
+                "run_script_poll", True, False,
+            ),
+            (
+                response["code"], response["success"], response["severity"],
+                response["data"]["operation"],
+                response["data"]["job_retained"],
+                response["data"]["cleanup_performed"],
+            ),
+            msg=(
+                "editor_run_script_poll must preserve job_retained=true and "
+                "cleanup_performed=false so callers can foreground Unity "
+                "and poll the same request_id."
+            ),
+        )
+
+
+class EditorRecompileRefreshDeferredPassThroughTests(unittest.TestCase):
+    """Issue #72: view wrappers preserve deferred compile envelopes."""
+
+    def test_recompile_deferred_envelope_passes_through_unchanged(self) -> None:
+        bridge_envelope = _background_deferred_envelope(
+            "editor_recompile_and_wait",
+        )
+        with patch.object(mcp_tools_editor_view, "send_action") as send:
+            send.return_value = bridge_envelope
+            response = mcp_tools_editor_view.editor_recompile(timeout_sec=30.0)
+        self.assertEqual(
+            (
+                "EDITOR_COMPILE_DEFERRED_BACKGROUND", False, "warning",
+                "editor_recompile_and_wait",
+            ),
+            (
+                response["code"], response["success"],
+                response["severity"], response["data"]["operation"],
+            ),
+            msg=(
+                "editor_recompile must preserve the deferred compile code "
+                "and operation payload from the bridge."
+            ),
+        )
+
+    def test_refresh_deferred_envelope_passes_through_unchanged(self) -> None:
+        bridge_envelope = _background_deferred_envelope("editor_refresh")
+        with patch.object(mcp_tools_editor_view, "send_action") as send:
+            send.return_value = bridge_envelope
+            response = mcp_tools_editor_view.editor_refresh()
+        self.assertEqual(
+            (
+                "EDITOR_COMPILE_DEFERRED_BACKGROUND", False, "warning",
+                "editor_refresh",
+            ),
+            (
+                response["code"], response["success"],
+                response["severity"], response["data"]["operation"],
+            ),
+            msg=(
+                "editor_refresh must preserve the deferred compile code "
+                "and operation payload from the bridge."
+            ),
         )
 
 
