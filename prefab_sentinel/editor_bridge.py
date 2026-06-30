@@ -75,6 +75,8 @@ SUPPORTED_ACTIONS = frozenset(
         "editor_serialized_property_read",
         "editor_serialized_property_list",
         "editor_serialized_property_write",
+        "create_generated_asset",
+        "move_asset",
         # Issue #193: ``safe_save_prefab`` is the sole public prefab-save
         # action.  Its handler guarantees that every caller-named protected
         # component type stays attached on the saved asset and reports both

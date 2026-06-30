@@ -168,6 +168,7 @@ class TestToolRegistration(unittest.TestCase):
             "editor_serialized_property_read",
             "editor_serialized_property_list",
             "editor_serialized_property_write",
+            "editor_create_generated_asset", "editor_move_asset",
             "editor_create_empty", "editor_create_primitive",
             "editor_create_ui_element",
             "editor_batch_create", "editor_batch_set_property",
@@ -226,7 +227,7 @@ class TestToolRegistration(unittest.TestCase):
         # issues #96 / #97 / #110 add two read-only effective inspectors;
         # issue #112 adds three generic serialized-property tools; issue
         # #99 adds the read-only material validation surface.
-        self.assertEqual(95, len(tools))
+        self.assertEqual(97, len(tools))
 
 
 class TestToolsCatalogDoc(unittest.TestCase):

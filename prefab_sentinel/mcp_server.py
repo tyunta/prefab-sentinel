@@ -27,6 +27,7 @@ from prefab_sentinel.mcp_tools_components import register_component_tools
 from prefab_sentinel.mcp_tools_components_copy import register_copy_component_fields_tool
 from prefab_sentinel.mcp_tools_editor_advanced import register_editor_advanced_tools
 from prefab_sentinel.mcp_tools_editor_animation import register_editor_animation_tools
+from prefab_sentinel.mcp_tools_editor_assets import register_editor_asset_tools
 from prefab_sentinel.mcp_tools_editor_batch import register_editor_batch_tools
 from prefab_sentinel.mcp_tools_editor_exec import register_editor_exec_tools
 from prefab_sentinel.mcp_tools_editor_geometry import register_editor_geometry_tools
@@ -112,6 +113,7 @@ def create_server(
     register_editor_batch_tools(server)
     register_editor_ops_tools(server)
     register_editor_serialized_property_tools(server)
+    register_editor_asset_tools(server)
     register_editor_advanced_tools(server)
     register_editor_exec_tools(server)
     register_editor_geometry_tools(server)

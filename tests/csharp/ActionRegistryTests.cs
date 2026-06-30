@@ -33,6 +33,15 @@ public class ActionRegistryTests
     }
 
     [Fact]
+    public void Asset_Ops_Actions_Are_Supported_With_The_Async_Flag_Clear()
+    {
+        Assert.Contains("create_generated_asset", ActionRegistry.Supported);
+        Assert.Contains("move_asset", ActionRegistry.Supported);
+        Assert.DoesNotContain("create_generated_asset", ActionRegistry.Async);
+        Assert.DoesNotContain("move_asset", ActionRegistry.Async);
+    }
+
+    [Fact]
     public void An_Unknown_Action_Is_Not_Supported()
     {
         Assert.DoesNotContain("no_such_action", ActionRegistry.Supported);
@@ -87,6 +96,18 @@ public class EditorControlRequestTests
         Assert.Equal(200, request.limit);
         Assert.True(request.save_on_close);
         Assert.False(request.cleanup_on_timeout);
+        Assert.Equal(string.Empty, request.asset_type);
+        Assert.Equal(string.Empty, request.source_asset_path);
+        Assert.Equal(string.Empty, request.destination_asset_path);
+        Assert.NotNull(request.parameters);
+        Assert.Equal(0, request.parameters.width);
+        Assert.Equal(0, request.parameters.height);
+        Assert.Equal(0, request.parameters.depth);
+        Assert.Equal(string.Empty, request.parameters.format);
+        Assert.Equal(string.Empty, request.parameters.read_write);
+        Assert.Equal(string.Empty, request.parameters.filter_mode);
+        Assert.Equal(string.Empty, request.parameters.wrap_mode);
+        Assert.False(request.parameters.mip_map);
     }
 
     [Fact]

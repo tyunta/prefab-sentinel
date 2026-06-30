@@ -11,6 +11,19 @@ using System;
 // because JsonUtility is a Unity type.
 namespace PrefabSentinel
 {
+[Serializable]
+    public sealed class RenderTextureParameters
+    {
+        public int width = 0;
+        public int height = 0;
+        public int depth = 0;
+        public string format = string.Empty;
+        public string read_write = string.Empty;
+        public string filter_mode = string.Empty;
+        public string wrap_mode = string.Empty;
+        public bool mip_map = false;
+    }
+
     [Serializable]
     public sealed class EditorControlRequest
     {
@@ -38,6 +51,12 @@ namespace PrefabSentinel
         public int material_index = -1;
         public string material_guid = string.Empty;
         public string material_path = string.Empty;  // asset path alternative to GUID
+
+        // Issue #116: generated asset create/move payload.
+        public string asset_type = string.Empty;
+        public string source_asset_path = string.Empty;
+        public string destination_asset_path = string.Empty;
+        public RenderTextureParameters parameters = new RenderTextureParameters();
 
         // capture_console_logs
         public int max_entries = 200;

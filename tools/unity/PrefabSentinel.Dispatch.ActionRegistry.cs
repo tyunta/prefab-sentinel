@@ -41,6 +41,8 @@ namespace PrefabSentinel
             "set_material",
             "delete_object",
             "delete_assets",
+            "create_generated_asset",
+            "move_asset",
             "list_children",
             "list_materials",
             "get_camera",

@@ -478,6 +478,8 @@ class TestSupportedActions(unittest.TestCase):
             "editor_serialized_property_read",
             "editor_serialized_property_list",
             "editor_serialized_property_write",
+            "create_generated_asset",
+            "move_asset",
             # Issue #193: ``safe_save_prefab`` is the sole public prefab-save action.
             "safe_save_prefab",
             "editor_set_parent",
