@@ -5231,6 +5231,14 @@ class AssetOpsSourceTests(unittest.TestCase):
             msg="Unity 2022.3 does not provide IsExternalInit for C# record types.",
         )
 
+    def test_asset_ops_path_validation_uses_numeric_null_char_check(self) -> None:
+        source = _read(TOOLS_DIR / "PrefabSentinel.AssetOpsPathValidation.cs")
+        self.assertIn("assetPath.IndexOf((char)0) >= 0", source)
+        self.assertNotIn(
+            "assetPath.Contains('\\0', StringComparison.Ordinal)",
+            source,
+        )
+
     def test_create_handler_uses_required_unity_apis_and_avoids_forbidden_paths(self) -> None:
         source = self._source()
         required = (

@@ -38,6 +38,17 @@ public class AssetOpsPathValidationTests
             (result.IsValid, result.Path, result.Stem, result.Extension));
     }
 
+    [Fact]
+    public void Generated_Asset_Path_Accepts_Digit_Zero_In_Stem()
+    {
+        var result = AssetOpsPathValidation.ValidateGeneratedAssetPath(
+            "Assets/Issue0Smoke.renderTexture");
+
+        Assert.Equal(
+            (true, "Assets/Issue0Smoke.renderTexture", "Issue0Smoke", ".renderTexture"),
+            (result.IsValid, result.Path, result.Stem, result.Extension));
+    }
+
     [Theory]
     [InlineData(
         "Assets/Foo.renderTexture",

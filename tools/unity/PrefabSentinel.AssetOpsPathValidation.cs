@@ -100,7 +100,7 @@ internal static class AssetOpsPathValidation
                 invalidCode,
                 $"{field}_required");
         }
-        if (assetPath.Contains('\0', StringComparison.Ordinal))
+        if (assetPath.IndexOf((char)0) >= 0)
         {
             return AssetOpsPathValidationResult.Invalid(invalidCode, "nul_byte");
         }
