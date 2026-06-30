@@ -259,43 +259,71 @@ class QuarterlyTemplateTests(unittest.TestCase):
         )
 
 
-_MUTMUT_SANITY_REQUIRED_PATHS = (
-    "pyproject.toml",
-    "prefab_sentinel",
-    "tests",
-    "scripts",
-    "tools",
-    "knowledge",
-)
-_MUTMUT_SANITY_COPY_IGNORE = shutil.ignore_patterns(
-    "__pycache__",
-    ".pytest_cache",
-    "mutants",
-    "*.pyc",
-)
-
-
 def _prepare_mutmut_sanity_project(source_root: Path, destination_root: Path) -> None:
-    for relative_path in _MUTMUT_SANITY_REQUIRED_PATHS:
-        source = source_root / relative_path
+    required_sources = (
+        source_root / "pyproject.toml",
+        source_root / "prefab_sentinel" / "__init__.py",
+        source_root / "prefab_sentinel" / "contracts.py",
+    )
+    for source in required_sources:
         if not source.exists():
             raise AssertionError(
                 "fixture preparation failed: required path missing: "
                 f"{source}"
             )
-        destination = destination_root / relative_path
-        if source.is_dir():
-            shutil.copytree(source, destination, ignore=_MUTMUT_SANITY_COPY_IGNORE)
-        else:
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, destination)
+
+    (destination_root / "prefab_sentinel").mkdir(parents=True)
+    (destination_root / "tests").mkdir(parents=True)
+    shutil.copy2(source_root / "pyproject.toml", destination_root / "pyproject.toml")
+    shutil.copy2(
+        source_root / "prefab_sentinel" / "__init__.py",
+        destination_root / "prefab_sentinel" / "__init__.py",
+    )
+    shutil.copy2(
+        source_root / "prefab_sentinel" / "contracts.py",
+        destination_root / "prefab_sentinel" / "contracts.py",
+    )
+    (destination_root / "tests" / "__init__.py").write_text("", encoding="utf-8")
+    (destination_root / "tests" / "test_mutmut_sanity_contracts.py").write_text(
+        "from prefab_sentinel.contracts import Severity, max_severity, success_response\n"
+        "\n"
+        "\n"
+        "def test_success_response_and_max_severity_cover_contracts():\n"
+        "    response = success_response(\"OK\", \"done\", severity=Severity.WARNING)\n"
+        "    assert response.success is True\n"
+        "    assert response.code == \"OK\"\n"
+        "    assert response.to_dict()[\"severity\"] == \"warning\"\n"
+        "    assert max_severity([Severity.INFO, Severity.ERROR]) == Severity.ERROR\n",
+        encoding="utf-8",
+    )
+
+    pyproject_path = destination_root / "pyproject.toml"
+    pyproject = pyproject_path.read_text(encoding="utf-8")
+    replacements = (
+        (
+            'also_copy = ["scripts/", "tools/", "knowledge/"]',
+            "also_copy = []",
+        ),
+        (
+            '    "tests/",\n    "-m",\n    "not source_text_invariant",',
+            '    "tests/test_mutmut_sanity_contracts.py",',
+        ),
+    )
+    for old, new in replacements:
+        if old not in pyproject:
+            raise AssertionError(
+                "fixture preparation failed: mutmut config token missing: "
+                f"{old}"
+            )
+        pyproject = pyproject.replace(old, new, 1)
+    pyproject_path.write_text(pyproject, encoding="utf-8")
 
 
 class MutmutSanityInvocationTests(unittest.TestCase):
     """Per-module mutmut sanity invocation against ``contracts.py``.
 
-    The test calls ``mutmut run`` on the smallest audited leaf module —
-    using the dotted mutant-name-glob form mutmut 3.5.0 accepts — and
+    The test calls ``mutmut run`` on the smallest audited leaf module,
+    using the dotted mutant-name-glob form mutmut 3.5.0 accepts, and
     asserts that none of the documented forbidden strings appears in the
     combined stdout/stderr capture: the four historical regression
     strings (issue #165) plus the ``AssertionError`` "nothing matches"
@@ -312,16 +340,18 @@ class MutmutSanityInvocationTests(unittest.TestCase):
        cleanup) and re-entering ``mutmut run`` here would tangle with
        it.  The recovery is ``rm -rf mutants/`` from the repository
        root.
-    2. **Upstream ``multiprocessing.set_start_method('fork')`` double-call
-       ``RuntimeError`` is detected** in the combined output.  This
-       indicates the mutmut runtime hit the upstream double-init bug
-       (``context has already been set``); the failure is unrelated to
-       the regression strings the test pins.
-    3. **The ``mutmut`` binary is unavailable on PATH.**  In that case
+    2. **The ``mutmut`` binary is unavailable on PATH.**  In that case
        the configuration-shape assertions in
        :class:`MutmutConfigShapeTests` already cover the static surface
        of ``[tool.mutmut]``; the per-module sanity invocation has no
        runtime to drive.
+
+    The subprocess deliberately imports ``mutmut.__main__`` as a normal
+    module and then calls ``cli()``.  Running ``python -m mutmut`` executes
+    the same file as ``__main__``; generated mutant trampolines later
+    import ``mutmut.__main__`` by package name, which re-executes the
+    module-level ``multiprocessing.set_start_method('fork')`` statement
+    and raises ``RuntimeError: context has already been set``.
     """
 
     # Forbidden strings — any appearance in combined output fails the test.
@@ -399,16 +429,16 @@ class MutmutSanityInvocationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="prefab-sentinel-mutmut-") as raw:
             sanity_root = Path(raw) / "project"
             _prepare_mutmut_sanity_project(PROJECT_ROOT, sanity_root)
+            shim = (
+                "import sys; "
+                "from mutmut.__main__ import cli; "
+                'sys.argv = ["mutmut", "run", '
+                f"{self._SANITY_TARGET!r}, "
+                '"--max-children", "1"]; '
+                "cli()"
+            )
             result = subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "mutmut",
-                    "run",
-                    self._SANITY_TARGET,
-                    "--max-children",
-                    "1",
-                ],
+                [sys.executable, "-c", shim],
                 cwd=str(sanity_root),
                 capture_output=True,
                 text=True,
@@ -416,24 +446,6 @@ class MutmutSanityInvocationTests(unittest.TestCase):
                 check=False,
             )
         combined = (result.stdout or "") + (result.stderr or "")
-        # Defensive skip for the upstream mutmut 3.5+ bug whose
-        # symptom is ``RuntimeError: context has already been set``
-        # raised at ``set_start_method('fork')`` inside
-        # ``mutmut/__main__.py`` when the trampoline import re-runs
-        # the module in a forked child.  This is unrelated to the
-        # silent-pass fix issue #165 targets; it indicates the
-        # mutmut runtime cannot complete stats collection in this
-        # environment.  Skip with a diagnostic message rather than
-        # mask it as a regression-string failure.
-        if (
-            "context has already been set" in combined
-            and "set_start_method" in combined
-        ):
-            self.skipTest(
-                "mutmut runtime hit upstream multiprocessing.set_start_method "
-                "double-init bug (combined output surfaces 'context has "
-                f"already been set'): {combined}"
-            )
         self.assertEqual(
             0,
             result.returncode,
@@ -508,6 +520,100 @@ class MutmutSanityIsolationTests(unittest.TestCase):
         self.assertFalse((tmc.PROJECT_ROOT / "mutants").exists())
         cleanup_targets = [Path(call.args[0]) for call in rmtree_mock.call_args_list]
         self.assertNotIn(tmc.PROJECT_ROOT / "mutants", cleanup_targets)
+
+    def test_single_module_invocation_uses_import_shim_command(self) -> None:
+        from tests import test_mutmut_config as tmc  # noqa: PLC0415
+
+        recorded_commands: list[list[str]] = []
+
+        class _FakeCompletedProcess:
+            returncode = 0
+            stdout = "ok\n"
+            stderr = ""
+
+        def _fake_run(command: list[str], **_kwargs: object) -> _FakeCompletedProcess:
+            recorded_commands.append(command)
+            return _FakeCompletedProcess()
+
+        with (
+            mock.patch.object(tmc.shutil, "which", return_value="/fake/mutmut"),
+            mock.patch.object(tmc.subprocess, "run", side_effect=_fake_run),
+            mock.patch(
+                "tests.test_mutmut_config._prepare_mutmut_sanity_project",
+                side_effect=lambda _source, destination: destination.mkdir(parents=True),
+                create=True,
+            ),
+            mock.patch.dict(os.environ, {}, clear=False),
+        ):
+            os.environ.pop("MUTANT_UNDER_TEST", None)
+            result = self._run_sanity_test()
+
+        self.assertEqual(
+            (0, 0, 0),
+            (len(result.errors), len(result.failures), len(result.skipped)),
+            f"unexpected outcome: errors={result.errors!r} "
+            f"failures={result.failures!r} skipped={result.skipped!r}",
+        )
+        self.assertEqual(1, len(recorded_commands), recorded_commands)
+        command = recorded_commands[0]
+        self.assertEqual(sys.executable, command[0])
+        self.assertEqual("-c", command[1])
+        self.assertIn("from mutmut.__main__ import cli", command[2])
+        self.assertIn('sys.argv = ["mutmut", "run"', command[2])
+        self.assertNotIn("-m", command)
+
+    def test_sanity_project_uses_minimal_contracts_fixture(self) -> None:
+        from tests import test_mutmut_config as tmc  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as raw:
+            source_root = Path(raw) / "source"
+            destination_root = Path(raw) / "destination"
+            (source_root / "prefab_sentinel").mkdir(parents=True)
+            (source_root / "tests").mkdir()
+            (source_root / "scripts").mkdir()
+            (source_root / "tools").mkdir()
+            (source_root / "knowledge").mkdir()
+            (source_root / "pyproject.toml").write_text(
+                "[tool.mutmut]\n"
+                'paths_to_mutate = ["prefab_sentinel/"]\n'
+                'also_copy = ["scripts/", "tools/", "knowledge/"]\n'
+                "pytest_add_cli_args_test_selection = [\n"
+                '    "tests/",\n'
+                '    "-m",\n'
+                '    "not source_text_invariant",\n'
+                "]\n",
+                encoding="utf-8",
+            )
+            (source_root / "prefab_sentinel" / "__init__.py").write_text(
+                "", encoding="utf-8"
+            )
+            (source_root / "prefab_sentinel" / "contracts.py").write_text(
+                "", encoding="utf-8"
+            )
+            (source_root / "tests" / "__init__.py").write_text("", encoding="utf-8")
+
+            tmc._prepare_mutmut_sanity_project(source_root, destination_root)
+
+            self.assertTrue(
+                (destination_root / "prefab_sentinel" / "contracts.py").exists()
+            )
+            self.assertFalse((destination_root / "prefab_sentinel" / "asset_delete.py").exists())
+            self.assertTrue(
+                (destination_root / "tests" / "test_mutmut_sanity_contracts.py").exists()
+            )
+            pyproject = (destination_root / "pyproject.toml").read_text(
+                encoding="utf-8"
+            )
+        self.assertEqual(
+            (True, True, True, False),
+            (
+                'paths_to_mutate = ["prefab_sentinel/"]' in pyproject,
+                'also_copy = []' in pyproject,
+                '"tests/test_mutmut_sanity_contracts.py"' in pyproject,
+                '"tests/"' in pyproject,
+            ),
+            pyproject,
+        )
 
     def test_missing_required_copy_source_fails_with_fixture_preparation_path(
         self,

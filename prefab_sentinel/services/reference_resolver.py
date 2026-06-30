@@ -365,7 +365,16 @@ class ReferenceResolverService:
 
     def _resolve_scan_project_root(self, scope_path: Path) -> Path:
         scope_anchor = scope_path if scope_path.is_dir() else scope_path.parent
-        candidate = find_project_root(scope_anchor)
+        resolved_anchor = scope_anchor.resolve()
+        assets_root = (self.project_root / "Assets").resolve()
+        try:
+            resolved_anchor.relative_to(assets_root)
+        except ValueError:
+            pass
+        else:
+            if resolved_anchor != assets_root:
+                return resolved_anchor
+        candidate = find_project_root(resolved_anchor)
         if (candidate / "Assets").exists():
             return candidate
         return self.project_root

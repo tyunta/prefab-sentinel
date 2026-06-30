@@ -379,6 +379,50 @@ class WhereUsedMissingGuidScanTests(unittest.TestCase):
         self.assertEqual("Assets/Target.asset", response.data["asset_path"])
         self.assertEqual(False, response.data["asset_missing"])
 
+    def test_subdirectory_scope_limits_guid_index_root(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            _seed_minimal_project(root)
+            scoped_dir = root / "Assets" / "Editor" / "PrefabSentinel"
+            scoped_dir.mkdir(parents=True)
+            write_file(
+                scoped_dir / "Target.asset",
+                "%YAML 1.1\n--- !u!114 &11400000\nMonoBehaviour:\n  m_Name: Target\n",
+            )
+            write_file(
+                scoped_dir / "Target.asset.meta",
+                f"fileFormatVersion: 2\nguid: {_TARGET_GUID}\n",
+            )
+            write_file(
+                scoped_dir / "Referrer.asset",
+                "%YAML 1.1\n--- !u!114 &22200000\nMonoBehaviour:\n"
+                f"  target: {{fileID: 11400000, guid: {_TARGET_GUID}, type: 2}}\n",
+            )
+            write_file(
+                root / "Assets" / "Outside.asset",
+                "%YAML 1.1\n--- !u!114 &33300000\nMonoBehaviour:\n"
+                f"  target: {{fileID: 11400000, guid: {_TARGET_GUID}, type: 2}}\n",
+            )
+            svc = ReferenceResolverService(project_root=root)
+            response = svc.where_used(
+                _TARGET_GUID,
+                scope="Assets/Editor/PrefabSentinel",
+            )
+
+        self.assertEqual(
+            (True, "REF_WHERE_USED"),
+            (response.success, response.code),
+            msg=f"subdirectory where_used scan mismatch: {response!r}",
+        )
+        self.assertEqual(
+            "Assets/Editor/PrefabSentinel",
+            response.data["scan_project_root"],
+        )
+        self.assertEqual(
+            ["Assets/Editor/PrefabSentinel/Referrer.asset"],
+            [usage["path"] for usage in response.data["usages"]],
+        )
+
 
 class BuildTopMissingEntryTests(unittest.TestCase):
     """Issue #207 — value-pin matrix for

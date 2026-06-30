@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from typing import cast
 
 from prefab_sentinel.asset_delete import (
     build_delete_plan,
@@ -74,6 +75,47 @@ class DeleteAssetPlanTests(unittest.TestCase):
             ["Assets/Referrer.prefab"],
             [u["path"] for u in plan["data"]["targets"][0]["reference_impact"]["usages"]],
         )
+
+    def test_default_reference_impact_scope_uses_target_parent_directory(self) -> None:
+        class _RecordingResolver:
+            def __init__(self) -> None:
+                self.where_used_scopes: list[str | None] = []
+
+            def where_used(self, *_args, **kwargs):
+                self.where_used_scopes.append(kwargs.get("scope"))
+                return type(
+                    "_Response",
+                    (),
+                    {
+                        "success": True,
+                        "data": {
+                            "usages": [],
+                            "usage_count": 0,
+                            "returned_usages": 0,
+                        },
+                    },
+                )()
+
+            def scan_broken_references(self, **_kwargs):
+                return {"success": True, "data": {"read_only": True}}
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            _seed_assets_dir(root)
+            _write_asset_with_meta(
+                root,
+                "Assets/Editor/PrefabSentinel/Temp.renderTexture",
+                _PREFAB_GUID,
+            )
+            resolver = _RecordingResolver()
+            plan = build_delete_plan(
+                ["Assets/Editor/PrefabSentinel/Temp.renderTexture"],
+                project_root=root,
+                reference_resolver=cast(ReferenceResolverService, resolver),
+            )
+
+        self.assertEqual((True, "ASSET_DELETE_DRY_RUN"), (plan["success"], plan["code"]))
+        self.assertEqual(["Assets/Editor/PrefabSentinel"], resolver.where_used_scopes)
 
     def test_batch_dry_run_preserves_requested_asset_order(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

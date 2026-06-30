@@ -14,7 +14,7 @@ uv run --extra test --extra mcp python scripts/run_unit_tests.py
 
 `scripts/run_unit_tests.py` が `unittest_parallel` のラッパーで、3 段の preflight（stale `mutants/` 検出 → `mcp` extra 検出 → `unittest_parallel` 検出）を順に通してからテストを発火する。
 
-mutmut sanity tests は repository root ではなく一時コピーした isolated project root を `cwd` として実行する。これにより sanity 実行中の `mutants/` artifact は temp tree 側へ閉じ込められ、既定の `unittest_parallel` worker が repository-root `mutants/` を import 対象として観測する race を作らない。repository root に既存 `mutants/` がある場合の stale preflight は引き続き exit code 3 で停止する。
+mutmut sanity tests は repository root ではなく一時コピーした isolated project root を `cwd` として実行する。sanity fixture は `prefab_sentinel/contracts.py` と専用の最小 pytest test だけをコピーし、`mutmut.__main__.cli()` を import-shim 経由で呼ぶ。これにより sanity 実行中の `mutants/` artifact は temp tree 側へ閉じ込められ、既定の `unittest_parallel` worker が repository-root `mutants/` を import 対象として観測する race と、`python -m mutmut` 経由で発生する `multiprocessing.set_start_method('fork')` double-init を作らない。repository root に既存 `mutants/` がある場合の stale preflight は引き続き exit code 3 で停止する。
 
 ```bash
 # 全テスト（並列、verbose）— `--extra mcp` は MCP サーバーをインポートする ~14 テストの collection エラー回避に必須（issue #217）
