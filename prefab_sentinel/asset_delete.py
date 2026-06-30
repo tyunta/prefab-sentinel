@@ -78,6 +78,15 @@ def _meta_path(asset_path: Path, project_root: Path) -> tuple[Path, str]:
     return meta, relative_to_root(meta, project_root)
 
 
+def _reference_scope_for_target(relative_asset_path: str, *, explicit_scope: str | None) -> str:
+    if explicit_scope is not None:
+        return explicit_scope
+    if "/" not in relative_asset_path:
+        return "Assets"
+    parent = relative_asset_path.rsplit("/", 1)[0]
+    return parent or "Assets"
+
+
 def _reference_impact(
     reference_resolver: ReferenceResolverService,
     guid: str | None,
@@ -250,10 +259,14 @@ def build_delete_plan(
                 )
         else:
             guid = None
+        reference_scope = _reference_scope_for_target(
+            relative_asset_path,
+            explicit_scope=scope,
+        )
         reference_impact = _reference_impact(
             reference_resolver,
             guid,
-            scope=plan_scope,
+            scope=reference_scope,
             exclude_patterns=exclude_patterns,
             max_usages=max_usages,
         )
