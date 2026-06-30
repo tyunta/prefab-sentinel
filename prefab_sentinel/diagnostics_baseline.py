@@ -73,15 +73,39 @@ def _empty_baseline(path: Path | None, status: str) -> DiagnosticsBaseline:
     )
 
 
+def _invalid_baseline_error(path: Path) -> ToolResponse:
+    return error_response(
+        DIAGNOSTICS_BASELINE_INVALID,
+        BASELINE_SCHEMA_MESSAGE,
+        data={"path": str(path), "read_only": True},
+    )
+
 def _invalid_baseline_result(path: Path) -> DiagnosticsBaselineLoadResult:
     return DiagnosticsBaselineLoadResult(
         baseline=_empty_baseline(path, "invalid"),
-        error=error_response(
-            DIAGNOSTICS_BASELINE_INVALID,
-            BASELINE_SCHEMA_MESSAGE,
-            data={"path": str(path), "read_only": True},
-        ),
+        error=_invalid_baseline_error(path),
     )
+
+def diagnostics_baseline_path(project_root: str | Path) -> tuple[Path, ToolResponse | None]:
+    baseline_path = Path(project_root) / BASELINE_RELATIVE_PATH
+    try:
+        root = Path(project_root).resolve()
+        parent = baseline_path.parent
+        if baseline_path.is_symlink() or parent.is_symlink():
+            return baseline_path, _invalid_baseline_error(baseline_path)
+        if parent.exists():
+            if not parent.is_dir():
+                return baseline_path, _invalid_baseline_error(baseline_path)
+            parent.resolve().relative_to(root)
+        if baseline_path.exists():
+            baseline_path.resolve().relative_to(root)
+            if not baseline_path.is_file():
+                return baseline_path, _invalid_baseline_error(baseline_path)
+    except (OSError, RuntimeError):
+        return baseline_path, _invalid_baseline_error(baseline_path)
+    except ValueError:
+        return baseline_path, _invalid_baseline_error(baseline_path)
+    return baseline_path, None
 
 
 def _known_diagnostics_from_payload(payload: object) -> tuple[str, ...] | None:
@@ -97,6 +121,35 @@ def _known_diagnostics_from_payload(payload: object) -> tuple[str, ...] | None:
         return None
     return tuple(known_diagnostics)
 
+def open_diagnostics_baseline_parent_fd(
+    project_root: str | Path,
+    *,
+    create_parent: bool,
+) -> tuple[Path, int | None, ToolResponse | None]:
+    import os
+
+    baseline_path, path_error = diagnostics_baseline_path(project_root)
+    if path_error is not None:
+        return baseline_path, None, path_error
+
+    parent = baseline_path.parent
+    try:
+        if create_parent:
+            parent.mkdir(parents=True, exist_ok=True)
+        elif not parent.exists():
+            return baseline_path, None, None
+        nofollow = getattr(os, "O_NOFOLLOW", None)
+        if nofollow is None:
+            return baseline_path, None, _invalid_baseline_error(baseline_path)
+        parent_fd = os.open(
+            parent,
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | nofollow,
+        )
+    except OSError:
+        return baseline_path, None, _invalid_baseline_error(baseline_path)
+    return baseline_path, parent_fd, None
+
+
 def load_diagnostics_baseline(project_root: str | Path | None) -> DiagnosticsBaselineLoadResult:
     if project_root is None:
         return DiagnosticsBaselineLoadResult(
@@ -104,18 +157,54 @@ def load_diagnostics_baseline(project_root: str | Path | None) -> DiagnosticsBas
             error=None,
         )
 
-    baseline_path = Path(project_root) / BASELINE_RELATIVE_PATH
+    baseline_path, parent_fd, path_error = open_diagnostics_baseline_parent_fd(
+        project_root,
+        create_parent=False,
+    )
+    if path_error is not None:
+        return DiagnosticsBaselineLoadResult(
+            baseline=_empty_baseline(baseline_path, "invalid"),
+            error=path_error,
+        )
+    if parent_fd is None:
+        return DiagnosticsBaselineLoadResult(
+            baseline=_empty_baseline(baseline_path, "absent"),
+            error=None,
+        )
+
     try:
-        if not baseline_path.exists():
-            return DiagnosticsBaselineLoadResult(
-                baseline=_empty_baseline(baseline_path, "absent"),
-                error=None,
-            )
-        if not baseline_path.is_file():
+        import os
+
+        nofollow = getattr(os, "O_NOFOLLOW", None)
+        if nofollow is None:
             return _invalid_baseline_result(baseline_path)
-        payload = json.loads(baseline_path.read_text(encoding="utf-8"))
-    except (OSError, JSONDecodeError, UnicodeDecodeError):
-        return _invalid_baseline_result(baseline_path)
+        file_fd: int | None = None
+        try:
+            try:
+                file_fd = os.open(
+                    baseline_path.name,
+                    os.O_RDONLY | nofollow,
+                    dir_fd=parent_fd,
+                )
+            except FileNotFoundError:
+                return DiagnosticsBaselineLoadResult(
+                    baseline=_empty_baseline(baseline_path, "absent"),
+                    error=None,
+                )
+            except OSError:
+                return _invalid_baseline_result(baseline_path)
+            with os.fdopen(file_fd, encoding="utf-8") as handle:
+                file_fd = None
+                payload = json.load(handle)
+        except (OSError, JSONDecodeError, UnicodeDecodeError):
+            return _invalid_baseline_result(baseline_path)
+        finally:
+            if file_fd is not None:
+                os.close(file_fd)
+    finally:
+        import os
+
+        os.close(parent_fd)
 
     known_diagnostics = _known_diagnostics_from_payload(payload)
     if known_diagnostics is None:

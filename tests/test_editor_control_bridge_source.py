@@ -972,19 +972,8 @@ class TestRecompileAndWaitDomainReloadResume(unittest.TestCase):
         self.assertNotIn("EDITOR_CTRL_RECOMPILE_AND_WAIT_OK", body)
 
     def test_resumer_uses_minus_one_reload_count_threshold(self) -> None:
-        # Issue #191 / #203 race-condition pin: the resumer runs on the
-        # post-reload AppDomain whose ``AssemblyReloadCount`` starts at
-        # ``0``. The post-reload poll completes the request the first
-        # time ``AssemblyReloadCount > threshold`` evaluates true. With
-        # ``threshold = 0`` (mutation candidate) ``0 > 0`` is false on
-        # the first tick and the request stalls until the next reload —
-        # the exact regression issue #191 fixed. Pin the literal so the
-        # mutation kills the test.
         source = _read(BRIDGE)
         body = _extract_method(source, "ResumePendingAsyncRunners")
-        # Restrict to the recompile-and-wait branch so a future addition
-        # of another action's resumer cannot accidentally satisfy the
-        # match.
         branch_match = re.search(
             r'else if \(entry\.action == "editor_recompile_and_wait"\)\s*\{(.*?)^\s{16}\}',
             body,
@@ -1009,18 +998,19 @@ class TestRecompileAndWaitDomainReloadResume(unittest.TestCase):
         )
         if call_match is None:
             self.fail("Resumer branch must call BuildRecompileReloadWaitPoll")
-        # The poll builder signature is
-        # ``(responsePath, deadlineMs, reloadCountThreshold, timeoutDetail)``;
-        # the third positional argument is the threshold literal.
         args = [a.strip() for a in call_match.group(1).split(",")]
-        self.assertGreaterEqual(
-            len(args), 4,
-            f"BuildRecompileReloadWaitPoll call must have 4 args, got {args}",
-        )
         self.assertEqual(
-            "-1", args[2],
-            "reloadCountThreshold must be -1 to satisfy the first-tick "
-            "post-reload check (issue #191).",
+            [
+                "entry.responsePath",
+                "entry.callTimeUnixMs",
+                "entry.deadlineUnixMs",
+                "-1",
+                '"editor_recompile_and_wait"',
+                '"editor_recompile_and_wait: timed out after domain reload."',
+                "BuildRecompileAndWaitReloadComplete(entry.responsePath)",
+            ],
+            args,
+            "BuildRecompileReloadWaitPoll call shape changed unexpectedly",
         )
 
 
@@ -2461,6 +2451,355 @@ class TestCompileBarrierSource(unittest.TestCase):
         self.assertIn(
             "editor_recompile_and_wait: failed to schedule compilation.",
             redaction,
+        )
+
+
+class BridgeBackgroundCompileDeferralSourceTests(unittest.TestCase):
+    """Issue #72 source invariants for background compile deferral.
+
+    Tier 3: the affected bridge partials depend on UnityEditor APIs, so
+    the Unity-free classifier has xUnit coverage and these checks pin the
+    Unity-dependent payload/wiring structure until live Editor validation.
+    """
+
+    def test_editor_control_data_declares_deferred_payload_fields(self) -> None:
+        body = _extract_editor_control_data_body(_read(BRIDGE))
+        expected_fields = (
+            "public string operation = string.Empty;",
+            "public bool editor_focused = false;",
+            "public string deferred_reason = string.Empty;",
+            "public float budget_sec = 0f;",
+            "public bool job_retained = false;",
+            "public bool cleanup_performed = false;",
+        )
+        for field in expected_fields:
+            with self.subTest(field=field):
+                self.assertIn(
+                    field,
+                    body,
+                    msg=f"EditorControlData must expose deferred payload field {field}",
+                )
+
+    def test_common_builder_emits_warning_deferred_envelope(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "BuildCompileDeferredBackgroundResponse")
+        self.assertIn(
+            'BackgroundCompileDeferredReason = "editor_background_compile_reload"',
+            source,
+        )
+        for expected in (
+            'code = "EDITOR_COMPILE_DEFERRED_BACKGROUND"',
+            'severity = "warning"',
+            "success = false",
+            "operation = operation",
+            "editor_focused = false",
+            "deferred_reason = BackgroundCompileDeferredReason",
+            "elapsed_sec = elapsedSec",
+            "budget_sec = budgetSec",
+            "diagnostic_compiling = compiling",
+            "job_retained = jobRetained",
+            "cleanup_performed = cleanupPerformed",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, body)
+
+    def test_compile_timeout_paths_observe_focus_before_deferred_response(self) -> None:
+        source = _read(BRIDGE)
+        for method in (
+            "BuildRecompileReloadWaitPoll",
+            "HandleRefreshAssetDatabase",
+            "HandleRecompileAndWait",
+            "HandleRunScript",
+            "RunScriptPollFrame",
+            "HandleRunScriptPoll",
+            "ScheduleMenuExecuteBarrier",
+        ):
+            with self.subTest(method=method):
+                body = _extract_method(source, method)
+                focus_index = body.find("ObserveEditorFocused()")
+                deferred_index = body.find("BuildCompileDeferredBackgroundResponse")
+                self.assertNotEqual(
+                    -1,
+                    focus_index,
+                    msg=f"{method} must observe editor focus at its deadline branch",
+                )
+                self.assertNotEqual(
+                    -1,
+                    deferred_index,
+                    msg=f"{method} must call the common deferred response builder",
+                )
+                self.assertLess(
+                    focus_index,
+                    deferred_index,
+                    msg=f"{method} must observe focus before building deferred response",
+                )
+
+    def test_generic_timeout_branches_remain_available(self) -> None:
+        source = _read(BRIDGE)
+        expected_timeout_markers = {
+            "BuildRecompileReloadWaitPoll": "EDITOR_CTRL_RECOMPILE_TIMEOUT",
+            "HandleRefreshAssetDatabase": "EDITOR_CTRL_REFRESH_COMPILE_TIMEOUT",
+            "HandleRecompileAndWait": "EDITOR_CTRL_RECOMPILE_TIMEOUT",
+            "HandleRunScript": "RunScriptCompilePendingResponse",
+            "RunScriptPollFrame": "RunScriptCompilePendingResponse",
+            "HandleRunScriptPoll": "EDITOR_RUN_SCRIPT_SUBMIT_TIMEOUT",
+            "ScheduleMenuExecuteBarrier": "EDITOR_CTRL_RECOMPILE_TIMEOUT",
+        }
+        for method, marker in expected_timeout_markers.items():
+            with self.subTest(method=method):
+                body = _extract_method(source, method)
+                self.assertIn(
+                    marker,
+                    body,
+                    msg=f"{method} must retain the focused/unknown generic timeout path",
+                )
+
+    def test_run_script_poll_deferred_cleanup_retains_job_before_cleanup(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleRunScriptPoll")
+        match = re.search(r"if\s*\(\s*request\.cleanup_on_timeout\s*\)\s*\{", body)
+        self.assertIsNotNone(
+            match,
+            "HandleRunScriptPoll must keep the cleanup_on_timeout branch",
+        )
+        if match is None:
+            self.fail("HandleRunScriptPoll must keep the cleanup_on_timeout branch")
+        cleanup_body = _extract_braced_block(
+            body,
+            match.end(),
+            "HandleRunScriptPoll cleanup_on_timeout branch",
+        )
+        deferred_index = cleanup_body.find("BuildCompileDeferredBackgroundResponse")
+        complete_index = cleanup_body.find("PendingAsyncRunner.Complete(completionFile)")
+        self.assertNotEqual(
+            -1,
+            deferred_index,
+            msg="background-deferred poll cleanup must return a deferred envelope",
+        )
+        self.assertNotEqual(
+            -1,
+            complete_index,
+            msg="non-deferred poll cleanup must still complete the stale job",
+        )
+        self.assertLess(
+            deferred_index,
+            complete_index,
+            msg="deferred poll cleanup must return before completing or deleting the job",
+        )
+        self.assertIn("jobRetained: true", cleanup_body)
+        self.assertIn("cleanupPerformed: false", cleanup_body)
+
+    def test_run_script_poll_deferred_cleanup_response_stays_pollable(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleRunScriptPoll")
+        match = re.search(r"if\s*\(\s*request\.cleanup_on_timeout\s*\)\s*\{", body)
+        self.assertIsNotNone(
+            match,
+            "HandleRunScriptPoll must keep the cleanup_on_timeout branch",
+        )
+        if match is None:
+            self.fail("HandleRunScriptPoll must keep the cleanup_on_timeout branch")
+        cleanup_body = _extract_braced_block(
+            body,
+            match.end(),
+            "HandleRunScriptPoll cleanup_on_timeout branch",
+        )
+        for expected in (
+            "PendingAsyncRunner.TryGet(completionFile, out var entry)",
+            "DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()",
+            "entry.callTimeUnixMs",
+            "entry.deadlineUnixMs",
+            "elapsedSec: elapsedSec",
+            "budgetSec: budgetSec",
+            "deferred.data.request_id = request.request_id",
+            'deferred.data.status = "pending"',
+            "return deferred;",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, cleanup_body)
+        self.assertNotIn("elapsedSec: 0f", cleanup_body)
+        self.assertNotIn("budgetSec: 0f", cleanup_body)
+
+
+    def test_run_script_poll_deferred_marker_does_not_redefer_after_focus_return(self) -> None:
+        source = _read(BRIDGE)
+        pending_body = _extract_class_body(source, "PendingAsyncRunner")
+        submit_body = _extract_method(source, "HandleRunScriptSubmit")
+        poll_body = _extract_method(source, "HandleRunScriptPoll")
+        match = re.search(r"if\s*\(\s*request\.cleanup_on_timeout\s*\)\s*\{", poll_body)
+        self.assertIsNotNone(
+            match,
+            "HandleRunScriptPoll must keep the cleanup_on_timeout branch",
+        )
+        if match is None:
+            self.fail("HandleRunScriptPoll must keep the cleanup_on_timeout branch")
+        cleanup_body = _extract_braced_block(
+            poll_body,
+            match.end(),
+            "HandleRunScriptPoll cleanup_on_timeout branch",
+        )
+
+        for expected in (
+            "public bool deferredCompileBackground;",
+            "internal static void MarkBackgroundDeferred(",
+            "internal static bool IsBackgroundDeferred(",
+            "internal static void ClearBackgroundDeferred(",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, pending_body)
+        self.assertIn(
+            "PendingAsyncRunner.MarkBackgroundDeferred(completionFile)",
+            submit_body,
+        )
+        self.assertIn(
+            "bool backgroundDeferredBefore = PendingAsyncRunner.IsBackgroundDeferred(completionFile);",
+            cleanup_body,
+        )
+        self.assertIn(
+            "bool backgroundDeferredNow = BackgroundCompileDeferralClassifier.Classify(",
+            cleanup_body,
+        )
+        foreground_index = cleanup_body.find(
+            "if (backgroundDeferredBefore && editorFocused == true)"
+        )
+        deferred_index = cleanup_body.find(
+            "if (backgroundDeferredNow || backgroundDeferredBefore)"
+        )
+        complete_index = cleanup_body.find("PendingAsyncRunner.Complete(completionFile)")
+        self.assertNotEqual(-1, foreground_index)
+        self.assertNotEqual(-1, deferred_index)
+        self.assertNotEqual(-1, complete_index)
+        self.assertLess(
+            foreground_index,
+            deferred_index,
+            msg="foreground focus must stop the stale marker from re-deferring",
+        )
+        self.assertLess(
+            deferred_index,
+            complete_index,
+            msg="continued background deferral must still return before cleanup",
+        )
+
+    def test_run_script_poll_frame_preserves_rehydrated_submit_deferred_marker(self) -> None:
+        body = _extract_method(_read(BRIDGE), "RunScriptPollFrame")
+        match = re.search(r"if\s*\(\s*nowMs\s*>\s*entry\.deadlineUnixMs\s*\)\s*\{", body)
+        self.assertIsNotNone(
+            match,
+            "RunScriptPollFrame must keep a deadline branch",
+        )
+        if match is None:
+            self.fail("RunScriptPollFrame must keep a deadline branch")
+        deadline_body = _extract_braced_block(
+            body,
+            match.end(),
+            "RunScriptPollFrame deadline branch",
+        )
+
+        marker_check_index = deadline_body.find(
+            "bool backgroundDeferredBefore = PendingAsyncRunner.IsBackgroundDeferred(responsePath);"
+        )
+        classifier_index = deadline_body.find(
+            "bool backgroundDeferredNow = BackgroundCompileDeferralClassifier.Classify("
+        )
+        foreground_guard_index = deadline_body.find(
+            'entry.action == "run_script_submit"\n'
+            "                    && backgroundDeferredBefore\n"
+            "                    && editorFocused == true"
+        )
+        clear_index = deadline_body.find(
+            "PendingAsyncRunner.ClearBackgroundDeferred(responsePath)"
+        )
+        submit_guard_index = deadline_body.find(
+            'else if (entry.action == "run_script_submit"\n'
+            "                    && (backgroundDeferredNow || backgroundDeferredBefore)"
+        )
+        background_timeout_index = deadline_body.find("else if (backgroundDeferredNow)")
+        mark_index = deadline_body.find(
+            "PendingAsyncRunner.MarkBackgroundDeferred(responsePath)"
+        )
+        retained_return_index = deadline_body.find("return;", mark_index)
+        complete_index = deadline_body.find("PendingAsyncRunner.Complete(responsePath)")
+        cleanup_index = deadline_body.find("CleanupRunScriptTempFiles(scriptAbs, metaAbs)")
+        self.assertNotEqual(-1, marker_check_index)
+        self.assertNotEqual(-1, classifier_index)
+        self.assertNotEqual(-1, foreground_guard_index)
+        self.assertNotEqual(-1, clear_index)
+        self.assertNotEqual(-1, submit_guard_index)
+        self.assertNotEqual(-1, background_timeout_index)
+        self.assertNotEqual(-1, mark_index)
+        self.assertNotEqual(-1, retained_return_index)
+        self.assertNotEqual(-1, complete_index)
+        self.assertNotEqual(-1, cleanup_index)
+        self.assertLess(marker_check_index, foreground_guard_index)
+        self.assertLess(classifier_index, foreground_guard_index)
+        self.assertLess(foreground_guard_index, submit_guard_index)
+        self.assertLess(clear_index, submit_guard_index)
+        self.assertLess(submit_guard_index, retained_return_index)
+        self.assertLess(retained_return_index, complete_index)
+        self.assertLess(retained_return_index, cleanup_index)
+        self.assertLess(background_timeout_index, complete_index)
+
+    def test_run_script_poll_preserves_deferred_completion_payload(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleRunScriptPoll")
+        for expected in (
+            "inner.data.operation",
+            "inner.data.editor_focused",
+            "inner.data.deferred_reason",
+            "inner.data.elapsed_sec",
+            "inner.data.budget_sec",
+            "inner.data.diagnostic_compiling",
+            "inner.data.job_retained",
+            "inner.data.cleanup_performed",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(
+                    expected,
+                    body,
+                    msg=(
+                        "HandleRunScriptPoll must preserve deferred completion "
+                        f"payload field {expected} from the inner envelope"
+                    ),
+                )
+
+    def test_run_script_submit_background_deadline_leaves_job_for_poll(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleRunScriptSubmit")
+        match = re.search(r"Action\s+writeCompileDeadline\s*=\s*\(\s*\)\s*=>\s*\{", body)
+        self.assertIsNotNone(
+            match,
+            "HandleRunScriptSubmit must keep a dedicated deadline action",
+        )
+        if match is None:
+            self.fail("HandleRunScriptSubmit must keep a dedicated deadline action")
+        deadline_body = _extract_braced_block(
+            body,
+            match.end(),
+            "HandleRunScriptSubmit writeCompileDeadline action",
+        )
+        focus_index = deadline_body.find("ObserveEditorFocused()")
+        classifier_index = deadline_body.find(
+            "BackgroundCompileDeferralClassifier.Classify"
+        )
+        retained_return_index = deadline_body.find("return;", classifier_index)
+        pending_index = deadline_body.find("writeCompilePending()")
+        self.assertNotEqual(-1, focus_index)
+        self.assertNotEqual(-1, classifier_index)
+        self.assertNotEqual(
+            -1,
+            retained_return_index,
+            msg="background-deferred submit deadline must return without cleanup",
+        )
+        self.assertNotEqual(
+            -1,
+            pending_index,
+            msg="focused/unknown submit deadline must keep the generic timeout path",
+        )
+        self.assertLess(
+            classifier_index,
+            retained_return_index,
+            msg="submit deadline must classify focus before retaining the job",
+        )
+        self.assertLess(
+            retained_return_index,
+            pending_index,
+            msg="background-deferred submit deadline must skip writeCompilePending cleanup",
         )
 
 
@@ -5772,7 +6111,7 @@ class EditorAssetOpsDocsTests(unittest.TestCase):
     def test_tools_catalog_lists_editor_asset_category_and_tools(self) -> None:
         text = self._doc("docs/tools.md")
         for token in (
-            "現在 97 件",
+            "現在 98 件",
             "18 カテゴリ",
             "**editor_assets**",
             "### editor_assets",

@@ -264,6 +264,12 @@ namespace PrefabSentinel
             public string blueprint_id = string.Empty;
             public string phase = string.Empty;           // "validated" or "complete"
             public float elapsed_sec = 0f;
+            public string operation = string.Empty;
+            public bool editor_focused = false;
+            public string deferred_reason = string.Empty;
+            public float budget_sec = 0f;
+            public bool job_retained = false;
+            public bool cleanup_performed = false;
 
             // Issue #116: AssetDatabase-backed generated asset create/move.
             public string asset_type = string.Empty;
@@ -1258,6 +1264,7 @@ private static string DeriveTransportRequestId(string requestPath)
                 public string stuckKey = string.Empty;
                 public string tempDirAbs = string.Empty;
                 public string transportRequestId = string.Empty;
+                public bool deferredCompileBackground;
             }
 
             [Serializable]
@@ -1334,6 +1341,69 @@ private static string DeriveTransportRequestId(string requestPath)
                 TransientResponsePaths.Add(entry.responsePath);
                 EditorApplication.update -= poll;
                 EditorApplication.update += poll;
+            }
+
+            internal static bool TryGet(
+                string responsePath, out PersistedEntry entry)
+            {
+                if (ActiveEntries.TryGetValue(responsePath, out entry))
+                    return true;
+
+                foreach (var persisted in ReadPersisted())
+                {
+                    if (persisted.responsePath == responsePath)
+                    {
+                        entry = persisted;
+                        return true;
+                    }
+                }
+
+                entry = null;
+                return false;
+            }
+
+            internal static bool IsBackgroundDeferred(string responsePath)
+            {
+                return TryGet(responsePath, out var entry)
+                    && entry.deferredCompileBackground;
+            }
+
+            internal static void MarkBackgroundDeferred(string responsePath)
+            {
+                if (ActiveEntries.TryGetValue(responsePath, out var active))
+                {
+                    active.deferredCompileBackground = true;
+                    Persist();
+                    return;
+                }
+
+                foreach (var persisted in ReadPersisted())
+                {
+                    if (persisted.responsePath != responsePath) continue;
+                    persisted.deferredCompileBackground = true;
+                    ActiveEntries[responsePath] = persisted;
+                    Persist();
+                    return;
+                }
+            }
+
+            internal static void ClearBackgroundDeferred(string responsePath)
+            {
+                if (ActiveEntries.TryGetValue(responsePath, out var active))
+                {
+                    active.deferredCompileBackground = false;
+                    Persist();
+                    return;
+                }
+
+                foreach (var persisted in ReadPersisted())
+                {
+                    if (persisted.responsePath != responsePath) continue;
+                    persisted.deferredCompileBackground = false;
+                    ActiveEntries[responsePath] = persisted;
+                    Persist();
+                    return;
+                }
             }
 
             internal static void Complete(string responsePath)
@@ -1600,6 +1670,45 @@ private static EditorOperatorContext BuildEditorOperatorContext()
                 code = code,
                 message = message,
                 data = data,
+                operator_context = BuildEditorOperatorContext()
+            };
+        }
+
+
+        private const string BackgroundCompileDeferredReason = "editor_background_compile_reload";
+
+        private static bool? ObserveEditorFocused()
+        {
+            return EditorWindow.focusedWindow != null;
+        }
+
+        private static EditorControlResponse BuildCompileDeferredBackgroundResponse(
+            string operation,
+            float elapsedSec,
+            float budgetSec,
+            bool compiling,
+            bool jobRetained,
+            bool cleanupPerformed)
+        {
+            return new EditorControlResponse
+            {
+                protocol_version = ProtocolVersion,
+                success = false,
+                severity = "warning",
+                code = "EDITOR_COMPILE_DEFERRED_BACKGROUND",
+                message = operation + ": compile/reload wait deferred because the Unity Editor is not focused.",
+                data = new EditorControlData
+                {
+                    operation = operation,
+                    editor_focused = false,
+                    deferred_reason = BackgroundCompileDeferredReason,
+                    elapsed_sec = elapsedSec,
+                    budget_sec = budgetSec,
+                    diagnostic_compiling = compiling,
+                    job_retained = jobRetained,
+                    cleanup_performed = cleanupPerformed,
+                    executed = false,
+                },
                 operator_context = BuildEditorOperatorContext()
             };
         }

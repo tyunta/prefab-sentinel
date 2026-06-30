@@ -1,23 +1,226 @@
 """MCP tools for asset inspection and validation."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from prefab_sentinel.contracts import Severity, ToolResponse
-from prefab_sentinel.diagnostics_baseline import load_diagnostics_baseline
+from prefab_sentinel.contracts import Severity, ToolResponse, error_response, success_response
+from prefab_sentinel.diagnostics_baseline import (
+    DiagnosticsBaseline,
+    load_diagnostics_baseline,
+)
+from prefab_sentinel.diagnostics_baseline_update import (
+    compute_diagnostics_baseline_update,
+    write_diagnostics_baseline,
+)
 from prefab_sentinel.ignore_guids_io import (
     IGNORE_GUIDS_RELATIVE_PATH,
     load_ignore_guids_file,
     merge_ignore_guids as _merge_ignore_guids,
 )
+from prefab_sentinel.mcp_validation import require_change_reason
 from prefab_sentinel.orchestrator_wiring import INSPECT_WIRING_PAGE_SIZE_DEFAULT
 from prefab_sentinel.session import ProjectSession
 
 __all__ = ["register_validation_tools"]
 
+
+
+_SUPPORTED_BASELINE_UPDATE_SOURCES = (
+    "validate_refs",
+    "inspect_wiring",
+    "validate_all_wiring",
+    "validate_structure",
+    "validate_materials",
+)
+_BASELINE_UPDATE_MODES = ("preview", "write")
+
+
+def _diagnostics_baseline_project_root_required() -> dict[str, Any]:
+    return error_response(
+        "DIAGNOSTICS_BASELINE_PROJECT_ROOT_REQUIRED",
+        "update_diagnostics_baseline requires an activated project_root.",
+        data={"read_only": True},
+    ).to_dict()
+
+
+def _diagnostics_baseline_source_invalid(source: str) -> dict[str, Any]:
+    return error_response(
+        "DIAGNOSTICS_BASELINE_SOURCE_INVALID",
+        "update_diagnostics_baseline source is not supported.",
+        data={
+            "source": source,
+            "supported_sources": list(_SUPPORTED_BASELINE_UPDATE_SOURCES),
+        },
+    ).to_dict()
+
+
+def _diagnostics_baseline_mode_invalid(mode: str) -> dict[str, Any] | None:
+    if mode in _BASELINE_UPDATE_MODES:
+        return None
+    return error_response(
+        "DIAGNOSTICS_BASELINE_MODE_INVALID",
+        "diagnostics baseline update mode must be preview or write.",
+        data={"mode": mode},
+    ).to_dict()
+
+
+def _diagnostics_baseline_write_audit_error(
+    mode: str,
+    confirm: bool,
+    change_reason: str,
+) -> dict[str, Any] | None:
+    if mode != "write":
+        return None
+    audit_reason = change_reason.strip() if confirm else None
+    return require_change_reason(True, audit_reason)
+
+
+def _validate_refs_with_baseline(
+    session: ProjectSession,
+    *,
+    scope: str,
+    details: bool,
+    max_diagnostics: int = 200,
+    top_missing_breakdown: bool = False,
+    snapshot_save: str = "",
+    snapshot_diff: str = "",
+    refresh_guid_index: bool = False,
+    ignore_asset_guids: list[str] | None = None,
+    baseline: DiagnosticsBaseline,
+) -> dict[str, Any]:
+    resolved_scope = session.resolve_scope(scope) or scope
+    orch = session.get_orchestrator()
+    scope_path = Path(resolved_scope)
+    file_entries = load_ignore_guids_file(scope_path)
+    merged = _merge_ignore_guids(ignore_asset_guids, file_entries)
+
+    resp = orch.validate_refs(
+        scope=resolved_scope,
+        details=details,
+        max_diagnostics=max_diagnostics,
+        top_missing_breakdown=top_missing_breakdown,
+        snapshot_save=snapshot_save,
+        snapshot_diff=snapshot_diff,
+        refresh_guid_index=refresh_guid_index,
+        ignore_asset_guids=merged,
+        diagnostics_baseline=baseline,
+    )
+    payload = resp.to_dict()
+    if file_entries:
+        file_path = scope_path / IGNORE_GUIDS_RELATIVE_PATH
+        payload["diagnostics"].append({
+            "severity": "info",
+            "code": "IGNORE_GUIDS_FILE_LOADED",
+            "message": (
+                f"Auto-loaded {len(file_entries)} ignore-GUID "
+                f"entries from {file_path}."
+            ),
+            "data": {
+                "path": str(file_path),
+                "count": len(file_entries),
+            },
+        })
+    return payload
+
+def _run_diagnostics_baseline_source(
+    session: ProjectSession,
+    *,
+    source: str,
+    target: str,
+    details: bool,
+    include_details: bool,
+    baseline: DiagnosticsBaseline,
+) -> dict[str, Any]:
+    if source == "validate_refs":
+        return _validate_refs_with_baseline(
+            session,
+            scope=target,
+            details=details,
+            baseline=baseline,
+        )
+
+    orch = session.get_orchestrator()
+    if source == "inspect_wiring":
+        inspect_wiring_response: ToolResponse = orch.inspect_wiring(
+            target_path=target,
+            diagnostics_baseline=baseline,
+        )
+        return inspect_wiring_response.to_dict()
+    if source == "validate_all_wiring":
+        validate_all_wiring_response: ToolResponse = orch.validate_all_wiring(
+            target_path=target,
+            diagnostics_baseline=baseline,
+        )
+        return validate_all_wiring_response.to_dict()
+    if source == "validate_structure":
+        validate_structure_response: ToolResponse = orch.inspect_structure(
+            target_path=target,
+            diagnostics_baseline=baseline,
+        )
+        return validate_structure_response.to_dict()
+    if source == "validate_materials":
+        validate_materials_response: ToolResponse = orch.validate_materials(
+            scope=target,
+            include_details=include_details,
+            diagnostics_baseline=baseline,
+        )
+        return validate_materials_response.to_dict()
+    raise AssertionError(f"unsupported diagnostics baseline source: {source}")
+
+
+def _diagnostics_baseline_source_failed(
+    *,
+    source: str,
+    source_response: Mapping[str, Any],
+) -> dict[str, Any]:
+    return error_response(
+        "DIAGNOSTICS_BASELINE_SOURCE_FAILED",
+        "diagnostics baseline source validation failed.",
+        data={"source": source, "source_response": dict(source_response)},
+    ).to_dict()
+
+
+def _source_diagnostics_classification(
+    *,
+    source: str,
+    source_response: Mapping[str, Any],
+) -> tuple[Mapping[str, object] | None, dict[str, Any] | None]:
+    data = source_response.get("data")
+    if not isinstance(data, Mapping):
+        return None, _source_missing_classification(source)
+    classification = data.get("diagnostics_baseline")
+    if not isinstance(classification, Mapping):
+        return None, _source_missing_classification(source)
+    return classification, None
+
+
+def _source_missing_classification(source: str) -> dict[str, Any]:
+    return error_response(
+        "DIAGNOSTICS_BASELINE_SOURCE_MISSING_CLASSIFICATION",
+        "source response data.diagnostics_baseline is missing or malformed.",
+        data={"source": source, "field": "data.diagnostics_baseline"},
+    ).to_dict()
+
+
+def _write_diagnostics_baseline_update(
+    *,
+    project_root: str | Path,
+    update_response: ToolResponse,
+) -> dict[str, Any]:
+    data = dict(update_response.data)
+    write_error = write_diagnostics_baseline(project_root, data["known_diagnostics"])
+    if write_error is not None:
+        return write_error.to_dict()
+    data["written"] = True
+    return success_response(
+        "DIAGNOSTICS_BASELINE_UPDATE_WRITTEN",
+        "Diagnostics baseline updated.",
+        data=data,
+    ).to_dict()
 
 def register_validation_tools(server: FastMCP, session: ProjectSession) -> None:
     """Register inspection and validation tools on *server*."""
@@ -98,51 +301,21 @@ def register_validation_tools(server: FastMCP, session: ProjectSession) -> None:
                 when the file fired.  Malformed entries surface through
                 the existing service-layer ``REF001`` envelope.
         """
-        resolved_scope = session.resolve_scope(scope) or scope
         baseline_result = load_diagnostics_baseline(session.project_root)
         if baseline_result.error is not None:
             return baseline_result.error.to_dict()
-        orch = session.get_orchestrator()
-
-        # Issue #237: union the caller-supplied list with the
-        # conventional file's entries.  Loader returns ``[]`` when the
-        # file is absent / unreadable, so the union degenerates to the
-        # caller list on that path.
-        scope_path = Path(resolved_scope)
-        file_entries = load_ignore_guids_file(scope_path)
-        merged = _merge_ignore_guids(ignore_asset_guids, file_entries)
-
-        resp = orch.validate_refs(
-            scope=resolved_scope,
+        return _validate_refs_with_baseline(
+            session,
+            scope=scope,
             details=details,
             max_diagnostics=max_diagnostics,
             top_missing_breakdown=top_missing_breakdown,
             snapshot_save=snapshot_save,
             snapshot_diff=snapshot_diff,
             refresh_guid_index=refresh_guid_index,
-            ignore_asset_guids=merged,
-            diagnostics_baseline=baseline_result.baseline,
+            ignore_asset_guids=ignore_asset_guids,
+            baseline=baseline_result.baseline,
         )
-        payload = resp.to_dict()
-
-        # Issue #237: when the conventional file contributed entries,
-        # surface an informational diagnostic so the caller can verify
-        # the auto-load actually fired on this invocation.
-        if file_entries:
-            file_path = scope_path / IGNORE_GUIDS_RELATIVE_PATH
-            payload["diagnostics"].append({
-                "severity": "info",
-                "code": "IGNORE_GUIDS_FILE_LOADED",
-                "message": (
-                    f"Auto-loaded {len(file_entries)} ignore-GUID "
-                    f"entries from {file_path}."
-                ),
-                "data": {
-                    "path": str(file_path),
-                    "count": len(file_entries),
-                },
-            })
-        return payload
 
     @server.tool()
     def validate_materials(
@@ -170,10 +343,14 @@ def register_validation_tools(server: FastMCP, session: ProjectSession) -> None:
                 diagnostics=[],
             ).to_dict()
 
+        baseline_result = load_diagnostics_baseline(session.project_root)
+        if baseline_result.error is not None:
+            return baseline_result.error.to_dict()
         orch = session.get_orchestrator()
         return orch.validate_materials(
             scope=resolved_scope,
             include_details=include_details,
+            diagnostics_baseline=baseline_result.baseline,
         ).to_dict()
 
     @server.tool()
@@ -375,8 +552,14 @@ def register_validation_tools(server: FastMCP, session: ProjectSession) -> None:
         Args:
             asset_path: Path to a .prefab, .unity, or .asset file.
         """
+        baseline_result = load_diagnostics_baseline(session.project_root)
+        if baseline_result.error is not None:
+            return baseline_result.error.to_dict()
         orch = session.get_orchestrator()
-        resp = orch.inspect_structure(target_path=asset_path)
+        resp = orch.inspect_structure(
+            target_path=asset_path,
+            diagnostics_baseline=baseline_result.baseline,
+        )
         return resp.to_dict()
 
     @server.tool()
@@ -456,8 +639,83 @@ def register_validation_tools(server: FastMCP, session: ProjectSession) -> None:
         Args:
             asset_path: Single .unity/.prefab file to scan. Empty = scan entire scope.
         """
+        baseline_result = load_diagnostics_baseline(session.project_root)
+        if baseline_result.error is not None:
+            return baseline_result.error.to_dict()
         orch = session.get_orchestrator()
-        return orch.validate_all_wiring(target_path=asset_path).to_dict()
+        return orch.validate_all_wiring(
+            target_path=asset_path,
+            diagnostics_baseline=baseline_result.baseline,
+        ).to_dict()
+
+    @server.tool()
+    def update_diagnostics_baseline(
+        source: str,
+        target: str,
+        mode: str = "preview",
+        prune_resolved: bool = False,
+        confirm: bool = False,
+        change_reason: str = "",
+        details: bool = False,
+        include_details: bool = False,
+    ) -> dict[str, Any]:
+        """Preview or write the project diagnostics baseline from a source scan."""
+        project_root = session.project_root
+        if project_root is None:
+            return _diagnostics_baseline_project_root_required()
+        if source not in _SUPPORTED_BASELINE_UPDATE_SOURCES:
+            return _diagnostics_baseline_source_invalid(source)
+        mode_error = _diagnostics_baseline_mode_invalid(mode)
+        if mode_error is not None:
+            return mode_error
+        audit_error = _diagnostics_baseline_write_audit_error(
+            mode,
+            confirm,
+            change_reason,
+        )
+        if audit_error is not None:
+            return audit_error
+
+        baseline_result = load_diagnostics_baseline(project_root)
+        if baseline_result.error is not None:
+            return baseline_result.error.to_dict()
+        baseline = baseline_result.baseline
+        source_response = _run_diagnostics_baseline_source(
+            session,
+            source=source,
+            target=target,
+            details=details,
+            include_details=include_details,
+            baseline=baseline,
+        )
+        if not source_response["success"]:
+            return _diagnostics_baseline_source_failed(
+                source=source,
+                source_response=source_response,
+            )
+        classification, classification_error = _source_diagnostics_classification(
+            source=source,
+            source_response=source_response,
+        )
+        if classification_error is not None:
+            return classification_error
+        if classification is None:
+            return _source_missing_classification(source)
+
+        update_response = compute_diagnostics_baseline_update(
+            baseline=baseline,
+            classification=classification,
+            mode=mode,
+            prune_resolved=prune_resolved,
+        )
+        if not update_response.success:
+            return update_response.to_dict()
+        if mode != "write":
+            return update_response.to_dict()
+        return _write_diagnostics_baseline_update(
+            project_root=project_root,
+            update_response=update_response,
+        )
 
     @server.tool()
     def validate_runtime(

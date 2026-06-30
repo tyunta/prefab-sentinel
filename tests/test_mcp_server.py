@@ -189,6 +189,8 @@ class TestToolRegistration(unittest.TestCase):
             "copy_component_fields",
             "set_properties",
             "editor_set_properties",
+            # Explicit diagnostics baseline management (#100)
+            "update_diagnostics_baseline",
             # Editor exec tool (#74)
             "editor_run_script",
             # Issue #119: high-level UdonSharp authoring tools.
@@ -226,8 +228,9 @@ class TestToolRegistration(unittest.TestCase):
         # #114 adds delete_asset and delete_assets, bringing it to 89;
         # issues #96 / #97 / #110 add two read-only effective inspectors;
         # issue #112 adds three generic serialized-property tools; issue
-        # #99 adds the read-only material validation surface.
-        self.assertEqual(97, len(tools))
+        # #99 adds the read-only material validation surface; issue #100
+        # adds explicit diagnostics baseline management.
+        self.assertEqual(98, len(tools))
 
 
 class TestToolsCatalogDoc(unittest.TestCase):
@@ -4114,6 +4117,9 @@ class TestInspectionTools(unittest.TestCase):
         self.assertTrue(result["success"])
         mock_orch.inspect_structure.assert_called_once_with(
             target_path="Assets/Scene.unity",
+            diagnostics_baseline=DiagnosticsBaseline(
+                known_diagnostics=(), path=None, status="not_loaded_no_project_root"
+            ),
         )
 
 

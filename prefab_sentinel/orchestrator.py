@@ -314,6 +314,7 @@ class Phase1Orchestrator:
         self,
         *,
         target_path: str = "",
+        diagnostics_baseline: orchestrator_validation.DiagnosticsBaseline | None = None,
     ) -> ToolResponse:
         """Run inspect_wiring on all .prefab/.unity files in scope.
 
@@ -324,7 +325,10 @@ class Phase1Orchestrator:
             Aggregated null-reference summary across all scanned files.
         """
         return orchestrator_wiring.validate_all_wiring(
-            self.prefab_variant, self.reference_resolver, target_path=target_path,
+            self.prefab_variant,
+            self.reference_resolver,
+            target_path=target_path,
+            diagnostics_baseline=diagnostics_baseline,
         )
 
     # ------------------------------------------------------------------
@@ -446,12 +450,14 @@ class Phase1Orchestrator:
         self,
         scope: str,
         include_details: bool = False,
+        diagnostics_baseline: orchestrator_validation.DiagnosticsBaseline | None = None,
     ) -> ToolResponse:
         """Run static material/shader/TMP/icon-font validation (read-only)."""
         return orchestrator_material_validation.validate_materials(
             self.reference_resolver,
             scope,
             include_details=include_details,
+            diagnostics_baseline=diagnostics_baseline,
         )
 
     # ------------------------------------------------------------------
@@ -559,6 +565,7 @@ class Phase1Orchestrator:
     def inspect_structure(
         self,
         target_path: str,
+        diagnostics_baseline: orchestrator_validation.DiagnosticsBaseline | None = None,
     ) -> ToolResponse:
         """Validate internal YAML structure of a Unity asset (read-only).
 
@@ -571,7 +578,9 @@ class Phase1Orchestrator:
             Transforms.
         """
         return orchestrator_validation.inspect_structure(
-            self.prefab_variant, target_path,
+            self.prefab_variant,
+            target_path,
+            diagnostics_baseline=diagnostics_baseline,
         )
 
     def validate_refs(

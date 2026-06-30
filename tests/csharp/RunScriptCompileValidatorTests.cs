@@ -102,3 +102,23 @@ public class RunScriptCompilePendingCodeSelectorTests
         Assert.Equal(RunScriptCompilePendingCodeSelector.RecoveryCode, code);
     }
 }
+
+
+public class BackgroundCompileDeferralClassifierTests
+{
+    [Theory]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, false)]
+    [InlineData(null, true, false)]
+    [InlineData(false, false, false)]
+    public void Only_Background_And_Elapsed_Deadline_Is_Deferred(
+        bool? editorFocused,
+        bool deadlineElapsed,
+        bool expectedDeferred)
+    {
+        bool deferred = BackgroundCompileDeferralClassifier.Classify(
+            editorFocused, deadlineElapsed);
+
+        Assert.Equal(expectedDeferred, deferred);
+    }
+}

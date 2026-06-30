@@ -102,6 +102,9 @@
     <Compile Include="..\..\tools\unity\PrefabSentinel.RunScriptCompile.Redaction.cs">
       <Link>Bridge\PrefabSentinel.RunScriptCompile.Redaction.cs</Link>
     </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.RunScriptCompile.BackgroundDeferral.cs">
+      <Link>Bridge\PrefabSentinel.RunScriptCompile.BackgroundDeferral.cs</Link>
+    </Compile>
     <Compile Include="..\..\tools\unity\PrefabSentinel.RunScript.ResultChannels.cs">
       <Link>Bridge\PrefabSentinel.RunScript.ResultChannels.cs</Link>
     </Compile>

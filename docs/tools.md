@@ -1,6 +1,6 @@
 # MCP ツール一覧
 
-`prefab-sentinel-mcp` が公開する全 MCP ツール（現在 97 件 / 18 カテゴリ）の正本カタログ。各カテゴリは `prefab_sentinel/mcp_tools_*.py` の 1 モジュールに対応する。エンベロープ仕様は [api-reference.md「レスポンスフォーマット」](./api-reference.md#レスポンスフォーマット)、エラーコードの正本は [api-reference.md「エラーコード規約」](./api-reference.md#エラーコード規約) を参照。
+`prefab-sentinel-mcp` が公開する全 MCP ツール（現在 98 件 / 18 カテゴリ）の正本カタログ。各カテゴリは `prefab_sentinel/mcp_tools_*.py` の 1 モジュールに対応する。エンベロープ仕様は [api-reference.md「レスポンスフォーマット」](./api-reference.md#レスポンスフォーマット)、エラーコードの正本は [api-reference.md「エラーコード規約」](./api-reference.md#エラーコード規約) を参照。
 
 ## 用途索引
 
@@ -87,12 +87,13 @@
 | `check_field_coverage` | validation | C# フィールドと YAML propertyPath の不一致検出 | — | read-only |
 | `inspect_materials` | validation | レンダラーごとのマテリアルスロット表示（override / inherited マーカー） | — | read-only |
 | `inspect_material_asset` | validation | `.mat` ファイルのシェーダー・プロパティ・テクスチャ参照を構造化データで返す | — | read-only |
-| `validate_materials` | validation | scope 内の `.mat` / renderer slot / TMP material preset / folder policy を静的検証し、generic risk と declarative rule drift を返す | #99 | read-only |
-| `validate_structure` | validation | YAML 内部構造の検証（fileID 重複・Transform 整合） | — | read-only |
+| `validate_materials` | validation | scope 内の `.mat` / renderer slot / TMP material preset / folder policy を静的検証し、generic risk と declarative rule drift を diagnostics baseline 分類付きで返す | #99, #100 | read-only |
+| `validate_structure` | validation | YAML 内部構造の検証（fileID 重複・Transform 整合）を diagnostics baseline 分類付きで返す | #100 | read-only |
 | `inspect_hierarchy` | validation | GameObject 階層ツリー表示。`expand_monobehaviour` でスクリプトクラス名展開、`expand_prefab_instances` で saved YAML の effective nested PrefabInstance 階層を展開 | #96, #196, #238 | read-only |
 | `inspect_transform_effective_values` | validation | offline `asset_path` + `symbol_path` の Transform local/world position・rotation・scale を source default / host override / effective 列で比較 | #97 | read-only |
 | `inspect_unity_event_listeners` | validation | Button.onClick / Slider.onValueChanged / Toggle.onValueChanged の persistent listener entries と UdonSharp 診断を 1 応答で返す | #110 | read-only |
-| `validate_all_wiring` | validation | スコープ内の全 `.prefab` / `.unity` の null 参照を一括スキャン | — | read-only |
+| `validate_all_wiring` | validation | スコープ内の全 `.prefab` / `.unity` の null 参照を一括スキャンし、各 file の `inspect_wiring` key で diagnostics baseline 分類する | #100 | read-only |
+| `update_diagnostics_baseline` | validation | supported validation source を再実行して project root の `config/diagnostics_baseline.json` 更新を preview/write する。`mode="write"` は `confirm=True` + 非空 `change_reason` 必須 | #100 | write |
 | `validate_runtime` | validation | `compile_only` / `editor_console_only` / `clientsim` profile で runtime 検証。既定は Play Mode に入らない `compile_only`、ClientSim は明示 profile + audit pair 必須 | #92 | read-only |
 
 ### symbols
@@ -133,8 +134,8 @@
 | `editor_list_roots` | editor_view | 現在の Scene / Prefab Stage のルートオブジェクト一覧 | — | read-only |
 | `editor_get_material_property` | editor_view | ランタイムのシェーダープロパティ値を読み取り | — | read-only |
 | `editor_console` | editor_view | Unity Console ログを bridge-owned callback buffer から構造化取得。`since_sequence` / `since_request_id` / `phase_filter` / `classification_filter` / pagination 対応 | #94, #113, #117, #131, #239 | read-only |
-| `editor_refresh` | editor_view | `AssetDatabase.Refresh()` をトリガーし、refresh で誘発したコンパイルを観測（compile-aware）。コンパイル無し→refresh-OK、成功→compile-success、失敗→実コンパイラ診断付き compile-failure | #70 | write |
-| `editor_recompile` | editor_view | スクリプト再コンパイルを発行し `CompilationPipeline.compilationFinished` で完了を観測（同期 / ブロッキング） | #54, #118, #134, #203, #213, #235 | write |
+| `editor_refresh` | editor_view | `AssetDatabase.Refresh()` をトリガーし、refresh で誘発したコンパイルを観測（compile-aware）。コンパイル無し→refresh-OK、成功→compile-success、失敗→実コンパイラ診断付き compile-failure。background/non-focused deadline は `EDITOR_COMPILE_DEFERRED_BACKGROUND` | #70, #72 | write |
+| `editor_recompile` | editor_view | スクリプト再コンパイルを発行し `CompilationPipeline.compilationFinished` で完了を観測（同期 / ブロッキング）。background/non-focused deadline は `EDITOR_COMPILE_DEFERRED_BACKGROUND` | #54, #72, #118, #134, #203, #213, #235 | write |
 | `editor_run_tests` | editor_view | Editor Bridge 経由で Unity 統合テストを実行 | — | read-only |
 
 ### editor_geometry
@@ -165,7 +166,7 @@
 | `editor_get_blend_shapes` | editor_write | SkinnedMeshRenderer の BlendShape 名とウェイト一覧を取得（pagination 対応） | #241 | read-only |
 | `editor_set_blend_shape` | editor_write | BlendShape ウェイトを名前で設定（Undo 対応） | — | write |
 | `editor_list_menu_items` | editor_write | リフレクション経由で `[MenuItem]` エントリを一覧表示 | — | read-only |
-| `editor_execute_menu_item` | editor_write | メニューアイテムをパスで実行（deny-list + implicit recompile barrier 付き）。`confirm` + `change_reason` 必須 | #49, #225, #248 | write |
+| `editor_execute_menu_item` | editor_write | メニューアイテムをパスで実行（deny-list + implicit recompile barrier 付き）。background/non-focused compile barrier deadline は `EDITOR_COMPILE_DEFERRED_BACKGROUND`。`confirm` + `change_reason` 必須 | #49, #72, #225, #248 | write |
 
 ### editor_ops
 
@@ -233,9 +234,9 @@
 
 | ツール | 区分 | 簡潔説明 | 関連 issue | 種別 |
 |--------|------|----------|-----------|------|
-| `editor_run_script` | editor_exec | C# スニペットを 1 ステップでコンパイル + 実行。stdout / primitive return / structured outputs / exception summary / WSL path hints を分離して返す。`confirm` + `change_reason` 必須、`compile_timeout_ms` ∈ `[1, 120000]` | #74, #93, #103, #116, #127, #226, #234 | write |
-| `editor_run_script_submit` | editor_exec | 長時間スクリプト用の非同期 submit。bridge に identifier と acceptance timestamp を返す | #233 | write |
-| `editor_run_script_poll` | editor_exec | submit が返した 32 文字 lower-case hex identifier で poll し結果を取り出す | #233 | read-only |
+| `editor_run_script` | editor_exec | C# スニペットを 1 ステップでコンパイル + 実行。background/non-focused compile deadline は `EDITOR_COMPILE_DEFERRED_BACKGROUND` を返し、foreground 後の再実行を促す。`confirm` + `change_reason` 必須、`compile_timeout_ms` ∈ `[1, 120000]` | #72, #74, #93, #103, #116, #127, #226, #234 | write |
+| `editor_run_script_submit` | editor_exec | 長時間スクリプト用の非同期 submit。background/non-focused compile deadline では job を保持し、poll 側の同一 `request_id` 再試行に委ねる | #72, #233 | write |
+| `editor_run_script_poll` | editor_exec | submit が返した 32 文字 lower-case hex identifier で poll し結果を取り出す。`cleanup_on_timeout=True` かつ background deferral confirmed の場合は `job_retained=true`, `cleanup_performed=false` | #72, #233 | read-only |
 
 ### editor_prefab_stage
 
