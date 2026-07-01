@@ -228,7 +228,11 @@ class InspectWiringPageSizeBoundaryTests(unittest.TestCase):
                 return_value={_BOUNDARY_CHILD_GUID: root / "Assets" / "Child.prefab"},
             ):
                 # No explicit page_size — default literal participates.
-                return inspect_wiring(pv, rr, target_path=str(base))
+                return inspect_wiring(
+                    pv,
+                    rr,
+                    target_path=base.relative_to(root).as_posix(),
+                )
 
     def test_total_one_below_default_returns_single_page(self) -> None:
         below = _DEFAULT_INSPECT_WIRING_PAGE_SIZE - 1
