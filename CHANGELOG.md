@@ -4,6 +4,40 @@
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-01
+
+0.8.0 は、AI エージェントに Unity / VRChat project の調査や編集を任せる人向けに、Editor Bridge 経由で観測できる範囲と失敗時の診断を広げたリリース。MCP ツールを直接手で叩く開発者よりも、「AI に壊れた参照、配線、見た目、アセット操作を任せたときに、どこまで安全に任せられるか」を重視している。
+
+### Added
+
+- Material validation を追加。マテリアルと shader property の組み合わせを検査し、AI エージェントが「見た目がおかしい」調査を始める前に、設定値・texture slot・色値の疑わしい箇所を structured diagnostics として拾える。
+- Effective hierarchy / effective transform inspection を追加。Prefab Variant や scene 上の override を踏まえた GameObject 階層・Transform 状態を取得でき、AI エージェントが base prefab だけを見て誤判断するリスクを下げた。
+- UnityEvent listener inspection を追加。UI Button や event-driven component の persistent listener を調べ、未配線・対象 missing・method mismatch を人間が Inspector を開かなくても確認できる。
+- Editor Bridge の asset 操作を拡張。`editor_create_generated_asset`、`editor_move_asset`、`delete_assets` 系の検査と dry-run / confirm 経路を整え、AI エージェントが生成物の作成・移動・削除を audit 付きで扱えるようにした。
+- Live geometry / screenshot 周辺の検査を拡張。bounds、距離、projection、target capture、world-space UI capture の補助を増やし、SceneView の目視確認に近い判断材料を MCP 応答として返せる範囲を広げた。
+- SerializedProperty read / list / write 系ツールを追加。AI エージェントが Inspector 表示名ではなく Unity の `propertyPath` を根拠に読み書きできる。
+- Diagnostics baseline と更新ツールを追加。既知の診断を baseline 化し、新しい警告・エラーが混ざったときに差分として見つけやすくした。
+- VRChat / Unity 周辺の同梱 knowledge を拡充。AI エージェントが作業前に読むための、Prefab、UdonSharp、UGUI、material、World SDK まわりの再利用可能な判断材料を増やした。
+
+### Changed
+
+- `editor_console` とコンパイル待ちの診断を強化。Unity Editor が background で domain reload を保留している場合や、async script 実行が保持された場合に、単なる timeout ではなく次に取るべき行動が分かる応答へ寄せた。
+- Project root と target path の検証を厳格化。WSL / Windows path の混在、project root 外の asset 指定、Bridge watch dir 未設定を fail-fast にし、AI エージェントが意図しない場所を読む・書く可能性を減らした。
+- UdonSharp / property write / asset side-effect の診断を整理。成功扱いのまま内部で失敗する経路を減らし、warning / error として利用者に返す範囲を広げた。
+- `AGENTS.md` と専門ドキュメント構成を公開運用向けに整理。README は入口、API / tool convention / execution / testing / configuration は専門ドキュメント、運用判断は AGENTS.md に分離した。
+
+### Fixed
+
+- Editor Bridge の request / response path、asset path normalization、confirm report、source invariant の drift を複数修正。AI エージェントから見た「成功したはずなのに Unity 側で反映されていない」ケースを減らした。
+- Screenshot / camera framing / target capture の境界条件を修正。対象が画面外に寄る、UI の capture がずれる、crop / dimension 指定が不安定になる経路をテストで固定した。
+- C# Bridge の pure-logic harness と source invariant を拡充。Unity Editor でしかコンパイルできない部分を残しつつ、Unity 非依存に切り出せるロジックは xUnit 側で検証できるようにした。
+
+### Upgrade Notes
+
+- 0.8.0 へ更新したら、Unity project 側で `deploy_bridge` を実行して Bridge C# を再配置すること。Python package だけ更新しても、起動中の Unity Editor に古い Bridge が残っていると新しい MCP tool の request shape と合わない。
+- `UNITYTOOL_BRIDGE_WATCH_DIR` は実在する watch directory を指す必要がある。未設定・存在しない path・project root 外の target は意図的に fail-fast する。
+- Unity 依存 Bridge C# を含むため、PR merge 前の実 Unity Editor compile error 0 件確認を release gate とする。CI の Python / xUnit 検証だけでは UnityEditor / VRChat SDK surface の型解決までは保証しない。
+
 ## [0.7.1] - 2026-05-21
 
 ### Added

@@ -1,7 +1,7 @@
 """Test-side helper for verifying structured response envelopes by value.
 
 Why a helper: the project's response envelope is the public contract surface
-captured by ``CLAUDE.md`` (``success / severity / code / message / data /
+captured by ``AGENTS.md`` (``success / severity / code / message / data /
 diagnostics``).  Tests that only assert "an error was raised" allow mutations
 that swap codes, change severities, or rename fields to escape detection.
 This helper concentrates per-field equality checks so individual tests pin

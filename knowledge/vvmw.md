@@ -1,7 +1,7 @@
 ---
 tool: vvmw
 version_tested: "VizVid 2026-05 build / VRC SDK 3.7+ / UdonSharp 2023.12+"
-last_updated: 2026-05-02
+last_updated: 2026-06-07
 confidence: medium
 ---
 
@@ -102,6 +102,46 @@ public void _PauseAfterLoad()
 ### マルチモジュール音声の build-time strip (既知)
 
 複数の `playerHandlers[]` (AVPro 8K / AVPro 6K / Unity 4K / Image Viewer) で **AudioSource を共有** すると、build 時 PreProcess の last-wins で 1 モジュールしか音が出ない。各 handler ごとに **専用 AudioSource を 1 つずつ用意** する必要がある (VVMW 既知の制約)。
+
+### AVPro 5.1 は explicit speaker routing を前提にする
+
+**症状**: 5.1 audio stream が decode できる media でも、default AudioSource や不完全な hand-built speaker hierarchy では `FL` / `FR` だけが鳴り、`FC` / `LFE` / surround slots が無音になることがある。
+
+**Why**: AVPro の Unity audio output は channel-aware speaker routing を必要とする。VVMW / VizVid の 5.1 surround module は、`Core.audioSources` と AVPro module の primary source fields と `VRCAVProVideoSpeaker` components の組み合わせで channel slots を AudioSource 群へ割り当てる。
+
+**回避策**: raw VizVid 5.1 surround module と同じ構造を基準にし、選択中 AVPro module の source fields と `Core.audioSources` を揃える。channel-ID media で 6 slots 全部を実機確認する。default AudioSource だけの再生結果は 5.1 routing gate の pass/fail として扱わない。
+
+標準的な AVPro 5.1 speaker set:
+
+```text
+VVMW (On-Screen Controls)/
+  <5.1 speaker root>/
+    Left            -> VRCAVProVideoSpeaker MonoLeft
+    Right           -> VRCAVProVideoSpeaker MonoRight
+    Center          -> VRCAVProVideoSpeaker Three
+    Subwoofer       -> VRCAVProVideoSpeaker Four
+    Left Surround   -> VRCAVProVideoSpeaker Five
+    Right Surround  -> VRCAVProVideoSpeaker Six
+```
+
+必要な Core / AVPro module wiring:
+
+```text
+Core.audioSources =
+  Default Audio Source,
+  Left,
+  Right,
+  Center,
+  Subwoofer,
+  Left Surround,
+  Right Surround
+
+AVPro Module <selected>.primaryAudioSource  = Left
+AVPro Module <selected>.primaryAudioSourceR = Right
+AVPro Module <selected>.primaryAudioSourceGO = null
+```
+
+standard 5.1 の channel label と実際の AudioSource 配置は、利用する player module の routing contract に従って一致させること。project-specific な channel reinterpretation は VVMW の汎用知識ではなく、各 project の media / speaker-bed 仕様に閉じて管理する。
 
 ### Volume/Mute の同期問題
 

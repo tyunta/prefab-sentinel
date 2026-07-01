@@ -5,7 +5,7 @@
     "variant_override": 0
   },
   "code": "VALIDATE_RUNTIME_RESULT",
-  "fail_fast_triggered": true,
+  "fail_fast_triggered": false,
   "severity": "error",
   "should_proceed": false,
   "steps_summary": [
@@ -18,8 +18,16 @@
       "step": "compile_udonsharp"
     },
     {
-      "code": "RUN_CONFIG_ERROR",
-      "step": "run_clientsim"
+      "code": "RUN_LOG_MISSING",
+      "step": "collect_unity_console"
+    },
+    {
+      "code": "RUN_CLASSIFY_OK",
+      "step": "classify_errors"
+    },
+    {
+      "code": "RUN_ASSERT_OK",
+      "step": "assert_no_critical_errors"
     }
   ],
   "success": false

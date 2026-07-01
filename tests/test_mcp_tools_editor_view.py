@@ -11,9 +11,12 @@ Pins:
 from __future__ import annotations
 
 import unittest
+from collections.abc import Callable
 from unittest.mock import patch
 
 from prefab_sentinel import mcp_tools_editor_view
+from tests._mcp_tool_recorder import record_tools
+from tests._typing_helpers import require_mapping, require_str
 
 
 def _success_envelope() -> dict:
@@ -106,6 +109,38 @@ class ConsoleCapturePhaseFilterForwardingTests(unittest.TestCase):
                 "phase_filter is non-default; the new parameter cannot "
                 "bypass the size-range gate."
             ),
+        )
+
+
+class EditorConsoleDeterministicCaptureTests(unittest.TestCase):
+    def test_editor_console_since_sequence_reads_ring_buffer(self) -> None:
+        with patch.object(
+            mcp_tools_editor_view, "send_action",
+            return_value=_success_envelope(),
+        ) as send:
+            mcp_tools_editor_view.editor_console(since_sequence=41, order="oldest_first")
+
+        send.assert_called_once()
+        kwargs = send.call_args.kwargs
+        self.assertEqual(
+            ("capture_console_logs", 41, "oldest_first"),
+            (kwargs["action"], kwargs["since_sequence"], kwargs["order"]),
+            msg=f"console sequence selector forwarding mismatch: {kwargs!r}",
+        )
+
+    def test_editor_console_request_id_filters_related_logs(self) -> None:
+        with patch.object(
+            mcp_tools_editor_view, "send_action",
+            return_value=_success_envelope(),
+        ) as send:
+            mcp_tools_editor_view.editor_console(since_request_id="0123456789abcdef0123456789abcdef")
+
+        send.assert_called_once()
+        kwargs = send.call_args.kwargs
+        self.assertEqual(
+            "0123456789abcdef0123456789abcdef",
+            kwargs["since_request_id"],
+            msg=f"console request-id selector forwarding mismatch: {kwargs!r}",
         )
 
 
@@ -353,6 +388,50 @@ class EditorScreenshotViewAllowlistTests(unittest.TestCase):
         )
 
 
+class EditorScreenshotPreflightFailureTests(unittest.TestCase):
+    def test_oversized_dimensions_rejected_before_refresh_or_capture(self) -> None:
+        with patch.object(
+            mcp_tools_editor_view, "send_action", return_value=_SCREENSHOT_BRIDGE_OK,
+        ) as send:
+            response = mcp_tools_editor_view.editor_screenshot(
+                width=mcp_tools_editor_view.SCREENSHOT_DIMENSION_MAX + 1,
+                height=64,
+                refresh=True,
+            )
+
+        send.assert_not_called()
+        self.assertEqual(
+            (False, "error", "SCREENSHOT_DIMENSIONS_OUT_OF_RANGE"),
+            (response["success"], response["severity"], response["code"]),
+        )
+        self.assertEqual(
+            {
+                "width": mcp_tools_editor_view.SCREENSHOT_DIMENSION_MAX + 1,
+                "height": 64,
+                "min": mcp_tools_editor_view.SCREENSHOT_DIMENSION_MIN,
+                "max": mcp_tools_editor_view.SCREENSHOT_DIMENSION_MAX,
+            },
+            response["data"],
+        )
+
+    def test_refresh_failure_returns_without_capture_request(self) -> None:
+        refresh_failure = {
+            "success": False,
+            "severity": "error",
+            "code": "EDITOR_REFRESH_FAILED",
+            "message": "refresh failed",
+            "data": {"phase": "refresh"},
+            "diagnostics": [],
+        }
+        with patch.object(
+            mcp_tools_editor_view, "send_action", return_value=refresh_failure,
+        ) as send:
+            response = mcp_tools_editor_view.editor_screenshot(refresh=True)
+
+        send.assert_called_once_with(action="refresh_asset_database")
+        self.assertEqual(refresh_failure, response)
+
+
 class EditorScreenshotAngleAllowlistTests(unittest.TestCase):
     """Issue #84 — ``editor_screenshot`` rejects an ``angle`` value
     outside the six-preset allowlist before any bridge transport
@@ -363,15 +442,20 @@ class EditorScreenshotAngleAllowlistTests(unittest.TestCase):
     _BRIDGE_OK = _SCREENSHOT_BRIDGE_OK
 
     def test_allowlist_constant_pins_exact_value(self) -> None:
-        # Pin the exported tuple verbatim in the issue-body order;
-        # drift (adding a seventh, reordering, swapping a name) is
-        # the failure mode this row catches.
         self.assertEqual(
-            ("front", "three_quarter", "back", "right", "left", "top"),
+            (
+                "front",
+                "three_quarter",
+                "back",
+                "right",
+                "left",
+                "top",
+                "current_camera",
+            ),
             mcp_tools_editor_view.SCREENSHOT_ANGLE_PRESETS,
             msg=(
-                "Wrapper-side angle allowlist must equal the six "
-                "preset names from issue #84 in canonical order."
+                "Wrapper-side angle allowlist must include renderer presets "
+                "and the UI-only current_camera selector in canonical order."
             ),
         )
 
@@ -429,8 +513,8 @@ class EditorScreenshotTargetForwardingTests(unittest.TestCase):
     * Default screenshot call carries neither ``target`` nor ``angle``
       on the bridge kwargs (no silent forwarding of the default
       ``angle="three_quarter"`` when ``target`` is empty).
-    * Object-capture forwarding: both ``target`` and ``angle`` reach
-      the bridge action verbatim.
+    * Object-capture forwarding: both ``target`` and explicit ``angle``
+      reach the bridge action verbatim.
     * ``view="game"`` + ``target`` is rejected pre-bridge with
       ``SCREENSHOT_TARGET_INVALID_VIEW``.
     * ``target`` + face-feature ``crop_roi`` preset is rejected with
@@ -480,6 +564,20 @@ class EditorScreenshotTargetForwardingTests(unittest.TestCase):
                 "reach the bridge unchanged on the capture_screenshot "
                 "action."
             ),
+        )
+
+    def test_target_with_omitted_angle_leaves_bridge_default_unresolved(self) -> None:
+        with patch.object(
+            mcp_tools_editor_view, "send_action", return_value=self._BRIDGE_OK,
+        ) as send:
+            mcp_tools_editor_view.editor_screenshot(target="/Avatar/Body", refresh=False)
+
+        send.assert_called_once()
+        kwargs = send.call_args.kwargs
+        self.assertEqual(
+            ("capture_screenshot", "/Avatar/Body", False),
+            (kwargs["action"], kwargs["target"], "angle" in kwargs),
+            msg="omitted target angle must stay unresolved until bridge target-mode routing.",
         )
 
     def test_view_game_with_target_is_rejected_pre_bridge(self) -> None:
@@ -555,6 +653,423 @@ class EditorScreenshotTargetForwardingTests(unittest.TestCase):
                 "is applied to the rendered frame after framing)."
             ),
         )
+
+
+class EditorScreenshotFitModeTests(unittest.TestCase):
+    """Issue #90 — target screenshot fit-mode validation and forwarding."""
+
+    _BRIDGE_OK = _success_envelope()
+
+    def test_invalid_fit_mode_is_rejected_before_refresh_or_capture(self) -> None:
+        with patch.object(
+            mcp_tools_editor_view, "send_action", return_value=self._BRIDGE_OK,
+        ) as send:
+            response = mcp_tools_editor_view.editor_screenshot(
+                target="/Avatar", fit_mode="fill", refresh=True,
+            )
+        send.assert_not_called()
+        observed = (
+            response["success"],
+            response["severity"],
+            response["code"],
+            response["data"]["supplied"],
+            response["data"]["allowed_fit_modes"],
+            "fill" in response["message"],
+            "max_axis" in response["message"],
+            "both_axes" in response["message"],
+        )
+        self.assertEqual(
+            (
+                False,
+                "error",
+                "SCREENSHOT_FIT_MODE_INVALID",
+                "fill",
+                ["max_axis", "both_axes"],
+                True,
+                True,
+                True,
+            ),
+            observed,
+            msg=(
+                "Invalid fit_mode must fail at the wrapper boundary with "
+                "the supplied value and the exact allowed selector set."
+            ),
+        )
+
+    def test_target_fit_mode_reaches_target_capture_payload(self) -> None:
+        with patch.object(
+            mcp_tools_editor_view, "send_action", return_value=self._BRIDGE_OK,
+        ) as send:
+            mcp_tools_editor_view.editor_screenshot(
+                target="/Avatar", angle="right", fit_mode="both_axes", refresh=False,
+            )
+        send.assert_called_once()
+        kwargs = send.call_args.kwargs
+        self.assertEqual(
+            ("capture_screenshot", "/Avatar", "right", "both_axes"),
+            (kwargs["action"], kwargs["target"], kwargs["angle"], kwargs["fit_mode"]),
+            msg="target screenshot fit_mode must be forwarded unchanged to the bridge.",
+        )
+
+    def test_no_target_screenshot_does_not_forward_fit_mode(self) -> None:
+        with patch.object(
+            mcp_tools_editor_view, "send_action", return_value=self._BRIDGE_OK,
+        ) as send:
+            mcp_tools_editor_view.editor_screenshot(fit_mode="both_axes", refresh=False)
+        send.assert_called_once()
+        kwargs = send.call_args.kwargs
+        self.assertEqual(
+            ("capture_screenshot", False),
+            (kwargs["action"], "fit_mode" in kwargs),
+            msg="scene/game screenshot payloads must not receive target-only fit_mode.",
+        )
+
+    def test_registered_tool_surface_forwards_fit_mode_unchanged(self) -> None:
+        with patch.object(
+            mcp_tools_editor_view,
+            "editor_screenshot",
+            return_value=self._BRIDGE_OK,
+        ) as editor_screenshot:
+            server = record_tools(mcp_tools_editor_view.register_editor_view_tools)
+            editor_screenshot_tool: Callable[..., object] = server.get(
+                "editor_screenshot"
+            )
+            response = editor_screenshot_tool(
+                target="/Avatar", angle="right", fit_mode="both_axes", refresh=False,
+            )
+
+        self.assertIs(response, self._BRIDGE_OK)
+        editor_screenshot.assert_called_once_with(
+            view="scene",
+            width=0,
+            height=0,
+            refresh=False,
+            crop_roi="",
+            target="/Avatar",
+            angle="right",
+            target_mode="auto",
+            padding_ratio=0.10,
+            projection="auto",
+            fit_mode="both_axes",
+            bounds_policy="all_visible_renderers",
+        )
+
+
+class EditorScreenshotBoundsPolicyTests(unittest.TestCase):
+    """Issue #85 screenshot bounds-policy behavior."""
+
+    _BRIDGE_OK = _success_envelope()
+
+    def test_target_screenshot_defaults_to_all_visible_renderer_bounds(self) -> None:
+        with patch.object(
+            mcp_tools_editor_view, "send_action", return_value=self._BRIDGE_OK,
+        ) as send:
+            mcp_tools_editor_view.editor_screenshot(
+                target="/Root", target_mode="object", refresh=False,
+            )
+
+        send.assert_called_once()
+        kwargs = send.call_args.kwargs
+        observed = (
+            kwargs["action"],
+            kwargs["target"],
+            kwargs["target_mode"],
+            kwargs["projection"],
+            kwargs["fit_mode"],
+            kwargs.get("bounds_policy"),
+        )
+        self.assertEqual(
+            (
+                "capture_screenshot",
+                "/Root",
+                "object",
+                "auto",
+                "max_axis",
+                "all_visible_renderers",
+            ),
+            observed,
+            msg=(
+                "Target screenshot capture must forward the default "
+                "bounds_policy='all_visible_renderers' with existing target "
+                "fit/projection options."
+            ),
+        )
+
+    def test_target_screenshot_rejects_unknown_bounds_policy_pre_bridge(self) -> None:
+        with patch.object(
+            mcp_tools_editor_view, "send_action", return_value=self._BRIDGE_OK,
+        ) as send:
+            try:
+                response = mcp_tools_editor_view.editor_screenshot(
+                    target="/Root", bounds_policy="exclude_outliers", refresh=False,
+                )
+            except TypeError as exc:
+                self.fail(
+                    "editor_screenshot must accept bounds_policy before validation; "
+                    f"observed TypeError: {exc}"
+                )
+
+        send.assert_not_called()
+        observed = (
+            response["success"],
+            response["severity"],
+            response["code"],
+            response["data"]["supplied"],
+            response["data"]["allowed_bounds_policies"],
+            "exclude_outliers" in response["message"],
+            "all_visible_renderers" in response["message"],
+            "focus_core" in response["message"],
+        )
+        self.assertEqual(
+            (
+                False,
+                "error",
+                "BOUNDS_POLICY_INVALID",
+                "exclude_outliers",
+                ["all_visible_renderers", "focus_core"],
+                True,
+                True,
+                True,
+            ),
+            observed,
+            msg=(
+                "Invalid screenshot bounds_policy must fail at the wrapper "
+                "boundary with the supplied value and exact allowed policies."
+            ),
+        )
+
+
+class EditorFrameBoundsPolicyTests(unittest.TestCase):
+    """Issue #85 frame-selected bounds-policy behavior."""
+
+    _BRIDGE_OK = _success_envelope()
+
+    def test_registered_editor_frame_forwards_default_bounds_policy_and_zoom(self) -> None:
+        with patch.object(
+            mcp_tools_editor_view, "send_action", return_value=self._BRIDGE_OK,
+        ) as send:
+            server = record_tools(mcp_tools_editor_view.register_editor_view_tools)
+            editor_frame: Callable[..., object] = server.get("editor_frame")
+            editor_frame(zoom=0.5)
+
+        send.assert_called_once()
+        self.assertEqual(
+            ("frame_selected", 0.5, "all_visible_renderers"),
+            (
+                send.call_args.kwargs["action"],
+                send.call_args.kwargs["zoom"],
+                send.call_args.kwargs.get("bounds_policy"),
+            ),
+            msg=(
+                "editor_frame must forward zoom and the default "
+                "bounds_policy='all_visible_renderers'."
+            ),
+        )
+
+    def test_registered_editor_frame_rejects_unknown_bounds_policy_pre_bridge(self) -> None:
+        with patch.object(
+            mcp_tools_editor_view, "send_action", return_value=self._BRIDGE_OK,
+        ) as send:
+            server = record_tools(mcp_tools_editor_view.register_editor_view_tools)
+            editor_frame: Callable[..., object] = server.get("editor_frame")
+            try:
+                response = editor_frame(
+                    zoom=0.5, bounds_policy="exclude_outliers",
+                )
+            except TypeError as exc:
+                self.fail(
+                    "editor_frame must accept bounds_policy before validation; "
+                    f"observed TypeError: {exc}"
+                )
+
+        send.assert_not_called()
+        response = require_mapping(response, "editor_frame response")
+        data = require_mapping(response["data"], "editor_frame response data")
+        message = require_str(response["message"], "editor_frame response message")
+        observed = (
+            response["success"],
+            response["severity"],
+            response["code"],
+            data["supplied"],
+            data["allowed_bounds_policies"],
+            "exclude_outliers" in message,
+            "all_visible_renderers" in message,
+            "focus_core" in message,
+        )
+        self.assertEqual(
+            (
+                False,
+                "error",
+                "BOUNDS_POLICY_INVALID",
+                "exclude_outliers",
+                ["all_visible_renderers", "focus_core"],
+                True,
+                True,
+                True,
+            ),
+            observed,
+            msg=(
+                "Invalid editor_frame bounds_policy must fail at the wrapper "
+                "boundary with the supplied value and exact allowed policies."
+            ),
+        )
+
+
+class EditorScreenshotUiFramingTests(unittest.TestCase):
+    def test_world_space_ui_target_selectors_reach_bridge(self) -> None:
+        with patch.object(
+            mcp_tools_editor_view, "send_action", return_value=_SCREENSHOT_BRIDGE_OK,
+        ) as send:
+            mcp_tools_editor_view.editor_screenshot(
+                target="/Canvas/WatchingButton",
+                target_mode="world_space_ui",
+                projection="orthographic",
+                padding_ratio=0.2,
+                angle="front",
+                refresh=False,
+            )
+
+        send.assert_called_once()
+        self.assertEqual(
+            (
+                "capture_screenshot",
+                "/Canvas/WatchingButton",
+                "world_space_ui",
+                "orthographic",
+                0.2,
+                "front",
+            ),
+            (
+                send.call_args.kwargs["action"],
+                send.call_args.kwargs["target"],
+                send.call_args.kwargs["target_mode"],
+                send.call_args.kwargs["projection"],
+                send.call_args.kwargs["padding_ratio"],
+                send.call_args.kwargs["angle"],
+            ),
+            msg=f"UI screenshot selectors were not forwarded: {send.call_args.kwargs!r}",
+        )
+
+    def test_world_space_ui_omitted_angle_leaves_bridge_default_unresolved(self) -> None:
+        with patch.object(
+            mcp_tools_editor_view, "send_action", return_value=_SCREENSHOT_BRIDGE_OK,
+        ) as send:
+            mcp_tools_editor_view.editor_screenshot(
+                target="/Canvas/WatchingButton",
+                target_mode="world_space_ui",
+                refresh=False,
+            )
+
+        send.assert_called_once()
+        self.assertEqual(
+            ("capture_screenshot", "world_space_ui", False),
+            (
+                send.call_args.kwargs["action"],
+                send.call_args.kwargs["target_mode"],
+                "angle" in send.call_args.kwargs,
+            ),
+            msg="world_space_ui omitted angle must stay unresolved until bridge target-mode routing.",
+        )
+
+    def test_world_space_ui_current_camera_selector_and_metadata_are_preserved(self) -> None:
+        bridge_response = {
+            "success": True,
+            "severity": "info",
+            "code": "EDITOR_CTRL_SCREENSHOT_OK",
+            "message": "ok",
+            "data": {
+                "target_mode": "world_space_ui",
+                "bounds_source": "rect_transform",
+                "bounds_center": [1.0, 2.0, 3.0],
+                "bounds_extents": [0.5, 0.25, 0.1],
+                "ui_normal": [0.0, 0.0, 1.0],
+                "camera_position": [1.0, 2.0, 8.0],
+                "camera_look_at": [1.0, 2.0, 3.0],
+                "camera_orthographic": True,
+                "camera_size": 0.6,
+                "projection": "orthographic",
+            },
+            "diagnostics": [],
+        }
+        with patch.object(
+            mcp_tools_editor_view, "send_action", return_value=bridge_response,
+        ) as send:
+            response = mcp_tools_editor_view.editor_screenshot(
+                target="/Canvas/WatchingButton",
+                target_mode="world_space_ui",
+                angle="current_camera",
+                refresh=False,
+            )
+
+        send.assert_called_once()
+        self.assertEqual("current_camera", send.call_args.kwargs["angle"])
+        self.assertEqual(bridge_response, response)
+
+    def test_ui_selector_validation_errors_are_typed(self) -> None:
+        cases: list[tuple[dict[str, object], str, str]] = [
+            (
+                {"target": "/Canvas", "target_mode": "screen_space"},
+                "SCREENSHOT_TARGET_MODE_INVALID",
+                "screen_space",
+            ),
+            (
+                {"target": "/Canvas", "projection": "fisheye"},
+                "SCREENSHOT_PROJECTION_INVALID",
+                "fisheye",
+            ),
+            (
+                {"target": "/Canvas", "padding_ratio": -0.01},
+                "SCREENSHOT_PADDING_RATIO_INVALID",
+                "-0.01",
+            ),
+        ]
+        with patch.object(
+            mcp_tools_editor_view, "send_action", return_value=_SCREENSHOT_BRIDGE_OK,
+        ) as send:
+            for kwargs, expected_code, expected_message_part in cases:
+                with self.subTest(expected_code=expected_code):
+                    kwargs_map = require_mapping(kwargs, "selector kwargs")
+                    target = require_str(kwargs_map["target"], "selector target")
+                    if "target_mode" in kwargs_map:
+                        response = mcp_tools_editor_view.editor_screenshot(
+                            refresh=False,
+                            target=target,
+                            target_mode=require_str(
+                                kwargs_map["target_mode"], "selector target_mode"
+                            ),
+                        )
+                    elif "projection" in kwargs_map:
+                        response = mcp_tools_editor_view.editor_screenshot(
+                            refresh=False,
+                            target=target,
+                            projection=require_str(
+                                kwargs_map["projection"], "selector projection"
+                            ),
+                        )
+                    else:
+                        padding_ratio = kwargs_map["padding_ratio"]
+                        if not isinstance(padding_ratio, float):
+                            raise AssertionError(
+                                "selector padding_ratio expected float, "
+                                f"got {type(padding_ratio).__name__}"
+                            )
+                        response = mcp_tools_editor_view.editor_screenshot(
+                            refresh=False,
+                            target=target,
+                            padding_ratio=padding_ratio,
+                        )
+                    self.assertEqual(
+                        (False, "error", expected_code, True),
+                        (
+                            response["success"],
+                            response["severity"],
+                            response["code"],
+                            expected_message_part in response["message"],
+                        ),
+                        msg=f"unexpected selector error envelope: {response!r}",
+                    )
+
+        send.assert_not_called()
 
 
 class EditorForceSceneViewRefreshTests(unittest.TestCase):

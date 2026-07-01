@@ -16,6 +16,7 @@ from prefab_sentinel.symbol_tree import (
     build_script_name_map,
 )
 from prefab_sentinel.symbol_tree_builder import build_symbol_tree
+from tests._typing_helpers import require_not_none
 from tests.yaml_helpers import (
     YAML_HEADER,
     make_gameobject,
@@ -816,6 +817,7 @@ class TestSymbolTreeNestedExpansion(unittest.TestCase):
         tree = build_symbol_tree(text, "test.prefab", expand_nested=True, guid_to_asset_path=guid_map)
         node = tree.resolve_file_id("300")
         self.assertIsNotNone(node)
+        node = require_not_none(node, "prefab instance marker")
         self.assertEqual(node.kind, SymbolKind.PREFAB_INSTANCE)
 
     def test_nested_child_nodes_not_in_file_id_index(self) -> None:

@@ -28,43 +28,32 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from prefab_sentinel.editor_bridge import send_action
+from prefab_sentinel.mcp_validation import require_write_audit
 
 __all__ = ["register_editor_udonsharp_tools"]
 
 
 def _both_value_envelope() -> dict[str, Any]:
-    """Mirror the existing property-set conflict envelope.
-
-    The field-set tool reuses the editor-control bridge's
-    ``EDITOR_CTRL_SET_PROP_BOTH_VALUE`` code so client-side and
-    bridge-side error paths are addressable by one identifier.
-    """
+    """Return the UdonSharp field input-conflict envelope."""
     return {
         "success": False,
         "severity": "error",
-        "code": "EDITOR_CTRL_SET_PROP_BOTH_VALUE",
-        "message": "Provide value or object_reference, not both.",
+        "code": "EDITOR_CTRL_UDON_SET_FIELD_INPUT_CONFLICT",
+        "message": "Provide exactly one of value, object_reference, or values_json.",
         "data": {},
         "diagnostics": [],
     }
 
 
 def _no_value_envelope() -> dict[str, Any]:
-    """Distinct empty-input envelope for the UdonSharp field-set tool.
-
-    Reusing the existing property-set value-vs-reference shape would
-    erase the surface distinction; callers may want to write an empty
-    string to a string field, but the value-versus-reference contract
-    requires *one* of the two to be supplied so the bridge can pick the
-    SerializedProperty branch deterministically.
-    """
+    """Distinct empty-input envelope for the UdonSharp field-set tool."""
     return {
         "success": False,
         "severity": "error",
         "code": "EDITOR_CTRL_UDON_SET_FIELD_NO_VALUE",
         "message": (
-            "editor_set_udonsharp_field requires either ``value`` or "
-            "``object_reference`` to be non-empty."
+            "editor_set_udonsharp_field requires exactly one of ``value``, "
+            "``object_reference``, or ``values_json`` to be supplied."
         ),
         "data": {},
         "diagnostics": [],
@@ -79,6 +68,8 @@ def register_editor_udonsharp_tools(server: FastMCP) -> None:
         hierarchy_path: str,
         type_full_name: str,
         fields_json: str = "",
+        confirm: bool = False,
+        change_reason: str | None = None,
     ) -> dict[str, Any]:
         """Upsert an UdonSharpBehaviour component on a GameObject.
 
@@ -104,6 +95,8 @@ def register_editor_udonsharp_tools(server: FastMCP) -> None:
                 hierarchy_path="/UI/PlayButton",
                 type_full_name="VVMW.PlayController",
                 fields_json='{"defaultUrl": "https://example.com/clip.m3u8"}',
+                confirm=True,
+                change_reason="add PlayController UdonSharp component",
             )
 
         Args:
@@ -115,12 +108,20 @@ def register_editor_udonsharp_tools(server: FastMCP) -> None:
                 string-encoded value, parsed through the same
                 ApplyPropertyValue surface as ``editor_set_property``.
                 Pass an empty string to skip initial field assignment.
+            confirm: Must be ``True`` for this write-class tool.
+            change_reason: Non-empty audit reason recorded with the write.
 
         Returns:
             The bridge envelope.  ``data`` carries ``was_existing``,
             ``applied_fields``, ``component_handle``, and
             ``udon_program_asset_path`` per the issue #119 contract.
         """
+        audit_err = require_write_audit(
+            "editor_add_udonsharp_component", confirm, change_reason,
+        )
+        if audit_err is not None:
+            return audit_err
+
         kwargs: dict[str, Any] = {
             "hierarchy_path": hierarchy_path,
             "component_type": type_full_name,
@@ -135,74 +136,37 @@ def register_editor_udonsharp_tools(server: FastMCP) -> None:
         property_name: str,
         value: str | None = None,
         object_reference: str = "",
+        values_json: str | None = None,
+        expected_length: int | None = None,
+        confirm: bool = False,
+        change_reason: str | None = None,
     ) -> dict[str, Any]:
-        """Write a single serialized field on the unique UdonSharp
-        behaviour at *hierarchy_path*.
-
-        Resolves the field through ``SerializedObject.FindProperty``
-        (covering both ``public`` fields and ``[SerializeField]
-        private`` fields), writes the value through the existing
-        ApplyPropertyValue surface, and synchronises the backing
-        ``UdonBehaviour`` with the proxy as one transaction.  VRChat
-        URL fields are addressable through the same shape — pass the
-        URL string in ``value`` and the bridge writes it to the
-        nested ``url`` sub-property of the ``VRCUrl`` wrapper.
-
-        Use this in preference to ``editor_set_property`` /
-        ``editor_run_script`` when:
-
-        * the field lives on an UdonSharpBehaviour (so
-          ``CopyProxyToUdon`` must run after the write); or
-        * the field is a ``VRCUrl`` (so the bridge writes the inner
-          string instead of constructing a wrapper instance).
-
-        Issue #52: ``value`` is typed ``str | None``. An empty-string
-        write (``value=""``) is a deliberate, valid write distinct from
-        an unspecified value (``value=None``); the bridge request carries
-        a value-present marker. ``EDITOR_CTRL_UDON_SET_FIELD_NO_VALUE``
-        is returned only when ``value`` is unspecified AND
-        ``object_reference`` is empty.
-
-        Example::
-
-            editor_set_udonsharp_field(
-                hierarchy_path="/UI/PlayButton",
-                property_name="defaultUrl",
-                value="https://example.com/clip.m3u8",
-            )
-
-        Args:
-            hierarchy_path: Hierarchy path of the target GameObject.
-            property_name: Serialized field name (matches what
-                SerializedObject.FindProperty resolves).
-            value: String-encoded value for primitive / enum / VRCUrl
-                fields. ``None`` (default) = unspecified; ``""`` = a
-                deliberate empty-string write. Mutually exclusive with
-                ``object_reference``.
-            object_reference: Hierarchy path or asset path for
-                ObjectReference fields (e.g. ``"/ToggleTarget"``).
-                Mutually exclusive with ``value``.
-
-        Returns:
-            The bridge envelope.  Conflicting inputs return
-            ``EDITOR_CTRL_SET_PROP_BOTH_VALUE`` from the client
-            without contacting the bridge; an unspecified value with no
-            object reference returns ``EDITOR_CTRL_UDON_SET_FIELD_NO_VALUE``.
-        """
-        if value is not None and object_reference:
+        """Write a serialized field on the unique UdonSharp behaviour."""
+        input_count = sum(
+            [value is not None, bool(object_reference), values_json is not None]
+        )
+        if input_count > 1:
             return _both_value_envelope()
-        if value is None and not object_reference:
+        if input_count == 0:
             return _no_value_envelope()
 
-        # The bridge DTO names this field ``field_name`` (the wire
-        # contract is unchanged); the MCP-facing argument is renamed to
-        # ``property_name`` for naming-convention conformance (#53).
+        audit_err = require_write_audit(
+            "editor_set_udonsharp_field", confirm, change_reason,
+        )
+        if audit_err is not None:
+            return audit_err
+
         kwargs: dict[str, Any] = {
             "hierarchy_path": hierarchy_path,
             "field_name": property_name,
         }
         if object_reference:
             kwargs["object_reference"] = object_reference
+        elif values_json is not None:
+            kwargs["values_json"] = values_json
+            kwargs["values_json_present"] = True
+            if expected_length is not None:
+                kwargs["expected_length"] = expected_length
         else:
             kwargs["property_value"] = value
             kwargs["property_value_present"] = True
@@ -215,6 +179,8 @@ def register_editor_udonsharp_tools(server: FastMCP) -> None:
         target_hierarchy_path: str,
         method: str,
         arg: str,
+        confirm: bool = False,
+        change_reason: str | None = None,
     ) -> dict[str, Any]:
         """Wire a string-mode persistent listener from a UnityEvent to
         a method on another component.
@@ -239,6 +205,8 @@ def register_editor_udonsharp_tools(server: FastMCP) -> None:
                 target_hierarchy_path="/Logic/UdonController",
                 method="SendCustomEvent",
                 arg="OnSliderChanged",
+                confirm=True,
+                change_reason="wire slider event to Udon controller",
             )
 
         String mode only — ``mode`` is intentionally absent from the
@@ -258,10 +226,18 @@ def register_editor_udonsharp_tools(server: FastMCP) -> None:
                 ``"SendCustomEvent"`` on ``UdonBehaviour``).
             arg: String argument bound at edit time and supplied to
                 the method on every invocation.
+            confirm: Must be ``True`` for this write-class tool.
+            change_reason: Non-empty audit reason recorded with the write.
 
         Returns:
             The bridge envelope.
         """
+        audit_err = require_write_audit(
+            "editor_wire_persistent_listener", confirm, change_reason,
+        )
+        if audit_err is not None:
+            return audit_err
+
         # The bridge DTO names the event field ``event_property_name``
         # (issue #61 named it for the component field it carries) and
         # the target field ``target_path``; the MCP-facing arguments

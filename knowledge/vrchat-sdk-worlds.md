@@ -1,7 +1,7 @@
 ---
 tool: vrchat-sdk-worlds
 version_tested: "VRC SDK 3.7+"
-last_updated: 2026-05-03
+last_updated: 2026-05-27
 confidence: high
 ---
 
@@ -77,6 +77,39 @@ VRChat World SDK 3 は UdonSharp / Udon Graph でインタラクティブなワ�
   - `animatorController`: AnimatorController
   - `canUseStationFromStation`: bool
 - **制約**: Entry と Exit は 2m 以内に配置
+
+#### Udon から Station に座らせる最小構成
+
+> 出典: <https://creators.vrchat.com/worlds/components/vrc_station/> および <https://creators.vrchat.com/worlds/udon/players/>。
+
+Station を独自 Udon で制御する場合、同一 GameObject 上に `VRCStation`、Collider、UdonBehaviour を置き、`Interact()` で `Networking.LocalPlayer.UseAttachedStation()` を呼ぶ。`UseAttachedStation()` は「この UdonBehaviour と同じ GameObject 上の Station」に入る API なので、Station と UdonBehaviour を別 GameObject に分ける場合はそのままでは動かない。
+
+```csharp
+public override void Interact()
+{
+    Networking.LocalPlayer.UseAttachedStation();
+}
+```
+
+座った後の処理は `OnStationEntered(VRCPlayerApi player)`、立った後の処理は `OnStationExited(VRCPlayerApi player)` に置く。ローカルプレイヤーだけに UI / カメラ / 音声などの個人向け処理を行う場合は、`player == null` と `!player.isLocal` を先に弾く。
+
+```csharp
+public override void OnStationEntered(VRCPlayerApi player)
+{
+    if (player == null) return;
+    if (!player.isLocal) return;
+    // local-only start logic
+}
+
+public override void OnStationExited(VRCPlayerApi player)
+{
+    if (player == null) return;
+    if (!player.isLocal) return;
+    // local-only stop logic
+}
+```
+
+Station 入室時はプレイヤーの頭・視点が `stationEnterPlayerLocation` へ移動して安定するまで数フレーム以上かかる場合がある。視点位置に依存する UI 初期配置や動画視聴開始は、`OnStationEntered` で即時実行せず、短い delayed event で遅らせ、`OnStationExited` で待機をキャンセルする構成が安全。
 
 ### VRCMirrorReflection
 - **名前空間**: `VRC.SDK3.Components`

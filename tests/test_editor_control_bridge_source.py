@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._typing_helpers import require_not_none
+
 # Issue #167: this module reads the C# bridge sources from the
 # un-mutated ``tools/unity`` tree to verify structural and source-text
 # invariants; its assertions are insensitive to mutations applied to
@@ -59,7 +61,6 @@ UI_ELEMENT_ALLOWLIST: Path = TOOLS_DIR / "PrefabSentinel.UiElement.Allowlist.cs"
 # appears only inside ``// ...`` or ``/* ... */`` documentation.
 _CS_BLOCK_COMMENT_RE = re.compile(r"/\*[\s\S]*?\*/")
 _CS_LINE_COMMENT_RE = re.compile(r"//[^\n]*")
-
 
 def _strip_cs_comments(source: str) -> str:
     return _CS_LINE_COMMENT_RE.sub("", _CS_BLOCK_COMMENT_RE.sub("", source))
@@ -165,7 +166,7 @@ class TestApplyPropertyValueTypes(unittest.TestCase):
     cannot be executed by this harness (spec Tier 3 Justification: no
     Unity-loadable serialized-property harness in this repo). Its
     Unity-free parsing sub-logic is exercised at Tier 1 in
-    ``tests/csharp/PropertiesPureLogicTests.cs``; these source-text
+    ``tests/csharp/PropertyValueParserTests.cs``; these source-text
     invariants pin the parser delegation and the absence of any parallel
     implementation.
     """
@@ -223,6 +224,76 @@ class TestApplyPropertyValueTypes(unittest.TestCase):
         )
 
 
+
+
+
+class TestTypedPropertyWriterSource(unittest.TestCase):
+    def _property_writer_source(self) -> str:
+        return _read(TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.PropertyWrite.cs")
+
+    def test_enum_writer_uses_declared_enum_backing_values(self) -> None:
+        source = self._property_writer_source()
+        body = _extract_method(source, "WriteEnumValue")
+        self.assertIn("ResolveEnumBackingValues(prop)", body)
+        resolver = _extract_method(source, "ResolveEnumBackingValues")
+        self.assertIn("Enum.GetValues(enumType)", resolver)
+        self.assertNotIn("Enumerable.Range(0, prop.enumNames.Length)", body)
+
+    def test_object_reference_writer_uses_expected_type_and_typed_codes(self) -> None:
+        writer = self._property_writer_source()
+        body = _extract_method(writer, "WriteObjectReferenceValue")
+        self.assertIn("ResolveExpectedObjectReferenceType(prop)", body)
+        self.assertIn("ResolveTypedObjectReference", body)
+        resolver_source = _read(
+            TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.PropertyObjectReference.cs"
+        )
+        expected_type = _extract_method(
+            resolver_source, "ResolveExpectedObjectReferenceType"
+        )
+        self.assertIn("EDITOR_CTRL_SET_PROP_OBJECT_REF_TYPE_MISMATCH", expected_type)
+        resolver = _extract_method(resolver_source, "ResolveTypedObjectReference")
+        for token in (
+            "EDITOR_CTRL_SET_PROP_OBJECT_REF_NOT_FOUND",
+            "EDITOR_CTRL_SET_PROP_OBJECT_REF_TYPE_MISMATCH",
+            "EDITOR_CTRL_SET_PROP_OBJECT_REF_AMBIGUOUS",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, resolver)
+
+    def test_object_reference_resolver_prefers_asset_paths_over_hierarchy_shorthand(self) -> None:
+        resolver_source = _read(
+            TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.PropertyObjectReference.cs"
+        )
+        resolver = _extract_method(resolver_source, "ResolveTypedObjectReference")
+        asset_lookup = resolver.find("AssetDatabase.LoadAssetAtPath(reference, expectedType)")
+        hierarchy_lookup = resolver.find("TryResolveGameObjectInActiveStage(goPath")
+        self.assertNotEqual(
+            -1,
+            asset_lookup,
+            msg="ResolveTypedObjectReference must look up asset paths directly.",
+        )
+        self.assertNotEqual(
+            -1,
+            hierarchy_lookup,
+            msg="ResolveTypedObjectReference must keep hierarchy shorthand resolution.",
+        )
+        self.assertLess(
+            asset_lookup,
+            hierarchy_lookup,
+            msg=(
+                "ResolveTypedObjectReference must prefer project asset paths "
+                "before hierarchy shorthand so asset references are not shadowed."
+            ),
+        )
+
+    def test_property_write_result_carries_structured_error_data(self) -> None:
+        source = self._property_writer_source()
+        self.assertIn("internal readonly struct PropertyWriteResult", source)
+        self.assertIn("EditorControlData ErrorData", source)
+        handler = _extract_method(_read(TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Properties.cs"), "HandleEditorSetProperty")
+        self.assertIn("writeResult.ErrorData", handler)
+
+
 class TestHandleEditorSetPropertyQuaternion(unittest.TestCase):
     """Issue #24 / #111 — quaternion coverage in the unified layer.
 
@@ -230,7 +301,7 @@ class TestHandleEditorSetPropertyQuaternion(unittest.TestCase):
     switch into the unified ``WritePropertyValue`` layer, where it must
     remain covered. Arity and unit-norm validation is owned by the
     Unity-free ``QuaternionInputValidator`` (Tier 1-covered in
-    ``tests/csharp/PropertiesPureLogicTests.cs``). These source-text
+    ``tests/csharp/QuaternionInputValidatorTests.cs``). These source-text
     invariants pin the dispatch and the delegation; the final test is a
     constant-value pin on the relocated ``NormTolerance`` literal.
     """
@@ -319,6 +390,27 @@ class TestHandleCaptureConsoleLogsContract(unittest.TestCase):
         # Ordering / malformed-cursor / max-entries validation is owned by
         # the Unity-free validator; the handler must route through it.
         self.assertIn("ConsoleCaptureRequestValidator.Validate", body)
+
+    def test_handler_checks_request_id_existence_before_post_filters(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleCaptureConsoleLogs")
+        self.assertIn(
+            "bool requestIdSelectorActive = ConsoleCaptureRequestValidator.UsesRequestIdSelector(",
+            body,
+        )
+        self.assertIn(
+            "bool knownRequestId = !requestIdSelectorActive",
+            body,
+        )
+        self.assertIn(
+            "ConsoleLogBuffer.HasRequestId(request.since_request_id)",
+            body,
+        )
+        self.assertLess(
+            body.index("ConsoleLogBuffer.HasRequestId(request.since_request_id)"),
+            body.index("ConsoleLogBuffer.GetEntries"),
+            msg="request-id existence must be decided before type/classification/phase filters",
+        )
 
 
 class TestBatchCreateParentWarning(unittest.TestCase):
@@ -520,7 +612,7 @@ class TestSetPropertyGameObject(unittest.TestCase):
         # Post H-track migration the GameObject property allowlist (the
         # inline ``gameObjectAllowedProperties`` array) was extracted into
         # the Unity-free ``GameObjectPropertyAllowlist``; its membership
-        # coverage now lives in ``tests/csharp/PropertiesPureLogicTests.cs``.
+        # coverage now lives in ``tests/csharp/GameObjectPropertyAllowlistTests.cs``.
         # The handler must route through the relocated allowlist.
         source = _read(BRIDGE)
         body = _extract_method(source, "HandleEditorSetProperty")
@@ -544,7 +636,7 @@ class TestSetPropertySuggestions(unittest.TestCase):
     Post H-track migration the similarity ranking (Levenshtein distance
     + the 0.4 distance-ratio threshold) was extracted into the Unity-free
     ``SuggestionRanker``; that behavioral coverage now lives in
-    ``tests/csharp/PropertiesPureLogicTests.cs``. This source-text test
+    ``tests/csharp/SuggestionRankerTests.cs``. This source-text test
     retains the Tier 3 delegation invariant (the handler routes the
     not-found branch through ``SuggestionRanker.SuggestSimilar``).
     """
@@ -880,19 +972,8 @@ class TestRecompileAndWaitDomainReloadResume(unittest.TestCase):
         self.assertNotIn("EDITOR_CTRL_RECOMPILE_AND_WAIT_OK", body)
 
     def test_resumer_uses_minus_one_reload_count_threshold(self) -> None:
-        # Issue #191 / #203 race-condition pin: the resumer runs on the
-        # post-reload AppDomain whose ``AssemblyReloadCount`` starts at
-        # ``0``. The post-reload poll completes the request the first
-        # time ``AssemblyReloadCount > threshold`` evaluates true. With
-        # ``threshold = 0`` (mutation candidate) ``0 > 0`` is false on
-        # the first tick and the request stalls until the next reload —
-        # the exact regression issue #191 fixed. Pin the literal so the
-        # mutation kills the test.
         source = _read(BRIDGE)
         body = _extract_method(source, "ResumePendingAsyncRunners")
-        # Restrict to the recompile-and-wait branch so a future addition
-        # of another action's resumer cannot accidentally satisfy the
-        # match.
         branch_match = re.search(
             r'else if \(entry\.action == "editor_recompile_and_wait"\)\s*\{(.*?)^\s{16}\}',
             body,
@@ -903,6 +984,8 @@ class TestRecompileAndWaitDomainReloadResume(unittest.TestCase):
             "ResumePendingAsyncRunners must contain the "
             "editor_recompile_and_wait branch",
         )
+        if branch_match is None:
+            self.fail("ResumePendingAsyncRunners editor_recompile_and_wait branch not found")
         branch_body = branch_match.group(1)
         call_match = re.search(
             r"BuildRecompileReloadWaitPoll\s*\(([^;]*)\)\s*;",
@@ -913,18 +996,21 @@ class TestRecompileAndWaitDomainReloadResume(unittest.TestCase):
             call_match,
             "Resumer branch must call BuildRecompileReloadWaitPoll",
         )
-        # The poll builder signature is
-        # ``(responsePath, deadlineMs, reloadCountThreshold, timeoutDetail)``;
-        # the third positional argument is the threshold literal.
+        if call_match is None:
+            self.fail("Resumer branch must call BuildRecompileReloadWaitPoll")
         args = [a.strip() for a in call_match.group(1).split(",")]
-        self.assertGreaterEqual(
-            len(args), 4,
-            f"BuildRecompileReloadWaitPoll call must have 4 args, got {args}",
-        )
         self.assertEqual(
-            "-1", args[2],
-            "reloadCountThreshold must be -1 to satisfy the first-tick "
-            "post-reload check (issue #191).",
+            [
+                "entry.responsePath",
+                "entry.callTimeUnixMs",
+                "entry.deadlineUnixMs",
+                "-1",
+                '"editor_recompile_and_wait"',
+                '"editor_recompile_and_wait: timed out after domain reload."',
+                "BuildRecompileAndWaitReloadComplete(entry.responsePath)",
+            ],
+            args,
+            "BuildRecompileReloadWaitPoll call shape changed unexpectedly",
         )
 
 
@@ -1244,6 +1330,24 @@ def _bridge_partial_filenames() -> list[str]:
     return sorted(p.name for p in TOOLS_DIR.glob(_BRIDGE_PARTIAL_GLOB))
 
 
+def _read_serialized_property_partials() -> str:
+    filenames = [
+        "PrefabSentinel.UnityEditorControlBridge.SerializedProperty.cs",
+        "PrefabSentinel.UnityEditorControlBridge.SerializedProperty.ObjectReference.cs",
+        "PrefabSentinel.UnityEditorControlBridge.SerializedProperty.Payload.cs",
+        "PrefabSentinel.UnityEditorControlBridge.SerializedProperty.Target.cs",
+        "PrefabSentinel.UnityEditorControlBridge.SerializedProperty.Traversal.cs",
+        "PrefabSentinel.UnityEditorControlBridge.SerializedProperty.Write.cs",
+    ]
+    present = set(_bridge_partial_filenames())
+    missing = [name for name in filenames if name not in present]
+    if missing:
+        raise AssertionError(
+            f"SerializedProperty bridge partial family is missing: {missing!r}"
+        )
+    return "\n".join(_read(TOOLS_DIR / name) for name in filenames)
+
+
 class TestBridgePartialLayout(unittest.TestCase):
     """Issue #123 / #266 — every bridge partial source on disk must
     declare the same partial class.  The contract set is derived from
@@ -1255,7 +1359,7 @@ class TestBridgePartialLayout(unittest.TestCase):
     """
 
     # Names of partials that earlier splits removed.  These must be
-    # absent from disk so the CLAUDE.md inventory and the actual file
+    # absent from disk so the AGENTS.md inventory and the actual file
     # set agree.
     _DELETED_PARTIAL_NAMES = (
         "PrefabSentinel.UnityEditorControlBridge.HierarchyComponents.cs",
@@ -1311,7 +1415,7 @@ class TestBridgePartialLayout(unittest.TestCase):
 
     def test_deleted_partials_are_absent(self) -> None:
         """The legacy oversized partials must be gone from disk so the
-        CLAUDE.md inventory and the live file set match.
+        AGENTS.md inventory and the live file set match.
         """
         for name in self._DELETED_PARTIAL_NAMES:
             with self.subTest(name=name):
@@ -1442,14 +1546,14 @@ class TestBridgePartialSizing(unittest.TestCase):
 
 
 class TestOperationalRulesPartialInventory(unittest.TestCase):
-    """Issue #138 — the project's operational rules file (``CLAUDE.md``)
+    """Issue #138 — the project's operational rules file (``AGENTS.md``)
     must list every present per-concern partial and list no absent
     partial in its partial-inventory line. The inventory line is the
     single source of truth on disk for the partial layout.
     """
 
     _PROJECT_ROOT = Path(__file__).resolve().parent.parent
-    _CLAUDE_MD = _PROJECT_ROOT / "CLAUDE.md"
+    _AGENTS_MD = _PROJECT_ROOT / "AGENTS.md"
     _PARTIAL_GLOB = "PrefabSentinel.UnityEditorControlBridge*.cs"
 
     def _disk_partial_concerns(self) -> set[str]:
@@ -1469,20 +1573,20 @@ class TestOperationalRulesPartialInventory(unittest.TestCase):
         return concerns
 
     def test_inventory_line_lists_every_present_partial(self) -> None:
-        text = self._CLAUDE_MD.read_text(encoding="utf-8")
+        text = self._AGENTS_MD.read_text(encoding="utf-8")
         for concern in sorted(self._disk_partial_concerns()):
             with self.subTest(concern=concern):
                 self.assertIn(
                     concern,
                     text,
-                    f"CLAUDE.md inventory line is missing concern '{concern}'.",
+                    f"AGENTS.md inventory line is missing concern '{concern}'.",
                 )
 
     def test_inventory_line_lists_no_absent_partial(self) -> None:
         """The legacy partial concern names that issue #138 removed must
-        not appear in CLAUDE.md, otherwise the inventory advertises files
+        not appear in AGENTS.md, otherwise the inventory advertises files
         that no longer exist on disk."""
-        text = self._CLAUDE_MD.read_text(encoding="utf-8")
+        text = self._AGENTS_MD.read_text(encoding="utf-8")
         for absent in ("HierarchyComponents", "UdonSharp.cs"):
             with self.subTest(absent=absent):
                 # ``UdonSharp`` alone is a substring of UdonSharp* names,
@@ -1490,7 +1594,7 @@ class TestOperationalRulesPartialInventory(unittest.TestCase):
                 self.assertNotIn(
                     absent,
                     text,
-                    f"CLAUDE.md still references the deleted partial '{absent}'.",
+                    f"AGENTS.md still references the deleted partial '{absent}'.",
                 )
 
 
@@ -1539,6 +1643,53 @@ class TestUdonSharpActionWiring(unittest.TestCase):
             with self.subTest(action=action):
                 self.assertIn(f'"{action}"', body)
                 self.assertIn(handler, body)
+
+
+class EditorControlBridgeDeleteSourceTests(unittest.TestCase):
+    """Issue #114 delete_assets bridge invariants that cannot run without Unity."""
+
+    def test_delete_assets_handler_rejects_malformed_payload_before_assetdatabase_call(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleDeleteAssets")
+        parse_failure = body.find("DELETE_ASSETS_BAD_PAYLOAD")
+        delete_call = body.find("AssetDatabase.DeleteAssets")
+        self.assertNotEqual(-1, parse_failure, msg="delete_assets bad payload code missing")
+        self.assertNotEqual(-1, delete_call, msg="AssetDatabase.DeleteAssets call missing")
+        self.assertLess(
+            parse_failure,
+            delete_call,
+            msg="malformed delete payload must be rejected before AssetDatabase.DeleteAssets",
+        )
+
+    def test_delete_assets_handler_rejects_non_assets_paths_before_assetdatabase_call(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "HandleDeleteAssets")
+        path_rejection = body.find("DELETE_ASSETS_UNSUPPORTED_PATH")
+        delete_call = body.find("AssetDatabase.DeleteAssets")
+        self.assertNotEqual(-1, path_rejection, msg="delete_assets path rejection code missing")
+        self.assertNotEqual(-1, delete_call, msg="AssetDatabase.DeleteAssets call missing")
+        self.assertLess(
+            path_rejection,
+            delete_call,
+            msg="unsupported delete paths must be rejected before AssetDatabase.DeleteAssets",
+        )
+
+    def test_delete_assets_handler_uses_assetdatabase_without_filesystem_delete(self) -> None:
+        source = _read(TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.AssetDelete.cs")
+        self.assertIn("AssetDatabase.DeleteAssets", source)
+        for forbidden in ("File.Delete", "Directory.Delete", "System.IO.File", "System.IO.Directory"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, source)
+
+    def test_delete_assets_dispatcher_routes_to_handler(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "DispatchAction")
+        self.assertIn('"delete_assets"', body)
+        self.assertIn("HandleDeleteAssets", body)
+
+    def test_editor_control_request_carries_delete_batch_payload(self) -> None:
+        source = _read(TOOLS_DIR / "PrefabSentinel.Dispatch.EditorControlRequest.cs")
+        self.assertIn("asset_paths_json", source)
 
 
 class TestAddUdonSharpComponentHandler(unittest.TestCase):
@@ -1675,6 +1826,74 @@ class TestSetUdonSharpFieldHandler(unittest.TestCase):
         )
 
 
+class TestUdonSharpArrayWriterSource(unittest.TestCase):
+    def _array_writer_source(self) -> str:
+        return _read(TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.UdonSharpArrayWrite.cs")
+
+    def test_array_writer_emits_typed_error_partitions(self) -> None:
+        source = self._array_writer_source()
+        for code in (
+            "EDITOR_CTRL_UDON_SET_FIELD_NON_ARRAY_VALUES",
+            "EDITOR_CTRL_UDON_SET_FIELD_VALUES_JSON_PARSE",
+            "EDITOR_CTRL_UDON_SET_FIELD_ARRAY_LENGTH_MISMATCH",
+            "EDITOR_CTRL_UDON_SET_FIELD_UNSUPPORTED_ARRAY_TYPE",
+            "EDITOR_CTRL_UDON_SET_FIELD_ARRAY_ELEMENT_PARSE",
+        ):
+            with self.subTest(code=code):
+                self.assertIn(code, source)
+
+    def test_array_writer_resolves_supported_element_type_from_field_info(self) -> None:
+        source = self._array_writer_source()
+        body = _extract_method(source, "WriteUdonSharpArrayValue")
+        for token in (
+            "fieldInfo.FieldType.IsArray",
+            "fieldInfo.FieldType.GetElementType()",
+            "!IsSupportedUdonArrayElementType(elementType)",
+            "prop.arraySize = elements.Count",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+        self.assertNotIn("&& elements.Count == 0", body)
+
+    def test_array_element_parse_error_reports_structured_index_context(self) -> None:
+        source = self._array_writer_source()
+        body = _extract_method(source, "ArrayElementParseError")
+        for token in (
+            "field_name = fieldName",
+            "element_index = index",
+            "expected_type = expectedType",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+
+    def test_array_writer_handles_supported_element_partitions(self) -> None:
+        source = self._array_writer_source()
+        body = _extract_method(source, "WriteUdonSharpArrayElement")
+        for token in (
+            "VRCUrl",
+            "SerializedPropertyType.String",
+            "SerializedPropertyType.Integer",
+            "SerializedPropertyType.Float",
+            "SerializedPropertyType.Boolean",
+            "values_json[{index}]",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+
+    def test_array_writer_supports_object_reference_elements(self) -> None:
+        source = self._array_writer_source()
+        support_body = _extract_method(source, "IsSupportedUdonArrayElementType")
+        element_body = _extract_method(source, "WriteUdonSharpArrayElement")
+        self.assertIn("typeof(UnityEngine.Object).IsAssignableFrom(elementType)", support_body)
+        for token in (
+            "ResolveObjectReference(element.Value)",
+            "elementType.IsAssignableFrom(obj.GetType())",
+            "item.objectReferenceValue = obj",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, element_body)
+
+
 class TestWirePersistentListenerHandler(unittest.TestCase):
     """Issue #119 — ``HandleWirePersistentListener`` must use the
     published string-mode entry point, walk the existing persistent-call
@@ -1774,6 +1993,12 @@ class TestUdonSharpRequestFields(unittest.TestCase):
     def test_request_carries_fields_json_for_add_udonsharp(self) -> None:
         body = _extract_editor_control_request_body()
         self.assertIn("fields_json", body)
+
+    def test_request_carries_array_fields_for_set_udonsharp(self) -> None:
+        body = _extract_editor_control_request_body()
+        self.assertIn("values_json", body)
+        self.assertIn("values_json_present", body)
+        self.assertIn("expected_length", body)
 
 
 def _extract_editor_bridge_ongui() -> str:
@@ -2039,7 +2264,14 @@ class TestEditorAsmdefUiReferences(unittest.TestCase):
 
     def _references(self) -> list[str]:
         manifest = json.loads(self._ASMDEF.read_text(encoding="utf-8"))
-        return manifest["references"]
+        if not isinstance(manifest, dict):
+            self.fail("PrefabSentinel.Editor.asmdef root must be an object")
+        references = manifest.get("references")
+        if not isinstance(references, list) or not all(
+            isinstance(item, str) for item in references
+        ):
+            self.fail("PrefabSentinel.Editor.asmdef references must be a string list")
+        return references
 
     def test_textmeshpro_reference_present(self) -> None:
         self.assertIn("Unity.TextMeshPro", self._references())
@@ -2178,6 +2410,8 @@ class TestCompileBarrierSource(unittest.TestCase):
         self.assertIsNotNone(
             match, "the barrier must catch a failing compile trigger"
         )
+        if match is None:
+            self.fail("the barrier must catch a failing compile trigger")
         catch_body = _extract_braced_block(
             body, match.end(), "ScheduleCompileBarrier schedule-failure catch"
         )
@@ -2202,6 +2436,8 @@ class TestCompileBarrierSource(unittest.TestCase):
         self.assertIsNotNone(
             match, "HandleRecompileAndWait must supply an onScheduleFailure action"
         )
+        if match is None:
+            self.fail("HandleRecompileAndWait must supply an onScheduleFailure action")
         action = _extract_braced_block(
             body, match.end(), "recompile onScheduleFailure action"
         )
@@ -2215,6 +2451,355 @@ class TestCompileBarrierSource(unittest.TestCase):
         self.assertIn(
             "editor_recompile_and_wait: failed to schedule compilation.",
             redaction,
+        )
+
+
+class BridgeBackgroundCompileDeferralSourceTests(unittest.TestCase):
+    """Issue #72 source invariants for background compile deferral.
+
+    Tier 3: the affected bridge partials depend on UnityEditor APIs, so
+    the Unity-free classifier has xUnit coverage and these checks pin the
+    Unity-dependent payload/wiring structure until live Editor validation.
+    """
+
+    def test_editor_control_data_declares_deferred_payload_fields(self) -> None:
+        body = _extract_editor_control_data_body(_read(BRIDGE))
+        expected_fields = (
+            "public string operation = string.Empty;",
+            "public bool editor_focused = false;",
+            "public string deferred_reason = string.Empty;",
+            "public float budget_sec = 0f;",
+            "public bool job_retained = false;",
+            "public bool cleanup_performed = false;",
+        )
+        for field in expected_fields:
+            with self.subTest(field=field):
+                self.assertIn(
+                    field,
+                    body,
+                    msg=f"EditorControlData must expose deferred payload field {field}",
+                )
+
+    def test_common_builder_emits_warning_deferred_envelope(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "BuildCompileDeferredBackgroundResponse")
+        self.assertIn(
+            'BackgroundCompileDeferredReason = "editor_background_compile_reload"',
+            source,
+        )
+        for expected in (
+            'code = "EDITOR_COMPILE_DEFERRED_BACKGROUND"',
+            'severity = "warning"',
+            "success = false",
+            "operation = operation",
+            "editor_focused = false",
+            "deferred_reason = BackgroundCompileDeferredReason",
+            "elapsed_sec = elapsedSec",
+            "budget_sec = budgetSec",
+            "diagnostic_compiling = compiling",
+            "job_retained = jobRetained",
+            "cleanup_performed = cleanupPerformed",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, body)
+
+    def test_compile_timeout_paths_observe_focus_before_deferred_response(self) -> None:
+        source = _read(BRIDGE)
+        for method in (
+            "BuildRecompileReloadWaitPoll",
+            "HandleRefreshAssetDatabase",
+            "HandleRecompileAndWait",
+            "HandleRunScript",
+            "RunScriptPollFrame",
+            "HandleRunScriptPoll",
+            "ScheduleMenuExecuteBarrier",
+        ):
+            with self.subTest(method=method):
+                body = _extract_method(source, method)
+                focus_index = body.find("ObserveEditorFocused()")
+                deferred_index = body.find("BuildCompileDeferredBackgroundResponse")
+                self.assertNotEqual(
+                    -1,
+                    focus_index,
+                    msg=f"{method} must observe editor focus at its deadline branch",
+                )
+                self.assertNotEqual(
+                    -1,
+                    deferred_index,
+                    msg=f"{method} must call the common deferred response builder",
+                )
+                self.assertLess(
+                    focus_index,
+                    deferred_index,
+                    msg=f"{method} must observe focus before building deferred response",
+                )
+
+    def test_generic_timeout_branches_remain_available(self) -> None:
+        source = _read(BRIDGE)
+        expected_timeout_markers = {
+            "BuildRecompileReloadWaitPoll": "EDITOR_CTRL_RECOMPILE_TIMEOUT",
+            "HandleRefreshAssetDatabase": "EDITOR_CTRL_REFRESH_COMPILE_TIMEOUT",
+            "HandleRecompileAndWait": "EDITOR_CTRL_RECOMPILE_TIMEOUT",
+            "HandleRunScript": "RunScriptCompilePendingResponse",
+            "RunScriptPollFrame": "RunScriptCompilePendingResponse",
+            "HandleRunScriptPoll": "EDITOR_RUN_SCRIPT_SUBMIT_TIMEOUT",
+            "ScheduleMenuExecuteBarrier": "EDITOR_CTRL_RECOMPILE_TIMEOUT",
+        }
+        for method, marker in expected_timeout_markers.items():
+            with self.subTest(method=method):
+                body = _extract_method(source, method)
+                self.assertIn(
+                    marker,
+                    body,
+                    msg=f"{method} must retain the focused/unknown generic timeout path",
+                )
+
+    def test_run_script_poll_deferred_cleanup_retains_job_before_cleanup(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleRunScriptPoll")
+        match = re.search(r"if\s*\(\s*request\.cleanup_on_timeout\s*\)\s*\{", body)
+        self.assertIsNotNone(
+            match,
+            "HandleRunScriptPoll must keep the cleanup_on_timeout branch",
+        )
+        if match is None:
+            self.fail("HandleRunScriptPoll must keep the cleanup_on_timeout branch")
+        cleanup_body = _extract_braced_block(
+            body,
+            match.end(),
+            "HandleRunScriptPoll cleanup_on_timeout branch",
+        )
+        deferred_index = cleanup_body.find("BuildCompileDeferredBackgroundResponse")
+        complete_index = cleanup_body.find("PendingAsyncRunner.Complete(completionFile)")
+        self.assertNotEqual(
+            -1,
+            deferred_index,
+            msg="background-deferred poll cleanup must return a deferred envelope",
+        )
+        self.assertNotEqual(
+            -1,
+            complete_index,
+            msg="non-deferred poll cleanup must still complete the stale job",
+        )
+        self.assertLess(
+            deferred_index,
+            complete_index,
+            msg="deferred poll cleanup must return before completing or deleting the job",
+        )
+        self.assertIn("jobRetained: true", cleanup_body)
+        self.assertIn("cleanupPerformed: false", cleanup_body)
+
+    def test_run_script_poll_deferred_cleanup_response_stays_pollable(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleRunScriptPoll")
+        match = re.search(r"if\s*\(\s*request\.cleanup_on_timeout\s*\)\s*\{", body)
+        self.assertIsNotNone(
+            match,
+            "HandleRunScriptPoll must keep the cleanup_on_timeout branch",
+        )
+        if match is None:
+            self.fail("HandleRunScriptPoll must keep the cleanup_on_timeout branch")
+        cleanup_body = _extract_braced_block(
+            body,
+            match.end(),
+            "HandleRunScriptPoll cleanup_on_timeout branch",
+        )
+        for expected in (
+            "PendingAsyncRunner.TryGet(completionFile, out var entry)",
+            "DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()",
+            "entry.callTimeUnixMs",
+            "entry.deadlineUnixMs",
+            "elapsedSec: elapsedSec",
+            "budgetSec: budgetSec",
+            "deferred.data.request_id = request.request_id",
+            'deferred.data.status = "pending"',
+            "return deferred;",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, cleanup_body)
+        self.assertNotIn("elapsedSec: 0f", cleanup_body)
+        self.assertNotIn("budgetSec: 0f", cleanup_body)
+
+
+    def test_run_script_poll_deferred_marker_does_not_redefer_after_focus_return(self) -> None:
+        source = _read(BRIDGE)
+        pending_body = _extract_class_body(source, "PendingAsyncRunner")
+        submit_body = _extract_method(source, "HandleRunScriptSubmit")
+        poll_body = _extract_method(source, "HandleRunScriptPoll")
+        match = re.search(r"if\s*\(\s*request\.cleanup_on_timeout\s*\)\s*\{", poll_body)
+        self.assertIsNotNone(
+            match,
+            "HandleRunScriptPoll must keep the cleanup_on_timeout branch",
+        )
+        if match is None:
+            self.fail("HandleRunScriptPoll must keep the cleanup_on_timeout branch")
+        cleanup_body = _extract_braced_block(
+            poll_body,
+            match.end(),
+            "HandleRunScriptPoll cleanup_on_timeout branch",
+        )
+
+        for expected in (
+            "public bool deferredCompileBackground;",
+            "internal static void MarkBackgroundDeferred(",
+            "internal static bool IsBackgroundDeferred(",
+            "internal static void ClearBackgroundDeferred(",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, pending_body)
+        self.assertIn(
+            "PendingAsyncRunner.MarkBackgroundDeferred(completionFile)",
+            submit_body,
+        )
+        self.assertIn(
+            "bool backgroundDeferredBefore = PendingAsyncRunner.IsBackgroundDeferred(completionFile);",
+            cleanup_body,
+        )
+        self.assertIn(
+            "bool backgroundDeferredNow = BackgroundCompileDeferralClassifier.Classify(",
+            cleanup_body,
+        )
+        foreground_index = cleanup_body.find(
+            "if (backgroundDeferredBefore && editorFocused == true)"
+        )
+        deferred_index = cleanup_body.find(
+            "if (backgroundDeferredNow || backgroundDeferredBefore)"
+        )
+        complete_index = cleanup_body.find("PendingAsyncRunner.Complete(completionFile)")
+        self.assertNotEqual(-1, foreground_index)
+        self.assertNotEqual(-1, deferred_index)
+        self.assertNotEqual(-1, complete_index)
+        self.assertLess(
+            foreground_index,
+            deferred_index,
+            msg="foreground focus must stop the stale marker from re-deferring",
+        )
+        self.assertLess(
+            deferred_index,
+            complete_index,
+            msg="continued background deferral must still return before cleanup",
+        )
+
+    def test_run_script_poll_frame_preserves_rehydrated_submit_deferred_marker(self) -> None:
+        body = _extract_method(_read(BRIDGE), "RunScriptPollFrame")
+        match = re.search(r"if\s*\(\s*nowMs\s*>\s*entry\.deadlineUnixMs\s*\)\s*\{", body)
+        self.assertIsNotNone(
+            match,
+            "RunScriptPollFrame must keep a deadline branch",
+        )
+        if match is None:
+            self.fail("RunScriptPollFrame must keep a deadline branch")
+        deadline_body = _extract_braced_block(
+            body,
+            match.end(),
+            "RunScriptPollFrame deadline branch",
+        )
+
+        marker_check_index = deadline_body.find(
+            "bool backgroundDeferredBefore = PendingAsyncRunner.IsBackgroundDeferred(responsePath);"
+        )
+        classifier_index = deadline_body.find(
+            "bool backgroundDeferredNow = BackgroundCompileDeferralClassifier.Classify("
+        )
+        foreground_guard_index = deadline_body.find(
+            'entry.action == "run_script_submit"\n'
+            "                    && backgroundDeferredBefore\n"
+            "                    && editorFocused == true"
+        )
+        clear_index = deadline_body.find(
+            "PendingAsyncRunner.ClearBackgroundDeferred(responsePath)"
+        )
+        submit_guard_index = deadline_body.find(
+            'else if (entry.action == "run_script_submit"\n'
+            "                    && (backgroundDeferredNow || backgroundDeferredBefore)"
+        )
+        background_timeout_index = deadline_body.find("else if (backgroundDeferredNow)")
+        mark_index = deadline_body.find(
+            "PendingAsyncRunner.MarkBackgroundDeferred(responsePath)"
+        )
+        retained_return_index = deadline_body.find("return;", mark_index)
+        complete_index = deadline_body.find("PendingAsyncRunner.Complete(responsePath)")
+        cleanup_index = deadline_body.find("CleanupRunScriptTempFiles(scriptAbs, metaAbs)")
+        self.assertNotEqual(-1, marker_check_index)
+        self.assertNotEqual(-1, classifier_index)
+        self.assertNotEqual(-1, foreground_guard_index)
+        self.assertNotEqual(-1, clear_index)
+        self.assertNotEqual(-1, submit_guard_index)
+        self.assertNotEqual(-1, background_timeout_index)
+        self.assertNotEqual(-1, mark_index)
+        self.assertNotEqual(-1, retained_return_index)
+        self.assertNotEqual(-1, complete_index)
+        self.assertNotEqual(-1, cleanup_index)
+        self.assertLess(marker_check_index, foreground_guard_index)
+        self.assertLess(classifier_index, foreground_guard_index)
+        self.assertLess(foreground_guard_index, submit_guard_index)
+        self.assertLess(clear_index, submit_guard_index)
+        self.assertLess(submit_guard_index, retained_return_index)
+        self.assertLess(retained_return_index, complete_index)
+        self.assertLess(retained_return_index, cleanup_index)
+        self.assertLess(background_timeout_index, complete_index)
+
+    def test_run_script_poll_preserves_deferred_completion_payload(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleRunScriptPoll")
+        for expected in (
+            "inner.data.operation",
+            "inner.data.editor_focused",
+            "inner.data.deferred_reason",
+            "inner.data.elapsed_sec",
+            "inner.data.budget_sec",
+            "inner.data.diagnostic_compiling",
+            "inner.data.job_retained",
+            "inner.data.cleanup_performed",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(
+                    expected,
+                    body,
+                    msg=(
+                        "HandleRunScriptPoll must preserve deferred completion "
+                        f"payload field {expected} from the inner envelope"
+                    ),
+                )
+
+    def test_run_script_submit_background_deadline_leaves_job_for_poll(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleRunScriptSubmit")
+        match = re.search(r"Action\s+writeCompileDeadline\s*=\s*\(\s*\)\s*=>\s*\{", body)
+        self.assertIsNotNone(
+            match,
+            "HandleRunScriptSubmit must keep a dedicated deadline action",
+        )
+        if match is None:
+            self.fail("HandleRunScriptSubmit must keep a dedicated deadline action")
+        deadline_body = _extract_braced_block(
+            body,
+            match.end(),
+            "HandleRunScriptSubmit writeCompileDeadline action",
+        )
+        focus_index = deadline_body.find("ObserveEditorFocused()")
+        classifier_index = deadline_body.find(
+            "BackgroundCompileDeferralClassifier.Classify"
+        )
+        retained_return_index = deadline_body.find("return;", classifier_index)
+        pending_index = deadline_body.find("writeCompilePending()")
+        self.assertNotEqual(-1, focus_index)
+        self.assertNotEqual(-1, classifier_index)
+        self.assertNotEqual(
+            -1,
+            retained_return_index,
+            msg="background-deferred submit deadline must return without cleanup",
+        )
+        self.assertNotEqual(
+            -1,
+            pending_index,
+            msg="focused/unknown submit deadline must keep the generic timeout path",
+        )
+        self.assertLess(
+            classifier_index,
+            retained_return_index,
+            msg="submit deadline must classify focus before retaining the job",
+        )
+        self.assertLess(
+            retained_return_index,
+            pending_index,
+            msg="background-deferred submit deadline must skip writeCompilePending cleanup",
         )
 
 
@@ -2335,21 +2920,16 @@ class TestConsoleLogEntryDeclaresPhaseField(unittest.TestCase):
 
 
 class TestOnLogMessagePhasePriority(unittest.TestCase):
-    """Issue #239: OnLogMessage snapshots phase with ``build > play > edit``.
-
-    Post H-track migration the build > play > edit precedence was
-    extracted into the Unity-free ``ConsoleLogPhaseClassifier.Classify``
-    (behavioral coverage in ``tests/csharp/ConsoleCaptureTests.cs``).
-    This source-text test retains the Tier 3 delegation invariant: the
-    handler reads both canonical editor-API flags and feeds them into
-    the classifier.
-    """
+    """Issue #239: console logs keep the canonical phase precedence."""
 
     def test_delegates_phase_classification(self) -> None:
-        body = _extract_method(_read(BRIDGE), "OnLogMessage")
-        self.assertIn("ConsoleLogPhaseClassifier.Classify", body)
-        self.assertIn("BuildPipeline.isBuildingPlayer", body)
-        self.assertIn("EditorApplication.isPlayingOrWillChangePlaymode", body)
+        text = _read(BRIDGE)
+        log_body = _extract_method(text, "OnLogMessage")
+        refresh_body = _extract_method(text, "ClassifyCurrentEditorPhase")
+        self.assertIn("_phaseSnapshot", log_body)
+        self.assertIn("ConsoleLogPhaseClassifier.Classify", refresh_body)
+        self.assertIn("BuildPipeline.isBuildingPlayer", refresh_body)
+        self.assertIn("EditorApplication.isPlayingOrWillChangePlaymode", refresh_body)
 
 
 def _extract_get_entries_body(source: str) -> str:
@@ -2383,6 +2963,58 @@ class TestConsoleLogBufferRetrievalAppliesPhaseFilter(unittest.TestCase):
             "ConsoleLogEntryPredicate.MatchesPhaseFilter(entry.phase, phaseFilter)",
             body,
         )
+
+    def test_get_entries_resolves_selector_precedence_before_filters(self) -> None:
+        body = _extract_get_entries_body(_read(BRIDGE))
+        self.assertIn(
+            "bool hasSequenceSelector = sinceSequence >= 0",
+            body,
+        )
+        self.assertIn(
+            "bool hasRequestSelector = ConsoleCaptureRequestValidator.UsesRequestIdSelector(",
+            body,
+        )
+        self.assertIn(
+            "bool hasCursorSelector = !hasSequenceSelector && !hasRequestSelector && !cursorIsEmpty",
+            body,
+        )
+        self.assertIn(
+            "bool hasTimeSelector = !hasSequenceSelector && !hasRequestSelector && !hasCursorSelector && sinceSeconds > 0f",
+            body,
+        )
+
+    def test_request_id_known_check_uses_active_selector(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleCaptureConsoleLogs")
+        self.assertIn(
+            "ConsoleCaptureRequestValidator.UsesRequestIdSelector(",
+            body,
+        )
+        self.assertIn("bool knownRequestId = !requestIdSelectorActive", body)
+
+    def test_get_entries_reports_buffer_reset_from_retained_lower_bound(self) -> None:
+        source = _read(BRIDGE)
+        self.assertIn("PeekLowestRetainedSequenceId", source)
+        body = _extract_method(source, "HandleCaptureConsoleLogs")
+        self.assertIn("EDITOR_CTRL_CONSOLE_BUFFER_RESET", body)
+        self.assertIn("ConsoleLogBuffer.PeekLowestRetainedSequenceId()", body)
+
+    def test_run_from_paths_scopes_dispatch_by_derived_transport_request_id(self) -> None:
+        source = _read(BRIDGE)
+        run_body = _extract_method(source, "RunFromPaths")
+        dispatch_body = _extract_method(source, "DispatchAction")
+        self.assertIn("DeriveTransportRequestId(requestPath)", run_body)
+        self.assertIn("ConsoleLogBuffer.BeginRequest(transportRequestId)", run_body)
+        self.assertIn("ConsoleLogBuffer.EndRequest(transportRequestId)", run_body)
+        self.assertIn("string transportRequestId", dispatch_body)
+
+    def test_run_script_persists_transport_request_id_for_delayed_logs(self) -> None:
+        source = _read(BRIDGE)
+        run_body = _extract_method(source, "HandleRunScript")
+        poll_body = _extract_method(source, "RunScriptPollFrame")
+        entry_body = _extract_class_body(source, "PersistedEntry")
+        self.assertIn("public string transportRequestId", entry_body)
+        self.assertIn("transportRequestId = transportRequestId", run_body)
+        self.assertIn("ConsoleLogBuffer.BeginRequest(entry.transportRequestId)", poll_body)
 
 
 class TestHandleCaptureConsoleLogsValidatesPhaseFilter(unittest.TestCase):
@@ -2444,9 +3076,6 @@ class TestHandleGetEditorStateReadsFiveFlags(unittest.TestCase):
         )
 
     def test_snapshot_class_declares_five_flag_fields(self) -> None:
-        # The EditorStateSnapshot DTO must declare exactly five bool
-        # flag fields; the unsaved-changes flag is additive on top of
-        # the original four.
         body = _read(BRIDGE)
         match = re.search(
             r"class\s+EditorStateSnapshot\s*\{",
@@ -2455,25 +3084,112 @@ class TestHandleGetEditorStateReadsFiveFlags(unittest.TestCase):
         self.assertIsNotNone(
             match, msg="EditorStateSnapshot class declaration not found"
         )
+        if match is None:
+            self.fail("EditorStateSnapshot class declaration not found")
         snapshot_body = _extract_braced_block(
             body, match.end(), "EditorStateSnapshot body"
         )
-        bool_fields = re.findall(r"public\s+bool\s+(\w+)\s*=", snapshot_body)
+        bool_fields = set(re.findall(r"public\s+bool\s+(\w+)\s*=", snapshot_body))
+        expected_flags = {
+            "is_playing",
+            "is_will_change_playmode",
+            "is_compiling",
+            "is_building_player",
+            "has_unsaved_changes",
+        }
         self.assertEqual(
-            5,
-            len(bool_fields),
+            expected_flags,
+            expected_flags & bool_fields,
             msg=(
-                "EditorStateSnapshot must declare exactly five bool flag "
-                f"fields; found {bool_fields}"
+                "EditorStateSnapshot must carry the five play/compile/dirty "
+                f"flags; found {sorted(bool_fields)}"
             ),
         )
-        self.assertIn(
-            "has_unsaved_changes",
-            bool_fields,
-            msg=(
-                "EditorStateSnapshot must carry the unsaved-changes flag "
-                "(issue #40)."
+
+
+class TestHandleGetEditorStateOperatorContextSource(unittest.TestCase):
+    def test_snapshot_and_response_declare_operator_identity_and_stage_fields(self) -> None:
+        source = _strip_cs_comments(_read(BRIDGE))
+        snapshot_body = _extract_class_body(source, "EditorStateSnapshot")
+        response_body = _extract_class_body(source, "EditorControlResponse")
+        context_body = _extract_class_body(source, "EditorOperatorContext")
+
+        snapshot_checks = {
+            "active_stage_kind": "public string active_stage_kind" in snapshot_body,
+            "active_scene_path": "public string active_scene_path" in snapshot_body,
+            "active_scene_name": "public string active_scene_name" in snapshot_body,
+            "prefab_stage_asset_path": "public string prefab_stage_asset_path" in snapshot_body,
+            "prefab_stage_root_name": "public string prefab_stage_root_name" in snapshot_body,
+            "prefab_stage_is_dirty": "public bool prefab_stage_is_dirty" in snapshot_body,
+            "open_scenes": "public EditorSceneStatus[] open_scenes" in snapshot_body,
+        }
+        context_checks = {
+            "response_context": "public EditorOperatorContext operator_context" in response_body,
+            "project_root": "public string project_root" in context_body,
+            "bridge_session_id": "public string bridge_session_id" in context_body,
+            "bridge_instance_id": "public string bridge_instance_id" in context_body,
+            "bridge_version": "public string bridge_version" in context_body,
+            "plugin_version": "public string plugin_version" in context_body,
+        }
+        self.assertEqual(
+            {key: True for key in snapshot_checks},
+            snapshot_checks,
+            msg=f"EditorStateSnapshot stage/dirty fields missing: {snapshot_checks}",
+        )
+        self.assertEqual(
+            {key: True for key in context_checks},
+            context_checks,
+            msg=f"Editor operator context fields missing: {context_checks}",
+        )
+
+    def test_get_editor_state_populates_identity_and_does_not_mutate_editor_state(self) -> None:
+        source = _strip_cs_comments(_read(BRIDGE))
+        body = _extract_method(source, "HandleGetEditorState")
+        required_tokens = {
+            "operator_context = BuildEditorOperatorContext()": (
+                "operator_context = BuildEditorOperatorContext()" in source
             ),
+            "PopulateActiveSceneStatus": "PopulateActiveSceneStatus(snapshot, diagnostics)" in body,
+            "PopulatePrefabStageStatus": "PopulatePrefabStageStatus(snapshot, diagnostics)" in body,
+            "open_scenes": "open_scenes" in body,
+            "active_stage_kind": "active_stage_kind" in source,
+            "prefab_stage": 'active_stage_kind = "prefab_stage"' in source,
+        }
+        forbidden_tokens = {
+            "EditorSceneManager.Save": "EditorSceneManager.Save" in body,
+            "SaveCurrentModifiedScenesIfUserWantsTo": (
+                "SaveCurrentModifiedScenesIfUserWantsTo" in body
+            ),
+            "StageUtility.GoToMainStage": "StageUtility.GoToMainStage" in body,
+            "ClearDirtiness": "ClearDirtiness" in body,
+        }
+        self.assertEqual(
+            {key: True for key in required_tokens},
+            required_tokens,
+            msg=f"HandleGetEditorState missing identity/stage population: {required_tokens}",
+        )
+        self.assertEqual(
+            {key: False for key in forbidden_tokens},
+            forbidden_tokens,
+            msg=f"HandleGetEditorState must be read-only: {forbidden_tokens}",
+        )
+
+    def test_get_editor_state_limited_enumeration_diagnostic_is_successful_warning(self) -> None:
+        source = _strip_cs_comments(_read(BRIDGE))
+        body = _extract_method(source, "HandleGetEditorState")
+        checks = {
+            "diagnostic_code": "EDITOR_STATE_ENUMERATION_LIMITED" in source,
+            "warning_severity": 'severity = "warning"' in source,
+            "success_response": "BuildSuccess(" in body,
+            "response_severity_gate": (
+                'if (diagnostics.Count > 0) response.severity = "warning";' in body
+            ),
+            "catch_exception": "catch (Exception" in source,
+        }
+        self.assertEqual(
+            {key: True for key in checks},
+            checks,
+            msg=f"HandleGetEditorState limited-enumeration diagnostic missing: {checks}",
         )
 
 
@@ -2534,6 +3250,8 @@ class TestRunFromPathsExceptionBoundary(unittest.TestCase):
             catch_match,
             msg="handler-exception catch guarding DispatchAction not found",
         )
+        if catch_match is None:
+            self.fail("handler-exception catch guarding DispatchAction not found")
         catch_var = catch_match.group(1)
         catch_body = _extract_braced_block(
             body, catch_match.end(), "RunFromPaths handler-exception catch"
@@ -2611,6 +3329,20 @@ class TestRecompileNoOpImporterWarning(unittest.TestCase):
             ),
         )
 
+    def test_collector_supplies_disabled_sequence_and_request_selectors(self) -> None:
+        collector = _extract_method(
+            _read(BRIDGE), "CollectImporterErrorDiagnostics"
+        )
+        self.assertIn(
+            "\"all\",\n                -1,\n                string.Empty,\n                newestFirst: false",
+            collector,
+            msg=(
+                "the importer-error collector snapshots the full console "
+                "buffer, so it must explicitly disable sequence/request "
+                "selectors when calling ConsoleLogBuffer.GetEntries."
+            ),
+        )
+
     def test_noop_importer_response_carries_warning_severity(self) -> None:
         # When importer errors are present the no-op response must carry
         # warning severity and the detected importer errors as diagnostics
@@ -2635,6 +3367,17 @@ class TestRecompileNoOpImporterWarning(unittest.TestCase):
             ),
         )
 
+    def test_noop_importer_response_carries_operator_context(self) -> None:
+        body = _extract_method(_read(BRIDGE), "WriteRecompileNoOpResponse")
+        self.assertIn(
+            "operator_context = BuildEditorOperatorContext()",
+            body,
+            msg=(
+                "The successful no-op warning response must carry operator "
+                "context so expected-root verification can accept the response."
+            ),
+        )
+
 
 # ---------------------------------------------------------------------------
 # Issue #216 — script-runner leak-safe envelope at four catch sites + shared
@@ -2642,10 +3385,9 @@ class TestRecompileNoOpImporterWarning(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
-# Forbidden tokens that would re-introduce the leak.  Each script-runner
-# catch site must contain none of these inside the catch block, and the
-# shared EditorControlData class body must declare no exception-text
-# field.
+# Forbidden tokens that would re-introduce raw exception-text leakage.
+# Structured exception summaries are allowed; full exception message and
+# ToString payloads remain console-only.
 _LEAK_TOKENS = (
     "ex.Message",
     "ex.ToString()",
@@ -2657,7 +3399,6 @@ _LEAK_TOKENS = (
     "inner.ToString()",
     "tie.Message",
     "tie.ToString()",
-    "exception =",
 )
 
 
@@ -2679,7 +3420,7 @@ def _extract_catch_block(method_body: str, exception_pattern: str) -> str:
 
 
 class TestRunScriptPollFrameRuntimeCatchesNoLeakInEnvelope(unittest.TestCase):
-    """Issue #216: per-frame runtime catches carry no exception text."""
+    """Issue #216/#93: runtime catches carry no raw exception text."""
 
     def test_target_invocation_exception_envelope_has_no_exception_text(
         self,
@@ -3043,6 +3784,17 @@ class TestRunScriptCompilePendingResponseDeadlinePath(unittest.TestCase):
             'TimeoutCode = "EDITOR_RUN_SCRIPT_COMPILE_TIMEOUT"', source
         )
 
+    def test_recovery_response_carries_operator_context(self) -> None:
+        body = _extract_method(_read(BRIDGE), "RunScriptCompilePendingResponse")
+        self.assertIn(
+            "operator_context = BuildEditorOperatorContext()",
+            body,
+            msg=(
+                "Manual recovery responses must carry operator context like "
+                "the central bridge response builders."
+            ),
+        )
+
 
 # ---------------------------------------------------------------------------
 # Issue #248 — HasEditorScriptChangedSince walks the Assets root and
@@ -3198,6 +3950,36 @@ class ScreenshotViewAllowlistSourceTests(unittest.TestCase):
             ),
         )
 
+    def test_handler_dimension_check_precedes_output_and_texture_allocation(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleCaptureScreenshot")
+        dimension_pos = body.find("ScreenshotDimensionBounds.Accepts")
+        output_dir_pos = body.find("string outputDir = Path.Combine")
+        object_dispatch_pos = body.find("HandleObjectCaptureScreenshot(request, outputPath)")
+        texture_pos = body.find("new Texture2D")
+        render_texture_pos = body.find("RenderTexture.GetTemporary")
+        self.assertEqual(
+            (True, True, True, True, True, True),
+            (
+                dimension_pos >= 0,
+                output_dir_pos >= 0,
+                object_dispatch_pos >= 0,
+                texture_pos >= 0,
+                render_texture_pos >= 0,
+                dimension_pos < output_dir_pos
+                and dimension_pos < object_dispatch_pos
+                and dimension_pos < texture_pos
+                and dimension_pos < render_texture_pos,
+            ),
+            msg=(
+                "Screenshot dimension rejection must run before output path "
+                "composition, target dispatch, Texture2D allocation, and "
+                "RenderTexture allocation; "
+                f"positions: dimension={dimension_pos}, output_dir={output_dir_pos}, "
+                f"object_dispatch={object_dispatch_pos}, texture={texture_pos}, "
+                f"render_texture={render_texture_pos}."
+            ),
+        )
+
     def test_handler_pins_scene_and_game_allowlist_literals(self) -> None:
         body = _extract_method(_read(BRIDGE), "HandleCaptureScreenshot")
         # The two accepted selectors must both appear as literals so
@@ -3214,27 +3996,135 @@ class ScreenshotViewAllowlistSourceTests(unittest.TestCase):
         )
 
 
+class TestScreenshotCropBoundsSource(unittest.TestCase):
+    _SCREENSHOT = TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Screenshot.cs"
+    _TARGET_CAPTURE = (
+        TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Screenshot.TargetCapture.cs"
+    )
+
+    def _method_body(self, method_name: str) -> str:
+        return _extract_method(_read(self._SCREENSHOT), method_name)
+
+    def _target_method_body(self, method_name: str) -> str:
+        self.assertTrue(
+            self._TARGET_CAPTURE.exists(),
+            msg="Screenshot.TargetCapture partial must exist before reading target capture methods.",
+        )
+        return _extract_method(_read(self._TARGET_CAPTURE), method_name)
+
+    def test_crop_roi_null_is_rejected_before_empty_no_crop_path(self) -> None:
+        resolver_body = self._method_body("TryResolveCropRoi")
+        null_guard_index = resolver_body.index("if (value == null)")
+        empty_guard_index = resolver_body.index("if (value.Length == 0)")
+
+        self.assertLess(null_guard_index, empty_guard_index)
+        self.assertNotIn("string.IsNullOrEmpty(value)", resolver_body)
+
+    def test_object_capture_null_crop_roi_is_rejected_before_no_crop_path(self) -> None:
+        body = self._target_method_body("ResolveTargetPixelCrop")
+        null_guard_index = body.index("if (request.crop_roi == null)")
+        empty_guard_index = body.index("if (request.crop_roi.Length == 0)")
+
+        self.assertLess(null_guard_index, empty_guard_index)
+        self.assertIn(
+            '"EDITOR_CTRL_CROP_ROI_INVALID"',
+            body[null_guard_index:empty_guard_index],
+        )
+
+    def test_object_capture_pixel_crop_delegates_before_render_and_read(self) -> None:
+        object_body = self._target_method_body("HandleObjectCaptureScreenshot")
+        crop_index = object_body.find("ResolveTargetPixelCrop(")
+        render_index = object_body.find("RenderSceneViewToTexture")
+        read_index = object_body.find("ReadPixels")
+
+        self.assertNotEqual(
+            -1,
+            crop_index,
+            msg="HandleObjectCaptureScreenshot must call ResolveTargetPixelCrop.",
+        )
+        self.assertNotEqual(
+            -1,
+            render_index,
+            msg="HandleObjectCaptureScreenshot must render through RenderSceneViewToTexture.",
+        )
+        self.assertNotEqual(
+            -1,
+            read_index,
+            msg="HandleObjectCaptureScreenshot must read pixels after crop validation.",
+        )
+        self.assertLess(
+            crop_index,
+            render_index,
+            msg=(
+                "Expected object-capture crop validation via "
+                "ResolveTargetPixelCrop before RenderSceneViewToTexture."
+            ),
+        )
+        self.assertLess(
+            crop_index,
+            read_index,
+            msg=(
+                "Expected object-capture crop validation via "
+                "ResolveTargetPixelCrop before ReadPixels."
+            ),
+        )
+
+        resolver_body = self._target_method_body("ResolveTargetPixelCrop")
+        self.assertIn(
+            "ScreenshotCropBounds.FitsWithinFrame",
+            resolver_body,
+            msg=(
+                "Expected ResolveTargetPixelCrop to reject non-fitting "
+                "pixel crops through ScreenshotCropBounds.FitsWithinFrame."
+            ),
+        )
+        self.assertIn(
+            '"EDITOR_CTRL_CROP_ROI_OUT_OF_BOUNDS"',
+            resolver_body,
+            msg=(
+                "Expected ResolveTargetPixelCrop to preserve the existing "
+                "EDITOR_CTRL_CROP_ROI_OUT_OF_BOUNDS envelope."
+            ),
+        )
+
+    def test_scene_pixel_crop_delegates_and_has_no_direct_edge_addition(self) -> None:
+        body = self._method_body("HandleCaptureScreenshot")
+        self.assertIn(
+            "ScreenshotCropBounds.FitsWithinFrame",
+            body,
+            msg=(
+                "Expected HandleCaptureScreenshot scene pixel crops to use "
+                "ScreenshotCropBounds.FitsWithinFrame."
+            ),
+        )
+        self.assertNotRegex(
+            body,
+            r"cropBounds\.x\s*\+\s*cropBounds\.w|"
+            r"cropBounds\.y\s*\+\s*cropBounds\.h",
+            msg=(
+                "HandleCaptureScreenshot must not use direct int edge "
+                "addition for scene pixel crop bounds."
+            ),
+        )
+
+
 class ScreenshotObjectCaptureSourceTests(unittest.TestCase):
-    """Issue #84 — bridge-side source-text invariants for the
-    target-oriented capture branch on ``HandleCaptureScreenshot``.
+    """Issue #84/#87/#90 — bridge-side source-text invariants for the
+    target-oriented capture branch.
 
-    The new branch reads ``request.target`` and ``request.angle``,
-    delegates target resolution to the existing stage-aware resolver
-    ``TryResolveGameObjectInActiveStage`` (so the ambiguous-hierarchy
-    envelope ``EDITOR_CTRL_HIERARCHY_PATH_AMBIGUOUS`` surfaces
-    unchanged), invokes the Unity-free framing math via
-    ``ObjectCaptureFramingMath``, and surfaces the three new bridge
-    error codes for "no match", "no renderers", and "unknown preset".
+    The dispatcher still lives in ``HandleCaptureScreenshot``. Target-specific
+    capture behavior lives in ``Screenshot.TargetCapture`` so the stage-aware
+    resolver, World Space UI branch, renderer framing, and target pixel crop
+    behavior can evolve without growing the generic screenshot partial.
 
-    The dispatcher routing for ``capture_screenshot`` is unchanged
-    (the action already exists); this class also pins the literal
-    presence of ``capture_screenshot`` in the dispatcher and the
-    ActionRegistry so a future routing rewrite is caught.
-
-    T3 source-text invariant: the bridge runs inside the Unity Editor;
-    the Python harness cannot drive the SceneView (justified in
-    spec.md Tier 3 Justification).
+    T3 source-text invariant: the bridge runs inside the Unity Editor; the
+    Python harness cannot drive the SceneView (justified in the spec's Tier 3
+    entries for target capture).
     """
+
+    _TARGET_CAPTURE_PARTIAL = (
+        TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Screenshot.TargetCapture.cs"
+    )
 
     _BRIDGE_CODES = (
         "EDITOR_CTRL_SCREENSHOT_TARGET_NOT_FOUND",
@@ -3251,15 +4141,17 @@ class ScreenshotObjectCaptureSourceTests(unittest.TestCase):
     )
 
     def _screenshot_partial_body(self) -> str:
-        # The object-capture branch lives in the Screenshot partial
-        # (``PrefabSentinel.UnityEditorControlBridge.Screenshot.cs``);
-        # the partial may dispatch from ``HandleCaptureScreenshot`` to a
-        # private helper, so this T3 net inspects the full partial body
-        # (comments stripped) rather than a single method extraction.
-        partial = (
-            TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Screenshot.cs"
+        self.assertTrue(
+            self._TARGET_CAPTURE_PARTIAL.exists(),
+            msg="Screenshot.TargetCapture partial must exist for target capture split.",
         )
-        return _strip_cs_comments(partial.read_text(encoding="utf-8"))
+        return _strip_cs_comments(_read(self._TARGET_CAPTURE_PARTIAL))
+
+    def _object_capture_body(self) -> str:
+        return _extract_method(
+            self._screenshot_partial_body(),
+            "HandleObjectCaptureScreenshot",
+        )
 
     def test_handler_branches_on_request_target(self) -> None:
         body = _extract_method(_read(BRIDGE), "HandleCaptureScreenshot")
@@ -3273,21 +4165,35 @@ class ScreenshotObjectCaptureSourceTests(unittest.TestCase):
             ),
         )
 
+    def test_target_capture_partial_is_split_from_screenshot_dispatcher(self) -> None:
+        self.assertTrue(
+            self._TARGET_CAPTURE_PARTIAL.exists(),
+            msg="Screenshot.TargetCapture partial must exist for issue #87 split.",
+        )
+        screenshot_body = _strip_cs_comments(
+            _read(TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Screenshot.cs")
+        )
+        dispatch_body = _extract_method(screenshot_body, "HandleCaptureScreenshot")
+        self.assertIn(
+            "HandleObjectCaptureScreenshot(request, outputPath)",
+            dispatch_body,
+            msg="Screenshot.cs must keep target dispatch wired to the moved helper.",
+        )
+        self.assertNotIn(
+            "private static EditorControlResponse HandleObjectCaptureScreenshot",
+            screenshot_body,
+            msg="Target object capture must move out of Screenshot.cs into Screenshot.TargetCapture.cs.",
+        )
+
     def test_handler_routes_target_through_stage_aware_resolver(self) -> None:
         body = self._screenshot_partial_body()
-        # The object-capture branch must route through the existing
-        # stage-aware resolver so the ambiguous-hierarchy envelope
-        # surfaces unchanged; an independent hierarchy walk would
-        # silently first-pick a same-named sibling.
         self.assertIn(
             "TryResolveGameObjectInActiveStage",
             body,
             msg=(
-                "The Screenshot partial's object-capture branch must "
-                "delegate target resolution to "
+                "The target-capture partial must delegate target resolution to "
                 "TryResolveGameObjectInActiveStage so the existing "
-                "EDITOR_CTRL_HIERARCHY_PATH_AMBIGUOUS envelope surfaces "
-                "unchanged (#84)."
+                "EDITOR_CTRL_HIERARCHY_PATH_AMBIGUOUS envelope surfaces unchanged (#84)."
             ),
         )
 
@@ -3297,11 +4203,151 @@ class ScreenshotObjectCaptureSourceTests(unittest.TestCase):
             "ObjectCaptureFramingMath",
             body,
             msg=(
-                "The Screenshot partial's object-capture branch must "
-                "invoke the Unity-free ObjectCaptureFramingMath helper "
-                "(#84)."
+                "The target-capture partial must invoke the Unity-free "
+                "ObjectCaptureFramingMath helper (#84/#90)."
             ),
         )
+
+    def test_handler_uses_shared_renderer_bounds_before_framing_math(self) -> None:
+        body = self._object_capture_body()
+        helper_index = body.find("TryResolveRendererFramingBounds")
+        solver_index = body.find("TrySolveFramingForAabb")
+        success_index = body.find("BuildSuccess")
+        self.assertNotEqual(
+            -1,
+            helper_index,
+            msg="HandleObjectCaptureScreenshot must call TryResolveRendererFramingBounds.",
+        )
+        self.assertNotEqual(
+            -1,
+            solver_index,
+            msg="HandleObjectCaptureScreenshot must call TrySolveFramingForAabb.",
+        )
+        self.assertLess(
+            helper_index,
+            solver_index,
+            msg="Renderer bounds must be resolved before framing math runs.",
+        )
+        for forbidden in (
+            "GetComponentsInChildren<SkinnedMeshRenderer>",
+            ".BakeMesh(",
+            "SelectFramingRenderers",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(
+                    forbidden,
+                    body,
+                    msg="HandleObjectCaptureScreenshot must not duplicate the shared renderer-bounds model.",
+                )
+        for token in ("bounds_center", "bounds_extents"):
+            with self.subTest(token=token):
+                token_index = body.find(token, helper_index)
+                self.assertNotEqual(
+                    -1,
+                    token_index,
+                    msg=f"Successful object capture must report aggregate {token}.",
+                )
+                self.assertLess(
+                    success_index,
+                    token_index,
+                    msg=f"Aggregate {token} must be populated in the success payload.",
+                )
+
+    def test_handler_rejects_invalid_fit_mode_before_renderer_framing_and_render(self) -> None:
+        body = self._object_capture_body()
+        fit_error_index = body.find("SCREENSHOT_FIT_MODE_INVALID")
+        helper_index = body.find("TryResolveRendererFramingBounds")
+        render_index = body.find("RenderSceneViewToTexture")
+        self.assertNotEqual(
+            -1,
+            fit_error_index,
+            msg="Bridge-side invalid fit_mode must return SCREENSHOT_FIT_MODE_INVALID.",
+        )
+        self.assertLess(
+            fit_error_index,
+            helper_index,
+            msg="Invalid fit_mode must be rejected before renderer framing.",
+        )
+        self.assertLess(
+            fit_error_index,
+            render_index,
+            msg="Invalid fit_mode must be rejected before file rendering.",
+        )
+        for token in ("request.fit_mode", "max_axis", "both_axes"):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+
+    def test_omitted_angle_defaults_after_world_space_ui_routing(self) -> None:
+        body = self._object_capture_body()
+        self.assertNotIn(
+            "string angle = string.IsNullOrEmpty(request.angle)",
+            body,
+            msg="request.angle must not resolve to the renderer default before UI routing.",
+        )
+        raw_angle_index = body.find("string angle = request.angle;")
+        ui_branch_index = body.find("ShouldUseWorldSpaceUiCapture")
+        ui_default_index = body.find("string uiAngle = string.IsNullOrEmpty(angle)", ui_branch_index)
+        renderer_default_index = body.find("angle = string.IsNullOrEmpty(angle)", ui_branch_index)
+        preset_index = body.find("ObjectCaptureFramingMath.PresetNames")
+        for label, index in (
+            ("raw angle assignment", raw_angle_index),
+            ("UI routing branch", ui_branch_index),
+            ("UI omitted-angle default", ui_default_index),
+            ("renderer omitted-angle default", renderer_default_index),
+            ("renderer preset validation", preset_index),
+        ):
+            with self.subTest(label=label):
+                self.assertNotEqual(-1, index)
+        self.assertLess(raw_angle_index, ui_branch_index)
+        self.assertLess(ui_branch_index, ui_default_index)
+        self.assertLess(ui_default_index, renderer_default_index)
+        self.assertLess(renderer_default_index, preset_index)
+        self.assertIn('"front"', body[ui_default_index:renderer_default_index])
+        self.assertIn('"three_quarter"', body[renderer_default_index:preset_index])
+
+    def test_handler_reports_no_renderers_before_solver_and_output(self) -> None:
+        body = self._object_capture_body()
+        helper_index = body.find("TryResolveRendererFramingBounds")
+        no_renderer_index = body.find("EDITOR_CTRL_SCREENSHOT_TARGET_NO_RENDERERS", helper_index)
+        solver_index = body.find("TrySolveFramingForAabb")
+        render_index = body.find("RenderSceneViewToTexture")
+        self.assertNotEqual(-1, helper_index)
+        self.assertNotEqual(
+            -1,
+            no_renderer_index,
+            msg="No renderer contributors must return EDITOR_CTRL_SCREENSHOT_TARGET_NO_RENDERERS.",
+        )
+        self.assertLess(no_renderer_index, solver_index)
+        self.assertLess(no_renderer_index, render_index)
+
+    def test_handler_reports_solver_failures_before_success_output(self) -> None:
+        body = self._object_capture_body()
+        for token in (
+            "TryResolveBothAxesAspectForAabb",
+            "ResolveOutputSizeForFitMode",
+            "TrySolveFramingForAabb",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+        success_index = body.find("BuildSuccess")
+        aspect_call_index = body.find("TryResolveBothAxesAspectForAabb")
+        aspect_failure_index = body.find("EDITOR_CTRL_SCREENSHOT_FAILED", aspect_call_index)
+        framing_call_index = body.find("TrySolveFramingForAabb")
+        framing_failure_index = body.find("EDITOR_CTRL_SCREENSHOT_FAILED", framing_call_index)
+        self.assertNotEqual(
+            -1,
+            aspect_failure_index,
+            msg="Both-axis aspect failure must return EDITOR_CTRL_SCREENSHOT_FAILED.",
+        )
+        self.assertNotEqual(
+            -1,
+            framing_failure_index,
+            msg="Framing solver failure must return EDITOR_CTRL_SCREENSHOT_FAILED.",
+        )
+        self.assertLess(aspect_failure_index, success_index)
+        self.assertLess(framing_failure_index, success_index)
+        self.assertIn("aspectReason", body)
+        self.assertIn("framingReason", body)
 
     def test_handler_emits_new_bridge_error_codes(self) -> None:
         body = self._screenshot_partial_body()
@@ -3310,15 +4356,12 @@ class ScreenshotObjectCaptureSourceTests(unittest.TestCase):
                 self.assertIn(
                     f'"{code}"', body,
                     msg=(
-                        f"The Screenshot partial must reference the "
+                        f"The target-capture partial must reference the "
                         f"bridge-side error code literal {code!r} (#84)."
                     ),
                 )
 
     def test_dispatcher_routes_capture_screenshot_unchanged(self) -> None:
-        # Issue #84: the dispatcher already routes ``capture_screenshot``;
-        # this row pins the routing so an accidental rewrite breaks the
-        # new mode.
         source = _read(BRIDGE)
         body = _extract_method(source, "DispatchAction")
         self.assertIn('case "capture_screenshot":', body)
@@ -3353,6 +4396,616 @@ class ScreenshotObjectCaptureSourceTests(unittest.TestCase):
                         f"new target-oriented capability (#84)."
                     ),
                 )
+
+
+class CameraScreenshotFramingDocsTests(unittest.TestCase):
+    _DOCS_API_REFERENCE = (
+        Path(__file__).resolve().parent.parent / "docs" / "api-reference.md"
+    )
+    _DOCS_TOOLS = (
+        Path(__file__).resolve().parent.parent / "docs" / "tools.md"
+    )
+
+    def test_api_reference_documents_fit_mode_and_new_diagnostics(self) -> None:
+        docs = self._DOCS_API_REFERENCE.read_text(encoding="utf-8")
+        for token in (
+            "SCREENSHOT_FIT_MODE_INVALID",
+            "EDITOR_CTRL_CAMERA_PROJECTION_TRANSITION",
+            "fit_mode",
+            "both_axes",
+            "max_axis",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, docs)
+
+    def test_api_reference_documents_auto_world_space_ui_routing(self) -> None:
+        docs = self._DOCS_API_REFERENCE.read_text(encoding="utf-8")
+        self.assertIn(
+            'target_mode="auto"',
+            docs,
+            msg="API reference must name the auto target-mode selector explicitly.",
+        )
+        self.assertIn(
+            "World Space Canvas",
+            docs,
+            msg="Auto routing docs must state the World Space Canvas eligibility condition.",
+        )
+        self.assertNotIn(
+            "auto renderer path",
+            docs,
+            msg="API reference must not describe auto as renderer-only after UI auto routing is intentional.",
+        )
+
+    def test_tools_reference_documents_screenshot_fit_mode(self) -> None:
+        docs = self._DOCS_TOOLS.read_text(encoding="utf-8")
+        editor_screenshot_row = next(
+            line for line in docs.splitlines() if line.startswith("| `editor_screenshot`")
+        )
+        for token in ("fit_mode", "both_axes", "max_axis", "width", "height", "target"):
+            with self.subTest(token=token):
+                self.assertIn(token, editor_screenshot_row)
+
+
+class EditorFrameRendererFramingSourceTests(unittest.TestCase):
+    """Issue #85 — editor_frame must use the shared renderer bounds model."""
+
+    def _handle_frame_selected_body(self) -> str:
+        return _extract_method(_read(BRIDGE), "HandleFrameSelected")
+
+    def test_frame_selected_uses_shared_renderer_bounds_before_rect_transform_fallback(self) -> None:
+        body = self._handle_frame_selected_body()
+        helper_index = body.find("TryResolveRendererFramingBounds")
+        rect_index = body.find("GetComponent<RectTransform>")
+        self.assertNotEqual(
+            -1,
+            helper_index,
+            msg="HandleFrameSelected must call TryResolveRendererFramingBounds for renderer targets.",
+        )
+        self.assertNotEqual(
+            -1,
+            rect_index,
+            msg="HandleFrameSelected must preserve the RectTransform fallback branch.",
+        )
+        self.assertLess(
+            helper_index,
+            rect_index,
+            msg="Renderer bounds must be attempted before the RectTransform fallback.",
+        )
+
+    def test_frame_selected_has_no_single_renderer_bounds_path(self) -> None:
+        body = self._handle_frame_selected_body()
+        self.assertNotIn(
+            "GetComponentInChildren<Renderer>()",
+            body,
+            msg="HandleFrameSelected must not frame only the first child Renderer.",
+        )
+        self.assertNotIn(
+            "renderer.bounds",
+            body,
+            msg="HandleFrameSelected must not carry a separate Renderer.bounds path.",
+        )
+
+
+class RendererFramingBoundsPolicySourceTests(unittest.TestCase):
+    """Issue #85 — source invariants for renderer bounds policy selection."""
+
+    _HELPER_PATH = TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.RendererFramingBounds.cs"
+
+    def _helper_body(self) -> str:
+        self.assertTrue(
+            self._HELPER_PATH.exists(),
+            msg="RendererFramingBounds partial must exist as the shared #85 bounds model.",
+        )
+        return _extract_method(
+            _strip_cs_comments(self._HELPER_PATH.read_text(encoding="utf-8")),
+            "TryResolveRendererFramingBounds",
+        )
+
+    def test_helper_signature_exposes_policy_and_included_excluded_records(self) -> None:
+        body = self._helper_body()
+        for literal in (
+            "string boundsPolicy",
+            "out IList<ObjectCaptureFramingMath.RendererBoundsRecord> includedRecords",
+            "out IList<ObjectCaptureFramingMath.RendererBoundsRecord> excludedRecords",
+        ):
+            with self.subTest(literal=literal):
+                self.assertIn(
+                    literal,
+                    body,
+                    msg=f"TryResolveRendererFramingBounds must expose {literal!r}.",
+                )
+
+    def test_helper_collects_active_enabled_renderer_contributors(self) -> None:
+        body = self._helper_body()
+        for literal in (
+            "GetComponentsInChildren<Renderer>(false)",
+            "renderer.enabled",
+            "records.Add(ToRendererBoundsRecord(bounds))",
+        ):
+            with self.subTest(literal=literal):
+                self.assertIn(
+                    literal,
+                    body,
+                    msg=f"TryResolveRendererFramingBounds must contain {literal!r}.",
+                )
+
+    def test_helper_bakes_skinned_meshes_and_destroys_temporary_meshes(self) -> None:
+        body = self._helper_body()
+        for literal in (
+            "SkinnedMeshRenderer",
+            ".BakeMesh(",
+            "UnityEngine.Object.DestroyImmediate",
+        ):
+            with self.subTest(literal=literal):
+                self.assertIn(
+                    literal,
+                    body,
+                    msg=f"TryResolveRendererFramingBounds must contain {literal!r}.",
+                )
+
+    def test_all_visible_branch_aggregates_records_without_core_filter(self) -> None:
+        body = self._helper_body()
+        all_visible_index = body.find('boundsPolicy == "all_visible_renderers"')
+        focus_core_index = body.find('boundsPolicy == "focus_core"')
+        selector_index = body.find("ObjectCaptureFramingMath.SelectFramingRenderers")
+        self.assertNotEqual(
+            -1,
+            all_visible_index,
+            msg="TryResolveRendererFramingBounds must branch on all_visible_renderers.",
+        )
+        self.assertNotEqual(
+            -1,
+            focus_core_index,
+            msg="TryResolveRendererFramingBounds must branch on focus_core.",
+        )
+        self.assertLess(
+            all_visible_index,
+            focus_core_index,
+            msg="The default all_visible_renderers branch must be evaluated before focus_core.",
+        )
+        self.assertNotIn(
+            "ObjectCaptureFramingMath.SelectFramingRenderers",
+            body[all_visible_index:focus_core_index],
+            msg="all_visible_renderers must aggregate gathered records without core selection.",
+        )
+        self.assertIn(
+            "includedRecords = records",
+            body[all_visible_index:focus_core_index],
+            msg="all_visible_renderers must include every gathered renderer record.",
+        )
+        self.assertLess(
+            focus_core_index,
+            selector_index,
+            msg="SelectFramingRenderers must be confined to the focus_core branch.",
+        )
+
+    def test_focus_core_branch_records_selector_exclusions(self) -> None:
+        body = self._helper_body()
+        focus_core_index = body.find('boundsPolicy == "focus_core"')
+        self.assertNotEqual(-1, focus_core_index, msg="focus_core branch missing.")
+        focus_core_body = body[focus_core_index:]
+        for literal in (
+            "ObjectCaptureFramingMath.SelectFramingRenderers(records)",
+            "excludedRecords",
+            "includedRecords",
+        ):
+            with self.subTest(literal=literal):
+                self.assertIn(
+                    literal,
+                    focus_core_body,
+                    msg=f"focus_core branch must contain {literal!r}.",
+                )
+
+
+class ObjectCaptureBoundsEvidenceSourceTests(unittest.TestCase):
+    _TARGET_CAPTURE_PARTIAL = (
+        TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Screenshot.TargetCapture.cs"
+    )
+
+    def _object_capture_body(self) -> str:
+        self.assertTrue(
+            self._TARGET_CAPTURE_PARTIAL.exists(),
+            msg="Screenshot.TargetCapture partial must exist for renderer target capture.",
+        )
+        return _extract_method(
+            _strip_cs_comments(self._TARGET_CAPTURE_PARTIAL.read_text(encoding="utf-8")),
+            "HandleObjectCaptureScreenshot",
+        )
+
+    def test_data_contract_declares_bounds_policy_and_exclusion_fields(self) -> None:
+        source = _read(BRIDGE)
+        for literal in (
+            "public string bounds_policy = string.Empty",
+            "public int excluded_count = 0",
+            "public GeometryBoundsContributorEntry[] excluded_renderers",
+        ):
+            with self.subTest(literal=literal):
+                self.assertIn(literal, source, msg=f"EditorControlData must declare {literal!r}.")
+
+    def test_object_capture_success_payload_assigns_bounds_evidence(self) -> None:
+        body = self._object_capture_body()
+        for literal in (
+            "request.bounds_policy",
+            "includedRecords",
+            "excludedRecords",
+            "bounds_policy = request.bounds_policy",
+            "bounds_center = new float[]",
+            "bounds_extents = new float[]",
+            "contributor_count = includedRecords.Count",
+            "excluded_count = excludedRecords.Count",
+            "bounds_contributors = ToContributorEntries(includedRecords)",
+            "excluded_renderers = ToContributorEntries(excludedRecords)",
+        ):
+            with self.subTest(literal=literal):
+                self.assertIn(
+                    literal,
+                    body,
+                    msg=f"HandleObjectCaptureScreenshot must assign {literal!r}.",
+                )
+
+
+class ObjectCaptureBoundsPolicyErrorSourceTests(unittest.TestCase):
+    _TARGET_CAPTURE_PARTIAL = (
+        TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Screenshot.TargetCapture.cs"
+    )
+
+    def _object_capture_body(self) -> str:
+        return _extract_method(
+            _strip_cs_comments(self._TARGET_CAPTURE_PARTIAL.read_text(encoding="utf-8")),
+            "HandleObjectCaptureScreenshot",
+        )
+
+    def test_invalid_policy_error_precedes_renderer_success(self) -> None:
+        body = self._object_capture_body()
+        error_index = body.find("BuildBoundsPolicyInvalidError(request.bounds_policy)")
+        success_index = body.find("EDITOR_CTRL_SCREENSHOT_OK")
+        self.assertNotEqual(
+            -1,
+            error_index,
+            msg="HandleObjectCaptureScreenshot must call the bounds-policy error helper.",
+        )
+        self.assertLess(
+            error_index,
+            success_index,
+            msg="Invalid bounds_policy must be rejected before screenshot success.",
+        )
+        source = _read(BRIDGE)
+        helper_body = _extract_method(source, "BuildBoundsPolicyInvalidError")
+        for literal in (
+            "EDITOR_CTRL_BOUNDS_POLICY_INVALID",
+            "all_visible_renderers",
+            "focus_core",
+        ):
+            with self.subTest(literal=literal):
+                self.assertIn(literal, helper_body)
+
+
+class FrameSelectedBoundsEvidenceSourceTests(unittest.TestCase):
+    def _handle_frame_selected_body(self) -> str:
+        return _extract_method(_read(BRIDGE), "HandleFrameSelected")
+
+    def test_frame_selected_success_payload_assigns_bounds_evidence(self) -> None:
+        body = self._handle_frame_selected_body()
+        for literal in (
+            "request.bounds_policy",
+            "includedRecords",
+            "excludedRecords",
+            "sceneView.Frame(frameBounds, instant: true)",
+            "data.bounds_policy = request.bounds_policy",
+            "data.contributor_count = includedRecords.Count",
+            "data.excluded_count = excludedRecords.Count",
+            "data.bounds_contributors = ToContributorEntries(includedRecords)",
+            "data.excluded_renderers = ToContributorEntries(excludedRecords)",
+            "data.bounds_source = \"rect_transform\"",
+        ):
+            with self.subTest(literal=literal):
+                self.assertIn(
+                    literal,
+                    body,
+                    msg=f"HandleFrameSelected must contain {literal!r}.",
+                )
+
+
+class FrameSelectedBoundsPolicyErrorSourceTests(unittest.TestCase):
+    def test_invalid_policy_error_precedes_frame_success(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleFrameSelected")
+        error_index = body.find("BuildBoundsPolicyInvalidError(request.bounds_policy)")
+        success_index = body.find("EDITOR_CTRL_FRAME_OK")
+        self.assertNotEqual(
+            -1,
+            error_index,
+            msg="HandleFrameSelected must call the bounds-policy error helper.",
+        )
+        self.assertLess(
+            error_index,
+            success_index,
+            msg="Invalid bounds_policy must be rejected before frame success.",
+        )
+        helper_body = _extract_method(_read(BRIDGE), "BuildBoundsPolicyInvalidError")
+        for literal in (
+            "EDITOR_CTRL_BOUNDS_POLICY_INVALID",
+            "all_visible_renderers",
+            "focus_core",
+        ):
+            with self.subTest(literal=literal):
+                self.assertIn(literal, helper_body)
+
+
+class GeometryMeasureDistanceSourceTests(unittest.TestCase):
+    def test_measure_distance_validates_bounds_source_before_pivot_shortcut(self) -> None:
+        source = _read(TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Geometry.cs")
+        body = _extract_method(source, "HandleMeasureDistance")
+        validation_idx = body.find("ValidateBoundsSourceSelector(")
+        pivot_idx = body.find("request.distance_mode == \"pivot\"")
+        self.assertNotEqual(
+            -1,
+            validation_idx,
+            msg="HandleMeasureDistance must validate bounds_source explicitly.",
+        )
+        self.assertIn("request.bounds_source", body[validation_idx:pivot_idx])
+        self.assertNotEqual(
+            -1,
+            pivot_idx,
+            msg="HandleMeasureDistance must keep the pivot distance branch.",
+        )
+        self.assertLess(
+            validation_idx,
+            pivot_idx,
+            msg="bounds_source validation must run before the pivot shortcut.",
+        )
+
+
+class ScreenshotWorldSpaceUiSourceTests(unittest.TestCase):
+    _TARGET_CAPTURE_PARTIAL = (
+        TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Screenshot.TargetCapture.cs"
+    )
+    _WORLD_SPACE_UI_PARTIAL = (
+        TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Screenshot.TargetCapture.WorldSpaceUi.cs"
+    )
+
+    def _target_capture_body(self) -> str:
+        self.assertTrue(
+            self._TARGET_CAPTURE_PARTIAL.exists(),
+            msg="Screenshot.TargetCapture partial must exist for renderer target capture.",
+        )
+        return _read(self._TARGET_CAPTURE_PARTIAL)
+
+    def _world_space_ui_body(self) -> str:
+        self.assertTrue(
+            self._WORLD_SPACE_UI_PARTIAL.exists(),
+            msg="Screenshot.TargetCapture.WorldSpaceUi partial must exist for world_space_ui target capture.",
+        )
+        return _read(self._WORLD_SPACE_UI_PARTIAL)
+
+    def test_ui_capture_supports_front_back_current_camera_and_rejects_other_angles(self) -> None:
+        body = _extract_method(
+            self._world_space_ui_body(),
+            "HandleWorldSpaceUiCaptureScreenshot",
+        )
+        self.assertIn("angle != \"front\" && angle != \"back\" && angle != \"current_camera\"", body)
+        self.assertIn("EDITOR_CTRL_SCREENSHOT_ANGLE_INVALID", body)
+        self.assertIn("angle == \"back\"", body)
+        self.assertIn("angle == \"current_camera\"", body)
+        self.assertIn("cam.transform.forward", body)
+
+    def test_ui_capture_front_uses_readable_side_of_rect_transform(self) -> None:
+        body = _extract_method(
+            self._world_space_ui_body(),
+            "HandleWorldSpaceUiCaptureScreenshot",
+        )
+        self.assertIn(
+            "Vector3 cameraDir = -uiNormal;",
+            body,
+            msg=(
+                "World Space UI angle='front' must place the camera on the "
+                "readable side of Unity UI graphics; using +uiNormal captures "
+                "the panel from behind and mirrors the text."
+            ),
+        )
+        back_index = body.index('if (angle == "back")')
+        self.assertIn(
+            "cameraDir = uiNormal;",
+            body[back_index:],
+            msg="angle='back' must select the opposite side from front.",
+        )
+
+    def test_object_capture_validates_renderer_angle_after_ui_branch(self) -> None:
+        body = _extract_method(
+            self._target_capture_body(),
+            "HandleObjectCaptureScreenshot",
+        )
+        ui_selector_index = body.index("ShouldUseWorldSpaceUiCapture")
+        renderer_helper_index = body.index("TryResolveRendererFramingBounds")
+        renderer_preset_index = body.index("ObjectCaptureFramingMath.PresetNames")
+        renderer_error_index = body.index("EDITOR_CTRL_SCREENSHOT_ANGLE_INVALID", renderer_preset_index)
+        self.assertLess(
+            ui_selector_index,
+            renderer_helper_index,
+            msg="World Space UI dispatch must run before renderer bounds are resolved.",
+        )
+        self.assertLess(
+            ui_selector_index,
+            renderer_preset_index,
+            msg="current_camera must reach the World Space UI branch before renderer preset validation",
+        )
+        self.assertLess(renderer_preset_index, renderer_error_index)
+        self.assertNotIn(
+            "ObjectCaptureFramingMath.PresetNames",
+            body[:ui_selector_index],
+            msg="renderer-only angle validation must not run before World Space UI dispatch",
+        )
+
+    def test_ui_capture_reports_required_framing_metadata(self) -> None:
+        body = _extract_method(
+            self._world_space_ui_body(),
+            "HandleWorldSpaceUiCaptureScreenshot",
+        )
+        for token in (
+            "bounds_source = \"rect_transform\"",
+            "bounds_center = Vector3ToArray(center)",
+            "bounds_extents = Vector3ToArray(extents)",
+            "ui_normal = Vector3ToArray(uiNormal)",
+            "camera_position = Vector3ToArray(cameraPosition)",
+            "camera_look_at = Vector3ToArray(center)",
+            "camera_orthographic = orthographic",
+            "camera_size = paddedHalfHeight",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+
+    def test_ui_capture_derives_framing_aspect_from_final_output_size(self) -> None:
+        body = _extract_method(
+            self._world_space_ui_body(),
+            "HandleWorldSpaceUiCaptureScreenshot",
+        )
+        width_index = body.find(
+            "int w = request.width > 0 ? request.width : (int)sceneView.position.width;"
+        )
+        height_index = body.find(
+            "int h = request.height > 0 ? request.height : (int)sceneView.position.height;"
+        )
+        aspect_index = body.find("float aspect = (float)w / (float)h;")
+        padded_index = body.find(
+            "float paddedHalfHeight = Math.Max(extents.y, extents.x / Math.Max(aspect, 0.001f))"
+        )
+
+        self.assertNotEqual(
+            -1,
+            aspect_index,
+            msg="World Space UI framing aspect must derive from the final output size.",
+        )
+        self.assertLess(
+            width_index,
+            aspect_index,
+            msg="World Space UI width must be finalized before framing aspect is computed.",
+        )
+        self.assertLess(
+            height_index,
+            aspect_index,
+            msg="World Space UI height must be finalized before framing aspect is computed.",
+        )
+        self.assertLess(
+            aspect_index,
+            padded_index,
+            msg="World Space UI padded framing must consume the final output aspect.",
+        )
+        self.assertNotIn(
+            "cam.aspect",
+            body[width_index:padded_index],
+            msg="World Space UI one-sided output sizes must not frame against stale camera aspect.",
+        )
+
+    def test_ui_capture_applies_target_pixel_rectangle_crop(self) -> None:
+        body = _extract_method(
+            self._world_space_ui_body(),
+            "HandleWorldSpaceUiCaptureScreenshot",
+        )
+        crop_index = body.index("ResolveTargetPixelCrop(")
+        render_index = body.index("RenderSceneViewToTexture", crop_index)
+        texture_index = body.index("new Texture2D(readW, readH", render_index)
+        read_index = body.index("ReadPixels(new Rect(readX, readY, readW, readH)", texture_index)
+        response_index = body.index("BuildSuccess(", read_index)
+        for token in (
+            'width = readW',
+            'height = readH',
+            'crop_roi_applied = pixelRectApplied != null ? "pixel_rect" : string.Empty',
+            "crop_bounds = pixelRectApplied",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body[response_index:])
+
+    def test_explicit_world_space_ui_without_rect_transform_is_handled_error(self) -> None:
+        body = _extract_method(
+            self._world_space_ui_body(),
+            "ShouldUseWorldSpaceUiCapture",
+        )
+        error_index = body.index("has no active RectTransform contributors")
+        handled_index = body.index("return true;", error_index)
+        self.assertNotIn(
+            "return false;",
+            body[error_index:handled_index],
+            msg="explicit world_space_ui targets without RectTransform must not fall through before the unsupported envelope is handled",
+        )
+        self.assertLess(
+            body.index("if (!wantsUi) return false;"),
+            error_index,
+            msg="only auto mode may fall back to renderer capture when RectTransform contributors are absent",
+        )
+
+    def test_auto_world_space_canvas_with_rect_transform_routes_to_ui_capture(self) -> None:
+        body = _extract_method(
+            self._world_space_ui_body(),
+            "ShouldUseWorldSpaceUiCapture",
+        )
+        renderer_short_circuit_index = body.index(
+            'if (request.target_mode == "renderer") return false;'
+        )
+        canvas_index = body.index("Canvas canvas = ResolveRelevantCanvas(target);")
+        rect_index = body.index("bool hasRect =")
+        no_rect_auto_fallback_index = body.index("if (!wantsUi) return false;")
+        canvas_guard_index = body.index(
+            "canvas == null || canvas.renderMode != RenderMode.WorldSpace"
+        )
+        final_ui_route_index = body.rfind("return true;")
+
+        self.assertLess(
+            renderer_short_circuit_index,
+            canvas_index,
+            msg="Explicit renderer target_mode must remain the only early renderer route.",
+        )
+        self.assertLess(
+            rect_index,
+            no_rect_auto_fallback_index,
+            msg="Auto fallback to renderer must be scoped to missing RectTransform contributors.",
+        )
+        self.assertLess(
+            no_rect_auto_fallback_index,
+            canvas_guard_index,
+            msg="Auto fallback must occur before the World Space Canvas eligibility check.",
+        )
+        self.assertNotIn(
+            "if (!wantsUi) return false;",
+            body[canvas_guard_index:final_ui_route_index],
+            msg="Eligible auto targets under a World Space Canvas must route to UI capture.",
+        )
+
+    def test_ui_capture_anchor_resolution_avoids_null_coalescing_on_unity_objects(self) -> None:
+        body = _extract_method(
+            self._world_space_ui_body(),
+            "HandleWorldSpaceUiCaptureScreenshot",
+        )
+        self.assertIn("RectTransform anchor = target.GetComponent<RectTransform>();", body)
+        self.assertIn(
+            "if (anchor == null)\n                anchor = target.GetComponentInChildren<RectTransform>(includeInactive: false);",
+            body,
+            msg=(
+                "RectTransform anchor resolution must use Unity's overloaded "
+                "null check before falling back to children; C# ?? can retain "
+                "a Unity fake-null component wrapper and later throw "
+                "MissingComponentException."
+            ),
+        )
+        self.assertNotIn(
+            "GetComponent<RectTransform>()\n                ??",
+            body,
+            msg="UnityEngine.Object references must not use ?? for RectTransform fallback.",
+        )
+
+
+class UnityCameraTypeQualificationSourceTests(unittest.TestCase):
+    def test_screenshot_partials_fully_qualify_unity_camera_type(self):
+        files = [
+            "PrefabSentinel.UnityEditorControlBridge.Screenshot.cs",
+            "PrefabSentinel.UnityEditorControlBridge.Screenshot.TargetCapture.cs",
+            "PrefabSentinel.UnityEditorControlBridge.Screenshot.TargetCapture.WorldSpaceUi.cs",
+            "PrefabSentinel.UnityIntegrationTests.cs",
+        ]
+
+        for filename in files:
+            source = _strip_cs_comments(_read(TOOLS_DIR / filename))
+            self.assertNotRegex(source, r"(?<![\w.])Camera\s+cam\b", filename)
+            self.assertNotIn("RenderSceneViewToTexture(Camera ", source, filename)
+            self.assertNotIn("GetComponent<Camera>", source, filename)
 
 
 class HandleSetCameraSizeFieldSourceTests(unittest.TestCase):
@@ -3540,7 +5193,7 @@ class MenuHasEditorScriptChangedSinceSegmentExclusionTests(unittest.TestCase):
 
     def test_temp_exclusion_constant_literal_value_unchanged(self) -> None:
         # The constant value is part of the public operating convention
-        # (CLAUDE.md / README.md); a rename would silently break the
+        # (AGENTS.md / README.md); a rename would silently break the
         # temp-exclusion contract with the run-script handler that writes
         # there. The literal now lives on EditorScriptPathClassifier.
         source = _strip_cs_comments(EDITOR_SCRIPT_PATH_CLASSIFIER.read_text(encoding="utf-8"))
@@ -3585,6 +5238,45 @@ class EditorControlBridgeRequestSchemaTests(unittest.TestCase):
         # Target-oriented screenshot (issue #84).
         "target",
         "angle",
+        "target_mode",
+        "padding_ratio",
+        "projection",
+        "since_sequence",
+        "since_request_id",
+        "bounds_source",
+        "include_children",
+        "distance_mode",
+        "values_json",
+        "values_json_present",
+        "expected_length",
+        "property_path",
+        "root_property_path",
+        "cap",
+        "serialized_property_bool_value",
+        "serialized_property_bool_value_present",
+        "serialized_property_int_value",
+        "serialized_property_int_value_present",
+        "serialized_property_long_value",
+        "serialized_property_long_value_present",
+        "serialized_property_float_value",
+        "serialized_property_float_value_present",
+        "serialized_property_string_value",
+        "serialized_property_string_value_present",
+        "serialized_property_enum_name",
+        "serialized_property_enum_name_present",
+        "serialized_property_enum_index",
+        "serialized_property_enum_index_present",
+        "serialized_property_object_reference_asset_path",
+        "serialized_property_object_reference_asset_path_present",
+        "serialized_property_object_reference_hierarchy_path",
+        "serialized_property_object_reference_hierarchy_path_present",
+        "serialized_property_object_reference_null",
+        "serialized_property_array_size",
+        "serialized_property_array_size_present",
+        "asset_type",
+        "source_asset_path",
+        "destination_asset_path",
+        "parameters",
     )
 
     _NEW_RESPONSE_FIELDS = (
@@ -3613,6 +5305,53 @@ class EditorControlBridgeRequestSchemaTests(unittest.TestCase):
         "renderers_touched",
         # Async poll status.
         "status",
+        "return_value",
+        "outputs",
+        "exception",
+        "path_hints",
+        "hierarchy_path",
+        "local_position",
+        "world_position",
+        "bounds_source",
+        "bounds_center",
+        "bounds_extents",
+        "target_mode",
+        "projection",
+        "ui_normal",
+        "distance_mode",
+        "distance",
+        # UdonSharp array write error context.
+        "field_name",
+        "element_index",
+        "expected_type",
+        "serialized_property_json",
+        "asset_type",
+        "unity_type",
+        "guid",
+        "would_create",
+        "created",
+        "dry_run",
+        "refreshed",
+        "dirty_before",
+        "dirty_after",
+        "name",
+        "applied_parameters",
+        "source_asset_path",
+        "destination_asset_path",
+        "before_guid",
+        "after_guid",
+        "guid_preserved",
+        "would_move",
+        "moved",
+        "old_name",
+        "new_name",
+        "name_changed",
+        "phase",
+        "exception_type",
+        "exception_message",
+        "unity_error",
+        "meta_exists",
+        "state_unknown",
     )
 
     def test_request_dto_declares_every_new_field(self) -> None:
@@ -3727,6 +5466,14 @@ class EditorControlBridgeDispatcherRoutingTests(unittest.TestCase):
         "close_prefab",
         "run_script_submit",
         "run_script_poll",
+        "get_transform",
+        "get_bounds",
+        "measure_distance",
+        "editor_serialized_property_read",
+        "editor_serialized_property_list",
+        "editor_serialized_property_write",
+        "create_generated_asset",
+        "move_asset",
         "inspect_animation_clip",
         "create_animation_clip",
         "apply_animation_clip",
@@ -3739,6 +5486,14 @@ class EditorControlBridgeDispatcherRoutingTests(unittest.TestCase):
         "close_prefab": "HandleClosePrefab",
         "run_script_submit": "HandleRunScriptSubmit",
         "run_script_poll": "HandleRunScriptPoll",
+        "get_transform": "HandleGetTransform",
+        "get_bounds": "HandleGetBounds",
+        "measure_distance": "HandleMeasureDistance",
+        "editor_serialized_property_read": "HandleSerializedPropertyRead",
+        "editor_serialized_property_list": "HandleSerializedPropertyList",
+        "editor_serialized_property_write": "HandleSerializedPropertyWrite",
+        "create_generated_asset": "HandleCreateGeneratedAsset",
+        "move_asset": "HandleMoveAsset",
         "inspect_animation_clip": "HandleInspectAnimationClip",
         "create_animation_clip": "HandleCreateAnimationClip",
         "apply_animation_clip": "HandleApplyAnimationClip",
@@ -3781,6 +5536,704 @@ class EditorControlBridgeDispatcherRoutingTests(unittest.TestCase):
         for action in self._NEW_ACTIONS:
             with self.subTest(action=action):
                 self.assertIn(action, SUPPORTED_ACTIONS)
+
+    def test_dispatcher_default_branch_keeps_unknown_action_envelope(self) -> None:
+        source = _read(BRIDGE)
+        body = _extract_method(source, "DispatchAction")
+
+        self.assertIn("default:", body)
+        self.assertIn('"EDITOR_CTRL_UNKNOWN_ACTION"', body)
+        self.assertIn("Unknown action:", body)
+
+
+class AssetOpsSourceTests(unittest.TestCase):
+    _ASSET_OPS = TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.AssetOps.cs"
+
+    def _source(self) -> str:
+        return "\n".join(
+            _read(path)
+            for path in sorted(
+                TOOLS_DIR.glob("PrefabSentinel.UnityEditorControlBridge.AssetOps*.cs")
+            )
+        )
+
+    def test_asset_ops_partial_exists_and_declares_partial_class(self) -> None:
+        self.assertTrue(self._ASSET_OPS.exists(), "AssetOps partial file is missing")
+        source = self._source()
+        self.assertIn("public static partial class UnityEditorControlBridge", source)
+
+    def test_asset_ops_validation_results_avoid_record_syntax_for_unity(self) -> None:
+        source = _read(TOOLS_DIR / "PrefabSentinel.AssetOpsPathValidation.cs")
+        self.assertNotIn(
+            "record ",
+            source,
+            msg="Unity 2022.3 does not provide IsExternalInit for C# record types.",
+        )
+
+    def test_asset_ops_path_validation_uses_numeric_null_char_check(self) -> None:
+        source = _read(TOOLS_DIR / "PrefabSentinel.AssetOpsPathValidation.cs")
+        self.assertIn("assetPath.IndexOf((char)0) >= 0", source)
+        self.assertNotIn(
+            "assetPath.Contains('\\0', StringComparison.Ordinal)",
+            source,
+        )
+
+    def test_create_handler_uses_required_unity_apis_and_avoids_forbidden_paths(self) -> None:
+        source = self._source()
+        required = (
+            "HandleCreateGeneratedAsset",
+            "AssetOpsPathValidation.ValidateGeneratedAssetPath",
+            "new RenderTexture(",
+            ".filterMode",
+            ".useMipMap",
+            ".wrapMode",
+            "AssetDatabase.CreateAsset",
+            "AssetDatabase.SaveAssets",
+            "AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport)",
+            "AssetDatabase.AssetPathToGUID",
+            "AssetDatabase.LoadMainAssetAtPath",
+            "AssetDatabase.IsValidFolder",
+            "EditorUtility.IsDirty",
+        )
+        for token in required:
+            with self.subTest(token=token):
+                self.assertIn(token, source)
+        forbidden = (
+            "RenderTexture.Create(",
+            "RenderTextureDescriptor",
+            "graphicsFormat",
+            "autoGenerateMips",
+            "wrapModeU",
+            "wrapModeV",
+            "wrapModeW",
+            "AssetDatabase.CreateFolder",
+            "File.Move(",
+            "File.Write",
+            "EditorUtility.SetDirty(renderTexture",
+            "EditorUtility.IsDirty(renderTexture",
+        )
+        for token in forbidden:
+            with self.subTest(token=token):
+                self.assertNotIn(token, source)
+
+    def test_move_handler_uses_assetdatabase_move_and_name_dirty_policy(self) -> None:
+        source = self._source()
+        required = (
+            "HandleMoveAsset",
+            "AssetOpsPathValidation.ValidateMoveAssetPaths",
+            "AssetDatabase.MoveAsset",
+            "unity_error",
+            "name_changed",
+            "EditorUtility.SetDirty(asset",
+            "AssetDatabase.SaveAssets",
+            "AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport)",
+            "AssetDatabase.AssetPathToGUID",
+            "AssetDatabase.LoadMainAssetAtPath",
+            "AssetDatabase.IsValidFolder",
+            "EditorUtility.IsDirty",
+        )
+        for token in required:
+            with self.subTest(token=token):
+                self.assertIn(token, source)
+        self.assertNotIn("File.Move(", source)
+        self.assertNotIn("AssetDatabase.CreateFolder", source)
+
+    def test_create_handler_declares_required_error_codes_and_partial_diagnostic(self) -> None:
+        source = self._source()
+        save_refresh = _extract_method(source, "SaveAndRefreshCreate")
+        for code in (
+            "GENERATED_ASSET_DESTINATION_EXISTS",
+            "GENERATED_ASSET_DESTINATION_META_EXISTS",
+            "GENERATED_ASSET_PARENT_NOT_FOUND",
+            "GENERATED_ASSET_PARENT_NOT_FOLDER",
+            "GENERATED_ASSET_CREATE_FAILED",
+            "GENERATED_ASSET_SAVE_OR_REFRESH_FAILED",
+            "GENERATED_ASSET_POSTCHECK_FAILED",
+            "GENERATED_ASSET_DIRTY_POSTCHECK_FAILED",
+            "PARTIAL_SIDE_EFFECT_REQUIRES_REVIEW",
+        ):
+            with self.subTest(code=code):
+                self.assertIn(code, source)
+        for phase in ('data.phase = "save";', 'data.phase = "refresh";'):
+            with self.subTest(phase=phase):
+                self.assertIn(phase, save_refresh)
+
+    def test_move_handler_declares_required_error_codes_and_partial_diagnostic(self) -> None:
+        source = self._source()
+        save_refresh = _extract_method(source, "SaveAndRefreshMove")
+        for code in (
+            "ASSET_SOURCE_NOT_FOUND",
+            "ASSET_SOURCE_LOAD_FAILED",
+            "ASSET_SOURCE_IS_FOLDER",
+            "ASSET_DESTINATION_EXISTS",
+            "ASSET_DESTINATION_META_EXISTS",
+            "ASSET_DESTINATION_PARENT_NOT_FOUND",
+            "ASSET_DESTINATION_PARENT_NOT_FOLDER",
+            "ASSET_MOVE_FAILED",
+            "ASSET_MOVE_SAVE_OR_REFRESH_FAILED",
+            "ASSET_MOVE_POSTCHECK_FAILED",
+            "ASSET_MOVE_DIRTY_POSTCHECK_FAILED",
+            "PARTIAL_SIDE_EFFECT_REQUIRES_REVIEW",
+            "meta_exists",
+        ):
+            with self.subTest(code=code):
+                self.assertIn(code, source)
+        for phase in ('data.phase = "save";', 'data.phase = "refresh";'):
+            with self.subTest(phase=phase):
+                self.assertIn(phase, save_refresh)
+
+
+class EditorSerializedPropertyBridgeSourceTests(unittest.TestCase):
+    _PARTIAL = TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.SerializedProperty.cs"
+
+    def _source(self) -> str:
+        return _read_serialized_property_partials()
+
+    def _method(self, method_name: str) -> str:
+        return _extract_method(self._source(), method_name)
+
+    def test_read_handler_uses_canonical_serialized_property_surface(self) -> None:
+        body = self._method("HandleSerializedPropertyRead")
+        for token in (
+            "ResolveSerializedPropertyTarget",
+            "new SerializedObject",
+            "FindProperty(request.property_path)",
+            "BuildSerializedPropertyJson",
+            "serialized_property_json",
+            "BuildPropertyNotFoundError",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+
+    def test_list_handler_normalizes_traversal_and_retains_no_snapshot_store(self) -> None:
+        source = self._source()
+        body = _extract_method(source, "HandleSerializedPropertyList")
+        for token in (
+            "SerializedPropertyTraversalOptions.Parse",
+            "GetIterator",
+            "next_cursor",
+            "truncated",
+            "CollectSerializedPropertyList",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+        list_builder = _extract_method(source, "BuildSerializedPropertyListJson")
+        self.assertIn('\\\"items\\\"', list_builder)
+        self.assertNotIn('\\\"properties\\\"', list_builder)
+        collector = _extract_method(source, "CollectSerializedPropertyList")
+        self.assertIn("SerializedPropertyTraversalOptions.Parse(1, 1, string.Empty)", collector)
+        self.assertIn(
+            "int maxRelativeDepth = root != null ? options.Depth : options.Depth + 1;",
+            collector,
+        )
+        self.assertIn("if (relativeDepth > maxRelativeDepth) continue;", collector)
+        self.assertNotIn("if (relativeDepth > options.Depth + 1) continue;", collector)
+        for token in ("NextVisible", "unsupported"):
+            with self.subTest(token=token):
+                self.assertIn(token, source)
+        for forbidden in ("static Dictionary", "static List", "snapshot"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, source)
+
+    def test_serialized_property_helpers_do_not_keep_unused_state(self) -> None:
+        value_intent = _strip_cs_comments(
+            (TOOLS_DIR / "PrefabSentinel.SerializedProperty.ValueIntent.cs").read_text(
+                encoding="utf-8"
+            )
+        )
+        target = _strip_cs_comments(
+            (
+                TOOLS_DIR
+                / "PrefabSentinel.UnityEditorControlBridge.SerializedProperty.Target.cs"
+            ).read_text(encoding="utf-8")
+        )
+        for token in ("ObjectReferencePath", "HasCursor"):
+            with self.subTest(token=token):
+                self.assertNotIn(token, value_intent)
+        for token in ("public int ComponentIndex", "ComponentIndex = selectedIndex"):
+            with self.subTest(token=token):
+                self.assertNotIn(token, target)
+
+    def test_payload_builder_reports_required_property_evidence(self) -> None:
+        source = self._source()
+        body = _extract_method(source, "BuildSerializedPropertyJson")
+        for token in (
+            "property.propertyPath",
+            "property.displayName",
+            "property.propertyType",
+            "value_kind",
+            "AppendPropertyValueFields",
+            "children",
+            "unsupported",
+            "state",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+        value_fields = _extract_method(source, "AppendPropertyValueFields")
+        for token in ("object_reference", "array_size"):
+            with self.subTest(token=token):
+                self.assertIn(token, value_fields)
+        object_reference = _extract_method(source, "BuildObjectReferenceJson")
+        for token in ("hierarchy_path", "GetHierarchyPath", "AssetDatabase.GetAssetPath"):
+            with self.subTest(token=token):
+                self.assertIn(token, object_reference)
+
+    def test_property_not_found_suggestions_use_raw_property_paths(self) -> None:
+        source = self._source()
+        body = self._method("BuildPropertyNotFoundError")
+        for token in (
+            "SuggestionRanker.SuggestSimilar",
+            "propertyPath",
+            "BuildSuggestionJson",
+            "truncated",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_NOT_FOUND",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+        suggestion_builder = _extract_method(source, "BuildSuggestionJson")
+        for token in ("displayName", "propertyType", "depth"):
+            with self.subTest(token=token):
+                self.assertIn(token, suggestion_builder)
+
+    def test_component_selection_rejects_ambiguous_matches_with_candidates(self) -> None:
+        source = self._source()
+        body = self._method("ResolveSerializedPropertyTarget")
+        for token in (
+            "GetComponents",
+            "component_index",
+            "BuildComponentAmbiguityError",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+        ambiguity = _extract_method(source, "BuildComponentAmbiguityError")
+        for token in (
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_COMPONENT_AMBIGUOUS",
+            "candidate",
+            "component_index",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, ambiguity)
+        self.assertNotIn("GetComponent(", body)
+
+    def test_state_evidence_distinguishes_scene_and_prefab_stage(self) -> None:
+        body = self._method("BuildSerializedPropertyStateEvidence")
+        for token in (
+            "PrefabStageUtility.GetCurrentPrefabStage",
+            '"prefab_stage"',
+            '"scene"',
+            "prefab_asset_path",
+            "scene_path",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+
+
+class EditorSerializedPropertyWriterScopeTests(unittest.TestCase):
+    _PARTIAL = TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.SerializedProperty.cs"
+
+    def _source(self) -> str:
+        return _read_serialized_property_partials()
+
+    def _method(self, method_name: str) -> str:
+        return _extract_method(self._source(), method_name)
+
+    def test_write_handler_separates_dry_run_noop_and_apply_side_effects(self) -> None:
+        source = self._source()
+        body = _extract_method(source, "HandleSerializedPropertyWrite")
+        dry_run = body.find("EDITOR_CTRL_SERIALIZED_PROPERTY_DRY_RUN_OK")
+        no_change = body.find("EDITOR_CTRL_SERIALIZED_PROPERTY_NO_CHANGE")
+        undo = body.find("Undo.RecordObject")
+        apply = body.find("ApplyModifiedProperties")
+        for label, index in (
+            ("dry-run branch", dry_run),
+            ("no-change branch", no_change),
+            ("Undo apply branch", undo),
+            ("SerializedObject apply branch", apply),
+        ):
+            with self.subTest(label=label):
+                self.assertNotEqual(-1, index, msg=f"Missing {label}.")
+        self.assertLess(dry_run, undo)
+        self.assertLess(no_change, undo)
+        self.assertLess(undo, apply)
+        for token in (
+            "MarkSerializedPropertyTargetDirty",
+            "RecordSerializedPropertyPrefabOverride",
+            "saved = false",
+            "executed = true",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+        write_result_builder = _extract_method(source, "BuildWriteResultJson")
+        self.assertIn(
+            "dirty_target",
+            write_result_builder,
+            msg="Write result payload must report the dirty target evidence required by #112 dry-run/apply responses.",
+        )
+        for token in (
+            "EditorSceneManager.MarkSceneDirty",
+            "PrefabUtility.RecordPrefabInstancePropertyModifications",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, source)
+
+    def test_writer_scope_rejects_structs_mismatches_unsigned_and_bad_enums(self) -> None:
+        source = self._source()
+        for token in (
+            "SerializedPropertyType.Vector3",
+            "SerializedPropertyType.Color",
+            "SerializedPropertyType.Quaternion",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_UNSUPPORTED_WRITE",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_TYPE_MISMATCH",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_UNSIGNED_RANGE",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_ENUM_VALUE_NOT_FOUND",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, source)
+        range_helper = self._method("ResolveSerializedPropertyIntegerRange")
+        for token in (
+            "property.numericType",
+            "SerializedPropertyNumericType.Int64",
+            "SerializedPropertyNumericType.UInt64",
+            "ulong.MaxValue",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, range_helper)
+        value_fields = self._method("AppendPropertyValueFields")
+        for token in (
+            "SerializedPropertyNumericType.UInt64",
+            "ulong_value",
+            "property.ulongValue",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, value_fields)
+        integer_writer = self._method("ApplyIntegerValue")
+        self.assertIn('BuildScalarJson("ulong_value", property.ulongValue)', integer_writer)
+        error_plan = self._method("WritePlanError")
+        for token in ("CurrentJson", "ProposedJson", "BuildCurrentPropertyValueJson", "BuildErrorProposalJson"):
+            with self.subTest(token=token):
+                self.assertIn(token, error_plan)
+        write_body = self._method("HandleSerializedPropertyWrite")
+        self.assertIn("BuildWriteResultJson(", write_body)
+
+    def test_object_reference_writes_resolve_paths_null_and_identity(self) -> None:
+        body = self._method("ResolveSerializedPropertyObjectReference")
+        for token in (
+            "serialized_property_object_reference_asset_path",
+            "AssetDatabase.LoadAssetAtPath",
+            "serialized_property_object_reference_hierarchy_path",
+            "serialized_property_object_reference_null",
+            "TryResolveGameObjectInActiveStage",
+            "ambiguity.code",
+            "ambiguity.message",
+            "GetComponents",
+            "candidates",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_OBJECT_REF_AMBIGUOUS",
+            "property.objectReferenceValue != resolved",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_OBJECT_REF_NOT_FOUND",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_OBJECT_REF_TYPE_MISMATCH",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+        self.assertNotIn("ReferenceEquals", body)
+        self.assertNotIn("ambiguity != null ? ambiguity.message", body)
+        ambiguity = self._method("BuildObjectReferenceAmbiguityJson")
+        for token in (
+            "object_reference_hierarchy_path",
+            "candidates",
+            "candidate",
+            "component_index",
+            "AppendJsonString",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, ambiguity)
+        self.assertNotIn("go.GetComponent(expected.Type)", body)
+
+    def test_array_resize_reports_resulting_size_and_changed_evidence(self) -> None:
+        body = self._method("ApplySerializedPropertyValueIntent")
+        for token in (
+            "arraySize",
+            "resulting_array_size",
+            "would_change",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_ARRAY_SIZE_INVALID",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+
+
+class EditorSerializedPropertyUdonSyncSourceTests(unittest.TestCase):
+    _PARTIAL = TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.SerializedProperty.cs"
+
+    def _source(self) -> str:
+        return _read_serialized_property_partials()
+
+    def _method(self, method_name: str) -> str:
+        return _extract_method(self._source(), method_name)
+
+    def test_confirmed_changed_write_attempts_udonsharp_sync_after_apply(self) -> None:
+        body = self._method("HandleSerializedPropertyWrite")
+        apply = body.find("ApplyModifiedProperties")
+        sync = body.find("BuildUdonSharpSyncStatus")
+        self.assertNotEqual(-1, apply, msg="Write handler must apply the SerializedObject.")
+        self.assertNotEqual(-1, sync, msg="Write handler must build UdonSharp sync status.")
+        self.assertLess(apply, sync)
+        self.assertIn("InvokeUdonSharpCopyProxyToUdon", self._source())
+
+    def test_sync_detection_uses_component_assembly_and_backing_behaviour(self) -> None:
+        body = self._method("BuildUdonSharpSyncStatus")
+        for token in (
+            "component.GetType().Assembly",
+            "UdonSharp",
+            "GetComponent",
+            "UdonBehaviour",
+            "not_applicable",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+        self.assertIn("if (!typeLooksUdonSharp || backing == null)", body)
+
+    def test_sync_warning_preserves_completed_write_success_code(self) -> None:
+        body = self._method("HandleSerializedPropertyWrite")
+        for token in (
+            'severity = "warning"',
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_WRITE_OK",
+            "diagnostics",
+            "sync_status",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+
+
+class EditorSerializedPropertyUnitySmokeSourceTests(unittest.TestCase):
+    _UNITY_INTEGRATION = TOOLS_DIR / "PrefabSentinel.UnityIntegrationTests.cs"
+
+    def _source(self) -> str:
+        return _strip_cs_comments(self._UNITY_INTEGRATION.read_text(encoding="utf-8"))
+
+    def test_unity_smoke_fixture_registers_serialized_property_probe(self) -> None:
+        source = self._source()
+        run_suite = _extract_method(source, "RunTestSuite")
+        self.assertIn("SerializedPropertySmokeSupport", source)
+        for token in (
+            "Test_EditorCtrl_SerializedProperty_ReadListWriteDryRunNoOp",
+            "EditorCtrl_SerializedProperty_ReadListWriteDryRunNoOp",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, source)
+                self.assertIn(token, run_suite)
+
+    def test_unity_smoke_probe_exercises_three_serialized_property_actions(self) -> None:
+        body = _extract_method(
+            self._source(),
+            "Test_EditorCtrl_SerializedProperty_ReadListWriteDryRunNoOp",
+        )
+        for token in (
+            "editor_serialized_property_read",
+            "editor_serialized_property_list",
+            "editor_serialized_property_write",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_DRY_RUN_OK",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_NO_CHANGE",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_WRITE_OK",
+            "root_property_path",
+            "m_LocalPosition",
+            "missingRoot",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_NOT_FOUND",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+
+
+class EditorSerializedPropertyDocsTests(unittest.TestCase):
+    _PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+    def _doc(self, relative: str) -> str:
+        return (self._PROJECT_ROOT / relative).read_text(encoding="utf-8")
+
+    def test_readme_routes_serialized_property_surface_to_specialized_docs(self) -> None:
+        text = self._doc("README.md")
+        self.assertIn("SerializedObject-backed", text)
+        self.assertIn("editor_serialized_property_read", text)
+        self.assertIn("docs/tools.md", text)
+        self.assertIn("docs/api-reference.md", text)
+
+    def test_tools_catalog_lists_all_serialized_property_tools(self) -> None:
+        text = self._doc("docs/tools.md")
+        for tool in (
+            "editor_serialized_property_read",
+            "editor_serialized_property_list",
+            "editor_serialized_property_write",
+            "root_property_path",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_NOT_FOUND",
+        ):
+            with self.subTest(tool=tool):
+                self.assertIn(tool, text)
+
+    def test_api_reference_documents_payload_and_error_codes(self) -> None:
+        text = self._doc("docs/api-reference.md")
+        for token in (
+            "serialized_property_json",
+            "value_kind",
+            "bool_value",
+            "int_value",
+            "long_value",
+            "float_value",
+            "string_value",
+            "enum_name",
+            "enum_index",
+            "root_property_path",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_READ_OK",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_DRY_RUN_OK",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_NO_CHANGE",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_WRITE_OK",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_NOT_FOUND",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_COMPONENT_AMBIGUOUS",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_OBJECT_REF_AMBIGUOUS",
+            "EDITOR_CTRL_SERIALIZED_PROPERTY_UNSIGNED_RANGE",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, text)
+        self.assertNotIn(" / `value` / ", text)
+
+    def test_operational_docs_cover_audit_and_unity_validation_boundary(self) -> None:
+        config = self._doc("CONFIGURATION.md")
+        testing = self._doc("TESTING.md")
+        self.assertIn("editor_serialized_property_write", config)
+        self.assertIn("SerializedPropertySmokeSupport", testing)
+        self.assertIn("Unity real-device validation", testing)
+        self.assertIn("editor_serialized_property_write", testing)
+
+
+class EditorAssetOpsDocsTests(unittest.TestCase):
+    _PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+    def _doc(self, relative: str) -> str:
+        return (self._PROJECT_ROOT / relative).read_text(encoding="utf-8")
+
+    def test_tools_catalog_lists_editor_asset_category_and_tools(self) -> None:
+        text = self._doc("docs/tools.md")
+        for token in (
+            "現在 98 件",
+            "18 カテゴリ",
+            "**editor_assets**",
+            "### editor_assets",
+            "prefab_sentinel/mcp_tools_editor_assets.py",
+            "`editor_create_generated_asset`",
+            "`editor_move_asset`",
+            "render_texture",
+            "AssetDatabase.MoveAsset",
+            "`copy_asset` / `rename_asset`",
+            "`delete_assets` は削除 surface",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, text)
+        self.assertNotIn("editor_delete_assets", text)
+
+    def test_configuration_lists_confirm_report_requirements(self) -> None:
+        text = self._doc("CONFIGURATION.md")
+        for tool in ("editor_create_generated_asset", "editor_move_asset"):
+            rows = [
+                line for line in text.splitlines()
+                if f"`{tool}`" in line and line.startswith("|")
+            ]
+            self.assertEqual(1, len(rows), msg=f"missing audit row for {tool}")
+            self.assertIn("✅", rows[0], msg=f"{tool} must require change_reason")
+            self.assertIn("`out_report`", rows[0], msg=f"{tool} must require out_report")
+        self.assertIn("dry-run", text)
+        self.assertIn("OUT_REPORT_REQUIRED", text)
+
+    def test_tool_conventions_document_dry_run_and_asset_boundaries(self) -> None:
+        text = self._doc("docs/tool-conventions.md")
+        for token in (
+            "editor_create_generated_asset",
+            "editor_move_asset",
+            "confirm=True",
+            "out_report",
+            "dry-run",
+            "AssetDatabase",
+            "copy_asset",
+            "rename_asset",
+            "delete_assets",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, text)
+
+    def test_api_reference_documents_asset_ops_contract(self) -> None:
+        text = self._doc("docs/api-reference.md")
+        for token in (
+            "editor_create_generated_asset",
+            "editor_move_asset",
+            "asset_type",
+            "asset_path",
+            "parameters",
+            "source_asset_path",
+            "destination_asset_path",
+            "applied_parameters",
+            "format",
+            "read_write",
+            "unity_type",
+            "guid_preserved",
+            "UNITY_BRIDGE_INVALID_RESPONSE",
+            "PARTIAL_SIDE_EFFECT_REQUIRES_REVIEW",
+            "OUT_REPORT_WRITE_FAILED",
+            "UNSUPPORTED_GENERATED_ASSET_TYPE",
+            "GENERATED_ASSET_DESTINATION_EXISTS",
+            "GENERATED_ASSET_SAVE_OR_REFRESH_FAILED",
+            "ASSET_SOURCE_NOT_FOUND",
+            "ASSET_DESTINATION_PARENT_NOT_FOUND",
+            "ASSET_MOVE_FAILED",
+            "ASSET_MOVE_DIRTY_POSTCHECK_FAILED",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, text)
+        self.assertIn(
+            "`applied_parameters` は snake_case `width`, `height`, `depth`, `format`, `read_write`, `filter_mode`, `wrap_mode`, `mip_map`",
+            text,
+        )
+        self.assertIn(
+            "Bridge success payload は `source_asset_path`, `destination_asset_path`, `unity_type`, `before_guid`",
+            text,
+        )
+        for stale_token in (
+            "graphics_format",
+            "ASSET_MOVE_SOURCE_NOT_FOUND",
+            "ASSET_MOVE_DESTINATION_EXISTS",
+            "ASSET_MOVE_PARENT_NOT_FOUND",
+            "ASSET_MOVE_GUID_CHANGED",
+        ):
+            with self.subTest(stale_token=stale_token):
+                self.assertNotIn(stale_token, text)
+
+    def test_testing_doc_records_deferred_unity_smoke_sequence(self) -> None:
+        text = self._doc("TESTING.md")
+        for token in (
+            "Issue #116",
+            "editor_create_generated_asset",
+            "editor_move_asset",
+            "create dry-run",
+            "create confirm",
+            "move dry-run",
+            "move confirm",
+            "lowercase `.rendertexture`",
+            "case-only move",
+            "report equality",
+            "delete_assets",
+            "Unity 2022.3",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, text)
+        self.assertNotIn("editor_delete_assets", text)
+
+    def test_readme_routes_editor_asset_tools_to_specialized_docs(self) -> None:
+        text = self._doc("README.md")
+        for token in (
+            "editor_create_generated_asset",
+            "editor_move_asset",
+            "docs/tools.md",
+            "docs/api-reference.md",
+            "CONFIGURATION.md",
+            "TESTING.md",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, text)
 
 
 class PrefabStagePersistFixSourceInvariantTests(unittest.TestCase):
@@ -4293,7 +6746,7 @@ class MenuScriptWatchSplitSourceInvariantTests(unittest.TestCase):
     """Issue #262 — the editor-script mtime detector and its three
     standalone constants now live in a dedicated partial; the Menu
     partial no longer declares the detector.  These invariants pin
-    the post-split layout end-to-end (filesystem, source, CLAUDE.md
+    the post-split layout end-to-end (filesystem, source, AGENTS.md
     inventory).
     """
 
@@ -4303,8 +6756,8 @@ class MenuScriptWatchSplitSourceInvariantTests(unittest.TestCase):
     _MENU_PARTIAL = (
         TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Menu.cs"
     )
-    _CLAUDE_MD = (
-        Path(__file__).resolve().parent.parent / "CLAUDE.md"
+    _AGENTS_MD = (
+        Path(__file__).resolve().parent.parent / "AGENTS.md"
     )
 
     def test_dedicated_partial_declares_detector_with_documented_signature(
@@ -4383,13 +6836,13 @@ class MenuScriptWatchSplitSourceInvariantTests(unittest.TestCase):
             with self.subTest(constant=constant):
                 self.assertIn(constant, text)
 
-    def test_claude_md_inventory_lists_menuscriptwatch(self) -> None:
-        text = self._CLAUDE_MD.read_text(encoding="utf-8")
+    def test_agents_md_inventory_lists_menuscriptwatch(self) -> None:
+        text = self._AGENTS_MD.read_text(encoding="utf-8")
         self.assertIn(
             "MenuScriptWatch",
             text,
             msg=(
-                "CLAUDE.md partial inventory must list the new "
+                "AGENTS.md partial inventory must list the new "
                 "MenuScriptWatch partial (issue #262)."
             ),
         )
@@ -4534,6 +6987,8 @@ class TestAddComponentInitialPropertyDiagnostics(unittest.TestCase):
             match,
             "properties_json parse catch block not found in HandleEditorAddComponent",
         )
+        if match is None:
+            self.fail("properties_json parse catch block not found in HandleEditorAddComponent")
         catch_body = _extract_braced_block(
             body, match.end(), "properties_json parse catch block"
         )
@@ -4741,6 +7196,74 @@ class TestRunScriptPollSurfacesCompileDiagnostics(unittest.TestCase):
         )
 
 
+class TestRunScriptPollFailureEnvelopeSource(unittest.TestCase):
+    def test_failed_poll_preserves_inner_failure_envelope(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleRunScriptPoll")
+        self.assertIn(
+            "success = inner.success",
+            body,
+            msg="Async poll completion must preserve failed inner success state.",
+        )
+        self.assertIn(
+            "severity = inner.severity",
+            body,
+            msg="Async poll completion must preserve failed inner severity.",
+        )
+        self.assertIn(
+            "? \"EDITOR_CTRL_RUN_SCRIPT_POLL_COMPLETED\"\n                                : inner.code",
+            body,
+            msg="Failed async poll completion must keep the runtime/compile error code.",
+        )
+        self.assertIn(
+            "exception = inner.data.exception",
+            body,
+            msg="Failed async poll completion must keep structured exception payloads.",
+        )
+
+    def test_completed_poll_preserves_inner_operator_context(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleRunScriptPoll")
+        self.assertIn(
+            "operator_context = inner.operator_context",
+            body,
+            msg=(
+                "Async poll completion must preserve the completed bridge "
+                "operator_context so root verification accepts valid success "
+                "responses."
+            ),
+        )
+
+
+class TestClientSimSideEffectAssetCandidatesSource(unittest.TestCase):
+    def test_clientsim_report_uses_snapshot_asset_candidates(self) -> None:
+        source = _read(TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.cs")
+        body = _extract_method(source, "BuildSideEffectReport")
+        self.assertIn(
+            "asset_change_candidates = Difference(\n                    after?.AssetChangeCandidates,\n                    before?.AssetChangeCandidates)",
+            body,
+            msg="ClientSim side-effect report must serialize observed asset candidates.",
+        )
+
+    def test_clientsim_snapshot_collects_dirty_asset_candidates(self) -> None:
+        source = _read(TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.cs")
+        snapshot_body = _extract_method(source, "CaptureSceneSnapshot")
+        collect_body = _extract_method(source, "DirtyAssetChangeCandidates")
+        self.assertIn(
+            "AssetChangeCandidates = DirtyAssetChangeCandidates()",
+            snapshot_body,
+            msg="ClientSim snapshots must capture asset candidates before diffing.",
+        )
+        self.assertIn(
+            "DirtyScenePaths()",
+            collect_body,
+            msg="Dirty scene paths must be included as asset-change candidates.",
+        )
+        self.assertIn(
+            "DirtyAssetPaths()",
+            collect_body,
+            msg="Dirty project assets must be included as asset-change candidates.",
+        )
+
+
 class TestCompileAwareRefreshWiring(unittest.TestCase):
     """Issue #70 — source-text invariants for the compile-aware
     ``editor_refresh`` wiring.
@@ -4934,6 +7457,106 @@ class TestSetCameraGeometrySource(unittest.TestCase):
         self.assertIn("sv.rotation", body)
 
 
+class SetCameraProjectionTransitionGuardSourceTests(unittest.TestCase):
+    def _handle_set_camera_body(self) -> str:
+        return _extract_method(_read(BRIDGE), "HandleSetCamera")
+
+    def _position_branch_body(self) -> str:
+        body = self._handle_set_camera_body()
+        match = re.search(r"if \(hasPosition\)\s*\{", body)
+        self.assertIsNotNone(
+            match,
+            msg="HandleSetCamera must retain a position-mode branch.",
+        )
+        match = require_not_none(match, "HandleSetCamera hasPosition branch")
+        return _extract_braced_block(body, match.end(), "HandleSetCamera hasPosition branch")
+
+    def test_position_mode_checks_projection_stability_before_fov_geometry(self) -> None:
+        body = self._handle_set_camera_body()
+        position_match = re.search(r"if \(hasPosition\)\s*\{", body)
+        self.assertIsNotNone(position_match, msg="HandleSetCamera must retain position mode.")
+        position_match = require_not_none(position_match, "HandleSetCamera position mode")
+        position_body = self._position_branch_body()
+        guard_index = position_body.find("ProjectionStateStability.IsStableForPositionMode")
+        sin_index = position_body.find("Mathf.Sin")
+        look_at_index = position_body.find("sceneView.LookAt")
+        self.assertNotEqual(
+            -1,
+            guard_index,
+            msg="Position mode must call ProjectionStateStability.IsStableForPositionMode.",
+        )
+        self.assertLess(
+            guard_index,
+            sin_index,
+            msg="Projection stability must be checked before position-mode fov geometry.",
+        )
+        self.assertLess(
+            guard_index,
+            look_at_index,
+            msg="Projection stability must be checked before position-mode LookAt mutation.",
+        )
+        self.assertNotIn(
+            "ProjectionStateStability.IsStableForPositionMode",
+            body[: position_match.start()],
+            msg="Reset/conflict/projection-switch setup must not reject non-position modes.",
+        )
+
+    def test_unstable_position_mode_returns_transition_error_before_lookat(self) -> None:
+        position_body = self._position_branch_body()
+        guard_index = position_body.find("!ProjectionStateStability.IsStableForPositionMode")
+        restore_index = position_body.find("RestoreSceneViewCameraState(previous);")
+        transition_index = position_body.find("EDITOR_CTRL_CAMERA_PROJECTION_TRANSITION")
+        look_at_index = position_body.find("sceneView.LookAt")
+        self.assertNotEqual(
+            -1,
+            guard_index,
+            msg="Transition rejection must be guarded by a false stability classifier result.",
+        )
+        self.assertNotEqual(
+            -1,
+            restore_index,
+            msg="Rejected projection-transition calls must restore the captured SceneView state.",
+        )
+        self.assertNotEqual(
+            -1,
+            transition_index,
+            msg="Unstable position mode must return EDITOR_CTRL_CAMERA_PROJECTION_TRANSITION.",
+        )
+        self.assertLess(
+            guard_index,
+            restore_index,
+            msg="State restoration must live inside the classifier-false branch.",
+        )
+        self.assertLess(
+            restore_index,
+            transition_index,
+            msg="SceneView state must be restored before the transition diagnostic returns.",
+        )
+        self.assertLess(
+            transition_index,
+            look_at_index,
+            msg="Transition diagnostic must return before position-mode LookAt is applied.",
+        )
+
+    def test_projection_guard_uses_public_state_without_reflection_or_wait(self) -> None:
+        sources = (
+            self._handle_set_camera_body()
+            + _read(TOOLS_DIR / "PrefabSentinel.Camera.ProjectionStateStability.cs")
+        )
+        for forbidden in (
+            "m_Ortho",
+            "perspectiveFov",
+            "BindingFlags",
+            "GetField",
+            "EditorApplication.delayCall",
+            "EditorApplication.update",
+            "Thread.Sleep",
+            "Task.Delay",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, sources)
+
+
 class TestGenericCollectionUsingDirective(unittest.TestCase):
     """Issue #84 follow-up — every bridge ``.cs`` file that references a
     generic collection type from ``System.Collections.Generic``
@@ -4944,7 +7567,7 @@ class TestGenericCollectionUsingDirective(unittest.TestCase):
     ``List<>`` references in ``PrefabSentinel.UnityEditorControlBridge
     .Screenshot.cs`` without that using directive. CI compiles neither
     the ``tools/unity/`` Unity-dependent ``.cs`` files (no Unity
-    reference assemblies in CI per CLAUDE.md §"Bridge C# コンパイル
+    reference assemblies in CI per AGENTS.md §"Bridge C# コンパイル
     検証") nor the xUnit-hosted ``tests/csharp`` mirror that excludes
     them, so the resulting ``CS0246`` only surfaced when the bridge was
     deployed into a real Unity project. This text-level invariant
@@ -4979,6 +7602,90 @@ class TestGenericCollectionUsingDirective(unittest.TestCase):
                 "Bridge C# files reference generic collection types but miss "
                 f"`{self.USING_DIRECTIVE}`: {offenders}. Without the "
                 "directive, Unity rejects the file at deploy time (CS0246)."
+            ),
+        )
+
+
+class TestUnityBridgeCSharpLanguageVersionSource(unittest.TestCase):
+    """Bridge sources must stay within Unity Editor's supported C# syntax.
+
+    PR #109 introduced a C# 10 file-scoped namespace in a bridge helper.
+    The dotnet test mirror compiled with ``LangVersion=latest`` and missed
+    it, but Unity rejected the deployed file with CS8773 under C# 9.0.
+    """
+
+    FILE_SCOPED_NAMESPACE_REGEX = re.compile(
+        r"(?m)^\s*namespace\s+[A-Za-z_][A-Za-z0-9_.]*\s*;"
+    )
+
+    def test_bridge_files_do_not_use_file_scoped_namespaces(self) -> None:
+        offenders: list[str] = []
+        for path in sorted(TOOLS_DIR.glob("*.cs")):
+            text = _strip_cs_comments(path.read_text(encoding="utf-8"))
+            if self.FILE_SCOPED_NAMESPACE_REGEX.search(text):
+                offenders.append(path.name)
+
+        self.assertEqual(
+            [],
+            offenders,
+            msg=(
+                "Bridge C# files use file-scoped namespaces: "
+                f"{offenders}. Unity compiles the bridge with C# 9.0 in "
+                "supported projects, so C# 10 namespace syntax fails at "
+                "deploy time (CS8773). Use block-scoped namespaces instead."
+            ),
+        )
+
+    def test_bridge_files_do_not_use_init_only_accessors(self) -> None:
+        init_only_accessor = re.compile(r"\binit\s*;")
+        offenders: list[str] = []
+        for path in sorted(TOOLS_DIR.glob("*.cs")):
+            text = _strip_cs_comments(path.read_text(encoding="utf-8"))
+            if init_only_accessor.search(text):
+                offenders.append(path.name)
+
+        self.assertEqual(
+            [],
+            offenders,
+            msg=(
+                "Bridge C# files use init-only accessors: "
+                f"{offenders}. Unity's supported .NET profile does not "
+                "provide System.Runtime.CompilerServices.IsExternalInit, "
+                "so these fail at deploy time (CS0518). Use set/private set "
+                "accessors instead."
+            ),
+        )
+
+    def test_run_script_result_channels_avoids_nullable_reference_annotations(self) -> None:
+        source = _strip_cs_comments(
+            (TOOLS_DIR / "PrefabSentinel.RunScript.ResultChannels.cs").read_text(
+                encoding="utf-8"
+            )
+        )
+        nullable_reference_annotation = re.compile(
+            r"\b(?:object|string|RunScriptValue|List<RunScriptOutputEntry>)\s*\?"
+        )
+        self.assertNotRegex(
+            source,
+            nullable_reference_annotation,
+            msg=(
+                "RunScript result-channel bridge code must not use nullable "
+                "reference annotations without a nullable annotations context; "
+                "Unity reports those as CS8632 warnings at deploy time."
+            ),
+        )
+
+    def test_run_script_result_channels_declares_nullable_disabled_context(self) -> None:
+        source = (TOOLS_DIR / "PrefabSentinel.RunScript.ResultChannels.cs").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "#nullable disable",
+            source,
+            msg=(
+                "RunScript result-channel bridge code intentionally uses "
+                "nullable-disabled C# so both Unity's default context and the "
+                "nullable-enabled dotnet mirror compile without nullable noise."
             ),
         )
 

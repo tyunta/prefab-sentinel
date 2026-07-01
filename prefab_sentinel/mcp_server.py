@@ -22,16 +22,21 @@ except ImportError as exc:
         "pip install prefab-sentinel[mcp]"
     ) from exc
 
-from prefab_sentinel.mcp_helpers import KNOWLEDGE_URI_PREFIX
+import prefab_sentinel.editor_bridge as editor_bridge
 from prefab_sentinel.mcp_tools_components import register_component_tools
 from prefab_sentinel.mcp_tools_components_copy import register_copy_component_fields_tool
 from prefab_sentinel.mcp_tools_editor_advanced import register_editor_advanced_tools
 from prefab_sentinel.mcp_tools_editor_animation import register_editor_animation_tools
+from prefab_sentinel.mcp_tools_editor_assets import register_editor_asset_tools
 from prefab_sentinel.mcp_tools_editor_batch import register_editor_batch_tools
 from prefab_sentinel.mcp_tools_editor_exec import register_editor_exec_tools
+from prefab_sentinel.mcp_tools_editor_geometry import register_editor_geometry_tools
 from prefab_sentinel.mcp_tools_editor_ops import register_editor_ops_tools
 from prefab_sentinel.mcp_tools_editor_prefab_stage import (
     register_editor_prefab_stage_tools,
+)
+from prefab_sentinel.mcp_tools_editor_serialized_property import (
+    register_editor_serialized_property_tools,
 )
 from prefab_sentinel.mcp_tools_editor_udonsharp import (
     register_editor_udonsharp_tools,
@@ -50,51 +55,12 @@ __all__ = ["create_server"]
 logger = logging.getLogger(__name__)
 
 
-def _resolve_knowledge_dir(package_dir: Path) -> Path | None:
-    """Resolve the knowledge documents directory for the running install.
-
-    Mirrors ``deploy_bridge``'s wheel-install-first / source-tree-fallback
-    pattern (issue #309): wheels ship knowledge files under a
-    ``_knowledge_files`` sub-directory of the package; source-tree
-    checkouts and editable installs keep them as a sibling ``knowledge``
-    directory of the package. Returns ``None`` when neither candidate
-    exists so callers can register zero resources without raising on
-    deployments that legitimately ship no knowledge files.
-    """
-    bundled = package_dir / "_knowledge_files"
-    if bundled.is_dir():
-        return bundled
-    source_tree = package_dir.parent / "knowledge"
-    if source_tree.is_dir():
-        return source_tree
-    return None
 
 
-_KNOWLEDGE_DIR: Path | None = _resolve_knowledge_dir(Path(__file__).parent)
 
 
-def _extract_description(path: Path) -> str:
-    """Extract description from YAML frontmatter without external dependencies.
 
-    Parses flat key-value frontmatter (no nested structures).
-    Falls back to file stem if no frontmatter or relevant fields.
-    """
-    text = path.read_text(encoding="utf-8")
-    if not text.startswith("---"):
-        return path.stem
-    end = text.find("---", 3)
-    if end < 0:
-        return path.stem
-    fm: dict[str, str] = {}
-    for line in text[3:end].strip().splitlines():
-        if ":" in line:
-            key, _, val = line.partition(":")
-            fm[key.strip()] = val.strip().strip('"').strip("'")
-    if "description" in fm:
-        return fm["description"]
-    if "tool" in fm:
-        return f"{fm['tool']} knowledge"
-    return path.stem
+
 
 
 def create_server(
@@ -113,9 +79,13 @@ def create_server(
 
     @asynccontextmanager
     async def _lifespan(_app: FastMCP):  # type: ignore[type-arg]
+        editor_bridge._set_expected_project_root_provider(
+            lambda: str(session.project_root) if session.project_root is not None else None
+        )
         try:
             yield
         finally:
+            editor_bridge._set_expected_project_root_provider(None)
             await session.shutdown()
 
     server = FastMCP(
@@ -130,20 +100,6 @@ def create_server(
         lifespan=_lifespan,
     )
 
-    # Knowledge resources
-    def _make_reader(file_path: Path) -> None:
-        @server.resource(
-            f"{KNOWLEDGE_URI_PREFIX}{file_path.name}",
-            name=file_path.stem,
-            description=_extract_description(file_path),
-        )
-        def _read_knowledge() -> str:
-            return file_path.read_text(encoding="utf-8")
-
-    if _KNOWLEDGE_DIR is not None:
-        for _md_file in sorted(_KNOWLEDGE_DIR.glob("*.md")):
-            _make_reader(_md_file)
-
     # Register tool modules
     register_session_tools(server, session)
     register_symbol_tools(server, session)
@@ -156,8 +112,11 @@ def create_server(
     register_editor_write_tools(server)
     register_editor_batch_tools(server)
     register_editor_ops_tools(server)
+    register_editor_serialized_property_tools(server)
+    register_editor_asset_tools(server)
     register_editor_advanced_tools(server)
     register_editor_exec_tools(server)
+    register_editor_geometry_tools(server)
     register_editor_udonsharp_tools(server)
     # Issue #236 / #243: dedicated registration hooks for the Prefab
     # Stage open/close primitives and the three AnimationClip surfaces.

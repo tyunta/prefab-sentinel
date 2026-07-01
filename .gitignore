@@ -3,7 +3,6 @@
 .serena/
 .claude/
 .superpowers/
-.takt/
 __pycache__/
 *.pyc
 

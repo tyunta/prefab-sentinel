@@ -8,6 +8,11 @@ from unittest.mock import MagicMock, patch
 from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse
 from prefab_sentinel.orchestrator import Phase1Orchestrator
 from prefab_sentinel.services.reference_resolver import ReferenceResolverService
+from tests._orchestrator_mocks import (
+    MockedPhase1Orchestrator,
+    make_mocked_orchestrator,
+)
+from tests._typing_helpers import require_str, require_tool_response
 
 
 def _ok_response(code: str = "OK", data: dict | None = None) -> ToolResponse:
@@ -54,13 +59,16 @@ def _make_runtime_mock() -> MagicMock:
     return mock
 
 
-def _make_orchestrator() -> Phase1Orchestrator:
-    return Phase1Orchestrator(
-        reference_resolver=MagicMock(),
-        prefab_variant=MagicMock(),
-        runtime_validation=_make_runtime_mock(),
-        serialized_object=MagicMock(),
-    )
+def _make_orchestrator() -> MockedPhase1Orchestrator:
+    orch = make_mocked_orchestrator()
+    orch.runtime_validation = _make_runtime_mock()
+    return orch
+
+
+def _write_project_asset(root: Path, relative_path: str, text: str) -> None:
+    path = root / relative_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
 
 
 class InspectVariantTests(unittest.TestCase):
@@ -291,21 +299,22 @@ class ReadTargetFilePathResolutionTests(unittest.TestCase):
 
             result = orch._read_target_file("Assets/Test.prefab", "TEST")
             self.assertIsInstance(result, str)
-            self.assertIn("m_Name: X", result)
+            self.assertIn("m_Name: X", require_str(result, "target file text"))
 
-    def test_absolute_path_still_works(self) -> None:
+    def test_absolute_path_is_rejected(self) -> None:
 
 
         with tempfile.TemporaryDirectory() as tmpdir:
             target = Path(tmpdir) / "Test.prefab"
             target.write_text("%YAML 1.1\n--- !u!1 &100\nGameObject:\n  m_Name: Y\n")
-
             orch = _make_orchestrator()
             orch.prefab_variant.project_root = Path(tmpdir)
 
             result = orch._read_target_file(str(target), "TEST")
-            self.assertIsInstance(result, str)
-            self.assertIn("m_Name: Y", result)
+            response = require_tool_response(result, "invalid target path response")
+            self.assertFalse(response.success)
+            self.assertEqual("TEST_INVALID_TARGET_PATH", response.code)
+            self.assertEqual({"target_path": str(target), "read_only": True}, response.data)
 
     def test_nonexistent_relative_path_returns_error(self) -> None:
 
@@ -316,8 +325,9 @@ class ReadTargetFilePathResolutionTests(unittest.TestCase):
 
             result = orch._read_target_file("Assets/NoSuch.prefab", "TEST")
             self.assertIsInstance(result, ToolResponse)
-            self.assertFalse(result.success)
-            self.assertEqual("TEST_FILE_NOT_FOUND", result.code)
+            response = require_tool_response(result, "missing file response")
+            self.assertFalse(response.success)
+            self.assertEqual("TEST_FILE_NOT_FOUND", response.code)
 
 
 class FileTypeGuardTests(unittest.TestCase):
@@ -325,11 +335,12 @@ class FileTypeGuardTests(unittest.TestCase):
 
 
         text = "--- !u!91 &100\nAnimatorController:\n  m_Name: Test\n"
-        with tempfile.NamedTemporaryFile(suffix=".controller", mode="w", delete=False) as f:
-            f.write(text)
-            f.flush()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            _write_project_asset(root, "Assets/Test.controller", text)
             orch = _make_orchestrator()
-            result = orch.inspect_wiring(f.name)
+            orch.prefab_variant.project_root = root
+            result = orch.inspect_wiring("Assets/Test.controller")
         self.assertTrue(result.success)
         self.assertEqual(Severity.WARNING, result.severity)
         self.assertEqual("INSPECT_WIRING_NO_MONOBEHAVIOURS", result.code)
@@ -339,11 +350,12 @@ class FileTypeGuardTests(unittest.TestCase):
 
 
         text = "--- !u!74 &100\nAnimationClip:\n  m_Name: Test\n"
-        with tempfile.NamedTemporaryFile(suffix=".anim", mode="w", delete=False) as f:
-            f.write(text)
-            f.flush()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            _write_project_asset(root, "Assets/Test.anim", text)
             orch = _make_orchestrator()
-            result = orch.inspect_wiring(f.name)
+            orch.prefab_variant.project_root = root
+            result = orch.inspect_wiring("Assets/Test.anim")
         self.assertTrue(result.success)
         self.assertEqual(Severity.WARNING, result.severity)
         self.assertEqual("INSPECT_WIRING_NO_MONOBEHAVIOURS", result.code)
@@ -352,11 +364,12 @@ class FileTypeGuardTests(unittest.TestCase):
 
 
         text = "--- !u!74 &100\nAnimationClip:\n  m_Name: Test\n"
-        with tempfile.NamedTemporaryFile(suffix=".anim", mode="w", delete=False) as f:
-            f.write(text)
-            f.flush()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            _write_project_asset(root, "Assets/Test.anim", text)
             orch = _make_orchestrator()
-            result = orch.inspect_hierarchy(f.name)
+            orch.prefab_variant.project_root = root
+            result = orch.inspect_hierarchy("Assets/Test.anim")
         self.assertTrue(result.success)
         self.assertEqual(Severity.WARNING, result.severity)
         self.assertEqual("INSPECT_HIERARCHY_NO_GAMEOBJECTS", result.code)
@@ -366,11 +379,12 @@ class FileTypeGuardTests(unittest.TestCase):
 
 
         text = "--- !u!91 &100\nAnimatorController:\n  m_Name: Test\n"
-        with tempfile.NamedTemporaryFile(suffix=".controller", mode="w", delete=False) as f:
-            f.write(text)
-            f.flush()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            _write_project_asset(root, "Assets/Test.controller", text)
             orch = _make_orchestrator()
-            result = orch.inspect_structure(f.name)
+            orch.prefab_variant.project_root = root
+            result = orch.inspect_structure("Assets/Test.controller")
         self.assertTrue(result.success)
         self.assertEqual(["duplicate_file_id"], result.data["checks_performed"])
         self.assertIn("transform_consistency", result.data["checks_skipped"])
@@ -382,11 +396,12 @@ class FileTypeGuardTests(unittest.TestCase):
         from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_transform
 
         text = YAML_HEADER + make_gameobject("100", "Root", ["200"]) + make_transform("200", "100")
-        with tempfile.NamedTemporaryFile(suffix=".prefab", mode="w", delete=False) as f:
-            f.write(text)
-            f.flush()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            _write_project_asset(root, "Assets/Test.prefab", text)
             orch = _make_orchestrator()
-            result = orch.inspect_structure(f.name)
+            orch.prefab_variant.project_root = root
+            result = orch.inspect_structure("Assets/Test.prefab")
         self.assertTrue(result.success)
         self.assertEqual(4, len(result.data["checks_performed"]))
         self.assertEqual([], result.data["checks_skipped"])
@@ -399,11 +414,12 @@ class FileTypeGuardTests(unittest.TestCase):
         from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
 
         text = YAML_HEADER + make_gameobject("100", "Obj", ["200"]) + make_monobehaviour("200", "100")
-        with tempfile.NamedTemporaryFile(suffix=".prefab", mode="w", delete=False) as f:
-            f.write(text)
-            f.flush()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            _write_project_asset(root, "Assets/Test.prefab", text)
             orch = _make_orchestrator()
-            result = orch.inspect_wiring(f.name)
+            orch.prefab_variant.project_root = root
+            result = orch.inspect_wiring("Assets/Test.prefab")
         self.assertEqual("INSPECT_WIRING_RESULT", result.code)
 
 
@@ -420,16 +436,16 @@ class InspectWiringTests(unittest.TestCase):
             + make_monobehaviour("200", "100", guid="aabbccdd11223344aabbccdd11223344")
             + "  someField: {fileID: 100}\n"
         )
-        with tempfile.NamedTemporaryFile(suffix=".prefab", mode="w", delete=False) as f:
-            f.write(text)
-            f.flush()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            _write_project_asset(root, "Assets/Test.prefab", text)
             orch = _make_orchestrator()
-            orch.prefab_variant.project_root = Path("/fake")
+            orch.prefab_variant.project_root = root
             with patch(
                 "prefab_sentinel.orchestrator_wiring.collect_project_guid_index",
-                return_value={"aabbccdd11223344aabbccdd11223344": Path("/fake/Assets/Scripts/MyScript.cs")},
+                return_value={"aabbccdd11223344aabbccdd11223344": root / "Assets" / "Scripts" / "MyScript.cs"},
             ):
-                result = orch.inspect_wiring(f.name)
+                result = orch.inspect_wiring("Assets/Test.prefab")
 
         self.assertTrue(result.success)
         comps = result.data["components"]
@@ -437,8 +453,8 @@ class InspectWiringTests(unittest.TestCase):
         self.assertEqual(comps[0]["game_object_name"], "MyObj")
         self.assertEqual(comps[0]["script_name"], "MyScript")
 
-    def test_script_name_empty_on_project_root_failure(self) -> None:
-        """script_name should be empty when project_root is None (no active project)."""
+    def test_script_name_empty_when_guid_index_has_no_match(self) -> None:
+        """script_name should be empty when the script GUID cannot be resolved."""
 
 
         from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
@@ -449,12 +465,16 @@ class InspectWiringTests(unittest.TestCase):
             + make_monobehaviour("200", "100")
             + "  ref: {fileID: 100}\n"
         )
-        with tempfile.NamedTemporaryFile(suffix=".prefab", mode="w", delete=False) as f:
-            f.write(text)
-            f.flush()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            _write_project_asset(root, "Assets/Test.prefab", text)
             orch = _make_orchestrator()
-            orch.prefab_variant.project_root = None
-            result = orch.inspect_wiring(f.name)
+            orch.prefab_variant.project_root = root
+            with patch(
+                "prefab_sentinel.orchestrator_wiring.collect_project_guid_index",
+                return_value={},
+            ):
+                result = orch.inspect_wiring("Assets/Test.prefab")
 
         self.assertTrue(result.success)
         comps = result.data["components"]
@@ -475,11 +495,12 @@ class InspectWiringTests(unittest.TestCase):
             + "  nullRef1: {fileID: 0}\n"
             + "  nullRef2: {fileID: 0}\n"
         )
-        with tempfile.NamedTemporaryFile(suffix=".prefab", mode="w", delete=False) as f:
-            f.write(text)
-            f.flush()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            _write_project_asset(root, "Assets/Test.prefab", text)
             orch = _make_orchestrator()
-            result = orch.inspect_wiring(f.name)
+            orch.prefab_variant.project_root = root
+            result = orch.inspect_wiring("Assets/Test.prefab")
 
         self.assertTrue(result.success)
         comps = result.data["components"]
@@ -519,35 +540,29 @@ class InspectWiringVariantTests(unittest.TestCase):
         base_text = self._make_base_text()
         variant_text = self._make_variant_text()
 
-        with tempfile.NamedTemporaryFile(
-            suffix=".prefab", mode="w", delete=False, prefix="base_"
-        ) as base_f:
-            base_f.write(base_text)
-            base_f.flush()
-            base_path = base_f.name
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            base_path = "Assets/Base.prefab"
+            variant_path = "Assets/Variant.prefab"
+            _write_project_asset(root, base_path, base_text)
+            _write_project_asset(root, variant_path, variant_text)
 
-        with tempfile.NamedTemporaryFile(
-            suffix=".prefab", mode="w", delete=False, prefix="variant_"
-        ) as var_f:
-            var_f.write(variant_text)
-            var_f.flush()
-            variant_path = var_f.name
-
-        orch = _make_orchestrator()
-        orch.prefab_variant.resolve_prefab_chain.return_value = _ok_response(
-            "CHAIN_OK",
-            {
-                "chain": [
-                    {"path": variant_path, "guid": "variant_guid"},
-                    {"path": base_path, "guid": self.BASE_GUID},
-                ]
-            },
-        )
-        orch.prefab_variant.list_overrides.return_value = _ok_response(
-            "PVR_OVERRIDES_OK",
-            {"overrides": [], "override_count": 0},
-        )
-        result = orch.inspect_wiring(variant_path)
+            orch = _make_orchestrator()
+            orch.prefab_variant.project_root = root
+            orch.prefab_variant.resolve_prefab_chain.return_value = _ok_response(
+                "CHAIN_OK",
+                {
+                    "chain": [
+                        {"path": variant_path, "guid": "variant_guid"},
+                        {"path": base_path, "guid": self.BASE_GUID},
+                    ]
+                },
+            )
+            orch.prefab_variant.list_overrides.return_value = _ok_response(
+                "PVR_OVERRIDES_OK",
+                {"overrides": [], "override_count": 0},
+            )
+            result = orch.inspect_wiring(variant_path)
 
         self.assertEqual("INSPECT_WIRING_RESULT", result.code)
         self.assertTrue(result.data.get("is_variant"))
@@ -561,11 +576,13 @@ class InspectWiringVariantTests(unittest.TestCase):
         from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
 
         text = YAML_HEADER + make_gameobject("100", "Obj", ["200"]) + make_monobehaviour("200", "100")
-        with tempfile.NamedTemporaryFile(suffix=".prefab", mode="w", delete=False) as f:
-            f.write(text)
-            f.flush()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            target_path = "Assets/Test.prefab"
+            _write_project_asset(root, target_path, text)
             orch = _make_orchestrator()
-            result = orch.inspect_wiring(f.name)
+            orch.prefab_variant.project_root = root
+            result = orch.inspect_wiring(target_path)
 
         self.assertEqual("INSPECT_WIRING_RESULT", result.code)
         self.assertNotIn("is_variant", result.data)
@@ -576,18 +593,19 @@ class InspectWiringVariantTests(unittest.TestCase):
 
 
         variant_text = self._make_variant_text()
-        with tempfile.NamedTemporaryFile(suffix=".prefab", mode="w", delete=False) as f:
-            f.write(variant_text)
-            f.flush()
-            variant_path = f.name
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            variant_path = "Assets/Variant.prefab"
+            _write_project_asset(root, variant_path, variant_text)
 
-        orch = _make_orchestrator()
-        # Chain returns only the variant itself (no base)
-        orch.prefab_variant.resolve_prefab_chain.return_value = _ok_response(
-            "CHAIN_OK",
-            {"chain": [{"path": variant_path, "guid": "variant_guid"}]},
-        )
-        result = orch.inspect_wiring(variant_path)
+            orch = _make_orchestrator()
+            orch.prefab_variant.project_root = root
+            # Chain returns only the variant itself (no base)
+            orch.prefab_variant.resolve_prefab_chain.return_value = _ok_response(
+                "CHAIN_OK",
+                {"chain": [{"path": variant_path, "guid": "variant_guid"}]},
+            )
+            result = orch.inspect_wiring(variant_path)
 
         self.assertEqual("INSPECT_WIRING_RESULT", result.code)
         # Should not be marked as variant since no base was found
@@ -629,42 +647,36 @@ class InspectWiringVariantOverrideAnnotationTests(unittest.TestCase):
         base_text = self._make_base_text()
         variant_text = self._make_variant_text()
 
-        with tempfile.NamedTemporaryFile(
-            suffix=".prefab", mode="w", delete=False, prefix="base_"
-        ) as base_f:
-            base_f.write(base_text)
-            base_f.flush()
-            base_path = base_f.name
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            base_path = "Assets/Base.prefab"
+            variant_path = "Assets/Variant.prefab"
+            _write_project_asset(root, base_path, base_text)
+            _write_project_asset(root, variant_path, variant_text)
 
-        with tempfile.NamedTemporaryFile(
-            suffix=".prefab", mode="w", delete=False, prefix="variant_"
-        ) as var_f:
-            var_f.write(variant_text)
-            var_f.flush()
-            variant_path = var_f.name
-
-        orch = _make_orchestrator()
-        orch.prefab_variant.resolve_prefab_chain.return_value = _ok_response(
-            "CHAIN_OK",
-            {
-                "chain": [
-                    {"path": variant_path, "guid": "variant_guid"},
-                    {"path": base_path, "guid": self.BASE_GUID},
-                ]
-            },
-        )
-        # list_overrides returns overrides targeting the MonoBehaviour (fileID 200)
-        orch.prefab_variant.list_overrides.return_value = _ok_response(
-            "PVR_OVERRIDES_OK",
-            {
-                "overrides": [
-                    {"target_file_id": "200", "property_path": "myRef.fileID"},
-                    {"target_file_id": "200", "property_path": "myRef.guid"},
-                ],
-                "override_count": 2,
-            },
-        )
-        result = orch.inspect_wiring(variant_path)
+            orch = _make_orchestrator()
+            orch.prefab_variant.project_root = root
+            orch.prefab_variant.resolve_prefab_chain.return_value = _ok_response(
+                "CHAIN_OK",
+                {
+                    "chain": [
+                        {"path": variant_path, "guid": "variant_guid"},
+                        {"path": base_path, "guid": self.BASE_GUID},
+                    ]
+                },
+            )
+            # list_overrides returns overrides targeting the MonoBehaviour (fileID 200)
+            orch.prefab_variant.list_overrides.return_value = _ok_response(
+                "PVR_OVERRIDES_OK",
+                {
+                    "overrides": [
+                        {"target_file_id": "200", "property_path": "myRef.fileID"},
+                        {"target_file_id": "200", "property_path": "myRef.guid"},
+                    ],
+                    "override_count": 2,
+                },
+            )
+            result = orch.inspect_wiring(variant_path)
 
         self.assertTrue(result.success)
         comps = result.data["components"]
@@ -688,11 +700,13 @@ class InspectWiringVariantOverrideAnnotationTests(unittest.TestCase):
             + make_monobehaviour("200", "100")
             + "  ref: {fileID: 100}\n"
         )
-        with tempfile.NamedTemporaryFile(suffix=".prefab", mode="w", delete=False) as f:
-            f.write(text)
-            f.flush()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            target_path = "Assets/Test.prefab"
+            _write_project_asset(root, target_path, text)
             orch = _make_orchestrator()
-            result = orch.inspect_wiring(f.name)
+            orch.prefab_variant.project_root = root
+            result = orch.inspect_wiring(target_path)
 
         comps = result.data["components"]
         self.assertEqual(len(comps), 1)
@@ -711,14 +725,17 @@ class ValidateAllWiringTests(unittest.TestCase):
             + make_monobehaviour("200", "100", guid="abcd" * 8)
         )
         with tempfile.TemporaryDirectory() as tmp:
-            p = Path(tmp) / "test.prefab"
-            p.write_text(text, encoding="utf-8")
+            root = Path(tmp)
+            target_path = "Assets/test.prefab"
+            _write_project_asset(root, target_path, text)
             orch = Phase1Orchestrator.default()
-            result = orch.validate_all_wiring(target_path=str(p))
+            orch.prefab_variant.project_root = root
+            orch.reference_resolver.project_root = root
+            result = orch.validate_all_wiring(target_path=target_path)
             resp = result.to_dict()
             self.assertTrue(resp["success"])
             self.assertEqual(1, resp["data"]["files_scanned"])
-            self.assertGreaterEqual(resp["data"]["total_components"], 1)
+            self.assertEqual(1, resp["data"]["total_components"])
 
     def test_no_scope_returns_error(self) -> None:
         orch = _make_orchestrator()
@@ -758,6 +775,36 @@ class ValidateRefsTests(unittest.TestCase):
         call_kwargs = orch.reference_resolver.scan_broken_references.call_args[1]
         self.assertEqual(("guid1", "guid2"), call_kwargs["ignore_asset_guids"])
 
+    def test_inspect_wiring_forwards_out_of_scope_flag_and_baseline(self) -> None:
+        from prefab_sentinel.diagnostics_baseline import DiagnosticsBaseline
+        from prefab_sentinel.orchestrator import orchestrator_wiring
+
+        baseline = DiagnosticsBaseline(
+            known_diagnostics=(
+                "inspect_wiring:null_reference:Assets/Base.prefab:40:targetRef",
+            ),
+            path="/project/config/diagnostics_baseline.json",
+            status="loaded",
+        )
+        orch = _make_orchestrator()
+        expected = _ok_response("INSPECT_WIRING_RESULT", {"component_count": 0})
+
+        with patch.object(orchestrator_wiring, "inspect_wiring", return_value=expected) as mocked:
+            result = orch.inspect_wiring(
+                "Assets/Base.prefab",
+                include_out_of_scope_diagnostics=True,
+                diagnostics_baseline=baseline,
+            )
+
+        self.assertIs(result, expected)
+        self.assertEqual(
+            (True, baseline),
+            (
+                mocked.call_args.kwargs["include_out_of_scope_diagnostics"],
+                mocked.call_args.kwargs["diagnostics_baseline"],
+            ),
+        )
+
 
 class ValidateRuntimeTests(unittest.TestCase):
     def test_all_steps_succeed(self) -> None:
@@ -774,16 +821,22 @@ class ValidateRuntimeTests(unittest.TestCase):
         self.assertTrue(result.success)
         self.assertEqual("VALIDATE_RUNTIME_RESULT", result.code)
         self.assertFalse(result.data["fail_fast_triggered"])
-        # Issue #121: an additional leading WorldSpace-Canvas step joins
-        # the pipeline (now 6 steps; was 5).
-        self.assertEqual(6, len(result.data["steps"]))
+        # The default profile is compile-only: canvas, compile, collect,
+        # classify, and assert.
+        self.assertEqual(5, len(result.data["steps"]))
+        orch.runtime_validation.run_clientsim.assert_not_called()
 
     def test_fail_fast_on_run_clientsim_error(self) -> None:
         orch = _make_orchestrator()
         orch.runtime_validation.compile_udonsharp.return_value = _ok_response()
         orch.runtime_validation.run_clientsim.return_value = _error_response()
 
-        result = orch.validate_runtime("Assets/Scenes/Test.unity")
+        result = orch.validate_runtime(
+            "Assets/Scenes/Test.unity",
+            profile="clientsim",
+            confirm=True,
+            change_reason="unit test",
+        )
         self.assertFalse(result.success)
         self.assertTrue(result.data["fail_fast_triggered"])
         # Issue #121: WorldSpace-Canvas inspection is the leading step,
@@ -877,7 +930,12 @@ class ValidateRuntimeTests(unittest.TestCase):
             "prefab_sentinel.orchestrator_validation._inspect_world_canvas_step",
             return_value=self._canvas_step_response([canvas_diag]),
         ):
-            result = orch.validate_runtime("Assets/Scenes/Test.unity")
+            result = orch.validate_runtime(
+                "Assets/Scenes/Test.unity",
+                profile="clientsim",
+                confirm=True,
+                change_reason="unit test",
+            )
 
         self.assertEqual(2, len(result.diagnostics))
         self.assertEqual(canvas_diag.detail, result.diagnostics[0].detail)
@@ -896,7 +954,12 @@ class ValidateRuntimeTests(unittest.TestCase):
             "prefab_sentinel.orchestrator_validation._inspect_world_canvas_step",
             return_value=self._canvas_step_response([canvas_diag]),
         ):
-            result = orch.validate_runtime("Assets/Scenes/Test.unity")
+            result = orch.validate_runtime(
+                "Assets/Scenes/Test.unity",
+                profile="clientsim",
+                confirm=True,
+                change_reason="unit test",
+            )
 
         self.assertFalse(result.success)
         self.assertEqual("VALIDATE_RUNTIME_RESULT", result.code)
@@ -1396,7 +1459,7 @@ class PatchApplyTests(unittest.TestCase):
             "postconditions": [],
         }
 
-    def _make_orch_with_dry_run(self) -> Phase1Orchestrator:
+    def _make_orch_with_dry_run(self) -> MockedPhase1Orchestrator:
         orch = _make_orchestrator()
         orch.serialized_object.dry_run_resource_plan.return_value = _ok_response(
             "DRY_RUN_OK"
@@ -1468,7 +1531,7 @@ class PatchApplyTests(unittest.TestCase):
     def test_postcondition_schema_fail_fast(self) -> None:
         orch = self._make_orch_with_dry_run()
         plan = self._minimal_plan()
-        # asset_exists with neither resource nor path → schema error at orchestrator level
+        # asset_exists with neither resource nor path maps to an orchestrator schema error.
         plan["postconditions"] = [{"type": "asset_exists"}]
         result = orch.patch_apply(plan, dry_run=False, confirm=True)
         self.assertFalse(result.success)
@@ -1932,11 +1995,11 @@ class TestCheckFieldCoverage(unittest.TestCase):
         self.assertTrue(result.success)
         self.assertEqual("CSF_COVERAGE_OK", result.code)
 
-        # playerName is in C# but not in YAML → unused
+        # playerName is in C# but not in YAML, so it is unused.
         unused_names = {e["field_name"] for e in result.data["unused_fields"]}
         self.assertIn("playerName", unused_names)
 
-        # legacyField is in YAML but not in C# → orphaned
+        # legacyField is in YAML but not in C#, so it is orphaned.
         orphaned_names = {e["field_name"] for e in result.data["orphaned_paths"]}
         self.assertIn("legacyField", orphaned_names)
 
@@ -2055,13 +2118,8 @@ class TestCheckFieldCoverage(unittest.TestCase):
 class TestInvalidationDelegation(unittest.TestCase):
     """Orchestrator invalidation delegates to services."""
 
-    def _make_orchestrator(self) -> Phase1Orchestrator:
-        return Phase1Orchestrator(
-            reference_resolver=MagicMock(),
-            prefab_variant=MagicMock(),
-            runtime_validation=MagicMock(),
-            serialized_object=MagicMock(),
-        )
+    def _make_orchestrator(self) -> MockedPhase1Orchestrator:
+        return make_mocked_orchestrator()
 
     def test_invalidate_text_cache_delegates(self) -> None:
         orch = self._make_orchestrator()
@@ -2141,7 +2199,7 @@ class TestNestedWiringTraversal(unittest.TestCase):
                 assets_dir, "Child.prefab", _CHILD_WIRING_GUID, child_text,
             )
 
-            # Base.prefab — PrefabInstance→Child, no direct MonoBehaviours
+            # Base.prefab has PrefabInstance to Child, no direct MonoBehaviours.
             base_text = (
                 YAML_HEADER
                 + make_gameobject("10", "BaseRoot", ["20"])
@@ -2158,19 +2216,113 @@ class TestNestedWiringTraversal(unittest.TestCase):
                 "prefab_sentinel.orchestrator_wiring.collect_project_guid_index",
                 return_value={_CHILD_WIRING_GUID: assets_dir / "Child.prefab"},
             ):
-                result = orch.inspect_wiring(str(base_path))
+                result = orch.inspect_wiring(base_path.relative_to(tmp_path).as_posix())
 
             self.assertEqual("INSPECT_WIRING_RESULT", result.code)
-            self.assertGreaterEqual(
-                result.data["component_count"], 1,
-                "Expected at least 1 component from nested prefab",
+            self.assertEqual(1, result.data["component_count"])
+            self.assertEqual(
+                [
+                    (
+                        "Assets/Child.prefab",
+                        "3",
+                        "ChildObj",
+                        _SCRIPT_GUID_CUSTOM,
+                    )
+                ],
+                [
+                    (
+                        c["source_prefab"],
+                        c["file_id"],
+                        c["game_object_name"],
+                        c["script_guid"],
+                    )
+                    for c in result.data["components"]
+                ],
             )
-            has_source_prefab = any(
-                "source_prefab" in c for c in result.data["components"]
+
+
+    def test_nested_diagnostics_are_emitted_and_classified(self) -> None:
+        from prefab_sentinel.diagnostics_baseline import DiagnosticsBaseline
+        from tests.yaml_helpers import (
+            YAML_HEADER,
+            make_gameobject,
+            make_monobehaviour,
+            make_prefab_instance,
+            make_transform,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            assets_dir = tmp_path / "Assets"
+            assets_dir.mkdir()
+
+            child_text = (
+                YAML_HEADER
+                + make_gameobject("1", "ChildObj", ["2", "3"])
+                + make_transform("2", "1")
+                + make_monobehaviour(
+                    "3",
+                    "1",
+                    guid=_SCRIPT_GUID_CUSTOM,
+                    fields={"childRef": "{fileID: 999}"},
+                )
             )
-            self.assertTrue(
-                has_source_prefab,
-                "Expected at least one component with source_prefab key",
+            _write_prefab_with_meta(
+                assets_dir, "Child.prefab", _CHILD_WIRING_GUID, child_text,
+            )
+
+            base_text = (
+                YAML_HEADER
+                + make_gameobject("10", "BaseRoot", ["20"])
+                + make_transform("20", "10")
+                + make_prefab_instance("30", _CHILD_WIRING_GUID)
+            )
+            base_path = _write_prefab_with_meta(
+                assets_dir, "Base.prefab", "66666666666666666666666666666666", base_text,
+            )
+            known_key = "inspect_wiring:internal_broken_ref:Assets/Child.prefab:3:childRef"
+            baseline = DiagnosticsBaseline(
+                known_diagnostics=(known_key,),
+                path=str(tmp_path / "config" / "diagnostics_baseline.json"),
+                status="loaded",
+            )
+
+            orch = _make_orchestrator()
+            orch.prefab_variant.project_root = tmp_path
+            with patch(
+                "prefab_sentinel.orchestrator_wiring.collect_project_guid_index",
+                return_value={
+                    _CHILD_WIRING_GUID: assets_dir / "Child.prefab",
+                    _SCRIPT_GUID_CUSTOM: assets_dir / "CustomBehaviour.cs",
+                },
+            ):
+                result = orch.inspect_wiring(
+                    base_path.relative_to(tmp_path).as_posix(),
+                    script_filter="CustomBehaviour",
+                    diagnostics_baseline=baseline,
+                )
+
+            self.assertEqual("INSPECT_WIRING_RESULT", result.code)
+            self.assertEqual(
+                (
+                    False,
+                    Severity.ERROR,
+                    1,
+                    1,
+                    ["Internal fileID not found: ChildObj.childRef -> fileID:999"],
+                    [known_key],
+                ),
+                (
+                    result.success,
+                    result.severity,
+                    result.data["internal_broken_ref_count"],
+                    result.data["diagnostic_counts"]["filtered"]["total"],
+                    [row["code"] for row in result.data["filtered_diagnostics"]],
+                    [
+                        item["key"]
+                        for item in result.data["diagnostics_baseline"]["known"]
+                    ],
+                ),
             )
 
     def test_udon_only_filter_with_nested(self) -> None:
@@ -2210,7 +2362,7 @@ class TestNestedWiringTraversal(unittest.TestCase):
                 assets_dir, "Child.prefab", _CHILD_WIRING_GUID, child_text,
             )
 
-            # Base.prefab — PrefabInstance→Child only
+            # Base.prefab has PrefabInstance to Child only.
             base_text = (
                 YAML_HEADER
                 + make_gameobject("10", "BaseRoot", ["20"])
@@ -2227,23 +2379,25 @@ class TestNestedWiringTraversal(unittest.TestCase):
                 "prefab_sentinel.orchestrator_wiring.collect_project_guid_index",
                 return_value={_CHILD_WIRING_GUID: assets_dir / "Child.prefab"},
             ):
-                result = orch.inspect_wiring(str(base_path), udon_only=True)
+                result = orch.inspect_wiring(base_path.relative_to(tmp_path).as_posix(), udon_only=True)
 
             self.assertEqual("INSPECT_WIRING_RESULT", result.code)
             nested_components = [
                 c for c in result.data["components"] if "source_prefab" in c
             ]
-            # Must have at least 1 nested component (the UdonSharp one from Child)
-            self.assertGreaterEqual(
-                len(nested_components), 1,
-                "Expected at least 1 nested component after udon_only filter",
+            self.assertEqual(1, result.data["component_count"])
+            self.assertEqual(
+                [("Assets/Child.prefab", "4", _SCRIPT_GUID_UDON_SHARP, True)],
+                [
+                    (
+                        c["source_prefab"],
+                        c["file_id"],
+                        c["script_guid"],
+                        c["is_udon_sharp"],
+                    )
+                    for c in nested_components
+                ],
             )
-            # Only the UdonSharp component should remain (custom filtered out)
-            for comp in nested_components:
-                self.assertTrue(
-                    comp["is_udon_sharp"],
-                    f"Expected only UdonSharp components with udon_only=True, got {comp}",
-                )
 
     def test_base_and_nested_components_distinguished(self) -> None:
         """Base has a direct MonoBehaviour; Child also has one.
@@ -2275,7 +2429,7 @@ class TestNestedWiringTraversal(unittest.TestCase):
                 assets_dir, "Child.prefab", _CHILD_WIRING_GUID, child_text,
             )
 
-            # Base.prefab — direct MonoBehaviour + PrefabInstance→Child
+            # Base.prefab has direct MonoBehaviour plus PrefabInstance to Child.
             base_text = (
                 YAML_HEADER
                 + make_gameobject("10", "BaseObj", ["20", "30"])
@@ -2294,7 +2448,7 @@ class TestNestedWiringTraversal(unittest.TestCase):
                 "prefab_sentinel.orchestrator_wiring.collect_project_guid_index",
                 return_value={_CHILD_WIRING_GUID: assets_dir / "Child.prefab"},
             ):
-                result = orch.inspect_wiring(str(base_path))
+                result = orch.inspect_wiring(base_path.relative_to(tmp_path).as_posix())
 
             self.assertEqual("INSPECT_WIRING_RESULT", result.code)
             comps = result.data["components"]
@@ -2345,6 +2499,57 @@ class InspectHierarchyVariantClassificationTests(unittest.TestCase):
         roots = response.data["roots"]
         self.assertEqual(1, len(roots))
         self.assertEqual("Outer", roots[0]["name"])
+
+    def test_expanded_variant_hierarchy_uses_variant_layer_effective_state(self) -> None:
+        from prefab_sentinel.orchestrator_inspect import inspect_hierarchy
+        from prefab_sentinel.services.prefab_variant import PrefabVariantService
+        from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_transform
+
+        base_guid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        variant_guid = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            assets = root / "Assets"
+            assets.mkdir(parents=True, exist_ok=True)
+            base_text = (
+                YAML_HEADER
+                + make_gameobject("100", "SourceRoot", ["200"])
+                + make_transform("200", "100")
+            )
+            variant_instance = InspectHierarchyPrefabInstanceExpansionTests._prefab_instance(
+                "9000",
+                base_guid,
+                modifications=[("100", "m_Name", "VariantRoot")],
+            )
+            variant_text = YAML_HEADER + variant_instance.replace(
+                "m_TransformParent: {fileID: 2000}",
+                "m_TransformParent: {fileID: 0}",
+            )
+            _write_prefab_with_meta(assets, "Source.prefab", base_guid, base_text)
+            _write_prefab_with_meta(assets, "Variant.prefab", variant_guid, variant_text)
+            svc = PrefabVariantService(project_root=root)
+
+            response = inspect_hierarchy(
+                svc,
+                "Assets/Variant.prefab",
+                expand_prefab_instances=True,
+            )
+
+        self.assertEqual(
+            (
+                True,
+                True,
+                "Assets/Source.prefab",
+                "VariantRoot",
+            ),
+            (
+                response.success,
+                response.data.get("is_variant"),
+                response.data.get("base_prefab_path"),
+                response.data["roots"][0]["name"],
+            ),
+            msg=f"expanded variant hierarchy must preserve the variant layer effective root: {response.to_dict()!r}",
+        )
 
     def test_inspect_hierarchy_actual_variant_still_resolves_base(self) -> None:
         from prefab_sentinel.orchestrator_inspect import inspect_hierarchy
@@ -2520,6 +2725,35 @@ class TestInspectHierarchyExpand(unittest.TestCase):
         # Response data records the expand mode active.
         self.assertEqual(True, response.data["expand_monobehaviour"])
 
+    def test_prefab_instance_expansion_also_substitutes_script_class_name(self) -> None:
+        from prefab_sentinel.orchestrator_inspect import inspect_hierarchy
+        from prefab_sentinel.services.prefab_variant import PrefabVariantService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_project_with_script(root)
+            svc = PrefabVariantService(project_root=root)
+
+            response = inspect_hierarchy(
+                svc,
+                "Assets/Test.prefab",
+                expand_monobehaviour=True,
+                expand_prefab_instances=True,
+            )
+
+        self.assertTrue(response.success, msg=response.message)
+        tree = response.data["tree"]
+        self.assertEqual(
+            (True, True, True, False),
+            (
+                response.data["expand_prefab_instances"],
+                response.data["expand_monobehaviour"],
+                "MyController" in tree,
+                "MonoBehaviour" in tree,
+            ),
+            msg=f"expanded hierarchy must preserve script-class expansion metadata and labels; response={response.to_dict()!r}",
+        )
+
     def test_expand_flag_off_keeps_generic_monobehaviour_label(self) -> None:
         from prefab_sentinel.orchestrator_inspect import inspect_hierarchy
         from prefab_sentinel.services.prefab_variant import PrefabVariantService
@@ -2559,6 +2793,286 @@ class TestInspectHierarchyExpand(unittest.TestCase):
         # Fallback: rendered tree carries the plain MonoBehaviour label.
         tree = response.data["tree"]
         self.assertIn("MonoBehaviour", tree)
+
+    def test_non_expanded_rect_parent_diagnostic_promotes_response_warning(self) -> None:
+        from prefab_sentinel.orchestrator_inspect import inspect_hierarchy
+        from prefab_sentinel.services.prefab_variant import PrefabVariantService
+        from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_transform
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            assets = root / "Assets"
+            assets.mkdir(parents=True)
+            prefab = assets / "Rect.prefab"
+            prefab.write_text(
+                YAML_HEADER
+                + make_gameobject("100", "Canvas", ["200"])
+                + make_transform(
+                    "200",
+                    "100",
+                    is_rect=True,
+                    anchor_min=(0.0, 0.0),
+                    anchor_max=(1.0, 1.0),
+                    size_delta=(0.0, 0.0),
+                ),
+                encoding="utf-8",
+            )
+            (assets / "Rect.prefab.meta").write_text(
+                "fileFormatVersion: 2\nguid: bbbb1111bbbb1111bbbb1111bbbb1111\n",
+                encoding="utf-8",
+            )
+            svc = PrefabVariantService(project_root=root)
+
+            response = inspect_hierarchy(svc, "Assets/Rect.prefab")
+
+        diagnostic_codes = [diagnostic.detail for diagnostic in response.diagnostics]
+        root_rect = response.data["roots"][0]["rect_transform"]
+        self.assertEqual(
+            (True, Severity.WARNING, "INSPECT_HIERARCHY_RESULT", "unresolved"),
+            (
+                response.success,
+                response.severity,
+                response.code,
+                root_rect["effective_world_size_basis"],
+            ),
+        )
+        self.assertIn(
+            "INSPECT_HIERARCHY_RECT_PARENT_UNRESOLVED",
+            diagnostic_codes,
+        )
+
+
+
+
+class InspectHierarchyPrefabInstanceExpansionTests(unittest.TestCase):
+    SOURCE_GUID = "11111111222222223333333344444444"
+    HOST_GUID = "55555555666666667777777788888888"
+
+    def _write_project(self, root: Path) -> None:
+        from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_transform
+
+        assets = root / "Assets"
+        assets.mkdir(parents=True, exist_ok=True)
+        source_text = (
+            YAML_HEADER
+            + make_gameobject("100", "NestedRoot", ["200"])
+            + make_transform("200", "100", children_file_ids=["201"])
+            + make_gameobject("101", "NestedLeaf", ["201"])
+            + make_transform("201", "101", father_file_id="200")
+        )
+        host_text = (
+            YAML_HEADER
+            + make_gameobject("1000", "HostRoot", ["2000"])
+            + make_transform("2000", "1000")
+            + self._prefab_instance(
+                "9000",
+                self.SOURCE_GUID,
+                modifications=[("100", "m_Name", "HostNestedRoot")],
+            )
+        )
+        _write_prefab_with_meta(assets, "Nested.prefab", self.SOURCE_GUID, source_text)
+        _write_prefab_with_meta(assets, "Host.prefab", self.HOST_GUID, host_text)
+
+    @staticmethod
+    def _prefab_instance(
+        file_id: str,
+        source_guid: str,
+        *,
+        modifications: list[tuple[str, str, str]] | None = None,
+    ) -> str:
+        if modifications:
+            modification_lines = "\n".join(
+                "\n".join(
+                    [
+                        f"    - target: {{fileID: {target_file_id}, guid: {source_guid}, type: 3}}",
+                        f"      propertyPath: {property_path}",
+                        f"      value: {value}",
+                        "      objectReference: {fileID: 0}",
+                    ]
+                )
+                for target_file_id, property_path, value in modifications
+            )
+            modifications_block = f"    m_Modifications:\n{modification_lines}\n"
+        else:
+            modifications_block = "    m_Modifications: []\n"
+        return (
+            f"--- !u!1001 &{file_id}\n"
+            "PrefabInstance:\n"
+            "  m_Modification:\n"
+            "    m_TransformParent: {fileID: 2000}\n"
+            f"{modifications_block}"
+            f"  m_SourcePrefab: {{fileID: 100100000, guid: {source_guid}, type: 3}}\n"
+        )
+
+    def test_non_expanded_mode_keeps_prefab_instance_leaf_contract(self) -> None:
+        from prefab_sentinel.orchestrator_inspect import inspect_hierarchy
+        from prefab_sentinel.services.prefab_variant import PrefabVariantService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_project(root)
+            svc = PrefabVariantService(project_root=root)
+
+            response = inspect_hierarchy(svc, "Assets/Host.prefab")
+
+        roots = response.data["roots"]
+        self.assertEqual(
+            (True, "HostRoot", []),
+            (response.success, roots[0]["name"], roots[0]["children"]),
+            msg=f"non-expanded inspect_hierarchy must not expand prefab children: {response.to_dict()!r}",
+        )
+
+    def test_expanded_mode_returns_effective_prefab_instance_children(self) -> None:
+        from prefab_sentinel.orchestrator_inspect import inspect_hierarchy
+        from prefab_sentinel.services.prefab_variant import PrefabVariantService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_project(root)
+            svc = PrefabVariantService(project_root=root)
+
+            try:
+                response = inspect_hierarchy(
+                    svc, "Assets/Host.prefab", expand_prefab_instances=True
+                )
+            except TypeError as exc:
+                self.fail(
+                    "expected expand_prefab_instances=True to return effective hierarchy; "
+                    f"observed TypeError: {exc}"
+                )
+
+        nested = response.data["roots"][0]["children"][0]
+        self.assertEqual(
+            (
+                True,
+                "INSPECT_HIERARCHY_RESULT",
+                True,
+                "HostNestedRoot",
+                "NestedLeaf",
+                "Assets/Nested.prefab",
+                ["m_Name"],
+            ),
+            (
+                response.success,
+                response.code,
+                response.data["expand_prefab_instances"],
+                nested["name"],
+                nested["children"][0]["name"],
+                nested["origin"]["source"]["asset_path"],
+                nested["origin"]["override_host"]["property_paths"],
+            ),
+            msg=f"expanded inspect_hierarchy lost effective metadata: {response.to_dict()!r}",
+        )
+
+    def test_non_gameobject_asset_warning_remains_when_expansion_requested(self) -> None:
+        text = "--- !u!74 &100\nAnimationClip:\n  m_Name: Test\n"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            _write_project_asset(root, "Assets/Test.anim", text)
+            orch = _make_orchestrator()
+            orch.prefab_variant.project_root = root
+            try:
+                result = orch.inspect_hierarchy(
+                    "Assets/Test.anim",
+                    expand_prefab_instances=True,
+                )
+            except TypeError as exc:
+                self.fail(
+                    "expected expand_prefab_instances=True to preserve non-GameObject warning; "
+                    f"observed TypeError: {exc}"
+                )
+        self.assertEqual(
+            (True, Severity.WARNING, "INSPECT_HIERARCHY_NO_GAMEOBJECTS", ".anim"),
+            (result.success, result.severity, result.code, result.data["file_type"]),
+            msg=f"non-GameObject hierarchy guard changed under expansion: {result.to_dict()!r}",
+        )
+
+
+class EffectiveInspectorDelegationTests(unittest.TestCase):
+    def test_inspect_hierarchy_forwards_prefab_instance_expansion_flag(self) -> None:
+        orch = _make_orchestrator()
+        delegated = _ok_response("INSPECT_HIERARCHY_RESULT", {"read_only": True})
+        with patch("prefab_sentinel.orchestrator_inspect.inspect_hierarchy") as inspect:
+            inspect.return_value = delegated
+            try:
+                result = orch.inspect_hierarchy(
+                    "Assets/Host.prefab",
+                    max_depth=2,
+                    show_components=False,
+                    expand_monobehaviour=True,
+                    expand_prefab_instances=True,
+                )
+            except TypeError as exc:
+                self.fail(
+                    "expected Phase1Orchestrator.inspect_hierarchy to forward expand_prefab_instances; "
+                    f"observed TypeError: {exc}"
+                )
+
+        self.assertIs(result, delegated)
+        inspect.assert_called_once_with(
+            orch.prefab_variant,
+            "Assets/Host.prefab",
+            max_depth=2,
+            show_components=False,
+            expand_monobehaviour=True,
+            expand_prefab_instances=True,
+        )
+
+
+    def test_inspect_transform_effective_values_delegates_to_helper(self) -> None:
+        orch = _make_orchestrator()
+        delegated = _ok_response("INSPECT_TRANSFORM_VALUES", {"read_only": True})
+        with patch(
+            "prefab_sentinel.effective_transform_inspector.inspect_transform_effective_values"
+        ) as inspect:
+            inspect.return_value = delegated
+            try:
+                result = orch.inspect_transform_effective_values(
+                    "Assets/Host.prefab",
+                    "HostRoot/NestedRoot",
+                )
+            except AttributeError as exc:
+                self.fail(
+                    "expected Phase1Orchestrator.inspect_transform_effective_values to delegate; "
+                    f"observed AttributeError: {exc}"
+                )
+
+        self.assertIs(result, delegated)
+        inspect.assert_called_once_with(
+            orch.prefab_variant,
+            "Assets/Host.prefab",
+            "HostRoot/NestedRoot",
+        )
+
+
+    def test_inspect_unity_event_listeners_delegates_to_helper(self) -> None:
+        orch = _make_orchestrator()
+        delegated = _ok_response("INSPECT_UNITY_EVENT_LISTENERS", {"read_only": True})
+        with patch(
+            "prefab_sentinel.unity_event_listener_inspector.inspect_unity_event_listeners"
+        ) as inspect:
+            inspect.return_value = delegated
+            try:
+                result = orch.inspect_unity_event_listeners(
+                    "Assets/Control.prefab",
+                    "Control",
+                    "Button",
+                    "onClick",
+                )
+            except AttributeError as exc:
+                self.fail(
+                    "expected Phase1Orchestrator.inspect_unity_event_listeners to delegate; "
+                    f"observed AttributeError: {exc}"
+                )
+
+        self.assertIs(result, delegated)
+        inspect.assert_called_once_with(
+            orch.prefab_variant,
+            "Assets/Control.prefab",
+            "Control",
+            "Button",
+            "onClick",
+        )
 
 
 if __name__ == "__main__":

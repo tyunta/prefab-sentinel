@@ -7,6 +7,7 @@ orchestrator_validation.
 
 from __future__ import annotations
 
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from prefab_sentinel.contracts import (
@@ -23,6 +24,7 @@ from prefab_sentinel.unity_assets import (
     is_variant_prefab,
 )
 from prefab_sentinel.unity_assets_path import resolve_scope_path
+from prefab_sentinel.wsl_compat import to_wsl_path
 
 __all__ = [
     "read_target_file",
@@ -36,13 +38,50 @@ __all__ = [
 # ------------------------------------------------------------------
 
 
+def _invalid_target_path_response(target_path: str, code_prefix: str) -> ToolResponse:
+    return error_response(
+        f"{code_prefix}_INVALID_TARGET_PATH",
+        "target_path must be project-root-relative and stay within project_root.",
+        data={"target_path": target_path, "read_only": True},
+    )
+
+
+def _resolve_target_file_path(
+    target_path: str,
+    project_root: Path,
+    code_prefix: str,
+) -> Path | ToolResponse:
+    converted_target = Path(to_wsl_path(target_path))
+    windows_target = PureWindowsPath(target_path)
+
+    if converted_target.is_absolute() or windows_target.is_absolute():
+        return _invalid_target_path_response(target_path, code_prefix)
+    if ".." in converted_target.parts or ".." in windows_target.parts:
+        return _invalid_target_path_response(target_path, code_prefix)
+
+    root = project_root.resolve()
+    resolved = resolve_scope_path(target_path, project_root)
+    try:
+        resolved.relative_to(root)
+    except ValueError:
+        return _invalid_target_path_response(target_path, code_prefix)
+    return resolved
+
+
 def read_target_file(
     prefab_variant: PrefabVariantService,
     target_path: str,
     code_prefix: str,
 ) -> ToolResponse | str:
     """Read a Unity YAML file, returning text on success or an error ToolResponse."""
-    path = resolve_scope_path(target_path, prefab_variant.project_root)
+    path_or_error = _resolve_target_file_path(
+        target_path,
+        prefab_variant.project_root,
+        code_prefix,
+    )
+    if isinstance(path_or_error, ToolResponse):
+        return path_or_error
+    path = path_or_error
     if not path.exists():
         return error_response(
             f"{code_prefix}_FILE_NOT_FOUND",

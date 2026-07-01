@@ -55,19 +55,20 @@ namespace PrefabSentinel
 
         internal const string InvalidOrderCode = "EDITOR_CTRL_INVALID_ORDER";
         internal const string InvalidCursorCode = "EDITOR_CTRL_INVALID_CURSOR";
+        internal const string InvalidSinceSequenceCode = "EDITOR_CTRL_INVALID_SINCE_SEQUENCE";
         internal const string MaxEntriesOutOfRangeCode =
             "EDITOR_CTRL_MAX_ENTRIES_OUT_OF_RANGE";
 
-        /// <summary>
-        /// Validate <paramref name="order"/>, <paramref name="cursor"/>, and
-        /// <paramref name="maxEntries"/>. An empty order defaults to
-        /// newest-first. The cursor sentinel for an empty cursor is
-        /// <see cref="long.MaxValue"/> (newest-first) or
-        /// <see cref="long.MinValue"/> (oldest-first).
-        /// </summary>
+        public static bool UsesRequestIdSelector(long sinceSequence, string sinceRequestId)
+        {
+            return sinceSequence < 0 && !string.IsNullOrEmpty(sinceRequestId);
+        }
+
         public static ConsoleCaptureValidation Validate(
             string order, string cursor, int maxEntries,
-            long highestSeqId, int capacity)
+            long highestSeqId, int capacity,
+            long sinceSequence = -1,
+            string sinceRequestId = "")
         {
             string resolvedOrder = string.IsNullOrEmpty(order) ? NewestFirst : order;
             if (resolvedOrder != NewestFirst && resolvedOrder != OldestFirst)
@@ -113,6 +114,19 @@ namespace PrefabSentinel
                         + $"position outside the captured range [0, {highestSeqId}].");
                 }
                 cursorAfter = parsed;
+            }
+
+            if (sinceSequence < -1)
+            {
+                return ConsoleCaptureValidation.Rejected(
+                    InvalidSinceSequenceCode,
+                    "since_sequence must be omitted or greater than or equal to zero.");
+            }
+            if (sinceSequence > highestSeqId && highestSeqId >= 0)
+            {
+                return ConsoleCaptureValidation.Rejected(
+                    InvalidSinceSequenceCode,
+                    $"since_sequence={sinceSequence} is outside the captured range [0, {highestSeqId}].");
             }
 
             if (maxEntries < 1 || maxEntries > capacity)

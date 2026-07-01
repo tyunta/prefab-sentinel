@@ -58,7 +58,11 @@ class TestValidateFieldRenameLocalReadDiagnostics(unittest.TestCase):
             real_read_text = Path.read_text
             call_counter = {"hits_on_target": 0}
 
-            def fake_read_text(self: Path, *args: object, **kwargs: object) -> str:
+            def fake_read_text(
+                self: Path,
+                encoding: str | None = None,
+                errors: str | None = None,
+            ) -> str:
                 # Let resolve_script_fields' first read succeed; fail the
                 # second local read inside validate_field_rename used for the
                 # derived-class lookup.
@@ -68,7 +72,7 @@ class TestValidateFieldRenameLocalReadDiagnostics(unittest.TestCase):
                         raise UnicodeDecodeError(
                             "utf-8", b"\xff", 0, 1, "simulated decode failure"
                         )
-                return real_read_text(self, *args, **kwargs)
+                return real_read_text(self, encoding=encoding, errors=errors)
 
             with patch.object(Path, "read_text", fake_read_text):
                 response = validate_field_rename(

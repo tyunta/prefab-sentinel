@@ -150,7 +150,49 @@ namespace PrefabSentinel
                 for (int i = 0; i < request.ops.Length; i++)
                 {
                     PatchOp op = request.ops[i];
-                    string opName = (op?.op ?? string.Empty).Trim();
+                    if (op == null)
+                    {
+                        diagnostics.Add(
+                            new BridgeDiagnostic
+                            {
+                                path = request.target,
+                                location = $"ops[{i}]",
+                                detail = "schema_error",
+                                evidence = "operation is null"
+                            }
+                        );
+                        return BuildError(
+                            "UNITY_BRIDGE_SCHEMA",
+                            "Invalid prefab create plan.",
+                            request.target,
+                            request.ops.Length,
+                            executed: false,
+                            applied: applied,
+                            diagnostics: diagnostics.ToArray()
+                        );
+                    }
+                    if (op.op == null)
+                    {
+                        diagnostics.Add(
+                            new BridgeDiagnostic
+                            {
+                                path = request.target,
+                                location = $"ops[{i}].op",
+                                detail = "schema_error",
+                                evidence = "op is null"
+                            }
+                        );
+                        return BuildError(
+                            "UNITY_BRIDGE_SCHEMA",
+                            "Invalid prefab create plan.",
+                            request.target,
+                            request.ops.Length,
+                            executed: false,
+                            applied: applied,
+                            diagnostics: diagnostics.ToArray()
+                        );
+                    }
+                    string opName = op.op.Trim();
                     if (
                         string.Equals(opName, "create_prefab", StringComparison.Ordinal)
                         || string.Equals(opName, "create_root", StringComparison.Ordinal)
@@ -427,7 +469,21 @@ namespace PrefabSentinel
                                 diagnostics: diagnostics.ToArray()
                             );
                         }
-                        string resultHandle = NormalizeHandle(op.result);
+                        if (!TryNormalizeResultHandle(
+                                op.result, request.target, i, diagnostics,
+                                out string resultHandle))
+                        {
+                            UnityEngine.Object.DestroyImmediate(addedComponent);
+                            return BuildError(
+                                "UNITY_BRIDGE_SCHEMA",
+                                "Invalid prefab create plan.",
+                                request.target,
+                                request.ops.Length,
+                                executed: false,
+                                applied: applied,
+                                diagnostics: diagnostics.ToArray()
+                            );
+                        }
                         if (!TrySetupUdonSharpBacking(
                             targetObject, addedComponent, componentType, handles,
                             resultHandle, request.target, i, diagnostics))
@@ -975,8 +1031,9 @@ namespace PrefabSentinel
         private static string SummarizePatchOpValue(PatchOp op)
         {
             if (op == null) return string.Empty;
-            string kind = op.value_kind ?? string.Empty;
-            switch (kind)
+            if (op.value_kind == null) return "null";
+
+            switch (op.value_kind)
             {
                 case "int":
                     return op.value_int.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -985,15 +1042,14 @@ namespace PrefabSentinel
                 case "bool":
                     return op.value_bool ? "true" : "false";
                 case "string":
-                    return op.value_string ?? string.Empty;
                 case "handle":
-                    return op.value_string ?? string.Empty;
+                    return op.value_string == null ? "null" : op.value_string;
                 case "json":
-                    return op.value_json ?? string.Empty;
+                    return op.value_json == null ? "null" : op.value_json;
                 case "null":
                     return "null";
                 default:
-                    return kind;
+                    return op.value_kind;
             }
         }
     }

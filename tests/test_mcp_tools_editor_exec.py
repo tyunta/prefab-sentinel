@@ -12,10 +12,35 @@ real Editor Bridge is required.
 from __future__ import annotations
 
 import unittest
-from unittest.mock import patch
+from contextlib import AbstractContextManager
+from unittest.mock import MagicMock, patch
 
 from prefab_sentinel import mcp_tools_editor_exec, mcp_tools_editor_view
 
+
+def _background_deferred_envelope(
+    operation: str,
+    **data_overrides: object,
+) -> dict:
+    data: dict[str, object] = {
+        "operation": operation,
+        "editor_focused": False,
+        "deferred_reason": "editor_background_compile_reload",
+        "elapsed_sec": 15.0,
+        "budget_sec": 15.0,
+        "diagnostic_compiling": True,
+        "job_retained": False,
+        "cleanup_performed": False,
+    }
+    data.update(data_overrides)
+    return {
+        "success": False,
+        "severity": "warning",
+        "code": "EDITOR_COMPILE_DEFERRED_BACKGROUND",
+        "message": "background compile deferred",
+        "data": data,
+        "diagnostics": [],
+    }
 
 class EditorRunScriptTests(unittest.TestCase):
     """Contract tests for ``editor_run_script``."""
@@ -26,7 +51,7 @@ class EditorRunScriptTests(unittest.TestCase):
         "}"
     )
 
-    def _patch_bridge(self) -> object:
+    def _patch_bridge(self) -> AbstractContextManager[MagicMock]:
         """Return a patch of ``send_action`` that also records calls.
 
         Returning the patcher lets each test control the mock's return
@@ -153,8 +178,6 @@ class EditorRunScriptTests(unittest.TestCase):
                 change_reason="path-traversal repro",
             )
         self.assertEqual(bridge_envelope, resp)
-        self.assertFalse(resp["success"])
-        self.assertEqual("error", resp["severity"])
 
     def test_runtime_exception_propagates(self) -> None:
         """T11c: RUNTIME envelope with exception/executed fields passes through."""
@@ -177,8 +200,169 @@ class EditorRunScriptTests(unittest.TestCase):
                 change_reason="runtime exception repro",
             )
         self.assertEqual(bridge_envelope, resp)
-        self.assertFalse(resp["success"])
-        self.assertEqual("error", resp["severity"])
+
+
+class EditorRunScriptResultChannelTests(unittest.TestCase):
+    _SNIPPET = (
+        "public static class PrefabSentinelTempScript {"
+        "  public static int Run() { return 7; }"
+        "}"
+    )
+
+    def test_run_script_returns_stdout_return_value_and_outputs(self) -> None:
+        bridge_envelope = {
+            "success": True,
+            "severity": "info",
+            "code": "EDITOR_CTRL_RUN_SCRIPT_OK",
+            "message": "ran",
+            "data": {
+                "stdout": "hello\n",
+                "return_value": {"kind": "number", "number_value": 7},
+                "outputs": [
+                    {"key": "label", "value": {"kind": "string", "string_value": "WatchingButton"}},
+                    {"key": "visible", "value": {"kind": "bool", "bool_value": True}},
+                ],
+                "executed": True,
+            },
+            "diagnostics": [],
+        }
+        with patch.object(mcp_tools_editor_exec, "send_action", return_value=bridge_envelope):
+            response = mcp_tools_editor_exec.editor_run_script(
+                code=self._SNIPPET,
+                confirm=True,
+                change_reason="capture result channels",
+            )
+
+        self.assertEqual(
+            ("hello\n", 7, {"label": "WatchingButton", "visible": True}),
+            (
+                response["data"]["stdout"],
+                response["data"]["return_value"],
+                response["data"]["outputs"],
+            ),
+            msg=f"run-script result channels mismatch: {response!r}",
+        )
+
+    def test_run_script_submit_and_poll_share_terminal_channels(self) -> None:
+        request_id = "0123456789abcdef0123456789abcdef"
+        poll_envelope = {
+            "success": True,
+            "severity": "info",
+            "code": "EDITOR_CTRL_RUN_SCRIPT_POLL_COMPLETED",
+            "message": "completed",
+            "data": {
+                "request_id": request_id,
+                "status": "completed",
+                "stdout": "async\n",
+                "return_value": {"kind": "string", "string_value": "done"},
+                "outputs": [
+                    {"key": "count", "value": {"kind": "number", "number_value": 2}},
+                ],
+            },
+            "diagnostics": [],
+        }
+        with patch.object(mcp_tools_editor_exec, "send_action", return_value=poll_envelope):
+            response = mcp_tools_editor_exec.editor_run_script_poll(request_id)
+
+        self.assertEqual(
+            ("async\n", "done", {"count": 2}),
+            (
+                response["data"]["stdout"],
+                response["data"]["return_value"],
+                response["data"]["outputs"],
+            ),
+            msg=f"async run-script terminal channels mismatch: {response!r}",
+        )
+
+    def test_run_script_poll_runtime_failure_keeps_terminal_channels(self) -> None:
+        request_id = "0123456789abcdef0123456789abcdef"
+        poll_envelope = {
+            "success": False,
+            "severity": "error",
+            "code": "EDITOR_CTRL_RUN_SCRIPT_RUNTIME",
+            "message": "runtime failed",
+            "data": {
+                "request_id": request_id,
+                "status": "failed",
+                "stdout": "before failure\n",
+                "exception": {
+                    "type": "InvalidOperationException",
+                    "message": "boom",
+                    "short_stack": "Thrower.Run",
+                },
+            },
+            "diagnostics": [],
+        }
+        with patch.object(mcp_tools_editor_exec, "send_action", return_value=poll_envelope):
+            response = mcp_tools_editor_exec.editor_run_script_poll(request_id)
+
+        self.assertEqual(
+            (
+                False,
+                "error",
+                "EDITOR_CTRL_RUN_SCRIPT_RUNTIME",
+                "failed",
+                {
+                    "type": "InvalidOperationException",
+                    "message": "boom",
+                    "short_stack": "Thrower.Run",
+                },
+            ),
+            (
+                response["success"],
+                response["severity"],
+                response["code"],
+                response["data"]["status"],
+                response["data"]["exception"],
+            ),
+            msg=f"async runtime failure channels mismatch: {response!r}",
+        )
+
+    def test_run_script_runtime_exception_is_structured_and_redacted(self) -> None:
+        bridge_envelope = {
+            "success": False,
+            "severity": "error",
+            "code": "EDITOR_CTRL_RUN_SCRIPT_RUNTIME",
+            "message": "run_script: Run() threw a runtime exception.",
+            "data": {
+                "stdout": "before\n",
+                "exception": {
+                    "type": "System.InvalidOperationException",
+                    "message": "failed at <wsl-path>",
+                    "short_stack": "at PrefabSentinelTempScript.Run()",
+                },
+                "path_hints": [
+                    {
+                        "detected_path": "/mnt/c/project/Assets/Scene.unity",
+                        "windows_path": "C:\\project\\Assets\\Scene.unity",
+                        "asset_relative_path": "Assets/Scene.unity",
+                        "application_data_path": "Application.dataPath + \"/Scene.unity\"",
+                    }
+                ],
+            },
+            "diagnostics": [],
+        }
+        with patch.object(mcp_tools_editor_exec, "send_action", return_value=bridge_envelope):
+            response = mcp_tools_editor_exec.editor_run_script(
+                code=self._SNIPPET,
+                confirm=True,
+                change_reason="capture runtime exception",
+            )
+
+        self.assertEqual(
+            (
+                "System.InvalidOperationException",
+                "failed at <wsl-path>",
+                "Assets/Scene.unity",
+            ),
+            (
+                response["data"]["exception"]["type"],
+                response["data"]["exception"]["message"],
+                response["data"]["path_hints"][0]["asset_relative_path"],
+            ),
+            msg=f"runtime exception channel mismatch: {response!r}",
+        )
+        self.assertNotIn("/mnt/c/project", str(response["data"]["exception"]))
 
 
 class EditorRunScriptDefaultsTests(unittest.TestCase):
@@ -801,6 +985,147 @@ class EditorRunScriptCompileTimeoutPassThroughTests(unittest.TestCase):
         self.assertIn(
             str(mcp_tools_editor_exec.COMPILE_TIMEOUT_MAX_MS),
             resp["message"],
+        )
+
+
+class EditorRunScriptBackgroundDeferredPassThroughTests(unittest.TestCase):
+    """Issue #72: run-script wrappers preserve the deferred compile class."""
+
+    _SNIPPET = (
+        "public static class PrefabSentinelTempScript {"
+        "  public static void Run() { }"
+        "}"
+    )
+    _VALID_ID = "0123456789abcdef0123456789abcdef"
+
+    def test_run_script_deferred_envelope_passes_through_unchanged(self) -> None:
+        bridge_envelope = _background_deferred_envelope("run_script")
+        with patch.object(mcp_tools_editor_exec, "send_action") as send:
+            send.return_value = bridge_envelope
+            response = mcp_tools_editor_exec.editor_run_script(
+                code=self._SNIPPET,
+                confirm=True,
+                change_reason="background compile deferral",
+                compile_timeout_ms=15000,
+            )
+        self.assertEqual(
+            (
+                "EDITOR_COMPILE_DEFERRED_BACKGROUND", False, "warning",
+                "run_script", False, "editor_background_compile_reload",
+            ),
+            (
+                response["code"], response["success"], response["severity"],
+                response["data"]["operation"],
+                response["data"]["editor_focused"],
+                response["data"]["deferred_reason"],
+            ),
+            msg=(
+                "editor_run_script must preserve the bridge's background "
+                "compile deferral envelope instead of rewriting it as a "
+                "transport timeout or generic compile timeout."
+            ),
+        )
+
+    def test_submit_deferred_envelope_passes_through_unchanged(self) -> None:
+        bridge_envelope = _background_deferred_envelope("run_script_submit")
+        with patch.object(mcp_tools_editor_exec, "send_action") as send:
+            send.return_value = bridge_envelope
+            response = mcp_tools_editor_exec.editor_run_script_submit(
+                code=self._SNIPPET,
+                confirm=True,
+                change_reason="background compile deferral",
+                compile_timeout_ms=15000,
+            )
+        self.assertEqual(
+            (
+                "EDITOR_COMPILE_DEFERRED_BACKGROUND", False, "warning",
+                "run_script_submit", False,
+            ),
+            (
+                response["code"], response["success"], response["severity"],
+                response["data"]["operation"],
+                response["data"]["editor_focused"],
+            ),
+            msg=(
+                "editor_run_script_submit must return a deferred bridge "
+                "envelope unchanged when the bridge supplies one."
+            ),
+        )
+
+    def test_poll_deferred_envelope_keeps_retention_fields(self) -> None:
+        bridge_envelope = _background_deferred_envelope(
+            "run_script_poll",
+            job_retained=True,
+            cleanup_performed=False,
+        )
+        with patch.object(mcp_tools_editor_exec, "send_action") as send:
+            send.return_value = bridge_envelope
+            response = mcp_tools_editor_exec.editor_run_script_poll(
+                request_id=self._VALID_ID,
+                cleanup_on_timeout=True,
+            )
+        self.assertEqual(
+            (
+                "EDITOR_COMPILE_DEFERRED_BACKGROUND", False, "warning",
+                "run_script_poll", True, False,
+            ),
+            (
+                response["code"], response["success"], response["severity"],
+                response["data"]["operation"],
+                response["data"]["job_retained"],
+                response["data"]["cleanup_performed"],
+            ),
+            msg=(
+                "editor_run_script_poll must preserve job_retained=true and "
+                "cleanup_performed=false so callers can foreground Unity "
+                "and poll the same request_id."
+            ),
+        )
+
+
+class EditorRecompileRefreshDeferredPassThroughTests(unittest.TestCase):
+    """Issue #72: view wrappers preserve deferred compile envelopes."""
+
+    def test_recompile_deferred_envelope_passes_through_unchanged(self) -> None:
+        bridge_envelope = _background_deferred_envelope(
+            "editor_recompile_and_wait",
+        )
+        with patch.object(mcp_tools_editor_view, "send_action") as send:
+            send.return_value = bridge_envelope
+            response = mcp_tools_editor_view.editor_recompile(timeout_sec=30.0)
+        self.assertEqual(
+            (
+                "EDITOR_COMPILE_DEFERRED_BACKGROUND", False, "warning",
+                "editor_recompile_and_wait",
+            ),
+            (
+                response["code"], response["success"],
+                response["severity"], response["data"]["operation"],
+            ),
+            msg=(
+                "editor_recompile must preserve the deferred compile code "
+                "and operation payload from the bridge."
+            ),
+        )
+
+    def test_refresh_deferred_envelope_passes_through_unchanged(self) -> None:
+        bridge_envelope = _background_deferred_envelope("editor_refresh")
+        with patch.object(mcp_tools_editor_view, "send_action") as send:
+            send.return_value = bridge_envelope
+            response = mcp_tools_editor_view.editor_refresh()
+        self.assertEqual(
+            (
+                "EDITOR_COMPILE_DEFERRED_BACKGROUND", False, "warning",
+                "editor_refresh",
+            ),
+            (
+                response["code"], response["success"],
+                response["severity"], response["data"]["operation"],
+            ),
+            msg=(
+                "editor_refresh must preserve the deferred compile code "
+                "and operation payload from the bridge."
+            ),
         )
 
 

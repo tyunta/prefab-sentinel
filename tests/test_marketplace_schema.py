@@ -22,11 +22,13 @@ guards against drift between the files.
 from __future__ import annotations
 
 import copy
-import json
 import unittest
 from pathlib import Path
+from typing import Any
 
 import pytest
+
+from tests._typing_helpers import load_json_object
 
 pytestmark = pytest.mark.source_text_invariant
 
@@ -37,8 +39,8 @@ _CODEX_MARKETPLACE_PATH = (
 )
 
 
-def _load(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
+def _load(path: Path) -> dict[str, Any]:
+    return load_json_object(path.read_text(encoding="utf-8"), str(path))
 
 
 class TestClaudeMarketplaceCatalogSchema(unittest.TestCase):
@@ -46,7 +48,7 @@ class TestClaudeMarketplaceCatalogSchema(unittest.TestCase):
     carries the documented fields and the marketplace-level
     ``interface.displayName``."""
 
-    def _load_catalog(self) -> dict:
+    def _load_catalog(self) -> dict[str, Any]:
         return _load(_CLAUDE_MARKETPLACE_PATH)
 
     def test_root_carries_marketplace_identity_and_owner(self) -> None:
@@ -109,7 +111,7 @@ class TestCodexMarketplaceCatalogSchema(unittest.TestCase):
     ``url`` plugin source so Codex CLI can install a repo-root plugin
     (openai/codex#17066)."""
 
-    def _load_catalog(self) -> dict:
+    def _load_catalog(self) -> dict[str, Any]:
         return _load(_CODEX_MARKETPLACE_PATH)
 
     def test_codex_catalog_file_exists(self) -> None:
