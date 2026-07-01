@@ -105,7 +105,12 @@ class InspectWiringPaginationTests(unittest.TestCase):
             "prefab_sentinel.orchestrator_wiring.collect_project_guid_index",
             return_value={_CHILD_GUID: root / "Assets" / "Child.prefab"},
         ):
-            return inspect_wiring(pv, rr, target_path=str(base_path), **kwargs)
+            return inspect_wiring(
+                pv,
+                rr,
+                target_path=base_path.relative_to(root).as_posix(),
+                **kwargs,
+            )
 
     def test_first_page_returns_slice_and_continuation(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

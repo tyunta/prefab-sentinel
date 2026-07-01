@@ -30,6 +30,10 @@ def _run(coro: Any) -> Any:
     return raw
 
 
+def _fixture_asset(name: str) -> str:
+    return (FIXTURES / name).relative_to(FIXTURES.parent.parent).as_posix()
+
+
 class McpSmokeTests(unittest.TestCase):
     """End-to-end smoke tests for MCP tools against static YAML fixtures."""
 
@@ -37,7 +41,7 @@ class McpSmokeTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.server = create_server()
+        cls.server = create_server(project_root=FIXTURES.parent.parent)
 
     # --- inspect_wiring ---
 
@@ -45,7 +49,7 @@ class McpSmokeTests(unittest.TestCase):
         """inspect_wiring returns a well-formed envelope response."""
         _, result = _run(self.server.call_tool(
             "inspect_wiring",
-            {"asset_path": str(FIXTURES / "basic.prefab")},
+            {"asset_path": _fixture_asset("basic.prefab")},
         ))
         for key in ("success", "severity", "code", "data", "diagnostics"):
             self.assertIn(key, result, f"Missing envelope key: {key}")
@@ -55,7 +59,7 @@ class McpSmokeTests(unittest.TestCase):
         """basic.prefab has 1 null ref out of 2 fields -> null_ratio='1/2'."""
         _, result = _run(self.server.call_tool(
             "inspect_wiring",
-            {"asset_path": str(FIXTURES / "basic.prefab")},
+            {"asset_path": _fixture_asset("basic.prefab")},
         ))
         comps = result["data"]["components"]
         self.assertEqual(len(comps), 1)
@@ -65,7 +69,7 @@ class McpSmokeTests(unittest.TestCase):
         """basic.prefab null_field_names should be ['nullRef']."""
         _, result = _run(self.server.call_tool(
             "inspect_wiring",
-            {"asset_path": str(FIXTURES / "basic.prefab")},
+            {"asset_path": _fixture_asset("basic.prefab")},
         ))
         comps = result["data"]["components"]
         self.assertEqual(comps[0]["null_field_names"], ["nullRef"])
@@ -109,7 +113,7 @@ class McpSmokeTests(unittest.TestCase):
         """hierarchy.prefab has Root as the root node."""
         _, result = _run(self.server.call_tool(
             "inspect_hierarchy",
-            {"asset_path": str(FIXTURES / "hierarchy.prefab")},
+            {"asset_path": _fixture_asset("hierarchy.prefab")},
         ))
         for key in ("success", "severity", "code", "data", "diagnostics"):
             self.assertIn(key, result, f"Missing envelope key: {key}")
@@ -124,7 +128,7 @@ class McpSmokeTests(unittest.TestCase):
         """hierarchy.prefab should pass structure validation (no dup fileIDs)."""
         _, result = _run(self.server.call_tool(
             "validate_structure",
-            {"asset_path": str(FIXTURES / "hierarchy.prefab")},
+            {"asset_path": _fixture_asset("hierarchy.prefab")},
         ))
         for key in ("success", "severity", "code", "data", "diagnostics"):
             self.assertIn(key, result, f"Missing envelope key: {key}")
@@ -134,7 +138,7 @@ class McpSmokeTests(unittest.TestCase):
         """basic.prefab should also pass structure validation."""
         _, result = _run(self.server.call_tool(
             "validate_structure",
-            {"asset_path": str(FIXTURES / "basic.prefab")},
+            {"asset_path": _fixture_asset("basic.prefab")},
         ))
         self.assertIn("success", result)
 
@@ -144,7 +148,7 @@ class McpSmokeTests(unittest.TestCase):
         """hierarchy.prefab should return symbols (requires Transform for tree)."""
         _, result = _run(self.server.call_tool(
             "get_unity_symbols",
-            {"asset_path": str(FIXTURES / "hierarchy.prefab")},
+            {"asset_path": _fixture_asset("hierarchy.prefab")},
         ))
         self.assertNotIn("success", result)
         self.assertIn("symbols", result)
@@ -154,7 +158,7 @@ class McpSmokeTests(unittest.TestCase):
         """hierarchy.prefab root-level symbols should contain Root."""
         _, result = _run(self.server.call_tool(
             "get_unity_symbols",
-            {"asset_path": str(FIXTURES / "hierarchy.prefab")},
+            {"asset_path": _fixture_asset("hierarchy.prefab")},
         ))
         root_names = [s["name"] for s in result["symbols"]]
         self.assertIn("Root", root_names)

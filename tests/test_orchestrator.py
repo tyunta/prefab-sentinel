@@ -65,6 +65,12 @@ def _make_orchestrator() -> MockedPhase1Orchestrator:
     return orch
 
 
+def _write_project_asset(root: Path, relative_path: str, text: str) -> None:
+    path = root / relative_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
 class InspectVariantTests(unittest.TestCase):
     def test_all_steps_succeed(self) -> None:
         orch = _make_orchestrator()
@@ -295,19 +301,20 @@ class ReadTargetFilePathResolutionTests(unittest.TestCase):
             self.assertIsInstance(result, str)
             self.assertIn("m_Name: X", require_str(result, "target file text"))
 
-    def test_absolute_path_still_works(self) -> None:
+    def test_absolute_path_is_rejected(self) -> None:
 
 
         with tempfile.TemporaryDirectory() as tmpdir:
             target = Path(tmpdir) / "Test.prefab"
             target.write_text("%YAML 1.1\n--- !u!1 &100\nGameObject:\n  m_Name: Y\n")
-
             orch = _make_orchestrator()
             orch.prefab_variant.project_root = Path(tmpdir)
 
             result = orch._read_target_file(str(target), "TEST")
-            self.assertIsInstance(result, str)
-            self.assertIn("m_Name: Y", require_str(result, "target file text"))
+            response = require_tool_response(result, "invalid target path response")
+            self.assertFalse(response.success)
+            self.assertEqual("TEST_INVALID_TARGET_PATH", response.code)
+            self.assertEqual({"target_path": str(target), "read_only": True}, response.data)
 
     def test_nonexistent_relative_path_returns_error(self) -> None:
 
@@ -328,11 +335,12 @@ class FileTypeGuardTests(unittest.TestCase):
 
 
         text = "--- !u!91 &100\nAnimatorController:\n  m_Name: Test\n"
-        with tempfile.NamedTemporaryFile(suffix=".controller", mode="w", delete=False) as f:
-            f.write(text)
-            f.flush()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            _write_project_asset(root, "Assets/Test.controller", text)
             orch = _make_orchestrator()
-            result = orch.inspect_wiring(f.name)
+            orch.prefab_variant.project_root = root
+            result = orch.inspect_wiring("Assets/Test.controller")
         self.assertTrue(result.success)
         self.assertEqual(Severity.WARNING, result.severity)
         self.assertEqual("INSPECT_WIRING_NO_MONOBEHAVIOURS", result.code)
@@ -342,11 +350,12 @@ class FileTypeGuardTests(unittest.TestCase):
 
 
         text = "--- !u!74 &100\nAnimationClip:\n  m_Name: Test\n"
-        with tempfile.NamedTemporaryFile(suffix=".anim", mode="w", delete=False) as f:
-            f.write(text)
-            f.flush()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            _write_project_asset(root, "Assets/Test.anim", text)
             orch = _make_orchestrator()
-            result = orch.inspect_wiring(f.name)
+            orch.prefab_variant.project_root = root
+            result = orch.inspect_wiring("Assets/Test.anim")
         self.assertTrue(result.success)
         self.assertEqual(Severity.WARNING, result.severity)
         self.assertEqual("INSPECT_WIRING_NO_MONOBEHAVIOURS", result.code)
@@ -355,11 +364,12 @@ class FileTypeGuardTests(unittest.TestCase):
 
 
         text = "--- !u!74 &100\nAnimationClip:\n  m_Name: Test\n"
-        with tempfile.NamedTemporaryFile(suffix=".anim", mode="w", delete=False) as f:
-            f.write(text)
-            f.flush()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            _write_project_asset(root, "Assets/Test.anim", text)
             orch = _make_orchestrator()
-            result = orch.inspect_hierarchy(f.name)
+            orch.prefab_variant.project_root = root
+            result = orch.inspect_hierarchy("Assets/Test.anim")
         self.assertTrue(result.success)
         self.assertEqual(Severity.WARNING, result.severity)
         self.assertEqual("INSPECT_HIERARCHY_NO_GAMEOBJECTS", result.code)
@@ -369,11 +379,12 @@ class FileTypeGuardTests(unittest.TestCase):
 
 
         text = "--- !u!91 &100\nAnimatorController:\n  m_Name: Test\n"
-        with tempfile.NamedTemporaryFile(suffix=".controller", mode="w", delete=False) as f:
-            f.write(text)
-            f.flush()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            _write_project_asset(root, "Assets/Test.controller", text)
             orch = _make_orchestrator()
-            result = orch.inspect_structure(f.name)
+            orch.prefab_variant.project_root = root
+            result = orch.inspect_structure("Assets/Test.controller")
         self.assertTrue(result.success)
         self.assertEqual(["duplicate_file_id"], result.data["checks_performed"])
         self.assertIn("transform_consistency", result.data["checks_skipped"])
@@ -385,11 +396,12 @@ class FileTypeGuardTests(unittest.TestCase):
         from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_transform
 
         text = YAML_HEADER + make_gameobject("100", "Root", ["200"]) + make_transform("200", "100")
-        with tempfile.NamedTemporaryFile(suffix=".prefab", mode="w", delete=False) as f:
-            f.write(text)
-            f.flush()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            _write_project_asset(root, "Assets/Test.prefab", text)
             orch = _make_orchestrator()
-            result = orch.inspect_structure(f.name)
+            orch.prefab_variant.project_root = root
+            result = orch.inspect_structure("Assets/Test.prefab")
         self.assertTrue(result.success)
         self.assertEqual(4, len(result.data["checks_performed"]))
         self.assertEqual([], result.data["checks_skipped"])
@@ -402,11 +414,12 @@ class FileTypeGuardTests(unittest.TestCase):
         from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
 
         text = YAML_HEADER + make_gameobject("100", "Obj", ["200"]) + make_monobehaviour("200", "100")
-        with tempfile.NamedTemporaryFile(suffix=".prefab", mode="w", delete=False) as f:
-            f.write(text)
-            f.flush()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            _write_project_asset(root, "Assets/Test.prefab", text)
             orch = _make_orchestrator()
-            result = orch.inspect_wiring(f.name)
+            orch.prefab_variant.project_root = root
+            result = orch.inspect_wiring("Assets/Test.prefab")
         self.assertEqual("INSPECT_WIRING_RESULT", result.code)
 
 
@@ -423,16 +436,16 @@ class InspectWiringTests(unittest.TestCase):
             + make_monobehaviour("200", "100", guid="aabbccdd11223344aabbccdd11223344")
             + "  someField: {fileID: 100}\n"
         )
-        with tempfile.NamedTemporaryFile(suffix=".prefab", mode="w", delete=False) as f:
-            f.write(text)
-            f.flush()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            _write_project_asset(root, "Assets/Test.prefab", text)
             orch = _make_orchestrator()
-            orch.prefab_variant.project_root = Path("/fake")
+            orch.prefab_variant.project_root = root
             with patch(
                 "prefab_sentinel.orchestrator_wiring.collect_project_guid_index",
-                return_value={"aabbccdd11223344aabbccdd11223344": Path("/fake/Assets/Scripts/MyScript.cs")},
+                return_value={"aabbccdd11223344aabbccdd11223344": root / "Assets" / "Scripts" / "MyScript.cs"},
             ):
-                result = orch.inspect_wiring(f.name)
+                result = orch.inspect_wiring("Assets/Test.prefab")
 
         self.assertTrue(result.success)
         comps = result.data["components"]
@@ -440,8 +453,8 @@ class InspectWiringTests(unittest.TestCase):
         self.assertEqual(comps[0]["game_object_name"], "MyObj")
         self.assertEqual(comps[0]["script_name"], "MyScript")
 
-    def test_script_name_empty_on_project_root_failure(self) -> None:
-        """script_name should be empty when project_root is None (no active project)."""
+    def test_script_name_empty_when_guid_index_has_no_match(self) -> None:
+        """script_name should be empty when the script GUID cannot be resolved."""
 
 
         from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
@@ -452,12 +465,16 @@ class InspectWiringTests(unittest.TestCase):
             + make_monobehaviour("200", "100")
             + "  ref: {fileID: 100}\n"
         )
-        with tempfile.NamedTemporaryFile(suffix=".prefab", mode="w", delete=False) as f:
-            f.write(text)
-            f.flush()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            _write_project_asset(root, "Assets/Test.prefab", text)
             orch = _make_orchestrator()
-            orch.prefab_variant.project_root = None
-            result = orch.inspect_wiring(f.name)
+            orch.prefab_variant.project_root = root
+            with patch(
+                "prefab_sentinel.orchestrator_wiring.collect_project_guid_index",
+                return_value={},
+            ):
+                result = orch.inspect_wiring("Assets/Test.prefab")
 
         self.assertTrue(result.success)
         comps = result.data["components"]
@@ -478,11 +495,12 @@ class InspectWiringTests(unittest.TestCase):
             + "  nullRef1: {fileID: 0}\n"
             + "  nullRef2: {fileID: 0}\n"
         )
-        with tempfile.NamedTemporaryFile(suffix=".prefab", mode="w", delete=False) as f:
-            f.write(text)
-            f.flush()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            _write_project_asset(root, "Assets/Test.prefab", text)
             orch = _make_orchestrator()
-            result = orch.inspect_wiring(f.name)
+            orch.prefab_variant.project_root = root
+            result = orch.inspect_wiring("Assets/Test.prefab")
 
         self.assertTrue(result.success)
         comps = result.data["components"]
@@ -522,35 +540,29 @@ class InspectWiringVariantTests(unittest.TestCase):
         base_text = self._make_base_text()
         variant_text = self._make_variant_text()
 
-        with tempfile.NamedTemporaryFile(
-            suffix=".prefab", mode="w", delete=False, prefix="base_"
-        ) as base_f:
-            base_f.write(base_text)
-            base_f.flush()
-            base_path = base_f.name
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            base_path = "Assets/Base.prefab"
+            variant_path = "Assets/Variant.prefab"
+            _write_project_asset(root, base_path, base_text)
+            _write_project_asset(root, variant_path, variant_text)
 
-        with tempfile.NamedTemporaryFile(
-            suffix=".prefab", mode="w", delete=False, prefix="variant_"
-        ) as var_f:
-            var_f.write(variant_text)
-            var_f.flush()
-            variant_path = var_f.name
-
-        orch = _make_orchestrator()
-        orch.prefab_variant.resolve_prefab_chain.return_value = _ok_response(
-            "CHAIN_OK",
-            {
-                "chain": [
-                    {"path": variant_path, "guid": "variant_guid"},
-                    {"path": base_path, "guid": self.BASE_GUID},
-                ]
-            },
-        )
-        orch.prefab_variant.list_overrides.return_value = _ok_response(
-            "PVR_OVERRIDES_OK",
-            {"overrides": [], "override_count": 0},
-        )
-        result = orch.inspect_wiring(variant_path)
+            orch = _make_orchestrator()
+            orch.prefab_variant.project_root = root
+            orch.prefab_variant.resolve_prefab_chain.return_value = _ok_response(
+                "CHAIN_OK",
+                {
+                    "chain": [
+                        {"path": variant_path, "guid": "variant_guid"},
+                        {"path": base_path, "guid": self.BASE_GUID},
+                    ]
+                },
+            )
+            orch.prefab_variant.list_overrides.return_value = _ok_response(
+                "PVR_OVERRIDES_OK",
+                {"overrides": [], "override_count": 0},
+            )
+            result = orch.inspect_wiring(variant_path)
 
         self.assertEqual("INSPECT_WIRING_RESULT", result.code)
         self.assertTrue(result.data.get("is_variant"))
@@ -564,11 +576,13 @@ class InspectWiringVariantTests(unittest.TestCase):
         from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
 
         text = YAML_HEADER + make_gameobject("100", "Obj", ["200"]) + make_monobehaviour("200", "100")
-        with tempfile.NamedTemporaryFile(suffix=".prefab", mode="w", delete=False) as f:
-            f.write(text)
-            f.flush()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            target_path = "Assets/Test.prefab"
+            _write_project_asset(root, target_path, text)
             orch = _make_orchestrator()
-            result = orch.inspect_wiring(f.name)
+            orch.prefab_variant.project_root = root
+            result = orch.inspect_wiring(target_path)
 
         self.assertEqual("INSPECT_WIRING_RESULT", result.code)
         self.assertNotIn("is_variant", result.data)
@@ -579,18 +593,19 @@ class InspectWiringVariantTests(unittest.TestCase):
 
 
         variant_text = self._make_variant_text()
-        with tempfile.NamedTemporaryFile(suffix=".prefab", mode="w", delete=False) as f:
-            f.write(variant_text)
-            f.flush()
-            variant_path = f.name
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            variant_path = "Assets/Variant.prefab"
+            _write_project_asset(root, variant_path, variant_text)
 
-        orch = _make_orchestrator()
-        # Chain returns only the variant itself (no base)
-        orch.prefab_variant.resolve_prefab_chain.return_value = _ok_response(
-            "CHAIN_OK",
-            {"chain": [{"path": variant_path, "guid": "variant_guid"}]},
-        )
-        result = orch.inspect_wiring(variant_path)
+            orch = _make_orchestrator()
+            orch.prefab_variant.project_root = root
+            # Chain returns only the variant itself (no base)
+            orch.prefab_variant.resolve_prefab_chain.return_value = _ok_response(
+                "CHAIN_OK",
+                {"chain": [{"path": variant_path, "guid": "variant_guid"}]},
+            )
+            result = orch.inspect_wiring(variant_path)
 
         self.assertEqual("INSPECT_WIRING_RESULT", result.code)
         # Should not be marked as variant since no base was found
@@ -632,42 +647,36 @@ class InspectWiringVariantOverrideAnnotationTests(unittest.TestCase):
         base_text = self._make_base_text()
         variant_text = self._make_variant_text()
 
-        with tempfile.NamedTemporaryFile(
-            suffix=".prefab", mode="w", delete=False, prefix="base_"
-        ) as base_f:
-            base_f.write(base_text)
-            base_f.flush()
-            base_path = base_f.name
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            base_path = "Assets/Base.prefab"
+            variant_path = "Assets/Variant.prefab"
+            _write_project_asset(root, base_path, base_text)
+            _write_project_asset(root, variant_path, variant_text)
 
-        with tempfile.NamedTemporaryFile(
-            suffix=".prefab", mode="w", delete=False, prefix="variant_"
-        ) as var_f:
-            var_f.write(variant_text)
-            var_f.flush()
-            variant_path = var_f.name
-
-        orch = _make_orchestrator()
-        orch.prefab_variant.resolve_prefab_chain.return_value = _ok_response(
-            "CHAIN_OK",
-            {
-                "chain": [
-                    {"path": variant_path, "guid": "variant_guid"},
-                    {"path": base_path, "guid": self.BASE_GUID},
-                ]
-            },
-        )
-        # list_overrides returns overrides targeting the MonoBehaviour (fileID 200)
-        orch.prefab_variant.list_overrides.return_value = _ok_response(
-            "PVR_OVERRIDES_OK",
-            {
-                "overrides": [
-                    {"target_file_id": "200", "property_path": "myRef.fileID"},
-                    {"target_file_id": "200", "property_path": "myRef.guid"},
-                ],
-                "override_count": 2,
-            },
-        )
-        result = orch.inspect_wiring(variant_path)
+            orch = _make_orchestrator()
+            orch.prefab_variant.project_root = root
+            orch.prefab_variant.resolve_prefab_chain.return_value = _ok_response(
+                "CHAIN_OK",
+                {
+                    "chain": [
+                        {"path": variant_path, "guid": "variant_guid"},
+                        {"path": base_path, "guid": self.BASE_GUID},
+                    ]
+                },
+            )
+            # list_overrides returns overrides targeting the MonoBehaviour (fileID 200)
+            orch.prefab_variant.list_overrides.return_value = _ok_response(
+                "PVR_OVERRIDES_OK",
+                {
+                    "overrides": [
+                        {"target_file_id": "200", "property_path": "myRef.fileID"},
+                        {"target_file_id": "200", "property_path": "myRef.guid"},
+                    ],
+                    "override_count": 2,
+                },
+            )
+            result = orch.inspect_wiring(variant_path)
 
         self.assertTrue(result.success)
         comps = result.data["components"]
@@ -691,11 +700,13 @@ class InspectWiringVariantOverrideAnnotationTests(unittest.TestCase):
             + make_monobehaviour("200", "100")
             + "  ref: {fileID: 100}\n"
         )
-        with tempfile.NamedTemporaryFile(suffix=".prefab", mode="w", delete=False) as f:
-            f.write(text)
-            f.flush()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            target_path = "Assets/Test.prefab"
+            _write_project_asset(root, target_path, text)
             orch = _make_orchestrator()
-            result = orch.inspect_wiring(f.name)
+            orch.prefab_variant.project_root = root
+            result = orch.inspect_wiring(target_path)
 
         comps = result.data["components"]
         self.assertEqual(len(comps), 1)
@@ -714,10 +725,13 @@ class ValidateAllWiringTests(unittest.TestCase):
             + make_monobehaviour("200", "100", guid="abcd" * 8)
         )
         with tempfile.TemporaryDirectory() as tmp:
-            p = Path(tmp) / "test.prefab"
-            p.write_text(text, encoding="utf-8")
+            root = Path(tmp)
+            target_path = "Assets/test.prefab"
+            _write_project_asset(root, target_path, text)
             orch = Phase1Orchestrator.default()
-            result = orch.validate_all_wiring(target_path=str(p))
+            orch.prefab_variant.project_root = root
+            orch.reference_resolver.project_root = root
+            result = orch.validate_all_wiring(target_path=target_path)
             resp = result.to_dict()
             self.assertTrue(resp["success"])
             self.assertEqual(1, resp["data"]["files_scanned"])
@@ -2202,7 +2216,7 @@ class TestNestedWiringTraversal(unittest.TestCase):
                 "prefab_sentinel.orchestrator_wiring.collect_project_guid_index",
                 return_value={_CHILD_WIRING_GUID: assets_dir / "Child.prefab"},
             ):
-                result = orch.inspect_wiring(str(base_path))
+                result = orch.inspect_wiring(base_path.relative_to(tmp_path).as_posix())
 
             self.assertEqual("INSPECT_WIRING_RESULT", result.code)
             self.assertEqual(1, result.data["component_count"])
@@ -2283,7 +2297,7 @@ class TestNestedWiringTraversal(unittest.TestCase):
                 },
             ):
                 result = orch.inspect_wiring(
-                    str(base_path),
+                    base_path.relative_to(tmp_path).as_posix(),
                     script_filter="CustomBehaviour",
                     diagnostics_baseline=baseline,
                 )
@@ -2365,7 +2379,7 @@ class TestNestedWiringTraversal(unittest.TestCase):
                 "prefab_sentinel.orchestrator_wiring.collect_project_guid_index",
                 return_value={_CHILD_WIRING_GUID: assets_dir / "Child.prefab"},
             ):
-                result = orch.inspect_wiring(str(base_path), udon_only=True)
+                result = orch.inspect_wiring(base_path.relative_to(tmp_path).as_posix(), udon_only=True)
 
             self.assertEqual("INSPECT_WIRING_RESULT", result.code)
             nested_components = [
@@ -2434,7 +2448,7 @@ class TestNestedWiringTraversal(unittest.TestCase):
                 "prefab_sentinel.orchestrator_wiring.collect_project_guid_index",
                 return_value={_CHILD_WIRING_GUID: assets_dir / "Child.prefab"},
             ):
-                result = orch.inspect_wiring(str(base_path))
+                result = orch.inspect_wiring(base_path.relative_to(tmp_path).as_posix())
 
             self.assertEqual("INSPECT_WIRING_RESULT", result.code)
             comps = result.data["components"]
@@ -2952,12 +2966,16 @@ class InspectHierarchyPrefabInstanceExpansionTests(unittest.TestCase):
 
     def test_non_gameobject_asset_warning_remains_when_expansion_requested(self) -> None:
         text = "--- !u!74 &100\nAnimationClip:\n  m_Name: Test\n"
-        with tempfile.NamedTemporaryFile(suffix=".anim", mode="w", delete=False) as f:
-            f.write(text)
-            f.flush()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            _write_project_asset(root, "Assets/Test.anim", text)
             orch = _make_orchestrator()
+            orch.prefab_variant.project_root = root
             try:
-                result = orch.inspect_hierarchy(f.name, expand_prefab_instances=True)
+                result = orch.inspect_hierarchy(
+                    "Assets/Test.anim",
+                    expand_prefab_instances=True,
+                )
             except TypeError as exc:
                 self.fail(
                     "expected expand_prefab_instances=True to preserve non-GameObject warning; "
