@@ -228,6 +228,7 @@ class InspectWiringFilterAndSummaryTests(unittest.TestCase):
 
     def _run(self, root: Path, base_path: Path, **kwargs):
         pv, rr = _services_for_root(root)
+        target_path = base_path.relative_to(root).as_posix()
         # Patch the GUID index to expose the three .cs files as the
         # script-name resolution source. The path values are not used
         # for content reads; only the stems and suffixes matter.
@@ -240,7 +241,40 @@ class InspectWiringFilterAndSummaryTests(unittest.TestCase):
             "prefab_sentinel.orchestrator_wiring.collect_project_guid_index",
             return_value=guid_index,
         ):
-            return inspect_wiring(pv, rr, target_path=str(base_path), **kwargs)
+            return inspect_wiring(pv, rr, target_path=target_path, **kwargs)
+
+    def test_rejects_windows_absolute_target_path(self) -> None:
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pv, rr = _services_for_root(root)
+            target_path = r"C:\outside\Base.prefab"
+            response = inspect_wiring(pv, rr, target_path=target_path)
+
+        assert_error_envelope(
+            response,
+            code="INSPECT_WIRING_INVALID_TARGET_PATH",
+            message_match=r"project-root-relative.*project_root",
+            data={"target_path": target_path, "read_only": True},
+        )
+
+    def test_rejects_traversal_target_path(self) -> None:
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _build_three_class_fixture(root)
+            pv, rr = _services_for_root(root)
+            target_path = "Assets/../Assets/Base.prefab"
+            response = inspect_wiring(pv, rr, target_path=target_path)
+
+        assert_error_envelope(
+            response,
+            code="INSPECT_WIRING_INVALID_TARGET_PATH",
+            message_match=r"project-root-relative.*project_root",
+            data={"target_path": target_path, "read_only": True},
+        )
 
     def test_default_behaviour_returns_full_payload(self) -> None:
         """Issue #227 — neither flag supplied means the existing wiring
@@ -316,7 +350,8 @@ class InspectWiringFilterAndSummaryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             base = _build_three_class_fixture(root)
-            known_key = f"inspect_wiring:null_reference:{base}:40:targetRef"
+            target_path = base.relative_to(root).as_posix()
+            known_key = f"inspect_wiring:null_reference:{target_path}:40:targetRef"
             baseline = DiagnosticsBaseline(
                 known_diagnostics=(known_key,),
                 path=str(root / "config" / "diagnostics_baseline.json"),
@@ -383,6 +418,7 @@ class InspectWiringFilterAndSummaryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             base = _build_duplicate_reference_fixture(root)
+            target_path = base.relative_to(root).as_posix()
             baseline = DiagnosticsBaseline(
                 known_diagnostics=(),
                 path=str(root / "config" / "diagnostics_baseline.json"),
@@ -398,7 +434,7 @@ class InspectWiringFilterAndSummaryTests(unittest.TestCase):
                 resp = inspect_wiring(
                     pv,
                     rr,
-                    target_path=str(base),
+                    target_path=target_path,
                     diagnostics_baseline=baseline,
                 )
 
@@ -409,8 +445,8 @@ class InspectWiringFilterAndSummaryTests(unittest.TestCase):
         ]
         self.assertEqual(
             [
-                f"inspect_wiring:duplicate_reference:{base}:30:same-component:fileID:60",
-                f"inspect_wiring:duplicate_reference:{base}:30:same-component:fileID:70",
+                f"inspect_wiring:duplicate_reference:{target_path}:30:same-component:fileID:60",
+                f"inspect_wiring:duplicate_reference:{target_path}:30:same-component:fileID:70",
             ],
             duplicate_keys,
         )
@@ -422,6 +458,7 @@ class InspectWiringFilterAndSummaryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             base = _build_mixed_duplicate_reference_fixture(root)
+            target_path = base.relative_to(root).as_posix()
             baseline = DiagnosticsBaseline(
                 known_diagnostics=(),
                 path=str(root / "config" / "diagnostics_baseline.json"),
@@ -437,7 +474,7 @@ class InspectWiringFilterAndSummaryTests(unittest.TestCase):
                 resp = inspect_wiring(
                     pv,
                     rr,
-                    target_path=str(base),
+                    target_path=target_path,
                     diagnostics_baseline=baseline,
                 )
 
@@ -448,8 +485,8 @@ class InspectWiringFilterAndSummaryTests(unittest.TestCase):
         ]
         self.assertEqual(
             [
-                f"inspect_wiring:duplicate_reference:{base}:30:same-component:fileID:60",
-                f"inspect_wiring:duplicate_reference:{base}:30:cross-component:fileID:60",
+                f"inspect_wiring:duplicate_reference:{target_path}:30:same-component:fileID:60",
+                f"inspect_wiring:duplicate_reference:{target_path}:30:cross-component:fileID:60",
             ],
             duplicate_keys,
         )

@@ -567,6 +567,52 @@ class InspectStructureContractTests(unittest.TestCase):
         self.assertEqual(0, response.data["missing_component_count"])
         self.assertEqual(0, response.data["orphaned_transform_count"])
 
+    def test_rejects_absolute_target_path(self) -> None:
+        from prefab_sentinel.orchestrator_validation import (  # noqa: PLC0415
+            inspect_structure,
+        )
+        from prefab_sentinel.services.prefab_variant import (  # noqa: PLC0415
+            PrefabVariantService,
+        )
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_clean_project(root)
+            svc = PrefabVariantService(project_root=root)
+            target_path = str(root.parent / "outside.prefab")
+            response = inspect_structure(svc, target_path)
+
+        assert_error_envelope(
+            response,
+            code="VALIDATE_STRUCTURE_INVALID_TARGET_PATH",
+            message_match=r"project-root-relative.*project_root",
+            data={"target_path": target_path, "read_only": True},
+        )
+
+    def test_rejects_traversal_target_path(self) -> None:
+        from prefab_sentinel.orchestrator_validation import (  # noqa: PLC0415
+            inspect_structure,
+        )
+        from prefab_sentinel.services.prefab_variant import (  # noqa: PLC0415
+            PrefabVariantService,
+        )
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_clean_project(root)
+            svc = PrefabVariantService(project_root=root)
+            target_path = "Assets/../Assets/Base.prefab"
+            response = inspect_structure(svc, target_path)
+
+        assert_error_envelope(
+            response,
+            code="VALIDATE_STRUCTURE_INVALID_TARGET_PATH",
+            message_match=r"project-root-relative.*project_root",
+            data={"target_path": target_path, "read_only": True},
+        )
+
     def test_non_prefab_fixture_skips_transform_checks(self) -> None:
         """A non-GameObject-bearing text asset (``.mat``) only runs
         the ``duplicate_file_id`` check; the other three checks land
