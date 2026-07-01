@@ -13,6 +13,7 @@ from prefab_sentinel.contracts import (
     error_response,
     success_response,
 )
+from prefab_sentinel.diagnostics_baseline import DiagnosticKeyRecord
 from prefab_sentinel.unity_assets import (
     DEFAULT_EXCLUDED_DIR_NAMES,
     collect_project_guid_index,
@@ -29,6 +30,40 @@ from prefab_sentinel.unity_assets import (
 )
 from prefab_sentinel.unity_assets_path import relative_to_root, resolve_scope_path
 
+
+def _diagnostic_key_record(
+    issue_key: tuple[str, ...],
+    category: str,
+) -> DiagnosticKeyRecord:
+    kind = issue_key[0]
+    if kind == "missing_asset_guid":
+        return DiagnosticKeyRecord(
+            key=":".join(issue_key),
+            severity="error",
+            message=category,
+            data={"category": category, "guid": issue_key[1]},
+        )
+    if kind == "missing_local_id_external":
+        return DiagnosticKeyRecord(
+            key=":".join(issue_key),
+            severity="error",
+            message=category,
+            data={
+                "category": category,
+                "target_path": issue_key[1],
+                "file_id": issue_key[2],
+            },
+        )
+    return DiagnosticKeyRecord(
+        key=":".join(issue_key),
+        severity="error",
+        message=category,
+        data={
+            "category": category,
+            "source_path": issue_key[1],
+            "file_id": issue_key[2],
+        },
+    )
 
 def _build_top_missing_entry(
     guid: str,
@@ -58,6 +93,16 @@ def _build_top_missing_entry(
             for source, count in per_source.most_common()
         ]
     return entry
+
+
+def _path_status_exists(path: Path) -> tuple[bool, OSError | None]:
+    try:
+        path.stat()
+    except FileNotFoundError:
+        return False, None
+    except OSError as exc:
+        return False, exc
+    return True, None
 
 
 class ReferenceResolverService:
@@ -194,7 +239,7 @@ class ReferenceResolverService:
             return cached
         try:
             text = decode_text_file(path)
-        except UnicodeDecodeError:
+        except (OSError, UnicodeDecodeError):
             self._unreadable_paths.add(path)
             self._text_cache[path] = None
             return None
@@ -205,7 +250,7 @@ class ReferenceResolverService:
         """Read file text without touching caches (for parallel preload)."""
         try:
             return decode_text_file(path)
-        except UnicodeDecodeError:
+        except (OSError, UnicodeDecodeError):
             return None
 
     def preload_texts(
@@ -277,6 +322,14 @@ class ReferenceResolverService:
             for pattern in exclude_patterns
         )
 
+    def _is_regular_scope_asset(self, path: Path) -> bool:
+        if not is_unity_text_asset(path):
+            return False
+        try:
+            return path.is_file() and not path.is_symlink()
+        except OSError:
+            return False
+
     def _collect_scope_files(
         self,
         scope_path: Path,
@@ -284,7 +337,7 @@ class ReferenceResolverService:
     ) -> list[Path]:
         if scope_path.is_file():
             if (
-                is_unity_text_asset(scope_path)
+                self._is_regular_scope_asset(scope_path)
                 and not self._is_excluded(scope_path, scope_path.parent, exclude_patterns)
             ):
                 return [scope_path]
@@ -301,7 +354,7 @@ class ReferenceResolverService:
 
             for filename in filenames:
                 path = root_path / filename
-                if not is_unity_text_asset(path):
+                if not self._is_regular_scope_asset(path):
                     continue
                 if self._is_excluded(path, scope_path, exclude_patterns):
                     continue
@@ -312,7 +365,16 @@ class ReferenceResolverService:
 
     def _resolve_scan_project_root(self, scope_path: Path) -> Path:
         scope_anchor = scope_path if scope_path.is_dir() else scope_path.parent
-        candidate = find_project_root(scope_anchor)
+        resolved_anchor = scope_anchor.resolve()
+        assets_root = (self.project_root / "Assets").resolve()
+        try:
+            resolved_anchor.relative_to(assets_root)
+        except ValueError:
+            pass
+        else:
+            if resolved_anchor != assets_root:
+                return resolved_anchor
+        candidate = find_project_root(resolved_anchor)
         if (candidate / "Assets").exists():
             return candidate
         return self.project_root
@@ -453,7 +515,11 @@ class ReferenceResolverService:
             ``data.top_missing_asset_guids``, and optionally ``diagnostics``.
         """
         scope_path = resolve_scope_path(scope, self.project_root)
-        if not scope_path.exists():
+        try:
+            scope_exists = scope_path.exists()
+        except OSError:
+            scope_exists = False
+        if not scope_exists:
             return error_response(
                 "REF404",
                 "Scope path does not exist.",
@@ -483,6 +549,7 @@ class ReferenceResolverService:
         raw_counts = Counter()
         unique_counts = Counter()
         unique_issue_keys: set[tuple[str, ...]] = set()
+        diagnostic_key_records: list[DiagnosticKeyRecord] = []
         missing_asset_guid_occurrences = Counter()
         ignored_missing_asset_guid_occurrences = Counter()
         # Issue #198: per-(missing GUID, source path) occurrence counter,
@@ -516,6 +583,7 @@ class ReferenceResolverService:
             unique_issue_keys.add(issue_key)
             unique_counts[category] += 1
             total_broken += 1
+            diagnostic_key_records.append(_diagnostic_key_record(issue_key, category))
             if not include_diagnostics:
                 return
             if len(diagnostics) >= max_diagnostics:
@@ -678,6 +746,9 @@ class ReferenceResolverService:
                 "missing_asset": raw_counts["missing_asset"],
                 "missing_local_id": raw_counts["missing_local_id"],
             },
+            "diagnostic_keys": [
+                record.to_dict() for record in diagnostic_key_records
+            ],
             "top_missing_asset_guids": [
                 _build_top_missing_entry(
                     guid,
@@ -758,7 +829,14 @@ class ReferenceResolverService:
         scan_project_root = self.project_root
         if scope:
             scan_scope_path = resolve_scope_path(scope, self.project_root)
-            if not scan_scope_path.exists():
+            scope_exists, scope_error = _path_status_exists(scan_scope_path)
+            if scope_error is not None:
+                return error_response(
+                    "REF404",
+                    f"scope path status could not be read: {scope_error}",
+                    data={"scope": scope, "read_only": True},
+                )
+            if not scope_exists:
                 return error_response(
                     "REF404",
                     "Scope path does not exist.",
@@ -769,7 +847,8 @@ class ReferenceResolverService:
         if looks_like_guid(asset_or_guid):
             guid = normalize_guid(asset_or_guid)
             asset_path = self._guid_map(scan_project_root).get(guid)
-            if asset_path is None:
+            asset_missing = asset_path is None
+            if asset_missing and scan_scope_path is None:
                 return error_response(
                     "REF001",
                     "GUID was not found in project meta files.",
@@ -777,14 +856,28 @@ class ReferenceResolverService:
                 )
         else:
             candidate = resolve_scope_path(asset_or_guid, self.project_root)
-            if not candidate.exists():
+            candidate_exists, candidate_error = _path_status_exists(candidate)
+            if candidate_error is not None:
+                return error_response(
+                    "REF404",
+                    f"target asset path status could not be read: {candidate_error}",
+                    data={"asset_or_guid": asset_or_guid, "read_only": True},
+                )
+            if not candidate_exists:
                 return error_response(
                     "REF404",
                     "Target asset path does not exist.",
                     data={"asset_or_guid": asset_or_guid, "read_only": True},
                 )
             meta_path = candidate.with_suffix(candidate.suffix + ".meta")
-            if not meta_path.exists():
+            meta_exists, meta_error = _path_status_exists(meta_path)
+            if meta_error is not None:
+                return error_response(
+                    "REF001",
+                    f"target meta path status could not be read: {meta_error}",
+                    data={"asset_or_guid": asset_or_guid, "read_only": True},
+                )
+            if not meta_exists:
                 return error_response(
                     "REF001",
                     "Target asset has no .meta GUID file.",
@@ -792,8 +885,12 @@ class ReferenceResolverService:
                 )
             try:
                 guid = extract_meta_guid(meta_path) or ""
-            except UnicodeDecodeError:
-                guid = ""
+            except (OSError, UnicodeDecodeError) as exc:
+                return error_response(
+                    "REF001",
+                    f"target meta metadata could not be read: {exc}",
+                    data={"asset_or_guid": asset_or_guid, "read_only": True},
+                )
             if not looks_like_guid(guid):
                 return error_response(
                     "REF001",
@@ -801,6 +898,7 @@ class ReferenceResolverService:
                     data={"asset_or_guid": asset_or_guid, "read_only": True},
                 )
             asset_path = candidate
+            asset_missing = False
 
         usages: list[dict[str, str | int]] = []
         if scan_scope_path is None:
@@ -835,13 +933,18 @@ class ReferenceResolverService:
         else:
             severity = Severity.WARNING
 
+        response_asset_path = None
+        if asset_path is not None:
+            response_asset_path = self._relative(asset_path)
+
         return success_response(
             "REF_WHERE_USED",
             "Reference usage scan completed.",
             severity=severity,
             data={
                 "guid": guid,
-                "asset_path": self._relative(asset_path),
+                "asset_path": response_asset_path,
+                "asset_missing": asset_missing,
                 "scope": self._relative(scan_scope_path),
                 "scan_project_root": self._relative(scan_project_root),
                 "usage_count": len(usages) + truncated_usages,

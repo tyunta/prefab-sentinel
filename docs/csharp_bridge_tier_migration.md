@@ -92,10 +92,10 @@ Tier 列の `(+T3)` 表記は「クラス内に移行するアサーションと
 |---|---|---|---|---|
 | cross-cutting | `test_editor_control_bridge_source.py::TestBridgePartialLayout` | partial-layout | T3 | T3 恒久。partial ファイルの存在・`partial class` 宣言・削除済 partial 不在は CLR から観測不能。 |
 | cross-cutting | `…::TestBridgePartialSizing` | partial-layout | T3 | T3 恒久。行数上限・concern コメント・legacy allowlist 整合はテキスト事実。 |
-| cross-cutting | `…::TestOperationalRulesPartialInventory` | partial-layout | T3 | T3 恒久。CLAUDE.md inventory ↔ disk のドリフト検査。C# テストですらない。 |
+| cross-cutting | `…::TestOperationalRulesPartialInventory` | partial-layout | T3 | T3 恒久。AGENTS.md inventory ↔ disk のドリフト検査。C# テストですらない。 |
 | cross-cutting | `test_unity_patch_bridge_source.py::TestPatchBridgePartialLayout` | partial-layout | T3 | T3 恒久。disk 上 9 ファイル集合 ↔ documented inventory の同一性。 |
 | cross-cutting | `…::TestPatchBridgePartialDeclaresPartialClass` | partial-layout | T3 | T3 恒久。`partial` キーワード presence は compiler-input 事実。 |
-| cross-cutting | `…::TestPatchBridgeOperationalRulesInventory` | partial-layout | T3 | T3 恒久。disk ↔ CLAUDE.md 同期。 |
+| cross-cutting | `…::TestPatchBridgeOperationalRulesInventory` | partial-layout | T3 | T3 恒久。disk ↔ AGENTS.md 同期。 |
 | MenuScriptWatch | `…::MenuScriptWatchSplitSourceInvariantTests` | partial-layout | T3 | T3 恒久。#262 partial split の宣言唯一性・inventory drift。 |
 | Hierarchy | `…::TestGetHierarchyPathDedup` | structural-invariant | T3 | T3 恒久。`GetHierarchyPath` 定義唯一性（CS0111 ガード）。本体は `Transform.parent` 走査で Unity 結合。 |
 | Components | `…::TestAsmdefAssemblyDisambiguation` | structural-invariant | T3 | T3 恒久。完全修飾 `System.Reflection.Assembly` 使用の compile-disambiguation 不変条件。 |

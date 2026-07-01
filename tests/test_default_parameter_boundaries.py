@@ -9,7 +9,7 @@ Filter rule applied to the result set: keep defaults that act as
 truncation caps, size limits, or thresholds; exclude defaults that
 function as flags or sentinel counts.
 
-Discovered set for the current ``prefab_sentinel/`` tree (exactly three
+Discovered set for the current ``prefab_sentinel/`` tree (exactly four
 sites):
 
 * ``prefab_sentinel.services.runtime_validation.classification.classify_errors``
@@ -22,6 +22,8 @@ sites):
   ``page_size: int = INSPECT_WIRING_PAGE_SIZE_DEFAULT`` (issue #197;
   page-size cap on the merged components list slice; default literal
   is ``50``, inclusive bounds ``[1, 500]``).
+* ``prefab_sentinel.diagnostics_baseline_update.compute_diagnostics_baseline_update``
+  — ``sample_limit: int = 20`` (sample cap on added/pruned key lists).
 
 Per-site triplets:
 
@@ -32,10 +34,12 @@ Per-site triplets:
 * Inspect-wiring page size: for 49 / 50 / 51 merged components the
   page slice length matches the total below the default and is capped
   at the default with a continuation token above it.
+* Baseline update sample limit: for 19 / 20 / 21 new keys the added
+  sample is capped at 20 while ``added_count`` reflects every key.
 
 Boundary triplets fire ``classify_errors``, ``scan_broken_references``,
-and ``inspect_wiring`` **without an explicit override**, so a mutation
-that flips the default literal (e.g. 200 to 201, 10 to 9, or 50 to 51)
+``inspect_wiring``, and ``compute_diagnostics_baseline_update`` **without
+an explicit override**, so a mutation that flips one default literal
 breaks the equality assertion.
 
 If a future audit surfaces additional default-parameter cap sites, they
@@ -49,6 +53,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from prefab_sentinel.diagnostics_baseline import DiagnosticsBaseline
+from prefab_sentinel.diagnostics_baseline_update import (
+    compute_diagnostics_baseline_update,
+)
 from prefab_sentinel.orchestrator_wiring import (
     INSPECT_WIRING_CURSOR_PREFIX,
     INSPECT_WIRING_PAGE_SIZE_DEFAULT,
@@ -69,6 +77,7 @@ _DEFAULT_CLASSIFICATION_CAP = 200
 _DEFAULT_TOP_GUID_LIMIT = 10
 # Issue #197 anchor; mirrored by INSPECT_WIRING_PAGE_SIZE_DEFAULT.
 _DEFAULT_INSPECT_WIRING_PAGE_SIZE = 50
+_DEFAULT_BASELINE_UPDATE_SAMPLE_LIMIT = 20
 
 _BOUNDARY_BASE_GUID = "11111111111111111111111111111111"
 _BOUNDARY_CHILD_GUID = "22222222222222222222222222222222"
@@ -219,7 +228,11 @@ class InspectWiringPageSizeBoundaryTests(unittest.TestCase):
                 return_value={_BOUNDARY_CHILD_GUID: root / "Assets" / "Child.prefab"},
             ):
                 # No explicit page_size — default literal participates.
-                return inspect_wiring(pv, rr, target_path=str(base))
+                return inspect_wiring(
+                    pv,
+                    rr,
+                    target_path=base.relative_to(root).as_posix(),
+                )
 
     def test_total_one_below_default_returns_single_page(self) -> None:
         below = _DEFAULT_INSPECT_WIRING_PAGE_SIZE - 1
@@ -250,6 +263,47 @@ class InspectWiringPageSizeBoundaryTests(unittest.TestCase):
         # (mirrors the constant exposed by the orchestrator).
         self.assertEqual(
             INSPECT_WIRING_PAGE_SIZE_DEFAULT, _DEFAULT_INSPECT_WIRING_PAGE_SIZE,
+        )
+
+
+class DiagnosticsBaselineUpdateSampleLimitBoundaryTests(unittest.TestCase):
+    """Triplet for baseline update ``sample_limit: int = 20``."""
+
+    def _run(self, new_key_count: int):
+        baseline = DiagnosticsBaseline(
+            known_diagnostics=(),
+            path="/project/config/diagnostics_baseline.json",
+            status="loaded",
+        )
+        classification = {
+            "new": [{"key": f"key-{index:03d}"} for index in range(new_key_count)],
+            "known": [],
+            "resolved": [],
+        }
+        return compute_diagnostics_baseline_update(
+            baseline=baseline,
+            classification=classification,
+        )
+
+    def test_new_keys_one_below_default_sample_limit_are_all_sampled(self) -> None:
+        below = _DEFAULT_BASELINE_UPDATE_SAMPLE_LIMIT - 1
+        response = self._run(below)
+        self.assertEqual(below, response.data["added_count"])
+        self.assertEqual(below, len(response.data["added_sample"]))
+
+    def test_new_keys_at_default_sample_limit_are_all_sampled(self) -> None:
+        at = _DEFAULT_BASELINE_UPDATE_SAMPLE_LIMIT
+        response = self._run(at)
+        self.assertEqual(at, response.data["added_count"])
+        self.assertEqual(at, len(response.data["added_sample"]))
+
+    def test_new_keys_one_above_default_sample_limit_are_truncated(self) -> None:
+        above = _DEFAULT_BASELINE_UPDATE_SAMPLE_LIMIT + 1
+        response = self._run(above)
+        self.assertEqual(above, response.data["added_count"])
+        self.assertEqual(
+            _DEFAULT_BASELINE_UPDATE_SAMPLE_LIMIT,
+            len(response.data["added_sample"]),
         )
 
 

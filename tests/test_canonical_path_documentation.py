@@ -10,7 +10,7 @@ surfaces must publish that dependency so a future relocation of the
 constants does not silently disable either tool:
 
 1. The version-management section of the project's operational rules
-   file (``CLAUDE.md``).
+   file (``AGENTS.md``).
 2. The leading documentation block of
    ``scripts/check_bridge_constants.py``.
 
@@ -26,7 +26,7 @@ from pathlib import Path
 
 import pytest
 
-# Issue #167: this module reads ``CLAUDE.md`` and the drift-checker
+# Issue #167: this module reads ``AGENTS.md`` and the drift-checker
 # script directly from the un-mutated source tree, so its assertions
 # cannot observe mutations applied to ``prefab_sentinel/``.  The marker
 # is the inclusion mechanism for repository-synchrony tests; mutmut's
@@ -34,7 +34,7 @@ import pytest
 pytestmark = pytest.mark.source_text_invariant
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_CLAUDE_MD = _PROJECT_ROOT / "CLAUDE.md"
+_AGENTS_MD = _PROJECT_ROOT / "AGENTS.md"
 _DRIFT_CHECKER = _PROJECT_ROOT / "scripts" / "check_bridge_constants.py"
 
 _CANONICAL_PARTIAL_PATH = "tools/unity/PrefabSentinel.UnityEditorControlBridge.cs"
@@ -46,20 +46,20 @@ _LOAD_BEARING_CONSTANTS = (
 
 
 class TestOperationalRulesDocumentsCanonicalPath(unittest.TestCase):
-    """The version-management section of CLAUDE.md names the canonical
+    """The version-management section of AGENTS.md names the canonical
     core partial path, lists the three load-bearing constants, and
     instructs that any relocation requires a simultaneous update to
     both the drift checker and the bumpversion configuration."""
 
     def setUp(self) -> None:
-        self.text = _CLAUDE_MD.read_text(encoding="utf-8")
+        self.text = _AGENTS_MD.read_text(encoding="utf-8")
         # Slice out the version-management section so the assertions
         # cannot be satisfied by an unrelated mention elsewhere in the
         # file. The section header in this repo is "## バージョン管理".
         marker = "## バージョン管理"
         start = self.text.find(marker)
         self.assertNotEqual(
-            -1, start, "version-management section header not found in CLAUDE.md"
+            -1, start, "version-management section header not found in AGENTS.md"
         )
         next_section = self.text.find("\n## ", start + len(marker))
         end = next_section if next_section != -1 else len(self.text)

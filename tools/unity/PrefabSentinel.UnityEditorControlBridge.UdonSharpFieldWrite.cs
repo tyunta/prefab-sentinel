@@ -114,15 +114,17 @@ namespace PrefabSentinel
             bool hasValue = request.property_value_present
                 || !string.IsNullOrEmpty(request.property_value);
             bool hasRef = !string.IsNullOrEmpty(request.object_reference);
-            if (hasValue && hasRef)
+            bool hasArray = request.values_json_present;
+            int inputCount = (hasValue ? 1 : 0) + (hasRef ? 1 : 0) + (hasArray ? 1 : 0);
+            if (inputCount > 1)
                 return BuildError(
-                    "EDITOR_CTRL_SET_PROP_BOTH_VALUE",
-                    "property_value and object_reference are mutually exclusive; " +
+                    "EDITOR_CTRL_UDON_SET_FIELD_INPUT_CONFLICT",
+                    "property_value, object_reference, and values_json are mutually exclusive; " +
                     "supply exactly one.");
-            if (!hasValue && !hasRef)
+            if (inputCount == 0)
                 return BuildError(
                     "EDITOR_CTRL_UDON_SET_FIELD_NO_VALUE",
-                    "Either property_value or object_reference is required.");
+                    "property_value, object_reference, or values_json is required.");
 
             // VRChat URL fields appear as a Generic SerializedProperty
             // wrapping a private "url" string — UdonSharp deserializes
@@ -132,7 +134,13 @@ namespace PrefabSentinel
             bool isVRCUrl = fieldInfo != null
                 && fieldInfo.FieldType.FullName != null
                 && fieldInfo.FieldType.FullName.EndsWith("VRCUrl", StringComparison.Ordinal);
-            if (isVRCUrl && hasValue && prop.propertyType == SerializedPropertyType.Generic)
+            if (hasArray)
+            {
+                EditorControlResponse arrayError = WriteUdonSharpArrayValue(
+                    prop, fieldInfo, request);
+                if (arrayError != null) return arrayError;
+            }
+            else if (isVRCUrl && hasValue && prop.propertyType == SerializedPropertyType.Generic)
             {
                 SerializedProperty urlProp = prop.FindPropertyRelative("url");
                 if (urlProp == null)
@@ -188,7 +196,14 @@ namespace PrefabSentinel
                     "editor_set_udonsharp_field to complete the sync step.");
             EditorControlResponse syncErr = InvokeUdonSharpCopyProxyToUdon(
                 editorUtilType, proxy);
-            if (syncErr != null) return syncErr;
+            if (syncErr != null)
+            {
+                if (hasArray)
+                {
+                    syncErr.code = "EDITOR_CTRL_UDON_SET_FIELD_ARRAY_SYNC_FAILED";
+                }
+                return syncErr;
+            }
 
             EditorUtility.SetDirty(proxy);
             EditorUtility.SetDirty(go);

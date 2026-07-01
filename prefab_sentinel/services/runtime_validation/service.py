@@ -46,6 +46,9 @@ class RuntimeValidationService:
         target_root: Path,
         scene_path: str | None = None,
         profile: str | None = None,
+        confirm: bool = False,
+        change_reason: str | None = None,
+        allow_dirty_before: bool = False,
     ) -> ToolResponse:
         return invoke_via_editor_bridge(
             action=action,
@@ -53,7 +56,14 @@ class RuntimeValidationService:
             scene_path=scene_path,
             profile=profile,
             relative_fn=self._relative,
+            confirm=confirm,
+            change_reason=change_reason,
+            allow_dirty_before=allow_dirty_before,
         )
+
+
+
+
 
     def compile_udonsharp(self, project_root: str | None = None) -> ToolResponse:
         """Trigger an UdonSharp compilation via the resident Editor Bridge.
@@ -83,49 +93,68 @@ class RuntimeValidationService:
             target_root=target_root,
         )
 
-    def run_clientsim(self, scene_path: str, profile: str) -> ToolResponse:
-        """Run a ClientSim session for a scene via the resident Editor Bridge.
-
-        Args:
-            scene_path: Path to the ``.unity`` scene file.
-            profile: ClientSim profile name to use.
-
-        Returns:
-            ``ToolResponse`` with the ClientSim execution result from
-            Unity, or a ``RUN002`` envelope when the scene path fails
-            local validation.
-        """
+    def run_clientsim(
+        self,
+        scene_path: str,
+        profile: str,
+        confirm: bool = False,
+        change_reason: str | None = None,
+        allow_dirty_before: bool = False,
+    ) -> ToolResponse:
         target_root = default_runtime_root(self.project_root)
+        resolved_root = Path(target_root).resolve()
         scene = resolve_scope_path(scene_path, target_root)
+        rejection_data = {
+            "scene_path": scene_path,
+            "profile": profile,
+            "read_only": True,
+            "executed": False,
+        }
+        if not scene.is_relative_to(resolved_root):
+            return error_response(
+                "RUN002",
+                "Scene path resolves outside runtime root.",
+                data=rejection_data,
+            )
         if not scene.exists():
             return error_response(
                 "RUN002",
                 "Scene path was not found for runtime validation.",
-                data={
-                    "scene_path": scene_path,
-                    "profile": profile,
-                    "read_only": True,
-                    "executed": False,
-                },
+                data=rejection_data,
             )
         if scene.suffix.lower() != ".unity":
             return error_response(
                 "RUN002",
                 "Runtime validation requires a .unity scene path.",
-                data={
-                    "scene_path": scene_path,
-                    "profile": profile,
-                    "read_only": True,
-                    "executed": False,
-                },
+                data=rejection_data,
+            )
+        if profile != "clientsim":
+            return error_response(
+                "VALIDATE_RUNTIME_PROFILE_UNSUPPORTED",
+                "ClientSim execution requires the clientsim runtime validation profile.",
+                data=rejection_data,
+            )
+        if not confirm or change_reason is None or not change_reason.strip():
+            return error_response(
+                "CLIENTSIM_CONFIRM_REQUIRED",
+                "ClientSim validation requires explicit audit confirmation and a non-empty change reason.",
+                data=rejection_data,
             )
 
-        return self._invoke_unity_runtime(
+        from prefab_sentinel.services.runtime_validation.editor_bridge_invoke import (
+            with_clientsim_side_effect_diagnostics,
+        )
+
+        response = self._invoke_unity_runtime(
             action="run_clientsim",
             target_root=target_root,
             scene_path=self._relative(scene),
             profile=profile,
+            confirm=confirm,
+            change_reason=change_reason.strip(),
+            allow_dirty_before=allow_dirty_before,
         )
+        return with_clientsim_side_effect_diagnostics(response)
 
     def collect_unity_console(
         self,
@@ -211,6 +240,20 @@ class RuntimeValidationService:
                 "since_timestamp": since_timestamp,
                 "read_only": True,
             },
+        )
+
+    def collect_editor_console(
+        self,
+        since_timestamp: str | None = None,
+        max_lines: int = 4000,
+    ) -> ToolResponse:
+        from prefab_sentinel.services.runtime_validation.editor_bridge_invoke import (
+            collect_editor_console_via_bridge,
+        )
+
+        return collect_editor_console_via_bridge(
+            since_timestamp=since_timestamp,
+            max_lines=max_lines,
         )
 
     def classify_errors(

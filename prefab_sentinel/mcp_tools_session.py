@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -13,8 +14,8 @@ from prefab_sentinel.editor_bridge import (
     get_last_bridge_version,
     send_action,
 )
-from prefab_sentinel.mcp_helpers import KNOWLEDGE_URI_PREFIX
 from prefab_sentinel.session import InvalidProjectRootError, ProjectSession
+from prefab_sentinel.wsl_compat import to_wsl_path
 
 __all__ = ["register_session_tools"]
 
@@ -67,6 +68,149 @@ def _compose_envelope_severity(
     return max_severity(levels).value
 
 
+def _coerce_bridge_severity(raw: object) -> Severity:
+    if isinstance(raw, str):
+        try:
+            return Severity(raw)
+        except ValueError:
+            return Severity.INFO
+    return Severity.INFO
+
+
+def _bridge_diagnostic_to_session_wire(
+    diagnostic: dict[str, Any],
+    bridge_severity: Severity,
+) -> dict[str, Any]:
+    raw_severity = diagnostic.get("severity")
+    severity = (
+        _coerce_bridge_severity(raw_severity)
+        if isinstance(raw_severity, str)
+        else bridge_severity
+    )
+
+    raw_code = diagnostic.get("code")
+    code = raw_code if isinstance(raw_code, str) and raw_code else "BRIDGE_DIAGNOSTIC"
+    raw_message = diagnostic.get("message")
+    raw_detail = diagnostic.get("detail")
+    message = (
+        raw_message
+        if isinstance(raw_message, str) and raw_message
+        else raw_detail
+        if isinstance(raw_detail, str) and raw_detail
+        else code
+    )
+    data = {
+        key: diagnostic[key]
+        for key in ("path", "location", "evidence")
+        if key in diagnostic and diagnostic[key] not in (None, "")
+    }
+    return _build_session_diagnostic(code, message, severity=severity, data=data)
+
+
+def _bridge_diagnostics_to_session_wire(
+    bridge_resp: dict[str, Any],
+) -> list[dict[str, Any]]:
+    bridge_severity = _coerce_bridge_severity(bridge_resp.get("severity"))
+    raw_diagnostics = bridge_resp.get("diagnostics")
+    if not isinstance(raw_diagnostics, list):
+        return []
+    return [
+        _bridge_diagnostic_to_session_wire(diagnostic, bridge_severity)
+        for diagnostic in raw_diagnostics
+        if isinstance(diagnostic, dict)
+    ]
+
+
+def _operator_context(payload: dict[str, Any]) -> dict[str, Any]:
+    context = payload.get("operator_context")
+    return context if isinstance(context, dict) else {}
+
+
+def _context_string(context: dict[str, Any], key: str) -> str | None:
+    value = context.get(key)
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _project_root_identity(root: str) -> str:
+    return str(Path(to_wsl_path(root)).expanduser().resolve())
+
+
+def _project_roots_consistent(
+    expected_project_root: str | None,
+    actual_project_root: str | None,
+) -> bool | None:
+    if expected_project_root is None or actual_project_root is None:
+        return None
+    return _project_root_identity(expected_project_root) == _project_root_identity(
+        actual_project_root
+    )
+
+
+def _copy_editor_state_summary(status: dict[str, Any], editor_state: object) -> None:
+    if not isinstance(editor_state, dict):
+        return
+    for key in (
+        "active_stage_kind",
+        "active_scene_path",
+        "active_scene_name",
+        "prefab_stage_asset_path",
+        "prefab_stage_root_name",
+        "prefab_stage_is_dirty",
+        "open_scenes",
+        "has_unsaved_changes",
+    ):
+        if key in editor_state:
+            status[key] = editor_state[key]
+
+
+def _copy_operator_context(status: dict[str, Any], context: dict[str, Any]) -> None:
+    actual_project_root = _context_string(context, "project_root")
+    if actual_project_root is not None:
+        status["actual_project_root"] = actual_project_root
+    else:
+        status["actual_project_root"] = None
+    for key in (
+        "bridge_session_id",
+        "bridge_instance_id",
+        "plugin_version",
+        "bridge_version",
+    ):
+        value = _context_string(context, key)
+        if value is not None:
+            status[key] = value
+
+
+def _append_project_root_mismatch_diagnostic(
+    diagnostics: list[dict[str, Any]],
+    *,
+    expected_project_root: str,
+    actual_project_root: str | None,
+) -> None:
+    data: dict[str, Any] = {"expected_project_root": expected_project_root}
+    if actual_project_root is not None:
+        data["actual_project_root"] = actual_project_root
+        message = (
+            "Editor bridge reached Unity project root "
+            f"{actual_project_root!r}, expected {expected_project_root!r}."
+        )
+    else:
+        message = (
+            "Editor bridge response did not include the actual Unity project root "
+            f"required to verify expected root {expected_project_root!r}."
+        )
+    diagnostics.append(
+        _build_session_diagnostic(
+            "EDITOR_BRIDGE_PROJECT_ROOT_MISMATCH",
+            message,
+            severity=Severity.WARNING,
+            data=data,
+        )
+    )
+
+
 def register_session_tools(server: FastMCP, session: ProjectSession) -> None:
     """Register session management tools on *server*."""
 
@@ -102,15 +246,6 @@ def register_session_tools(server: FastMCP, session: ProjectSession) -> None:
                 "data": {},
                 "diagnostics": [],
             }
-        result["suggested_reads"] = session.suggest_reads()
-        # Issue #309: the canonical knowledge channel is the MCP resource
-        # URI scheme — wheel-installed deployments have no ``knowledge/``
-        # directory in cwd, so the Glob path is a source-tree-checkout
-        # affordance only.
-        result["knowledge_hint"] = (
-            f"Knowledge files are available as MCP resources under {KNOWLEDGE_URI_PREFIX}; "
-            "source-tree development checkouts can additionally use Glob('knowledge/*.md')."
-        )
         diagnostics: list[dict[str, Any]] = [
             _build_session_diagnostic(
                 "SESSION_SCOPE_DEFAULT_NOTE",
@@ -267,13 +402,16 @@ def register_session_tools(server: FastMCP, session: ProjectSession) -> None:
         new_version = session.detect_bridge_version()
 
         try:
-            send_action(action="refresh_asset_database")
+            refresh_response = send_action(action="refresh_asset_database")
         except Exception:
             logger.debug("Post-deploy asset database refresh failed", exc_info=True)
+        else:
+            if refresh_response.get("success") is not True:
+                return refresh_response
 
         return {
             "success": True,
-            "severity": "info",
+            "severity": _compose_envelope_severity(diagnostics),
             "code": "DEPLOY_OK",
             "message": f"Deployed {len(copied_files)} files to {target_dir}",
             "data": {
@@ -288,6 +426,7 @@ def register_session_tools(server: FastMCP, session: ProjectSession) -> None:
         }
 
     @server.tool()
+
     def get_project_status() -> dict[str, Any]:
         """Show current session state: cached items, scope, project root.
 
@@ -324,18 +463,38 @@ def register_session_tools(server: FastMCP, session: ProjectSession) -> None:
         status = session.status()
         status["python_version"] = python_version
         status["bridge_version"] = bridge_ver
+        status["actual_project_root"] = None
+        status["project_root_consistent"] = None
 
-        # Issue #239: surface the live editor-state snapshot when the
-        # bridge is currently connected. When disconnected the field is
-        # absent (None) — we do not fabricate ``false`` values for a
-        # bridge we cannot reach. On a bridge-action failure the field
-        # is similarly absent and a warning diagnostic names the
-        # underlying bridge code so the caller can act.
-        editor_state: dict[str, bool] | None = None
+        editor_state: dict[str, Any] | None = None
         if bridge_status().get("connected"):
-            bridge_resp = send_action(action="get_editor_state")
+            bridge_resp = send_action(
+                action="get_editor_state",
+                expected_project_root=None,
+            )
             if bridge_resp.get("success"):
+                diagnostics.extend(_bridge_diagnostics_to_session_wire(bridge_resp))
                 editor_state = bridge_resp.get("data", {}).get("editor_state")
+                context = _operator_context(bridge_resp)
+                _copy_operator_context(status, context)
+                _copy_editor_state_summary(status, editor_state)
+                actual_project_root = status.get("actual_project_root")
+                consistent = _project_roots_consistent(
+                    status.get("expected_project_root"),
+                    actual_project_root if isinstance(actual_project_root, str) else None,
+                )
+                status["project_root_consistent"] = consistent
+                expected_root = status.get("expected_project_root")
+                if expected_root is not None and consistent is not True:
+                    _append_project_root_mismatch_diagnostic(
+                        diagnostics,
+                        expected_project_root=expected_root,
+                        actual_project_root=(
+                            actual_project_root
+                            if isinstance(actual_project_root, str)
+                            else None
+                        ),
+                    )
             else:
                 diagnostics.append(
                     _build_session_diagnostic(

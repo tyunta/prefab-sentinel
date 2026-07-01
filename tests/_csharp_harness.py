@@ -103,7 +103,7 @@ def run_csharp_tests(
     # Pop the bridge dispatch env var so the inherited host shell value
     # does not leak into the runner; the bridge is not part of the C#
     # test surface and tests must start from a deterministic
-    # watch-dir-unconfigured state (CLAUDE.md "Editor リモート操作の
+    # watch-dir-unconfigured state (AGENTS.md "Editor リモート操作の
     # 行動規約" / issues #88, #89, #270).
     env = os.environ.copy()
     env.pop("UNITYTOOL_BRIDGE_WATCH_DIR", None)

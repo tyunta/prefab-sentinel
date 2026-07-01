@@ -119,6 +119,79 @@ def register_patch_tools(server: FastMCP, session: ProjectSession) -> None:
         )
         return resp.to_dict()
 
+
+    @server.tool()
+    def delete_asset(
+        asset_path: str,
+        scope: str | None = None,
+        dry_run: bool = True,
+        confirm: bool = False,
+        change_reason: str = "",
+    ) -> dict[str, Any]:
+        """Plan or delete one Unity asset through the AssetDatabase bridge.
+
+        Two-phase workflow:
+        - dry_run=True (default): returns deletion impact only.
+        - dry_run=False and confirm=True: applies through Unity AssetDatabase.
+
+        Args:
+            asset_path: Project-relative asset path under Assets/.
+            scope: Optional scope for reference impact and post-delete scan.
+            dry_run: Keep the request read-only when True.
+            confirm: Explicit apply gate.
+            change_reason: Required for effective apply.
+        """
+        effective_apply = not dry_run and confirm
+        err = require_change_reason(effective_apply, change_reason)
+        if err is not None:
+            return err
+        orch = session.get_orchestrator()
+        resolved_scope = session.resolve_scope(scope)
+        resp = orch.delete_assets(
+            [asset_path],
+            scope=resolved_scope,
+            dry_run=dry_run,
+            confirm=confirm,
+            change_reason=change_reason or None,
+        )
+        return resp.to_dict()
+
+    @server.tool()
+    def delete_assets(
+        asset_paths: list[str],
+        scope: str | None = None,
+        dry_run: bool = True,
+        confirm: bool = False,
+        change_reason: str = "",
+    ) -> dict[str, Any]:
+        """Plan or delete a batch of Unity assets through AssetDatabase.
+
+        Two-phase workflow:
+        - dry_run=True (default): returns deletion impact only.
+        - dry_run=False and confirm=True: applies through Unity AssetDatabase.
+
+        Args:
+            asset_paths: Project-relative asset paths under Assets/.
+            scope: Optional scope for reference impact and post-delete scan.
+            dry_run: Keep the request read-only when True.
+            confirm: Explicit apply gate.
+            change_reason: Required for effective apply.
+        """
+        effective_apply = not dry_run and confirm
+        err = require_change_reason(effective_apply, change_reason)
+        if err is not None:
+            return err
+        orch = session.get_orchestrator()
+        resolved_scope = session.resolve_scope(scope)
+        resp = orch.delete_assets(
+            asset_paths,
+            scope=resolved_scope,
+            dry_run=dry_run,
+            confirm=confirm,
+            change_reason=change_reason or None,
+        )
+        return resp.to_dict()
+
     @server.tool()
     def patch_apply(
         plan: str | dict,

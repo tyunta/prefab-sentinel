@@ -96,12 +96,13 @@ namespace PrefabSentinel
                 tempId = id,
                 stuckKey = stuckKey,
                 tempDirAbs = tempDirAbs,
+                transportRequestId = id,
             };
 
             // Issue #68: hand the compile observation to the shared
             // ``ScheduleCompileBarrier`` mechanism.  A snippet that fails
-            // to compile records a compile-failure response — carrying the
-            // real compiler diagnostics — to the completion artefact
+            // to compile records a compile-failure response - carrying the
+            // real compiler diagnostics - to the completion artefact
             // before the compile-poll budget elapses; a snippet that
             // compiles leaves the persisted entry in place so the startup
             // resumer installs ``RunScriptPollFrame`` post-reload.
@@ -116,12 +117,25 @@ namespace PrefabSentinel
                     + "snippet once Unity finishes compiling."));
             };
 
+            Action writeCompileDeadline = () =>
+            {
+                bool? editorFocused = ObserveEditorFocused();
+                if (BackgroundCompileDeferralClassifier.Classify(
+                    editorFocused, deadlineElapsed: true))
+                {
+                    entry.deferredCompileBackground = true;
+                    PendingAsyncRunner.MarkBackgroundDeferred(completionFile);
+                    return;
+                }
+                writeCompilePending();
+            };
+
             // The compile trigger runs synchronously inside
             // ScheduleCompileBarrier, so a rejected ``AssetDatabase.Refresh``
             // resolves before this method returns.  A schedule failure must
             // surface as the synchronous error envelope on the request's own
-            // response path — not as an ``accepted`` envelope the caller
-            // would then have to poll — so it is recorded here and returned.
+            // response path - not as an ``accepted`` envelope the caller
+            // would then have to poll - so it is recorded here and returned.
             bool scheduleFailed = false;
 
             ScheduleCompileBarrier(new CompileBarrierSpec
@@ -148,7 +162,7 @@ namespace PrefabSentinel
                 },
                 onCompiled = () => { },
                 onNoAssemblyCompiled = writeCompilePending,
-                onDeadlineExceeded = writeCompilePending,
+                onDeadlineExceeded = writeCompileDeadline,
                 onScheduleFailure = () =>
                 {
                     scheduleFailed = true;
@@ -176,6 +190,9 @@ namespace PrefabSentinel
                 });
         }
 
+
+
+
         private static EditorControlResponse HandleRunScriptPoll(
             EditorControlRequest request, string responsePath)
         {
@@ -183,9 +200,6 @@ namespace PrefabSentinel
                 return BuildError(
                     "EDITOR_CTRL_RUN_SCRIPT_UNKNOWN_REQUEST",
                     "run_script_poll requires a non-empty request_id.");
-            // Defence-in-depth: reject malformed identifiers before any
-            // path is composed so a wrapper-less direct caller cannot
-            // traverse out of the watch directory.
             if (!RunScriptSubmitRequestIdRe.IsMatch(request.request_id))
                 return BuildError(
                     "EDITOR_CTRL_RUN_SCRIPT_UNKNOWN_REQUEST",
@@ -199,13 +213,6 @@ namespace PrefabSentinel
                 try
                 {
                     string body = File.ReadAllText(completionFile);
-                    // The completion file is the inner EditorControlResponse
-                    // serialised by ``RunScriptPollFrame``.  Map its
-                    // ``data`` fields onto the outer poll response so
-                    // callers see ``data.stdout`` as the actual script
-                    // output rather than a raw JSON blob; the inner
-                    // success flag drives the poll status (``completed``
-                    // when the inner run succeeded, ``failed`` otherwise).
                     EditorControlResponse inner = null;
                     try
                     {
@@ -222,25 +229,42 @@ namespace PrefabSentinel
                         string innerMessage = string.IsNullOrEmpty(inner.message)
                             ? "run_script_poll: job completed."
                             : inner.message;
-                        // Issue #68: a submit that failed to compile records
-                        // the real compiler diagnostics in the completion
-                        // artefact's ``data.errors``. Copy them onto the
-                        // outer poll response so a ``failed`` poll surfaces
-                        // why the snippet failed rather than an empty list.
-                        return BuildSuccess(
-                            "EDITOR_CTRL_RUN_SCRIPT_POLL_COMPLETED",
-                            innerMessage,
-                            data: new EditorControlData
+                        var response = new EditorControlResponse
+                        {
+                            protocol_version = ProtocolVersion,
+                            success = inner.success,
+                            severity = inner.severity,
+                            code = inner.success
+                                ? "EDITOR_CTRL_RUN_SCRIPT_POLL_COMPLETED"
+                                : inner.code,
+                            message = innerMessage,
+                            data = new EditorControlData
                             {
                                 executed = inner.data.executed,
                                 request_id = request.request_id,
                                 status = inner.success ? "completed" : "failed",
                                 stdout = innerStdout,
                                 errors = inner.data.errors ?? Array.Empty<string>(),
-                            });
+                                return_value = inner.data.return_value,
+                                outputs = inner.data.outputs ?? Array.Empty<RunScriptOutputEntry>(),
+                                unsupported_output_key = inner.data.unsupported_output_key ?? string.Empty,
+                                exception = inner.data.exception,
+                                path_hints = inner.data.path_hints ?? Array.Empty<WslPathHint>(),
+                                operation = inner.data.operation ?? string.Empty,
+                                editor_focused = inner.data.editor_focused,
+                                deferred_reason = inner.data.deferred_reason ?? string.Empty,
+                                elapsed_sec = inner.data.elapsed_sec,
+                                budget_sec = inner.data.budget_sec,
+                                diagnostic_compiling = inner.data.diagnostic_compiling,
+                                job_retained = inner.data.job_retained,
+                                cleanup_performed = inner.data.cleanup_performed,
+                            },
+                            diagnostics = inner.diagnostics ?? Array.Empty<EditorControlDiagnostic>(),
+                            operator_context = inner.operator_context,
+                        };
+                        if (response.diagnostics.Length > 0 && response.success) response.severity = "warning";
+                        return response;
                     }
-                    // Parse failure: surface the raw body so callers can
-                    // still inspect the unparseable completion artefact.
                     return BuildSuccess(
                         "EDITOR_CTRL_RUN_SCRIPT_POLL_COMPLETED",
                         "run_script_poll: completion file present but unparseable; raw body surfaced via stdout.",
@@ -261,12 +285,49 @@ namespace PrefabSentinel
                         "run_script_poll: completion file unreadable.");
                 }
             }
-            // Cleanup on timeout: when the bridge deadline elapsed and
-            // the caller asked for teardown, remove the temp script
-            // and the registered poll so the in-flight job is
-            // finalised; report failed in the same call.
             if (request.cleanup_on_timeout)
             {
+                bool? editorFocused = ObserveEditorFocused();
+                bool backgroundDeferredNow = BackgroundCompileDeferralClassifier.Classify(
+                    editorFocused, deadlineElapsed: true);
+                bool backgroundDeferredBefore = PendingAsyncRunner.IsBackgroundDeferred(completionFile);
+                if (backgroundDeferredBefore && editorFocused == true)
+                {
+                    return BuildSuccess(
+                        "EDITOR_CTRL_RUN_SCRIPT_POLL_PENDING",
+                        "run_script_poll: job is still pending.",
+                        data: new EditorControlData
+                        {
+                            executed = false,
+                            request_id = request.request_id,
+                            status = "pending",
+                        });
+                }
+                if (backgroundDeferredNow || backgroundDeferredBefore)
+                {
+                    if (backgroundDeferredNow)
+                        PendingAsyncRunner.MarkBackgroundDeferred(completionFile);
+                    float elapsedSec = 0f;
+                    float budgetSec = 0f;
+                    if (PendingAsyncRunner.TryGet(completionFile, out var entry))
+                    {
+                        long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                        elapsedSec = Math.Max(
+                            0f, (nowMs - entry.callTimeUnixMs) / 1000f);
+                        budgetSec = Math.Max(
+                            0f, (entry.deadlineUnixMs - entry.callTimeUnixMs) / 1000f);
+                    }
+                    var deferred = BuildCompileDeferredBackgroundResponse(
+                        "run_script_poll",
+                        elapsedSec: elapsedSec,
+                        budgetSec: budgetSec,
+                        compiling: EditorApplication.isCompiling,
+                        jobRetained: true,
+                        cleanupPerformed: false);
+                    deferred.data.request_id = request.request_id;
+                    deferred.data.status = "pending";
+                    return deferred;
+                }
                 string tempDirAbs = Path.Combine(
                     Directory.GetCurrentDirectory(),
                     RunScriptTempDir.Replace('/', Path.DirectorySeparatorChar));

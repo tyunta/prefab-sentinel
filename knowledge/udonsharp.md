@@ -1,7 +1,7 @@
 ---
 tool: udonsharp
 version_tested: "VRC SDK 3.7+ / UdonSharp 1.x"
-last_updated: 2026-05-18
+last_updated: 2026-05-27
 confidence: high
 ---
 
@@ -105,6 +105,46 @@ C# (.cs) → UdonSharp Compiler → Udon Assembly → Udon VM bytecode
 - `SendCustomEvent("MethodName")` — 同一 UdonBehaviour のメソッド呼び出し
 - `SendCustomEventDelayedSeconds("MethodName", delay, EventTiming)` — 遅延呼び出し
 - `SendCustomEventDelayedFrames("MethodName", frames, EventTiming)` — フレーム遅延
+
+#### 遅延イベントのキャンセルは state で表現する
+
+> 出典: <https://udonsharp.docs.vrchat.com/vrchat-api/>。
+
+`SendCustomEventDelayedSeconds` は指定時間後に public method を呼ぶ fire-and-forget の API として扱う。送信済み delayed event を後から取り消す API を前提にせず、キャンセル可能なタイマーは `pending` フラグや generation token で無効化する。
+
+```csharp
+private bool startPending;
+private float startDueTime;
+
+public void QueueStart()
+{
+    startPending = true;
+    startDueTime = Time.time + 2.5f;
+    SendCustomEventDelayedSeconds("_StartAfterDelay", 2.5f, EventTiming.Update);
+}
+
+public void CancelStart()
+{
+    startPending = false;
+}
+
+public void _StartAfterDelay()
+{
+    if (!startPending) return;
+
+    float remaining = startDueTime - Time.time;
+    if (remaining > 0.05f)
+    {
+        SendCustomEventDelayedSeconds("_StartAfterDelay", remaining, EventTiming.Update);
+        return;
+    }
+
+    startPending = false;
+    // start logic
+}
+```
+
+複数回予約されうる UI / Station / pickup フローでは、古い delayed event が後から届いても何もしない構造にする。`Time.time` を併用すると、コンパイル reload や frame timing の揺れで早めに呼ばれた場合も残り時間を再予約できる。
 
 ### ネットワークイベント
 - `SendCustomNetworkEvent(NetworkEventTarget.All, "MethodName")` — 全クライアント実行

@@ -11,21 +11,23 @@ from __future__ import annotations
 
 import contextlib
 import io
-import json
-import sys
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
-from pathlib import Path
 from unittest import mock
 
-# Make ``scripts/mutmut_score_report.py`` importable as
-# ``mutmut_score_report`` from the test process.
-_SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
-if str(_SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS_DIR))
+from scripts import mutmut_score_report
+from tests._typing_helpers import (
+    load_json_object,
+    require_list,
+    require_mapping,
+    require_str,
+)
 
-import mutmut_score_report  # noqa: E402
 
+def _require_int(value: object, label: str) -> int:
+    if not isinstance(value, int):
+        raise AssertionError(f"{label} expected int, got {type(value).__name__}")
+    return value
 
 def _parse_records_from_json(
     text: str,
@@ -36,15 +38,20 @@ def _parse_records_from_json(
     the JSON formatter test can assert structural fidelity without
     polluting the script's public surface.
     """
-    payload = json.loads(text)
+    payload = load_json_object(text, "mutmut JSON")
+    record_values = require_list(payload["records"], "mutmut JSON records")
     records: dict[str, mutmut_score_report.ModuleRecord] = {}
-    for entry in payload["records"]:
-        records[entry["module"]] = mutmut_score_report.ModuleRecord(
-            module=entry["module"],
-            killed=entry["killed"],
-            survived=entry["survived"],
-            timeout=entry["timeout"],
-            not_checked=entry["not_checked"],
+    for value in record_values:
+        entry = require_mapping(value, "mutmut JSON record")
+        module = require_str(entry["module"], "mutmut JSON record module")
+        records[module] = mutmut_score_report.ModuleRecord(
+            module=module,
+            killed=_require_int(entry["killed"], "mutmut JSON killed"),
+            survived=_require_int(entry["survived"], "mutmut JSON survived"),
+            timeout=_require_int(entry["timeout"], "mutmut JSON timeout"),
+            not_checked=_require_int(
+                entry["not_checked"], "mutmut JSON not_checked"
+            ),
         )
     return records
 
@@ -129,9 +136,7 @@ class MutmutResultsFormatterTests(unittest.TestCase):
     """Markdown / CSV / JSON formatter pins."""
 
     def _records(self) -> dict[str, mutmut_score_report.ModuleRecord]:
-        return mutmut_score_report.parse_mutmut_results(
-            _SAMPLE_MULTI_MODULE_RESULTS
-        )
+        return mutmut_score_report.parse_mutmut_results(_SAMPLE_MULTI_MODULE_RESULTS)
 
     def test_markdown_table_renders_one_header_and_one_row_per_module(self) -> None:
         text = mutmut_score_report.format_markdown(self._records())
@@ -309,11 +314,13 @@ class MutmutResultsCliEndToEndTests(unittest.TestCase):
                 ]
             )
         self.assertEqual(0, rc)
-        payload = json.loads(captured.getvalue())
-        self.assertEqual(1, len(payload["records"]))
+        payload = load_json_object(captured.getvalue(), "module JSON")
+        records = require_list(payload["records"], "module JSON records")
+        first_record = require_mapping(records[0], "module JSON record")
+        self.assertEqual(1, len(records))
         self.assertEqual(
             "prefab_sentinel.orchestrator_postcondition",
-            payload["records"][0]["module"],
+            first_record["module"],
         )
 
     def test_cli_audited_only_strips_off_list_modules(self) -> None:
@@ -344,8 +351,15 @@ class MutmutResultsCliEndToEndTests(unittest.TestCase):
                 ["--audited-only", "--format", "json"]
             )
         self.assertEqual(0, rc)
-        payload = json.loads(captured.getvalue())
-        modules = [entry["module"] for entry in payload["records"]]
+        payload = load_json_object(captured.getvalue(), "audited JSON")
+        records = [
+            require_mapping(entry, "audited JSON record")
+            for entry in require_list(payload["records"], "audited JSON records")
+        ]
+        modules = [
+            require_str(entry["module"], "audited JSON module")
+            for entry in records
+        ]
         self.assertNotIn("prefab_sentinel.unrelated.module", modules)
         for module in modules:
             self.assertTrue(

@@ -76,6 +76,12 @@ namespace PrefabSentinel
         public static bool TryParse(
             SerializedPropertyKind kind, string raw, out ParsedPropertyValue value)
         {
+            if (raw == null)
+            {
+                value = default;
+                return false;
+            }
+
             switch (kind)
             {
                 case SerializedPropertyKind.Integer:
@@ -101,7 +107,7 @@ namespace PrefabSentinel
                     }
                     break;
                 case SerializedPropertyKind.String:
-                    value = Scalar(kind, stringValue: raw ?? string.Empty);
+                    value = Scalar(kind, stringValue: raw);
                     return true;
                 case SerializedPropertyKind.Vector2:
                     return TryParseVector(kind, raw, 2, out value);
@@ -120,7 +126,13 @@ namespace PrefabSentinel
             SerializedPropertyKind kind, string raw, int arity,
             out ParsedPropertyValue value)
         {
-            var parts = (raw ?? string.Empty).Split(',');
+            if (raw == null)
+            {
+                value = default;
+                return false;
+            }
+
+            var parts = raw.Split(',');
             if (parts.Length >= arity)
             {
                 var components = new float[arity];
@@ -145,7 +157,13 @@ namespace PrefabSentinel
 
         private static bool TryParseColor(string raw, out ParsedPropertyValue value)
         {
-            var parts = (raw ?? string.Empty).Split(',');
+            if (raw == null)
+            {
+                value = default;
+                return false;
+            }
+
+            var parts = raw.Split(',');
             if (parts.Length >= 3
                 && float.TryParse(parts[0].Trim(), FloatStyle, Ci, out float r)
                 && float.TryParse(parts[1].Trim(), FloatStyle, Ci, out float g)

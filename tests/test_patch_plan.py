@@ -239,7 +239,7 @@ class NormalizePatchPlanTests(unittest.TestCase):
         plan = _v2_plan(
             resources=[{"id": "r1", "path": "a.prefab"}],
             ops=[],
-            postconditions=["not_a_dict"],
+            postconditions=["not_a_dict"],  # type: ignore[list-item]  # intentional non-dict postcondition
         )
         with self.assertRaises(ValueError) as cm:
             normalize_patch_plan(plan)

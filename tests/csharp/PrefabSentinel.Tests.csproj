@@ -52,6 +52,15 @@
     <Compile Include="..\..\tools\unity\PrefabSentinel.Screenshot.ObjectCaptureFramingMath.cs">
       <Link>Bridge\PrefabSentinel.Screenshot.ObjectCaptureFramingMath.cs</Link>
     </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.Camera.ProjectionStateStability.cs">
+      <Link>Bridge\PrefabSentinel.Camera.ProjectionStateStability.cs</Link>
+    </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.Screenshot.DimensionBounds.cs">
+      <Link>Bridge\PrefabSentinel.Screenshot.DimensionBounds.cs</Link>
+    </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.Screenshot.CropBounds.cs">
+      <Link>Bridge\PrefabSentinel.Screenshot.CropBounds.cs</Link>
+    </Compile>
     <!--
       H-track xUnit migration (issues #10-#16, #19): the Unity-free decision
       classes extracted from the C# bridge handlers. Each file references only
@@ -75,6 +84,12 @@
     <Compile Include="..\..\tools\unity\PrefabSentinel.Properties.PropertyValueParser.cs">
       <Link>Bridge\PrefabSentinel.Properties.PropertyValueParser.cs</Link>
     </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.Properties.TypedPropertyValues.cs">
+      <Link>Bridge\PrefabSentinel.Properties.TypedPropertyValues.cs</Link>
+    </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.SerializedProperty.ValueIntent.cs">
+      <Link>Bridge\PrefabSentinel.SerializedProperty.ValueIntent.cs</Link>
+    </Compile>
     <Compile Include="..\..\tools\unity\PrefabSentinel.UiElement.Allowlist.cs">
       <Link>Bridge\PrefabSentinel.UiElement.Allowlist.cs</Link>
     </Compile>
@@ -87,8 +102,26 @@
     <Compile Include="..\..\tools\unity\PrefabSentinel.RunScriptCompile.Redaction.cs">
       <Link>Bridge\PrefabSentinel.RunScriptCompile.Redaction.cs</Link>
     </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.RunScriptCompile.BackgroundDeferral.cs">
+      <Link>Bridge\PrefabSentinel.RunScriptCompile.BackgroundDeferral.cs</Link>
+    </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.RunScript.ResultChannels.cs">
+      <Link>Bridge\PrefabSentinel.RunScript.ResultChannels.cs</Link>
+    </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.RunScript.WslPathHints.cs">
+      <Link>Bridge\PrefabSentinel.RunScript.WslPathHints.cs</Link>
+    </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.JsonArrayScalarParser.cs">
+      <Link>Bridge\PrefabSentinel.JsonArrayScalarParser.cs</Link>
+    </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.Geometry.BoundsMath.cs">
+      <Link>Bridge\PrefabSentinel.Geometry.BoundsMath.cs</Link>
+    </Compile>
     <Compile Include="..\..\tools\unity\PrefabSentinel.Dispatch.ActionRegistry.cs">
       <Link>Bridge\PrefabSentinel.Dispatch.ActionRegistry.cs</Link>
+    </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.AssetOpsPathValidation.cs">
+      <Link>Bridge\PrefabSentinel.AssetOpsPathValidation.cs</Link>
     </Compile>
     <Compile Include="..\..\tools\unity\PrefabSentinel.Dispatch.EditorControlRequest.cs">
       <Link>Bridge\PrefabSentinel.Dispatch.EditorControlRequest.cs</Link>

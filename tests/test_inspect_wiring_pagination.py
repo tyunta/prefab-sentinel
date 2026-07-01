@@ -105,7 +105,12 @@ class InspectWiringPaginationTests(unittest.TestCase):
             "prefab_sentinel.orchestrator_wiring.collect_project_guid_index",
             return_value={_CHILD_GUID: root / "Assets" / "Child.prefab"},
         ):
-            return inspect_wiring(pv, rr, target_path=str(base_path), **kwargs)
+            return inspect_wiring(
+                pv,
+                rr,
+                target_path=base_path.relative_to(root).as_posix(),
+                **kwargs,
+            )
 
     def test_first_page_returns_slice_and_continuation(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -145,7 +150,7 @@ class InspectWiringPaginationTests(unittest.TestCase):
                 cursor=f"{INSPECT_WIRING_CURSOR_PREFIX}{self.PAGE * 2}",
                 page_size=self.PAGE,
             )
-        # 120 total, position 100, page 50 → only 20 items remain
+        # 120 total, position 100, page 50 leaves 20 items.
         self.assertEqual(20, resp.data["page_slice_length"])
         self.assertEqual("", resp.data["next_cursor"])
 
@@ -320,6 +325,124 @@ class AggregatorWiringScanMaxPageSizeTests(unittest.TestCase):
                 INSPECT_WIRING_PAGE_SIZE_MAX, call["page_size"],
                 f"aggregator must pass the documented inclusive upper bound: {call}",
             )
+
+
+class ValidateAllWiringDiagnosticsBaselineTests(unittest.TestCase):
+    def test_aggregate_baseline_uses_inspect_wiring_field_keys(self) -> None:
+        from prefab_sentinel.diagnostics_baseline import DiagnosticsBaseline
+
+        expected_key = "inspect_wiring:null_reference:Assets/Base.prefab:30:someRef"
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            assets = root / "Assets"
+            assets.mkdir(parents=True, exist_ok=True)
+            text = (
+                YAML_HEADER
+                + make_gameobject("10", "BaseRoot", ["20", "30"])
+                + make_transform("20", "10")
+                + make_monobehaviour(
+                    "30",
+                    "10",
+                    guid=_SCRIPT_GUID,
+                    fields={"someRef": "{fileID: 0}"},
+                )
+            )
+            (assets / "Base.prefab").write_text(text, encoding="utf-8")
+            _write_meta(assets / "Base.prefab.meta", _BASE_GUID)
+            pv, rr = _services_for_root(root)
+            baseline = DiagnosticsBaseline(
+                known_diagnostics=(expected_key,),
+                path=str(root / "config" / "diagnostics_baseline.json"),
+                status="loaded",
+            )
+
+            try:
+                response = validate_all_wiring(
+                    pv,
+                    rr,
+                    target_path="Assets/Base.prefab",
+                    diagnostics_baseline=baseline,
+                )
+            except TypeError as exc:
+                self.fail(
+                    "validate_all_wiring must accept diagnostics_baseline for aggregate classification: "
+                    f"{exc}"
+                )
+
+        classification = response.data.get("diagnostics_baseline")
+        self.assertEqual(
+            (1, 1, 1, 0, [expected_key]),
+            (
+                response.data["files_scanned"],
+                response.data["total_null_refs"],
+                None if classification is None else classification["known_count"],
+                None if classification is None else classification["new_count"],
+                [] if classification is None else [r["key"] for r in classification["known"]],
+            ),
+        )
+
+
+    def test_aggregate_baseline_omits_classification_when_child_scan_fails(self) -> None:
+        from prefab_sentinel.diagnostics_baseline import DiagnosticsBaseline
+
+        class FailedChildScan:
+            def to_dict(self) -> dict[str, object]:
+                return {
+                    "success": False,
+                    "severity": "error",
+                    "code": "INSPECT_WIRING_FAILED",
+                    "message": "scan failed",
+                    "data": {},
+                    "diagnostics": [],
+                }
+
+        original_inspect_wiring = inspect_wiring
+        baseline_key = "inspect_wiring:null_reference:Assets/Broken.prefab:30:someRef"
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            assets = root / "Assets"
+            assets.mkdir(parents=True, exist_ok=True)
+            text = YAML_HEADER + make_gameobject("10", "Root", ["20"]) + make_transform("20", "10")
+            (assets / "Broken.prefab").write_text(text, encoding="utf-8")
+            (assets / "Clean.prefab").write_text(text, encoding="utf-8")
+            pv, rr = _services_for_root(root)
+            baseline = DiagnosticsBaseline(
+                known_diagnostics=(baseline_key,),
+                path=str(root / "config" / "diagnostics_baseline.json"),
+                status="loaded",
+            )
+
+            def fail_broken_child_scan(
+                prefab_variant: PrefabVariantService,
+                reference_resolver: ReferenceResolverService,
+                *,
+                target_path: str,
+                page_size: int,
+                diagnostics_baseline: DiagnosticsBaseline | None,
+            ):
+                if target_path.endswith("Broken.prefab"):
+                    return FailedChildScan()
+                return original_inspect_wiring(
+                    prefab_variant,
+                    reference_resolver,
+                    target_path=target_path,
+                    page_size=page_size,
+                    diagnostics_baseline=diagnostics_baseline,
+                )
+
+            with patch(
+                "prefab_sentinel.orchestrator_wiring.inspect_wiring",
+                side_effect=fail_broken_child_scan,
+            ) as inspect_mock:
+                response = validate_all_wiring(
+                    pv,
+                    rr,
+                    diagnostics_baseline=baseline,
+                )
+
+        self.assertEqual(2, response.data["files_scanned"])
+        self.assertEqual(2, inspect_mock.call_count)
+        self.assertNotIn("diagnostics_baseline", response.data)
 
 
 class OrchestratorFacadeForwardsPaginationTests(unittest.TestCase):

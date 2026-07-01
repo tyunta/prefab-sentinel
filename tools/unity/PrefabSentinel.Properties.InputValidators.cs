@@ -63,6 +63,7 @@ namespace PrefabSentinel
     /// </summary>
     internal static class QuaternionInputValidator
     {
+        internal const string NullInputCode = "EDITOR_CTRL_SET_PROP_NULL_INPUT";
         internal const string TypeMismatchCode = "EDITOR_CTRL_SET_PROP_TYPE_MISMATCH";
         internal const string NotNormalizedCode =
             "EDITOR_CTRL_SET_PROP_QUATERNION_NOT_NORMALIZED";
@@ -78,7 +79,12 @@ namespace PrefabSentinel
         /// </summary>
         public static QuaternionParse Validate(string raw)
         {
-            var parts = (raw ?? string.Empty).Split(',');
+            if (raw == null)
+            {
+                return QuaternionParse.Rejected(NullInputCode);
+            }
+
+            var parts = raw.Split(',');
             if (parts.Length != 4)
             {
                 return QuaternionParse.Rejected(TypeMismatchCode);

@@ -174,32 +174,50 @@ def _extract_guid_safe(meta_path: Path) -> str | None:
         return None
 
 
-def _scan_meta_files(scan_root: Path, excluded: set[str], index: dict[str, Path]) -> None:
+def _indexed_asset_path(meta_path: Path, project_root: Path) -> Path | None:
+    asset_path = meta_path.with_suffix("")
+    try:
+        if meta_path.is_symlink() or asset_path.is_symlink():
+            return None
+        asset_path.resolve().relative_to(project_root.resolve())
+    except (OSError, ValueError):
+        return None
+    return asset_path
+
+def _scan_meta_files(
+    scan_root: Path,
+    excluded: set[str],
+    index: dict[str, Path],
+    project_root: Path,
+) -> None:
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    # Phase 1: collect .meta paths (sequential)
-    meta_paths: list[Path] = []
+    meta_paths: dict[Path, Path] = {}
     for root, dirnames, filenames in os.walk(scan_root):
         dirnames[:] = [dirname for dirname in dirnames if dirname.lower() not in excluded]
         for filename in filenames:
-            if filename.lower().endswith(".meta"):
-                meta_paths.append(Path(root) / filename)
+            if not filename.lower().endswith(".meta"):
+                continue
+            meta_path = Path(root) / filename
+            asset_path = _indexed_asset_path(meta_path, project_root)
+            if asset_path is not None:
+                meta_paths[meta_path] = asset_path
 
     if not meta_paths:
         return
 
-    # Phase 2: parallel GUID extraction
     with ThreadPoolExecutor(
         max_workers=min(10, len(meta_paths)),
     ) as pool:
         futures = {
-            pool.submit(_extract_guid_safe, p): p for p in meta_paths
+            pool.submit(_extract_guid_safe, meta_path): asset_path
+            for meta_path, asset_path in meta_paths.items()
         }
         for future in as_completed(futures):
-            path = futures[future]
+            asset_path = futures[future]
             guid = future.result()
             if guid:
-                index[guid] = path.with_suffix("")
+                index[guid] = asset_path
 
 
 def collect_project_guid_index(
@@ -208,16 +226,17 @@ def collect_project_guid_index(
     *,
     include_package_cache: bool = True,
 ) -> dict[str, Path]:
+    resolved_root = project_root.resolve()
     excluded = {
         name.lower() for name in (excluded_dir_names or DEFAULT_EXCLUDED_DIR_NAMES)
     }
     index: dict[str, Path] = {}
-    _scan_meta_files(project_root, excluded, index)
+    _scan_meta_files(resolved_root, excluded, index, resolved_root)
 
     if include_package_cache:
-        pkg_cache = project_root / PACKAGE_CACHE_REL
+        pkg_cache = resolved_root / PACKAGE_CACHE_REL
         if pkg_cache.is_dir():
-            _scan_meta_files(pkg_cache, set(), index)
+            _scan_meta_files(pkg_cache, set(), index, resolved_root)
 
     return index
 

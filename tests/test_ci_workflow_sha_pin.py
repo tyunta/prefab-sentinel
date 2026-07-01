@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._typing_helpers import require_not_none
+
 # Reads the un-mutated ``.github/workflows/ci.yml`` text; the
 # assertions cannot observe mutations applied to ``prefab_sentinel/``.
 pytestmark = pytest.mark.source_text_invariant
@@ -91,6 +93,7 @@ class TestCsharpTestsWorkflowDispatchFallback(unittest.TestCase):
             match,
             "csharp-tests job block with an `if:` line not found.",
         )
+        match = require_not_none(match, "csharp-tests if line")
         if_expression = match.group(1)
         # The conjunct from the original change-filter must still
         # gate path-driven runs.
@@ -111,6 +114,53 @@ class TestCsharpTestsWorkflowDispatchFallback(unittest.TestCase):
             "||",
             if_expression,
             f"logical-or join missing in `if:`: {if_expression!r}",
+        )
+
+
+class TestFullMypyWorkflowGate(unittest.TestCase):
+    """Pin the full test-target mypy CI gate restored by issue #132."""
+
+    def test_full_mypy_gate_has_required_triggers_and_command(self) -> None:
+        text = _strip_yaml_comments(_CI_PATH.read_text(encoding="utf-8"))
+
+        self.assertIn("pull_request:", text)
+        self.assertIn("workflow_dispatch:", text)
+        self.assertRegex(text, r"(?m)^\s*push:\s*\n\s*branches:\s*\n\s*-\s*main\s*$")
+        self.assertRegex(text, r"(?m)^\s*schedule:\s*\n\s*-\s*cron:\s*['\"][^'\"]+['\"]")
+
+        command = "uv run mypy prefab_sentinel tests --show-error-codes"
+        self.assertEqual(
+            1,
+            text.count(command),
+            "ci.yml must contain exactly one full test-target mypy gate.",
+        )
+
+        match = re.search(
+            r"(?ms)^  typecheck-tests:\s*\n(?P<body>.*?)(?=^  [A-Za-z0-9_-]+:|\Z)",
+            text,
+        )
+        self.assertIsNotNone(
+            match,
+            "typecheck-tests job block not found.",
+        )
+        match = require_not_none(match, "typecheck-tests job block")
+        body = match.group("body")
+        install_index = body.find("uv sync --extra lint --extra test --extra mcp")
+        command_index = body.find(command)
+        self.assertNotEqual(
+            -1,
+            install_index,
+            "typecheck-tests must install lint, test, and mcp extras.",
+        )
+        self.assertNotEqual(
+            -1,
+            command_index,
+            "typecheck-tests must run full mypy over prefab_sentinel and tests.",
+        )
+        self.assertLess(
+            install_index,
+            command_index,
+            "typecheck-tests must install dependencies before running full mypy.",
         )
 
 

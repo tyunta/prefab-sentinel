@@ -1,7 +1,7 @@
 ---
 tool: prefab-sentinel-workflow-patterns
-version_tested: "prefab-sentinel 0.5.162"
-last_updated: 2026-05-07
+version_tested: "prefab-sentinel 0.7.1"
+last_updated: 2026-06-07
 confidence: high
 ---
 
@@ -52,6 +52,19 @@ Prefab ファイルが古い場合やシーン上にオーバーライドがあ�
 
 ### ランタイムエラー調査
 `validate_runtime` → ログ分類 → アセット特定 → 修正提案
+
+### ClientSim を使わない副作用ゼロ検証
+
+入稿用 scene やユーザーが手動調整中の scene では、ClientSim / `validate_runtime` を read-only 検査として扱わない。ClientSim 起動は scene 状態や生成物に副作用を残すことがあるため、明示的な opt-in がない限り実行しない。
+
+副作用を避けて UdonSharp / scene wiring の最低限ゲートを踏む場合は以下を使う:
+
+1. `editor_recompile` — Unity 側で C# / UdonSharp の再コンパイル完了を待つ
+2. `editor_console(log_type_filter="error")` と `editor_console(log_type_filter="exception")` — 直近の error / exception を確認
+3. `inspect_wiring(script_filter=...)` — 変更対象 UdonBehaviour の必須参照だけを確認
+4. `validate_structure` — scene / prefab YAML の fileID 重複・Transform 不整合・missing component・orphan transform を確認
+
+この経路は runtime smoke ではないため、VRChat 実機挙動までは保証しない。目的は「ClientSim 副作用なしで、編集直後のコンパイル・配線・serialized structure が破綻していないこと」を確認すること。
 
 ### ランタイム階層確認
 `editor_list_children` でシーン実行中の子オブジェクト一覧を取得。`inspect_hierarchy` はファイルベースだが、こちらは Prefab Instance 内のネスト構造も表示
@@ -126,22 +139,22 @@ Inspector の表示名と SerializedProperty の `propertyPath` が食い違う 
 
 - `editor_batch_create` は1回で22オブジェクトまで問題なく動作確認済み（Undo グループ化あり）
 - `editor_batch_set_property` は1回で29プロパティまで動作確認済み
-- 配列型プロパティ（`Array.size`, `Array.data[N]`）は `editor_set_property` で設定可能（v0.5.149 で確認）。`editor_set_component_fields` では不可。手順: まず `Array.size` を設定、次に `Array.data[0]`, `Array.data[1]`, ... を個別に設定。あるワールド UI コンポーネントで Text[] を5要素配線して実証済み
+- 配列型プロパティ（`Array.size`, `Array.data[N]`）は `editor_set_property` で設定可能（v0.5.149 で確認）。`editor_set_component_fields` では不可。手順: まず `Array.size` を設定、次に `Array.data[0]`, `Array.data[1]`, ... を個別に設定。検証用 UI コンポーネントで Text[] 配線を実証済み
 - `editor_set_parent` 実行後はオブジェクトのパスが変わる（例: `/Wall_N` → `/Lobby/Wall_N`）。並列呼び出しでパスを参照する場合は移動後のパスを使うこと
 - Bridge C# ファイルを Unity プロジェクトにコピーした後、`ResolveComponentType` の `System.ReflectionTypeLoadException` が Unity のデフォルトアセンブリでコンパイルエラーになる。`System.Reflection.ReflectionTypeLoadException` に手動修正が必要
 - `BridgeVersion` 定数（C# 側）が実際の Plugin バージョンと同期しておらず `"0.5.82"` のままハードコードされている
 - Bridge ファイルを手動更新する場合、旧ファイルの位置（`Assets/Editor/` 直下）と新ファイルの位置（`Assets/Editor/PrefabSentinel/`）が異なると CS0101 重複定義エラーになる。旧ファイルを完全に削除してからコピーすること
 - `VRCSDKUploadHandler.cs` はプロジェクトの VRC SDK バージョンや対象（Avatar/World）によってコンパイルエラーを起こす。不要なら配置しない
-- シーン構築では batch_create → add_component → batch_set_property の3ステップが最も効率的。推定400+ → 実測65回に削減（約80%減）
-- WSL 環境では `UNITYTOOL_BRIDGE_WATCH_DIR` に WSL パス（`/mnt/d/...`）を使うこと。Windows パス（`D:/...`）は watch_dir の存在チェックで失敗する（wslpath 自動変換が効かないケースがある）
-- `.claude/settings.json` の `env` セクションで設定した環境変数は、MCP サーバーに伝播しない場合がある。確実に伝播させるには、シェルプロファイル（`.bashrc` 等）に記載して Claude Code 起動前に export すること
+- シーン構築では batch_create → add_component → batch_set_property の3ステップが最も効率的。逐次操作より呼び出し回数を大きく削減できる
+- WSL 環境では `UNITYTOOL_BRIDGE_WATCH_DIR` に WSL パス（`/mnt/<drive>/...`）を使うこと。Windows パス（`<drive>:/...`）は watch_dir の存在チェックで失敗する（wslpath 自動変換が効かないケースがある）
+- Host-specific MCP settings の `env` セクションで設定した環境変数は、MCP サーバーに伝播しない場合がある。確実に伝播させるには、シェルプロファイル（`.bashrc` 等）に記載してクライアント起動前に export すること
 - `inspect_hierarchy` は FBX ベースの Prefab / Variant を解析できない（`unreadable_file` 診断）。FBX 由来の階層確認には `editor_list_children` を使うこと
 - `inspect_wiring` の null 参照レポートには、MA コンポーネントの設計上 null が正常な optional フィールド（`menuSource_otherObjectChildren`, `menuToAppend`, `installTargetMenu`）が含まれる。これらは偽陽性として無視してよい
 - `editor_execute_menu_item` + `editor_console` の組み合わせは、C# スクリプト実行のフィードバックループとして非常に効果的。1サイクル（recompile → execute → console確認）が数秒で完了する
 - `deploy_bridge` 後の `activate_project` で `bridge.connected: false` と表示されても、env 変数が正しく設定されていれば `editor_*` 呼び出し時に接続が確立される。`activate_project` の bridge 状態はキャッシュされた情報であり、リアルタイムの接続状態を反映しない
 - TMPro コンポーネントは `TMPro.TextMeshProUGUI`（完全修飾名）で `editor_add_component` に渡す。`properties` で `fontSize`, `fontStyle`, `text` を初期値設定可能
 - TMPro のテキスト配置は `m_HorizontalAlignment`（Left=1, Center=2, Right=4）と `m_VerticalAlignment`（Top=256, Middle=512, Bottom=1024）で設定する
-- `editor_batch_set_property` で RectTransform の `m_SizeDelta.x/y`, `m_AnchoredPosition.x/y`, `m_LocalScale.x/y/z` を一括設定可能。1 リクエストで 20 プロパティ設定を確認済み（あるワールド UI の 5 要素 x 4 フィールド）
+- `editor_batch_set_property` で RectTransform の `m_SizeDelta.x/y`, `m_AnchoredPosition.x/y`, `m_LocalScale.x/y/z` を一括設定可能。検証用 UI で 1 リクエストに複数要素の RectTransform 設定をまとめられることを確認済み
 - World Space Canvas のセットアップ: `m_SizeDelta` で Canvas 座標系のサイズ（例: 800x500）を設定し、`m_LocalScale` で世界座標サイズに変換（例: 0.001 = 0.8m x 0.5m）。子要素は `m_AnchoredPosition` + `m_SizeDelta` で配置
 - String プロパティに空文字列 `""` は設定不可（API 仕様）。クリアにはスペース `" "` で代用する
 - **`editor_run_script` の bridge state stuck**: 数回呼び出した後、`EDITOR_CTRL_RUN_SCRIPT_COMPILE` "Script compilation is still in progress" を **永続的に** 返す症状あり。実際には Unity 側のコンパイルは settled。`editor_recompile` / `editor_refresh` でも復旧せず。**回避策: Editor menu helper パターン** — `Assets/Editor/_*.cs` に `[MenuItem]` 付き静的クラスを永続ファイルとして配置し `editor_execute_menu_item` で実行する。temp script の自動 cleanup は失われるが、bridge state に左右されず複雑なロジック (UnityEvent 永続リスナー追加・SetActive・Layer 設定等) を実行できる。マルチユーザ同期 prefab の wiring helper のような大規模ロジックでも実用可能
@@ -153,3 +166,5 @@ Inspector の表示名と SerializedProperty の `propertyPath` が食い違う 
 - **`inspect_wiring` のページネーション契約 (issue #197 仕様参照)**: Nested package prefab を多数含む対象を呼ぶと MCP token cap を超える。`cursor` は `pos:<offset>` 形式の不透明 continuation token、`page_size` は `[1, 500]` の inclusive bounds（既定 50）。`data.component_count` は常に総件数で、`data.components` は当ページのスライス。`data.next_cursor` が空文字のとき exhausted。`null_reference_count` 等の diagnostic counts はページ非依存（全ページで同じ値）。`Phase1Orchestrator.validate_all_wiring`（aggregator）は `page_size=500` で呼ぶので、aggregate scan は 1 ページに収まる前提
 - **`editor_recompile_and_wait` の三分岐 (issue #203 仕様参照)**: `CompilationPipeline.compilationFinished` イベント駆動で 3 つの結果を返す: 全アセンブリ `assemblyCompilationNotRequired` → `EDITOR_CTRL_RECOMPILE_AND_WAIT_NOOP`（同期 success、SessionState 永続化なし）/ `assemblyCompilationFinished` で `CompilerMessageType.Error` のメッセージ 1 件以上 → `EDITOR_CTRL_RECOMPILE_FAILED`（`data.errors` にメッセージ列）/ 1 件以上のアセンブリが実コンパイル → domain reload 後の `AssemblyReloadCount` 増加で `EDITOR_CTRL_RECOMPILE_AND_WAIT_OK`。mtime polling 経路は採用しない — Unity が `assemblyCompilationNotRequired` を返すケースで mtime が進まないため絶対に発火しない
 - **`editor_create_ui_element` の使い分け (issue #195 仕様参照)**: `editor_create_primitive` は `GameObject.CreatePrimitive(PrimitiveType.X)` のラッパなので Cube/Sphere/Cylinder/Capsule/Plane/Quad の 6 値のみ。uGUI 要素（Image/TextMeshProUGUI/Button/Slider/Toggle）は `editor_create_ui_element` を使う。`rect={"anchorMin": [...], "anchorMax": [...], "sizeDelta": [...]}` で RectTransform を第一級指定、`properties={"color": [r,g,b,a], "font": "<asset path>"}` で graphic を設定。TMP の `font` を省略すると `Assets/TextMesh Pro/Resources/Fonts & Materials/LiberationSans SDF.asset` を自動代入（fontSize 体感サイズの再現に必要、§3 trap 回避）
+- **known-good subtree 比較は audio/video prefab の原因切り分けに有効**: VVMW / VizVid のように内部配列・module field・child speaker の組み合わせで動く prefab は、hand-built subtree が失敗し、raw package subtree が成功することがある。この場合は media decode や Unity component 単体を疑う前に、`editor_list_children` / `inspect_wiring` / `find_unity_symbol` で known-good subtree と hand-built subtree の hierarchy・component・serialized field を比較する。成功した raw subtree を baseline として採用し、不要な再実装を避ける判断が有効。
+- **subjective gate と serialized gate を分離する**: spatial audio / video playback / animation capture のように実機視聴・目視が必要な機能では、PrefabSentinel は wiring・hierarchy・saved state の検証を担当し、音質・定位・見た目の良否は別 gate に分離する。Direct / Spatial / custom routing の A/B UI を作る場合も、PrefabSentinel の検証対象は「比較モードが同一 prefab state で再現可能に保存されていること」までに限定する。

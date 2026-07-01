@@ -15,6 +15,7 @@ import json
 import os
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,8 @@ from prefab_sentinel.wsl_compat import to_wsl_path
 DEFAULT_TIMEOUT_SEC = 30
 # Cached bridge version from last successful response
 _last_bridge_version: str | None = None
+_expected_project_root_provider: Callable[[], str | None] | None = None
+_EXPECTED_PROJECT_ROOT_UNSET = object()
 DEFAULT_POLL_INTERVAL = 1.0
 
 SUPPORTED_ACTIONS = frozenset(
@@ -46,6 +49,7 @@ SUPPORTED_ACTIONS = frozenset(
         "refresh_asset_database",
         "set_material",
         "delete_object",
+        "delete_assets",
         "list_children",
         "list_materials",
         "get_camera",
@@ -68,6 +72,11 @@ SUPPORTED_ACTIONS = frozenset(
         "create_udon_program_asset",
         # Phase 5: SetProperty + SaveAsPrefab
         "editor_set_property",
+        "editor_serialized_property_read",
+        "editor_serialized_property_list",
+        "editor_serialized_property_write",
+        "create_generated_asset",
+        "move_asset",
         # Issue #193: ``safe_save_prefab`` is the sole public prefab-save
         # action.  Its handler guarantees that every caller-named protected
         # component type stays attached on the saved asset and reports both
@@ -100,7 +109,7 @@ SUPPORTED_ACTIONS = frozenset(
         "editor_recompile_and_wait",
         # Issue #119: high-level UdonSharp authoring surface — three
         # synchronous handlers (Add / SetField / WireListener) that wrap
-        # the AddComponent → RunBehaviourSetup → CopyProxyToUdon chain,
+        # the AddComponent / RunBehaviourSetup / CopyProxyToUdon chain,
         # the SerializedObject field-write surface, and the published
         # UnityEventTools persistent-listener entry point.  Mirrors the
         # bridge-side SupportedActions set so an out-of-sync action name
@@ -124,6 +133,9 @@ SUPPORTED_ACTIONS = frozenset(
         # Issue #233: asynchronous run-script submit / poll surfaces.
         "run_script_submit",
         "run_script_poll",
+        "get_transform",
+        "get_bounds",
+        "measure_distance",
         # Issue #243: AnimationClip primitives (inspect / create / apply).
         "inspect_animation_clip",
         "create_animation_clip",
@@ -142,6 +154,119 @@ def _error_response(*, code: str, message: str, data: dict[str, Any] | None = No
         "data": data or {},
         "diagnostics": [],
     }
+
+
+def _set_expected_project_root_provider(
+    provider: Callable[[], str | None] | None,
+) -> None:
+    global _expected_project_root_provider
+    _expected_project_root_provider = provider
+
+
+def _expected_project_root(expected_project_root: str | None | object) -> str | None:
+    if expected_project_root is None:
+        return None
+    if expected_project_root is not _EXPECTED_PROJECT_ROOT_UNSET:
+        if not isinstance(expected_project_root, str):
+            raise TypeError("expected_project_root must be a string, None, or unset")
+        return expected_project_root
+    if _expected_project_root_provider is None:
+        return None
+    return _expected_project_root_provider()
+
+
+def _operator_context(payload: dict[str, Any]) -> dict[str, Any]:
+    context = payload.get("operator_context")
+    return context if isinstance(context, dict) else {}
+
+
+def _operator_context_project_root(payload: dict[str, Any]) -> str | None:
+    root = _operator_context(payload).get("project_root")
+    if not isinstance(root, str):
+        return None
+    stripped = root.strip()
+    return stripped or None
+
+
+def _normal_project_root_identity(root: str) -> str:
+    return str(Path(to_wsl_path(root)).expanduser().resolve())
+
+
+def _bridge_identity_fields(payload: dict[str, Any]) -> dict[str, Any]:
+    context = _operator_context(payload)
+    identity: dict[str, Any] = {}
+    for key in ("bridge_session_id", "bridge_instance_id", "bridge_version", "plugin_version"):
+        if key in context:
+            identity[key] = context[key]
+        elif key in payload:
+            identity[key] = payload[key]
+    return identity
+
+
+def _project_root_mismatch_response(
+    *,
+    action: str,
+    request_id: str,
+    expected_project_root: str,
+    actual_project_root: str | None,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    data = {
+        "action": action,
+        "request_id": request_id,
+        "expected_project_root": expected_project_root,
+        **_bridge_identity_fields(payload),
+    }
+    if actual_project_root is not None:
+        data["actual_project_root"] = actual_project_root
+        message = (
+            "Editor bridge reached Unity project root "
+            f"{actual_project_root!r}, expected {expected_project_root!r}."
+        )
+    else:
+        message = (
+            "Editor bridge response did not include the actual Unity project root "
+            f"required to verify expected root {expected_project_root!r}."
+        )
+    return _error_response(
+        code="EDITOR_BRIDGE_PROJECT_ROOT_MISMATCH",
+        message=message,
+        data=data,
+    )
+
+
+def _verify_expected_project_root(
+    *,
+    payload: dict[str, Any],
+    action: str,
+    request_id: str,
+    expected_project_root: str | None,
+) -> dict[str, Any] | None:
+    if expected_project_root is None or payload.get("success") is not True:
+        return None
+
+    actual_project_root = _operator_context_project_root(payload)
+    if actual_project_root is None:
+        return _project_root_mismatch_response(
+            action=action,
+            request_id=request_id,
+            expected_project_root=expected_project_root,
+            actual_project_root=None,
+            payload=payload,
+        )
+
+    if _normal_project_root_identity(actual_project_root) == _normal_project_root_identity(
+        expected_project_root
+    ):
+        return None
+
+    return _project_root_mismatch_response(
+        action=action,
+        request_id=request_id,
+        expected_project_root=expected_project_root,
+        actual_project_root=actual_project_root,
+        payload=payload,
+    )
 
 
 def _try_delete(path: Path) -> None:
@@ -178,6 +303,7 @@ def send_action(
     action: str,
     timeout_sec: int | None = None,
     request_extras: dict[str, Any] | None = None,
+    expected_project_root: str | None | object = _EXPECTED_PROJECT_ROOT_UNSET,
     **kwargs: Any,
 ) -> dict[str, Any]:
     """Send an editor-control action and wait for the response.
@@ -193,6 +319,10 @@ def send_action(
         Used when a request payload field collides with one of this
         function's named parameters (notably ``timeout_sec``, which the
         synchronous recompile-and-wait action requires as a payload field).
+    expected_project_root:
+        Resolved Unity project root expected by the active MCP session.
+        Successful bridge responses must carry a matching actual root in
+        ``operator_context.project_root`` when this value is provided.
     **kwargs:
         Additional fields merged into the request JSON.
     """
@@ -232,7 +362,7 @@ def send_action(
     if request_extras:
         request_payload.update(request_extras)
 
-    # Atomic write: .tmp → rename to avoid partial reads by the watcher.
+    # Atomic write uses .tmp plus rename to avoid partial reads by the watcher.
     try:
         watch_dir.mkdir(parents=True, exist_ok=True)
         tmp_file.write_text(
@@ -247,7 +377,6 @@ def send_action(
             data={"request_file": str(request_file), "error": str(exc)},
         )
 
-    # Poll for response.
     deadline = time.monotonic() + timeout_sec
     while time.monotonic() < deadline:
         if response_file.exists():
@@ -275,17 +404,29 @@ def send_action(
             # transport tag for response-shape callers and pinned by tests.
             payload.setdefault("bridge_mode", "editor")
             payload.setdefault("action", action)
+            # Issue #94: this is the file-transport request id used by the
+            # bridge to tag log entries captured during the request. Expose it
+            # so callers can pass it to editor_console(since_request_id=...).
+            payload.setdefault("request_id", request_id)
 
-            # Cache bridge version from response
             global _last_bridge_version
             if "bridge_version" in payload:
                 _last_bridge_version = payload["bridge_version"]
+
+            verified_request_id = str(payload["request_id"])
+            mismatch = _verify_expected_project_root(
+                payload=payload,
+                action=action,
+                request_id=verified_request_id,
+                expected_project_root=_expected_project_root(expected_project_root),
+            )
+            if mismatch is not None:
+                return mismatch
 
             return payload
 
         time.sleep(DEFAULT_POLL_INTERVAL)
 
-    # Timeout — clean up.
     _try_delete(request_file)
     return _error_response(
         code="EDITOR_BRIDGE_TIMEOUT",

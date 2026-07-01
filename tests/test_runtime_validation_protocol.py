@@ -32,7 +32,7 @@ def _identity_relative(path: Path) -> str:
     return str(path)
 
 
-def _parse(payload: object) -> object:
+def _parse(payload: object) -> protocol.ToolResponse:
     return protocol.parse_runtime_response(
         payload,
         action="test_action",

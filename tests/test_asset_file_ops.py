@@ -350,7 +350,7 @@ class CopyAssetSignatureTests(unittest.TestCase):
             with self.assertRaises(TypeError) as cm:
                 # ``True`` here is the third positional argument; the
                 # documented contract is keyword-only.
-                copy_asset(str(src), str(dest), True)
+                copy_asset(str(src), str(dest), True)  # type: ignore[misc]  # intentional keyword-only probe
 
         self.assertIn("positional", str(cm.exception))
 
@@ -587,7 +587,7 @@ class RenameAssetSignatureTests(unittest.TestCase):
             shutil.copy(_FIXTURES / "standard_textured.mat", src)
 
             with self.assertRaises(TypeError) as cm:
-                rename_asset(str(src), "renamed.mat", True)
+                rename_asset(str(src), "renamed.mat", True)  # type: ignore[misc]  # intentional keyword-only probe
 
         self.assertIn("positional", str(cm.exception))
 

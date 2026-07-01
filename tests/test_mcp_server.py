@@ -9,12 +9,14 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock, call, patch
 
+import prefab_sentinel.editor_bridge as editor_bridge
 from prefab_sentinel.contracts import Severity, ToolResponse
-from prefab_sentinel.mcp_helpers import KNOWLEDGE_URI_PREFIX
-from prefab_sentinel.mcp_server import _resolve_knowledge_dir, create_server
+from prefab_sentinel.diagnostics_baseline import DiagnosticsBaseline
+from prefab_sentinel.editor_bridge import BRIDGE_WATCH_DIR_ENV, PROTOCOL_VERSION
+from prefab_sentinel.mcp_server import create_server
 from prefab_sentinel.mcp_validation import require_change_reason
 from prefab_sentinel.session import ProjectSession
 from prefab_sentinel.symbol_tree_builder import build_symbol_tree
@@ -142,7 +144,7 @@ class TestToolRegistration(unittest.TestCase):
             # Existing 15 tools
             "activate_project", "get_project_status",
             "get_unity_symbols", "find_unity_symbol", "find_referencing_assets",
-            "validate_refs", "inspect_wiring", "inspect_variant",
+            "validate_refs", "validate_materials", "inspect_wiring", "inspect_variant",
             "diff_unity_symbols", "set_property",
             "add_component", "remove_component",
             "list_serialized_fields", "validate_field_rename", "check_field_coverage",
@@ -163,6 +165,10 @@ class TestToolRegistration(unittest.TestCase):
             "editor_create_udon_program_asset",
             "editor_set_property", "editor_safe_save_prefab",
             "editor_set_parent",
+            "editor_serialized_property_read",
+            "editor_serialized_property_list",
+            "editor_serialized_property_write",
+            "editor_create_generated_asset", "editor_move_asset",
             "editor_create_empty", "editor_create_primitive",
             "editor_create_ui_element",
             "editor_batch_create", "editor_batch_set_property",
@@ -175,13 +181,16 @@ class TestToolRegistration(unittest.TestCase):
             "deploy_bridge",
             # Inspection + orchestrator tools
             "inspect_materials", "inspect_material_asset", "set_material_property",
-            "copy_asset", "rename_asset",
+            "copy_asset", "rename_asset", "delete_asset", "delete_assets",
             "validate_structure", "revert_overrides", "vrcsdk_upload",
-            "inspect_hierarchy", "validate_runtime", "validate_all_wiring",
+            "inspect_hierarchy", "inspect_transform_effective_values",
+            "inspect_unity_event_listeners", "validate_runtime", "validate_all_wiring",
             "patch_apply",
             "copy_component_fields",
             "set_properties",
             "editor_set_properties",
+            # Explicit diagnostics baseline management (#100)
+            "update_diagnostics_baseline",
             # Editor exec tool (#74)
             "editor_run_script",
             # Issue #119: high-level UdonSharp authoring tools.
@@ -200,6 +209,10 @@ class TestToolRegistration(unittest.TestCase):
             "editor_inspect_animation_clip",
             "editor_create_animation_clip",
             "editor_apply_animation_clip",
+            # Issue #98: live geometry read primitives.
+            "editor_get_transform",
+            "editor_get_bounds",
+            "editor_measure_distance",
         }
         self.assertEqual(expected, tool_names)
 
@@ -210,8 +223,14 @@ class TestToolRegistration(unittest.TestCase):
         # tool, bringing the registered surface from 75 to 76; issues
         # #233 / #236 / #240 / #242 / #243 add 9 more tools, bringing
         # the surface to 85; issue #71 retired the fire-and-return
-        # ``editor_recompile_async`` tool, leaving 84.
-        self.assertEqual(84, len(tools))
+        # ``editor_recompile_async`` tool, leaving 84; issue #98 adds
+        # three live geometry tools, bringing the surface to 87; issue
+        # #114 adds delete_asset and delete_assets, bringing it to 89;
+        # issues #96 / #97 / #110 add two read-only effective inspectors;
+        # issue #112 adds three generic serialized-property tools; issue
+        # #99 adds the read-only material validation surface; issue #100
+        # adds explicit diagnostics baseline management.
+        self.assertEqual(98, len(tools))
 
 
 class TestToolsCatalogDoc(unittest.TestCase):
@@ -256,9 +275,8 @@ class TestToolsCatalogDoc(unittest.TestCase):
         registered = len(_run(create_server().list_tools()))
         header = self._TOOLS_MD.read_text(encoding="utf-8").splitlines()[2]
         match = re.search(r"現在 (\d+) 件", header)
-        self.assertIsNotNone(
-            match,
-            msg="docs/tools.md header must state the tool count as '現在 N 件'.",
+        assert match is not None, (
+            "docs/tools.md header must state the tool count as '現在 N 件'."
         )
         self.assertEqual(
             registered,
@@ -615,6 +633,9 @@ class TestOrchestratorTools(unittest.TestCase):
             # With no caller list and a path that has no
             # config/ignore_guids.txt the merged tuple is empty.
             ignore_asset_guids=(),
+            diagnostics_baseline=DiagnosticsBaseline(
+                known_diagnostics=(), path=None, status="not_loaded_no_project_root"
+            ),
         )
 
     def test_validate_refs_forwards_refresh_guid_index_flag(self) -> None:
@@ -673,6 +694,10 @@ class TestOrchestratorTools(unittest.TestCase):
             page_size=50,
             summary_only=False,
             script_filter="",
+            include_out_of_scope_diagnostics=False,
+            diagnostics_baseline=DiagnosticsBaseline(
+                known_diagnostics=(), path=None, status="not_loaded_no_project_root"
+            ),
         )
 
     def test_inspect_wiring_forwards_summary_and_filter_flags(self) -> None:
@@ -703,6 +728,81 @@ class TestOrchestratorTools(unittest.TestCase):
         kwargs = mock_orch.inspect_wiring.call_args.kwargs
         self.assertEqual(True, kwargs["summary_only"])
         self.assertEqual("AvatarSync", kwargs["script_filter"])
+
+    def test_inspect_wiring_forwards_out_of_scope_flag_and_project_baseline(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            project_root = Path(raw)
+            config_dir = project_root / "config"
+            config_dir.mkdir()
+            (config_dir / "diagnostics_baseline.json").write_text(
+                json.dumps({
+                    "version": 1,
+                    "known_diagnostics": [
+                        "inspect_wiring:null_reference:Assets/Base.prefab:40:targetRef",
+                    ],
+                }),
+                encoding="utf-8",
+            )
+            mock_resp = MagicMock()
+            mock_resp.to_dict.return_value = {
+                "success": True,
+                "severity": "info",
+                "data": {"component_count": 3},
+            }
+            mock_orch = MagicMock()
+            mock_orch.inspect_wiring.return_value = mock_resp
+
+            server = self._make_server()
+
+            with (
+                patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_cls,
+                patch.object(ProjectSession, "project_root", project_root),
+            ):
+                mock_cls.default.return_value = mock_orch
+                _run(server.call_tool(
+                    "inspect_wiring",
+                    {
+                        "asset_path": "Assets/Base.prefab",
+                        "script_filter": "FooBehaviour",
+                        "include_out_of_scope_diagnostics": True,
+                    },
+                ))
+
+        kwargs = mock_orch.inspect_wiring.call_args.kwargs
+        baseline = kwargs["diagnostics_baseline"]
+        self.assertEqual(
+            (True, "loaded", ("inspect_wiring:null_reference:Assets/Base.prefab:40:targetRef",)),
+            (
+                kwargs["include_out_of_scope_diagnostics"],
+                baseline.status,
+                baseline.known_diagnostics,
+            ),
+        )
+
+    def test_inspect_wiring_invalid_project_baseline_returns_error_before_orchestration(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            project_root = Path(raw)
+            config_dir = project_root / "config"
+            config_dir.mkdir()
+            (config_dir / "diagnostics_baseline.json").write_text("{", encoding="utf-8")
+            mock_orch = MagicMock()
+
+            server = self._make_server()
+
+            with (
+                patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_cls,
+                patch.object(ProjectSession, "project_root", project_root),
+            ):
+                mock_cls.default.return_value = mock_orch
+                _, result = _run(server.call_tool(
+                    "inspect_wiring",
+                    {"asset_path": "Assets/Base.prefab"},
+                ))
+
+        self.assertEqual(
+            (False, "DIAGNOSTICS_BASELINE_INVALID", 0),
+            (result["success"], result["code"], mock_orch.inspect_wiring.call_count),
+        )
 
     def test_inspect_wiring_delegates_cursor_and_page_size(self) -> None:
         # Issue #197: the MCP tool surface forwards the opaque continuation
@@ -741,6 +841,10 @@ class TestOrchestratorTools(unittest.TestCase):
             page_size=25,
             summary_only=False,
             script_filter="",
+            include_out_of_scope_diagnostics=False,
+            diagnostics_baseline=DiagnosticsBaseline(
+                known_diagnostics=(), path=None, status="not_loaded_no_project_root"
+            ),
         )
 
     def test_find_referencing_assets_delegates(self) -> None:
@@ -2208,6 +2312,46 @@ class TestFindReferencingAssetsDirectPayload(unittest.TestCase):
         self.assertNotIn("success", result)
         self.assertNotIn("severity", result)
 
+
+    def test_missing_target_metadata_stays_in_direct_payload(self) -> None:
+        server = create_server()
+        usages = [{"path": "Assets/Referrer.prefab", "line": 4, "column": 11}]
+        mock_step = ToolResponse(
+            success=True,
+            severity=Severity.INFO,
+            code="REF_WHERE_USED",
+            message="Reference usage scan completed.",
+            data={
+                "usages": usages,
+                "usage_count": 1,
+                "returned_usages": 1,
+                "truncated_usages": 0,
+                "scanned_files": 1,
+                "asset_path": None,
+                "asset_missing": True,
+            },
+            diagnostics=[],
+        )
+        with patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_cls:
+            mock_orch = mock_cls.default.return_value
+            mock_orch.reference_resolver.where_used.return_value = mock_step
+            _, result = _run(server.call_tool(
+                "find_referencing_assets",
+                {"asset_or_guid": "f" * 32},
+            ))
+
+        self.assertEqual(usages, result["matches"])
+        self.assertEqual(
+            {
+                "total_count": 1,
+                "truncated": False,
+                "scope": None,
+                "asset_path": None,
+                "asset_missing": True,
+            },
+            result["metadata"],
+        )
+
     def test_truncated_metadata(self) -> None:
         server = create_server()
         mock_step = ToolResponse(
@@ -2244,8 +2388,8 @@ class TestFindReferencingAssetsDirectPayload(unittest.TestCase):
         mock_step = ToolResponse(
             success=False,
             severity=Severity.ERROR,
-            code="REF_ERR",
-            message="Scope not found",
+            code="REF404",
+            message="Scope path status could not be read.",
             data={},
             diagnostics=[],
         )
@@ -2257,7 +2401,11 @@ class TestFindReferencingAssetsDirectPayload(unittest.TestCase):
                     "find_referencing_assets",
                     {"asset_or_guid": "x" * 32},
                 ))
-            self.assertIn("Scope not found", str(ctx.exception))
+            message = str(ctx.exception)
+            self.assertIn("REF404", message)
+            self.assertIn("Scope path status could not be read.", message)
+            self.assertNotIn("PermissionError", message)
+            self.assertNotIn("OSError", message)
 
 
 class TestEditorReadOnlyTools(unittest.TestCase):
@@ -2295,13 +2443,19 @@ class TestEditorReadOnlyTools(unittest.TestCase):
             _run(server.call_tool("editor_screenshot", {"refresh": False}))
         mock_send.assert_called_once_with(action="capture_screenshot", view="scene", width=0, height=0)
 
-    def test_editor_screenshot_refresh_failure_still_captures(self) -> None:
+    def test_editor_screenshot_refresh_failure_stops_before_capture(self) -> None:
+        from mcp.server.fastmcp.exceptions import ToolError
+
         server = create_server()
-        responses = [Exception("refresh failed"), {"success": True, "data": {"output_path": "/shot.png"}}]
-        with patch("prefab_sentinel.mcp_tools_editor_view.send_action", side_effect=responses) as mock_send:
-            _, result = _run(server.call_tool("editor_screenshot", {"refresh": True}))
-        self.assertEqual(mock_send.call_count, 2)
-        self.assertTrue(result["success"])
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_view.send_action",
+            side_effect=Exception("refresh failed"),
+        ) as mock_send:
+            with self.assertRaises(ToolError) as ctx:
+                _run(server.call_tool("editor_screenshot", {"refresh": True}))
+
+        mock_send.assert_called_once_with(action="refresh_asset_database")
+        self.assertIn("refresh failed", str(ctx.exception))
 
     def test_editor_select_delegates(self) -> None:
         server = create_server()
@@ -2326,13 +2480,21 @@ class TestEditorReadOnlyTools(unittest.TestCase):
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_frame", {"zoom": 2.5}))
-        mock_send.assert_called_once_with(action="frame_selected", zoom=2.5)
+        mock_send.assert_called_once_with(
+            action="frame_selected",
+            zoom=2.5,
+            bounds_policy="all_visible_renderers",
+        )
 
     def test_editor_frame_defaults(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_frame", {}))
-        mock_send.assert_called_once_with(action="frame_selected", zoom=0.0)
+        mock_send.assert_called_once_with(
+            action="frame_selected",
+            zoom=0.0,
+            bounds_policy="all_visible_renderers",
+        )
 
     def test_editor_frame_preserves_bounds_payload(self) -> None:
         """Issue #115 — Python continuous-integration coverage for the
@@ -2683,6 +2845,8 @@ class TestEditorAddUdonSharpComponentTool(unittest.TestCase):
                 {
                     "hierarchy_path": "/UI/PlayButton",
                     "type_full_name": "VVMW.PlayController",
+                    "confirm": True,
+                    "change_reason": "add PlayController",
                 },
             ))
         assert_error_envelope(
@@ -2715,6 +2879,8 @@ class TestEditorAddUdonSharpComponentTool(unittest.TestCase):
                 {
                     "hierarchy_path": "/UI/PlayButton",
                     "type_full_name": "VVMW.PlayController",
+                    "confirm": True,
+                    "change_reason": "add PlayController",
                 },
             ))
         assert_error_envelope(
@@ -2787,6 +2953,258 @@ class TestEditorSetPropertyValueSemantics(unittest.TestCase):
         self.assertNotIn("property_value", kwargs)
 
 
+class TestEditorSerializedPropertyTools(unittest.TestCase):
+    """Issue #112 serialized-property MCP wrappers."""
+
+    def setUp(self) -> None:
+        os.environ.pop("UNITYTOOL_BRIDGE_WATCH_DIR", None)
+
+    def test_read_forwards_raw_property_path_and_expands_payload(self) -> None:
+        server = create_server()
+        bridge_response = {
+            "success": True,
+            "severity": "info",
+            "code": "EDITOR_CTRL_SERIALIZED_PROPERTY_READ_OK",
+            "message": "Read serialized property.",
+            "data": {
+                "serialized_property_json": json.dumps({
+                    "property_path": "m_Name",
+                    "value_kind": "string",
+                }),
+            },
+            "diagnostics": [],
+        }
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_serialized_property.send_action",
+            return_value=bridge_response,
+        ) as mock_send:
+            _, result = _run(server.call_tool(
+                "editor_serialized_property_read",
+                {
+                    "hierarchy_path": "/Obj",
+                    "component_type": "ExampleComponent",
+                    "component_index": 2,
+                    "property_path": "m_Name",
+                },
+            ))
+
+        mock_send.assert_called_once_with(
+            action="editor_serialized_property_read",
+            hierarchy_path="/Obj",
+            component_type="ExampleComponent",
+            component_index=2,
+            property_path="m_Name",
+        )
+        self.assertEqual("EDITOR_CTRL_SERIALIZED_PROPERTY_READ_OK", result["code"])
+        self.assertEqual("m_Name", result["data"]["serialized_property"]["property_path"])
+
+    def test_read_preserves_malformed_serialized_property_json(self) -> None:
+        server = create_server()
+        bridge_response = {
+            "success": True,
+            "severity": "info",
+            "code": "EDITOR_CTRL_SERIALIZED_PROPERTY_READ_OK",
+            "message": "Read serialized property.",
+            "data": {"serialized_property_json": "{not-json"},
+            "diagnostics": [],
+        }
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_serialized_property.send_action",
+            return_value=bridge_response,
+        ) as mock_send:
+            _, result = _run(server.call_tool(
+                "editor_serialized_property_read",
+                {
+                    "hierarchy_path": "/Obj",
+                    "component_type": "ExampleComponent",
+                    "property_path": "m_Name",
+                },
+            ))
+
+        mock_send.assert_called_once_with(
+            action="editor_serialized_property_read",
+            hierarchy_path="/Obj",
+            component_type="ExampleComponent",
+            property_path="m_Name",
+        )
+        self.assertEqual("{not-json", result["data"]["serialized_property_json"])
+        self.assertNotIn("serialized_property", result["data"])
+
+    def test_read_rejects_required_address_fields_before_transport(self) -> None:
+        server = create_server()
+        cases: list[tuple[dict[str, object], str]] = [
+            (
+                {"hierarchy_path": "", "component_type": "C", "property_path": "m_Name"},
+                "EDITOR_CTRL_SERIALIZED_PROPERTY_NO_PATH",
+            ),
+            (
+                {"hierarchy_path": "/Obj", "component_type": "", "property_path": "m_Name"},
+                "EDITOR_CTRL_SERIALIZED_PROPERTY_NO_COMPONENT_TYPE",
+            ),
+            (
+                {"hierarchy_path": "/Obj", "component_type": "C", "property_path": ""},
+                "EDITOR_CTRL_SERIALIZED_PROPERTY_NO_PROPERTY_PATH",
+            ),
+        ]
+        with patch("prefab_sentinel.mcp_tools_editor_serialized_property.send_action") as mock_send:
+            for payload, expected_code in cases:
+                with self.subTest(expected_code=expected_code):
+                    _, result = _run(server.call_tool("editor_serialized_property_read", payload))
+                    self.assertEqual((False, expected_code), (result["success"], result["code"]))
+        mock_send.assert_not_called()
+
+    def test_list_defaults_and_cursor_are_forwarded(self) -> None:
+        server = create_server()
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_serialized_property.send_action",
+            return_value={"success": True, "code": "EDITOR_CTRL_SERIALIZED_PROPERTY_LIST_OK"},
+        ) as mock_send:
+            _, default_result = _run(server.call_tool(
+                "editor_serialized_property_list",
+                {"hierarchy_path": "/Obj", "component_type": "ExampleComponent"},
+            ))
+            _, cursor_result = _run(server.call_tool(
+                "editor_serialized_property_list",
+                {
+                    "hierarchy_path": "/Obj",
+                    "component_type": "ExampleComponent",
+                    "cursor": "42",
+                },
+            ))
+
+        self.assertEqual(
+            (
+                "EDITOR_CTRL_SERIALIZED_PROPERTY_LIST_OK",
+                "EDITOR_CTRL_SERIALIZED_PROPERTY_LIST_OK",
+            ),
+            (default_result["code"], cursor_result["code"]),
+        )
+        self.assertEqual(
+            [
+                call(
+                    action="editor_serialized_property_list",
+                    hierarchy_path="/Obj",
+                    component_type="ExampleComponent",
+                    depth=1,
+                    cap=50,
+                ),
+                call(
+                    action="editor_serialized_property_list",
+                    hierarchy_path="/Obj",
+                    component_type="ExampleComponent",
+                    depth=1,
+                    cap=50,
+                    cursor="42",
+                ),
+            ],
+            mock_send.call_args_list,
+        )
+
+    def test_list_invalid_traversal_inputs_stop_before_transport(self) -> None:
+        server = create_server()
+        cases: list[tuple[dict[str, object], str]] = [
+            ({"depth": -1}, "EDITOR_CTRL_SERIALIZED_PROPERTY_LIST_LIMIT_INVALID"),
+            ({"cap": 201}, "EDITOR_CTRL_SERIALIZED_PROPERTY_LIST_LIMIT_INVALID"),
+            ({"cursor": "next"}, "EDITOR_CTRL_SERIALIZED_PROPERTY_CURSOR_INVALID"),
+            ({"cursor": "+1"}, "EDITOR_CTRL_SERIALIZED_PROPERTY_CURSOR_INVALID"),
+            ({"cursor": " 1"}, "EDITOR_CTRL_SERIALIZED_PROPERTY_CURSOR_INVALID"),
+            ({"cursor": "1_0"}, "EDITOR_CTRL_SERIALIZED_PROPERTY_CURSOR_INVALID"),
+        ]
+        base: dict[str, object] = {"hierarchy_path": "/Obj", "component_type": "ExampleComponent"}
+        with patch("prefab_sentinel.mcp_tools_editor_serialized_property.send_action") as mock_send:
+            for extra, expected_code in cases:
+                payload = {**base, **extra}
+                with self.subTest(expected_code=expected_code, payload=payload):
+                    _, result = _run(server.call_tool("editor_serialized_property_list", payload))
+                    self.assertEqual((False, expected_code), (result["success"], result["code"]))
+        mock_send.assert_not_called()
+
+    def test_write_preserves_false_zero_and_empty_string_presence_markers(self) -> None:
+        server = create_server()
+        calls: list[tuple[dict[str, object], str, str, object]] = [
+            ({"bool_value": False}, "serialized_property_bool_value_present", "serialized_property_bool_value", False),
+            ({"int_value": 0}, "serialized_property_int_value_present", "serialized_property_int_value", 0),
+            ({"string_value": ""}, "serialized_property_string_value_present", "serialized_property_string_value", ""),
+        ]
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_serialized_property.send_action",
+            return_value={"success": True, "data": {"executed": False}},
+        ) as mock_send:
+            for extra, present_key, value_key, expected_value in calls:
+                payload = {
+                    "hierarchy_path": "/Obj",
+                    "component_type": "ExampleComponent",
+                    "property_path": "m_Name",
+                    **extra,
+                }
+                _run(server.call_tool("editor_serialized_property_write", payload))
+                kwargs = mock_send.call_args.kwargs
+                self.assertTrue(kwargs[present_key])
+                self.assertEqual(expected_value, kwargs[value_key])
+                self.assertFalse(kwargs["confirm"])
+
+    def test_write_rejects_value_conflicts_and_missing_values_before_transport(self) -> None:
+        server = create_server()
+        cases = [
+            ({}, "EDITOR_CTRL_SERIALIZED_PROPERTY_VALUE_REQUIRED"),
+            ({"bool_value": False, "int_value": 0}, "EDITOR_CTRL_SERIALIZED_PROPERTY_VALUE_CONFLICT"),
+            ({"array_size": -1}, "EDITOR_CTRL_SERIALIZED_PROPERTY_ARRAY_SIZE_INVALID"),
+        ]
+        base = {
+            "hierarchy_path": "/Obj",
+            "component_type": "ExampleComponent",
+            "property_path": "m_Name",
+        }
+        with patch("prefab_sentinel.mcp_tools_editor_serialized_property.send_action") as mock_send:
+            for extra, expected_code in cases:
+                payload = {**base, **extra}
+                with self.subTest(expected_code=expected_code):
+                    _, result = _run(server.call_tool("editor_serialized_property_write", payload))
+                    self.assertEqual((False, expected_code), (result["success"], result["code"]))
+        mock_send.assert_not_called()
+
+    def test_confirmed_write_requires_trimmed_change_reason(self) -> None:
+        server = create_server()
+        base = {
+            "hierarchy_path": "/Obj",
+            "component_type": "ExampleComponent",
+            "property_path": "m_Name",
+            "int_value": 3,
+            "confirm": True,
+        }
+        with patch("prefab_sentinel.mcp_tools_editor_serialized_property.send_action") as mock_send:
+            _, rejected = _run(server.call_tool(
+                "editor_serialized_property_write",
+                {**base, "change_reason": "   "},
+            ))
+            self.assertEqual(
+                (False, "EDITOR_CTRL_SERIALIZED_PROPERTY_CHANGE_REASON_REQUIRED"),
+                (rejected["success"], rejected["code"]),
+            )
+            mock_send.assert_not_called()
+
+            mock_send.return_value = {
+                "success": True,
+                "code": "EDITOR_CTRL_SERIALIZED_PROPERTY_WRITE_OK",
+            }
+            _, accepted = _run(server.call_tool(
+                "editor_serialized_property_write",
+                {**base, "change_reason": "  audit reason  "},
+            ))
+
+        self.assertEqual("EDITOR_CTRL_SERIALIZED_PROPERTY_WRITE_OK", accepted["code"])
+        mock_send.assert_called_once_with(
+            action="editor_serialized_property_write",
+            hierarchy_path="/Obj",
+            component_type="ExampleComponent",
+            property_path="m_Name",
+            confirm=True,
+            serialized_property_int_value=3,
+            serialized_property_int_value_present=True,
+            change_reason="audit reason",
+        )
+
+
 class TestEditorSetUdonSharpFieldValueSemantics(unittest.TestCase):
     """T-52-2: editor_set_udonsharp_field accepts an empty-string value."""
 
@@ -2805,6 +3223,8 @@ class TestEditorSetUdonSharpFieldValueSemantics(unittest.TestCase):
                     "hierarchy_path": "/UI/PlayButton",
                     "property_name": "label",
                     "value": "",
+                    "confirm": True,
+                    "change_reason": "set label",
                 },
             ))
         # No client-side NO_VALUE rejection for an empty-string write.
@@ -2942,6 +3362,7 @@ class TestEditorArgumentNaming(unittest.TestCase):
             self._tool_fn("editor_wire_persistent_listener")(
                 hierarchy_path="/A", property_name="onValueChanged",
                 target_hierarchy_path="/B", method="M", arg="x",
+                confirm=True, change_reason="wire listener",
             )
         send.assert_called_once()
 
@@ -2993,6 +3414,7 @@ class TestEditorArgumentNaming(unittest.TestCase):
             self._tool_fn("editor_wire_persistent_listener")(
                 hierarchy_path="/A", property_name="OnX",
                 target_hierarchy_path="/B", method="M", arg="x",
+                confirm=True, change_reason="wire listener",
             )
         kwargs = send.call_args.kwargs
         self.assertEqual(
@@ -3129,12 +3551,14 @@ class TestEditorWriteTools(unittest.TestCase):
 
     def test_editor_set_material_property_delegates(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
+        with patch("prefab_sentinel.mcp_tools_editor_write.send_action", return_value={"success": True}) as mock_send:
             _run(server.call_tool("editor_set_material_property", {
                 "hierarchy_path": "/Foo",
                 "material_index": 0,
                 "property_name": "_Color",
                 "value": "[1, 0, 0, 1]",
+                "confirm": True,
+                "change_reason": "set material color",
             }))
         mock_send.assert_called_once_with(
             action="set_material_property",
@@ -3142,6 +3566,21 @@ class TestEditorWriteTools(unittest.TestCase):
             material_index=0,
             property_name="_Color",
             property_value="[1, 0, 0, 1]",
+        )
+
+    def test_editor_set_material_property_requires_audit_pair(self) -> None:
+        server = create_server()
+        with patch("prefab_sentinel.mcp_tools_editor_write.send_action") as mock_send:
+            _, result = _run(server.call_tool("editor_set_material_property", {
+                "hierarchy_path": "/Foo",
+                "material_index": 0,
+                "property_name": "_Color",
+                "value": "[1, 0, 0, 1]",
+            }))
+
+        mock_send.assert_not_called()
+        assert_error_envelope(
+            result, code="CHANGE_REASON_REQUIRED", severity="error",
         )
 
     def test_editor_batch_set_material_property_delegates(self) -> None:
@@ -3678,6 +4117,9 @@ class TestInspectionTools(unittest.TestCase):
         self.assertTrue(result["success"])
         mock_orch.inspect_structure.assert_called_once_with(
             target_path="Assets/Scene.unity",
+            diagnostics_baseline=DiagnosticsBaseline(
+                known_diagnostics=(), path=None, status="not_loaded_no_project_root"
+            ),
         )
 
 
@@ -3797,6 +4239,7 @@ class TestInspectHierarchyTool(unittest.TestCase):
             max_depth=None,
             show_components=True,
             expand_monobehaviour=False,
+            expand_prefab_instances=False,
         )
 
     def test_passes_optional_params(self) -> None:
@@ -3818,34 +4261,141 @@ class TestInspectHierarchyTool(unittest.TestCase):
             max_depth=2,
             show_components=False,
             expand_monobehaviour=False,
+            expand_prefab_instances=False,
+        )
+
+    def test_passes_prefab_instance_expansion_option(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.to_dict.return_value = {"success": True, "data": {"roots": []}}
+        mock_orch = MagicMock()
+        mock_orch.inspect_hierarchy.return_value = mock_resp
+
+        server = create_server()
+        with patch.object(
+            ProjectSession, "get_orchestrator", return_value=mock_orch,
+        ):
+            _, result = _run(server.call_tool("inspect_hierarchy", {
+                "asset_path": "Assets/A.prefab", "expand_prefab_instances": True,
+            }))
+
+        self.assertEqual(
+            (True, True),
+            (result["success"], mock_orch.inspect_hierarchy.call_args.kwargs["expand_prefab_instances"]),
+            msg="inspect_hierarchy MCP wrapper must forward expand_prefab_instances=True unchanged.",
+        )
+
+
+class TestEffectiveInspectorTools(unittest.TestCase):
+    def test_transform_inspector_delegates_to_orchestrator(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.to_dict.return_value = {"success": True, "code": "INSPECT_TRANSFORM_VALUES"}
+        mock_orch = MagicMock()
+        mock_orch.inspect_transform_effective_values.return_value = mock_resp
+
+        server = create_server()
+        with patch.object(
+            ProjectSession, "get_orchestrator", return_value=mock_orch,
+        ):
+            _, result = _run(server.call_tool(
+                "inspect_transform_effective_values",
+                {"asset_path": "Assets/Host.prefab", "symbol_path": "Root/Child"},
+            ))
+
+        self.assertEqual(
+            (True, "INSPECT_TRANSFORM_VALUES"),
+            (result["success"], result["code"]),
+            msg=f"Transform inspector MCP wrapper should pass through orchestrator response; observed result={result!r}",
+        )
+        mock_orch.inspect_transform_effective_values.assert_called_once_with(
+            asset_path="Assets/Host.prefab",
+            symbol_path="Root/Child",
+        )
+
+
+    def test_unity_event_listener_inspector_delegates_to_orchestrator(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.to_dict.return_value = {"success": True, "code": "INSPECT_UNITY_EVENT_LISTENERS"}
+        mock_orch = MagicMock()
+        mock_orch.inspect_unity_event_listeners.return_value = mock_resp
+
+        server = create_server()
+        with patch.object(
+            ProjectSession, "get_orchestrator", return_value=mock_orch,
+        ):
+            _, result = _run(server.call_tool(
+                "inspect_unity_event_listeners",
+                {
+                    "asset_path": "Assets/Control.prefab",
+                    "symbol_path": "Control",
+                    "component_type": "Button",
+                    "property_name": "onClick",
+                },
+            ))
+
+        self.assertEqual(
+            (True, "INSPECT_UNITY_EVENT_LISTENERS"),
+            (result["success"], result["code"]),
+            msg=f"UnityEvent inspector MCP wrapper should pass through orchestrator response; observed result={result!r}",
+        )
+        mock_orch.inspect_unity_event_listeners.assert_called_once_with(
+            asset_path="Assets/Control.prefab",
+            symbol_path="Control",
+            component_type="Button",
+            property_name="onClick",
         )
 
 
 class TestValidateRuntimeTool(unittest.TestCase):
-    """Tests for the validate_runtime MCP tool."""
+    def _runtime_with_validation_steps(self):
+        from unittest.mock import MagicMock
 
-    def test_delegates_to_orchestrator(self) -> None:
+        from prefab_sentinel.contracts import Severity, ToolResponse
+
+        runtime = MagicMock()
+        runtime.assert_no_critical_errors = MagicMock()
+        runtime.compile_udonsharp.return_value = ToolResponse(True, Severity.INFO, "RUN_COMPILE_OK", "m", {"read_only": True})
+        runtime.run_clientsim.return_value = ToolResponse(True, Severity.INFO, "RUN_CLIENTSIM_OK", "m", {"read_only": False})
+        runtime.collect_unity_console.return_value = ToolResponse(
+            True,
+            Severity.INFO,
+            "RUN_LOG_COLLECTED",
+            "m",
+            {"read_only": True, "log_lines": []},
+        )
+        runtime.classify_errors.return_value = ToolResponse(True, Severity.INFO, "RUN_CLASSIFY_OK", "m", {"read_only": True})
+        runtime.assert_no_critical_errors.return_value = ToolResponse(True, Severity.INFO, "RUN_ASSERT_OK", "m", {"read_only": True})
+        return runtime
+
+    def test_delegates_to_orchestrator_with_compile_only_defaults(self) -> None:
         mock_resp = MagicMock()
         mock_resp.to_dict.return_value = {"success": True, "data": {"steps": []}}
         mock_orch = MagicMock()
         mock_orch.validate_runtime.return_value = mock_resp
 
         server = create_server()
-        with patch.object(
-            ProjectSession, "get_orchestrator", return_value=mock_orch,
-        ):
-            _, result = _run(server.call_tool("validate_runtime", {
-                "asset_path": "Assets/Scenes/Main.unity",
-            }))
+        with patch.object(ProjectSession, "get_orchestrator", return_value=mock_orch):
+            _, result = _run(
+                server.call_tool(
+                    "validate_runtime",
+                    {"asset_path": "Assets/Scenes/Main.unity"},
+                )
+            )
 
-        self.assertTrue(result["success"])
+        self.assertEqual(
+            True,
+            result["success"],
+            msg=f"validate_runtime tool result mismatch: {result!r}",
+        )
         mock_orch.validate_runtime.assert_called_once_with(
             scene_path="Assets/Scenes/Main.unity",
-            profile="default",
+            profile="compile_only",
             log_file=None,
             since_timestamp=None,
             allow_warnings=False,
             max_diagnostics=200,
+            confirm=False,
+            change_reason=None,
+            allow_dirty_before_clientsim=False,
         )
 
     def test_passes_all_params(self) -> None:
@@ -3855,25 +4405,74 @@ class TestValidateRuntimeTool(unittest.TestCase):
         mock_orch.validate_runtime.return_value = mock_resp
 
         server = create_server()
-        with patch.object(
-            ProjectSession, "get_orchestrator", return_value=mock_orch,
-        ):
-            _run(server.call_tool("validate_runtime", {
-                "asset_path": "Assets/S.unity",
-                "profile": "smoke",
-                "log_file": "/tmp/Editor.log",
-                "allow_warnings": True,
-                "max_diagnostics": 50,
-            }))
+        with patch.object(ProjectSession, "get_orchestrator", return_value=mock_orch):
+            _run(
+                server.call_tool(
+                    "validate_runtime",
+                    {
+                        "asset_path": "Assets/S.unity",
+                        "profile": "clientsim",
+                        "log_file": "/tmp/Editor.log",
+                        "since_timestamp": "2026-05-30T00:00:00Z",
+                        "allow_warnings": True,
+                        "max_diagnostics": 50,
+                        "confirm": True,
+                        "change_reason": "audit clientsim validation",
+                        "allow_dirty_before_clientsim": True,
+                    },
+                )
+            )
 
         mock_orch.validate_runtime.assert_called_once_with(
             scene_path="Assets/S.unity",
-            profile="smoke",
+            profile="clientsim",
             log_file="/tmp/Editor.log",
-            since_timestamp=None,
+            since_timestamp="2026-05-30T00:00:00Z",
             allow_warnings=True,
             max_diagnostics=50,
+            confirm=True,
+            change_reason="audit clientsim validation",
+            allow_dirty_before_clientsim=True,
         )
+
+    def test_validate_runtime_rejects_unknown_profile(self) -> None:
+        from prefab_sentinel.contracts import Severity
+        from prefab_sentinel.orchestrator_validation import validate_runtime
+
+        runtime = self._runtime_with_validation_steps()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            scene = Path(temp_dir) / "Scene.unity"
+            scene.write_text("%YAML 1.1\n", encoding="utf-8")
+            response = validate_runtime(runtime, str(scene), profile="smoke")
+
+        self.assertEqual(
+            (False, "VALIDATE_RUNTIME_PROFILE_UNSUPPORTED", Severity.ERROR),
+            (response.success, response.code, response.severity),
+            msg=f"unsupported runtime profile envelope mismatch: {response.to_dict()!r}",
+        )
+        runtime.compile_udonsharp.assert_not_called()
+        runtime.run_clientsim.assert_not_called()
+
+    def test_validate_runtime_clientsim_requires_audit_pair(self) -> None:
+        from prefab_sentinel.contracts import Severity
+        from prefab_sentinel.orchestrator_validation import validate_runtime
+
+        runtime = self._runtime_with_validation_steps()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            scene = Path(temp_dir) / "Scene.unity"
+            scene.write_text("%YAML 1.1\n", encoding="utf-8")
+            response = validate_runtime(runtime, str(scene), profile="clientsim")
+
+        self.assertEqual(
+            (False, "CLIENTSIM_CONFIRM_REQUIRED", Severity.ERROR),
+            (response.success, response.code, response.severity),
+            msg=f"clientsim audit gate envelope mismatch: {response.to_dict()!r}",
+        )
+        self.assertIn("explicit audit", response.message)
+        runtime.compile_udonsharp.assert_not_called()
+        runtime.run_clientsim.assert_not_called()
 
 
 class TestPatchApplyTool(unittest.TestCase):
@@ -3973,19 +4572,19 @@ class TestPatchApplyTool(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# activate_project suggested_reads
+# activate_project batch scope
 # ---------------------------------------------------------------------------
 
 
-class TestActivateProjectSuggestedReads(unittest.TestCase):
-    """activate_project response includes suggested_reads."""
+class TestActivateProjectBatchScope(unittest.TestCase):
+    """activate_project exposes only the batch-scoped session payload."""
 
     @patch("prefab_sentinel.session_cache.collect_project_guid_index")
     @patch("prefab_sentinel.session_cache.build_script_name_map")
     @patch("prefab_sentinel.session_cache.Phase1Orchestrator")
     @patch("prefab_sentinel.session.resolve_scope_path")
     @patch("prefab_sentinel.session.find_project_root")
-    def test_response_contains_suggested_reads(
+    def test_response_omits_unscoped_knowledge_fields(
         self,
         mock_find: MagicMock,
         mock_resolve: MagicMock,
@@ -3999,34 +4598,12 @@ class TestActivateProjectSuggestedReads(unittest.TestCase):
         mock_guid.return_value = {}
         server = create_server()
         _, result = _run(server.call_tool("activate_project", {"scope": "Assets/MyScope"}))
-        self.assertIn("suggested_reads", result["data"])
-        self.assertIsInstance(result["data"]["suggested_reads"], list)
-        self.assertTrue(
-            any("prefab-sentinel" in r for r in result["data"]["suggested_reads"])
-        )
 
-    @patch("prefab_sentinel.session_cache.collect_project_guid_index")
-    @patch("prefab_sentinel.session_cache.build_script_name_map")
-    @patch("prefab_sentinel.session_cache.Phase1Orchestrator")
-    @patch("prefab_sentinel.session.resolve_scope_path")
-    @patch("prefab_sentinel.session.find_project_root")
-    def test_response_contains_knowledge_hint(
-        self,
-        mock_find: MagicMock,
-        mock_resolve: MagicMock,
-        mock_orch: MagicMock,
-        mock_build: MagicMock,
-        mock_guid: MagicMock,
-    ) -> None:
-        mock_find.return_value = Path("/unity")
-        mock_resolve.return_value = Path("/unity/Assets/MyScope")
-        mock_build.return_value = {}
-        mock_guid.return_value = {}
-        server = create_server()
-        _, result = _run(server.call_tool("activate_project", {"scope": "Assets/MyScope"}))
-        self.assertIn("knowledge_hint", result["data"])
-
-        self.assertIn(KNOWLEDGE_URI_PREFIX, result["data"]["knowledge_hint"])
+        self.assertEqual(True, result["success"], result)
+        self.assertNotIn("suggested_reads", result["data"])
+        self.assertNotIn("knowledge_hint", result["data"])
+        self.assertEqual("/unity", result["data"]["expected_project_root"])
+        self.assertEqual("/unity/Assets/MyScope", result["data"]["scope"])
 
 
 # ---------------------------------------------------------------------------
@@ -4034,153 +4611,145 @@ class TestActivateProjectSuggestedReads(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
-class TestKnowledgeDirResolution(unittest.TestCase):
-    """Issue #309 — ``_resolve_knowledge_dir`` prefers the wheel-bundled
-    ``_knowledge_files`` location, falls back to the source-tree
-    ``knowledge`` sibling, and yields ``None`` when neither is present.
-    The behavior mirrors ``deploy_bridge``'s plugin_tools resolution so
-    wheel-installed deployments expose every knowledge document and
-    source-tree checkouts continue to work unchanged.
-    """
-
-    def setUp(self) -> None:
-        self._tmp = Path(tempfile.mkdtemp())
-        self._pkg_dir = self._tmp / "prefab_sentinel"
-        self._pkg_dir.mkdir()
-
-    def tearDown(self) -> None:
-        shutil.rmtree(self._tmp, ignore_errors=True)
-
-    def test_resolver_prefers_bundled_when_both_present(self) -> None:
-        bundled = self._pkg_dir / "_knowledge_files"
-        bundled.mkdir()
-        sibling = self._tmp / "knowledge"
-        sibling.mkdir()
-
-        resolved = _resolve_knowledge_dir(self._pkg_dir)
-
-        self.assertEqual(bundled, resolved)
-
-    def test_resolver_falls_back_to_source_tree_when_bundled_absent(self) -> None:
-        sibling = self._tmp / "knowledge"
-        sibling.mkdir()
-
-        resolved = _resolve_knowledge_dir(self._pkg_dir)
-
-        self.assertEqual(sibling, resolved)
-
-    def test_resolver_returns_none_when_neither_candidate_exists(self) -> None:
-        resolved = _resolve_knowledge_dir(self._pkg_dir)
-
-        self.assertIsNone(resolved)
 
 
-class TestKnowledgeResourcesRegistrationFromResolvedDir(unittest.TestCase):
-    """K-4 / K-5: ``create_server`` registers one MCP resource per
-    markdown file under the resolved knowledge directory when a directory
-    was resolved, and registers zero knowledge resources without raising
-    when the resolver yields ``None``.
-    """
 
-    def setUp(self) -> None:
-        self._tmp = Path(tempfile.mkdtemp())
+class TestKnowledgeResourcesNotRegisteredForBatch(unittest.TestCase):
+    """The current issue batch does not publish knowledge MCP resources."""
 
-    def tearDown(self) -> None:
-        shutil.rmtree(self._tmp, ignore_errors=True)
+    def test_create_server_registers_no_knowledge_resources(self) -> None:
+        server = create_server()
+        resources = _run(server.list_resources())
 
-    def test_registers_one_resource_per_markdown_file(self) -> None:
-        knowledge_dir = self._tmp / "knowledge"
-        knowledge_dir.mkdir()
-        # Three deterministic markdown files; non-.md companions must
-        # not turn into MCP resources.
-        for name in ("alpha", "beta", "gamma"):
-            (knowledge_dir / f"{name}.md").write_text(
-                "---\ndescription: test\n---\n# body\n",
-                encoding="utf-8",
-            )
-        (knowledge_dir / "ignored.txt").write_text("noise", encoding="utf-8")
-        # The ``with patch(...)`` context manager replaces the
-        # module-level binding with a real ``Path`` for the duration of
-        # the call; the registration loop calls ``glob`` on it which
-        # must walk the temporary tree.
-        with patch("prefab_sentinel.mcp_server._KNOWLEDGE_DIR", knowledge_dir):
-            server = create_server()
-            resources = _run(server.list_resources())
-
-        knowledge_uris = [
-            str(r.uri) for r in resources if "knowledge/" in str(r.uri)
-        ]
-
-        self.assertEqual(
-            sorted([
-                f"{KNOWLEDGE_URI_PREFIX}alpha.md",
-                f"{KNOWLEDGE_URI_PREFIX}beta.md",
-                f"{KNOWLEDGE_URI_PREFIX}gamma.md",
-            ]),
-            sorted(knowledge_uris),
-        )
-
-    def test_registers_zero_resources_when_resolver_returns_none(self) -> None:
-        with patch("prefab_sentinel.mcp_server._KNOWLEDGE_DIR", None):
-            server = create_server()
-            resources = _run(server.list_resources())
-
-        knowledge_uris = [
-            str(r.uri) for r in resources if "knowledge/" in str(r.uri)
-        ]
+        knowledge_uris = [str(r.uri) for r in resources if "knowledge/" in str(r.uri)]
         self.assertEqual([], knowledge_uris)
 
 
-class TestKnowledgeResources(unittest.TestCase):
-    """knowledge/*.md files are registered as MCP Resources."""
+class TestExpectedRootProviderLifespan(unittest.TestCase):
+    """Session lifespan owns the bridge expected-root guard."""
 
-    def test_resources_registered(self) -> None:
-        """At least one knowledge resource is registered."""
-        server = create_server()
-        resources = _run(server.list_resources())
-        uris = [r.uri for r in resources]
-        knowledge_uris = [u for u in uris if "knowledge/" in str(u)]
-        self.assertGreater(len(knowledge_uris), 0)
+    def _send_with_fake_response(
+        self,
+        response_payload: dict[str, object],
+    ) -> tuple[dict[str, object], str]:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            watch_dir = Path(tmpdir)
+            seen_request_id: dict[str, str] = {}
+            responder_errors: list[BaseException] = []
 
-    def test_resource_uri_scheme(self) -> None:
-        """All knowledge resources use the expected URI scheme."""
+            import threading
 
-        server = create_server()
-        resources = _run(server.list_resources())
-        for r in resources:
-            uri_str = str(r.uri)
-            if "knowledge/" in uri_str:
-                self.assertTrue(
-                    uri_str.startswith(KNOWLEDGE_URI_PREFIX),
-                    f"Unexpected URI: {uri_str}",
+            request_ready = threading.Condition()
+            observed_request: dict[str, Path] = {}
+            original_rename = Path.rename
+
+            def notifying_rename(self_path: Path, target: str | Path) -> Path:
+                renamed_path = original_rename(self_path, target)
+                target_path = Path(target)
+                if target_path.parent == watch_dir and target_path.name.endswith(
+                    ".request.json"
+                ):
+                    with request_ready:
+                        observed_request["path"] = target_path
+                        request_ready.notify_all()
+                return renamed_path
+
+            def fake_send() -> None:
+                with request_ready:
+                    request_seen = request_ready.wait_for(
+                        lambda: "path" in observed_request,
+                        timeout=2,
+                    )
+                if not request_seen:
+                    responder_errors.append(
+                        AssertionError("Expected request file before fake Unity response")
+                    )
+                    return
+
+                request_file = observed_request["path"]
+                request_id = request_file.name.removesuffix(".request.json")
+                seen_request_id["value"] = request_id
+                response = dict(response_payload)
+                response.setdefault("protocol_version", PROTOCOL_VERSION)
+                (watch_dir / f"{request_id}.response.json").write_text(
+                    json.dumps(response),
+                    encoding="utf-8",
                 )
-                self.assertTrue(uri_str.endswith(".md"), f"Not .md: {uri_str}")
 
-    def test_resource_read_returns_content(self) -> None:
-        """Reading a knowledge resource returns non-empty markdown text."""
-        server = create_server()
-        resources = _run(server.list_resources())
-        knowledge_resources = [
-            r for r in resources if "knowledge/" in str(r.uri)
-        ]
-        self.assertGreater(len(knowledge_resources), 0)
-        # Read the first one
-        uri = str(knowledge_resources[0].uri)
-        content = _run(server.read_resource(uri))
-        # content is a list with one item (text or blob)
-        text = content[0].content if hasattr(content[0], "content") else str(content[0])
-        self.assertGreater(len(text), 0)
-
-    def test_resource_has_description(self) -> None:
-        """Each knowledge resource has a non-empty description."""
-        server = create_server()
-        resources = _run(server.list_resources())
-        for r in resources:
-            if "knowledge/" in str(r.uri):
-                self.assertTrue(
-                    r.description and len(r.description) > 0,
-                    f"Missing description for {r.uri}",
+            with (
+                patch.dict(os.environ, {BRIDGE_WATCH_DIR_ENV: tmpdir}, clear=False),
+                patch.object(Path, "rename", notifying_rename),
+            ):
+                t = threading.Thread(target=fake_send)
+                t.start()
+                result = editor_bridge.send_action(
+                    action="get_editor_state",
+                    timeout_sec=5,
                 )
+                t.join()
+
+        self.assertEqual([], responder_errors)
+        return result, seen_request_id["value"]
+
+    def _successful_editor_state(self, actual_root: str) -> dict[str, object]:
+        return {
+            "success": True,
+            "severity": "info",
+            "code": "EDITOR_CTRL_STATE_OK",
+            "message": "Editor state captured",
+            "data": {},
+            "diagnostics": [],
+            "operator_context": {"project_root": actual_root},
+        }
+
+    def _clear_provider_for_failed_red_run(self) -> None:
+        editor_bridge._set_expected_project_root_provider(None)
+
+    def test_lifespan_session_root_guards_unannotated_bridge_action(self) -> None:
+        expected_root = "/workspace/ExpectedProject"
+        actual_root = "/workspace/OtherProject"
+
+        async def exercise() -> dict[str, object]:
+            server = create_server(project_root=expected_root)
+            async with server._mcp_server.lifespan(cast(Any, server)):
+                result, _ = self._send_with_fake_response(
+                    self._successful_editor_state(actual_root)
+                )
+            return result
+
+        result = _run(exercise())
+
+        self.assertEqual(False, result["success"], result)
+        self.assertEqual("EDITOR_BRIDGE_PROJECT_ROOT_MISMATCH", result["code"])
+        self.assertEqual(expected_root, result["data"]["expected_project_root"])
+        self.assertEqual(actual_root, result["data"]["actual_project_root"])
+
+    def test_lifespan_clears_expected_root_before_shutdown(self) -> None:
+        expected_root = "/workspace/ExpectedProject"
+        actual_root = "/workspace/OtherProject"
+
+        async def fail_shutdown(_session: ProjectSession) -> None:
+            raise RuntimeError("shutdown failed")
+
+        async def exercise_failed_shutdown() -> None:
+            server = create_server(project_root=expected_root)
+            with patch("prefab_sentinel.session.ProjectSession.shutdown", fail_shutdown):
+                with self.assertRaisesRegex(RuntimeError, "shutdown failed"):
+                    async with server._mcp_server.lifespan(cast(Any, server)):
+                        pass
+
+        _run(exercise_failed_shutdown())
+        try:
+            result, _ = self._send_with_fake_response(
+                self._successful_editor_state(actual_root)
+            )
+            self.assertEqual(True, result["success"], result)
+            self.assertEqual("EDITOR_CTRL_STATE_OK", result["code"])
+        finally:
+            self._clear_provider_for_failed_red_run()
+
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -4201,9 +4770,14 @@ class TestDeployBridgeCleanup(unittest.TestCase):
     def tearDown(self) -> None:
         shutil.rmtree(self._tmp, ignore_errors=True)
 
+    @staticmethod
+    def _mock_successful_refresh(mock_send: MagicMock) -> None:
+        mock_send.return_value = {"success": True}
+
     @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_removes_old_files_from_parent(self, _mock: MagicMock) -> None:
+    def test_removes_old_files_from_parent(self, mock_send: MagicMock) -> None:
         """Old PrefabSentinel.*.cs in parent dir are removed before deploy."""
+        self._mock_successful_refresh(mock_send)
         parent = self._target.parent
         old_cs = parent / "PrefabSentinel.EditorBridge.cs"
         old_meta = parent / "PrefabSentinel.EditorBridge.cs.meta"
@@ -4223,8 +4797,9 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertFalse(old_meta.exists())
 
     @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_no_old_files_no_removal(self, _mock: MagicMock) -> None:
+    def test_no_old_files_no_removal(self, mock_send: MagicMock) -> None:
         """When parent has no old files, removed_old_files is empty."""
+        self._mock_successful_refresh(mock_send)
         server = create_server(project_root=str(self._project_root))
         _, result = _run(server.call_tool(
             "deploy_bridge",
@@ -4235,8 +4810,9 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertEqual(result["data"]["removed_old_files"], [])
 
     @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_first_deploy_no_old_files(self, _mock: MagicMock) -> None:
+    def test_first_deploy_no_old_files(self, mock_send: MagicMock) -> None:
         """First deploy to a new path has no old files to clean up."""
+        self._mock_successful_refresh(mock_send)
         deep_target = self._project_root / "Assets" / "NewDir" / "SubDir" / "Bridge"
         server = create_server(project_root=str(self._project_root))
         _, result = _run(server.call_tool(
@@ -4248,8 +4824,9 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertEqual(result["data"]["removed_old_files"], [])
 
     @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_upload_handler_always_deployed(self, _mock: MagicMock) -> None:
+    def test_upload_handler_always_deployed(self, mock_send: MagicMock) -> None:
         """VRCSDKUploadHandler.cs is always copied unconditionally."""
+        self._mock_successful_refresh(mock_send)
         server = create_server(project_root=str(self._project_root))
         _, result = _run(server.call_tool(
             "deploy_bridge",
@@ -4261,8 +4838,9 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertTrue((self._target / "PrefabSentinel.VRCSDKUploadHandler.cs").exists())
 
     @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_asmdef_deployed(self, _mock: MagicMock) -> None:
+    def test_asmdef_deployed(self, mock_send: MagicMock) -> None:
         """PrefabSentinel.Editor.asmdef is copied alongside C# files."""
+        self._mock_successful_refresh(mock_send)
         server = create_server(project_root=str(self._project_root))
         _, result = _run(server.call_tool(
             "deploy_bridge",
@@ -4274,8 +4852,9 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertTrue((self._target / "PrefabSentinel.Editor.asmdef").exists())
 
     @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_no_skipped_files_in_response(self, _mock: MagicMock) -> None:
+    def test_no_skipped_files_in_response(self, mock_send: MagicMock) -> None:
         """Response data must not contain skipped_files key."""
+        self._mock_successful_refresh(mock_send)
         server = create_server(project_root=str(self._project_root))
         _, result = _run(server.call_tool(
             "deploy_bridge",
@@ -4286,8 +4865,9 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertNotIn("skipped_files", result["data"])
 
     @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_diagnostics_warn_on_old_file_removal(self, _mock: MagicMock) -> None:
+    def test_diagnostics_warn_on_old_file_removal(self, mock_send: MagicMock) -> None:
         """Diagnostics include warning when old files are removed."""
+        self._mock_successful_refresh(mock_send)
         parent = self._target.parent
         (parent / "PrefabSentinel.EditorBridge.cs").write_text("// old", encoding="utf-8")
 
@@ -4301,8 +4881,32 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertTrue(any("old Bridge" in d["message"] for d in warnings))
 
     @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_clean_redeploy_removes_all_target_files(self, _mock: MagicMock) -> None:
+    def test_cleanup_warning_sets_success_envelope_severity(
+        self,
+        mock_send: MagicMock,
+    ) -> None:
+        self._mock_successful_refresh(mock_send)
+        parent = self._target.parent
+        (parent / "PrefabSentinel.Legacy.cs").write_text("// old", encoding="utf-8")
+
+        server = create_server(project_root=str(self._project_root))
+        _, result = _run(server.call_tool(
+            "deploy_bridge",
+            {"target_dir": str(self._target)},
+        ))
+
+        self.assertTrue(result["success"])
+        self.assertEqual("warning", result["severity"])
+        warnings = [d for d in result["diagnostics"] if d["severity"] == "warning"]
+        self.assertTrue(any(
+            d["code"] == "DEPLOY_REMOVED_OLD_BRIDGE_FILES"
+            for d in warnings
+        ))
+
+    @patch("prefab_sentinel.mcp_tools_session.send_action")
+    def test_clean_redeploy_removes_all_target_files(self, mock_send: MagicMock) -> None:
         """All pre-existing files in target_dir are removed before deploy."""
+        self._mock_successful_refresh(mock_send)
         (self._target / "Dummy.cs").write_text("// dummy", encoding="utf-8")
         (self._target / "Dummy.cs.meta").write_text("guid: dummy", encoding="utf-8")
 
@@ -4317,8 +4921,9 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertFalse((self._target / "Dummy.cs.meta").exists())
 
     @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_clean_redeploy_preserves_subdirectories(self, _mock: MagicMock) -> None:
+    def test_clean_redeploy_preserves_subdirectories(self, mock_send: MagicMock) -> None:
         """Subdirectories inside target_dir survive the clean phase."""
+        self._mock_successful_refresh(mock_send)
         subdir = self._target / "subdir"
         subdir.mkdir()
         (subdir / "keep.txt").write_text("keep", encoding="utf-8")
@@ -4335,8 +4940,9 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertIsInstance(result["data"]["removed_stale_files"], list)
 
     @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_removed_stale_files_in_response(self, _mock: MagicMock) -> None:
+    def test_removed_stale_files_in_response(self, mock_send: MagicMock) -> None:
         """Stale files removed during clean phase appear in response data."""
+        self._mock_successful_refresh(mock_send)
         (self._target / "OldFile.cs").write_text("// old", encoding="utf-8")
 
         server = create_server(project_root=str(self._project_root))
@@ -4349,8 +4955,9 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertIn("OldFile.cs", result["data"]["removed_stale_files"])
 
     @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_clean_redeploy_diagnostic_message(self, _mock: MagicMock) -> None:
+    def test_clean_redeploy_diagnostic_message(self, mock_send: MagicMock) -> None:
         """Clearing files produces an info diagnostic with 'Cleared' message."""
+        self._mock_successful_refresh(mock_send)
         (self._target / "Stale.cs").write_text("// stale", encoding="utf-8")
 
         server = create_server(project_root=str(self._project_root))
@@ -4363,8 +4970,9 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertTrue(any("Cleared" in d["message"] for d in infos))
 
     @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_first_deploy_empty_removed_stale(self, _mock: MagicMock) -> None:
+    def test_first_deploy_empty_removed_stale(self, mock_send: MagicMock) -> None:
         """First deploy to empty target_dir has empty removed_stale_files."""
+        self._mock_successful_refresh(mock_send)
         fresh_target = self._project_root / "Assets" / "Editor" / "FreshDeploy"
         server = create_server(project_root=str(self._project_root))
         _, result = _run(server.call_tool(
@@ -4376,8 +4984,31 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self.assertEqual(result["data"]["removed_stale_files"], [])
 
     @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_uses_bridge_files_dir_when_available(self, _mock: MagicMock) -> None:
+    def test_returns_refresh_failure_envelope(self, mock_send: MagicMock) -> None:
+        """A failed post-copy refresh is the deploy result."""
+        refresh_failure = {
+            "success": False,
+            "severity": "error",
+            "code": "EDITOR_BRIDGE_PROJECT_ROOT_MISMATCH",
+            "message": "expected root did not match reached Unity project",
+            "data": {"action": "refresh_asset_database"},
+            "diagnostics": [],
+        }
+        mock_send.return_value = refresh_failure
+
+        server = create_server(project_root=str(self._project_root))
+        _, result = _run(server.call_tool(
+            "deploy_bridge",
+            {"target_dir": str(self._target)},
+        ))
+
+        mock_send.assert_called_once_with(action="refresh_asset_database")
+        self.assertEqual(refresh_failure, result)
+
+    @patch("prefab_sentinel.mcp_tools_session.send_action")
+    def test_uses_bridge_files_dir_when_available(self, mock_send: MagicMock) -> None:
         """When _bridge_files/ exists (wheel install), uses it over tools/unity/."""
+        self._mock_successful_refresh(mock_send)
         # Create _bridge_files in a temp dir and patch __file__ to point there
         fake_pkg = self._tmp / "fake_pkg" / "prefab_sentinel"
         fake_pkg.mkdir(parents=True)
@@ -4406,50 +5037,8 @@ class TestDeployBridgeCleanup(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# _extract_description
-# ---------------------------------------------------------------------------
 
 
-class TestExtractDescription(unittest.TestCase):
-    """_extract_description handles various frontmatter formats."""
-
-    def _extract(self, content: str) -> str:
-        """Write content to a temp file and extract description."""
-        with tempfile.NamedTemporaryFile(
-            suffix=".md", mode="w", delete=False, encoding="utf-8"
-        ) as f:
-            f.write(content)
-            f.flush()
-            path = Path(f.name)
-        try:
-            from prefab_sentinel.mcp_server import _extract_description
-            return _extract_description(path)
-        finally:
-            path.unlink(missing_ok=True)
-
-    def test_with_description_field(self) -> None:
-        content = "---\ntool: foo\ndescription: A helpful guide\n---\n# Title\n"
-        self.assertEqual("A helpful guide", self._extract(content))
-
-    def test_with_tool_field_only(self) -> None:
-        content = "---\ntool: liltoon\nversion_tested: 1.0\n---\n# Title\n"
-        self.assertEqual("liltoon knowledge", self._extract(content))
-
-    def test_no_frontmatter(self) -> None:
-        content = "# Just a markdown file\nSome content.\n"
-        result = self._extract(content)
-        # Returns the file stem (temp file name)
-        self.assertIsInstance(result, str)
-        self.assertGreater(len(result), 0)
-
-    def test_incomplete_frontmatter(self) -> None:
-        content = "---\ntool: broken\n# No closing delimiter\n"
-        result = self._extract(content)
-        self.assertIsInstance(result, str)
-
-    def test_quoted_values_stripped(self) -> None:
-        content = '---\ntool: "udonsharp"\n---\n# Title\n'
-        self.assertEqual("udonsharp knowledge", self._extract(content))
 
 
 class TestCopyAssetTool(unittest.TestCase):
@@ -4542,6 +5131,109 @@ class TestRenameAssetTool(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertEqual("CHANGE_REASON_REQUIRED", result["code"])
         mock_orch.rename_asset.assert_not_called()
+
+
+class PatchAssetDeleteToolTests(unittest.TestCase):
+    """Tests for delete_asset and delete_assets MCP tools."""
+
+    def test_delete_asset_delegates_single_path_as_batch(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.to_dict.return_value = {"success": True, "data": {"targets": []}}
+        mock_orch = MagicMock()
+        mock_orch.delete_assets.return_value = mock_resp
+
+        server = create_server()
+        with patch.object(
+            ProjectSession, "get_orchestrator", return_value=mock_orch,
+        ):
+            _, result = _run(server.call_tool(
+                "delete_asset", {"asset_path": "Assets/Foo.prefab"},
+            ))
+
+        self.assertTrue(result["success"])
+        mock_orch.delete_assets.assert_called_once_with(
+            ["Assets/Foo.prefab"],
+            scope=None,
+            dry_run=True,
+            confirm=False,
+            change_reason=None,
+        )
+
+    def test_delete_assets_defaults_to_dry_run(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.to_dict.return_value = {"success": True, "data": {"targets": []}}
+        mock_orch = MagicMock()
+        mock_orch.delete_assets.return_value = mock_resp
+
+        server = create_server()
+        with patch.object(
+            ProjectSession, "get_orchestrator", return_value=mock_orch,
+        ):
+            _, result = _run(server.call_tool(
+                "delete_assets", {"asset_paths": ["Assets/Foo.prefab"]},
+            ))
+
+        self.assertTrue(result["success"])
+        mock_orch.delete_assets.assert_called_once_with(
+            ["Assets/Foo.prefab"],
+            scope=None,
+            dry_run=True,
+            confirm=False,
+            change_reason=None,
+        )
+
+    def test_delete_assets_confirmed_apply_passes_resolved_scope_and_reason(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.to_dict.return_value = {"success": True, "data": {"deleted_paths": []}}
+        mock_orch = MagicMock()
+        mock_orch.delete_assets.return_value = mock_resp
+
+        server = create_server()
+        with (
+            patch.object(ProjectSession, "get_orchestrator", return_value=mock_orch),
+            patch.object(ProjectSession, "resolve_scope", return_value="Assets/Resolved"),
+        ):
+            _, result = _run(server.call_tool(
+                "delete_assets",
+                {
+                    "asset_paths": ["Assets/Foo.prefab"],
+                    "scope": "feature",
+                    "dry_run": False,
+                    "confirm": True,
+                    "change_reason": "remove obsolete asset",
+                },
+            ))
+
+        self.assertTrue(result["success"])
+        mock_orch.delete_assets.assert_called_once_with(
+            ["Assets/Foo.prefab"],
+            scope="Assets/Resolved",
+            dry_run=False,
+            confirm=True,
+            change_reason="remove obsolete asset",
+        )
+
+    def test_delete_assets_confirmed_apply_requires_change_reason(self) -> None:
+        mock_orch = MagicMock()
+        server = create_server()
+        with patch.object(
+            ProjectSession, "get_orchestrator", return_value=mock_orch,
+        ):
+            _, result = _run(server.call_tool(
+                "delete_assets",
+                {
+                    "asset_paths": ["Assets/Foo.prefab"],
+                    "dry_run": False,
+                    "confirm": True,
+                    "change_reason": "",
+                },
+            ))
+
+        self.assertEqual(
+            (False, "CHANGE_REASON_REQUIRED"),
+            (result["success"], result["code"]),
+        )
+        mock_orch.delete_assets.assert_not_called()
 
 
 class TestSetMaterialPropertyTool(unittest.TestCase):

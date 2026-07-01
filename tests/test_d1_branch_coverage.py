@@ -52,7 +52,7 @@ class PatchExecutorBranchTests(unittest.TestCase):
         self.assertEqual(2, diff["after"])
 
     def test_set_missing_leaf_raises_key_error(self) -> None:
-        payload = {"a": {}}
+        payload: dict[str, object] = {"a": {}}
         with self.assertRaises(KeyError) as cm:
             apply_op(payload, {"op": "set", "path": "a.missing", "value": 0})
         self.assertEqual(("missing",), cm.exception.args)

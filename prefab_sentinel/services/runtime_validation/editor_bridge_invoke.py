@@ -43,8 +43,10 @@ def invoke_via_editor_bridge(
     scene_path: str | None,
     profile: str | None,
     relative_fn: Callable[[Path], str],
+    confirm: bool = False,
+    change_reason: str | None = None,
+    allow_dirty_before: bool = False,
 ) -> ToolResponse:
-    """Send a runtime validation request via the editor bridge file watcher."""
     watch_dir_raw = os.environ.get(BRIDGE_WATCH_DIR_ENV, "").strip()
     if not watch_dir_raw:
         return error_response(
@@ -87,14 +89,14 @@ def invoke_via_editor_bridge(
         "scene_path": to_windows_path(scene_path) if scene_path else "",
         "profile": profile or "",
         "timeout_sec": timeout_sec,
+        "confirm": confirm,
+        "change_reason": change_reason or "",
+        "allow_dirty_before": allow_dirty_before,
     }
 
     try:
         watch_dir.mkdir(parents=True, exist_ok=True)
-        tmp_file.write_text(
-            dump_json(payload, indent=None),
-            encoding="utf-8",
-        )
+        tmp_file.write_text(dump_json(payload, indent=None), encoding="utf-8")
         tmp_file.rename(request_file)
     except OSError as exc:
         return error_response(
@@ -158,11 +160,113 @@ def invoke_via_editor_bridge(
             "profile": profile,
             "timeout_sec": timeout_sec,
             "request_file": str(request_file),
-            # ``bridge_mode`` is always "editor" since the batchmode dispatch
-            # path was removed in issue #270; retained as a stable transport
-            # tag for response-shape callers.
             "bridge_mode": "editor",
             "read_only": False,
             "executed": False,
+        },
+    )
+
+
+def _clientsim_side_effect_codes(report: object) -> list[str]:
+    if not isinstance(report, dict):
+        return []
+    if report.get("diff_complete") is False:
+        return ["CLIENTSIM_SIDE_EFFECT_DIFF_UNAVAILABLE"]
+    changed_keys = (
+        "added_gameobjects",
+        "removed_gameobjects",
+        "added_components",
+        "removed_components",
+        "asset_change_candidates",
+    )
+    if any(report.get(key) for key in changed_keys):
+        return ["CLIENTSIM_SIDE_EFFECT_DIFF_DETECTED"]
+    if report.get("dirty_before") != report.get("dirty_after"):
+        return ["CLIENTSIM_SIDE_EFFECT_DIFF_DETECTED"]
+    if report.get("dirty_count_before") != report.get("dirty_count_after"):
+        return ["CLIENTSIM_SIDE_EFFECT_DIFF_DETECTED"]
+    return []
+
+
+def with_clientsim_side_effect_diagnostics(response: ToolResponse) -> ToolResponse:
+    from prefab_sentinel.contracts import Diagnostic, Severity, max_severity
+
+    codes = _clientsim_side_effect_codes(response.data.get("side_effect_report"))
+    if not codes:
+        return response
+
+    messages = {
+        "CLIENTSIM_SIDE_EFFECT_DIFF_UNAVAILABLE": "ClientSim side-effect diff could not be fully collected.",
+        "CLIENTSIM_SIDE_EFFECT_DIFF_DETECTED": "ClientSim side-effect diff detected scene, hierarchy, component, dirty, or asset candidates.",
+    }
+    diagnostics = [
+        *response.diagnostics,
+        *[
+            Diagnostic(
+                path=str(response.data.get("scene_path", "")),
+                location="",
+                detail=code,
+                evidence=messages[code],
+                severity=Severity.WARNING.value,
+            )
+            for code in codes
+        ],
+    ]
+    return ToolResponse(
+        success=response.success,
+        severity=max_severity([response.severity, Severity.WARNING]),
+        code=response.code,
+        message=response.message,
+        data=response.data,
+        diagnostics=diagnostics,
+    )
+
+
+def collect_editor_console_via_bridge(
+    *,
+    since_timestamp: str | None = None,
+    max_lines: int = 4000,
+) -> ToolResponse:
+    from prefab_sentinel.contracts import success_response
+    from prefab_sentinel.editor_bridge import send_action
+
+    max_entries = min(max(max_lines, 1), 1000)
+    response = send_action(
+        action="capture_console_logs",
+        max_entries=max_entries,
+        since_seconds=0.0,
+        order="oldest_first",
+    )
+    data = response.get("data")
+    if not response.get("success") or not isinstance(data, dict):
+        return error_response(
+            str(response.get("code", "RUN_EDITOR_CONSOLE_ERROR")),
+            str(response.get("message", "Editor console capture failed.")),
+            data={
+                "since_timestamp": since_timestamp,
+                "read_only": True,
+                "executed": bool(isinstance(data, dict) and data.get("executed", False)),
+                "bridge_response": response,
+            },
+        )
+
+    entries = data.get("entries", [])
+    log_lines: list[str] = []
+    if isinstance(entries, list):
+        for entry in entries:
+            if isinstance(entry, dict):
+                message = entry.get("message", "")
+                log_type = entry.get("log_type", "")
+                if isinstance(message, str):
+                    log_lines.append(f"[{log_type}] {message}" if log_type else message)
+    return success_response(
+        "RUN_EDITOR_CONSOLE_COLLECTED",
+        "Editor Bridge console entries collected.",
+        data={
+            "line_count": len(log_lines),
+            "log_lines": log_lines,
+            "since_timestamp": since_timestamp,
+            "read_only": True,
+            "executed": True,
         },
     )

@@ -17,38 +17,12 @@ from typing import Any
 from unittest import mock
 
 from prefab_sentinel import mcp_tools_editor_batch
+from tests._mcp_tool_recorder import ToolRecorderServer, record_tools
+from tests._typing_helpers import require_mapping
 
 
-class _RecorderServer:
-    """Minimal ``FastMCP``-compatible recorder.
-
-    The production module decorates each tool with ``@server.tool()``;
-    the recorder collects the decorated callables by name so the tests
-    can drive them directly.
-    """
-
-    def __init__(self) -> None:
-        self.registered: dict[str, Any] = {}
-
-    def tool(self, *args: Any, **kwargs: Any):  # noqa: D401, ANN401
-        # Issue #260: honour the FastMCP ``@server.tool(name="...")``
-        # convention.  When the caller supplies a non-empty ``name``
-        # kwarg the registry key is that explicit external name;
-        # otherwise the recorder falls back to the Python function
-        # name so legacy ``@server.tool()`` registrations keep working.
-        explicit_name = kwargs.get("name")
-        def _decorator(fn):  # noqa: ANN001
-            key = explicit_name if explicit_name else fn.__name__
-            self.registered[key] = fn
-            return fn
-
-        return _decorator
-
-
-def _register() -> _RecorderServer:
-    server = _RecorderServer()
-    mcp_tools_editor_batch.register_editor_batch_tools(server)  # type: ignore[arg-type]
-    return server
+def _register() -> ToolRecorderServer:
+    return record_tools(mcp_tools_editor_batch.register_editor_batch_tools)
 
 
 _DOCUMENTED_TOOLS = {
@@ -68,26 +42,15 @@ _DOCUMENTED_TOOLS = {
 
 
 class RecorderServerNameKwargTests(unittest.TestCase):
-    """Issue #260 — ``_RecorderServer.tool`` keys the registered
-    callable by the explicit ``name=`` kwarg when supplied, otherwise
-    by the Python function's own name.
-
-    The production module uses ``@server.tool(name="editor_screenshot")``
-    decorators whose Python function names diverge from the registered
-    external names (``_editor_screenshot`` etc.).  If the recorder
-    ignored ``name=``, the registration suite would observe the wrong
-    keys and the bug would silently mask renames.
-    """
+    """Issue #260 — recorder registration follows FastMCP name rules."""
 
     def test_explicit_name_kwarg_is_used_as_registration_key(self) -> None:
-        server = _RecorderServer()
+        server = ToolRecorderServer()
 
         @server.tool(name="alt")
         def _python_name_differs() -> None:
             return None
 
-        # Pin: registered under the explicit kwarg value; the Python
-        # function's own name is NOT a registry key.
         self.assertEqual(
             (True, False),
             (
@@ -102,15 +65,12 @@ class RecorderServerNameKwargTests(unittest.TestCase):
         )
 
     def test_function_name_fallback_when_kwarg_omitted(self) -> None:
-        server = _RecorderServer()
+        server = ToolRecorderServer()
 
         @server.tool()
         def f() -> None:
             return None
 
-        # When no name= kwarg is supplied the recorder must fall back
-        # to the Python function name so legacy registrations keep
-        # working.
         self.assertEqual(
             (True, f),
             ("f" in server.registered, server.registered.get("f")),
@@ -324,7 +284,10 @@ class EditorBatchRoutingTests(unittest.TestCase):
 
     def test_save_scene_without_audit_pair_rejected(self) -> None:
         # Issue #49: editor_save_scene gates on the audit pair.
-        response = self.server.registered["editor_save_scene"]()
+        response = require_mapping(
+            self.server.registered["editor_save_scene"](),
+            "editor_save_scene response",
+        )
         self.assertEqual("CHANGE_REASON_REQUIRED", response["code"])
         self.mock_send.assert_not_called()
 
@@ -341,8 +304,11 @@ class EditorBatchRoutingTests(unittest.TestCase):
 
     def test_create_scene_without_audit_pair_rejected(self) -> None:
         # Issue #49: editor_create_scene gates on the audit pair.
-        response = self.server.registered["editor_create_scene"](
-            asset_path="Assets/Scenes/New.unity",
+        response = require_mapping(
+            self.server.registered["editor_create_scene"](
+                asset_path="Assets/Scenes/New.unity",
+            ),
+            "editor_create_scene response",
         )
         self.assertEqual("CHANGE_REASON_REQUIRED", response["code"])
         self.mock_send.assert_not_called()
@@ -406,7 +372,7 @@ class EditorBatchSetBlendShapeNoAuditTests(unittest.TestCase):
 
     def test_confirm_argument_raises_type_error(self) -> None:
         with self.assertRaises(TypeError) as cm:
-            mcp_tools_editor_batch.editor_batch_set_blend_shape(
+            mcp_tools_editor_batch.editor_batch_set_blend_shape(  # type: ignore[call-arg]  # intentional no-audit-pair probe
                 hierarchy_path="/Avatar/Body",
                 shapes=[{"name": "Smile", "weight": 50.0}],
                 confirm=True,

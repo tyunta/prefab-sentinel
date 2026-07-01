@@ -213,7 +213,8 @@ namespace PrefabSentinel
                     };
                     EditorApplication.CallbackFunction reloadPoll =
                         BuildRecompileReloadWaitPoll(
-                            responsePath, deadlineMs, callTimeReloadCount,
+                            responsePath, callTimeMs, deadlineMs,
+                            callTimeReloadCount, "execute_menu_item",
                             "execute_menu_item: timed out after domain reload "
                             + "before AssemblyReloadCount advanced.",
                             BuildMenuExecuteReloadComplete(menuPath, responsePath));
@@ -221,6 +222,22 @@ namespace PrefabSentinel
                 },
                 onDeadlineExceeded = () =>
                 {
+                    long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                    bool? editorFocused = ObserveEditorFocused();
+                    if (BackgroundCompileDeferralClassifier.Classify(
+                        editorFocused, deadlineElapsed: true))
+                    {
+                        PendingAsyncRunner.Complete(responsePath);
+                        WriteResponse(responsePath,
+                            BuildCompileDeferredBackgroundResponse(
+                                "execute_menu_item",
+                                (nowMs - callTimeMs) / 1000f,
+                                (deadlineMs - callTimeMs) / 1000f,
+                                EditorApplication.isCompiling,
+                                jobRetained: false,
+                                cleanupPerformed: false));
+                        return;
+                    }
                     PendingAsyncRunner.Complete(responsePath);
                     WriteResponse(responsePath, BuildError(
                         "EDITOR_CTRL_RECOMPILE_TIMEOUT",

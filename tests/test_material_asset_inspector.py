@@ -130,7 +130,7 @@ class TestInspectMaterialAsset(unittest.TestCase):
         with self.assertRaises(ValueError) as cm:
             inspect_material_asset(str(FIXTURES / "malformed.mat"))
         # ``ValueError`` is not on the project's infrastructure-exception
-        # allow-list, so the value-pin rule (CLAUDE.md L118) requires an
+        # allow-list, so the value-pin rule (AGENTS.md L118) requires an
         # assertion on the exception text in the same method.  Tighten
         # the previous "non-empty" pin to a substring regex on the
         # production message at ``material_asset_inspector.py:182``
@@ -168,9 +168,10 @@ class TestFormatMaterialAsset(unittest.TestCase):
 
 class TestOrchestratorInspectMaterialAsset(unittest.TestCase):
     def test_success(self) -> None:
-        orch = Phase1Orchestrator.default(project_root=FIXTURES.parent.parent)
+        project_root = FIXTURES.parent.parent
+        orch = Phase1Orchestrator.default(project_root=project_root)
         resp = orch.inspect_material_asset(
-            target_path=str(FIXTURES / "standard_textured.mat"),
+            target_path=(FIXTURES / "standard_textured.mat").relative_to(project_root).as_posix(),
         )
         self.assertTrue(resp.success)
         self.assertEqual(resp.code, "INSPECT_MATERIAL_ASSET_RESULT")
@@ -180,9 +181,12 @@ class TestOrchestratorInspectMaterialAsset(unittest.TestCase):
         self.assertIn("tree", resp.data)
 
     def test_not_mat_file(self) -> None:
-        orch = Phase1Orchestrator.default(project_root=FIXTURES.parent.parent)
+        project_root = FIXTURES.parent.parent
+        orch = Phase1Orchestrator.default(project_root=project_root)
         resp = orch.inspect_material_asset(
-            target_path=str(FIXTURES.parent / "smoke" / "basic.prefab"),
+            target_path=(FIXTURES.parent / "smoke" / "basic.prefab")
+            .relative_to(project_root)
+            .as_posix(),
         )
         assert_error_envelope(resp, code="INSPECT_MATERIAL_ASSET_NOT_MAT")
 

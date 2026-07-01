@@ -44,6 +44,7 @@ from prefab_sentinel.services.serialized_object.patch_executor import apply_op
 from prefab_sentinel.services.serialized_object.patch_json_apply import (
     apply_json_target,
 )
+from tests._typing_helpers import require_not_none
 from tests.bridge_test_helpers import write_file
 
 BASE_GUID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -224,6 +225,7 @@ class PatchDispatchEnvelopeTests(unittest.TestCase):
         self.assertIsNotNone(
             response, "prevalidator must return an envelope for invalid path"
         )
+        response = require_not_none(response, "first invalid path response")
         # Dominated-collapse: success flag, op_index (0 = first op),
         # op_count (2 ops total), target verbatim, and read_only flag
         # all pinned as one tuple.
@@ -247,6 +249,7 @@ class PatchDispatchEnvelopeTests(unittest.TestCase):
         self.assertIsNotNone(
             response, "prevalidator must return an envelope for second-op invalid path"
         )
+        response = require_not_none(response, "second invalid path response")
         self.assertEqual(1, response.data["op_index"])
 
     def test_prevalidator_skips_ops_without_path(self) -> None:
@@ -266,6 +269,7 @@ class PatchDispatchEnvelopeTests(unittest.TestCase):
         self.assertIsNotNone(
             response, "validator must return envelope for empty target"
         )
+        response = require_not_none(response, "empty target response")
         diags = response.diagnostics
         # Dominated-collapse: code, exact diagnostic count (1 — the
         # validator emits exactly one ``schema_error`` for empty target),
@@ -280,6 +284,7 @@ class PatchDispatchEnvelopeTests(unittest.TestCase):
         self.assertIsNotNone(
             response, "validator must return envelope for empty ops"
         )
+        response = require_not_none(response, "empty ops response")
         self.assertEqual(
             ("SER_PLAN_INVALID", "ops must contain at least one operation"),
             (response.code, response.diagnostics[0].evidence),

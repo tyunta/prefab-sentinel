@@ -225,6 +225,205 @@ class WhereUsedPathFormErrorPathTests(unittest.TestCase):
         self.assertIn("Assets/Referrer.asset", usage_paths)
 
 
+class WhereUsedMissingGuidScanTests(unittest.TestCase):
+    def test_scoped_missing_guid_returns_usages_with_missing_target_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            _seed_minimal_project(root)
+            missing_guid = "9999999999999999999999999999abcd"
+            raw_reference = f"{{fileID: 11400000, guid: {missing_guid}, type: 2}}"
+            write_file(
+                root / "Assets" / "Referrer.prefab",
+                "%YAML 1.1\n--- !u!114 &11400000\nMonoBehaviour:\n"
+                f"  target: {raw_reference}\n",
+            )
+            svc = ReferenceResolverService(project_root=root)
+            response = svc.where_used(missing_guid, scope="Assets")
+
+        self.assertEqual(
+            (True, "REF_WHERE_USED"),
+            (response.success, response.code),
+            msg=f"scoped missing GUID scan mismatch: {response!r}",
+        )
+        self.assertEqual(None, response.data["asset_path"])
+        self.assertEqual(True, response.data["asset_missing"])
+        self.assertEqual(1, response.data["usage_count"])
+        self.assertEqual(
+            {
+                "path": "Assets/Referrer.prefab",
+                "line": 4,
+                "column": 11,
+                "reference": raw_reference,
+            },
+            response.data["usages"][0],
+        )
+
+    def test_scoped_missing_guid_obeys_max_usages_accounting(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            _seed_minimal_project(root)
+            missing_guid = "9999999999999999999999999999bcde"
+            refs = "\n".join(
+                f"  target{i}: {{fileID: {i}, guid: {missing_guid}, type: 2}}"
+                for i in range(3)
+            )
+            write_file(
+                root / "Assets" / "Many.prefab",
+                f"%YAML 1.1\n--- !u!114 &11400000\nMonoBehaviour:\n{refs}\n",
+            )
+            svc = ReferenceResolverService(project_root=root)
+            response = svc.where_used(missing_guid, scope="Assets", max_usages=2)
+
+        self.assertEqual(
+            (True, "REF_WHERE_USED"),
+            (response.success, response.code),
+            msg=f"truncated missing GUID scan mismatch: {response!r}",
+        )
+        self.assertEqual(3, response.data["usage_count"])
+        self.assertEqual(2, response.data["returned_usages"])
+        self.assertEqual(1, response.data["truncated_usages"])
+        self.assertEqual(2, response.data["max_usages"])
+
+    def test_scoped_missing_guid_obeys_exclude_patterns(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            _seed_minimal_project(root)
+            missing_guid = "9999999999999999999999999999cdef"
+            raw_reference = f"{{fileID: 11400000, guid: {missing_guid}, type: 2}}"
+            write_file(
+                root / "Assets" / "Included.prefab",
+                f"%YAML 1.1\n--- !u!114 &1\nMonoBehaviour:\n  target: {raw_reference}\n",
+            )
+            write_file(
+                root / "Assets" / "Ignored.prefab",
+                f"%YAML 1.1\n--- !u!114 &2\nMonoBehaviour:\n  target: {raw_reference}\n",
+            )
+            svc = ReferenceResolverService(project_root=root)
+            response = svc.where_used(
+                missing_guid,
+                scope="Assets",
+                exclude_patterns=("Ignored.prefab",),
+            )
+
+        self.assertEqual(
+            (True, "REF_WHERE_USED"),
+            (response.success, response.code),
+            msg=f"excluded missing GUID scan mismatch: {response!r}",
+        )
+        self.assertEqual(["Assets/Included.prefab"], [u["path"] for u in response.data["usages"]])
+        self.assertEqual(["Ignored.prefab"], response.data["exclude_patterns"])
+
+    def test_scan_broken_reference_guid_can_be_passed_to_where_used(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            _seed_minimal_project(root)
+            missing_guid = "9999999999999999999999999999def0"
+            write_file(
+                root / "Assets" / "Broken.prefab",
+                "%YAML 1.1\n--- !u!114 &11400000\nMonoBehaviour:\n"
+                f"  target: {{fileID: 11400000, guid: {missing_guid}, type: 2}}\n",
+            )
+            svc = ReferenceResolverService(project_root=root)
+            scan = svc.scan_broken_references(scope="Assets")
+            top_guid = scan.data["top_missing_asset_guids"][0]["guid"]
+            response = svc.where_used(top_guid, scope="Assets")
+
+        self.assertEqual(missing_guid, top_guid)
+        self.assertEqual(
+            (True, "REF_WHERE_USED"),
+            (response.success, response.code),
+            msg=f"scan-to-where_used mismatch: {response!r}",
+        )
+        self.assertEqual(["Assets/Broken.prefab"], [u["path"] for u in response.data["usages"]])
+
+    def test_path_form_unreadable_meta_returns_ref001(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            _seed_minimal_project(root)
+            write_file(
+                root / "Assets" / "Target.asset",
+                "%YAML 1.1\n--- !u!114 &11400000\nMonoBehaviour:\n  m_Name: Target\n",
+            )
+            (root / "Assets" / "Target.asset.meta").mkdir()
+            svc = ReferenceResolverService(project_root=root)
+            response = svc.where_used("Assets/Target.asset", scope="Assets")
+
+        self.assertEqual((False, "REF001"), (response.success, response.code))
+        self.assertIn("target meta metadata", response.message)
+
+    def test_resolved_guid_marks_asset_present(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            _seed_minimal_project(root)
+            write_file(
+                root / "Assets" / "Target.asset",
+                "%YAML 1.1\n--- !u!114 &11400000\nMonoBehaviour:\n  m_Name: Target\n",
+            )
+            write_file(
+                root / "Assets" / "Target.asset.meta",
+                f"fileFormatVersion: 2\nguid: {_TARGET_GUID}\n",
+            )
+            write_file(
+                root / "Assets" / "Referrer.asset",
+                "%YAML 1.1\n--- !u!114 &22200000\nMonoBehaviour:\n"
+                f"  target: {{fileID: 11400000, guid: {_TARGET_GUID}, type: 2}}\n",
+            )
+            svc = ReferenceResolverService(project_root=root)
+            response = svc.where_used(_TARGET_GUID, scope="Assets")
+
+        self.assertEqual(
+            (True, "REF_WHERE_USED"),
+            (response.success, response.code),
+            msg=f"resolved GUID scan mismatch: {response!r}",
+        )
+        self.assertEqual("Assets/Target.asset", response.data["asset_path"])
+        self.assertEqual(False, response.data["asset_missing"])
+
+    def test_subdirectory_scope_limits_guid_index_root(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            _seed_minimal_project(root)
+            scoped_dir = root / "Assets" / "Editor" / "PrefabSentinel"
+            scoped_dir.mkdir(parents=True)
+            write_file(
+                scoped_dir / "Target.asset",
+                "%YAML 1.1\n--- !u!114 &11400000\nMonoBehaviour:\n  m_Name: Target\n",
+            )
+            write_file(
+                scoped_dir / "Target.asset.meta",
+                f"fileFormatVersion: 2\nguid: {_TARGET_GUID}\n",
+            )
+            write_file(
+                scoped_dir / "Referrer.asset",
+                "%YAML 1.1\n--- !u!114 &22200000\nMonoBehaviour:\n"
+                f"  target: {{fileID: 11400000, guid: {_TARGET_GUID}, type: 2}}\n",
+            )
+            write_file(
+                root / "Assets" / "Outside.asset",
+                "%YAML 1.1\n--- !u!114 &33300000\nMonoBehaviour:\n"
+                f"  target: {{fileID: 11400000, guid: {_TARGET_GUID}, type: 2}}\n",
+            )
+            svc = ReferenceResolverService(project_root=root)
+            response = svc.where_used(
+                _TARGET_GUID,
+                scope="Assets/Editor/PrefabSentinel",
+            )
+
+        self.assertEqual(
+            (True, "REF_WHERE_USED"),
+            (response.success, response.code),
+            msg=f"subdirectory where_used scan mismatch: {response!r}",
+        )
+        self.assertEqual(
+            "Assets/Editor/PrefabSentinel",
+            response.data["scan_project_root"],
+        )
+        self.assertEqual(
+            ["Assets/Editor/PrefabSentinel/Referrer.asset"],
+            [usage["path"] for usage in response.data["usages"]],
+        )
+
+
 class BuildTopMissingEntryTests(unittest.TestCase):
     """Issue #207 — value-pin matrix for
     ``services.reference_resolver._build_top_missing_entry``.
@@ -327,7 +526,7 @@ class BuildTopMissingEntryTests(unittest.TestCase):
         insertion order or in the wrong shape."""
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw).resolve()
-            counter = Counter()
+            counter: Counter[str] = Counter()
             counter["Assets/Low.prefab"] = 1
             counter["Assets/High.prefab"] = 2
             entry = _build_top_missing_entry(

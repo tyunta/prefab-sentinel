@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 
 from prefab_sentinel.bridge_constants import UNITY_PROJECT_PATH_ENV
 from prefab_sentinel.session import InvalidProjectRootError, ProjectSession
+from tests._typing_helpers import require_not_none
 from tests.yaml_helpers import (
     YAML_HEADER,
     make_gameobject,
@@ -197,7 +198,6 @@ class TestSymbolTreeCaching(unittest.TestCase):
 
     def test_cache_miss_on_mtime_change(self) -> None:
         import os
-        import time
 
         with _tmp_prefab() as path:
             session = ProjectSession()
@@ -205,9 +205,8 @@ class TestSymbolTreeCaching(unittest.TestCase):
 
             tree1 = session.get_symbol_tree(path, text)
 
-            # Touch the file to change mtime
-            time.sleep(0.05)
-            os.utime(path, None)
+            updated_mtime = path.stat().st_mtime + 1.0
+            os.utime(path, (updated_mtime, updated_mtime))
 
             tree2 = session.get_symbol_tree(path, text)
             self.assertIsNot(tree1, tree2)
@@ -368,15 +367,24 @@ class TestStatus(unittest.TestCase):
         session = ProjectSession()
         s = session.status()
 
-        # Pin every documented status field as a single dict-equality so
-        # one mutation of any flag/value names every divergent field in
-        # one failure message.  ``bridge`` is provider-specific and is
-        # excluded from the pin to keep the test independent of
-        # bridge_status() internals.
         observed = {k: v for k, v in s.items() if k != "bridge"}
+        session_id = observed.pop("session_id")
+        self.assertIsInstance(session_id, str)
+        self.assertEqual(
+            32,
+            len(session_id),
+            f"session_id should be a 32-character hex value, got {session_id!r}",
+        )
+        self.assertEqual(session_id.lower(), session_id)
+        try:
+            int(session_id, 16)
+        except ValueError as exc:
+            raise AssertionError(f"session_id should be hex, got {session_id!r}") from exc
+
         self.assertEqual(
             {
                 "project_root": None,
+                "expected_project_root": None,
                 "scope": None,
                 "orchestrator_cached": False,
                 "script_map_size": 0,
@@ -756,6 +764,7 @@ class TestBridgeVersionDetection(unittest.TestCase):
             session = ProjectSession(project_root=root)
             diag = session.check_bridge_version()
             self.assertIsNotNone(diag)
+            diag = require_not_none(diag, "bridge mismatch diagnostic")
             self.assertEqual("BRIDGE_VERSION_MISMATCH", diag["code"])
 
     def test_check_bridge_not_found_carries_unified_four_key_shape(self) -> None:
@@ -768,6 +777,7 @@ class TestBridgeVersionDetection(unittest.TestCase):
             (root / "Assets").mkdir()
             session = ProjectSession(project_root=root)
             diag = session.check_bridge_version()
+            diag = require_not_none(diag, "bridge diagnostic")
             self.assertEqual(
                 {"severity", "code", "message", "data"},
                 set(diag),

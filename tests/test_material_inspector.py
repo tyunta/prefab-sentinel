@@ -807,8 +807,9 @@ class TestOrchestratorMaterialsSerialization(unittest.TestCase):
             )
             variant.write_text(variant_text)
 
-            orch = Phase1Orchestrator.default(project_root=Path(tmpdir))
-            response = orch.inspect_materials(str(variant))
+            project_root = Path(tmpdir)
+            orch = Phase1Orchestrator.default(project_root=project_root)
+            response = orch.inspect_materials(variant.relative_to(project_root).as_posix())
             self.assertTrue(response.success)
             renderers = response.data.get("renderers", [])
             self.assertGreater(len(renderers), 0)

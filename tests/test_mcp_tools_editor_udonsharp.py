@@ -78,6 +78,8 @@ class AddUdonSharpComponentForwardingTests(_UdonSharpToolHarness):
                 hierarchy_path="/UI/Play",
                 type_full_name="VVMW.PlayController",
                 fields_json='{"defaultUrl": "https://example.com/clip.m3u8"}',
+                confirm=True,
+                change_reason="add play controller",
             )
         send.assert_called_once()
         kwargs = send.call_args.kwargs
@@ -100,6 +102,8 @@ class AddUdonSharpComponentForwardingTests(_UdonSharpToolHarness):
             self.add_tool(
                 hierarchy_path="/UI/Play",
                 type_full_name="VVMW.PlayController",
+                confirm=True,
+                change_reason="add play controller",
             )
         send.assert_called_once()
         kwargs = send.call_args.kwargs
@@ -112,8 +116,24 @@ class AddUdonSharpComponentForwardingTests(_UdonSharpToolHarness):
             resp = self.add_tool(
                 hierarchy_path="/UI/Play",
                 type_full_name="VVMW.PlayController",
+                confirm=True,
+                change_reason="add play controller",
             )
         self.assertIs(_BRIDGE_OK, resp)
+
+    def test_requires_audit_pair(self) -> None:
+        with patch.object(mcp_tools_editor_udonsharp, "send_action") as send:
+            response = self.add_tool(
+                hierarchy_path="/UI/Play",
+                type_full_name="VVMW.PlayController",
+            )
+
+        send.assert_not_called()
+        self.assertEqual(
+            (False, "error", "CHANGE_REASON_REQUIRED"),
+            (response["success"], response["severity"], response["code"]),
+            msg=f"add UdonSharp audit rejection mismatch: {response!r}",
+        )
 
 
 class SetUdonSharpFieldForwardingTests(_UdonSharpToolHarness):
@@ -126,6 +146,8 @@ class SetUdonSharpFieldForwardingTests(_UdonSharpToolHarness):
                 hierarchy_path="/UI/Play",
                 property_name="defaultUrl",
                 value="https://example.com/clip.m3u8",
+                confirm=True,
+                change_reason="set default url",
             )
         send.assert_called_once()
         kwargs = send.call_args.kwargs
@@ -148,11 +170,105 @@ class SetUdonSharpFieldForwardingTests(_UdonSharpToolHarness):
                 hierarchy_path="/UI/Play",
                 property_name="targetUdon",
                 object_reference="/Logic/UdonController",
+                confirm=True,
+                change_reason="wire target udon",
             )
         send.assert_called_once()
         kwargs = send.call_args.kwargs
         self.assertEqual("/Logic/UdonController", kwargs["object_reference"])
         self.assertNotIn("property_value", kwargs)
+
+    def test_requires_audit_pair_for_valid_write(self) -> None:
+        with patch.object(mcp_tools_editor_udonsharp, "send_action") as send:
+            response = self.set_tool(
+                hierarchy_path="/UI/Play",
+                property_name="defaultUrl",
+                value="https://example.com/clip.m3u8",
+            )
+
+        send.assert_not_called()
+        self.assertEqual(
+            (False, "error", "CHANGE_REASON_REQUIRED"),
+            (response["success"], response["severity"], response["code"]),
+            msg=f"set UdonSharp field audit rejection mismatch: {response!r}",
+        )
+
+
+class SetUdonSharpFieldArrayTests(_UdonSharpToolHarness):
+    def test_values_json_forwards_array_payload_and_expected_length(self) -> None:
+        with patch.object(
+            mcp_tools_editor_udonsharp, "send_action", return_value=_BRIDGE_OK,
+        ) as send:
+            response = self.set_tool(
+                hierarchy_path="/World/Udon",
+                property_name="labels",
+                values_json='["a","b"]',
+                expected_length=2,
+                confirm=True,
+                change_reason="set label array",
+            )
+
+        self.assertIs(response, _BRIDGE_OK)
+        self.assertEqual(
+            {
+                "action": "editor_set_udonsharp_field",
+                "hierarchy_path": "/World/Udon",
+                "field_name": "labels",
+                "values_json": '["a","b"]',
+                "values_json_present": True,
+                "expected_length": 2,
+            },
+            send.call_args.kwargs,
+            msg=f"array payload was not forwarded exactly: {send.call_args.kwargs!r}",
+        )
+
+    def test_empty_values_json_is_forwarded_as_explicit_array_input(self) -> None:
+        with patch.object(
+            mcp_tools_editor_udonsharp, "send_action", return_value=_BRIDGE_OK,
+        ) as send:
+            response = self.set_tool(
+                hierarchy_path="/World/Udon",
+                property_name="labels",
+                values_json="",
+                confirm=True,
+                change_reason="set empty label array",
+            )
+
+        self.assertIs(response, _BRIDGE_OK)
+        self.assertEqual(
+            {
+                "action": "editor_set_udonsharp_field",
+                "hierarchy_path": "/World/Udon",
+                "field_name": "labels",
+                "values_json": "",
+                "values_json_present": True,
+            },
+            send.call_args.kwargs,
+            msg=f"empty array payload did not stay explicit: {send.call_args.kwargs!r}",
+        )
+
+    def test_values_json_rejects_conflicts(self) -> None:
+        with patch.object(
+            mcp_tools_editor_udonsharp, "send_action", return_value=_BRIDGE_OK,
+        ) as send:
+            response = self.set_tool(
+                hierarchy_path="/World/Udon",
+                property_name="labels",
+                value="scalar",
+                values_json='["a"]',
+            )
+
+        send.assert_not_called()
+        self.assertEqual(
+            (False, "error", "EDITOR_CTRL_UDON_SET_FIELD_INPUT_CONFLICT", True),
+            (
+                response["success"],
+                response["severity"],
+                response["code"],
+                "values_json" in response["message"],
+            ),
+            msg=f"array conflict envelope was not specific: {response!r}",
+        )
 
 
 class SetUdonSharpFieldValidationTests(_UdonSharpToolHarness):
@@ -168,7 +284,7 @@ class SetUdonSharpFieldValidationTests(_UdonSharpToolHarness):
             )
         self.assertFalse(resp["success"])
         self.assertEqual("error", resp["severity"])
-        self.assertEqual("EDITOR_CTRL_SET_PROP_BOTH_VALUE", resp["code"])
+        self.assertEqual("EDITOR_CTRL_UDON_SET_FIELD_INPUT_CONFLICT", resp["code"])
         send.assert_not_called()
 
     def test_rejects_neither_input(self) -> None:
@@ -195,6 +311,8 @@ class WirePersistentListenerForwardingTests(_UdonSharpToolHarness):
                 target_hierarchy_path="/Logic/UdonController",
                 method="SendCustomEvent",
                 arg="OnSliderChanged",
+                confirm=True,
+                change_reason="wire slider listener",
             )
         send.assert_called_once()
         kwargs = send.call_args.kwargs
@@ -220,6 +338,23 @@ class WirePersistentListenerForwardingTests(_UdonSharpToolHarness):
                 "on the correct wire keys; event_property_name carries the "
                 "property_name value (issue #61)."
             ),
+        )
+
+    def test_requires_audit_pair(self) -> None:
+        with patch.object(mcp_tools_editor_udonsharp, "send_action") as send:
+            response = self.wire_tool(
+                hierarchy_path="/UI/Slider",
+                property_name="onValueChanged",
+                target_hierarchy_path="/Logic/UdonController",
+                method="SendCustomEvent",
+                arg="OnSliderChanged",
+            )
+
+        send.assert_not_called()
+        self.assertEqual(
+            (False, "error", "CHANGE_REASON_REQUIRED"),
+            (response["success"], response["severity"], response["code"]),
+            msg=f"wire persistent listener audit rejection mismatch: {response!r}",
         )
 
 

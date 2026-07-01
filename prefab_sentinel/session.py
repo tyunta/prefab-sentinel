@@ -7,6 +7,7 @@ import contextlib
 import logging
 import os
 import re
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -41,6 +42,7 @@ class ProjectSession:
         self._cache = SessionCacheManager()
         self._cache.project_root = project_root
         self._scope: Path | None = None
+        self._session_id = uuid.uuid4().hex
 
         self._watcher_task: asyncio.Task[None] | None = None
         self._stop_event: asyncio.Event = asyncio.Event()
@@ -247,8 +249,11 @@ class ProjectSession:
 
     def status(self) -> dict[str, Any]:
         """Return current cache diagnostics."""
+        project_root = str(self._cache.project_root) if self._cache.project_root else None
         result = self._cache.cache_status()
-        result["project_root"] = str(self._cache.project_root) if self._cache.project_root else None
+        result["project_root"] = project_root
+        result["expected_project_root"] = project_root
+        result["session_id"] = self._session_id
         result["scope"] = str(self._scope) if self._scope else None
         result["watcher_running"] = (
             self._watcher_task is not None and not self._watcher_task.done()
