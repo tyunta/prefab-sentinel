@@ -445,8 +445,8 @@ namespace PrefabSentinel
                         Test_Live_Console_Captures_Debug_Log_Matrix),
                     ("Live_Screenshot_World_Space_Ui_Framing",
                         Test_Live_Screenshot_World_Space_Ui_Framing),
-                    ("Live_Geometry_Measures_Chair_To_WatchingButton_Without_RunScript",
-                        Test_Live_Geometry_Measures_Chair_To_WatchingButton_Without_RunScript),
+                    ("Live_Geometry_Measures_Chair_To_TargetButton_Without_RunScript",
+                        Test_Live_Geometry_Measures_Chair_To_TargetButton_Without_RunScript),
                     ("Live_SetProperty_ObjectReference_Shorthand",
                         Test_Live_SetProperty_ObjectReference_Shorthand),
                     ("Live_UdonSharp_Array_Sync",
@@ -3675,27 +3675,27 @@ namespace PrefabSentinel
             }
         }
 
-        private static TestCaseResult Test_Live_Geometry_Measures_Chair_To_WatchingButton_Without_RunScript(
+        private static TestCaseResult Test_Live_Geometry_Measures_Chair_To_TargetButton_Without_RunScript(
             string prefabPath, string materialPath)
         {
-            const string name = "Live_Geometry_Measures_Chair_To_WatchingButton_Without_RunScript";
+            const string name = "Live_Geometry_Measures_Chair_To_TargetButton_Without_RunScript";
             if (!LiveUnityProbeEnabled()) return SkipLiveProbe(name);
 
             string suffix = Guid.NewGuid().ToString("N").Substring(0, 8);
             var root = new GameObject("LiveGeometryFixture_" + suffix);
             var chair = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            var watchingButton = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            var targetButton = GameObject.CreatePrimitive(PrimitiveType.Cube);
             try
             {
                 chair.name = "Chair";
-                watchingButton.name = "WatchingButton";
+                targetButton.name = "TargetButton";
                 chair.transform.SetParent(root.transform, false);
-                watchingButton.transform.SetParent(root.transform, false);
+                targetButton.transform.SetParent(root.transform, false);
                 chair.transform.localPosition = Vector3.zero;
-                watchingButton.transform.localPosition = new Vector3(3f, 0f, 0f);
+                targetButton.transform.localPosition = new Vector3(3f, 0f, 0f);
 
                 string chairPath = "/" + root.name + "/Chair";
-                string buttonPath = "/" + root.name + "/WatchingButton";
+                string buttonPath = "/" + root.name + "/TargetButton";
                 string extra = "\"hierarchy_path\":\"" + EscapeJsonString(chairPath) + "\","
                              + "\"target_path\":\"" + EscapeJsonString(buttonPath) + "\","
                              + "\"distance_mode\":\"pivot\"";

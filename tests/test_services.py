@@ -5382,27 +5382,27 @@ class TestSerializedObjectServiceProjectRoot(unittest.TestCase):
     def test_resolve_target_path_uses_project_root(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             project_root = Path(temp_dir)
-            assets_dir = project_root / "Assets" / "Tyunta"
+            assets_dir = project_root / "Assets" / "Sample"
             assets_dir.mkdir(parents=True)
             (assets_dir / "Test.prefab").write_text("%YAML 1.1\n")
 
             svc = SerializedObjectService(project_root=project_root)
-            resolved = svc._resolve_target_path("Assets/Tyunta/Test.prefab")
-            self.assertEqual(resolved, (project_root / "Assets" / "Tyunta" / "Test.prefab").resolve())
+            resolved = svc._resolve_target_path("Assets/Sample/Test.prefab")
+            self.assertEqual(resolved, (project_root / "Assets" / "Sample" / "Test.prefab").resolve())
 
     def test_resolve_target_path_no_doubling(self) -> None:
         """CWD being inside Assets/ must not cause path doubling."""
         with tempfile.TemporaryDirectory() as temp_dir:
             project_root = Path(temp_dir)
-            assets_dir = project_root / "Assets" / "Tyunta"
+            assets_dir = project_root / "Assets" / "Sample"
             assets_dir.mkdir(parents=True)
             (assets_dir / "Test.prefab").write_text("%YAML 1.1\n")
 
             svc = SerializedObjectService(project_root=project_root)
-            # Even if CWD were inside Assets/Tyunta, project_root anchors the path
-            resolved = svc._resolve_target_path("Assets/Tyunta/Test.prefab")
+            # Even if CWD were inside Assets/Sample, project_root anchors the path
+            resolved = svc._resolve_target_path("Assets/Sample/Test.prefab")
             path_str = str(resolved)
-            self.assertNotIn("Assets/Tyunta/Assets/Tyunta", path_str.replace("\\", "/"))
+            self.assertNotIn("Assets/Sample/Assets/Sample", path_str.replace("\\", "/"))
 
     def test_default_orchestrator_passes_project_root(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -5419,7 +5419,7 @@ class TestSerializedObjectServiceProjectRoot(unittest.TestCase):
         """Relative Assets/ path must be resolved via project_root before reaching the bridge."""
         with tempfile.TemporaryDirectory() as temp_dir:
             project_root = Path(temp_dir)
-            assets_dir = project_root / "Assets" / "Tyunta" / "Materials"
+            assets_dir = project_root / "Assets" / "Sample" / "Materials"
             assets_dir.mkdir(parents=True)
 
             # Bridge script that echoes the received target and resource path back
@@ -5452,7 +5452,7 @@ class TestSerializedObjectServiceProjectRoot(unittest.TestCase):
                 resource={
                     "id": "mat",
                     "kind": "material",
-                    "path": "Assets/Tyunta/Materials/Test.mat",
+                    "path": "Assets/Sample/Materials/Test.mat",
                     "mode": "create",
                 },
                 ops=[
@@ -5467,15 +5467,15 @@ class TestSerializedObjectServiceProjectRoot(unittest.TestCase):
             resource_path = response.data.get("resource_path", "")
             self.assertTrue(
                 resource_path.replace("\\", "/").endswith(
-                    "Assets/Tyunta/Materials/Test.mat"
+                    "Assets/Sample/Materials/Test.mat"
                 ),
-                f"Expected resolved path ending with Assets/Tyunta/Materials/Test.mat, "
+                f"Expected resolved path ending with Assets/Sample/Materials/Test.mat, "
                 f"got: {resource_path}",
             )
             # Must NOT contain path doubling
             normalized = resource_path.replace("\\", "/")
             self.assertNotIn(
-                "Assets/Tyunta/Assets/Tyunta",
+                "Assets/Sample/Assets/Sample",
                 normalized,
                 f"Path doubling detected in bridge request: {resource_path}",
             )

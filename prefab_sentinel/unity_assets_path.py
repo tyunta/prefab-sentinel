@@ -23,7 +23,7 @@ def has_path_doubling(path: str) -> bool:
     """Return True if *path* contains a repeated ``Assets/`` segment.
 
     Detects CWD-dependent path doubling such as
-    ``Assets/Tyunta/Assets/Tyunta/Materials/foo.mat``.
+    ``Assets/Sample/Assets/Sample/Materials/foo.mat``.
     """
     return bool(_PATH_DOUBLING_RE.search(path.replace("\\", "/")))
 

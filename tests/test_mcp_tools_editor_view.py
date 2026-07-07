@@ -921,7 +921,7 @@ class EditorScreenshotUiFramingTests(unittest.TestCase):
             mcp_tools_editor_view, "send_action", return_value=_SCREENSHOT_BRIDGE_OK,
         ) as send:
             mcp_tools_editor_view.editor_screenshot(
-                target="/Canvas/WatchingButton",
+                target="/Canvas/TargetButton",
                 target_mode="world_space_ui",
                 projection="orthographic",
                 padding_ratio=0.2,
@@ -933,7 +933,7 @@ class EditorScreenshotUiFramingTests(unittest.TestCase):
         self.assertEqual(
             (
                 "capture_screenshot",
-                "/Canvas/WatchingButton",
+                "/Canvas/TargetButton",
                 "world_space_ui",
                 "orthographic",
                 0.2,
@@ -955,7 +955,7 @@ class EditorScreenshotUiFramingTests(unittest.TestCase):
             mcp_tools_editor_view, "send_action", return_value=_SCREENSHOT_BRIDGE_OK,
         ) as send:
             mcp_tools_editor_view.editor_screenshot(
-                target="/Canvas/WatchingButton",
+                target="/Canvas/TargetButton",
                 target_mode="world_space_ui",
                 refresh=False,
             )
@@ -995,7 +995,7 @@ class EditorScreenshotUiFramingTests(unittest.TestCase):
             mcp_tools_editor_view, "send_action", return_value=bridge_response,
         ) as send:
             response = mcp_tools_editor_view.editor_screenshot(
-                target="/Canvas/WatchingButton",
+                target="/Canvas/TargetButton",
                 target_mode="world_space_ui",
                 angle="current_camera",
                 refresh=False,

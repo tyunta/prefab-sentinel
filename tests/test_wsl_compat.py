@@ -300,8 +300,8 @@ class TestResolveScopePathWsl(unittest.TestCase):
         """When scope is a Windows path, to_wsl_path is called before Path()."""
         with tempfile.TemporaryDirectory() as tmpdir:
             mock_to_wsl.return_value = tmpdir
-            result = resolve_scope_path("D:/VRChatProject/Assets", Path(tmpdir))
-            mock_to_wsl.assert_called_once_with("D:/VRChatProject/Assets")
+            result = resolve_scope_path("D:/UnitySampleProject/Assets", Path(tmpdir))
+            mock_to_wsl.assert_called_once_with("D:/UnitySampleProject/Assets")
             self.assertEqual(Path(tmpdir).resolve(), result)
 
     @patch("prefab_sentinel.unity_assets_path.to_wsl_path", side_effect=lambda p: p)
@@ -332,8 +332,8 @@ class TestFindProjectRootWsl(unittest.TestCase):
 
             from prefab_sentinel.unity_assets import find_project_root
 
-            result = find_project_root(Path("D:/VRChatProject"))
-            mock_to_wsl.assert_called_once_with("D:/VRChatProject")
+            result = find_project_root(Path("D:/UnitySampleProject"))
+            mock_to_wsl.assert_called_once_with("D:/UnitySampleProject")
             self.assertEqual(Path(tmpdir).resolve(), result)
 
 

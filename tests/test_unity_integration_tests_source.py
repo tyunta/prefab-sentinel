@@ -91,7 +91,7 @@ class TestLiveProbeInventory(unittest.TestCase):
         "Live_RunScript_Channels_Return_Without_Asset_Temp_File",
         "Live_Console_Captures_Debug_Log_Matrix",
         "Live_Screenshot_World_Space_Ui_Framing",
-        "Live_Geometry_Measures_Chair_To_WatchingButton_Without_RunScript",
+        "Live_Geometry_Measures_Chair_To_TargetButton_Without_RunScript",
         "Live_SetProperty_ObjectReference_Shorthand",
         "Live_UdonSharp_Array_Sync",
     )

@@ -219,7 +219,7 @@ class EditorRunScriptResultChannelTests(unittest.TestCase):
                 "stdout": "hello\n",
                 "return_value": {"kind": "number", "number_value": 7},
                 "outputs": [
-                    {"key": "label", "value": {"kind": "string", "string_value": "WatchingButton"}},
+                    {"key": "label", "value": {"kind": "string", "string_value": "TargetButton"}},
                     {"key": "visible", "value": {"kind": "bool", "bool_value": True}},
                 ],
                 "executed": True,
@@ -234,7 +234,7 @@ class EditorRunScriptResultChannelTests(unittest.TestCase):
             )
 
         self.assertEqual(
-            ("hello\n", 7, {"label": "WatchingButton", "visible": True}),
+            ("hello\n", 7, {"label": "TargetButton", "visible": True}),
             (
                 response["data"]["stdout"],
                 response["data"]["return_value"],

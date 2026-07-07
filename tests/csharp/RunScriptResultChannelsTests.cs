@@ -9,14 +9,14 @@ public class RunScriptResultChannelsTests
     {
         Output.BeginCapture();
 
-        Output.Add("name", "WatchingButton");
+        Output.Add("name", "TargetButton");
         Output.Add("count", 3);
         Output.Add("visible", true);
         Output.Add("labels", new[] { "left", "right" });
         RunScriptOutputSnapshot snapshot = Output.EndCapture();
 
         Assert.Equal(4, snapshot.Outputs.Length);
-        Assert.Equal(("name", "string", "WatchingButton"), (
+        Assert.Equal(("name", "string", "TargetButton"), (
             snapshot.Outputs[0].Key,
             snapshot.Outputs[0].Value.Kind,
             snapshot.Outputs[0].Value.StringValue));
