@@ -7,11 +7,11 @@ confidence: high
 
 # BlendShape Capture Pipeline
 
-VRChat アバターの大量 BlendShape (典型 500-1500 個) を Unity Editor 上で系統的に撮影し、AnimationClip として永続化する pipeline の構築 know-how。HARUNOPUPU / Selestia / VRoid 等の汎用アバター系で特に有用。
+VRChat アバターの大量 BlendShape (典型 500-1500 個) を Unity Editor 上で系統的に撮影し、AnimationClip として永続化する pipeline の構築 know-how。BlendShape 数が多い汎用アバター系で特に有用。
 
 ## 概要 (L1)
 
-VRChat アバター (特に HARUNOPUPU Fyuett や Selestia 系) は Body SkinnedMeshRenderer に 500-1500 個の BlendShape を持つことが多い。これらを系統的に撮影し、各 shape の効果を視認できるデータベースを構築すると、後段で:
+VRChat アバターは Body SkinnedMeshRenderer に 500-1500 個の BlendShape を持つことが多い。これらを系統的に撮影し、各 shape の効果を視認できるデータベースを構築すると、後段で:
 
 - 表情合成 (LLM agent が「悲しい顔」「驚き」等のリクエストから shape 組み合わせを提案)
 - FaceEmo / VRChat Expression Menu のレシピ作成
@@ -113,7 +113,7 @@ Camera state は両方とも `camera_state.json` に保存して再現可能に�
 
 ## MMD カテゴリ shape の扱い (L3)
 
-HARUNOPUPU 系アバターには `---MMD---` カテゴリ (あ/まばたき/にこり/困る/笑い/怒り/ウィンク 等の 42 シェイプ) があり、これは VRChat MMD ダンスワールドが自動駆動するための shape 群。
+一部のアバター系には `---MMD---` カテゴリ (あ/まばたき/にこり/困る/笑い/怒り/ウィンク 等の shape 群) があり、これは VRChat MMD ダンスワールドが自動駆動するための shape 群。
 
 **FaceEmo や ExpressionMenu で独自表情を作る場合、MMD カテゴリの shape を使うとダンスワールドで競合する**。ダンスワールド入場時に強制的に weight 上書きされ表情が崩れる、というユーザ事例あり。
 

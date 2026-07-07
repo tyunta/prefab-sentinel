@@ -295,10 +295,10 @@ from mcp.client.stdio import stdio_client
 params = StdioServerParameters(
     command="uvx",
     args=[
-        "--from", "/mnt/d/git/prefab-sentinel-dev[mcp]",
+        "--from", "/path/to/prefab-sentinel[mcp]",
         "prefab-sentinel-mcp",
     ],
-    env={**os.environ, "UNITYTOOL_BRIDGE_WATCH_DIR": "D:\\VRChatProject\\prefab-sentinel"},
+    env={**os.environ, "UNITYTOOL_BRIDGE_WATCH_DIR": "D:\\UnitySampleProject\\prefab-sentinel"},
 )
 async with stdio_client(params) as (read, write):
     async with ClientSession(read, write) as session:
@@ -319,11 +319,11 @@ async with stdio_client(params) as (read, write):
 1. `deploy_bridge` 直後は `Library/ScriptAssemblies/PrefabSentinel.Editor.dll` の mtime / サイズが変わっていることを確認（変化なしなら Unity がまだ import していない）。
 2. Unity Editor を**最前面に出して `Ctrl+R`** で AssetDatabase.Refresh を強制（background 化中は domain reload が保留される — グローバルメモリ `feedback-unity-background-defers-compile`）。
 3. `editor_console`（severity=error）で `CS****` が残っていないことを確認。
-4. 検証ツール（`editor_screenshot` 等）を呼んで結果を観察。screenshot は `D:\VRChatProject\<bridge-watch-dir>\screenshots\` に保存される。
+4. 検証ツール（`editor_screenshot` 等）を呼んで結果を観察。screenshot は `D:\UnitySampleProject\<bridge-watch-dir>\screenshots\` に保存される。
 
 **bridge dispatch 経路の確認**: 新しい branch を追加した bridge handler は、応答の `message` / `code` フィールドで分岐先が確認できる。例えば issue #84 の `HandleObjectCaptureScreenshot` 成功時は `"Object-capture screenshot of '...' (angle=...)"` を返し、既存 SceneView capture 経路の `"Scene view captured to ..."` と区別できる。視覚以前に文字列で経路同定する習慣をつける。
 
 **issue #92/#93/#94/#95/#98/#101/#102/#103 batch probes**:
 - Python focused: `uv run --extra mcp pytest tests/test_orchestrator_validation.py tests/test_mcp_tools_editor_exec.py tests/test_mcp_tools_editor_view.py tests/test_mcp_tools_editor_geometry.py tests/test_mcp_tools_editor_udonsharp.py tests/test_mcp_server.py tests/test_services.py`
 - Unity-free C#: `dotnet test tests/csharp/PrefabSentinel.Tests.csproj --no-restore`
-- Live Unity opt-in (`UNITYTOOL_BRIDGE_E2E_LIVE=1`): validate `profile="clientsim"` side-effect report, deterministic `editor_console` request correlation, `editor_screenshot(target_mode="world_space_ui")`, geometry chair-to-WatchingButton distance, typed `editor_set_property`, and UdonSharp `values_json` array sync. Unity-dependent bridge partials still require `deploy_bridge` + Editor compile confirmation because CI/xUnit does not compile files that reference UnityEditor / VRChat SDK assemblies.
+- Live Unity opt-in (`UNITYTOOL_BRIDGE_E2E_LIVE=1`): validate `profile="clientsim"` side-effect report, deterministic `editor_console` request correlation, `editor_screenshot(target_mode="world_space_ui")`, geometry chair-to-TargetButton distance, typed `editor_set_property`, and UdonSharp `values_json` array sync. Unity-dependent bridge partials still require `deploy_bridge` + Editor compile confirmation because CI/xUnit does not compile files that reference UnityEditor / VRChat SDK assemblies.
