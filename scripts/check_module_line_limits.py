@@ -24,6 +24,9 @@ from pathlib import Path
 DEFAULT_LIMIT = 300
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PACKAGE_ROOTS: tuple[Path, ...] = (
+    PROJECT_ROOT / "prefab_sentinel" / "effective_hierarchy",
+    PROJECT_ROOT / "prefab_sentinel" / "effective_transform_inspector",
+    PROJECT_ROOT / "prefab_sentinel" / "unity_event_listener_inspector",
     PROJECT_ROOT / "prefab_sentinel" / "services" / "prefab_variant",
     PROJECT_ROOT / "prefab_sentinel" / "services" / "runtime_validation",
     PROJECT_ROOT / "prefab_sentinel" / "services" / "serialized_object",

@@ -324,6 +324,304 @@ namespace PrefabSentinel
         /// max(D_horizontal, D_vertical).  3 is the issue body's
         /// upper bound; tests pass 4+ to verify convergence stability.
         /// </summary>
+private readonly struct ProjectedAabb
+        {
+            public ProjectedAabb(
+                double centerX,
+                double centerY,
+                double centerZ,
+                double[] rightProjection,
+                double[] upProjection,
+                double[] depthProjection)
+            {
+                CenterX = centerX;
+                CenterY = centerY;
+                CenterZ = centerZ;
+                RightProjection = rightProjection;
+                UpProjection = upProjection;
+                DepthProjection = depthProjection;
+            }
+
+            public double CenterX { get; }
+            public double CenterY { get; }
+            public double CenterZ { get; }
+            public double[] RightProjection { get; }
+            public double[] UpProjection { get; }
+            public double[] DepthProjection { get; }
+        }
+
+        private static bool TryProjectAabb(
+            float[] cornersWorld,
+            float[] cameraRightWorld,
+            float[] cameraUpWorld,
+            float[] cameraDirectionWorld,
+            out ProjectedAabb projected,
+            out string failureReason)
+        {
+            projected = default;
+            failureReason = string.Empty;
+            if (cornersWorld == null || cornersWorld.Length != 24)
+            {
+                throw new ArgumentException(
+                    "cornersWorld must carry 8 corners flattened to 24 floats.",
+                    nameof(cornersWorld));
+            }
+            RequireLength3(cameraRightWorld, nameof(cameraRightWorld));
+            RequireLength3(cameraUpWorld, nameof(cameraUpWorld));
+            RequireLength3(cameraDirectionWorld, nameof(cameraDirectionWorld));
+
+            double centerX = 0.0;
+            double centerY = 0.0;
+            double centerZ = 0.0;
+            for (int i = 0; i < 8; i++)
+            {
+                centerX += cornersWorld[i * 3 + 0];
+                centerY += cornersWorld[i * 3 + 1];
+                centerZ += cornersWorld[i * 3 + 2];
+            }
+            centerX /= 8.0;
+            centerY /= 8.0;
+            centerZ /= 8.0;
+
+            double[] rightProjection = new double[8];
+            double[] upProjection = new double[8];
+            double[] depthProjection = new double[8];
+            double maxExtentSq = 0.0;
+            for (int i = 0; i < 8; i++)
+            {
+                double dx = cornersWorld[i * 3 + 0] - centerX;
+                double dy = cornersWorld[i * 3 + 1] - centerY;
+                double dz = cornersWorld[i * 3 + 2] - centerZ;
+                rightProjection[i] = dx * cameraRightWorld[0]
+                                   + dy * cameraRightWorld[1]
+                                   + dz * cameraRightWorld[2];
+                upProjection[i] = dx * cameraUpWorld[0]
+                                + dy * cameraUpWorld[1]
+                                + dz * cameraUpWorld[2];
+                depthProjection[i] = dx * cameraDirectionWorld[0]
+                                   + dy * cameraDirectionWorld[1]
+                                   + dz * cameraDirectionWorld[2];
+                double extentSq = dx * dx + dy * dy + dz * dz;
+                if (extentSq > maxExtentSq) maxExtentSq = extentSq;
+            }
+
+            const double DegenerateEpsilon = 1e-10;
+            if (maxExtentSq < DegenerateEpsilon)
+            {
+                failureReason = FailureDegenerateAabb;
+                return false;
+            }
+
+            projected = new ProjectedAabb(
+                centerX,
+                centerY,
+                centerZ,
+                rightProjection,
+                upProjection,
+                depthProjection);
+            return true;
+        }
+
+        public static bool TryResolveBothAxesAspectForAabb(
+            float[] cornersWorld,
+            float[] cameraRightWorld,
+            float[] cameraUpWorld,
+            float[] cameraDirectionWorld,
+            float fovDegrees,
+            float margin,
+            out float aspect,
+            out string failureReason)
+        {
+            aspect = 0f;
+            failureReason = string.Empty;
+            if (!TryProjectAabb(
+                    cornersWorld,
+                    cameraRightWorld,
+                    cameraUpWorld,
+                    cameraDirectionWorld,
+                    out ProjectedAabb projected,
+                    out failureReason))
+            {
+                return false;
+            }
+
+            double tanHalfFov = Math.Tan(fovDegrees * 0.5 * Math.PI / 180.0);
+            if (!IsPositiveFinite(tanHalfFov) || !IsPositiveFinite(margin))
+            {
+                failureReason = FailureNoValidBinding;
+                return false;
+            }
+
+            double verticalK = tanHalfFov * margin;
+            if (!TrySolveAxis(
+                    projected.UpProjection,
+                    projected.DepthProjection,
+                    verticalK,
+                    out double verticalDistance,
+                    out _))
+            {
+                failureReason = FailureNoValidBinding;
+                return false;
+            }
+
+            const double MinAspect = 1e-4;
+            const double MaxAspect = 1e4;
+            if (!TrySolveHorizontalDistance(
+                    projected,
+                    tanHalfFov,
+                    margin,
+                    MinAspect,
+                    out double lowDistance)
+                || lowDistance < verticalDistance)
+            {
+                failureReason = FailureNoValidBinding;
+                return false;
+            }
+
+            double highAspect = 1.0;
+            if (!TrySolveHorizontalDistance(
+                    projected,
+                    tanHalfFov,
+                    margin,
+                    highAspect,
+                    out double highDistance))
+            {
+                failureReason = FailureNoValidBinding;
+                return false;
+            }
+            while (highDistance > verticalDistance)
+            {
+                highAspect *= 2.0;
+                if (highAspect > MaxAspect
+                    || !TrySolveHorizontalDistance(
+                        projected,
+                        tanHalfFov,
+                        margin,
+                        highAspect,
+                        out highDistance))
+                {
+                    failureReason = FailureNoValidBinding;
+                    return false;
+                }
+            }
+
+            double lowAspect = MinAspect;
+            for (int i = 0; i < 48; i++)
+            {
+                double midAspect = (lowAspect + highAspect) * 0.5;
+                if (!TrySolveHorizontalDistance(
+                        projected,
+                        tanHalfFov,
+                        margin,
+                        midAspect,
+                        out double midDistance))
+                {
+                    failureReason = FailureNoValidBinding;
+                    return false;
+                }
+                if (midDistance > verticalDistance)
+                {
+                    lowAspect = midAspect;
+                }
+                else
+                {
+                    highAspect = midAspect;
+                }
+            }
+
+            aspect = (float)highAspect;
+            return true;
+        }
+
+        public static bool ResolveOutputSizeForFitMode(
+            string fitMode,
+            int requestWidth,
+            int requestHeight,
+            int defaultWidth,
+            int defaultHeight,
+            float bothAxesAspect,
+            out int width,
+            out int height,
+            out float aspect,
+            out string failureReason)
+        {
+            width = 0;
+            height = 0;
+            aspect = 0f;
+            failureReason = string.Empty;
+            if (fitMode != "max_axis" && fitMode != "both_axes")
+            {
+                failureReason = $"Unknown fit_mode '{fitMode}'. Expected max_axis or both_axes.";
+                return false;
+            }
+            if (defaultWidth <= 0 || defaultHeight <= 0)
+            {
+                failureReason = "default dimensions must be positive.";
+                return false;
+            }
+
+            bool hasWidth = requestWidth > 0;
+            bool hasHeight = requestHeight > 0;
+            if (fitMode == "max_axis" || hasWidth || hasHeight)
+            {
+                width = hasWidth ? requestWidth : defaultWidth;
+                height = hasHeight ? requestHeight : defaultHeight;
+                aspect = width / (float)height;
+                return true;
+            }
+
+            if (!IsPositiveFinite(bothAxesAspect))
+            {
+                failureReason = "bothAxesAspect must be finite and positive.";
+                return false;
+            }
+
+            int longEdge = Math.Max(defaultWidth, defaultHeight);
+            if (bothAxesAspect >= 1f)
+            {
+                width = longEdge;
+                height = Math.Max(1, (int)Math.Round(longEdge / bothAxesAspect, MidpointRounding.AwayFromZero));
+            }
+            else
+            {
+                height = longEdge;
+                width = Math.Max(1, (int)Math.Round(longEdge * bothAxesAspect, MidpointRounding.AwayFromZero));
+            }
+            aspect = width / (float)height;
+            return true;
+        }
+
+        private static bool TrySolveHorizontalDistance(
+            ProjectedAabb projected,
+            double tanHalfFov,
+            double margin,
+            double aspect,
+            out double distance)
+        {
+            distance = 0.0;
+            double horizontalK = tanHalfFov * aspect * margin;
+            return TrySolveAxis(
+                projected.RightProjection,
+                projected.DepthProjection,
+                horizontalK,
+                out distance,
+                out _);
+        }
+
+
+
+
+
+        private static bool IsPositiveFinite(double value)
+        {
+            return !double.IsNaN(value) && !double.IsInfinity(value) && value > 0.0;
+        }
+
+        private static bool IsPositiveFinite(float value)
+        {
+            return !float.IsNaN(value) && !float.IsInfinity(value) && value > 0f;
+        }
+
         public static bool TrySolveFramingForAabb(
             float[] cornersWorld,
             float[] cameraRightWorld,
@@ -340,59 +638,14 @@ namespace PrefabSentinel
             pivotWorld = null;
             size = 0f;
             failureReason = string.Empty;
-            if (cornersWorld == null || cornersWorld.Length != 24)
+            if (!TryProjectAabb(
+                    cornersWorld,
+                    cameraRightWorld,
+                    cameraUpWorld,
+                    cameraDirectionWorld,
+                    out ProjectedAabb projected,
+                    out failureReason))
             {
-                throw new ArgumentException(
-                    "cornersWorld must carry 8 corners flattened to 24 floats.",
-                    nameof(cornersWorld));
-            }
-            RequireLength3(cameraRightWorld, nameof(cameraRightWorld));
-            RequireLength3(cameraUpWorld, nameof(cameraUpWorld));
-            RequireLength3(cameraDirectionWorld, nameof(cameraDirectionWorld));
-
-            // Translate corners so the AABB-center sits at the origin
-            // in the chosen camera basis. The pivot we solve for is
-            // expressed as (delta_h, delta_v) offsets from AABB center
-            // along (cameraRight, cameraUp); we add the AABB center
-            // back at the end.
-            double aabbCenterX = 0.0, aabbCenterY = 0.0, aabbCenterZ = 0.0;
-            for (int i = 0; i < 8; i++)
-            {
-                aabbCenterX += cornersWorld[i * 3 + 0];
-                aabbCenterY += cornersWorld[i * 3 + 1];
-                aabbCenterZ += cornersWorld[i * 3 + 2];
-            }
-            aabbCenterX /= 8.0;
-            aabbCenterY /= 8.0;
-            aabbCenterZ /= 8.0;
-
-            // Project the corners onto the three camera basis axes.
-            double[] uProj = new double[8];
-            double[] vProj = new double[8];
-            double[] hProj = new double[8];
-            double maxExtentSq = 0.0;
-            for (int i = 0; i < 8; i++)
-            {
-                double cx = cornersWorld[i * 3 + 0] - aabbCenterX;
-                double cy = cornersWorld[i * 3 + 1] - aabbCenterY;
-                double cz = cornersWorld[i * 3 + 2] - aabbCenterZ;
-                uProj[i] = cx * cameraRightWorld[0]
-                         + cy * cameraRightWorld[1]
-                         + cz * cameraRightWorld[2];
-                vProj[i] = cx * cameraUpWorld[0]
-                         + cy * cameraUpWorld[1]
-                         + cz * cameraUpWorld[2];
-                hProj[i] = cx * cameraDirectionWorld[0]
-                         + cy * cameraDirectionWorld[1]
-                         + cz * cameraDirectionWorld[2];
-                double extentSq = cx * cx + cy * cy + cz * cz;
-                if (extentSq > maxExtentSq) maxExtentSq = extentSq;
-            }
-
-            const double DegenerateEpsilon = 1e-10;
-            if (maxExtentSq < DegenerateEpsilon)
-            {
-                failureReason = FailureDegenerateAabb;
                 return false;
             }
 
@@ -400,40 +653,36 @@ namespace PrefabSentinel
             double kH = tanHalfFov * aspect * margin;
             double kV = tanHalfFov * margin;
 
-            if (!TrySolveAxis(uProj, hProj, kH, out double dH, out double deltaH))
+            if (!TrySolveAxis(projected.RightProjection, projected.DepthProjection, kH, out double dH, out double deltaH))
             {
                 failureReason = FailureNoValidBinding;
                 return false;
             }
-            if (!TrySolveAxis(vProj, hProj, kV, out double dV, out double deltaV))
+            if (!TrySolveAxis(projected.UpProjection, projected.DepthProjection, kV, out double dV, out double deltaV))
             {
                 failureReason = FailureNoValidBinding;
                 return false;
             }
 
             double dFinal = Math.Max(dH, dV);
-
-            // Re-center the non-binding axis at dFinal. The binding
-            // axis already touches both edges at dFinal (it's the
-            // axis that drove dFinal), so it does not move.
             if (dV > dH)
             {
-                deltaH = Recenter(uProj, hProj, dFinal, deltaH, recenteringIterations);
+                deltaH = Recenter(projected.RightProjection, projected.DepthProjection, dFinal, deltaH, recenteringIterations);
             }
             else if (dH > dV)
             {
-                deltaV = Recenter(vProj, hProj, dFinal, deltaV, recenteringIterations);
+                deltaV = Recenter(projected.UpProjection, projected.DepthProjection, dFinal, deltaV, recenteringIterations);
             }
 
             pivotWorld = new float[3]
             {
-                (float)(aabbCenterX
+                (float)(projected.CenterX
                     + deltaH * cameraRightWorld[0]
                     + deltaV * cameraUpWorld[0]),
-                (float)(aabbCenterY
+                (float)(projected.CenterY
                     + deltaH * cameraRightWorld[1]
                     + deltaV * cameraUpWorld[1]),
-                (float)(aabbCenterZ
+                (float)(projected.CenterZ
                     + deltaH * cameraRightWorld[2]
                     + deltaV * cameraUpWorld[2]),
             };

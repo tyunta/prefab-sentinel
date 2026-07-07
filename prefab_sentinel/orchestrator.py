@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from prefab_sentinel import (
+    orchestrator_delete,
     orchestrator_fields,
     orchestrator_inspect,
+    orchestrator_material_validation,
     orchestrator_patch,
     orchestrator_postcondition,
     orchestrator_validation,
@@ -16,6 +19,7 @@ from prefab_sentinel import (
 )
 from prefab_sentinel.contracts import ToolResponse
 from prefab_sentinel.editor_bridge import bridge_status, send_action
+from prefab_sentinel.inspection_context import ProjectInspectionContext
 from prefab_sentinel.services.prefab_variant import PrefabVariantService
 from prefab_sentinel.services.reference_resolver import ReferenceResolverService
 from prefab_sentinel.services.runtime_validation import RuntimeValidationService
@@ -30,9 +34,14 @@ class Phase1Orchestrator:
     prefab_variant: PrefabVariantService
     runtime_validation: RuntimeValidationService
     serialized_object: SerializedObjectService
+    inspection_context_provider: Callable[[], ProjectInspectionContext] | None = None
 
     @classmethod
-    def default(cls, project_root: Path | None = None) -> Phase1Orchestrator:
+    def default(
+        cls,
+        project_root: Path | None = None,
+        inspection_context_provider: Callable[[], ProjectInspectionContext] | None = None,
+    ) -> Phase1Orchestrator:
         """Create an orchestrator with default-configured service instances.
 
         Args:
@@ -50,7 +59,13 @@ class Phase1Orchestrator:
                 project_root=project_root,
                 prefab_variant=pv,
             ),
+            inspection_context_provider=inspection_context_provider,
         )
+
+    def _inspection_context_kwargs(self) -> dict[str, ProjectInspectionContext]:
+        if self.inspection_context_provider is None:
+            return {}
+        return {"inspection_context": self.inspection_context_provider()}
 
     def maybe_auto_refresh(self) -> str:
         """Trigger AssetDatabase.Refresh if Editor Bridge is connected.
@@ -77,8 +92,9 @@ class Phase1Orchestrator:
         self.reference_resolver.invalidate_text_cache(path)
 
     def invalidate_guid_index(self) -> None:
-        """Delegate GUID index invalidation to reference resolver."""
+        """Invalidate services that cache project GUID resolution state."""
         self.reference_resolver.invalidate_guid_index()
+        self.prefab_variant.invalidate_guid_index()
 
     def invalidate_before_cache(self) -> None:
         """Delegate before-cache invalidation to serialized object service."""
@@ -210,7 +226,12 @@ class Phase1Orchestrator:
             ``ToolResponse`` with ``data.affected_assets`` and ``data.conflict``.
         """
         return orchestrator_fields.validate_field_rename(
-            self.reference_resolver, script_path_or_guid, old_name, new_name, scope,
+            self.reference_resolver,
+            script_path_or_guid,
+            old_name,
+            new_name,
+            scope,
+            **self._inspection_context_kwargs(),
         )
 
     def check_field_coverage(
@@ -229,7 +250,9 @@ class Phase1Orchestrator:
             ``ToolResponse`` with ``data.unused_fields`` and ``data.orphaned_paths``.
         """
         return orchestrator_fields.check_field_coverage(
-            self.reference_resolver, scope,
+            self.reference_resolver,
+            scope,
+            **self._inspection_context_kwargs(),
         )
 
     # ------------------------------------------------------------------
@@ -268,6 +291,8 @@ class Phase1Orchestrator:
         page_size: int = orchestrator_wiring.INSPECT_WIRING_PAGE_SIZE_DEFAULT,
         summary_only: bool = False,
         script_filter: str = "",
+        include_out_of_scope_diagnostics: bool = False,
+        diagnostics_baseline: orchestrator_wiring.DiagnosticsBaseline | None = None,
     ) -> ToolResponse:
         """Analyze MonoBehaviour field wiring in a Prefab or Scene (read-only).
 
@@ -286,6 +311,11 @@ class Phase1Orchestrator:
                 list to entries whose recorded script class matches the
                 supplied identifier. Bare class names and dotted
                 fully-qualified names are both accepted (issue #227).
+            include_out_of_scope_diagnostics: When ``script_filter`` is
+                active, include diagnostic rows for non-matching
+                components in ``data.out_of_scope_diagnostics``.
+            diagnostics_baseline: Optional project-level diagnostics
+                baseline used to classify current wiring diagnostics.
 
         Returns:
             ``ToolResponse`` with ``data.components`` carrying a single
@@ -297,12 +327,16 @@ class Phase1Orchestrator:
             self.prefab_variant, self.reference_resolver, target_path,
             udon_only=udon_only, cursor=cursor, page_size=page_size,
             summary_only=summary_only, script_filter=script_filter,
+            include_out_of_scope_diagnostics=include_out_of_scope_diagnostics,
+            diagnostics_baseline=diagnostics_baseline,
+            **self._inspection_context_kwargs(),
         )
 
     def validate_all_wiring(
         self,
         *,
         target_path: str = "",
+        diagnostics_baseline: orchestrator_validation.DiagnosticsBaseline | None = None,
     ) -> ToolResponse:
         """Run inspect_wiring on all .prefab/.unity files in scope.
 
@@ -313,7 +347,11 @@ class Phase1Orchestrator:
             Aggregated null-reference summary across all scanned files.
         """
         return orchestrator_wiring.validate_all_wiring(
-            self.prefab_variant, self.reference_resolver, target_path=target_path,
+            self.prefab_variant,
+            self.reference_resolver,
+            target_path=target_path,
+            diagnostics_baseline=diagnostics_baseline,
+            **self._inspection_context_kwargs(),
         )
 
     # ------------------------------------------------------------------
@@ -327,6 +365,7 @@ class Phase1Orchestrator:
         max_depth: int | None = None,
         show_components: bool = True,
         expand_monobehaviour: bool = False,
+        expand_prefab_instances: bool = False,
     ) -> ToolResponse:
         """Build the GameObject/Transform hierarchy tree (read-only).
 
@@ -337,6 +376,8 @@ class Phase1Orchestrator:
             expand_monobehaviour: Substitute script class names for the
                 generic MonoBehaviour label when the script GUID resolves
                 through the project GUID index (issue #196).
+            expand_prefab_instances: Expand nested PrefabInstance source
+                children into an effective saved-YAML hierarchy (issue #96).
 
         Returns:
             ``ToolResponse`` with ``data.tree`` (formatted text) and
@@ -348,6 +389,46 @@ class Phase1Orchestrator:
             max_depth=max_depth,
             show_components=show_components,
             expand_monobehaviour=expand_monobehaviour,
+            expand_prefab_instances=expand_prefab_instances,
+            **self._inspection_context_kwargs(),
+        )
+
+
+    def inspect_transform_effective_values(
+        self,
+        asset_path: str,
+        symbol_path: str,
+    ) -> ToolResponse:
+        """Delegate Transform default/override/effective inspection."""
+        from prefab_sentinel.effective_transform_inspector import (
+            inspect_transform_effective_values,
+        )
+
+        return inspect_transform_effective_values(
+            self.prefab_variant,
+            asset_path,
+            symbol_path,
+        )
+
+
+    def inspect_unity_event_listeners(
+        self,
+        asset_path: str,
+        symbol_path: str,
+        component_type: str,
+        property_name: str,
+    ) -> ToolResponse:
+        """Delegate supported uGUI UnityEvent listener inspection."""
+        from prefab_sentinel.unity_event_listener_inspector import (
+            inspect_unity_event_listeners,
+        )
+
+        return inspect_unity_event_listeners(
+            self.prefab_variant,
+            asset_path,
+            symbol_path,
+            component_type,
+            property_name,
         )
 
     def inspect_materials(
@@ -364,7 +445,9 @@ class Phase1Orchestrator:
             material slots, and ``data.tree`` with a formatted text summary.
         """
         return orchestrator_inspect.inspect_materials(
-            self.prefab_variant, target_path,
+            self.prefab_variant,
+            target_path,
+            **self._inspection_context_kwargs(),
         )
 
     def inspect_material_asset(
@@ -386,6 +469,23 @@ class Phase1Orchestrator:
         """
         return orchestrator_inspect.inspect_material_asset(
             self.prefab_variant, target_path,
+            **self._inspection_context_kwargs(),
+        )
+
+
+    def validate_materials(
+        self,
+        scope: str,
+        include_details: bool = False,
+        diagnostics_baseline: orchestrator_validation.DiagnosticsBaseline | None = None,
+    ) -> ToolResponse:
+        """Run static material/shader/TMP/icon-font validation (read-only)."""
+        return orchestrator_material_validation.validate_materials(
+            self.reference_resolver,
+            scope,
+            include_details=include_details,
+            diagnostics_baseline=diagnostics_baseline,
+            **self._inspection_context_kwargs(),
         )
 
     # ------------------------------------------------------------------
@@ -466,6 +566,26 @@ class Phase1Orchestrator:
             dry_run=dry_run, change_reason=change_reason,
         )
 
+
+    def delete_assets(
+        self,
+        asset_paths: list[str],
+        *,
+        scope: str | None = None,
+        dry_run: bool = True,
+        confirm: bool = False,
+        change_reason: str | None = None,
+    ) -> ToolResponse:
+        """Delete Unity assets through the audited AssetDatabase bridge path."""
+        return orchestrator_delete.delete_assets(
+            self,
+            asset_paths,
+            scope=scope,
+            dry_run=dry_run,
+            confirm=confirm,
+            change_reason=change_reason,
+        )
+
     # ------------------------------------------------------------------
     # Validation
     # ------------------------------------------------------------------
@@ -473,6 +593,7 @@ class Phase1Orchestrator:
     def inspect_structure(
         self,
         target_path: str,
+        diagnostics_baseline: orchestrator_validation.DiagnosticsBaseline | None = None,
     ) -> ToolResponse:
         """Validate internal YAML structure of a Unity asset (read-only).
 
@@ -485,7 +606,9 @@ class Phase1Orchestrator:
             Transforms.
         """
         return orchestrator_validation.inspect_structure(
-            self.prefab_variant, target_path,
+            self.prefab_variant,
+            target_path,
+            diagnostics_baseline=diagnostics_baseline,
         )
 
     def validate_refs(
@@ -500,6 +623,7 @@ class Phase1Orchestrator:
         snapshot_save: str = "",
         snapshot_diff: str = "",
         refresh_guid_index: bool = False,
+        diagnostics_baseline: orchestrator_validation.DiagnosticsBaseline | None = None,
     ) -> ToolResponse:
         """Scan for broken GUID/fileID references in scope (read-only).
 
@@ -530,35 +654,32 @@ class Phase1Orchestrator:
             snapshot_save=snapshot_save,
             snapshot_diff=snapshot_diff,
             refresh_guid_index=refresh_guid_index,
+            diagnostics_baseline=diagnostics_baseline,
         )
 
     def validate_runtime(
         self,
         scene_path: str,
-        profile: str = "default",
+        profile: str = "compile_only",
         log_file: str | None = None,
         since_timestamp: str | None = None,
         allow_warnings: bool = False,
         max_diagnostics: int = 200,
+        confirm: bool = False,
+        change_reason: str | None = None,
+        allow_dirty_before_clientsim: bool = False,
     ) -> ToolResponse:
-        """Run the full runtime validation pipeline (compile + ClientSim + log check).
-
-        Args:
-            scene_path: Path to the ``.unity`` scene to validate.
-            profile: ClientSim profile name.
-            log_file: Optional explicit path to Unity Editor.log.
-            since_timestamp: Only classify log lines after this timestamp.
-            allow_warnings: When ``True``, warnings do not fail the assertion.
-            max_diagnostics: Cap on classified diagnostic entries.
-
-        Returns:
-            ``ToolResponse`` with ``data.steps`` containing compile_udonsharp,
-            run_clientsim, collect_unity_console, classify_errors, and
-            assert_no_critical_errors sub-step results.
-        """
         return orchestrator_validation.validate_runtime(
-            self.runtime_validation, scene_path, profile, log_file,
-            since_timestamp, allow_warnings, max_diagnostics,
+            self.runtime_validation,
+            scene_path,
+            profile,
+            log_file,
+            since_timestamp,
+            allow_warnings,
+            max_diagnostics,
+            confirm,
+            change_reason,
+            allow_dirty_before_clientsim,
         )
 
     # ------------------------------------------------------------------

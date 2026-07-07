@@ -23,7 +23,6 @@ from prefab_sentinel.unity_yaml_parser import (
 
 __all__ = [
     "COPY_SKIP_FIELDS",
-    "KNOWLEDGE_URI_PREFIX",
     "collect_symbol_paths",
     "find_block_by_file_id",
     "normalize_material_value",
@@ -32,8 +31,6 @@ __all__ = [
     "resolve_component_with_type",
     "resolve_game_object_node",
 ]
-
-KNOWLEDGE_URI_PREFIX = "resource://prefab-sentinel/knowledge/"
 
 COPY_SKIP_FIELDS = frozenset({
     "m_ObjectHideFlags",
@@ -221,5 +218,4 @@ def find_block_by_file_id(text: str, file_id: str) -> str:
             return block.text
     msg = f"No YAML block found for fileID={file_id}"
     raise ValueError(msg)
-
 

@@ -1,6 +1,6 @@
 # Testing
 
-PR を上げる前にローカルで走らせるテストの実行手順とテスト戦略の正本。ユニット / 統合 / 回帰 / mutmut の 4 系統と、CI（`ci.yml`）が回す内容、`source_text_invariant` マーカー、C# xUnit ハーネスの扱いを 1 箇所に集約する。運用ルールの正本は [CLAUDE.md](./CLAUDE.md)。
+PR を上げる前にローカルで走らせるテストの実行手順とテスト戦略の正本。ユニット / 統合 / 回帰 / mutmut の 4 系統と、CI（`ci.yml`）が回す内容、`source_text_invariant` マーカー、C# xUnit ハーネスの扱いを 1 箇所に集約する。運用ルールの正本は [AGENTS.md](./AGENTS.md)。
 
 ## Quickstart
 
@@ -13,6 +13,8 @@ uv run --extra test --extra mcp python scripts/run_unit_tests.py
 ## ユニットテスト
 
 `scripts/run_unit_tests.py` が `unittest_parallel` のラッパーで、3 段の preflight（stale `mutants/` 検出 → `mcp` extra 検出 → `unittest_parallel` 検出）を順に通してからテストを発火する。
+
+mutmut sanity tests は repository root ではなく一時コピーした isolated project root を `cwd` として実行する。sanity fixture は `prefab_sentinel/contracts.py` と専用の最小 pytest test だけをコピーし、`mutmut.__main__.cli()` を import-shim 経由で呼ぶ。これにより sanity 実行中の `mutants/` artifact は temp tree 側へ閉じ込められ、既定の `unittest_parallel` worker が repository-root `mutants/` を import 対象として観測する race と、`python -m mutmut` 経由で発生する `multiprocessing.set_start_method('fork')` double-init を作らない。repository root に既存 `mutants/` がある場合の stale preflight は引き続き exit code 3 で停止する。
 
 ```bash
 # 全テスト（並列、verbose）— `--extra mcp` は MCP サーバーをインポートする ~14 テストの collection エラー回避に必須（issue #217）
@@ -106,7 +108,7 @@ uv run mutmut results
 uv run python scripts/mutmut_score_report.py --audited-only --format markdown
 ```
 
-`mutants/` は mutmut の作業ツリーで、`.gitignore` と `[tool.ruff].extend-exclude` で除外済み（走行後の `git status` / `ruff check` には現れない）。survived は critical / trivial / equivalent の三分類で四半期レポートに記録する：critical はテストでキル、trivial は四半期 survivor 分類に証跡を残すにとどめる（`do_not_mutate` はファイルパスグロブで構造単位の trivial mutant を抑制できないため追加しない）、equivalent も四半期レポートで証跡を残す。詳細運用カデンスは [CLAUDE.md の Mutation testing 運用](./CLAUDE.md#mutation-testing-運用) を参照。
+`mutants/` は mutmut の作業ツリーで、`.gitignore` と `[tool.ruff].extend-exclude` で除外済み（走行後の `git status` / `ruff check` には現れない）。survived は critical / trivial / equivalent の三分類で四半期レポートに記録する：critical はテストでキル、trivial は四半期 survivor 分類に証跡を残すにとどめる（`do_not_mutate` はファイルパスグロブで構造単位の trivial mutant を抑制できないため追加しない）、equivalent も四半期レポートで証跡を残す。詳細運用カデンスは [AGENTS.md の Mutation testing 運用](./AGENTS.md#mutation-testing-運用) を参照。
 
 並列ワーカー数 `--max-children 180` は固定値で運用する：開発機の物理コア数（最大 64 想定）の約 3 倍に取り、CPU バウンド・I/O 待ち混在の走行で待ち時間を埋めつつ、ワーカー間で `pytest` プロセスがスラッシングしない値として実測で選定した。`mutmut` の走行状態は実行間で永続化されないため、集計は `mutmut results` を同じ走行直後に呼ぶ。
 
@@ -118,7 +120,7 @@ uv run python scripts/mutmut_score_report.py --audited-only --format markdown
 
 **非監査 low-score モジュールの監査保留** — `prefab_sentinel.watcher`（`watchfiles` 依存と Editor Bridge file-IPC ポーリングループにより unit 環境で再現できない経路を多数含む）と `prefab_sentinel.editor_bridge`（file-IPC 経由でしか執行できないハンドラ群）は監査対象 6 モジュールに含めず、`[tool.mutmut].do_not_mutate` 拡張または untestable-mark を次サイクルで議論する（issue #211）。
 
-**テストの書き方（envelope value-pinning）** — 新規テストは `tests._assertion_helpers.assert_error_envelope` を使い、code / severity / field / message-pattern を値で固定する。「例外が出る」だけのアサートはミューテーションが拾えない。`assertRaises` 系も同様に値固定が必須で、`tests/test_assertion_density.py` がリポジトリ全体を AST で歩いて全 `assertRaises` サイトにこのルールを meta-test として強制する。同じルールは [CLAUDE.md の Mutation testing 運用](./CLAUDE.md#mutation-testing-運用) にも置かれている。
+**テストの書き方（envelope value-pinning）** — 新規テストは `tests._assertion_helpers.assert_error_envelope` を使い、code / severity / field / message-pattern を値で固定する。「例外が出る」だけのアサートはミューテーションが拾えない。`assertRaises` 系も同様に値固定が必須で、`tests/test_assertion_density.py` がリポジトリ全体を AST で歩いて全 `assertRaises` サイトにこのルールを meta-test として強制する。同じルールは [AGENTS.md の Mutation testing 運用](./AGENTS.md#mutation-testing-運用) にも置かれている。
 
 ### 四半期 run チェックリスト
 
@@ -161,7 +163,7 @@ import pytest
 pytestmark = pytest.mark.source_text_invariant
 ```
 
-宣言だけで `[tool.mutmut].pytest_add_cli_args_test_selection` の `-m "not source_text_invariant"` 単一フィルタから一括除外される。per-file の `--ignore=` を増やす必要はない。新規のリポジトリ同期テスト（CLAUDE.md inventory との drift 検出など）を追加する際もこのマーカーで対応する。
+宣言だけで `[tool.mutmut].pytest_add_cli_args_test_selection` の `-m "not source_text_invariant"` 単一フィルタから一括除外される。per-file の `--ignore=` を増やす必要はない。新規のリポジトリ同期テスト（AGENTS.md inventory との drift 検出など）を追加する際もこのマーカーで対応する。
 
 ### Tier 3 — 構造不変条件のみ
 
@@ -203,10 +205,13 @@ class CsharpHarnessCollectionSkipTests(unittest.TestCase):
 
 | job | トリガ | 内容 |
 |-----|--------|------|
-| `lint` | 全 push / PR | `ruff check` → `mypy` → モジュール行数ゲート（`scripts/check_module_line_limits.py`） |
-| `unit-tests` | 全 push / PR | `uv sync --extra test --extra mcp` → `uv run python scripts/run_unit_tests.py` |
-| `changes` | 全 push / PR | `tools/unity/**` / `tests/csharp/**` / `global.json` / `ci.yml` 自身の変更を `dorny/paths-filter@v3` で検出し、`csharp` 出力フラグを立てる |
-| `csharp-tests` | `changes.outputs.csharp == 'true'` のみ起動 | `.NET SDK setup`（`global.json` で pin）→ `dotnet restore --locked-mode` → `dotnet build --no-restore --configuration Release` → `dotnet test --no-build` で `tests/csharp/` の sanity Fact を実行 |
+| `lint` | 全 push / PR / manual / weekly | `ruff check` → production-only `mypy prefab_sentinel/` → モジュール行数ゲート（`scripts/check_module_line_limits.py`） |
+| `typecheck-tests` | 全 push / PR / manual / weekly | `uv sync --extra lint --extra test --extra mcp` → full test-target `uv run mypy prefab_sentinel tests --show-error-codes` |
+| `unit-tests` | 全 push / PR / manual / weekly | `uv sync --extra test --extra mcp` → `uv run python scripts/run_unit_tests.py` |
+| `changes` | 全 push / PR / manual / weekly | `tools/unity/**` / `tests/csharp/**` / `global.json` / `ci.yml` 自身の変更を `dorny/paths-filter@v3` で検出し、`csharp` 出力フラグを立てる |
+| `csharp-tests` | `changes.outputs.csharp == 'true'` または manual | `.NET SDK setup`（`global.json` で pin）→ `dotnet restore --locked-mode` → `dotnet build --no-restore --configuration Release` → `dotnet test --no-build` で `tests/csharp/` の sanity Fact を実行 |
+
+Full test-target mypy は test 依存と MCP 依存も含むため、pre-commit には入れない。local / TAKT 検証では `uv run --extra lint mypy prefab_sentinel tests --show-error-codes` を走らせ、CI では `typecheck-tests` job が同じ対象を通常 gate として検証する。
 
 `csharp-tests` は監視対象外の PR では skip され、branch protection 上では `skipped` 状態が success として扱われる（issue #290）。
 
@@ -229,7 +234,7 @@ class CsharpHarnessCollectionSkipTests(unittest.TestCase):
 # 依存復元（plain restore は lock を再生成。CI 差分が出る場合はコミットする）
 dotnet restore tests/csharp/PrefabSentinel.Tests.csproj
 
-# ロックモード復元 → ビルド → テスト（CI と同型）
+# ロックモード復元 then ビルド then テスト（CI と同型）
 dotnet restore tests/csharp/PrefabSentinel.Tests.csproj --locked-mode
 dotnet build  tests/csharp/PrefabSentinel.Tests.csproj --no-restore --configuration Release
 dotnet test   tests/csharp/PrefabSentinel.Tests.csproj --no-build  --configuration Release
@@ -259,15 +264,19 @@ Unity の `internal` メンバを参照する必要が生じた段階で初め�
 
 ## Unity 依存 Bridge C# のコンパイル検証
 
-`tools/unity/` の C# 橋ソース 55 ファイルのうち、CI と上記 xUnit ハーネスがコンパイルするのは Unity 参照を持たない pure-logic 15 ファイルのみ。残る 40 ファイル（`UnityEditor` 参照 36 / `UnityEngine` のみ 4、うち 9 が VRChat SDK / UdonSharp surface に触れる）は **どのテストでもコンパイルされない**。これらは `source_text_invariant` の Tier 3 構造検証と `scripts/check_bridge_constants.py` の定数ドリフト検査の対象だが、いずれも型・メンバ参照を解決しない。ヘルパー抽出リファクタ（H 系）が呼び出し側を取りこぼした場合、実 Unity コンパイルでしか出ないエラー（旧入れ子型パス参照 `CS0426` / 無修飾呼び出し `CS0103` 等）が release をすり抜ける（issue #42 の実績）。
+`tools/unity/` の C# 橋ソース 57 ファイルのうち、CI と上記 xUnit ハーネスがコンパイルするのは Unity 参照を持たない pure-logic 16 ファイルのみ。残る 41 ファイル（`UnityEditor` 参照 37 / `UnityEngine` のみ 4、うち 9 が VRChat SDK / UdonSharp surface に触れる）は **どのテストでもコンパイルされない**。これらは `source_text_invariant` の Tier 3 構造検証と `scripts/check_bridge_constants.py` の定数ドリフト検査の対象だが、いずれも型・メンバ参照を解決しない。ヘルパー抽出リファクタ（H 系）が呼び出し側を取りこぼした場合、実 Unity コンパイルでしか出ないエラー（旧入れ子型パス参照 `CS0426` / 無修飾呼び出し `CS0103` 等）が release をすり抜ける（issue #42 の実績）。
 
 ### CI コンパイルゲートを入れない理由（issue #43）
 
-この 40 ファイルに対する CI 型解決ゲート（Roslyn 等）は検討の結果、採用しない。Bridge は本質的に Editor アセンブリ（`PrefabSentinel.Editor`）であり、検証が必要な 36 ファイルが `UnityEditor` に依存する。`UnityEditor.dll` には正規の再配布経路（公式 NuGet reference package 等）が存在せず — community NuGet（`Unity3D` / `UnityAssemblies` 系）はメタデータのみでローカル Unity install のパスを解決するだけ、実 DLL を含む版は `UnityEngine` のみ・旧バージョン・ライセンスがグレー — 加えて 9 ファイルが proprietary な VRChat SDK に依存する。reference assembly の調達には Unity install が不可避であり、Unity を入れる時点で「フル Unity コンパイルを避ける軽量ゲート」という前提が崩れる。GameCI 等によるフル Unity コンパイルは Unity ライセンス管理と CI 実行コストに見合わないと判断した。
+この 41 ファイルに対する CI 型解決ゲート（Roslyn 等）は検討の結果、採用しない。Bridge は本質的に Editor アセンブリ（`PrefabSentinel.Editor`）であり、検証が必要な 37 ファイルが `UnityEditor` に依存する。`UnityEditor.dll` には正規の再配布経路（公式 NuGet reference package 等）が存在せず — community NuGet（`Unity3D` / `UnityAssemblies` 系）はメタデータのみでローカル Unity install のパスを解決するだけ、実 DLL を含む版は `UnityEngine` のみ・旧バージョン・ライセンスがグレー — 加えて 9 ファイルが proprietary な VRChat SDK に依存する。reference assembly の調達には Unity install が不可避であり、Unity を入れる時点で「フル Unity コンパイルを避ける軽量ゲート」という前提が崩れる。GameCI 等によるフル Unity コンパイルは Unity ライセンス管理と CI 実行コストに見合わないと判断した。
 
 ### 安全網: 手動 deploy コンパイル確認
 
 Unity 依存 Bridge C#（`tools/unity/` の `UnityEditor` / VRChat SDK 参照ファイル）を変更したら、`deploy_bridge` で実 Unity 2022.3 + VRChat SDK プロジェクトに配置し、Unity のコンパイルがエラー 0 件であることを手動で確認する。これが現状唯一のコンパイル検証経路。pure-logic を新規抽出して Unity 非依存にできた分は xUnit ハーネス（`<Compile Include>`）へ取り込み、検証対象を段階的に CI 側へ移すことで、この未検証 surface を縮小していく。
+
+issue #112 の `editor_serialized_property_read` / `editor_serialized_property_list` / `editor_serialized_property_write` は `UnityEditorControlBridge.SerializedProperty` partial に実装されるため、Unity real-device validation はこの手動 deploy コンパイル確認の対象になる。`UnityIntegrationTests` には `SerializedPropertySmokeSupport` と `EditorCtrl_SerializedProperty_ReadListWriteDryRunNoOp` probe を置き、read / list / dry-run / confirmed write / no-op を同じ temporary GameObject で検証する。TAKT 内では source invariant までを自動確認し、実 Unity 2022.3 + VRChat SDK project で `deploy_bridge` 後に `editor_run_tests` から probe を実行することを follow-up 条件にする。
+
+Issue #116 の `editor_create_generated_asset` / `editor_move_asset` は `UnityEditorControlBridge.AssetOps` partial に実装されるため、TAKT 内では Python wrapper tests、Unity-free C# `AssetOpsPathValidation` xUnit tests、source invariant までを自動確認する。実 Unity 2022.3 + VRChat SDK project では `deploy_bridge` 後に `editor_create_generated_asset` create dry-run、create confirm、`editor_move_asset` move dry-run、move confirm、lowercase `.rendertexture` reject、case-only move reject、confirm report equality を手動 smoke し、cleanup は既存 `delete_assets` で行う。
 
 ### 安全網: dev 経路での visual 検証
 
@@ -286,10 +295,10 @@ from mcp.client.stdio import stdio_client
 params = StdioServerParameters(
     command="uvx",
     args=[
-        "--from", "/mnt/d/git/prefab-sentinel-dev[mcp]",
+        "--from", "/path/to/prefab-sentinel[mcp]",
         "prefab-sentinel-mcp",
     ],
-    env={**os.environ, "UNITYTOOL_BRIDGE_WATCH_DIR": "D:\\VRChatProject\\prefab-sentinel"},
+    env={**os.environ, "UNITYTOOL_BRIDGE_WATCH_DIR": "D:\\UnitySampleProject\\prefab-sentinel"},
 )
 async with stdio_client(params) as (read, write):
     async with ClientSession(read, write) as session:
@@ -310,6 +319,11 @@ async with stdio_client(params) as (read, write):
 1. `deploy_bridge` 直後は `Library/ScriptAssemblies/PrefabSentinel.Editor.dll` の mtime / サイズが変わっていることを確認（変化なしなら Unity がまだ import していない）。
 2. Unity Editor を**最前面に出して `Ctrl+R`** で AssetDatabase.Refresh を強制（background 化中は domain reload が保留される — グローバルメモリ `feedback-unity-background-defers-compile`）。
 3. `editor_console`（severity=error）で `CS****` が残っていないことを確認。
-4. 検証ツール（`editor_screenshot` 等）を呼んで結果を観察。screenshot は `D:\VRChatProject\<bridge-watch-dir>\screenshots\` に保存される。
+4. 検証ツール（`editor_screenshot` 等）を呼んで結果を観察。screenshot は `D:\UnitySampleProject\<bridge-watch-dir>\screenshots\` に保存される。
 
 **bridge dispatch 経路の確認**: 新しい branch を追加した bridge handler は、応答の `message` / `code` フィールドで分岐先が確認できる。例えば issue #84 の `HandleObjectCaptureScreenshot` 成功時は `"Object-capture screenshot of '...' (angle=...)"` を返し、既存 SceneView capture 経路の `"Scene view captured to ..."` と区別できる。視覚以前に文字列で経路同定する習慣をつける。
+
+**issue #92/#93/#94/#95/#98/#101/#102/#103 batch probes**:
+- Python focused: `uv run --extra mcp pytest tests/test_orchestrator_validation.py tests/test_mcp_tools_editor_exec.py tests/test_mcp_tools_editor_view.py tests/test_mcp_tools_editor_geometry.py tests/test_mcp_tools_editor_udonsharp.py tests/test_mcp_server.py tests/test_services.py`
+- Unity-free C#: `dotnet test tests/csharp/PrefabSentinel.Tests.csproj --no-restore`
+- Live Unity opt-in (`UNITYTOOL_BRIDGE_E2E_LIVE=1`): validate `profile="clientsim"` side-effect report, deterministic `editor_console` request correlation, `editor_screenshot(target_mode="world_space_ui")`, geometry chair-to-TargetButton distance, typed `editor_set_property`, and UdonSharp `values_json` array sync. Unity-dependent bridge partials still require `deploy_bridge` + Editor compile confirmation because CI/xUnit does not compile files that reference UnityEditor / VRChat SDK assemblies.

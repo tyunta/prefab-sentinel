@@ -20,6 +20,7 @@ from __future__ import annotations
 import os
 import unittest
 from pathlib import Path
+from typing import cast
 from unittest import mock
 
 from prefab_sentinel.services.serialized_object import resource_bridge
@@ -52,7 +53,7 @@ class _BridgeEnvIsolationMixin:
     """
 
     def setUp(self) -> None:
-        super().setUp()
+        cast(unittest.TestCase, super()).setUp()
         self._saved = os.environ.pop(_BRIDGE_ENV, None)
 
     def tearDown(self) -> None:
@@ -60,7 +61,7 @@ class _BridgeEnvIsolationMixin:
             os.environ[_BRIDGE_ENV] = self._saved
         else:
             os.environ.pop(_BRIDGE_ENV, None)
-        super().tearDown()
+        cast(unittest.TestCase, super()).tearDown()
 
 
 class LoadBridgeCommandEnvTests(_BridgeEnvIsolationMixin, unittest.TestCase):

@@ -151,7 +151,7 @@ class EditorCreateAnimationClipForwardingTests(unittest.TestCase):
     def test_removed_directory_stem_argument_names_raise_type_error(self) -> None:
         """Issue #53: the former (target_dir, name) signature is gone."""
         with self.assertRaises(TypeError) as cm:
-            mcp_tools_editor_animation.editor_create_animation_clip(
+            mcp_tools_editor_animation.editor_create_animation_clip(  # type: ignore[call-arg]  # intentional removed-signature probe
                 target_dir="Assets/Animations",
                 name="Wink",
                 curves=[],
@@ -220,7 +220,7 @@ class EditorApplyAnimationClipNoAuditTests(unittest.TestCase):
 
     def test_confirm_argument_raises_type_error(self) -> None:
         with self.assertRaises(TypeError) as cm:
-            mcp_tools_editor_animation.editor_apply_animation_clip(
+            mcp_tools_editor_animation.editor_apply_animation_clip(  # type: ignore[call-arg]  # intentional no-audit-pair probe
                 asset_path="Assets/Animations/Smile.anim",
                 target_hierarchy_path="/Avatar/Body",
                 confirm=True,

@@ -8,6 +8,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 from prefab_sentinel.editor_bridge import (
@@ -20,6 +21,7 @@ from prefab_sentinel.editor_bridge import (
 )
 from prefab_sentinel.editor_bridge_builders import build_create_empty_kwargs, build_set_camera_kwargs
 from prefab_sentinel.unity_assets_path import resolve_asset_path
+from tests._typing_helpers import require_mapping
 
 
 class TestCheckEditorBridgeEnv(unittest.TestCase):
@@ -173,40 +175,68 @@ class TestSendAction(unittest.TestCase):
         """Simulate Unity writing a response file."""
         with tempfile.TemporaryDirectory() as tmpdir:
             watch_dir = Path(tmpdir)
-
-            def fake_send():
-                """Write a fake response before polling starts."""
-                import time
-
-                time.sleep(0.1)
-                for f in watch_dir.iterdir():
-                    if f.name.endswith(".request.json"):
-                        base = f.name.replace(".request.json", "")
-                        resp_path = watch_dir / f"{base}.response.json"
-                        resp = {
-                            "protocol_version": PROTOCOL_VERSION,
-                            "success": True,
-                            "severity": "info",
-                            "code": "EDITOR_CTRL_SCREENSHOT_OK",
-                            "message": "Screenshot captured",
-                            "data": {
-                                "output_path": "/tmp/test.png",
-                                "view": "scene",
-                                "width": 800,
-                                "height": 600,
-                                "executed": True,
-                            },
-                            "diagnostics": [],
-                        }
-                        resp_path.write_text(json.dumps(resp), encoding="utf-8")
-                        break
+            seen_request_id: dict[str, str] = {}
+            responder_errors: list[BaseException] = []
 
             import threading
 
-            with patch.dict(
-                os.environ,
-                {BRIDGE_WATCH_DIR_ENV: tmpdir},
-                clear=False,
+            request_ready = threading.Condition()
+            observed_request: dict[str, Path] = {}
+            original_rename = Path.rename
+
+            def notifying_rename(self_path: Path, target: str | Path) -> Path:
+                renamed_path = original_rename(self_path, target)
+                target_path = Path(target)
+                if (
+                    target_path.parent == watch_dir
+                    and target_path.name.endswith(".request.json")
+                ):
+                    with request_ready:
+                        observed_request["path"] = target_path
+                        request_ready.notify_all()
+                return renamed_path
+
+            def fake_send():
+                """Write a fake response after observing the request file."""
+                with request_ready:
+                    request_seen = request_ready.wait_for(
+                        lambda: "path" in observed_request,
+                        timeout=2,
+                    )
+                if not request_seen:
+                    responder_errors.append(
+                        AssertionError("Expected request file before fake Unity response")
+                    )
+                    return
+
+                request_file = observed_request["path"]
+                base = request_file.name.replace(".request.json", "")
+                seen_request_id["value"] = base
+                resp_path = watch_dir / f"{base}.response.json"
+                resp = {
+                    "protocol_version": PROTOCOL_VERSION,
+                    "success": True,
+                    "severity": "info",
+                    "code": "EDITOR_CTRL_SCREENSHOT_OK",
+                    "message": "Screenshot captured",
+                    "data": {
+                        "output_path": "/tmp/test.png",
+                        "view": "scene",
+                        "width": 800,
+                        "height": 600,
+                        "executed": True,
+                    },
+                    "diagnostics": [],
+                }
+                resp_path.write_text(json.dumps(resp), encoding="utf-8")
+
+            with (
+                patch.dict(
+                    os.environ,
+                    {BRIDGE_WATCH_DIR_ENV: tmpdir},
+                    clear=False,
+                ),
+                patch.object(Path, "rename", notifying_rename),
             ):
                 t = threading.Thread(target=fake_send)
                 t.start()
@@ -219,9 +249,184 @@ class TestSendAction(unittest.TestCase):
                 )
                 t.join()
 
+                self.assertEqual([], responder_errors)
                 self.assertTrue(result["success"])
                 self.assertEqual("EDITOR_CTRL_SCREENSHOT_OK", result["code"])
                 self.assertEqual("/tmp/test.png", result["data"]["output_path"])
+                self.assertEqual(seen_request_id["value"], result["request_id"])
+
+
+class BridgeProjectRootMismatchTests(unittest.TestCase):
+    _OMIT_EXPECTED_ROOT = object()
+
+    def _send_with_fake_response(
+        self,
+        response_payload: dict[str, object],
+        *,
+        expected_project_root: str | None | object = _OMIT_EXPECTED_ROOT,
+    ) -> tuple[dict[str, Any], str]:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            watch_dir = Path(tmpdir)
+            seen_request_id: dict[str, str] = {}
+            responder_errors: list[BaseException] = []
+
+            import threading
+
+            request_ready = threading.Condition()
+            observed_request: dict[str, Path] = {}
+            original_rename = Path.rename
+
+            def notifying_rename(self_path: Path, target: str | Path) -> Path:
+                renamed_path = original_rename(self_path, target)
+                target_path = Path(target)
+                if target_path.parent == watch_dir and target_path.name.endswith(
+                    ".request.json"
+                ):
+                    with request_ready:
+                        observed_request["path"] = target_path
+                        request_ready.notify_all()
+                return renamed_path
+
+            def fake_send() -> None:
+                with request_ready:
+                    request_seen = request_ready.wait_for(
+                        lambda: "path" in observed_request,
+                        timeout=2,
+                    )
+                if not request_seen:
+                    responder_errors.append(
+                        AssertionError("Expected request file before fake Unity response")
+                    )
+                    return
+
+                request_file = observed_request["path"]
+                request_id = request_file.name.removesuffix(".request.json")
+                seen_request_id["value"] = request_id
+                response = dict(response_payload)
+                response.setdefault("protocol_version", PROTOCOL_VERSION)
+                response_file = watch_dir / f"{request_id}.response.json"
+                tmp_response_file = Path(str(response_file) + ".tmp")
+                tmp_response_file.write_text(
+                    json.dumps(response),
+                    encoding="utf-8",
+                )
+                tmp_response_file.rename(response_file)
+
+            with (
+                patch.dict(os.environ, {BRIDGE_WATCH_DIR_ENV: tmpdir}, clear=False),
+                patch.object(Path, "rename", notifying_rename),
+            ):
+                t = threading.Thread(target=fake_send)
+                t.start()
+                if expected_project_root is self._OMIT_EXPECTED_ROOT:
+                    result = send_action(action="get_editor_state", timeout_sec=5)
+                else:
+                    if not isinstance(expected_project_root, str):
+                        raise AssertionError(
+                            "expected_project_root must be a string when provided"
+                        )
+                    result = send_action(
+                        action="get_editor_state",
+                        timeout_sec=5,
+                        expected_project_root=expected_project_root,
+                    )
+                t.join()
+
+        self.assertEqual([], responder_errors)
+        return result, seen_request_id["value"]
+
+    def test_mismatching_project_root_returns_typed_error_with_identity(self) -> None:
+        expected_root = "/workspace/ExpectedProject"
+        actual_root = "/workspace/OtherProject"
+        result, request_id = self._send_with_fake_response(
+            {
+                "success": True,
+                "severity": "info",
+                "code": "EDITOR_CTRL_STATE_OK",
+                "message": "Editor state captured",
+                "data": {"is_playing": False},
+                "diagnostics": [],
+                "operator_context": {
+                    "project_root": actual_root,
+                    "bridge_session_id": "bridge-session-1",
+                    "bridge_instance_id": "bridge-instance-1",
+                },
+            },
+            expected_project_root=expected_root,
+        )
+
+        self.assertEqual(False, result["success"], result)
+        self.assertEqual("EDITOR_BRIDGE_PROJECT_ROOT_MISMATCH", result["code"])
+        self.assertEqual("error", result["severity"])
+        self.assertIn(expected_root, result["message"])
+        self.assertIn(actual_root, result["message"])
+        data = require_mapping(result["data"], "mismatch data")
+        self.assertEqual("get_editor_state", data["action"])
+        self.assertEqual(request_id, data["request_id"])
+        self.assertEqual(expected_root, data["expected_project_root"])
+        self.assertEqual(actual_root, data["actual_project_root"])
+        self.assertEqual("bridge-session-1", data["bridge_session_id"])
+        self.assertEqual("bridge-instance-1", data["bridge_instance_id"])
+
+    def test_expected_root_requires_actual_root_identity(self) -> None:
+        expected_root = "/workspace/ExpectedProject"
+        result, request_id = self._send_with_fake_response(
+            {
+                "success": True,
+                "severity": "info",
+                "code": "EDITOR_CTRL_STATE_OK",
+                "message": "Editor state captured",
+                "data": {},
+                "diagnostics": [],
+                "operator_context": {
+                    "bridge_session_id": "bridge-session-1",
+                    "bridge_instance_id": "bridge-instance-1",
+                },
+            },
+            expected_project_root=expected_root,
+        )
+
+        self.assertEqual(False, result["success"], result)
+        self.assertEqual("EDITOR_BRIDGE_PROJECT_ROOT_MISMATCH", result["code"])
+        self.assertIn("actual Unity project root", result["message"])
+        self.assertIn(expected_root, result["message"])
+        data = require_mapping(result["data"], "mismatch data")
+        self.assertEqual(request_id, data["request_id"])
+        self.assertEqual(expected_root, data["expected_project_root"])
+        self.assertNotIn("actual_project_root", data)
+
+    def test_matching_project_root_preserves_success_payload(self) -> None:
+        expected_root = "/workspace/ExpectedProject"
+        result, request_id = self._send_with_fake_response(
+            {
+                "success": True,
+                "severity": "info",
+                "code": "EDITOR_CTRL_STATE_OK",
+                "message": "Editor state captured",
+                "data": {"is_playing": False},
+                "diagnostics": [],
+                "operator_context": {
+                    "project_root": expected_root,
+                    "bridge_session_id": "bridge-session-1",
+                    "bridge_instance_id": "bridge-instance-1",
+                },
+            },
+            expected_project_root=expected_root,
+        )
+
+        self.assertEqual(True, result["success"], result)
+        self.assertEqual("EDITOR_CTRL_STATE_OK", result["code"])
+        self.assertEqual(request_id, result["request_id"])
+        operator_context = require_mapping(
+            result["operator_context"], "operator context"
+        )
+        data = require_mapping(result["data"], "success data")
+        self.assertEqual(expected_root, operator_context["project_root"])
+        self.assertEqual(False, data["is_playing"])
+
+
+
+
 
 
 class TestEditorBridgeSupportedActions(unittest.TestCase):
@@ -270,6 +475,11 @@ class TestSupportedActions(unittest.TestCase):
             "editor_remove_component",
             "create_udon_program_asset",
             "editor_set_property",
+            "editor_serialized_property_read",
+            "editor_serialized_property_list",
+            "editor_serialized_property_write",
+            "create_generated_asset",
+            "move_asset",
             # Issue #193: ``safe_save_prefab`` is the sole public prefab-save action.
             "safe_save_prefab",
             "editor_set_parent",
@@ -309,6 +519,12 @@ class TestSupportedActions(unittest.TestCase):
             "inspect_animation_clip",
             "create_animation_clip",
             "apply_animation_clip",
+            # Issue #98: live geometry read primitives.
+            "get_transform",
+            "get_bounds",
+            "measure_distance",
+            # Issue #114: AssetDatabase-backed asset deletion.
+            "delete_assets",
         }
         self.assertEqual(expected, SUPPORTED_ACTIONS)
 

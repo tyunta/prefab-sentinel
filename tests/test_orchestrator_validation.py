@@ -50,7 +50,7 @@ def _stable_validate_refs_snapshot(response) -> dict:
         "step_severity": step_result["severity"],
         "step_code": step_result["code"],
         # Per-category counts: broken_pptr / udon_runtime / variant_override
-        # are the published quality-gate keys (CLAUDE.md "Quality Gates").
+        # are the published quality-gate keys (AGENTS.md "Quality Gates").
         # The reference scan reports under the "categories" map which uses
         # different names; we project them onto the published keys here.
         "categories": {
@@ -128,6 +128,27 @@ guid: {VARIANT_GUID}
     )
 
 
+def _create_project_with_missing_guid_and_local_id(root: Path) -> None:
+    _create_project_with_missing_guid(root)
+    write_file(
+        root / "Assets" / "LocalBroken.prefab",
+        f"""%YAML 1.1
+--- !u!1 &100
+GameObject:
+  m_Name: LocalBroken
+--- !u!114 &200
+MonoBehaviour:
+  m_GameObject: {{fileID: 100}}
+  m_Script: {{fileID: 11500000, guid: {MISSING_GUID}, type: 3}}
+  localRef: {{fileID: 999999}}
+""",
+    )
+    write_file(
+        root / "Assets" / "LocalBroken.prefab.meta",
+        "fileFormatVersion: 2\nguid: 33333333333333333333333333333333\n",
+    )
+
+
 def _create_clean_project(root: Path) -> None:
     write_file(
         root / "Assets" / "Base.prefab",
@@ -167,6 +188,7 @@ class MissingGuidContractTests(unittest.TestCase):
             "broken_occurrences": 0,
             "categories": {"missing_asset": 0, "missing_local_id": 0},
             "categories_occurrences": {"missing_asset": 0, "missing_local_id": 0},
+            "diagnostic_keys": [],
             "ignored_missing_asset_occurrences": 0,
             "ignored_missing_asset_unique_count": 0,
             "returned_diagnostics": 0,
@@ -200,6 +222,14 @@ class MissingGuidContractTests(unittest.TestCase):
             "broken_occurrences": 1,
             "categories": {"missing_asset": 1, "missing_local_id": 0},
             "categories_occurrences": {"missing_asset": 1, "missing_local_id": 0},
+            "diagnostic_keys": [
+                {
+                    "key": f"missing_asset_guid:{MISSING_GUID}",
+                    "severity": "error",
+                    "message": "missing_asset",
+                    "data": {"category": "missing_asset", "guid": MISSING_GUID},
+                }
+            ],
             "ignored_missing_asset_occurrences": 0,
             "ignored_missing_asset_unique_count": 0,
             "returned_diagnostics": 0,
@@ -309,6 +339,194 @@ class MissingGuidContractTests(unittest.TestCase):
         )
 
 
+class DiagnosticsKeyContractTests(unittest.TestCase):
+    def test_broken_reference_scan_reports_stable_keys_without_details(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_project_with_missing_guid_and_local_id(root)
+            resolver = ReferenceResolverService(project_root=root)
+
+            without_details = resolver.scan_broken_references(
+                scope="Assets",
+                include_diagnostics=False,
+            )
+            with_details = resolver.scan_broken_references(
+                scope="Assets",
+                include_diagnostics=True,
+            )
+
+        expected_keys = [
+            {
+                "key": f"missing_asset_guid:{MISSING_GUID}",
+                "severity": "error",
+                "message": "missing_asset",
+                "data": {"category": "missing_asset", "guid": MISSING_GUID},
+            },
+            {
+                "key": "missing_local_id_local:Assets/LocalBroken.prefab:999999",
+                "severity": "error",
+                "message": "missing_local_id",
+                "data": {
+                    "category": "missing_local_id",
+                    "source_path": "Assets/LocalBroken.prefab",
+                    "file_id": "999999",
+                },
+            },
+        ]
+        for response in (without_details, with_details):
+            self.assertEqual(
+                (2, {"missing_asset": 1, "missing_local_id": 1}),
+                (response.data["broken_count"], response.data["categories"]),
+            )
+            self.assertEqual(expected_keys, response.data.get("diagnostic_keys"))
+
+
+class DiagnosticsBaselineValidateRefsTests(unittest.TestCase):
+    SECOND_MISSING_GUID = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+
+    def test_validate_refs_classifies_current_keys_without_downgrading_ref001(self) -> None:
+        from prefab_sentinel.diagnostics_baseline import DiagnosticsBaseline
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_project_with_missing_guid(root)
+            write_file(
+                root / "Assets" / "SecondMissing.prefab",
+                f"""%YAML 1.1
+--- !u!1 &100
+GameObject:
+  m_Name: SecondMissing
+--- !u!114 &200
+MonoBehaviour:
+  m_GameObject: {{fileID: 100}}
+  m_Script: {{fileID: 11500000, guid: {self.SECOND_MISSING_GUID}, type: 3}}
+""",
+            )
+            write_file(
+                root / "Assets" / "SecondMissing.prefab.meta",
+                "fileFormatVersion: 2\nguid: 44444444444444444444444444444444\n",
+            )
+            resolver = ReferenceResolverService(project_root=root)
+            baseline = DiagnosticsBaseline(
+                known_diagnostics=(f"missing_asset_guid:{MISSING_GUID}",),
+                path=str(root / "config" / "diagnostics_baseline.json"),
+                status="loaded",
+            )
+
+            response = validate_refs(
+                resolver,
+                scope="Assets",
+                diagnostics_baseline=baseline,
+            )
+
+        scan_data = response.data["steps"][0]["result"]["data"]
+        self.assertEqual((False, "REF001", Severity.ERROR), (response.success, response.code, response.severity))
+        self.assertEqual((2, {"missing_asset": 2, "missing_local_id": 0}), (scan_data["broken_count"], scan_data["categories"]))
+        self.assertEqual(
+            {
+                "new_count": 1,
+                "known_count": 1,
+                "resolved_count": 0,
+                "new_keys": [f"missing_asset_guid:{self.SECOND_MISSING_GUID}"],
+                "known_keys": [f"missing_asset_guid:{MISSING_GUID}"],
+                "resolved_keys": [],
+            },
+            {
+                "new_count": response.data.get("diagnostics_baseline", {}).get("new_count"),
+                "known_count": response.data.get("diagnostics_baseline", {}).get("known_count"),
+                "resolved_count": response.data.get("diagnostics_baseline", {}).get("resolved_count"),
+                "new_keys": [
+                    item["key"]
+                    for item in response.data.get("diagnostics_baseline", {}).get("new", [])
+                ],
+                "known_keys": [
+                    item["key"]
+                    for item in response.data.get("diagnostics_baseline", {}).get("known", [])
+                ],
+                "resolved_keys": [
+                    item["key"]
+                    for item in response.data.get("diagnostics_baseline", {}).get("resolved", [])
+                ],
+            },
+        )
+
+    def test_validate_refs_with_baseline_preserves_invalid_ignore_guid_error(self) -> None:
+        from prefab_sentinel.diagnostics_baseline import DiagnosticsBaseline
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_project_with_missing_guid(root)
+            resolver = ReferenceResolverService(project_root=root)
+            baseline = DiagnosticsBaseline(
+                known_diagnostics=(),
+                path=str(root / "config" / "diagnostics_baseline.json"),
+                status="loaded",
+            )
+
+            try:
+                response = validate_refs(
+                    resolver,
+                    scope="Assets",
+                    ignore_asset_guids=("not-a-guid",),
+                    diagnostics_baseline=baseline,
+                )
+            except KeyError as exc:
+                self.fail(
+                    "validate_refs must preserve invalid-ignore scan errors "
+                    f"instead of raising {exc!r}"
+                )
+
+        step_result = response.data["steps"][0]["result"]
+        self.assertEqual((False, Severity.ERROR), (response.success, response.severity))
+        self.assertEqual(
+            (
+                "REF001",
+                {
+                    "scope": "Assets",
+                    "invalid_ignore_asset_guids": ["not-a-guid"],
+                    "read_only": True,
+                },
+            ),
+            (step_result["code"], step_result["data"]),
+        )
+        self.assertNotIn("diagnostics_baseline", response.data)
+
+    def test_validate_refs_with_baseline_preserves_missing_scope_error(self) -> None:
+        from prefab_sentinel.diagnostics_baseline import DiagnosticsBaseline
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            resolver = ReferenceResolverService(project_root=root)
+            baseline = DiagnosticsBaseline(
+                known_diagnostics=(),
+                path=str(root / "config" / "diagnostics_baseline.json"),
+                status="loaded",
+            )
+
+            try:
+                response = validate_refs(
+                    resolver,
+                    scope="Assets/Does/Not/Exist",
+                    diagnostics_baseline=baseline,
+                )
+            except KeyError as exc:
+                self.fail(
+                    "validate_refs must preserve missing-scope scan errors "
+                    f"instead of raising {exc!r}"
+                )
+
+        step_result = response.data["steps"][0]["result"]
+        self.assertEqual((False, Severity.ERROR), (response.success, response.severity))
+        self.assertEqual(
+            (
+                "REF404",
+                {"scope": "Assets/Does/Not/Exist", "read_only": True},
+            ),
+            (step_result["code"], step_result["data"]),
+        )
+        self.assertNotIn("diagnostics_baseline", response.data)
+
+
 class InspectStructureContractTests(unittest.TestCase):
     """Issue #146 row: pin ``inspect_structure`` outcomes for prefab vs.
     non-prefab fixtures.  ``checks_performed`` / ``checks_skipped`` /
@@ -348,6 +566,52 @@ class InspectStructureContractTests(unittest.TestCase):
         self.assertEqual(0, response.data["transform_inconsistency_count"])
         self.assertEqual(0, response.data["missing_component_count"])
         self.assertEqual(0, response.data["orphaned_transform_count"])
+
+    def test_rejects_absolute_target_path(self) -> None:
+        from prefab_sentinel.orchestrator_validation import (  # noqa: PLC0415
+            inspect_structure,
+        )
+        from prefab_sentinel.services.prefab_variant import (  # noqa: PLC0415
+            PrefabVariantService,
+        )
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_clean_project(root)
+            svc = PrefabVariantService(project_root=root)
+            target_path = str(root.parent / "outside.prefab")
+            response = inspect_structure(svc, target_path)
+
+        assert_error_envelope(
+            response,
+            code="VALIDATE_STRUCTURE_INVALID_TARGET_PATH",
+            message_match=r"project-root-relative.*project_root",
+            data={"target_path": target_path, "read_only": True},
+        )
+
+    def test_rejects_traversal_target_path(self) -> None:
+        from prefab_sentinel.orchestrator_validation import (  # noqa: PLC0415
+            inspect_structure,
+        )
+        from prefab_sentinel.services.prefab_variant import (  # noqa: PLC0415
+            PrefabVariantService,
+        )
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_clean_project(root)
+            svc = PrefabVariantService(project_root=root)
+            target_path = "Assets/../Assets/Base.prefab"
+            response = inspect_structure(svc, target_path)
+
+        assert_error_envelope(
+            response,
+            code="VALIDATE_STRUCTURE_INVALID_TARGET_PATH",
+            message_match=r"project-root-relative.*project_root",
+            data={"target_path": target_path, "read_only": True},
+        )
 
     def test_non_prefab_fixture_skips_transform_checks(self) -> None:
         """A non-GameObject-bearing text asset (``.mat``) only runs
@@ -389,6 +653,88 @@ class InspectStructureContractTests(unittest.TestCase):
             response.data["checks_skipped"],
         )
         self.assertIn(".mat", response.data["skip_reason"])
+
+
+class InspectStructureDiagnosticsBaselineTests(unittest.TestCase):
+    def test_baseline_keys_exclude_human_structure_messages(self) -> None:
+        from prefab_sentinel.diagnostics_baseline import DiagnosticsBaseline
+        from prefab_sentinel.orchestrator_validation import inspect_structure
+        from prefab_sentinel.services.prefab_variant import PrefabVariantService
+
+        duplicate_key = (
+            "validate_structure:duplicate_file_id:Assets/Broken.prefab:"
+            "fileID:20:{fileID: 20}"
+        )
+        missing_component_key = (
+            "validate_structure:missing_component:Assets/Broken.prefab:"
+            "fileID:10:component: {fileID: 999}"
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            write_file(
+                root / "Assets" / "Broken.prefab",
+                """%YAML 1.1
+--- !u!1 &10
+GameObject:
+  m_Name: Broken
+  m_Component:
+  - component: {fileID: 20}
+  - component: {fileID: 999}
+--- !u!4 &20
+Transform:
+  m_GameObject: {fileID: 10}
+  m_Father: {fileID: 0}
+  m_Children: []
+--- !u!114 &20
+MonoBehaviour:
+  m_GameObject: {fileID: 10}
+""",
+            )
+            write_file(
+                root / "Assets" / "Broken.prefab.meta",
+                f"fileFormatVersion: 2\nguid: {BASE_GUID}\n",
+            )
+            svc = PrefabVariantService(project_root=root)
+            baseline = DiagnosticsBaseline(
+                known_diagnostics=(duplicate_key,),
+                path=str(root / "config" / "diagnostics_baseline.json"),
+                status="loaded",
+            )
+
+            try:
+                response = inspect_structure(
+                    svc,
+                    "Assets/Broken.prefab",
+                    diagnostics_baseline=baseline,
+                )
+            except TypeError as exc:
+                self.fail(
+                    "inspect_structure must accept diagnostics_baseline for baseline classification: "
+                    f"{exc}"
+                )
+
+        classification = response.data.get("diagnostics_baseline")
+        if classification is None:
+            self.fail("inspect_structure must attach diagnostics_baseline classification")
+        self.assertEqual(
+            (1, 1, [missing_component_key], [duplicate_key]),
+            (
+                classification["new_count"],
+                classification["known_count"],
+                [r["key"] for r in classification["new"]],
+                [r["key"] for r in classification["known"]],
+            ),
+        )
+        human_messages = {
+            "Duplicate fileID: 20 appears 2 times",
+            "GameObject 'Broken' references missing component: fileID:999",
+        }
+        sampled_text = "\n".join(
+            [r["key"] for r in classification["new"] + classification["known"]]
+            + [str(r["data"]) for r in classification["new"] + classification["known"]]
+        )
+        for message in human_messages:
+            self.assertNotIn(message, sampled_text)
 
 
 class OpLabelCodePinTests(unittest.TestCase):
@@ -521,6 +867,30 @@ class InspectWorldCanvasStepTests(unittest.TestCase):
             [d.detail for d in response.diagnostics],
         )
 
+    def test_scene_outside_runtime_root_is_not_read_or_inspected(self) -> None:
+        from unittest.mock import MagicMock
+
+        from prefab_sentinel.contracts import Severity as _Severity
+        from prefab_sentinel.orchestrator_validation import (  # noqa: PLC0415
+            _inspect_world_canvas_step,
+        )
+
+        with tempfile.TemporaryDirectory() as runtime_dir, tempfile.TemporaryDirectory() as outside_dir:
+            outside_scene = Path(outside_dir) / "outside.unity"
+            outside_scene.write_text("not a Unity scene fixture", encoding="utf-8")
+            inspector = MagicMock()
+            with patch_world_canvas_inspector(inspector):
+                response = _inspect_world_canvas_step(str(outside_scene), Path(runtime_dir))
+
+        self.assertTrue(response.success)
+        self.assertEqual(_Severity.INFO, response.severity)
+        self.assertEqual("WORLD_CANVAS_INSPECT_OK", response.code)
+        self.assertEqual(
+            ["WORLD_CANVAS_SCENE_OUTSIDE_ROOT"],
+            [d.detail for d in response.diagnostics],
+        )
+        inspector.assert_not_called()
+
     def test_scene_with_local_scale_finding_returns_warning_severity(self) -> None:
         """A scene whose canvas inspector emits a
         ``WORLD_CANVAS_LOCAL_SCALE`` finding is rolled up to
@@ -567,13 +937,10 @@ def patch_world_canvas_inspector(stub):
     )
 
 
-class ValidateRuntimePipelineTests(unittest.TestCase):
-    """Issue #146 row: pin ``validate_runtime`` outcomes for the
-    fail-fast path (runtime step error) and the clean path."""
-
+class ValidateRuntimeProfileTests(unittest.TestCase):
     @staticmethod
     def _make_response(code: str, severity, success: bool, data: dict | None = None):
-        from prefab_sentinel.contracts import ToolResponse  # noqa: PLC0415
+        from prefab_sentinel.contracts import ToolResponse
 
         return ToolResponse(
             success=success,
@@ -585,8 +952,6 @@ class ValidateRuntimePipelineTests(unittest.TestCase):
 
     @staticmethod
     def _canvas_step_result(scene_path: str) -> dict:
-        """Full nested ``inspect_world_canvas`` result envelope (the
-        canvas step is real, not mocked, so its payload is deterministic)."""
         return {
             "success": True,
             "severity": "info",
@@ -608,8 +973,6 @@ class ValidateRuntimePipelineTests(unittest.TestCase):
         code: str,
         data: dict | None = None,
     ) -> dict:
-        """Full nested step result envelope for a stubbed runtime step.
-        The mock response carries message ``"m"`` and the supplied data."""
         return {
             "success": success,
             "severity": severity,
@@ -619,95 +982,26 @@ class ValidateRuntimePipelineTests(unittest.TestCase):
             "diagnostics": [],
         }
 
-    def test_fail_fast_runtime_step_error_aborts_pipeline(self) -> None:
-        """When ``run_clientsim`` returns ``severity=error``, the
-        pipeline aborts at the run-clientsim step.  The full top-level
-        payload binds by value, with ``fail_fast_triggered`` true,
-        scene_path and profile echoed, and each step's name plus its
-        full nested result envelope (canvas / compile / run-clientsim)
-        bound by exact value."""
-        from unittest.mock import MagicMock  # noqa: PLC0415
+    @staticmethod
+    def _write_scene(temp_dir: str) -> str:
+        scene = Path(temp_dir) / "scene.unity"
+        scene.write_text("%YAML 1.1\n--- !u!1 &1\nGameObject:\n", encoding="utf-8")
+        return str(scene)
 
-        from prefab_sentinel.contracts import Severity  # noqa: PLC0415
-        from prefab_sentinel.orchestrator_validation import (  # noqa: PLC0415
-            validate_runtime,
-        )
-        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+    def _runtime_with_log_steps(self):
+        from unittest.mock import MagicMock
+
+        from prefab_sentinel.contracts import Severity
 
         runtime = MagicMock()
-        runtime.compile_udonsharp.return_value = self._make_response(
-            "RUN_COMPILE_OK", Severity.INFO, True
-        )
-        runtime.run_clientsim.return_value = self._make_response(
-            "RUN_CLIENTSIM_FAILED", Severity.ERROR, False
-        )
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            scene = Path(temp_dir) / "scene.unity"
-            scene.write_text(
-                "%YAML 1.1\n--- !u!1 &1\nGameObject:\n", encoding="utf-8"
-            )
-            scene_path = str(scene)
-            response = validate_runtime(runtime, scene_path)
-
-            assert_error_envelope(
-                response,
-                code="VALIDATE_RUNTIME_RESULT",
-                severity="error",
-                message_match=r"fail-fast policy",
-                data={
-                    "scene_path": scene_path,
-                    "profile": "default",
-                    "read_only": True,
-                    "fail_fast_triggered": True,
-                    "steps": [
-                        {
-                            "step": "inspect_world_canvas",
-                            "result": self._canvas_step_result(scene_path),
-                        },
-                        {
-                            "step": "compile_udonsharp",
-                            "result": self._stub_step_result(
-                                success=True,
-                                severity="info",
-                                code="RUN_COMPILE_OK",
-                            ),
-                        },
-                        {
-                            "step": "run_clientsim",
-                            "result": self._stub_step_result(
-                                success=False,
-                                severity="error",
-                                code="RUN_CLIENTSIM_FAILED",
-                            ),
-                        },
-                    ],
-                },
-            )
-
-    def test_clean_pipeline_runs_full_step_sequence(self) -> None:
-        """When every step succeeds, the pipeline runs the full
-        six-step sequence; ``fail_fast_triggered`` is False; the full
-        top-level payload binds by value, with each step's name plus
-        its full nested result envelope bound by exact value."""
-        from unittest.mock import MagicMock  # noqa: PLC0415
-
-        from prefab_sentinel.contracts import Severity  # noqa: PLC0415
-        from prefab_sentinel.orchestrator_validation import (  # noqa: PLC0415
-            validate_runtime,
-        )
-
-        runtime = MagicMock()
-        # MagicMock treats any attribute starting with ``assert`` as an
-        # assertion method by default; bind it explicitly so the
-        # orchestrator's ``runtime_validation.assert_no_critical_errors``
-        # call resolves to a normal mock callable.
+        runtime.project_root = Path("/")
         runtime.assert_no_critical_errors = MagicMock()
-        runtime.compile_udonsharp.return_value = self._make_response(
-            "RUN_COMPILE_OK", Severity.INFO, True
-        )
+        runtime.compile_udonsharp.return_value = self._make_response("RUN_COMPILE_OK", Severity.INFO, True)
         runtime.run_clientsim.return_value = self._make_response(
-            "RUN_CLIENTSIM_OK", Severity.INFO, True
+            "RUN_CLIENTSIM_OK",
+            Severity.INFO,
+            True,
+            data={"read_only": False, "executed": True},
         )
         runtime.collect_unity_console.return_value = self._make_response(
             "RUN_LOG_COLLECTED",
@@ -715,82 +1009,195 @@ class ValidateRuntimePipelineTests(unittest.TestCase):
             True,
             data={"log_lines": [], "read_only": True},
         )
-        runtime.classify_errors.return_value = self._make_response(
-            "RUN_CLASSIFY_OK", Severity.INFO, True
+        runtime.collect_editor_console.return_value = self._make_response(
+            "RUN_EDITOR_CONSOLE_COLLECTED",
+            Severity.INFO,
+            True,
+            data={"log_lines": [], "read_only": True},
         )
-        runtime.assert_no_critical_errors.return_value = self._make_response(
-            "RUN_ASSERT_OK", Severity.INFO, True
+        runtime.classify_errors.return_value = self._make_response("RUN_CLASSIFY_OK", Severity.INFO, True)
+        runtime.assert_no_critical_errors.return_value = self._make_response("RUN_ASSERT_OK", Severity.INFO, True)
+        return runtime
+
+    def test_validate_runtime_default_profile_never_runs_clientsim(self) -> None:
+        from prefab_sentinel.contracts import Severity
+        from prefab_sentinel.orchestrator_validation import validate_runtime
+
+        runtime = self._runtime_with_log_steps()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            scene_path = self._write_scene(temp_dir)
+            response = validate_runtime(runtime, scene_path)
+
+        self.assertEqual(
+            (True, "VALIDATE_RUNTIME_RESULT", Severity.INFO),
+            (response.success, response.code, response.severity),
+            msg=f"compile-only validation envelope mismatch: {response.to_dict()!r}",
+        )
+        self.assertEqual(
+            "compile_only",
+            response.data["profile"],
+            msg=f"default validation profile mismatch: {response.data!r}",
+        )
+        self.assertEqual(
+            [
+                "inspect_world_canvas",
+                "compile_udonsharp",
+                "collect_unity_console",
+                "classify_errors",
+                "assert_no_critical_errors",
+            ],
+            [step["step"] for step in response.data["steps"]],
+            msg=f"default validation step sequence must exclude ClientSim: {response.data!r}",
+        )
+        runtime.run_clientsim.assert_not_called()
+
+    def test_validate_runtime_rejects_unknown_profile(self) -> None:
+        from prefab_sentinel.contracts import Severity
+        from prefab_sentinel.orchestrator_validation import validate_runtime
+
+        runtime = self._runtime_with_log_steps()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            scene_path = self._write_scene(temp_dir)
+            response = validate_runtime(runtime, scene_path, profile="smoke")
+
+        self.assertEqual(
+            (False, "VALIDATE_RUNTIME_PROFILE_UNSUPPORTED", Severity.ERROR),
+            (response.success, response.code, response.severity),
+            msg=f"unsupported runtime profile envelope mismatch: {response.to_dict()!r}",
+        )
+        self.assertIn("compile_only", response.message)
+        self.assertIn("editor_console_only", response.message)
+        self.assertIn("clientsim", response.message)
+        runtime.compile_udonsharp.assert_not_called()
+        runtime.run_clientsim.assert_not_called()
+
+    def test_validate_runtime_editor_console_only_uses_console_without_clientsim(self) -> None:
+        from prefab_sentinel.contracts import Severity
+        from prefab_sentinel.orchestrator_validation import validate_runtime
+
+        runtime = self._runtime_with_log_steps()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            scene_path = self._write_scene(temp_dir)
+            response = validate_runtime(runtime, scene_path, profile="editor_console_only")
+
+        self.assertEqual(
+            (True, "VALIDATE_RUNTIME_RESULT", Severity.INFO),
+            (response.success, response.code, response.severity),
+            msg=f"console-only validation envelope mismatch: {response.to_dict()!r}",
+        )
+        self.assertEqual(
+            "editor_console_only",
+            response.data["profile"],
+            msg=f"console-only profile mismatch: {response.data!r}",
+        )
+        self.assertEqual(
+            [
+                "inspect_world_canvas",
+                "collect_editor_console",
+                "classify_errors",
+                "assert_no_critical_errors",
+            ],
+            [step["step"] for step in response.data["steps"]],
+            msg=f"console-only step sequence must exclude compile and ClientSim: {response.data!r}",
+        )
+        runtime.collect_unity_console.assert_not_called()
+        runtime.compile_udonsharp.assert_not_called()
+        runtime.run_clientsim.assert_not_called()
+
+    def test_clientsim_profile_runs_full_side_effect_sequence(self) -> None:
+        from prefab_sentinel.contracts import Severity
+        from prefab_sentinel.orchestrator_validation import validate_runtime
+
+        runtime = self._runtime_with_log_steps()
+        runtime.run_clientsim.return_value = self._make_response(
+            "RUN_CLIENTSIM_OK",
+            Severity.INFO,
+            True,
+            data={"read_only": False, "executed": True},
         )
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            scene = Path(temp_dir) / "scene.unity"
-            scene.write_text(
-                "%YAML 1.1\n--- !u!1 &1\nGameObject:\n", encoding="utf-8"
+            scene_path = self._write_scene(temp_dir)
+            response = validate_runtime(
+                runtime,
+                scene_path,
+                profile="clientsim",
+                confirm=True,
+                change_reason="audit clientsim validation",
             )
-            scene_path = str(scene)
-            response = validate_runtime(runtime, scene_path)
 
-            from prefab_sentinel.contracts import Severity as _Severity  # noqa: PLC0415
+        self.assertEqual(
+            [
+                "inspect_world_canvas",
+                "compile_udonsharp",
+                "run_clientsim",
+                "collect_unity_console",
+                "classify_errors",
+                "assert_no_critical_errors",
+            ],
+            [step["step"] for step in response.data["steps"]],
+            msg=f"clientsim profile step sequence mismatch: {response.data!r}",
+        )
+        runtime.run_clientsim.assert_called_once_with(
+            scene_path,
+            "clientsim",
+            confirm=True,
+            change_reason="audit clientsim validation",
+            allow_dirty_before=False,
+        )
 
-            self.assertTrue(response.success)
-            self.assertEqual("VALIDATE_RUNTIME_RESULT", response.code)
-            self.assertEqual(_Severity.INFO, response.severity)
-            self.assertEqual(
-                {
-                    "scene_path": scene_path,
-                    "profile": "default",
-                    "read_only": True,
-                    "fail_fast_triggered": False,
-                    "steps": [
-                        {
-                            "step": "inspect_world_canvas",
-                            "result": self._canvas_step_result(scene_path),
-                        },
-                        {
-                            "step": "compile_udonsharp",
-                            "result": self._stub_step_result(
-                                success=True,
-                                severity="info",
-                                code="RUN_COMPILE_OK",
-                            ),
-                        },
-                        {
-                            "step": "run_clientsim",
-                            "result": self._stub_step_result(
-                                success=True,
-                                severity="info",
-                                code="RUN_CLIENTSIM_OK",
-                            ),
-                        },
-                        {
-                            "step": "collect_unity_console",
-                            "result": self._stub_step_result(
-                                success=True,
-                                severity="info",
-                                code="RUN_LOG_COLLECTED",
-                                data={"log_lines": [], "read_only": True},
-                            ),
-                        },
-                        {
-                            "step": "classify_errors",
-                            "result": self._stub_step_result(
-                                success=True,
-                                severity="info",
-                                code="RUN_CLASSIFY_OK",
-                            ),
-                        },
-                        {
-                            "step": "assert_no_critical_errors",
-                            "result": self._stub_step_result(
-                                success=True,
-                                severity="info",
-                                code="RUN_ASSERT_OK",
-                            ),
-                        },
-                    ],
-                },
-                response.data,
+    def test_clientsim_step_error_aborts_pipeline(self) -> None:
+        from prefab_sentinel.contracts import Severity
+        from prefab_sentinel.orchestrator_validation import validate_runtime
+        from tests._assertion_helpers import assert_error_envelope
+
+        runtime = self._runtime_with_log_steps()
+        runtime.run_clientsim.return_value = self._make_response("RUN_CLIENTSIM_FAILED", Severity.ERROR, False)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            scene_path = self._write_scene(temp_dir)
+            response = validate_runtime(
+                runtime,
+                scene_path,
+                profile="clientsim",
+                confirm=True,
+                change_reason="audit clientsim validation",
             )
+
+        assert_error_envelope(
+            response,
+            code="VALIDATE_RUNTIME_RESULT",
+            severity="error",
+            message_match=r"fail-fast policy",
+            data={
+                "scene_path": scene_path,
+                "profile": "clientsim",
+                "read_only": True,
+                "fail_fast_triggered": True,
+                "steps": [
+                    {"step": "inspect_world_canvas", "result": self._canvas_step_result(scene_path)},
+                    {
+                        "step": "compile_udonsharp",
+                        "result": self._stub_step_result(
+                            success=True,
+                            severity="info",
+                            code="RUN_COMPILE_OK",
+                        ),
+                    },
+                    {
+                        "step": "run_clientsim",
+                        "result": self._stub_step_result(
+                            success=False,
+                            severity="error",
+                            code="RUN_CLIENTSIM_FAILED",
+                        ),
+                    },
+                ],
+            },
+        )
 
 
 class TestValidationSnapshotPinning:
@@ -1079,6 +1486,88 @@ GameObject:
                     svc,
                     scope=str(root / "Assets"),
                     snapshot_diff="corrupt",
+                )
+            finally:
+                os.environ.pop("PREFAB_SENTINEL_SNAPSHOT_DIR", None)
+
+        self.assertFalse(resp.success)
+        self.assertEqual("VALIDATE_REFS_SNAPSHOT_BAD_NAME", resp.code)
+        self.assertEqual(Severity.ERROR, resp.severity)
+        self.assertIn("malformed", resp.message)
+
+
+    def test_snapshot_save_rejects_symlink_target(self) -> None:
+        if not hasattr(os, "symlink"):
+            self.skipTest("platform does not support os.symlink")
+
+        from prefab_sentinel.services.reference_resolver_snapshots import (
+            snapshot_path,
+        )
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            snap_dir = root / "snapshots"
+            _create_clean_project(root)
+            svc = ReferenceResolverService(project_root=root)
+
+            os.environ["PREFAB_SENTINEL_SNAPSHOT_DIR"] = str(snap_dir)
+            try:
+                target = snapshot_path("blocked", root)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                outside = root / "outside.json"
+                outside.write_text("unchanged", encoding="utf-8")
+                try:
+                    os.symlink(outside, target)
+                except OSError as exc:
+                    self.skipTest(f"symlink creation not permitted: {exc}")
+
+                resp = validate_refs(
+                    svc,
+                    scope=str(root / "Assets"),
+                    snapshot_save="blocked",
+                )
+                outside_text = outside.read_text(encoding="utf-8")
+            finally:
+                os.environ.pop("PREFAB_SENTINEL_SNAPSHOT_DIR", None)
+
+        self.assertFalse(resp.success)
+        self.assertEqual("VALIDATE_REFS_SNAPSHOT_BAD_NAME", resp.code)
+        self.assertEqual(Severity.ERROR, resp.severity)
+        self.assertIn("malformed", resp.message)
+        self.assertEqual("unchanged", outside_text)
+
+    def test_snapshot_diff_rejects_symlink_source(self) -> None:
+        if not hasattr(os, "symlink"):
+            self.skipTest("platform does not support os.symlink")
+
+        from prefab_sentinel.services.reference_resolver_snapshots import (
+            snapshot_path,
+        )
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            snap_dir = root / "snapshots"
+            _create_clean_project(root)
+            svc = ReferenceResolverService(project_root=root)
+
+            os.environ["PREFAB_SENTINEL_SNAPSHOT_DIR"] = str(snap_dir)
+            try:
+                target = snapshot_path("linked", root)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                outside = root / "outside.json"
+                outside.write_text(
+                    json.dumps({"top_missing_asset_guids": [{"guid": self.MISSING_A}]}),
+                    encoding="utf-8",
+                )
+                try:
+                    os.symlink(outside, target)
+                except OSError as exc:
+                    self.skipTest(f"symlink creation not permitted: {exc}")
+
+                resp = validate_refs(
+                    svc,
+                    scope=str(root / "Assets"),
+                    snapshot_diff="linked",
                 )
             finally:
                 os.environ.pop("PREFAB_SENTINEL_SNAPSHOT_DIR", None)

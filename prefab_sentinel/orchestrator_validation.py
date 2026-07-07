@@ -10,6 +10,11 @@ from prefab_sentinel.contracts import (
     ToolResponse,
     max_severity,
 )
+from prefab_sentinel.diagnostics_baseline import (
+    DiagnosticKeyRecord,
+    DiagnosticsBaseline,
+    classify_current_keys,
+)
 from prefab_sentinel.orchestrator_variant import read_target_file
 from prefab_sentinel.services.prefab_variant import PrefabVariantService
 from prefab_sentinel.services.reference_resolver import ReferenceResolverService
@@ -38,6 +43,7 @@ STALE_GUID_INDEX_HINT_DETAIL = "STALE_GUID_INDEX_HINT"
 def inspect_structure(
     prefab_variant: PrefabVariantService,
     target_path: str,
+    diagnostics_baseline: DiagnosticsBaseline | None = None,
 ) -> ToolResponse:
     text_or_error = read_target_file(prefab_variant, target_path, "VALIDATE_STRUCTURE")
     if isinstance(text_or_error, ToolResponse):
@@ -64,24 +70,74 @@ def inspect_structure(
         checks_skipped = ["transform_consistency", "missing_components", "orphaned_transforms"]
         skip_reason = f"File type {suffix} has no GameObject/Transform structure"
 
+    data: dict[str, object] = {
+        "target_path": target_path,
+        "read_only": True,
+        "duplicate_file_id_count": len(result.duplicate_file_ids),
+        "transform_inconsistency_count": len(result.transform_inconsistencies),
+        "missing_component_count": len(result.missing_components),
+        "orphaned_transform_count": len(result.orphaned_transforms),
+        "checks_performed": checks_performed,
+        "checks_skipped": checks_skipped,
+        "skip_reason": skip_reason,
+    }
+    if diagnostics_baseline is not None:
+        data["diagnostics_baseline"] = classify_current_keys(
+            _structure_diagnostic_key_records(
+                target_path,
+                diagnostics,
+                result.max_severity,
+            ),
+            diagnostics_baseline,
+        ).to_dict()
+
     return ToolResponse(
         success=success,
         severity=result.max_severity,
         code="VALIDATE_STRUCTURE_RESULT",
         message="validate.structure completed (read-only).",
-        data={
-            "target_path": target_path,
-            "read_only": True,
-            "duplicate_file_id_count": len(result.duplicate_file_ids),
-            "transform_inconsistency_count": len(result.transform_inconsistencies),
-            "missing_component_count": len(result.missing_components),
-            "orphaned_transform_count": len(result.orphaned_transforms),
-            "checks_performed": checks_performed,
-            "checks_skipped": checks_skipped,
-            "skip_reason": skip_reason,
-        },
+        data=data,
         diagnostics=diagnostics,
     )
+
+
+def _structure_diagnostic_key_records(
+    target_path: str,
+    diagnostics: list[Diagnostic],
+    default_severity: Severity,
+) -> tuple[DiagnosticKeyRecord, ...]:
+    records: list[DiagnosticKeyRecord] = []
+    for diagnostic in diagnostics:
+        category = _structure_diagnostic_category(diagnostic)
+        records.append(
+            DiagnosticKeyRecord(
+                key=(
+                    f"validate_structure:{category}:{target_path}:"
+                    f"{diagnostic.location}:{diagnostic.evidence}"
+                ),
+                severity=diagnostic.severity or default_severity.value,
+                message=diagnostic.detail,
+                data={
+                    "category": category,
+                    "target_path": target_path,
+                    "path": diagnostic.path,
+                    "location": diagnostic.location,
+                    "evidence": diagnostic.evidence,
+                },
+            )
+        )
+    return tuple(records)
+
+
+def _structure_diagnostic_category(diagnostic: Diagnostic) -> str:
+    detail = diagnostic.detail
+    if detail.startswith("Duplicate fileID:"):
+        return "duplicate_file_id"
+    if "references missing component:" in detail:
+        return "missing_component"
+    if detail.startswith("Orphaned transform:"):
+        return "orphaned_transform"
+    return "transform_consistency"
 
 
 def _handle_snapshot_modes(
@@ -108,6 +164,14 @@ def _handle_snapshot_modes(
             return _snapshot_error(
                 "VALIDATE_REFS_SNAPSHOT_BAD_NAME",
                 str(exc),
+                scope=scope,
+                snapshot_save=snapshot_save,
+                snapshot_diff=snapshot_diff,
+            )
+        except SnapshotPayloadError as exc:
+            return _snapshot_error(
+                "VALIDATE_REFS_SNAPSHOT_BAD_NAME",
+                f"snapshot file is malformed: {exc}",
                 scope=scope,
                 snapshot_save=snapshot_save,
                 snapshot_diff=snapshot_diff,
@@ -215,6 +279,30 @@ def _detect_stale_cache_resolutions(
     return sum(1 for guid in unique_missing_guids if guid in fresh_index)
 
 
+def _diagnostic_key_records_from_scan(
+    scan_data: dict[str, object],
+) -> tuple[DiagnosticKeyRecord, ...]:
+    raw_records = scan_data["diagnostic_keys"]
+    if not isinstance(raw_records, list):
+        raise TypeError("scan_data['diagnostic_keys'] must be a list")
+    records: list[DiagnosticKeyRecord] = []
+    for raw_record in raw_records:
+        if not isinstance(raw_record, dict):
+            raise TypeError("diagnostic key records must be dictionaries")
+        raw_data = raw_record["data"]
+        if not isinstance(raw_data, dict):
+            raise TypeError("diagnostic key record data must be a dictionary")
+        records.append(
+            DiagnosticKeyRecord(
+                key=str(raw_record["key"]),
+                severity=str(raw_record["severity"]),
+                message=str(raw_record["message"]),
+                data=raw_data,
+            )
+        )
+    return tuple(records)
+
+
 def validate_refs(
     reference_resolver: ReferenceResolverService,
     scope: str,
@@ -227,6 +315,7 @@ def validate_refs(
     snapshot_save: str = "",
     snapshot_diff: str = "",
     refresh_guid_index: bool = False,
+    diagnostics_baseline: DiagnosticsBaseline | None = None,
 ) -> ToolResponse:
     if snapshot_save and snapshot_diff:
         return ToolResponse(
@@ -306,48 +395,105 @@ def validate_refs(
         top_success = step.success
         top_severity = step.severity
         top_message = "validate.refs pipeline completed (read-only)."
+    response_data = {
+        "scope": scope,
+        "read_only": True,
+        "ignore_asset_guids": list(ignore_asset_guids),
+        "missing_asset_unique_count": missing_asset_unique,
+        "steps": [
+            {
+                "step": "scan_broken_references",
+                "result": {
+                    "success": step.success,
+                    "severity": step.severity.value,
+                    "code": step.code,
+                    "message": step.message,
+                    "data": step.data,
+                },
+            }
+        ],
+    }
+    if diagnostics_baseline is not None and "diagnostic_keys" in step_data:
+        response_data["diagnostics_baseline"] = classify_current_keys(
+            _diagnostic_key_records_from_scan(step_data),
+            diagnostics_baseline,
+        ).to_dict()
+
     return ToolResponse(
         success=top_success,
         severity=top_severity,
         code=top_code,
         message=top_message,
-        data={
-            "scope": scope,
-            "read_only": True,
-            "ignore_asset_guids": list(ignore_asset_guids),
-            "missing_asset_unique_count": missing_asset_unique,
-            "steps": [
-                {
-                    "step": "scan_broken_references",
-                    "result": {
-                        "success": step.success,
-                        "severity": step.severity.value,
-                        "code": step.code,
-                        "message": step.message,
-                        "data": step.data,
-                    },
-                }
-            ],
-        },
+        data=response_data,
         diagnostics=diagnostics,
     )
 
 
-def _inspect_world_canvas_step(scene_path: str) -> ToolResponse:
-    """Issue #121: leading static WorldSpace-Canvas inspection step.
+def _inspect_world_canvas_step(scene_path: str, runtime_root: Path | None = None) -> ToolResponse:
+    """Issue #121: leading static WorldSpace-Canvas inspection step."""
+    from prefab_sentinel.unity_assets_path import resolve_scope_path
 
-    Reads the scene YAML (best-effort) and runs the pure-function
-    canvas linter.  The step's severity is intentionally capped at
-    ``WARNING`` so a flagged Canvas does not abort the rest of the
-    runtime-validation pipeline — the documented BoxCollider Z trap
-    is a structural mistake worth surfacing but not a build blocker.
-    A missing or unreadable scene file becomes a single ``info``
-    diagnostic so the pipeline still proceeds to the runtime steps.
-    """
     diagnostics: list[Diagnostic] = []
     severity = Severity.INFO
+    resolved_scene = Path(scene_path)
+    if runtime_root is not None:
+        resolved_root = Path(runtime_root).resolve()
+        try:
+            resolved_scene = resolve_scope_path(scene_path, runtime_root).resolve()
+        except (OSError, RuntimeError, ValueError) as exc:
+            diagnostics.append(
+                Diagnostic(
+                    path=scene_path,
+                    location="",
+                    detail="WORLD_CANVAS_SCENE_INVALID",
+                    evidence=f"Scene path could not be resolved for static WorldSpace-Canvas inspection: {exc}",
+                )
+            )
+            return ToolResponse(
+                success=True,
+                severity=Severity.INFO,
+                code="WORLD_CANVAS_INSPECT_OK",
+                message="World canvas inspection skipped (scene path invalid).",
+                data={"scene_path": scene_path, "read_only": True},
+                diagnostics=diagnostics,
+            )
+        if not resolved_scene.is_relative_to(resolved_root):
+            diagnostics.append(
+                Diagnostic(
+                    path=scene_path,
+                    location="",
+                    detail="WORLD_CANVAS_SCENE_OUTSIDE_ROOT",
+                    evidence="Scene path resolves outside the runtime project root.",
+                )
+            )
+            return ToolResponse(
+                success=True,
+                severity=Severity.INFO,
+                code="WORLD_CANVAS_INSPECT_OK",
+                message="World canvas inspection skipped (scene path outside runtime root).",
+                data={"scene_path": scene_path, "read_only": True},
+                diagnostics=diagnostics,
+            )
+        if resolved_scene.suffix.lower() != ".unity":
+            diagnostics.append(
+                Diagnostic(
+                    path=scene_path,
+                    location="",
+                    detail="WORLD_CANVAS_SCENE_NOT_UNITY",
+                    evidence="World canvas inspection only reads .unity scene files.",
+                )
+            )
+            return ToolResponse(
+                success=True,
+                severity=Severity.INFO,
+                code="WORLD_CANVAS_INSPECT_OK",
+                message="World canvas inspection skipped (not a .unity scene).",
+                data={"scene_path": scene_path, "read_only": True},
+                diagnostics=diagnostics,
+            )
+
     try:
-        text = Path(scene_path).read_text(encoding="utf-8")
+        text = resolved_scene.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
         diagnostics.append(
             Diagnostic(
@@ -389,53 +535,91 @@ def _inspect_world_canvas_step(scene_path: str) -> ToolResponse:
 def validate_runtime(
     runtime_validation: RuntimeValidationService,
     scene_path: str,
-    profile: str = "default",
+    profile: str = "compile_only",
     log_file: str | None = None,
     since_timestamp: str | None = None,
     allow_warnings: bool = False,
     max_diagnostics: int = 200,
+    confirm: bool = False,
+    change_reason: str | None = None,
+    allow_dirty_before_clientsim: bool = False,
 ) -> ToolResponse:
-    # Issue #121: leading static WorldSpace-Canvas + VRC_UiShape check.
-    # Severity is capped at warning so this never aborts the pipeline.
-    canvas_step = _inspect_world_canvas_step(scene_path)
-    compile_step = runtime_validation.compile_udonsharp()
-    run_step = runtime_validation.run_clientsim(scene_path, profile)
+    from prefab_sentinel.services.runtime_validation.config import default_runtime_root
 
-    steps = [
-        ("inspect_world_canvas", canvas_step),
-        ("compile_udonsharp", compile_step),
-        ("run_clientsim", run_step),
-    ]
-    if run_step.severity in (Severity.ERROR, Severity.CRITICAL):
-        severity = max_severity([compile_step.severity, run_step.severity])
+    supported_profiles = ("compile_only", "editor_console_only", "clientsim")
+    if profile not in supported_profiles:
         return ToolResponse(
             success=False,
-            severity=severity,
-            code="VALIDATE_RUNTIME_RESULT",
-            message="validate.runtime stopped by fail-fast policy due to scene/runtime setup errors.",
+            severity=Severity.ERROR,
+            code="VALIDATE_RUNTIME_PROFILE_UNSUPPORTED",
+            message=(
+                "Unsupported runtime validation profile. Supported profiles: "
+                + ", ".join(supported_profiles)
+                + "."
+            ),
+            data={"scene_path": scene_path, "profile": profile, "read_only": True},
+        )
+
+    if profile == "clientsim" and (not confirm or change_reason is None or not change_reason.strip()):
+        return ToolResponse(
+            success=False,
+            severity=Severity.ERROR,
+            code="CLIENTSIM_CONFIRM_REQUIRED",
+            message="ClientSim validation requires explicit audit confirmation and a non-empty change reason.",
             data={
                 "scene_path": scene_path,
                 "profile": profile,
-                "read_only": all(
-                    bool(step.data.get("read_only", True)) for _, step in steps
-                ),
-                "fail_fast_triggered": True,
-                "steps": [
-                    {"step": name, "result": step.to_dict()} for name, step in steps
-                ],
+                "read_only": True,
+                "executed": False,
             },
-            # Issue #133: surface the canvas-step diagnostics at the top
-            # level even on the fail-fast return so callers iterating
-            # ``response.diagnostics`` observe canvas findings without
-            # descending into nested steps. Mirrors the convention used
-            # by ``inspect_structure`` and ``validate_refs``.
-            diagnostics=list(canvas_step.diagnostics),
         )
 
-    collect_step = runtime_validation.collect_unity_console(
-        log_file=log_file,
-        since_timestamp=since_timestamp,
-    )
+    runtime_root = default_runtime_root(runtime_validation.project_root)
+    canvas_step = _inspect_world_canvas_step(scene_path, runtime_root)
+    steps: list[tuple[str, ToolResponse]] = [("inspect_world_canvas", canvas_step)]
+
+    if profile in ("compile_only", "clientsim"):
+        compile_step = runtime_validation.compile_udonsharp()
+        steps.append(("compile_udonsharp", compile_step))
+
+    if profile == "clientsim":
+        run_step = runtime_validation.run_clientsim(
+            scene_path,
+            profile,
+            confirm=confirm,
+            change_reason=change_reason,
+            allow_dirty_before=allow_dirty_before_clientsim,
+        )
+        steps.append(("run_clientsim", run_step))
+        if run_step.severity in (Severity.ERROR, Severity.CRITICAL):
+            severity = max_severity([step.severity for _, step in steps])
+            return ToolResponse(
+                success=False,
+                severity=severity,
+                code="VALIDATE_RUNTIME_RESULT",
+                message="validate.runtime stopped by fail-fast policy due to scene/runtime setup errors.",
+                data={
+                    "scene_path": scene_path,
+                    "profile": profile,
+                    "read_only": all(bool(step.data.get("read_only", True)) for _, step in steps),
+                    "fail_fast_triggered": True,
+                    "steps": [{"step": name, "result": step.to_dict()} for name, step in steps],
+                },
+                diagnostics=list(canvas_step.diagnostics),
+            )
+
+    if profile == "editor_console_only":
+        collect_step = runtime_validation.collect_editor_console(
+            since_timestamp=since_timestamp,
+            max_lines=max_diagnostics,
+        )
+        collect_step_name = "collect_editor_console"
+    else:
+        collect_step = runtime_validation.collect_unity_console(
+            log_file=log_file,
+            since_timestamp=since_timestamp,
+        )
+        collect_step_name = "collect_unity_console"
     classify_step = runtime_validation.classify_errors(
         log_lines=list(collect_step.data.get("log_lines", [])),
         max_diagnostics=max_diagnostics,
@@ -446,19 +630,14 @@ def validate_runtime(
     )
     steps.extend(
         [
-            ("collect_unity_console", collect_step),
+            (collect_step_name, collect_step),
             ("classify_errors", classify_step),
             ("assert_no_critical_errors", assert_step),
         ]
     )
 
-    severities = [step.severity for _, step in steps]
-    severity = max_severity(severities)
+    severity = max_severity([step.severity for _, step in steps])
     success = all(step.success for _, step in steps)
-    # Issue #133: promote the canvas-step diagnostics to the top level so
-    # callers iterating ``response.diagnostics`` observe canvas findings
-    # alongside classification findings. Canvas precedes classification
-    # because the canvas step runs first in the pipeline.
     diagnostics = list(canvas_step.diagnostics) + list(classify_step.diagnostics)
 
     return ToolResponse(
@@ -469,10 +648,7 @@ def validate_runtime(
         data={
             "scene_path": scene_path,
             "profile": profile,
-            "read_only": all(
-                bool(step.data.get("read_only", True))
-                for _, step in steps
-            ),
+            "read_only": all(bool(step.data.get("read_only", True)) for _, step in steps),
             "fail_fast_triggered": False,
             "steps": [{"step": name, "result": step.to_dict()} for name, step in steps],
         },

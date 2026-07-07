@@ -36,7 +36,10 @@ namespace PrefabSentinel
             public string project_root = string.Empty;
             public string scene_path = string.Empty;
             public string profile = string.Empty;
-            public int timeout_sec = 60;
+            public int timeout_sec = 120;
+            public bool confirm = false;
+            public string change_reason = string.Empty;
+            public bool allow_dirty_before = false;
         }
 
         [Serializable]
@@ -59,6 +62,40 @@ namespace PrefabSentinel
             public bool clientsim_ready = false;
             public bool read_only = true;
             public bool executed = false;
+            public ClientSimSideEffectReport side_effect_report = null;
+        }
+
+        [Serializable]
+        public sealed class ClientSimSideEffectReport
+        {
+            public bool diff_complete = true;
+            public string[] diff_warnings = Array.Empty<string>();
+            public string scene_path = string.Empty;
+            public string[] roots_before = Array.Empty<string>();
+            public string[] roots_after = Array.Empty<string>();
+            public string[] hierarchy_before = Array.Empty<string>();
+            public string[] hierarchy_after = Array.Empty<string>();
+            public string[] components_before = Array.Empty<string>();
+            public string[] components_after = Array.Empty<string>();
+            public string[] added_gameobjects = Array.Empty<string>();
+            public string[] removed_gameobjects = Array.Empty<string>();
+            public string[] added_components = Array.Empty<string>();
+            public string[] removed_components = Array.Empty<string>();
+            public bool dirty_before = false;
+            public bool dirty_after = false;
+            public int dirty_count_before = 0;
+            public int dirty_count_after = 0;
+            public string[] asset_change_candidates = Array.Empty<string>();
+        }
+
+        internal sealed class SceneSideEffectSnapshot
+        {
+            public string[] Roots = Array.Empty<string>();
+            public string[] Hierarchy = Array.Empty<string>();
+            public string[] Components = Array.Empty<string>();
+            public string[] AssetChangeCandidates = Array.Empty<string>();
+            public bool Dirty;
+            public int DirtyCount;
         }
 
         [Serializable]
@@ -295,7 +332,8 @@ namespace PrefabSentinel
             bool readOnly,
             bool executed,
             int udonProgramCount = 0,
-            bool clientSimReady = false
+            bool clientSimReady = false,
+            ClientSimSideEffectReport sideEffectReport = null
         )
         {
             return new RuntimeData
@@ -308,6 +346,7 @@ namespace PrefabSentinel
                 clientsim_ready = clientSimReady,
                 read_only = readOnly,
                 executed = executed,
+                side_effect_report = sideEffectReport,
             };
         }
 
@@ -329,7 +368,8 @@ namespace PrefabSentinel
             string message,
             RuntimeRequest request,
             int udonProgramCount = 0,
-            bool clientSimReady = false
+            bool clientSimReady = false,
+            ClientSimSideEffectReport sideEffectReport = null
         )
         {
             return new RuntimeResponse
@@ -338,7 +378,13 @@ namespace PrefabSentinel
                 severity = "info",
                 code = code,
                 message = message,
-                data = BuildData(request, readOnly: false, executed: true, udonProgramCount: udonProgramCount, clientSimReady: clientSimReady),
+                data = BuildData(
+                    request,
+                    readOnly: false,
+                    executed: true,
+                    udonProgramCount: udonProgramCount,
+                    clientSimReady: clientSimReady,
+                    sideEffectReport: sideEffectReport),
                 diagnostics = Array.Empty<RuntimeDiagnostic>(),
             };
         }
@@ -351,7 +397,8 @@ namespace PrefabSentinel
             bool readOnly,
             bool executed,
             int udonProgramCount = 0,
-            bool clientSimReady = false
+            bool clientSimReady = false,
+            ClientSimSideEffectReport sideEffectReport = null
         )
         {
             return new RuntimeResponse
@@ -360,7 +407,13 @@ namespace PrefabSentinel
                 severity = "error",
                 code = code,
                 message = message,
-                data = BuildData(request, readOnly: readOnly, executed: executed, udonProgramCount: udonProgramCount, clientSimReady: clientSimReady),
+                data = BuildData(
+                    request,
+                    readOnly: readOnly,
+                    executed: executed,
+                    udonProgramCount: udonProgramCount,
+                    clientSimReady: clientSimReady,
+                    sideEffectReport: sideEffectReport),
                 diagnostics = diagnostics ?? Array.Empty<RuntimeDiagnostic>(),
             };
         }
@@ -562,24 +615,37 @@ namespace PrefabSentinel
                 yield break;
             }
 
-            // Hoist variables needed across try-catch / yield boundaries
             object instance = null;
             bool initComplete = false;
             Exception initFailure = null;
             Coroutine active = null;
             double deadline = 0;
+            UnityRuntimeValidationBridge.SceneSideEffectSnapshot beforeSnapshot = null;
+            UnityRuntimeValidationBridge.SceneSideEffectSnapshot afterSnapshot = null;
 
-            // Outer try-finally (no catch) — yield return is legal here.
-            // Inner try-catch blocks handle TargetInvocationException without yield return.
             try
             {
-                // Phase 1: Setup (may throw TargetInvocationException from reflection)
                 try
                 {
                     Scene openedScene = EditorSceneManager.OpenScene(sceneAssetPath, OpenSceneMode.Single);
                     if (!openedScene.IsValid() || !openedScene.isLoaded)
                     {
                         complete(ClientSimError("Failed to open runtime validation scene.", DiagFrom("scene_path", "apply_error", sceneAssetPath)));
+                        yield break;
+                    }
+                    beforeSnapshot = CaptureSceneSnapshot(openedScene);
+                    if (beforeSnapshot.Dirty && !_request.allow_dirty_before)
+                    {
+                        complete(
+                            UnityRuntimeValidationBridge.BuildError(
+                                code: "CLIENTSIM_DIRTY_SCENE",
+                                message: "ClientSim validation refused to run because the scene is already dirty.",
+                                request: _request,
+                                diagnostics: DiagFrom("scene_path", "dirty_scene", sceneAssetPath),
+                                readOnly: true,
+                                executed: false,
+                                sideEffectReport: BuildSideEffectReport(sceneAssetPath, beforeSnapshot, beforeSnapshot))
+                        );
                         yield break;
                     }
 
@@ -619,13 +685,11 @@ namespace PrefabSentinel
                     yield break;
                 }
 
-                // Phase 2: Wait for init (yield return — legal in outer try-finally)
                 while (!initComplete && initFailure == null && EditorApplication.timeSinceStartup < deadline)
                 {
                     yield return null;
                 }
 
-                // Phase 3: Post-init checks (no yield return)
                 if (!initComplete && initFailure == null)
                 {
                     if (active != null)
@@ -643,7 +707,6 @@ namespace PrefabSentinel
                     yield break;
                 }
 
-                // isNetworkReady reflection call may throw — wrap in inner try-catch
                 try
                 {
                     bool ready = Convert.ToBoolean(isNetworkReady.Invoke(instance, null));
@@ -653,12 +716,15 @@ namespace PrefabSentinel
                         yield break;
                     }
 
+                    Scene activeScene = SceneManager.GetActiveScene();
+                    afterSnapshot = CaptureSceneSnapshot(activeScene);
                     complete(
                         UnityRuntimeValidationBridge.BuildSuccess(
                             code: "RUN_CLIENTSIM_OK",
                             message: "ClientSim smoke completed via the Editor Bridge.",
                             request: _request,
-                            clientSimReady: true
+                            clientSimReady: true,
+                            sideEffectReport: BuildSideEffectReport(sceneAssetPath, beforeSnapshot, afterSnapshot)
                         )
                     );
                 }
@@ -679,6 +745,151 @@ namespace PrefabSentinel
                     Debug.LogWarning($"ClientSim cleanup failed: {cleanupEx}");
                 }
             }
+        }
+
+        private static UnityRuntimeValidationBridge.SceneSideEffectSnapshot CaptureSceneSnapshot(Scene scene)
+        {
+            var roots = new List<string>();
+            var hierarchy = new List<string>();
+            var components = new List<string>();
+            if (scene.IsValid() && scene.isLoaded)
+            {
+                foreach (GameObject root in scene.GetRootGameObjects())
+                {
+                    roots.Add(root.name);
+                    CaptureGameObjectSnapshot(root.transform, root.name, hierarchy, components);
+                }
+            }
+            return new UnityRuntimeValidationBridge.SceneSideEffectSnapshot
+            {
+                Roots = roots.ToArray(),
+                Hierarchy = hierarchy.ToArray(),
+                Components = components.ToArray(),
+                AssetChangeCandidates = DirtyAssetChangeCandidates(),
+                Dirty = scene.IsValid() && scene.isDirty,
+                DirtyCount = DirtySceneCount(),
+            };
+        }
+
+        private static void CaptureGameObjectSnapshot(
+            Transform transform,
+            string path,
+            List<string> hierarchy,
+            List<string> components)
+        {
+            hierarchy.Add(path);
+            foreach (Component component in transform.GetComponents<Component>())
+            {
+                string componentName = component == null
+                    ? "<missing>"
+                    : component.GetType().FullName ?? component.GetType().Name;
+                components.Add(path + ":" + componentName);
+            }
+            for (int i = 0; i < transform.childCount; i++)
+            {
+                Transform child = transform.GetChild(i);
+                CaptureGameObjectSnapshot(child, path + "/" + child.name, hierarchy, components);
+            }
+        }
+
+        private static int DirtySceneCount()
+        {
+            int count = 0;
+            for (int i = 0; i < SceneManager.sceneCount; i++)
+            {
+                Scene scene = SceneManager.GetSceneAt(i);
+                if (scene.IsValid() && scene.isDirty) count++;
+            }
+            return count;
+        }
+
+        private static string[] DirtyAssetChangeCandidates()
+        {
+            var candidates = new List<string>();
+            foreach (string path in DirtyScenePaths())
+            {
+                AddUnique(candidates, path);
+            }
+            foreach (string path in DirtyAssetPaths())
+            {
+                AddUnique(candidates, path);
+            }
+            candidates.Sort(StringComparer.Ordinal);
+            return candidates.ToArray();
+        }
+
+        private static string[] DirtyScenePaths()
+        {
+            var paths = new List<string>();
+            for (int i = 0; i < SceneManager.sceneCount; i++)
+            {
+                Scene scene = SceneManager.GetSceneAt(i);
+                if (scene.IsValid() && scene.isDirty && !string.IsNullOrEmpty(scene.path))
+                {
+                    paths.Add(scene.path);
+                }
+            }
+            return paths.ToArray();
+        }
+
+        private static string[] DirtyAssetPaths()
+        {
+            var paths = new List<string>();
+            foreach (string path in AssetDatabase.GetAllAssetPaths())
+            {
+                if (!path.StartsWith("Assets/", StringComparison.Ordinal)) continue;
+                UnityEngine.Object asset = AssetDatabase.LoadMainAssetAtPath(path);
+                if (asset != null && EditorUtility.IsDirty(asset)) paths.Add(path);
+            }
+            return paths.ToArray();
+        }
+
+        private static void AddUnique(List<string> values, string value)
+        {
+            if (!values.Contains(value)) values.Add(value);
+        }
+
+        private static UnityRuntimeValidationBridge.ClientSimSideEffectReport BuildSideEffectReport(
+            string sceneAssetPath,
+            UnityRuntimeValidationBridge.SceneSideEffectSnapshot before,
+            UnityRuntimeValidationBridge.SceneSideEffectSnapshot after)
+        {
+            return new UnityRuntimeValidationBridge.ClientSimSideEffectReport
+            {
+                diff_complete = before != null && after != null,
+                diff_warnings = before == null || after == null
+                    ? new[] { "CLIENTSIM_SIDE_EFFECT_DIFF_UNAVAILABLE" }
+                    : Array.Empty<string>(),
+                scene_path = sceneAssetPath,
+                roots_before = before?.Roots ?? Array.Empty<string>(),
+                roots_after = after?.Roots ?? Array.Empty<string>(),
+                hierarchy_before = before?.Hierarchy ?? Array.Empty<string>(),
+                hierarchy_after = after?.Hierarchy ?? Array.Empty<string>(),
+                components_before = before?.Components ?? Array.Empty<string>(),
+                components_after = after?.Components ?? Array.Empty<string>(),
+                added_gameobjects = Difference(after?.Hierarchy, before?.Hierarchy),
+                removed_gameobjects = Difference(before?.Hierarchy, after?.Hierarchy),
+                added_components = Difference(after?.Components, before?.Components),
+                removed_components = Difference(before?.Components, after?.Components),
+                dirty_before = before != null && before.Dirty,
+                dirty_after = after != null && after.Dirty,
+                dirty_count_before = before?.DirtyCount ?? 0,
+                dirty_count_after = after?.DirtyCount ?? 0,
+                asset_change_candidates = Difference(
+                    after?.AssetChangeCandidates,
+                    before?.AssetChangeCandidates),
+            };
+        }
+
+        private static string[] Difference(string[] left, string[] right)
+        {
+            var rightSet = new HashSet<string>(right ?? Array.Empty<string>());
+            var diff = new List<string>();
+            foreach (string value in left ?? Array.Empty<string>())
+            {
+                if (!rightSet.Contains(value)) diff.Add(value);
+            }
+            return diff.ToArray();
         }
 
         private IEnumerator GuardCoroutine(IEnumerator routine, Action onComplete, Action<Exception> onError)

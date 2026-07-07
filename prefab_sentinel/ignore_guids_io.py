@@ -1,6 +1,6 @@
 """Loader for the conventional ``<scope>/config/ignore_guids.txt`` file.
 
-The operating convention documented in ``CLAUDE.md`` places the baseline
+The operating convention documented in ``AGENTS.md`` places the baseline
 ignore-GUID list at ``<scope>/config/ignore_guids.txt``.  When the file is
 absent the convention treats the scope as having no baseline entries; the
 loader returns an empty list in that case so callers can union without
@@ -26,7 +26,7 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-# CLAUDE.md operating convention: the baseline ignore-GUID list lives at
+# AGENTS.md operating convention: the baseline ignore-GUID list lives at
 # ``<scope>/config/ignore_guids.txt`` and the absent-file case is silently
 # ignored.  The relative path is exported so the validation MCP tool can
 # include the resolved absolute path in the informational diagnostic

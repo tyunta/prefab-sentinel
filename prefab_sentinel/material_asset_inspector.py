@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -171,6 +172,8 @@ def _extract_section(text: str, section_name: str) -> str:
 def inspect_material_asset(
     target_path: str,
     project_root: Path | None = None,
+    *,
+    guid_index: Mapping[str, Path] | None = None,
 ) -> MaterialAssetResult:
     """Parse a .mat file and return structured material data.
 
@@ -178,6 +181,9 @@ def inspect_material_asset(
         target_path: Path to a ``.mat`` file.
         project_root: Unity project root for GUID resolution. Auto-detected
             if *None*.
+        guid_index: Optional caller-owned GUID index for shader/texture
+            resolution. When supplied, the parser does not build a project
+            GUID index.
 
     Returns:
         ``MaterialAssetResult`` with shader, properties, and texture
@@ -191,15 +197,12 @@ def inspect_material_asset(
     path = resolve_scope_path(target_path, proj_root)
     text = decode_text_file(path)
 
-    # Validate it's a Material file
     if "--- !u!21 " not in text:
         raise ValueError(f"Not a valid Material file: {target_path}")
 
-    # Material name
     m = _NAME.search(text)
     material_name = m.group(1).strip() if m else ""
 
-    # Shader reference
     m = _SHADER_REF.search(text)
     if m:
         shader_fid = m.group(1)
@@ -207,16 +210,17 @@ def inspect_material_asset(
     else:
         shader_fid, shader_guid = "0", ""
 
-    # Shared GUID index — built lazily, reused across shader + texture resolution
-    guid_index: dict[str, Path] | None = None
+    project_guid_index = guid_index
 
-    # Resolve shader name
     if shader_guid and is_unity_builtin_guid(shader_guid):
         shader_name = resolve_builtin_shader_name(shader_fid)
         shader_path = None
     elif shader_guid:
-        guid_index = collect_project_guid_index(proj_root, include_package_cache=False)
-        asset = guid_index.get(shader_guid)
+        if project_guid_index is None:
+            project_guid_index = collect_project_guid_index(
+                proj_root, include_package_cache=False,
+            )
+        asset = project_guid_index.get(shader_guid)
         if asset is not None:
             try:
                 shader_path = asset.resolve().relative_to(proj_root.resolve()).as_posix()
@@ -230,12 +234,10 @@ def inspect_material_asset(
         shader_name = f"Unknown (fileID={shader_fid})"
         shader_path = None
 
-    # Keywords
     m = _KEYWORDS.search(text)
     kw_str = m.group(1).strip() if m else ""
     keywords = kw_str.split() if kw_str else []
 
-    # Scalar fields
     m = _RENDER_QUEUE.search(text)
     render_queue = int(m.group(1)) if m else -1
 
@@ -248,22 +250,20 @@ def inspect_material_asset(
     m = _DOUBLE_SIDED_GI.search(text)
     double_sided_gi = m.group(1) != "0" if m else False
 
-    # --- m_TexEnvs ---
     tex_section = _extract_section(text, "m_TexEnvs")
     textures: list[MaterialTexture] = []
     for tm in _TEX_ENTRY.finditer(tex_section):
         name, fid, guid = tm.group(1), tm.group(2), tm.group(3) or ""
         if fid == "0":
-            continue  # Unset slot
+            continue
         guid = normalize_guid(guid) if guid else ""
-        # Resolve texture path
         tex_path = ""
         if guid:
-            if guid_index is None:
-                guid_index = collect_project_guid_index(
+            if project_guid_index is None:
+                project_guid_index = collect_project_guid_index(
                     proj_root, include_package_cache=False,
                 )
-            asset = guid_index.get(guid)
+            asset = project_guid_index.get(guid)
             if asset is not None:
                 try:
                     tex_path = asset.resolve().relative_to(
@@ -279,14 +279,12 @@ def inspect_material_asset(
             offset=[float(tm.group(7)), float(tm.group(8))],
         ))
 
-    # --- m_Floats ---
     float_section = _extract_section(text, "m_Floats")
     floats = [
         MaterialFloat(name=fm.group(1), value=float(fm.group(2)))
         for fm in _FLOAT_ENTRY.finditer(float_section)
     ]
 
-    # --- m_Colors ---
     color_section = _extract_section(text, "m_Colors")
     colors = [
         MaterialColor(
@@ -301,7 +299,6 @@ def inspect_material_asset(
         for cm in _COLOR_ENTRY.finditer(color_section)
     ]
 
-    # --- m_Ints ---
     int_section = _extract_section(text, "m_Ints")
     ints = [
         MaterialInt(name=im.group(1), value=int(im.group(2)))

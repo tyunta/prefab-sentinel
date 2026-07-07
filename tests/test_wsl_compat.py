@@ -15,6 +15,7 @@ from prefab_sentinel.wsl_compat import (
     to_windows_path,
     to_wsl_path,
 )
+from tests._typing_helpers import require_tool_response
 
 
 class TestIsWsl(unittest.TestCase):
@@ -299,8 +300,8 @@ class TestResolveScopePathWsl(unittest.TestCase):
         """When scope is a Windows path, to_wsl_path is called before Path()."""
         with tempfile.TemporaryDirectory() as tmpdir:
             mock_to_wsl.return_value = tmpdir
-            result = resolve_scope_path("D:/VRChatProject/Assets", Path(tmpdir))
-            mock_to_wsl.assert_called_once_with("D:/VRChatProject/Assets")
+            result = resolve_scope_path("D:/UnitySampleProject/Assets", Path(tmpdir))
+            mock_to_wsl.assert_called_once_with("D:/UnitySampleProject/Assets")
             self.assertEqual(Path(tmpdir).resolve(), result)
 
     @patch("prefab_sentinel.unity_assets_path.to_wsl_path", side_effect=lambda p: p)
@@ -331,13 +332,13 @@ class TestFindProjectRootWsl(unittest.TestCase):
 
             from prefab_sentinel.unity_assets import find_project_root
 
-            result = find_project_root(Path("D:/VRChatProject"))
-            mock_to_wsl.assert_called_once_with("D:/VRChatProject")
+            result = find_project_root(Path("D:/UnitySampleProject"))
+            mock_to_wsl.assert_called_once_with("D:/UnitySampleProject")
             self.assertEqual(Path(tmpdir).resolve(), result)
 
 
 class TestReadTargetFileWsl(unittest.TestCase):
-    """Verify that _read_target_file resolves paths via resolve_scope_path."""
+    """Verify that _read_target_file enforces target path containment."""
 
     def setUp(self) -> None:
         is_wsl.cache_clear()
@@ -345,10 +346,8 @@ class TestReadTargetFileWsl(unittest.TestCase):
     def tearDown(self) -> None:
         is_wsl.cache_clear()
 
-    @patch("prefab_sentinel.orchestrator_variant.resolve_scope_path")
-    def test_windows_target_path_converted(self, mock_resolve: MagicMock) -> None:
-        """Windows path in _read_target_file gets resolved via resolve_scope_path."""
-        mock_resolve.return_value = Path("/nonexistent/file.prefab")
+    def test_windows_absolute_target_path_rejected(self) -> None:
+        """Windows absolute target_path is rejected before file resolution."""
         from prefab_sentinel.orchestrator import Phase1Orchestrator
 
         orch = Phase1Orchestrator(
@@ -358,11 +357,16 @@ class TestReadTargetFileWsl(unittest.TestCase):
             serialized_object=MagicMock(),
         )
         orch.prefab_variant.project_root = Path("/fake")
-        result = orch._read_target_file("D:/Project/file.prefab", "TEST")
-        mock_resolve.assert_called_once_with("D:/Project/file.prefab", Path("/fake"))
-        # Should return error ToolResponse since file doesn't exist
+        result = require_tool_response(
+            orch._read_target_file("D:/Project/file.prefab", "TEST"),
+            "read target result",
+        )
         self.assertFalse(result.success)
-        self.assertEqual("TEST_FILE_NOT_FOUND", result.code)
+        self.assertEqual("TEST_INVALID_TARGET_PATH", result.code)
+        self.assertEqual(
+            {"target_path": "D:/Project/file.prefab", "read_only": True},
+            result.data,
+        )
 
 
 if __name__ == "__main__":

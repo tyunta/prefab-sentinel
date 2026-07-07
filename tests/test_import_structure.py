@@ -49,28 +49,44 @@ def _iter_package_modules() -> list[Path]:
 
 
 def _cross_module_private_imports(path: Path) -> list[str]:
-    """Return ``module:name`` strings for every import of an
-    underscore-prefixed symbol from a ``prefab_sentinel`` sibling module.
+    """Return ``module:name`` strings for private imports across
+    ``prefab_sentinel`` module boundaries.
 
-    Parsing the AST (rather than grepping text) means a name that occurs
-    only inside a ``#`` comment or a string literal is never matched, and
-    ``from x import public as _alias`` is correctly classified by the
-    imported name (``public``), not the local alias.
+    Focused package submodules may share package-private helpers inside the
+    same package. Cross-package private imports still make an operation hard to
+    discover from its public module and remain violations.
     """
+    package_local_private_import_packages = {
+        "effective_hierarchy",
+        "effective_transform_inspector",
+        "unity_event_listener_inspector",
+    }
+    relative_path = path.relative_to(_PACKAGE_ROOT)
+    package_name = relative_path.parts[0] if len(relative_path.parts) > 1 else ""
+    same_focused_package = package_name in package_local_private_import_packages
+
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     violations: list[str] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.ImportFrom):
             continue
-        # Relative imports (level > 0) and absolute ``prefab_sentinel``
-        # imports both target sibling modules within the package.
-        is_sibling = node.level > 0 or (node.module or "").startswith("prefab_sentinel")
+        target_module = node.module or ""
+        is_sibling = node.level > 0 or target_module.startswith("prefab_sentinel")
         if not is_sibling:
             continue
+        is_package_local = same_focused_package and (
+            node.level == 1
+            or target_module == f"prefab_sentinel.{package_name}"
+            or target_module.startswith(f"prefab_sentinel.{package_name}.")
+        )
         for alias in node.names:
             name = alias.name
-            if name.startswith("_") and not name.startswith("__"):
-                violations.append(f"{node.module or '.'}:{name}")
+            if (
+                name.startswith("_")
+                and not name.startswith("__")
+                and not is_package_local
+            ):
+                violations.append(f"{target_module or '.'}:{name}")
     return violations
 
 

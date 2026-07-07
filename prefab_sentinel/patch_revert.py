@@ -261,7 +261,7 @@ def revert_overrides(
 
     # change_reason is required for any confirmed write-mode invocation
     # (audit log contract shared with all write-mode tools; see
-    # CLAUDE.md "API / エラー規約").
+    # AGENTS.md "API / エラー規約").
     if not (change_reason or "").strip():
         return error_response(
             "CHANGE_REASON_REQUIRED",

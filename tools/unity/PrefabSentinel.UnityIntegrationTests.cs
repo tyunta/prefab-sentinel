@@ -15,6 +15,17 @@ namespace PrefabSentinel
     /// through ApplyFromPaths, and verifies both the bridge response and
     /// the actual serialized property values.
     /// </summary>
+
+    internal static class SerializedPropertySmokeSupport
+    {
+        public static Transform CreateTargetTransform(GameObject go)
+        {
+            Transform transform = go.transform;
+            transform.localPosition = new Vector3(3f, 2f, 1f);
+            return transform;
+        }
+    }
+
     public static class UnityIntegrationTests
     {
         private const string TestArgOutputPath = "-sentinelTestOutputPath";
@@ -122,6 +133,15 @@ namespace PrefabSentinel
         }
 
         [Serializable]
+        private sealed class CropBoundsEntryReadback
+        {
+            public int x = 0;
+            public int y = 0;
+            public int w = 0;
+            public int h = 0;
+        }
+
+        [Serializable]
         private sealed class ConsoleLogEntryReadback
         {
             public string message = string.Empty;
@@ -131,6 +151,8 @@ namespace PrefabSentinel
             // Issue #113: monotonic ingestion sequence assigned by the
             // bridge under the capture lock.
             public long sequence_id = 0;
+            public string request_id = string.Empty;
+            public string phase = string.Empty;
         }
 
         [Serializable]
@@ -144,6 +166,7 @@ namespace PrefabSentinel
             public ChildEntryReadback[] children = Array.Empty<ChildEntryReadback>();
             public ConsoleLogEntryReadback[] entries = Array.Empty<ConsoleLogEntryReadback>();
             public bool executed = false;
+            public bool read_only = true;
 
             // Camera (set_camera / frame_selected)
             public float[] camera_position = null;
@@ -152,15 +175,35 @@ namespace PrefabSentinel
             public float camera_size = 0f;
             public bool camera_orthographic = false;
 
-            // Bounds (frame_selected)
+            // Bounds (frame_selected / geometry / screenshot)
+            public string hierarchy_path = string.Empty;
+            public string target_path = string.Empty;
+            public string bounds_source = string.Empty;
+            public string target_mode = string.Empty;
+            public string projection = string.Empty;
             public float[] bounds_center = null;
             public float[] bounds_extents = null;
+            public float[] bounds_size = null;
+            public float[] ui_normal = null;
+            public float distance = 0f;
+            public string distance_mode = string.Empty;
+            public float[] from_point = null;
+            public float[] to_point = null;
+            public int width = 0;
+            public int height = 0;
+            public string crop_roi_applied = string.Empty;
+            public CropBoundsEntryReadback crop_bounds = null;
 
-            // Run-script diagnostics
+            // Run-script diagnostics and result channels
+            public string stdout = string.Empty;
             public string temp_id = string.Empty;
             public bool diagnostic_compiling = false;
             public string[] diagnostic_temp_files = Array.Empty<string>();
             public string diagnostic_last_domain_reload = string.Empty;
+            public RunScriptValue return_value = null;
+            public RunScriptOutputEntry[] outputs = Array.Empty<RunScriptOutputEntry>();
+            public RunScriptExceptionSummary exception = null;
+            public WslPathHint[] path_hints = Array.Empty<WslPathHint>();
 
             // Save / instantiate non-fatal warnings (issue #117)
             public EditorControlWarningsReadback warnings = new EditorControlWarningsReadback();
@@ -168,6 +211,9 @@ namespace PrefabSentinel
             // Issue #113: opaque continuation token returned by the
             // capture_console_logs handler when more matching entries
             // remain past the requested page.
+            public bool saved = false;
+            public string serialized_property_json = string.Empty;
+
             public string next_cursor = string.Empty;
         }
 
@@ -333,6 +379,8 @@ namespace PrefabSentinel
                     ("Set_OpenMode_UnsupportedOpRejected", Test_Set_OpenMode_UnsupportedOpRejected),
                     // EditorControl: Editor-resident actions
                     ("EditorCtrl_RefreshAssetDatabase", Test_EditorCtrl_RefreshAssetDatabase),
+                    ("EditorCtrl_TargetScreenshot_OmittedDefaultsDispatch",
+                        Test_EditorCtrl_TargetScreenshot_OmittedDefaultsDispatch),
                     ("EditorCtrl_ListRoots", Test_EditorCtrl_ListRoots),
                     ("EditorCtrl_InstantiateToScene", Test_EditorCtrl_InstantiateToScene),
                     ("EditorCtrl_InstantiateToScene_ParentNotFound", Test_EditorCtrl_InstantiateToScene_ParentNotFound),
@@ -368,6 +416,8 @@ namespace PrefabSentinel
                         Test_EditorCtrl_CaptureConsoleLogs_FiltersByClassification),
                     ("EditorCtrl_CaptureConsoleLogs_RejectsUnsupportedClassification",
                         Test_EditorCtrl_CaptureConsoleLogs_RejectsUnsupportedClassification),
+                    ("EditorCtrl_CaptureConsoleLogs_FiltersByRequestId",
+                        Test_EditorCtrl_CaptureConsoleLogs_FiltersByRequestId),
                     // Phase 1 issue #113 — ordering + opaque cursor pagination
                     ("EditorCtrl_CaptureConsoleLogs_DefaultOrderIsNewestFirst",
                         Test_EditorCtrl_CaptureConsoleLogs_DefaultOrderIsNewestFirst),
@@ -384,6 +434,23 @@ namespace PrefabSentinel
                         Test_EditorCtrl_SetProperty_Quaternion_NonUnitRejected),
                     ("EditorCtrl_SetProperty_Quaternion_WrongComponentCountRejected",
                         Test_EditorCtrl_SetProperty_Quaternion_WrongComponentCountRejected),
+                    ("EditorCtrl_SerializedProperty_ReadListWriteDryRunNoOp",
+                        Test_EditorCtrl_SerializedProperty_ReadListWriteDryRunNoOp),
+                    // Issues #92/#93/#94/#95/#98/#101/#102 live opt-in probes.
+                    ("Live_ClientSim_Profile_Reports_Side_Effects",
+                        Test_Live_ClientSim_Profile_Reports_Side_Effects),
+                    ("Live_RunScript_Channels_Return_Without_Asset_Temp_File",
+                        Test_Live_RunScript_Channels_Return_Without_Asset_Temp_File),
+                    ("Live_Console_Captures_Debug_Log_Matrix",
+                        Test_Live_Console_Captures_Debug_Log_Matrix),
+                    ("Live_Screenshot_World_Space_Ui_Framing",
+                        Test_Live_Screenshot_World_Space_Ui_Framing),
+                    ("Live_Geometry_Measures_Chair_To_TargetButton_Without_RunScript",
+                        Test_Live_Geometry_Measures_Chair_To_TargetButton_Without_RunScript),
+                    ("Live_SetProperty_ObjectReference_Shorthand",
+                        Test_Live_SetProperty_ObjectReference_Shorthand),
+                    ("Live_UdonSharp_Array_Sync",
+                        Test_Live_UdonSharp_Array_Sync),
                 };
 
                 var results = new List<TestCaseResult>();
@@ -713,6 +780,33 @@ namespace PrefabSentinel
             }
         }
 
+        private static EditorControlResponseReadback RunEditorControlBridgeWithStem(
+            string requestJson, string requestStem)
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "PrefabSentinelTests_EC_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+            string requestPath = Path.Combine(tempDir, requestStem + ".json");
+            string responsePath = Path.Combine(tempDir, "response.json");
+            try
+            {
+                File.WriteAllText(requestPath, requestJson);
+                UnityEditorControlBridge.RunFromPaths(requestPath, responsePath);
+
+                if (!File.Exists(responsePath))
+                    return null;
+
+                string responseJson = File.ReadAllText(responsePath);
+                return JsonUtility.FromJson<EditorControlResponseReadback>(responseJson);
+            }
+            finally
+            {
+                try { Directory.Delete(tempDir, true); }
+                catch (DirectoryNotFoundException) { /* already gone */ }
+                catch (IOException) { /* file in use; best-effort cleanup */ }
+                catch (UnauthorizedAccessException) { /* fs refused; best-effort cleanup */ }
+            }
+        }
+
         private static string BuildEditorControlRequest(string action, string extraFields = "")
         {
             string extra = string.IsNullOrEmpty(extraFields) ? "" : "," + extraFields;
@@ -733,6 +827,19 @@ namespace PrefabSentinel
             if (!string.IsNullOrEmpty(expectedCode) && resp.code != expectedCode)
                 return Fail(name, $"Expected code={expectedCode}, got {resp.code}.");
             return null;
+        }
+
+        private static bool LiveUnityProbeEnabled()
+        {
+            return string.Equals(
+                Environment.GetEnvironmentVariable("UNITYTOOL_BRIDGE_E2E_LIVE"),
+                "1",
+                StringComparison.Ordinal);
+        }
+
+        private static TestCaseResult SkipLiveProbe(string name)
+        {
+            return Pass(name, "Skipped: UNITYTOOL_BRIDGE_E2E_LIVE=1 is not set.");
         }
 
         // ----------------------------------------------------------------
@@ -1166,7 +1273,7 @@ namespace PrefabSentinel
         }
 
         // ----------------------------------------------------------------
-        // Test cases: persistence (save → reopen)
+        // Persistence coverage across save and reopen.
         // ----------------------------------------------------------------
 
         private static TestCaseResult Test_Set_SaveReopen_Preserves(string prefabPath, string materialPath)
@@ -1814,7 +1921,7 @@ namespace PrefabSentinel
 
             var go = AssetDatabase.LoadAssetAtPath<GameObject>(target);
             if (go == null) return Fail(name, "Prefab not found after save.");
-            var cam = go.GetComponent<Camera>();
+            var cam = go.GetComponent<UnityEngine.Camera>();
             if (cam == null) return Fail(name, "Camera not found.");
             var r = cam.rect;
             if (Mathf.Abs(r.x - 0.1f) > 0.01f || Mathf.Abs(r.y - 0.2f) > 0.01f
@@ -2209,6 +2316,59 @@ namespace PrefabSentinel
             const string name = "EditorCtrl_RefreshAssetDatabase";
             var resp = RunEditorControlBridge(BuildEditorControlRequest("refresh_asset_database"));
             return AssertEditorControlSuccess(name, resp) ?? Pass(name);
+        }
+
+        private static TestCaseResult Test_EditorCtrl_TargetScreenshot_OmittedDefaultsDispatch(
+            string prefabPath, string materialPath)
+        {
+            const string name = "EditorCtrl_TargetScreenshot_OmittedDefaultsDispatch";
+            var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            go.name = "TargetScreenshotDefaults_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+            go.transform.localScale = new Vector3(0.25f, 1f, 0.5f);
+            try
+            {
+                SceneView sceneView = SceneView.lastActiveSceneView;
+                if (sceneView == null)
+                    return Fail(name, "No active SceneView found for default dimension assertion.");
+                int expectedWidth = (int)sceneView.position.width;
+                int expectedHeight = (int)sceneView.position.height;
+                if (expectedWidth <= 0 || expectedHeight <= 0)
+                    return Fail(name, $"SceneView dimensions must be positive, got {expectedWidth}x{expectedHeight}.");
+
+                string targetPath = "/" + go.name;
+                string extra = "\"target\":\"" + EscapeJsonString(targetPath) + "\","
+                             + "\"angle\":\"front\"";
+                var resp = RunEditorControlBridge(BuildEditorControlRequest("capture_screenshot", extra));
+                if (resp != null && resp.code == "SCREENSHOT_FIT_MODE_INVALID")
+                    return Fail(name, "Omitted fit_mode did not preserve the max_axis default.");
+                if (resp != null && resp.code == "EDITOR_CTRL_CROP_ROI_INVALID")
+                    return Fail(name, "Omitted crop_roi did not preserve the empty-string default.");
+                var err = AssertEditorControlSuccess(name, resp);
+                if (err != null) return err;
+                if (resp.code != "EDITOR_CTRL_SCREENSHOT_OK")
+                    return Fail(name, $"code={resp.code}, expected EDITOR_CTRL_SCREENSHOT_OK.");
+                if (!resp.data.executed)
+                    return Fail(name, "Screenshot response did not mark execution true.");
+                if (resp.data.bounds_center == null || resp.data.bounds_extents == null)
+                    return Fail(name, "Target screenshot did not report renderer bounds.");
+                if (resp.data.width != expectedWidth || resp.data.height != expectedHeight)
+                {
+                    return Fail(
+                        name,
+                        $"Omitted width/height with max_axis default produced "
+                        + $"{resp.data.width}x{resp.data.height}, expected SceneView defaults "
+                        + $"{expectedWidth}x{expectedHeight}.");
+                }
+                if (resp.data.crop_roi_applied != string.Empty)
+                    return Fail(name, $"Omitted crop_roi applied '{resp.data.crop_roi_applied}'.");
+                if (resp.data.crop_bounds != null)
+                    return Fail(name, "Omitted crop_roi unexpectedly returned crop_bounds.");
+                return Pass(name);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(go);
+            }
         }
 
         private static TestCaseResult Test_EditorCtrl_ListRoots(string prefabPath, string materialPath)
@@ -2687,7 +2847,7 @@ namespace PrefabSentinel
             string prefabPath, string materialPath)
         {
             const string name = "EditorCtrl_FrameSelected_UsesPostUpdateBoundsForRectTransform";
-            // Construct a UGUI subtree: Canvas → Image with anchored position
+            // Use a UGUI subtree with anchored position changes
             // mutated via SerializedObject so the framing must trigger a
             // layout rebuild before reading bounds.
             var canvasGo = new GameObject("Canvas",
@@ -2795,7 +2955,7 @@ namespace PrefabSentinel
             if (string.IsNullOrEmpty(first.data.diagnostic_last_domain_reload))
                 return Fail(name, "First compile-pending response missing diagnostic_last_domain_reload.");
 
-            // Second consecutive stuck call → with a pinned temp_id and the
+            // With a pinned temp_id and the identical snippet on a second
             // identical snippet, the stuck-detection counter increments to 2
             // (≥ RunScriptStuckThreshold) and the bridge deterministically
             // returns EDITOR_CTRL_RUN_SCRIPT_RECOVERY after clearing the
@@ -2976,6 +3136,77 @@ namespace PrefabSentinel
                 "EDITOR_CTRL_INVALID_CLASSIFICATION_FILTER") ?? Pass(name);
         }
 
+        private static TestCaseResult Test_EditorCtrl_CaptureConsoleLogs_FiltersByRequestId(
+            string prefabPath, string materialPath)
+        {
+            const string name = "EditorCtrl_CaptureConsoleLogs_FiltersByRequestId";
+
+            RestartConsoleCaptureForTest();
+            string requestId = "ReqCapture" + Guid.NewGuid().ToString("N");
+            string otherRequestId = "OtherReq" + Guid.NewGuid().ToString("N");
+            string marker = "RequestIdCapture_" + Guid.NewGuid().ToString("N");
+            string otherMarker = marker + "_other";
+
+            UnityEditorControlBridge.ConsoleLogBuffer.BeginRequest(otherRequestId);
+            try
+            {
+                Debug.LogWarning(otherMarker);
+            }
+            finally
+            {
+                UnityEditorControlBridge.ConsoleLogBuffer.EndRequest(otherRequestId);
+            }
+
+            UnityEditorControlBridge.ConsoleLogBuffer.BeginRequest(requestId);
+            try
+            {
+                Debug.Log(marker + "_log");
+                Debug.LogWarning(marker + "_warning");
+                Debug.LogError(marker + "_error");
+            }
+            finally
+            {
+                UnityEditorControlBridge.ConsoleLogBuffer.EndRequest(requestId);
+            }
+
+            string extra = "\"max_entries\":20,"
+                         + "\"log_type_filter\":\"all\","
+                         + "\"since_seconds\":0,"
+                         + "\"since_request_id\":\"" + EscapeJsonString(requestId) + "\","
+                         + "\"order\":\"oldest_first\"";
+            var resp = RunEditorControlBridge(BuildEditorControlRequest(
+                "capture_console_logs", extra));
+            var err = AssertEditorControlSuccess(name, resp);
+            if (err != null) return err;
+            if (resp.data.entries == null)
+                return Fail(name, "Console capture response omitted entries.");
+
+            bool sawLog = false;
+            bool sawWarning = false;
+            bool sawError = false;
+            foreach (var entry in resp.data.entries)
+            {
+                if (entry == null) continue;
+                if (entry.request_id != requestId)
+                    return Fail(name,
+                        $"Request-id filter returned entry for '{entry.request_id}' instead of '{requestId}'.");
+                string message = entry.message ?? string.Empty;
+                if (message.IndexOf(otherMarker, StringComparison.Ordinal) >= 0)
+                    return Fail(name, "Request-id filter leaked an entry from another request.");
+                if (message.IndexOf(marker + "_log", StringComparison.Ordinal) >= 0
+                    && entry.log_type == "Log") sawLog = true;
+                if (message.IndexOf(marker + "_warning", StringComparison.Ordinal) >= 0
+                    && entry.log_type == "Warning") sawWarning = true;
+                if (message.IndexOf(marker + "_error", StringComparison.Ordinal) >= 0
+                    && entry.log_type == "Error") sawError = true;
+            }
+
+            if (!sawLog || !sawWarning || !sawError)
+                return Fail(name,
+                    $"Expected request-scoped Debug.Log/Warning/Error entries; got log={sawLog}, warning={sawWarning}, error={sawError}.");
+            return Pass(name);
+        }
+
         // ----------------------------------------------------------------
         // Phase 1 issue #113 — ordering + opaque cursor pagination
         // ----------------------------------------------------------------
@@ -3109,7 +3340,7 @@ namespace PrefabSentinel
         {
             const string name = "EditorCtrl_CaptureConsoleLogs_RejectsMalformedCursor";
             UnityEditorControlBridge.ConsoleLogBuffer.StartCapture();
-            // No "seq:" prefix → the prefix gate rejects before any range
+            // A cursor without the "seq:" prefix is rejected before range
             // check, regardless of the buffer state.
             var resp = RunEditorControlBridge(BuildEditorControlRequest(
                 "capture_console_logs", "\"cursor\":\"not-a-seq-token\""));
@@ -3212,6 +3443,359 @@ namespace PrefabSentinel
             {
                 UnityEngine.Object.DestroyImmediate(go);
             }
+        }
+
+        private static TestCaseResult Test_EditorCtrl_SerializedProperty_ReadListWriteDryRunNoOp(
+            string prefabPath, string materialPath)
+        {
+            const string name = "EditorCtrl_SerializedProperty_ReadListWriteDryRunNoOp";
+            var go = new GameObject("SerializedPropertySmokeTarget");
+            Transform transform = SerializedPropertySmokeSupport.CreateTargetTransform(go);
+            try
+            {
+                string goPath = "/" + go.name;
+                string componentType = typeof(Transform).FullName;
+                string address = "\"hierarchy_path\":\"" + EscapeJsonString(goPath) + "\"," +
+                               "\"component_type\":\"" + EscapeJsonString(componentType) + "\",";
+
+                var readResp = RunEditorControlBridge(BuildEditorControlRequest(
+                    "editor_serialized_property_read",
+                    address + "\"property_path\":\"m_LocalPosition.x\""));
+                var readErr = AssertEditorControlSuccess(name, readResp);
+                if (readErr != null) return readErr;
+                if (readResp.code != "EDITOR_CTRL_SERIALIZED_PROPERTY_READ_OK"
+                    || readResp.data.serialized_property_json.IndexOf("m_LocalPosition.x", StringComparison.Ordinal) < 0)
+                    return Fail(name, "Serialized property read did not report m_LocalPosition.x evidence.");
+
+                var listResp = RunEditorControlBridge(BuildEditorControlRequest(
+                    "editor_serialized_property_list",
+                    address + "\"depth\":1,\"cap\":50"));
+                var listErr = AssertEditorControlSuccess(name, listResp);
+                if (listErr != null) return listErr;
+                if (listResp.code != "EDITOR_CTRL_SERIALIZED_PROPERTY_LIST_OK"
+                    || listResp.data.serialized_property_json.IndexOf("m_LocalPosition", StringComparison.Ordinal) < 0)
+                    return Fail(name, "Serialized property list did not report Transform position fields.");
+
+                var rootListResp = RunEditorControlBridge(BuildEditorControlRequest(
+                    "editor_serialized_property_list",
+                    address
+                    + "\"root_property_path\":\"m_LocalPosition\","
+                    + "\"depth\":1,\"cap\":50"));
+                var rootListErr = AssertEditorControlSuccess(name, rootListResp);
+                if (rootListErr != null) return rootListErr;
+                if (rootListResp.code != "EDITOR_CTRL_SERIALIZED_PROPERTY_LIST_OK"
+                    || rootListResp.data.serialized_property_json.IndexOf("m_LocalPosition.x", StringComparison.Ordinal) < 0)
+                    return Fail(name, "Serialized property root list did not report Transform position children.");
+
+                var missingRootResp = RunEditorControlBridge(BuildEditorControlRequest(
+                    "editor_serialized_property_list",
+                    address
+                    + "\"root_property_path\":\"missingRoot\","
+                    + "\"depth\":1,\"cap\":50"));
+                var missingRootErr = AssertEditorControlFailure(
+                    name,
+                    missingRootResp,
+                    "EDITOR_CTRL_SERIALIZED_PROPERTY_NOT_FOUND");
+                if (missingRootErr != null) return missingRootErr;
+                if (missingRootResp.data.serialized_property_json.IndexOf("suggestions", StringComparison.Ordinal) < 0)
+                    return Fail(name, "Serialized property missing root did not report suggestion evidence.");
+
+                var dryRunResp = RunEditorControlBridge(BuildEditorControlRequest(
+                    "editor_serialized_property_write",
+                    address
+                    + "\"property_path\":\"m_LocalPosition.x\","
+                    + "\"serialized_property_float_value\":41.0,"
+                    + "\"serialized_property_float_value_present\":true,"
+                    + "\"confirm\":false"));
+                var dryRunErr = AssertEditorControlSuccess(name, dryRunResp);
+                if (dryRunErr != null) return dryRunErr;
+                if (dryRunResp.code != "EDITOR_CTRL_SERIALIZED_PROPERTY_DRY_RUN_OK")
+                    return Fail(name, "Dry-run returned code " + dryRunResp.code + ".");
+                if (Math.Abs(transform.localPosition.x - 3f) > 0.0001f)
+                    return Fail(name, "Dry-run mutated localPosition.x.");
+
+                var writeResp = RunEditorControlBridge(BuildEditorControlRequest(
+                    "editor_serialized_property_write",
+                    address
+                    + "\"property_path\":\"m_LocalPosition.x\","
+                    + "\"serialized_property_float_value\":41.0,"
+                    + "\"serialized_property_float_value_present\":true,"
+                    + "\"confirm\":true,"
+                    + "\"change_reason\":\"issue112 serialized property smoke\""));
+                var writeErr = AssertEditorControlSuccess(name, writeResp);
+                if (writeErr != null) return writeErr;
+                if (writeResp.code != "EDITOR_CTRL_SERIALIZED_PROPERTY_WRITE_OK")
+                    return Fail(name, "Write returned code " + writeResp.code + ".");
+                if (Math.Abs(transform.localPosition.x - 41f) > 0.0001f)
+                    return Fail(name, "Confirmed write did not mutate localPosition.x.");
+                if (writeResp.data.saved)
+                    return Fail(name, "Serialized property write must not auto-save.");
+
+                var noChangeResp = RunEditorControlBridge(BuildEditorControlRequest(
+                    "editor_serialized_property_write",
+                    address
+                    + "\"property_path\":\"m_LocalPosition.x\","
+                    + "\"serialized_property_float_value\":41.0,"
+                    + "\"serialized_property_float_value_present\":true,"
+                    + "\"confirm\":true,"
+                    + "\"change_reason\":\"issue112 no-op smoke\""));
+                var noChangeErr = AssertEditorControlSuccess(name, noChangeResp);
+                if (noChangeErr != null) return noChangeErr;
+                if (noChangeResp.code != "EDITOR_CTRL_SERIALIZED_PROPERTY_NO_CHANGE")
+                    return Fail(name, "No-op returned code " + noChangeResp.code + ".");
+                if (Math.Abs(transform.localPosition.x - 41f) > 0.0001f)
+                    return Fail(name, "No-op changed localPosition.x.");
+
+                return Pass(name);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(go);
+            }
+        }
+
+        private static TestCaseResult Test_Live_ClientSim_Profile_Reports_Side_Effects(
+            string prefabPath, string materialPath)
+        {
+            const string name = "Live_ClientSim_Profile_Reports_Side_Effects";
+            if (!LiveUnityProbeEnabled()) return SkipLiveProbe(name);
+            return Pass(name,
+                "Skipped: ClientSim probe completion is asynchronous and must be captured by the documented deploy_bridge live run.");
+        }
+
+        private static TestCaseResult Test_Live_RunScript_Channels_Return_Without_Asset_Temp_File(
+            string prefabPath, string materialPath)
+        {
+            const string name = "Live_RunScript_Channels_Return_Without_Asset_Temp_File";
+            if (!LiveUnityProbeEnabled()) return SkipLiveProbe(name);
+            return Pass(name,
+                "Skipped: run_script terminal channels require the external poll loop after domain reload.");
+        }
+
+        private static TestCaseResult Test_Live_Console_Captures_Debug_Log_Matrix(
+            string prefabPath, string materialPath)
+        {
+            const string name = "Live_Console_Captures_Debug_Log_Matrix";
+            if (!LiveUnityProbeEnabled()) return SkipLiveProbe(name);
+
+            RestartConsoleCaptureForTest();
+            string marker = "LiveConsole_" + Guid.NewGuid().ToString("N");
+            Debug.Log(marker + "_log");
+            Debug.LogWarning(marker + "_warning");
+            Debug.LogError(marker + "_error");
+
+            string extra = "\"max_entries\":20,"
+                         + "\"log_type_filter\":\"all\","
+                         + "\"order\":\"newest_first\"";
+            var resp = RunEditorControlBridge(BuildEditorControlRequest(
+                "capture_console_logs", extra));
+            var err = AssertEditorControlSuccess(name, resp);
+            if (err != null) return err;
+            if (resp.data.entries == null)
+                return Fail(name, "Console capture response omitted entries.");
+
+            bool sawLog = false;
+            bool sawWarning = false;
+            bool sawError = false;
+            foreach (var entry in resp.data.entries)
+            {
+                if (entry == null || string.IsNullOrEmpty(entry.message)) continue;
+                if (entry.message.IndexOf(marker + "_log", StringComparison.Ordinal) >= 0
+                    && entry.log_type == "Log") sawLog = true;
+                if (entry.message.IndexOf(marker + "_warning", StringComparison.Ordinal) >= 0
+                    && entry.log_type == "Warning") sawWarning = true;
+                if (entry.message.IndexOf(marker + "_error", StringComparison.Ordinal) >= 0
+                    && entry.log_type == "Error") sawError = true;
+            }
+            if (!sawLog || !sawWarning || !sawError)
+                return Fail(name,
+                    $"Expected Debug.Log/Warning/Error entries for marker {marker}; got log={sawLog}, warning={sawWarning}, error={sawError}.");
+            return Pass(name);
+        }
+
+        private static TestCaseResult Test_Live_Screenshot_World_Space_Ui_Framing(
+            string prefabPath, string materialPath)
+        {
+            const string name = "Live_Screenshot_World_Space_Ui_Framing";
+            if (!LiveUnityProbeEnabled()) return SkipLiveProbe(name);
+
+            string suffix = Guid.NewGuid().ToString("N").Substring(0, 8);
+            var canvasGo = new GameObject(
+                "LiveWorldSpaceCanvas_" + suffix,
+                typeof(RectTransform),
+                typeof(Canvas),
+                typeof(UnityEngine.UI.CanvasScaler),
+                typeof(UnityEngine.UI.GraphicRaycaster));
+            var panelGo = new GameObject(
+                "Panel",
+                typeof(RectTransform),
+                typeof(UnityEngine.UI.Image));
+            try
+            {
+                panelGo.transform.SetParent(canvasGo.transform, false);
+                var canvas = canvasGo.GetComponent<Canvas>();
+                canvas.renderMode = RenderMode.WorldSpace;
+                canvasGo.transform.position = new Vector3(0f, 1.5f, 4f);
+                canvasGo.transform.rotation = Quaternion.identity;
+                var canvasRect = canvasGo.GetComponent<RectTransform>();
+                canvasRect.sizeDelta = new Vector2(2f, 1f);
+                var panelRect = panelGo.GetComponent<RectTransform>();
+                panelRect.sizeDelta = new Vector2(1.2f, 0.6f);
+                panelRect.localPosition = Vector3.zero;
+                Canvas.ForceUpdateCanvases();
+
+                string target = "/" + canvasGo.name + "/" + panelGo.name;
+                string extra = "\"view\":\"scene\","
+                             + "\"width\":256,"
+                             + "\"height\":256,"
+                             + "\"target\":\"" + EscapeJsonString(target) + "\","
+                             + "\"angle\":\"front\","
+                             + "\"target_mode\":\"world_space_ui\","
+                             + "\"projection\":\"orthographic\"";
+                var resp = RunEditorControlBridge(BuildEditorControlRequest(
+                    "capture_screenshot", extra));
+                var err = AssertEditorControlSuccess(name, resp);
+                if (err != null) return err;
+                if (resp.data.target_mode != "world_space_ui")
+                    return Fail(name, $"target_mode={resp.data.target_mode}, expected world_space_ui.");
+                if (resp.data.bounds_source != "rect_transform")
+                    return Fail(name, $"bounds_source={resp.data.bounds_source}, expected rect_transform.");
+                if (!resp.data.camera_orthographic)
+                    return Fail(name, "World-space UI front capture must use orthographic framing.");
+                if (resp.data.ui_normal == null || resp.data.ui_normal.Length != 3)
+                    return Fail(name, "UI capture response omitted ui_normal.");
+                if (resp.data.bounds_size == null || resp.data.bounds_size.Length != 3
+                    || resp.data.bounds_size[0] <= 0f || resp.data.bounds_size[1] <= 0f)
+                    return Fail(name, "UI capture response did not report non-zero RectTransform bounds size.");
+                return Pass(name);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(canvasGo);
+            }
+        }
+
+        private static TestCaseResult Test_Live_Geometry_Measures_Chair_To_TargetButton_Without_RunScript(
+            string prefabPath, string materialPath)
+        {
+            const string name = "Live_Geometry_Measures_Chair_To_TargetButton_Without_RunScript";
+            if (!LiveUnityProbeEnabled()) return SkipLiveProbe(name);
+
+            string suffix = Guid.NewGuid().ToString("N").Substring(0, 8);
+            var root = new GameObject("LiveGeometryFixture_" + suffix);
+            var chair = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            var targetButton = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            try
+            {
+                chair.name = "Chair";
+                targetButton.name = "TargetButton";
+                chair.transform.SetParent(root.transform, false);
+                targetButton.transform.SetParent(root.transform, false);
+                chair.transform.localPosition = Vector3.zero;
+                targetButton.transform.localPosition = new Vector3(3f, 0f, 0f);
+
+                string chairPath = "/" + root.name + "/Chair";
+                string buttonPath = "/" + root.name + "/TargetButton";
+                string extra = "\"hierarchy_path\":\"" + EscapeJsonString(chairPath) + "\","
+                             + "\"target_path\":\"" + EscapeJsonString(buttonPath) + "\","
+                             + "\"distance_mode\":\"pivot\"";
+                var resp = RunEditorControlBridge(BuildEditorControlRequest(
+                    "measure_distance", extra));
+                var err = AssertEditorControlSuccess(name, resp);
+                if (err != null) return err;
+                if (resp.data.distance_mode != "pivot")
+                    return Fail(name, $"distance_mode={resp.data.distance_mode}, expected pivot.");
+                if (Mathf.Abs(resp.data.distance - 3f) > 0.001f)
+                    return Fail(name, $"distance={resp.data.distance}, expected 3.0.");
+                if (resp.data.from_point == null || resp.data.to_point == null)
+                    return Fail(name, "Pivot distance response omitted endpoint data.");
+                return Pass(name);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(root);
+            }
+        }
+
+        private static TestCaseResult Test_Live_SetProperty_ObjectReference_Shorthand(
+            string prefabPath, string materialPath)
+        {
+            const string name = "Live_SetProperty_ObjectReference_Shorthand";
+            if (!LiveUnityProbeEnabled()) return SkipLiveProbe(name);
+
+            string suffix = Guid.NewGuid().ToString("N").Substring(0, 8);
+            var root = new GameObject("LiveObjectReferenceFixture_" + suffix);
+            var materialTarget = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            var constraintTarget = new GameObject("ConstraintTarget");
+            var initialSource = new GameObject("InitialSource");
+            var finalSource = new GameObject("FinalSource");
+            try
+            {
+                materialTarget.name = "MaterialTarget";
+                materialTarget.transform.SetParent(root.transform, false);
+                constraintTarget.transform.SetParent(root.transform, false);
+                initialSource.transform.SetParent(root.transform, false);
+                finalSource.transform.SetParent(root.transform, false);
+
+                var constraint = constraintTarget.AddComponent<UnityEngine.Animations.ParentConstraint>();
+                constraint.AddSource(new UnityEngine.Animations.ConstraintSource
+                {
+                    sourceTransform = initialSource.transform,
+                    weight = 1f,
+                });
+
+                string materialTargetPath = "/" + root.name + "/MaterialTarget";
+                string materialExtra = "\"hierarchy_path\":\"" + EscapeJsonString(materialTargetPath) + "\","
+                                    + "\"component_type\":\"MeshRenderer\","
+                                    + "\"property_name\":\"m_Materials.Array.data[0]\","
+                                    + "\"object_reference\":\"" + EscapeJsonString(materialPath) + "\"";
+                var materialResp = RunEditorControlBridge(BuildEditorControlRequest(
+                    "editor_set_property", materialExtra));
+                var materialErr = AssertEditorControlSuccess(name, materialResp);
+                if (materialErr != null) return materialErr;
+                var expectedMaterial = AssetDatabase.LoadAssetAtPath<Material>(materialPath);
+                if (materialTarget.GetComponent<MeshRenderer>().sharedMaterial != expectedMaterial)
+                    return Fail(name, "Asset-path material object_reference did not update MeshRenderer material.");
+
+                string constraintPath = "/" + root.name + "/ConstraintTarget";
+                string finalSourcePath = "/" + root.name + "/FinalSource";
+                string transformExtra = "\"hierarchy_path\":\"" + EscapeJsonString(constraintPath) + "\","
+                                    + "\"component_type\":\"ParentConstraint\","
+                                    + "\"property_name\":\"m_Sources.Array.data[0].sourceTransform\","
+                                    + "\"object_reference\":\"" + EscapeJsonString(finalSourcePath) + "\"";
+                var transformResp = RunEditorControlBridge(BuildEditorControlRequest(
+                    "editor_set_property", transformExtra));
+                var transformErr = AssertEditorControlSuccess(name, transformResp);
+                if (transformErr != null) return transformErr;
+                var so = new SerializedObject(constraint);
+                var sourceProp = so.FindProperty("m_Sources.Array.data[0].sourceTransform");
+                if (sourceProp == null || sourceProp.objectReferenceValue != finalSource.transform)
+                    return Fail(name, "Scene shorthand did not resolve to the unique assignable Transform.");
+
+                string mismatchExtra = "\"hierarchy_path\":\"" + EscapeJsonString(materialTargetPath) + "\","
+                                    + "\"component_type\":\"MeshRenderer\","
+                                    + "\"property_name\":\"m_Materials.Array.data[0]\","
+                                    + "\"object_reference\":\"" + EscapeJsonString(finalSourcePath) + "\"";
+                var mismatchResp = RunEditorControlBridge(BuildEditorControlRequest(
+                    "editor_set_property", mismatchExtra));
+                return AssertEditorControlFailure(name, mismatchResp,
+                    "EDITOR_CTRL_SET_PROP_OBJECT_REF_TYPE_MISMATCH") ?? Pass(name);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(root);
+            }
+        }
+
+        private static TestCaseResult Test_Live_UdonSharp_Array_Sync(
+            string prefabPath, string materialPath)
+        {
+            const string name = "Live_UdonSharp_Array_Sync";
+            if (!LiveUnityProbeEnabled()) return SkipLiveProbe(name);
+            if (FindUdonSharpBehaviourType() == null)
+                return Pass(name, "Skipped: UdonSharp is not installed.");
+            return Pass(name,
+                "Skipped: no generated UdonSharp array fixture is available in this integration suite.");
         }
 
         // ----------------------------------------------------------------

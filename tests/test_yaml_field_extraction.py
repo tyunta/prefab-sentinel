@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from typing import cast
 
 from prefab_sentinel.yaml_field_extraction import (
     extract_block_fields,
@@ -141,7 +142,10 @@ class TestParseYamlScalarNumeric(unittest.TestCase):
         self.assertEqual(parse_yaml_scalar("-7"), -7)
 
     def test_float(self) -> None:
-        self.assertAlmostEqual(parse_yaml_scalar("3.14"), 3.14)
+        value = parse_yaml_scalar("3.14")
+        self.assertIsInstance(value, float)
+        value = cast(float, value)
+        self.assertAlmostEqual(value, 3.14)
 
 
 class TestParseYamlScalarOther(unittest.TestCase):

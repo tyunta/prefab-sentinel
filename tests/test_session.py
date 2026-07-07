@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 
 from prefab_sentinel.bridge_constants import UNITY_PROJECT_PATH_ENV
 from prefab_sentinel.session import InvalidProjectRootError, ProjectSession
+from tests._typing_helpers import require_not_none
 from tests.yaml_helpers import (
     YAML_HEADER,
     make_gameobject,
@@ -67,7 +68,21 @@ class TestOrchestratorCaching(unittest.TestCase):
         session = ProjectSession(project_root=root)
         session.get_orchestrator()
 
-        mock_cls.default.assert_called_once_with(project_root=root)
+        mock_cls.default.assert_called_once()
+        self.assertEqual(root, mock_cls.default.call_args.kwargs["project_root"])
+
+    @patch("prefab_sentinel.session_cache.Phase1Orchestrator")
+    def test_passes_internal_inspection_context_provider(
+        self, mock_cls: MagicMock
+    ) -> None:
+        root = Path("/fake/project")
+        session = ProjectSession(project_root=root)
+        session.get_orchestrator()
+
+        provider = mock_cls.default.call_args.kwargs["inspection_context_provider"]
+        self.assertEqual(root, mock_cls.default.call_args.kwargs["project_root"])
+        self.assertEqual("inspection_context", provider.__name__)
+        self.assertIs(provider.__self__, session._cache)
 
     @patch("prefab_sentinel.session_cache.Phase1Orchestrator")
     def test_recreated_after_guid_invalidation(self, mock_cls: MagicMock) -> None:
@@ -159,6 +174,30 @@ class TestGuidIndexCaching(unittest.TestCase):
         mock_collect.assert_called_once_with(root, include_package_cache=False)
 
     @patch("prefab_sentinel.session_cache.collect_project_guid_index")
+    @patch("prefab_sentinel.session_cache.build_script_name_map")
+    def test_inspection_context_reuses_cached_guid_and_script_maps(
+        self, mock_build: MagicMock, mock_collect: MagicMock
+    ) -> None:
+        from prefab_sentinel.inspection_context import ProjectInspectionContext
+
+        root = Path("/fake/project")
+        guid_index = {"scriptguid": root / "Assets" / "Player.cs"}
+        script_map = {"scriptguid": "Player"}
+        mock_collect.return_value = guid_index
+        mock_build.return_value = script_map
+        session = ProjectSession(project_root=root)
+
+        context1 = session._cache.inspection_context()
+        context2 = session._cache.inspection_context()
+
+        self.assertIsInstance(context1, ProjectInspectionContext)
+        self.assertEqual(root, context1.project_root)
+        self.assertIs(context1.guid_index, context2.guid_index)
+        self.assertIs(context1.script_name_map, context2.script_name_map)
+        mock_collect.assert_called_once_with(root, include_package_cache=False)
+        mock_build.assert_called_once_with(guid_index)
+
+    @patch("prefab_sentinel.session_cache.collect_project_guid_index")
     def test_returns_empty_when_no_root(self, mock_collect: MagicMock) -> None:
         session = ProjectSession()
         result = session.guid_index()
@@ -182,6 +221,48 @@ class TestGuidIndexCaching(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
+    def test_invalidate_guid_index_clears_nested_prefab_cache(self) -> None:
+        from prefab_sentinel.unity_assets import decode_text_file
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            assets = root / "Assets"
+            assets.mkdir()
+            child = assets / "Child.prefab"
+            child.write_text("%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Child\n", encoding="utf-8")
+            guid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            host = (
+                "%YAML 1.1\n"
+                "--- !u!1001 &1001\n"
+                "PrefabInstance:\n"
+                f"  m_SourcePrefab: {{fileID: 100100000, guid: {guid}, type: 3}}\n"
+            )
+            session = ProjectSession(project_root=root)
+            context = session._cache.inspection_context()
+            with patch(
+                "prefab_sentinel.nested_prefab_cache.decode_text_file",
+                wraps=decode_text_file,
+            ) as decode_text:
+                context.nested_prefab_cache.prefetch_children(
+                    host,
+                    {guid: child},
+                    root,
+                )
+                context.nested_prefab_cache.prefetch_children(
+                    host,
+                    {guid: child},
+                    root,
+                )
+                session.invalidate_guid_index()
+                session._cache.inspection_context().nested_prefab_cache.prefetch_children(
+                    host,
+                    {guid: child},
+                    root,
+                )
+
+        self.assertEqual(2, decode_text.call_count)
+
+
 class TestSymbolTreeCaching(unittest.TestCase):
     """SymbolTree is cached per asset path and invalidated on mtime change."""
 
@@ -197,7 +278,6 @@ class TestSymbolTreeCaching(unittest.TestCase):
 
     def test_cache_miss_on_mtime_change(self) -> None:
         import os
-        import time
 
         with _tmp_prefab() as path:
             session = ProjectSession()
@@ -205,9 +285,8 @@ class TestSymbolTreeCaching(unittest.TestCase):
 
             tree1 = session.get_symbol_tree(path, text)
 
-            # Touch the file to change mtime
-            time.sleep(0.05)
-            os.utime(path, None)
+            updated_mtime = path.stat().st_mtime + 1.0
+            os.utime(path, (updated_mtime, updated_mtime))
 
             tree2 = session.get_symbol_tree(path, text)
             self.assertIsNot(tree1, tree2)
@@ -368,15 +447,24 @@ class TestStatus(unittest.TestCase):
         session = ProjectSession()
         s = session.status()
 
-        # Pin every documented status field as a single dict-equality so
-        # one mutation of any flag/value names every divergent field in
-        # one failure message.  ``bridge`` is provider-specific and is
-        # excluded from the pin to keep the test independent of
-        # bridge_status() internals.
         observed = {k: v for k, v in s.items() if k != "bridge"}
+        session_id = observed.pop("session_id")
+        self.assertIsInstance(session_id, str)
+        self.assertEqual(
+            32,
+            len(session_id),
+            f"session_id should be a 32-character hex value, got {session_id!r}",
+        )
+        self.assertEqual(session_id.lower(), session_id)
+        try:
+            int(session_id, 16)
+        except ValueError as exc:
+            raise AssertionError(f"session_id should be hex, got {session_id!r}") from exc
+
         self.assertEqual(
             {
                 "project_root": None,
+                "expected_project_root": None,
                 "scope": None,
                 "orchestrator_cached": False,
                 "script_map_size": 0,
@@ -756,6 +844,7 @@ class TestBridgeVersionDetection(unittest.TestCase):
             session = ProjectSession(project_root=root)
             diag = session.check_bridge_version()
             self.assertIsNotNone(diag)
+            diag = require_not_none(diag, "bridge mismatch diagnostic")
             self.assertEqual("BRIDGE_VERSION_MISMATCH", diag["code"])
 
     def test_check_bridge_not_found_carries_unified_four_key_shape(self) -> None:
@@ -768,6 +857,7 @@ class TestBridgeVersionDetection(unittest.TestCase):
             (root / "Assets").mkdir()
             session = ProjectSession(project_root=root)
             diag = session.check_bridge_version()
+            diag = require_not_none(diag, "bridge diagnostic")
             self.assertEqual(
                 {"severity", "code", "message", "data"},
                 set(diag),

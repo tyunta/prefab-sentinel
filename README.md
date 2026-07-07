@@ -8,9 +8,9 @@ Unity / VRChat プロジェクトの Prefab / Scene / Asset を安全に検査�
 
 `Variant` の override 衝突、`Broken PPtr` / missing fileID、Udon / ClientSim ランタイム例外を構造化された応答で診断し、手作業 YAML 編集を経由せずに修復する。AI エージェント前提の設計。
 
-read-only 経路（`validate_refs` / `inspect_*` / `find_*` 等）は Unity を起動せず YAML 直読みで完結する。書き込み経路（`patch_apply` / `set_property` / `editor_*` 等）は常駐 Editor Bridge との file-IPC で動き、`confirm=True` + 非空 `change_reason` の監査ペアを欠く呼び出しは `CHANGE_REASON_REQUIRED` で拒否される。
+read-only 経路（`validate_refs` / `validate_materials` / `inspect_*` / `find_*` 等）は Unity を起動せず YAML 直読みで完結する。書き込み経路（`patch_apply` / `set_property` / `editor_*` 等）は常駐 Editor Bridge との file-IPC で動き、`confirm=True` + 非空 `change_reason` の監査ペアを欠く呼び出しは `CHANGE_REASON_REQUIRED` で拒否される。
 
-本 README は各専門ドキュメントへの入口（[ドキュメントマップ](#ドキュメントマップ) 参照）。仕様の正本は専門ドキュメント群、運用ルールの正本は [CLAUDE.md](./CLAUDE.md)。
+本 README は各専門ドキュメントへの入口（[ドキュメントマップ](#ドキュメントマップ) 参照）。仕様の正本は専門ドキュメント群、運用ルールの正本は [AGENTS.md](./AGENTS.md)。
 
 ## やること / やらないこと
 
@@ -93,15 +93,27 @@ MCP サーバーは Plugin 内部で `uv` / `uvx` 経由でローカル起動さ
 |--------|------|
 | `activate_project` | プロジェクトスコープ設定 + キャッシュ warm（セッション開始時に呼ぶ） |
 | `validate_refs` | 壊れた GUID / fileID 参照のスキャン |
+| `validate_materials` | `.mat` / renderer slot / TMP material preset / folder policy の静的検証。任意ルールは [CONFIGURATION.md](./CONFIGURATION.md#material_validation_rulesjson-形式仕様) を正本とする |
 | `validate_structure` | YAML 内部構造の検証（fileID 重複・Transform 整合性） |
 | `inspect_wiring` | MonoBehaviour フィールド配線の分析（null 参照の分類付き） |
 | `inspect_variant` | Prefab Variant の override チェーン分析 |
+| `inspect_hierarchy` | saved YAML の GameObject 階層表示。`expand_prefab_instances` で effective nested PrefabInstance 階層を read-only 展開 |
+| `inspect_transform_effective_values` | offline `asset_path` + `symbol_path` の Transform default / override / effective 値を local/world で比較 |
+| `inspect_unity_event_listeners` | Button / Slider / Toggle の UnityEvent persistent listener entries と UdonSharp 診断を 1 応答で取得 |
 | `find_referencing_assets` | GUID / パスの参照元アセット検索 |
 | `patch_apply` | パッチ計画の検証・適用（dry-run / confirm ゲート付き） |
-| `validate_runtime` | UdonSharp コンパイル + ClientSim 実行検証 |
-| `editor_*` | Editor Bridge 経由の Scene / Hierarchy / Component / BlendShape / Animation 編集 |
+| `delete_asset` / `delete_assets` | AssetDatabase-backed asset 削除の dry-run / confirm。削除後 broken-reference delta を返す |
+| `editor_create_generated_asset` / `editor_move_asset` | RenderTexture generated asset 作成と AssetDatabase.MoveAsset-backed asset 移動。公開ツール一覧は [docs/tools.md](./docs/tools.md)、payload/error は [docs/api-reference.md](./docs/api-reference.md)、confirm audit/report requirements は [CONFIGURATION.md](./CONFIGURATION.md)、live Unity smoke は [TESTING.md](./TESTING.md) を正本とする |
+| `validate_runtime` | 既定 `compile_only` の UdonSharp compile 検証。ClientSim は `profile="clientsim"` + audit pair で明示 opt-in |
+| `editor_get_transform` / `editor_get_bounds` / `editor_measure_distance` | Editor Bridge 経由の read-only live geometry 検査 |
+| `editor_serialized_property_read` / `editor_serialized_property_list` / `editor_serialized_property_write` | SerializedObject-backed generic inspector / writer API。公開ツール一覧は [docs/tools.md](./docs/tools.md)、payload とエラーコードは [docs/api-reference.md](./docs/api-reference.md) を正本とする |
+| `editor_*` | Editor Bridge 経由の Scene / Hierarchy / Component / BlendShape / Animation 編集、スクリーンショット、Console、UdonSharp field / array write |
+
+Routine CI / agent validation では `validate_runtime(profile="compile_only")` または `validate_runtime(profile="editor_console_only")` を使う。ClientSim は submission scene 向けの明示 opt-in で、`profile="clientsim"` + audit pair が揃った場合だけ実行する。
 
 read-only 検査（`validate_*` / `inspect_*` / `find_*`）は Unity 不要、`editor_*` 系と `patch_apply` の confirm 適用は Editor Bridge 常駐が前提。
+
+`validate_refs` / `inspect_wiring` / `validate_all_wiring` / `validate_structure` / `validate_materials` は project root の `config/diagnostics_baseline.json` を読むと diagnostics を `new` / `known` / `resolved` に分類する。baseline は自動生成・暗黙更新せず、明示的な `update_diagnostics_baseline` だけが preview / audit-gated write を担う。baseline file 形式は [CONFIGURATION.md](./CONFIGURATION.md)、応答形状と update tool 契約は [docs/api-reference.md](./docs/api-reference.md)、公開 tool 一覧は [docs/tools.md](./docs/tools.md) を正本とする。
 
 推奨フロー: `validate_refs` で参照破損を早期検出 → `inspect_variant` で override 衝突を実効値として可視化 → `patch_apply` の dry-run → `confirm=True` + `change_reason` + `out_report` で監査ログ付きの適用。
 
@@ -124,6 +136,6 @@ read-only 検査（`validate_*` / `inspect_*` / `find_*`）は Unity 不要、`e
 | [CONFIGURATION.md](./CONFIGURATION.md) | `UNITYTOOL_*` 環境変数・`ignore_guids.txt`・scope config 規約 |
 | [DEBUGGING.md](./DEBUGGING.md) | Bridge エンベロープ / Unity Console / broken reference の調査手順 |
 | [CONTRIBUTING.md](./CONTRIBUTING.md) | 開発環境・MCP サーバーの直接起動・テスト・コミット規約・PR フロー |
-| [CLAUDE.md](./CLAUDE.md) | 運用ルールと判断基準の正本 |
+| [AGENTS.md](./AGENTS.md) | 運用ルールと判断基準の正本 |
 | [AGENT_GUIDE.md](./AGENT_GUIDE.md) | AI エージェント向け onboarding（最初の参照点） |
 | [CHANGELOG.md](./CHANGELOG.md) | 変更履歴 |

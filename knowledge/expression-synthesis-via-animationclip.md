@@ -110,8 +110,8 @@ FaceEmo の細部は `face-emo.md` 参照。
 
 同じレシピを複数アバターに適用するパターン:
 
-- 同じ系統のアバター (e.g., HARUNOPUPU Fyuett の Variant) なら BlendShape 名がほぼ共通、レシピ JSON をそのまま流用可
-- 異なる系統 (e.g., Selestia → KIKYO) は BlendShape 名が違うので、name mapping 表を持って convert する helper を別途用意
+- 同じ系統のアバターなら BlendShape 名がほぼ共通、レシピ JSON をそのまま流用可
+- 異なる系統のアバター間では BlendShape 名が違うので、name mapping 表を持って convert する helper を別途用意
 
 ## AnimationClip primitive 経由の永続化 (issue #243)
 

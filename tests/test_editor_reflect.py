@@ -127,7 +127,13 @@ class TestEditorReflectResponseUnwrap(unittest.TestCase):
 
     def test_should_accept_valid_scope_values(self) -> None:
         for scope in ("unity", "packages", "project", "all"):
-            inner = {"query": "Foo", "scope": scope, "count": 0, "results": [], "truncated": False}
+            inner: dict[str, object] = {
+                "query": "Foo",
+                "scope": scope,
+                "count": 0,
+                "results": [],
+                "truncated": False,
+            }
             bridge_resp = self._make_bridge_response(inner)
             with patch("prefab_sentinel.mcp_tools_editor_advanced.send_action", return_value=bridge_resp):
                 _, result = _run(

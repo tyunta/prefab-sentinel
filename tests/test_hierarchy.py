@@ -12,7 +12,7 @@ Phase-1 assertion-shape compliance (#222 Mode A):
 
 from __future__ import annotations
 
-from prefab_sentinel.hierarchy import analyze_hierarchy, format_tree
+from prefab_sentinel.hierarchy import HierarchyNode, analyze_hierarchy, format_tree
 from tests.yaml_helpers import (
     YAML_HEADER,
     make_gameobject,
@@ -589,9 +589,9 @@ class TestInspectHierarchyRectTransform:
         from prefab_sentinel.contracts import Diagnostic
         result = analyze_hierarchy(text)
         # Build parent map keyed by id()
-        parent_by_node_id: dict[int, object] = {}
+        parent_by_node_id: dict[int, HierarchyNode] = {}
 
-        def _walk(node, parent):
+        def _walk(node: HierarchyNode, parent: HierarchyNode | None) -> None:
             if parent is not None:
                 parent_by_node_id[id(node)] = parent
             for c in node.children:
@@ -601,7 +601,7 @@ class TestInspectHierarchyRectTransform:
 
         diagnostics: list[Diagnostic] = []
 
-        def _effective(node):
+        def _effective(node: HierarchyNode) -> tuple[tuple[float, float], str]:
             a = node.rect_anchor
             if a is None:
                 return ((0.0, 0.0), "unresolved")
@@ -623,7 +623,7 @@ class TestInspectHierarchyRectTransform:
                 cursor = parent_by_node_id.get(id(cursor))
             return ((0.0, 0.0), "unresolved")
 
-        def _ser(node):
+        def _ser(node: HierarchyNode) -> dict[str, object]:
             d: dict[str, object] = {
                 "name": node.name,
                 "children": [_ser(c) for c in node.children],

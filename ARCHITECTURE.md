@@ -1,6 +1,6 @@
 # Architecture
 
-Prefab Sentinel の構成概観・レイヤ責務・サービス仕様・データモデル・用語集の正本。運用ルールの正本は [CLAUDE.md](./CLAUDE.md)。本ファイルは「どこに何があるか」のオリエンテーションと、各レイヤ・サービスの責務境界を担う。
+Prefab Sentinel の構成概観・レイヤ責務・サービス仕様・データモデル・用語集の正本。運用ルールの正本は [AGENTS.md](./AGENTS.md)。本ファイルは「どこに何があるか」のオリエンテーションと、各レイヤ・サービスの責務境界を担う。
 
 ## 概要
 
@@ -35,7 +35,7 @@ flowchart LR
 
 ### orchestrator
 
-`prefab_sentinel.orchestrator*` モジュール群。`inspect_wiring` / `inspect_variant` / `validate_refs` / `patch_apply` などのユースケース単位で複数 service を編成し、実行計画と停止条件を管理する。応答は常に `ToolResponse.to_dict()` 経由で `success / severity / code / message / data / diagnostics` エンベロープに正規化する。`critical` / `error` が 1 件でも生じれば後続を停止する fail-fast 原則。`orchestrator_postcondition` と `orchestrator_validation` は mutation testing の P0 監査対象（[TESTING.md の Mutation testing 節](./TESTING.md#mutation-testing)）。
+`prefab_sentinel.orchestrator*` モジュール群。`inspect_wiring` / `inspect_variant` / `validate_refs` / `patch_apply` / `delete_assets` などのユースケース単位で複数 service を編成し、実行計画と停止条件を管理する。応答は常に `ToolResponse.to_dict()` 経由で `success / severity / code / message / data / diagnostics` エンベロープに正規化する。`critical` / `error` が 1 件でも生じれば後続を停止する fail-fast 原則。`delete_assets` は dry-run 計画を返し、confirmed apply では Editor Bridge の AssetDatabase action に委譲して削除後の broken-reference delta を返す。`orchestrator_postcondition` と `orchestrator_validation` は mutation testing の P0 監査対象（[TESTING.md の Mutation testing 節](./TESTING.md#mutation-testing)）。
 
 ### mcp_tools
 
@@ -43,7 +43,7 @@ flowchart LR
 
 ### tools/unity
 
-`tools/unity_patch_bridge.py`（Python 側中継）と `tools/unity/PrefabSentinel.*.cs`（Unity Editor 内 C# 実装）の対で構成する常駐 Editor Bridge。`UNITYTOOL_BRIDGE_WATCH_DIR` 配下に `{uuid}.request.json` を書き込み、`{uuid}.response.json` の出現をポーリングする file-IPC のみが Unity との連携経路（issue #270 で Unity batchmode 経路は削除済み）。C# 側は `EditorApplication.update` で 500 ms 間隔のディスパッチを行い、`UnityEditorControlBridge` と `UnityPatchBridge` をそれぞれ概念単位の partial class に分割している（partial inventory は CLAUDE.md「設計原則」を参照）。
+`tools/unity_patch_bridge.py`（Python 側中継）と `tools/unity/PrefabSentinel.*.cs`（Unity Editor 内 C# 実装）の対で構成する常駐 Editor Bridge。`UNITYTOOL_BRIDGE_WATCH_DIR` 配下に `{uuid}.request.json` を書き込み、`{uuid}.response.json` の出現をポーリングする file-IPC のみが Unity との連携経路（issue #270 で Unity batchmode 経路は削除済み）。C# 側は `EditorApplication.update` で 500 ms 間隔のディスパッチを行い、`UnityEditorControlBridge` と `UnityPatchBridge` をそれぞれ概念単位の partial class に分割している（partial inventory は AGENTS.md「設計原則」を参照）。Project asset の確定削除は `UnityEditorControlBridge.AssetDelete` partial が `AssetDatabase.DeleteAssets` で実行し、Python filesystem delete は使用しない。
 
 ### skills
 
@@ -90,7 +90,7 @@ flowchart LR
 
 **目的** — GUID / fileID 参照を人間可読の実体へ逆引きし、壊れた参照を早期検出する。
 
-**主機能** — `resolve_reference(guid, file_id)` / `resolve_object_to_reference(asset_path, hierarchy_path, component_type)` / `scan_broken_references(scope, *, top_missing_breakdown=False)` / `where_used(asset_or_guid)` / `validate_pointer_set(pointer_list)`。`top_missing_breakdown=True` で `top_missing_asset_guids[].referenced_from` に `{source, count}` の per-source-file 内訳が追加される（issue #198）。
+**主機能** — `resolve_reference(guid, file_id)` / `resolve_object_to_reference(asset_path, hierarchy_path, component_type)` / `scan_broken_references(scope, *, top_missing_breakdown=False)` / `where_used(asset_or_guid)` / `validate_pointer_set(pointer_list)`。`top_missing_breakdown=True` で `top_missing_asset_guids[].referenced_from` に `{source, count}` の per-source-file 内訳が追加される（issue #198）。`where_used` は 32 文字 GUID が project meta index に無い場合でも、caller が `scope` を指定していれば scoped YAML scan を継続し、target missing metadata と usage list を返す（issue #113）。
 
 **出力カテゴリ** — `resolved` / `missing_asset` / `missing_local_id` / `type_mismatch`。
 
@@ -147,6 +147,6 @@ orchestrator / services 間で受け渡すコアエンティティと、それ�
 * **orchestrator** — ユースケース単位で複数 service を順序付き編成する層。`prefab_sentinel.orchestrator*` モジュール群が実体で、応答は標準エンベロープに正規化する。
 * **Skill** — `skills/<name>/SKILL.md` に記述された運用手順書。ツール呼び出し順・停止条件・成功条件を含み、Claude Code Plugin として `/prefab-sentinel:<name>` で呼び出される。
 * **Service** — 単一責務サブパッケージ（`prefab_sentinel/services/<name>/`）。公開 API はファサードクラス 1 つに絞り、後方互換シムは持たない。
-* **partial concern** — 1 つの C# クラスを `disk 上の partial ファイル` ごとに概念単位で分割した責務分割の単位。`UnityEditorControlBridge` / `UnityPatchBridge` は両方ともこの形で構成され、CLAUDE.md の per-concern token inventory がドリフト検出の正本。
+* **partial concern** — 1 つの C# クラスを `disk 上の partial ファイル` ごとに概念単位で分割した責務分割の単位。`UnityEditorControlBridge` / `UnityPatchBridge` は両方ともこの形で構成され、AGENTS.md の per-concern token inventory がドリフト検出の正本。
 * **scope** — `validate_refs` / `find_referencing_assets` 等で受け取る走査範囲指定。`--scope` で実行時指定し、固定パスは持たない。`<scope>/config/ignore_guids.txt` 等の auto-load はこのパスを起点に解決する。
 * **handle** — Bridge への 1 回の create / open 操作で確立した resource identifier。`prefab create mode` の root asset `$asset`、scene mode の component `$handle` / asset `$handle` などで `target` フィールドに与え、後続 mutation op の対象を一意に指す（[docs/execution-reference.md「Unity bridge / runtime」](./docs/execution-reference.md#unity-bridge--runtime)）。

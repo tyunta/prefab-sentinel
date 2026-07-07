@@ -152,7 +152,7 @@ LLM (Claude Code 等) で screenshot を Read tool 経由で参照する場合�
 
 ## 同名アバターの「ベースの顔」差異 (L3)
 
-HARUNOPUPU Fyuett 系の典型 base 構成 (snapshot 結果から):
+同一アバター系の典型 base 構成 (snapshot 結果から):
 
 ```
 eye_shape_ottori02       50    # おっとり目 (癒し系基調)

@@ -7,6 +7,7 @@ import os
 import sys
 import tempfile
 import unittest
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -26,6 +27,7 @@ from prefab_sentinel.services.serialized_object.before_cache import (
     UnresolvedReason,
 )
 from prefab_sentinel.services.serialized_object.patch_validator import validate_op
+from tests._typing_helpers import require_mapping, require_str
 from tests.bridge_test_helpers import write_file
 
 BASE_GUID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -157,6 +159,52 @@ class ReferenceResolverServiceTests(unittest.TestCase):
             self.assertIn("target_guid", details[0])
             self.assertIn("file_id", details[0])
 
+    def test_scan_broken_references_uses_ordered_runner(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_sample_project(root)
+            svc = ReferenceResolverService(project_root=root)
+            submitted_calls: list[list[Path]] = []
+            execution_calls: list[list[Path]] = []
+
+            def run_in_reverse(
+                items: list[Path],
+                worker: Callable[[Path], object],
+                *,
+                max_workers: int | None = None,
+            ) -> list[object]:
+                self.assertIsNone(max_workers)
+                submitted = list(items)
+                submitted_calls.append(submitted)
+                execution_paths: list[Path] = []
+                by_path = {}
+                for path in reversed(submitted):
+                    execution_paths.append(path)
+                    by_path[path] = worker(path)
+                execution_calls.append(execution_paths)
+                return [by_path[path] for path in submitted]
+
+            with patch(
+                "prefab_sentinel.services.reference_resolver.run_ordered",
+                side_effect=run_in_reverse,
+            ) as run_ordered:
+                response = svc.scan_broken_references(
+                    "Assets",
+                    include_diagnostics=True,
+                    max_diagnostics=1,
+                    top_missing_breakdown=True,
+                )
+
+            self.assertEqual(2, run_ordered.call_count)
+            self.assertEqual(2, len(submitted_calls[1]))
+            self.assertEqual(list(reversed(submitted_calls[1])), execution_calls[1])
+            self.assertEqual((False, "REF_SCAN_BROKEN"), (response.success, response.code))
+            self.assertEqual(2, response.data["broken_count"])
+            self.assertEqual(2, response.data["broken_occurrences"])
+            self.assertEqual(1, response.data["returned_diagnostics"])
+            self.assertEqual(1, response.data["truncated_diagnostics"])
+            self.assertEqual("Assets/Variant.prefab", response.diagnostics[0].path)
+
     def test_scan_broken_references_honors_details_limit(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -179,14 +227,8 @@ class ReferenceResolverServiceTests(unittest.TestCase):
             # truncated hint is in data, not diagnostics
             self.assertIn("--max-diagnostics", response.data["truncated_hint"])
             self.assertEqual(1, response.data["truncated_diagnostics"])
-            self.assertGreaterEqual(
-                response.data["broken_occurrences"],
-                response.data["broken_count"],
-                msg=(
-                    "occurrence count must be >= unique broken-reference count: "
-                    f"{response.data!r}"
-                ),
-            )
+            self.assertEqual(2, response.data["broken_count"])
+            self.assertEqual(2, response.data["broken_occurrences"])
 
     def test_scan_broken_references_honors_ignore_asset_guids(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -261,6 +303,46 @@ class ReferenceResolverServiceTests(unittest.TestCase):
                 0,
                 msg=f"usages beyond the cap should be reported as truncated: {usage.data!r}",
             )
+
+    def test_where_used_uses_ordered_runner_before_usage_cap(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_sample_project(root)
+            svc = ReferenceResolverService(project_root=root)
+            submitted_calls: list[list[Path]] = []
+            execution_calls: list[list[Path]] = []
+
+            def run_in_reverse(
+                items: list[Path],
+                worker: Callable[[Path], object],
+                *,
+                max_workers: int | None = None,
+            ) -> list[object]:
+                self.assertIsNone(max_workers)
+                submitted = list(items)
+                submitted_calls.append(submitted)
+                execution_paths: list[Path] = []
+                by_path = {}
+                for path in reversed(submitted):
+                    execution_paths.append(path)
+                    by_path[path] = worker(path)
+                execution_calls.append(execution_paths)
+                return [by_path[path] for path in submitted]
+
+            with patch(
+                "prefab_sentinel.services.reference_resolver.run_ordered",
+                side_effect=run_in_reverse,
+            ) as run_ordered:
+                usage = svc.where_used(BASE_GUID, scope="Assets", max_usages=1)
+
+            self.assertEqual(2, run_ordered.call_count)
+            self.assertEqual(2, len(submitted_calls[1]))
+            self.assertEqual(list(reversed(submitted_calls[1])), execution_calls[1])
+            self.assertEqual((True, "REF_WHERE_USED"), (usage.success, usage.code))
+            self.assertEqual(1, usage.data["returned_usages"])
+            self.assertEqual(5, usage.data["truncated_usages"])
+            self.assertEqual(6, usage.data["usage_count"])
+            self.assertEqual("Assets/Variant.prefab", usage.data["usages"][0]["path"])
 
     def test_where_used_returns_missing_scope_error(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -405,6 +487,35 @@ PrefabInstance:
                     msg=f"preload should cache the on-disk text of {f}",
                 )
 
+    def test_preload_texts_uses_shared_runner_with_cpu_default(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_sample_project(root)
+            svc = ReferenceResolverService(project_root=root)
+            files = [
+                root / "Assets" / "Base.prefab",
+                root / "Assets" / "Variant.prefab",
+            ]
+
+            def run_immediately(
+                items: list[Path],
+                worker: Callable[[Path], str],
+                *,
+                max_workers: int | None = None,
+            ) -> list[str]:
+                self.assertIsNone(max_workers)
+                return [worker(path) for path in items]
+
+            with patch(
+                "prefab_sentinel.services.reference_resolver.run_ordered",
+                side_effect=run_immediately,
+            ) as run_ordered:
+                svc.preload_texts(files)
+
+            run_ordered.assert_called_once()
+            self.assertEqual(files[0].read_text(encoding="utf-8"), svc._text_cache[files[0]])
+            self.assertEqual(files[1].read_text(encoding="utf-8"), svc._text_cache[files[1]])
+
     def test_preload_texts_handles_unreadable(self) -> None:
         """_preload_texts should mark unreadable files in _unreadable_paths."""
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -462,6 +573,28 @@ PrefabInstance:
             result2 = service.collect_scope_files(assets)
             self.assertEqual(result1, result2)  # Same cached list
 
+
+    def test_collect_scope_files_skips_symlinked_unity_text_assets(self) -> None:
+        if not hasattr(os, "symlink"):
+            self.skipTest("platform does not support os.symlink")
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            assets = root / "Assets"
+            assets.mkdir()
+            prefab = assets / "Real.prefab"
+            prefab.write_text("%YAML 1.1\n", encoding="utf-8")
+            outside = root / "Outside.prefab"
+            outside.write_text("outside content must not be scanned\n", encoding="utf-8")
+            symlinked_prefab = assets / "Escape.prefab"
+            try:
+                os.symlink(outside, symlinked_prefab)
+            except OSError as exc:
+                self.skipTest(f"symlink creation not permitted: {exc}")
+
+            service = ReferenceResolverService(project_root=root)
+            self.assertEqual([prefab], service.collect_scope_files(assets))
+
     def test_preload_and_read_populates_cache(self) -> None:
         """preload_texts + read_text uses _text_cache."""
         with tempfile.TemporaryDirectory() as td:
@@ -478,7 +611,7 @@ PrefabInstance:
             service.preload_texts([prefab])
             self.assertIn(prefab, service._text_cache)
             text = service.read_text(prefab)
-            self.assertIn("m_Name: A", text)
+            self.assertIn("m_Name: A", require_str(text, "cached prefab text"))
 
     def test_collect_scope_files_invalidated(self) -> None:
         """After invalidation, re-walk picks up new files."""
@@ -714,6 +847,7 @@ guid: 1111111111111111111111111111aaaa
                 "broken_occurrences": 0,
                 "categories": {"missing_asset": 0, "missing_local_id": 0},
                 "categories_occurrences": {"missing_asset": 0, "missing_local_id": 0},
+                "diagnostic_keys": [],
                 "ignored_missing_asset_occurrences": 0,
                 "ignored_missing_asset_unique_count": 0,
                 "returned_diagnostics": 0,
@@ -809,6 +943,27 @@ guid: 2222222222222222222222222222bbbb
                 "broken_occurrences": 2,
                 "categories": {"missing_asset": 1, "missing_local_id": 1},
                 "categories_occurrences": {"missing_asset": 1, "missing_local_id": 1},
+                "diagnostic_keys": [
+                    {
+                        "key": f"missing_asset_guid:{MISSING_GUID}",
+                        "severity": "error",
+                        "message": "missing_asset",
+                        "data": {
+                            "category": "missing_asset",
+                            "guid": MISSING_GUID,
+                        },
+                    },
+                    {
+                        "key": "missing_local_id_local:Assets/Variant.prefab:999999",
+                        "severity": "error",
+                        "message": "missing_local_id",
+                        "data": {
+                            "category": "missing_local_id",
+                            "source_path": "Assets/Variant.prefab",
+                            "file_id": "999999",
+                        },
+                    },
+                ],
                 "ignored_missing_asset_occurrences": 0,
                 "ignored_missing_asset_unique_count": 0,
                 "returned_diagnostics": 0,
@@ -888,6 +1043,36 @@ guid: 2222222222222222222222222222bbbb
             },
         )
 
+
+    def test_scan_broken_references_scope_status_error_emits_ref404(self) -> None:
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            scope_path = root / "Assets"
+            scope_path.mkdir()
+            svc = ReferenceResolverService(project_root=root)
+            original_exists = type(scope_path).exists
+
+            def raise_for_scope(self):
+                if self == scope_path:
+                    raise OSError("permission denied")
+                return original_exists(self)
+
+            with patch.object(type(scope_path), "exists", raise_for_scope):
+                response = svc.scan_broken_references("Assets")
+
+        assert_error_envelope(
+            response,
+            code="REF404",
+            severity="error",
+            message_match=r"does not exist",
+            data={
+                "scope": "Assets",
+                "read_only": True,
+            },
+        )
+
     def test_scan_broken_references_invalid_ignore_entry_emits_ref001(self) -> None:
         """An ignore-asset-guid entry that is not a 32-char hex GUID
         returns ``REF001`` with the offending entry echoed under
@@ -941,6 +1126,7 @@ guid: 2222222222222222222222222222bbbb
             {
                 "guid": BASE_GUID,
                 "asset_path": "Assets/Base.prefab",
+                "asset_missing": False,
                 "scope": "Assets",
                 "scan_project_root": ".",
                 "usage_count": 6,
@@ -1027,15 +1213,14 @@ guid: 2222222222222222222222222222bbbb
         )
 
     def test_where_used_unknown_guid_emits_ref001(self) -> None:
-        """A well-formed but unknown GUID returns ``REF001`` with the
-        offending input echoed under ``data.asset_or_guid``."""
+        """Unscoped well-formed unknown GUIDs still stop with ``REF001``."""
         from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
 
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             _create_sample_project(root)
             svc = ReferenceResolverService(project_root=root)
-            response = svc.where_used(MISSING_GUID, scope="Assets")
+            response = svc.where_used(MISSING_GUID)
 
         assert_error_envelope(
             response,
@@ -2053,6 +2238,35 @@ PrefabInstance:
             response.data,
         )
 
+    def test_orchestrator_guid_invalidation_clears_prefab_variant_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_sample_project(root)
+            orchestrator = Phase1Orchestrator.default(project_root=root)
+
+            first = orchestrator.prefab_variant.resolve_prefab_chain("Assets/Variant.prefab")
+            self.assertEqual(
+                [
+                    {"path": "Assets/Variant.prefab", "guid": None},
+                    {"path": "Assets/Base.prefab", "guid": None},
+                ],
+                first.data["chain"],
+            )
+
+            (root / "Assets" / "Base.prefab").rename(root / "Assets" / "Moved.prefab")
+            (root / "Assets" / "Base.prefab.meta").rename(root / "Assets" / "Moved.prefab.meta")
+            orchestrator.invalidate_guid_index()
+
+            second = orchestrator.prefab_variant.resolve_prefab_chain("Assets/Variant.prefab")
+
+        self.assertEqual(
+            [
+                {"path": "Assets/Variant.prefab", "guid": None},
+                {"path": "Assets/Moved.prefab", "guid": None},
+            ],
+            second.data["chain"],
+        )
+
     def test_resolve_chain_values_with_origin_pins_full_payload(self) -> None:
         """Issue #142 row: ``resolve_chain_values_with_origin`` returns
         ``PVR_CHAIN_VALUES_WITH_ORIGIN`` whose full per-entry origin
@@ -2605,52 +2819,114 @@ class RuntimeValidationServiceTests(unittest.TestCase):
                 msg=f"bridge compile must report executed=True: {response.data!r}",
             )
 
-    def test_run_clientsim_returns_missing_scene_error(self) -> None:
+    def test_clientsim_missing_or_non_scene_path_is_typed_for_missing_scene(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             _create_sample_project(root)
             svc = RuntimeValidationService(project_root=root)
 
-            response = svc.run_clientsim("Assets/MissingScene.unity", "default")
+            response = svc.run_clientsim(
+                "Assets/MissingScene.unity",
+                "clientsim",
+                confirm=True,
+                change_reason="audit clientsim validation",
+            )
 
-            self.assertEqual("RUN002", response.code)
+            self.assertEqual(
+                (False, "RUN002"),
+                (response.success, response.code),
+                msg=f"missing ClientSim scene envelope mismatch: {response.to_dict()!r}",
+            )
             self.assertEqual(
                 (True, False),
                 (response.data["read_only"], response.data["executed"]),
-                msg=(
-                    "a rejected clientsim run stays read-only and unexecuted: "
-                    f"{response.data!r}"
-                ),
+                msg=f"a rejected clientsim run must be read-only and unexecuted: {response.data!r}",
             )
 
-    def test_run_clientsim_rejects_non_unity_extension(self) -> None:
-        """``run_clientsim`` rejects scene paths whose suffix is not
-        ``.unity`` with ``RUN002`` before contacting Unity.
-        """
+    def test_clientsim_outside_root_scene_path_fails_closed_before_file_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            root = base / "project"
+            outside = base / "outside"
+            _create_sample_project(root)
+            outside.mkdir()
+            existing_scene = outside / "Probe.unity"
+            missing_scene = outside / "Missing.unity"
+            non_scene = outside / "Probe.txt"
+            write_file(existing_scene, "%YAML 1.1\n")
+            write_file(non_scene, "not a scene\n")
+            svc = RuntimeValidationService(project_root=root)
+
+            with patch.object(svc, "_invoke_unity_runtime") as invoke:
+                existing_response = svc.run_clientsim(
+                    str(existing_scene),
+                    "clientsim",
+                    confirm=True,
+                    change_reason="audit clientsim validation",
+                )
+                missing_response = svc.run_clientsim(
+                    str(missing_scene),
+                    "clientsim",
+                    confirm=True,
+                    change_reason="audit clientsim validation",
+                )
+                non_scene_response = svc.run_clientsim(
+                    str(non_scene),
+                    "clientsim",
+                    confirm=True,
+                    change_reason="audit clientsim validation",
+                )
+
+            invoke.assert_not_called()
+            expected = (False, "RUN002", "Scene path resolves outside runtime root.")
+            self.assertEqual(
+                (expected, expected, expected),
+                (
+                    (existing_response.success, existing_response.code, existing_response.message),
+                    (missing_response.success, missing_response.code, missing_response.message),
+                    (non_scene_response.success, non_scene_response.code, non_scene_response.message),
+                ),
+                msg=(
+                    "outside-root ClientSim scene rejection must not disclose existence or suffix: "
+                    f"{existing_response.to_dict()!r}, {missing_response.to_dict()!r}, "
+                    f"{non_scene_response.to_dict()!r}"
+                ),
+            )
+            self.assertEqual(
+                ((True, False), (True, False), (True, False)),
+                (
+                    (existing_response.data["read_only"], existing_response.data["executed"]),
+                    (missing_response.data["read_only"], missing_response.data["executed"]),
+                    (non_scene_response.data["read_only"], non_scene_response.data["executed"]),
+                ),
+                msg="outside-root ClientSim rejections must be read-only and unexecuted",
+            )
+
+    def test_clientsim_missing_or_non_scene_path_is_typed_for_non_scene_asset(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             _create_sample_project(root)
-            write_file(
-                root / "Assets" / "Scenes" / "Smoke.txt",
-                "not a scene\n",
-            )
+            write_file(root / "Assets" / "Scenes" / "Smoke.txt", "not a scene\n")
             svc = RuntimeValidationService(project_root=root)
-            response = svc.run_clientsim("Assets/Scenes/Smoke.txt", "default")
+            response = svc.run_clientsim(
+                "Assets/Scenes/Smoke.txt",
+                "clientsim",
+                confirm=True,
+                change_reason="audit clientsim validation",
+            )
 
-            self.assertEqual("RUN002", response.code)
+            self.assertEqual(
+                (False, "RUN002"),
+                (response.success, response.code),
+                msg=f"non-scene ClientSim asset envelope mismatch: {response.to_dict()!r}",
+            )
             self.assertEqual(
                 (True, False),
                 (response.data["read_only"], response.data["executed"]),
-                msg=(
-                    "a non-.unity scene path stays read-only and unexecuted: "
-                    f"{response.data!r}"
-                ),
+                msg=f"a non-.unity scene path must be read-only and unexecuted: {response.data!r}",
             )
 
-    def test_run_clientsim_reaches_unity_via_editor_bridge(self) -> None:
-        """The clientsim dispatcher writes a request file to the watch
-        directory and surfaces the responder's envelope unchanged.
-        """
+    def test_clientsim_dirty_scene_refuses_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             _create_sample_project(root)
@@ -2667,7 +2943,87 @@ GameObject:
             svc = RuntimeValidationService(project_root=root)
 
             def respond(request: dict) -> dict:
-                self.assertEqual("run_clientsim", request["action"])
+                self.assertEqual(
+                    ("run_clientsim", False, True),
+                    (request["action"], request["allow_dirty_before"], request["confirm"]),
+                    msg=f"ClientSim dirty-scene request mismatch: {request!r}",
+                )
+                return {
+                    "success": False,
+                    "severity": "error",
+                    "code": "CLIENTSIM_DIRTY_SCENE",
+                    "message": "ClientSim refused unsaved active-scene changes before execution.",
+                    "data": {"executed": False, "read_only": True, "dirty_before": True},
+                    "diagnostics": [],
+                }
+
+            from tests.bridge_test_helpers import EditorBridgeResponder
+
+            with EditorBridgeResponder(watch_dir, respond):
+                with patch.dict(
+                    os.environ,
+                    {
+                        "UNITYTOOL_BRIDGE_WATCH_DIR": str(watch_dir),
+                        "UNITYTOOL_UNITY_TIMEOUT_SEC": "10",
+                    },
+                    clear=False,
+                ):
+                    response = svc.run_clientsim(
+                        "Assets/Scenes/Smoke.unity",
+                        "clientsim",
+                        confirm=True,
+                        change_reason="audit clientsim validation",
+                    )
+
+            self.assertEqual(
+                (False, "CLIENTSIM_DIRTY_SCENE", "error"),
+                (response.success, response.code, response.severity.value),
+                msg=f"dirty ClientSim envelope mismatch: {response.to_dict()!r}",
+            )
+            self.assertIn("unsaved active-scene", response.message)
+
+    def test_clientsim_success_reports_side_effect_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_sample_project(root)
+            write_file(
+                root / "Assets" / "Scenes" / "Smoke.unity",
+                """%YAML 1.1
+--- !u!1 &1
+GameObject:
+  m_Name: Smoke
+""",
+            )
+            watch_dir = root / "watch"
+            watch_dir.mkdir()
+            svc = RuntimeValidationService(project_root=root)
+
+            side_effect_report = {
+                "diff_complete": True,
+                "scene_path": "Assets/Scenes/Smoke.unity",
+                "root_objects_before": ["World"],
+                "root_objects_after": ["World", "ClientSim"],
+                "hierarchy_paths_before": ["/World"],
+                "hierarchy_paths_after": ["/World", "/ClientSim"],
+                "components_before": {"/World": ["Transform"]},
+                "components_after": {"/World": ["Transform"], "/ClientSim": ["Transform"]},
+                "added_gameobjects": ["/ClientSim"],
+                "removed_gameobjects": [],
+                "added_components": [{"path": "/ClientSim", "component": "Transform"}],
+                "removed_components": [],
+                "dirty_before": False,
+                "dirty_after": True,
+                "dirty_count_before": 0,
+                "dirty_count_after": 1,
+                "asset_change_candidates": ["Assets/Scenes/Smoke.unity"],
+            }
+
+            def respond(request: dict) -> dict:
+                self.assertEqual(
+                    ("run_clientsim", True, "audit clientsim validation"),
+                    (request["action"], request["confirm"], request["change_reason"]),
+                    msg=f"ClientSim audited request mismatch: {request!r}",
+                )
                 return {
                     "success": True,
                     "severity": "info",
@@ -2677,6 +3033,7 @@ GameObject:
                         "clientsim_ready": True,
                         "executed": True,
                         "read_only": False,
+                        "side_effect_report": side_effect_report,
                     },
                     "diagnostics": [],
                 }
@@ -2692,18 +3049,93 @@ GameObject:
                     },
                     clear=False,
                 ):
-                    response = svc.run_clientsim("Assets/Scenes/Smoke.unity", "default")
+                    response = svc.run_clientsim(
+                        "Assets/Scenes/Smoke.unity",
+                        "clientsim",
+                        confirm=True,
+                        change_reason="audit clientsim validation",
+                    )
 
-            self.assertEqual("RUN_CLIENTSIM_OK", response.code)
             self.assertEqual(
-                (True, True),
-                (response.data["clientsim_ready"], response.data["executed"]),
-                msg=(
-                    "a bridge clientsim run reports ready and executed: "
-                    f"{response.data!r}"
-                ),
+                (True, "RUN_CLIENTSIM_OK", "warning", False),
+                (response.success, response.code, response.severity.value, response.data["read_only"]),
+                msg=f"ClientSim side-effect envelope mismatch: {response.to_dict()!r}",
             )
-            self.assertEqual(".", response.data["project_root"])
+            self.assertEqual(
+                side_effect_report,
+                response.data["side_effect_report"],
+                msg=f"ClientSim side-effect report mismatch: {response.data!r}",
+            )
+            self.assertEqual(
+                ["CLIENTSIM_SIDE_EFFECT_DIFF_DETECTED"],
+                [diagnostic["code"] for diagnostic in response.to_dict()["diagnostics"]],
+                msg=f"ClientSim side-effect diagnostics mismatch: {response.to_dict()!r}",
+            )
+
+    def test_clientsim_incomplete_side_effect_diff_warns(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_sample_project(root)
+            write_file(
+                root / "Assets" / "Scenes" / "Smoke.unity",
+                """%YAML 1.1
+--- !u!1 &1
+GameObject:
+  m_Name: Smoke
+""",
+            )
+            watch_dir = root / "watch"
+            watch_dir.mkdir()
+            svc = RuntimeValidationService(project_root=root)
+
+            def respond(request: dict) -> dict:
+                return {
+                    "success": True,
+                    "severity": "info",
+                    "code": "RUN_CLIENTSIM_OK",
+                    "message": "clientsim ok",
+                    "data": {
+                        "executed": True,
+                        "read_only": False,
+                        "side_effect_report": {
+                            "diff_complete": False,
+                            "dirty_before": False,
+                            "dirty_after": False,
+                            "dirty_count_before": 0,
+                            "dirty_count_after": 0,
+                        },
+                    },
+                    "diagnostics": [],
+                }
+
+            from tests.bridge_test_helpers import EditorBridgeResponder
+
+            with EditorBridgeResponder(watch_dir, respond):
+                with patch.dict(
+                    os.environ,
+                    {
+                        "UNITYTOOL_BRIDGE_WATCH_DIR": str(watch_dir),
+                        "UNITYTOOL_UNITY_TIMEOUT_SEC": "10",
+                    },
+                    clear=False,
+                ):
+                    response = svc.run_clientsim(
+                        "Assets/Scenes/Smoke.unity",
+                        "clientsim",
+                        confirm=True,
+                        change_reason="audit clientsim validation",
+                    )
+
+            self.assertEqual(
+                (True, "RUN_CLIENTSIM_OK", "warning", False),
+                (response.success, response.code, response.severity.value, response.data["side_effect_report"]["diff_complete"]),
+                msg=f"incomplete ClientSim diff envelope mismatch: {response.to_dict()!r}",
+            )
+            self.assertEqual(
+                ["CLIENTSIM_SIDE_EFFECT_DIFF_UNAVAILABLE"],
+                [diagnostic["code"] for diagnostic in response.to_dict()["diagnostics"]],
+                msg=f"incomplete ClientSim diff diagnostics mismatch: {response.to_dict()!r}",
+            )
 
     def test_classify_errors_detects_known_categories(self) -> None:
         svc = RuntimeValidationService(project_root=Path.cwd())
@@ -2725,12 +3157,6 @@ GameObject:
         self.assertEqual(1, response.data["count_by_category"]["DUPLICATE_EVENTSYSTEM"])
 
     def test_orchestrator_validate_runtime_pipeline(self) -> None:
-        """When the watch directory is unconfigured, ``validate_runtime``
-        fails-fast on the runtime step with the editor-bridge config
-        envelope; the surrounding pipeline reports error severity (the
-        max of the compile and clientsim steps' ``RUN_CONFIG_ERROR``
-        codes).
-        """
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             _create_sample_project(root)
@@ -2742,10 +3168,7 @@ GameObject:
   m_Name: Smoke
 """,
             )
-            write_file(
-                root / "Logs" / "Editor.log",
-                "NullReferenceException in UdonBehaviour\n",
-            )
+            write_file(root / "Logs" / "Editor.log", "NullReferenceException in UdonBehaviour\n")
 
             orchestrator = Phase1Orchestrator.default(project_root=root)
             response = orchestrator.validate_runtime(
@@ -2754,17 +3177,28 @@ GameObject:
             )
 
             self.assertEqual(
-                (False, "VALIDATE_RUNTIME_RESULT"),
-                (response.success, response.code),
-                msg=f"envelope mismatch: {response!r}",
+                (False, "VALIDATE_RUNTIME_RESULT", "compile_only"),
+                (response.success, response.code, response.data["profile"]),
+                msg=f"compile-only runtime validation envelope mismatch: {response.to_dict()!r}",
             )
-            self.assertEqual("error", response.severity.value)
+            self.assertEqual(
+                [
+                    "inspect_world_canvas",
+                    "compile_udonsharp",
+                    "collect_unity_console",
+                    "classify_errors",
+                    "assert_no_critical_errors",
+                ],
+                [step["step"] for step in response.data["steps"]],
+                msg=f"compile-only runtime validation steps mismatch: {response.data!r}",
+            )
             step_codes = [
                 step["result"]["code"]
                 for step in response.data["steps"]
                 if isinstance(step, dict) and isinstance(step.get("result"), dict)
             ]
             self.assertIn("RUN_CONFIG_ERROR", step_codes)
+            self.assertNotIn("RUN_CLIENTSIM_OK", step_codes)
 
     def test_orchestrator_validate_runtime_pipeline_uses_editor_bridge_when_configured(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2789,24 +3223,7 @@ GameObject:
                         "severity": "info",
                         "code": "RUN_COMPILE_OK",
                         "message": "compile ok",
-                        "data": {
-                            "udon_program_count": 3,
-                            "executed": True,
-                            "read_only": False,
-                        },
-                        "diagnostics": [],
-                    }
-                if action == "run_clientsim":
-                    return {
-                        "success": True,
-                        "severity": "info",
-                        "code": "RUN_CLIENTSIM_OK",
-                        "message": "clientsim ok",
-                        "data": {
-                            "clientsim_ready": True,
-                            "executed": True,
-                            "read_only": False,
-                        },
+                        "data": {"udon_program_count": 3, "executed": True, "read_only": False},
                         "diagnostics": [],
                     }
                 return {
@@ -2830,23 +3247,29 @@ GameObject:
                     },
                     clear=False,
                 ):
-                    response = orchestrator.validate_runtime(
-                        scene_path="Assets/Scenes/Smoke.unity",
-                    )
+                    response = orchestrator.validate_runtime(scene_path="Assets/Scenes/Smoke.unity")
 
             self.assertEqual(
-                (True, "VALIDATE_RUNTIME_RESULT"),
-                (response.success, response.code),
-                msg=f"envelope mismatch: {response!r}",
+                (True, "VALIDATE_RUNTIME_RESULT", "compile_only"),
+                (response.success, response.code, response.data["profile"]),
+                msg=f"configured compile-only validation envelope mismatch: {response.to_dict()!r}",
             )
             step_codes = [
                 step["result"]["code"]
                 for step in response.data["steps"]
                 if isinstance(step, dict) and isinstance(step.get("result"), dict)
             ]
-            self.assertIn("RUN_COMPILE_OK", step_codes)
-            self.assertIn("RUN_CLIENTSIM_OK", step_codes)
-            self.assertIn("RUN_ASSERT_OK", step_codes)
+            self.assertEqual(
+                [
+                    "WORLD_CANVAS_INSPECT_OK",
+                    "RUN_COMPILE_OK",
+                    "RUN_LOG_MISSING",
+                    "RUN_CLASSIFY_OK",
+                    "RUN_ASSERT_OK",
+                ],
+                step_codes,
+                msg=f"configured compile-only step codes mismatch: {response.data!r}",
+            )
 
 
 class SerializedObjectServiceTests(unittest.TestCase):
@@ -4959,27 +5382,27 @@ class TestSerializedObjectServiceProjectRoot(unittest.TestCase):
     def test_resolve_target_path_uses_project_root(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             project_root = Path(temp_dir)
-            assets_dir = project_root / "Assets" / "Tyunta"
+            assets_dir = project_root / "Assets" / "Sample"
             assets_dir.mkdir(parents=True)
             (assets_dir / "Test.prefab").write_text("%YAML 1.1\n")
 
             svc = SerializedObjectService(project_root=project_root)
-            resolved = svc._resolve_target_path("Assets/Tyunta/Test.prefab")
-            self.assertEqual(resolved, (project_root / "Assets" / "Tyunta" / "Test.prefab").resolve())
+            resolved = svc._resolve_target_path("Assets/Sample/Test.prefab")
+            self.assertEqual(resolved, (project_root / "Assets" / "Sample" / "Test.prefab").resolve())
 
     def test_resolve_target_path_no_doubling(self) -> None:
         """CWD being inside Assets/ must not cause path doubling."""
         with tempfile.TemporaryDirectory() as temp_dir:
             project_root = Path(temp_dir)
-            assets_dir = project_root / "Assets" / "Tyunta"
+            assets_dir = project_root / "Assets" / "Sample"
             assets_dir.mkdir(parents=True)
             (assets_dir / "Test.prefab").write_text("%YAML 1.1\n")
 
             svc = SerializedObjectService(project_root=project_root)
-            # Even if CWD were inside Assets/Tyunta, project_root anchors the path
-            resolved = svc._resolve_target_path("Assets/Tyunta/Test.prefab")
+            # Even if CWD were inside Assets/Sample, project_root anchors the path
+            resolved = svc._resolve_target_path("Assets/Sample/Test.prefab")
             path_str = str(resolved)
-            self.assertNotIn("Assets/Tyunta/Assets/Tyunta", path_str.replace("\\", "/"))
+            self.assertNotIn("Assets/Sample/Assets/Sample", path_str.replace("\\", "/"))
 
     def test_default_orchestrator_passes_project_root(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -4996,7 +5419,7 @@ class TestSerializedObjectServiceProjectRoot(unittest.TestCase):
         """Relative Assets/ path must be resolved via project_root before reaching the bridge."""
         with tempfile.TemporaryDirectory() as temp_dir:
             project_root = Path(temp_dir)
-            assets_dir = project_root / "Assets" / "Tyunta" / "Materials"
+            assets_dir = project_root / "Assets" / "Sample" / "Materials"
             assets_dir.mkdir(parents=True)
 
             # Bridge script that echoes the received target and resource path back
@@ -5029,7 +5452,7 @@ class TestSerializedObjectServiceProjectRoot(unittest.TestCase):
                 resource={
                     "id": "mat",
                     "kind": "material",
-                    "path": "Assets/Tyunta/Materials/Test.mat",
+                    "path": "Assets/Sample/Materials/Test.mat",
                     "mode": "create",
                 },
                 ops=[
@@ -5044,15 +5467,15 @@ class TestSerializedObjectServiceProjectRoot(unittest.TestCase):
             resource_path = response.data.get("resource_path", "")
             self.assertTrue(
                 resource_path.replace("\\", "/").endswith(
-                    "Assets/Tyunta/Materials/Test.mat"
+                    "Assets/Sample/Materials/Test.mat"
                 ),
-                f"Expected resolved path ending with Assets/Tyunta/Materials/Test.mat, "
+                f"Expected resolved path ending with Assets/Sample/Materials/Test.mat, "
                 f"got: {resource_path}",
             )
             # Must NOT contain path doubling
             normalized = resource_path.replace("\\", "/")
             self.assertNotIn(
-                "Assets/Tyunta/Assets/Tyunta",
+                "Assets/Sample/Assets/Sample",
                 normalized,
                 f"Path doubling detected in bridge request: {resource_path}",
             )
@@ -5075,7 +5498,10 @@ class TestNumericComponentWarning(unittest.TestCase):
             )
             fileid_diags = [d for d in response.diagnostics if d.detail == "likely_fileid"]
             self.assertEqual(len(fileid_diags), 1)
-            self.assertIn("type name", fileid_diags[0].evidence)
+            self.assertIn(
+                "type name",
+                require_str(fileid_diags[0].evidence, "diagnostic evidence"),
+            )
 
     def test_negative_numeric_also_warns(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -5085,12 +5511,15 @@ class TestNumericComponentWarning(unittest.TestCase):
             prefab.write_text("%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Root\n")
 
             svc = SerializedObjectService(project_root=project_root)
-            diagnostics: list = []
-            result = validate_op(
-                svc,
-                "Assets/Test.prefab", 0,
-                {"op": "set", "component": "-42", "path": "m_IsActive", "value": 1},
-                diagnostics,
+            diagnostics: list[Diagnostic] = []
+            result = require_mapping(
+                validate_op(
+                    svc,
+                    "Assets/Test.prefab", 0,
+                    {"op": "set", "component": "-42", "path": "m_IsActive", "value": 1},
+                    diagnostics,
+                ),
+                "validate_op result",
             )
             fileid_diags = [d for d in diagnostics if d.detail == "likely_fileid"]
             self.assertEqual(len(fileid_diags), 1)
@@ -5110,12 +5539,15 @@ class TestNumericComponentWarning(unittest.TestCase):
             prefab.write_text("%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Root\n")
 
             svc = SerializedObjectService(project_root=project_root)
-            diagnostics: list = []
-            result = validate_op(
-                svc,
-                "Assets/Test.prefab", 0,
-                {"op": "set", "component": "SkinnedMeshRenderer", "path": "m_IsActive", "value": 1},
-                diagnostics,
+            diagnostics: list[Diagnostic] = []
+            result = require_mapping(
+                validate_op(
+                    svc,
+                    "Assets/Test.prefab", 0,
+                    {"op": "set", "component": "SkinnedMeshRenderer", "path": "m_IsActive", "value": 1},
+                    diagnostics,
+                ),
+                "validate_op result",
             )
             fileid_diags = [d for d in diagnostics if d.detail == "likely_fileid"]
             self.assertEqual(len(fileid_diags), 0)
@@ -5151,14 +5583,27 @@ class TestBeforeValueResolution(unittest.TestCase):
         meta.write_text("guid: cccccccccccccccccccccccccccccccc\n")
         return project_root
 
+    def _validate_op(
+        self,
+        svc: SerializedObjectService,
+        target: str,
+        index: int,
+        op: dict[str, Any],
+        diagnostics: list[Diagnostic],
+    ) -> dict[str, Any]:
+        return require_mapping(
+            validate_op(svc, target, index, op, diagnostics),
+            "validate_op result",
+        )
+
     def test_before_shows_existing_override_value(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project_root = self._make_variant(tmp)
             pv = PrefabVariantService(project_root=project_root)
             svc = SerializedObjectService(project_root=project_root, prefab_variant=pv)
 
-            diagnostics: list = []
-            result = validate_op(
+            diagnostics: list[Diagnostic] = []
+            result = self._validate_op(
                 svc,
                 "Assets/Variant.prefab",
                 0,
@@ -5168,7 +5613,10 @@ class TestBeforeValueResolution(unittest.TestCase):
             # The before value should be the objectReference from the override
             self.assertNotIsInstance(result["before"], UnresolvedReason)
             # Should contain the GUID reference
-            self.assertIn("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", result["before"])
+            self.assertIn(
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                require_str(result["before"], "before value"),
+            )
 
     def test_before_shows_base_default_for_unoverridden_property(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -5176,8 +5624,8 @@ class TestBeforeValueResolution(unittest.TestCase):
             pv = PrefabVariantService(project_root=project_root)
             svc = SerializedObjectService(project_root=project_root, prefab_variant=pv)
 
-            diagnostics: list = []
-            result = validate_op(
+            diagnostics: list[Diagnostic] = []
+            result = self._validate_op(
                 svc,
                 "Assets/Variant.prefab",
                 0,
@@ -5191,8 +5639,8 @@ class TestBeforeValueResolution(unittest.TestCase):
             project_root = self._make_variant(tmp)
             svc = SerializedObjectService(project_root=project_root)
 
-            diagnostics: list = []
-            result = validate_op(
+            diagnostics: list[Diagnostic] = []
+            result = self._validate_op(
                 svc,
                 "Assets/Variant.prefab",
                 0,
@@ -5212,8 +5660,8 @@ class TestBeforeValueResolution(unittest.TestCase):
             pv = PrefabVariantService(project_root=project_root)
             svc = SerializedObjectService(project_root=project_root, prefab_variant=pv)
 
-            diagnostics: list = []
-            result = validate_op(
+            diagnostics: list[Diagnostic] = []
+            result = self._validate_op(
                 svc,
                 "Assets/Base.prefab",
                 0,
@@ -5305,6 +5753,19 @@ class TestChainBeforeValueResolution(unittest.TestCase):
 
         return project_root
 
+    def _validate_op(
+        self,
+        svc: SerializedObjectService,
+        target: str,
+        index: int,
+        op: dict[str, Any],
+        diagnostics: list[Diagnostic],
+    ) -> dict[str, Any]:
+        return require_mapping(
+            validate_op(svc, target, index, op, diagnostics),
+            "validate_op result",
+        )
+
     def test_chain_resolves_parent_override(self) -> None:
         """Property overridden in parent variant is found via chain walk."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -5313,7 +5774,7 @@ class TestChainBeforeValueResolution(unittest.TestCase):
             svc = SerializedObjectService(project_root=project_root, prefab_variant=pv)
 
             diagnostics: list = []
-            result = validate_op(
+            result = self._validate_op(
                 svc,
                 "Assets/Leaf.prefab",
                 0,
@@ -5321,7 +5782,10 @@ class TestChainBeforeValueResolution(unittest.TestCase):
                 diagnostics,
             )
             # data[0] is overridden in Mid variant -> should find that value
-            self.assertIn("33333333333333333333333333333333", result["before"])
+            self.assertIn(
+                "33333333333333333333333333333333",
+                require_str(result["before"], "before value"),
+            )
 
     def test_chain_resolves_leaf_override(self) -> None:
         """Property overridden in the leaf variant itself takes precedence."""
@@ -5331,7 +5795,7 @@ class TestChainBeforeValueResolution(unittest.TestCase):
             svc = SerializedObjectService(project_root=project_root, prefab_variant=pv)
 
             diagnostics: list = []
-            result = validate_op(
+            result = self._validate_op(
                 svc,
                 "Assets/Leaf.prefab",
                 0,
@@ -5339,7 +5803,10 @@ class TestChainBeforeValueResolution(unittest.TestCase):
                 diagnostics,
             )
             # data[1] is overridden in the Leaf itself -> should find that value
-            self.assertIn("44444444444444444444444444444444", result["before"])
+            self.assertIn(
+                "44444444444444444444444444444444",
+                require_str(result["before"], "before value"),
+            )
 
     def test_chain_resolves_base_prefab_value(self) -> None:
         """Property not overridden in any variant is read from the base prefab."""
@@ -5349,7 +5816,7 @@ class TestChainBeforeValueResolution(unittest.TestCase):
             svc = SerializedObjectService(project_root=project_root, prefab_variant=pv)
 
             diagnostics: list = []
-            result = validate_op(
+            result = self._validate_op(
                 svc,
                 "Assets/Leaf.prefab",
                 0,
@@ -5375,7 +5842,7 @@ class TestChainBeforeValueResolution(unittest.TestCase):
             svc = SerializedObjectService(project_root=project_root, prefab_variant=pv)
 
             diagnostics: list = []
-            result = validate_op(
+            result = self._validate_op(
                 svc,
                 "Assets/Orphan.prefab",
                 0,
@@ -5424,7 +5891,10 @@ class TestChainBeforeValueResolution(unittest.TestCase):
             values = pv.resolve_chain_values("Assets/Top.prefab")
 
             # Top overrides data[0] -> should shadow Mid's override
-            self.assertIn("55555555555555555555555555555555", values["42:m_Materials.Array.data[0]"])
+            self.assertIn(
+                "55555555555555555555555555555555",
+                values["42:m_Materials.Array.data[0]"],
+            )
 
     # ----- Type-name lookup paths (component addressed by Unity type name) -----
 
@@ -5440,7 +5910,7 @@ class TestChainBeforeValueResolution(unittest.TestCase):
                 project_root=project_root, prefab_variant=pv
             )
 
-            by_id = validate_op(
+            by_id = self._validate_op(
                 svc_by_id,
                 "Assets/Leaf.prefab",
                 0,
@@ -5448,7 +5918,7 @@ class TestChainBeforeValueResolution(unittest.TestCase):
                  "path": "m_Materials.Array.data[0]", "value": "x"},
                 [],
             )
-            by_name = validate_op(
+            by_name = self._validate_op(
                 svc_by_name,
                 "Assets/Leaf.prefab",
                 0,
@@ -5496,7 +5966,7 @@ class TestChainBeforeValueResolution(unittest.TestCase):
             pv = PrefabVariantService(project_root=project_root)
             svc = SerializedObjectService(project_root=project_root, prefab_variant=pv)
 
-            result = validate_op(
+            result = self._validate_op(
                 svc,
                 "Assets/Leaf.prefab",
                 0,
@@ -5514,7 +5984,7 @@ class TestChainBeforeValueResolution(unittest.TestCase):
             pv = PrefabVariantService(project_root=project_root)
             svc = SerializedObjectService(project_root=project_root, prefab_variant=pv)
 
-            result = validate_op(
+            result = self._validate_op(
                 svc,
                 "Assets/Leaf.prefab",
                 0,

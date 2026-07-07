@@ -83,5 +83,32 @@ class TestNonFatalClassificationCallsSafeSave(unittest.TestCase):
         )
 
 
+class TestLiveProbeInventory(unittest.TestCase):
+    """Issues #92/#93/#94/#95/#98/#101/#102 require named live probes."""
+
+    _LIVE_PROBES = (
+        "Live_ClientSim_Profile_Reports_Side_Effects",
+        "Live_RunScript_Channels_Return_Without_Asset_Temp_File",
+        "Live_Console_Captures_Debug_Log_Matrix",
+        "Live_Screenshot_World_Space_Ui_Framing",
+        "Live_Geometry_Measures_Chair_To_TargetButton_Without_RunScript",
+        "Live_SetProperty_ObjectReference_Shorthand",
+        "Live_UdonSharp_Array_Sync",
+    )
+
+    def test_run_suite_registers_live_probe_methods(self) -> None:
+        text = _read_integration_source()
+        for probe in self._LIVE_PROBES:
+            with self.subTest(probe=probe):
+                self.assertIn(f'("{probe}",', text)
+                method_suffix = probe.replace("Live_", "Test_Live_", 1)
+                self.assertIn(method_suffix, text)
+
+    def test_live_probe_inventory_is_opt_in(self) -> None:
+        text = _read_integration_source()
+        self.assertIn("UNITYTOOL_BRIDGE_E2E_LIVE", text)
+        self.assertIn("LiveUnityProbeEnabled", text)
+
+
 if __name__ == "__main__":
     unittest.main()

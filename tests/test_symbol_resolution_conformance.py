@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import unittest
 from pathlib import Path
+from typing import Any, ClassVar
 
 import pytest
 
@@ -52,6 +53,9 @@ def _build_node(entry: dict) -> SymbolNode:
 class TestSymbolResolutionConformance(unittest.TestCase):
     """T-38-c1: the offline symbol tree conforms to the shared fixture."""
 
+    fixture: ClassVar[dict[str, Any]]
+    tree: ClassVar[SymbolTree]
+
     @classmethod
     def setUpClass(cls) -> None:
         cls.fixture = json.loads(_FIXTURE.read_text(encoding="utf-8"))
@@ -80,17 +84,17 @@ class TestSymbolResolutionConformance(unittest.TestCase):
                         len(matches), 1,
                         msg=f"{path!r} should be ambiguous",
                     )
-                    with self.assertRaises(AmbiguousSymbolError) as cm:
+                    with self.assertRaises(AmbiguousSymbolError) as ambiguous_cm:
                         self.tree.resolve_unique(path)
-                    self.assertIn("mbiguous", str(cm.exception))
+                    self.assertIn("mbiguous", str(ambiguous_cm.exception))
                 elif outcome == "not_found":
                     self.assertEqual(
                         [], matches,
                         msg=f"{path!r} should resolve to nothing",
                     )
-                    with self.assertRaises(SymbolNotFoundError) as cm:
+                    with self.assertRaises(SymbolNotFoundError) as missing_cm:
                         self.tree.resolve_unique(path)
-                    self.assertIn(path, str(cm.exception))
+                    self.assertIn(path, str(missing_cm.exception))
                 else:  # pragma: no cover - guards a malformed fixture
                     self.fail(f"unknown outcome {outcome!r}")
 

@@ -18,9 +18,12 @@ in one diagnostic.
 from __future__ import annotations
 
 import unittest
+from collections.abc import Callable
+from typing import Any
 from unittest.mock import patch
 
 from prefab_sentinel import mcp_tools_editor_write
+from tests._mcp_tool_recorder import record_tools
 
 
 def _success_envelope() -> dict:
@@ -34,6 +37,26 @@ def _success_envelope() -> dict:
             "total_entries": 0,
             "next_cursor": "",
             "executed": True,
+        },
+        "diagnostics": [],
+    }
+
+
+def _background_deferred_envelope(operation: str) -> dict:
+    return {
+        "success": False,
+        "severity": "warning",
+        "code": "EDITOR_COMPILE_DEFERRED_BACKGROUND",
+        "message": "background compile deferred",
+        "data": {
+            "operation": operation,
+            "editor_focused": False,
+            "deferred_reason": "editor_background_compile_reload",
+            "elapsed_sec": 15.0,
+            "budget_sec": 15.0,
+            "diagnostic_compiling": True,
+            "job_retained": False,
+            "cleanup_performed": False,
         },
         "diagnostics": [],
     }
@@ -122,6 +145,38 @@ class EditorGetBlendShapesPaginationTests(unittest.TestCase):
             msg=(
                 "Pagination forwarding must carry the target hierarchy "
                 "path, the filter substring, and both knobs verbatim."
+            ),
+        )
+
+
+class EditorMenuDeferredPassThroughTests(unittest.TestCase):
+    """Issue #72: menu execution preserves deferred compile envelopes."""
+
+    def test_execute_menu_item_deferred_envelope_passes_through_unchanged(self) -> None:
+        bridge_envelope = _background_deferred_envelope("execute_menu_item")
+        menu_tool: Callable[..., dict[str, Any]] = record_tools(
+            mcp_tools_editor_write.register_editor_write_tools,
+        ).get("editor_execute_menu_item")
+        with patch.object(mcp_tools_editor_write, "send_action") as send:
+            send.return_value = bridge_envelope
+            response = menu_tool(
+                menu_path="Tools/Prefab Sentinel/Test",
+                confirm=True,
+                change_reason="background compile deferral",
+            )
+        self.assertEqual(
+            (
+                "EDITOR_COMPILE_DEFERRED_BACKGROUND", False, "warning",
+                "execute_menu_item", False,
+            ),
+            (
+                response["code"], response["success"], response["severity"],
+                response["data"]["operation"],
+                response["data"]["editor_focused"],
+            ),
+            msg=(
+                "editor_execute_menu_item must preserve the deferred compile "
+                "envelope and operation payload returned by the bridge."
             ),
         )
 

@@ -69,7 +69,7 @@ editor_set_material_property(property_name="_MainColorPower", property_value="0.
 - **実態確認は `editor_list_materials` を使う**。特に「Prefab が古い」とユーザーが言った場合は必ずシーン側を確認
 
 ### 外部マテリアルの編集手順
-- Assets/Tyunta 以外のマテリアルは readonly ルールに従いコピーしてから編集
+- Assets/Sample 以外のマテリアルは readonly ルールに従いコピーしてから編集
 - 手順: bash で .mat をコピー → `editor_refresh` → `editor_set_material` でスロット差し替え → `editor_set_material_property` で調整
 - .mat.meta もコピーすると GUID が重複するため、コピーせず Unity に新規生成させる方が安全
 

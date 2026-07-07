@@ -3,7 +3,9 @@ from __future__ import annotations
 import tempfile
 import unittest
 import warnings
+from collections.abc import Callable
 from pathlib import Path
+from unittest.mock import patch
 
 from prefab_sentinel.unity_assets import (
     DEFAULT_EXCLUDED_DIR_NAMES,
@@ -468,6 +470,44 @@ class CollectProjectGuidIndexTests(unittest.TestCase):
         self.assertIn("abcdef01234567890abcdef012345678", index)
         self.assertEqual(index["abcdef01234567890abcdef012345678"].name, "test.cs")
 
+    def test_symlinked_meta_file_is_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir, tempfile.TemporaryDirectory() as outside_tmp:
+            root = Path(tmpdir)
+            outside_meta = Path(outside_tmp) / "Escaped.mat.meta"
+            outside_meta.write_text(
+                "guid: abcdef01234567890abcdef012345678\n",
+                encoding="utf-8",
+            )
+            meta = root / "Escaped.mat.meta"
+            try:
+                meta.symlink_to(outside_meta)
+            except (OSError, NotImplementedError):
+                self.skipTest("platform does not support symlink creation")
+
+            index = collect_project_guid_index(root)
+
+        self.assertNotIn("abcdef01234567890abcdef012345678", index)
+
+    def test_symlinked_asset_target_is_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir, tempfile.TemporaryDirectory() as outside_tmp:
+            root = Path(tmpdir)
+            outside_asset = Path(outside_tmp) / "Escaped.mat"
+            outside_asset.write_text("outside", encoding="utf-8")
+            asset = root / "Escaped.mat"
+            try:
+                asset.symlink_to(outside_asset)
+            except (OSError, NotImplementedError):
+                self.skipTest("platform does not support symlink creation")
+            meta = root / "Escaped.mat.meta"
+            meta.write_text(
+                "guid: abcdef01234567890abcdef012345678\n",
+                encoding="utf-8",
+            )
+
+            index = collect_project_guid_index(root)
+
+        self.assertNotIn("abcdef01234567890abcdef012345678", index)
+
     def test_excludes_default_dirs(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -569,6 +609,32 @@ class CollectProjectGuidIndexTests(unittest.TestCase):
             index = collect_project_guid_index(root)
         self.assertEqual(len(index), 20)
 
+    def test_guid_index_scan_uses_shared_runner(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            for i in range(3):
+                guid = f"{i:032x}"
+                meta = root / f"file_{i}.cs.meta"
+                meta.write_text(f"guid: {guid}\n", encoding="utf-8")
+
+            def run_immediately(
+                items: list[tuple[Path, Path]],
+                worker: Callable[[tuple[Path, Path]], tuple[str | None, Path]],
+                *,
+                max_workers: int | None = None,
+            ) -> list[tuple[str | None, Path]]:
+                self.assertIsNone(max_workers)
+                return [worker(item) for item in items]
+
+            with patch(
+                "prefab_sentinel.unity_assets.run_ordered",
+                side_effect=run_immediately,
+            ) as run_ordered:
+                index = collect_project_guid_index(root)
+
+        run_ordered.assert_called_once()
+        self.assertEqual({f"{i:032x}" for i in range(3)}, set(index))
+
 
 class FindProjectRootTests(unittest.TestCase):
     def test_directory_with_assets(self) -> None:
@@ -615,14 +681,14 @@ class ResolveScopePathTests(unittest.TestCase):
     def test_warns_on_path_doubling(self) -> None:
         """resolve_scope_path emits a warning when the resolved path contains doubled Assets/ segments."""
         with tempfile.TemporaryDirectory() as temp_dir:
-            # Simulate a project_root that already includes "Assets/Tyunta"
-            # and a scope that also starts with "Assets/Tyunta".
+            # Simulate a project_root that already includes "Assets/Sample"
+            # and a scope that also starts with "Assets/Sample".
             # This would only happen if project_root was misconfigured.
-            fake_root = Path(temp_dir) / "Assets" / "Tyunta"
+            fake_root = Path(temp_dir) / "Assets" / "Sample"
             fake_root.mkdir(parents=True)
             with warnings.catch_warnings(record=True) as w:
                 warnings.simplefilter("always")
-                resolve_scope_path("Assets/Tyunta/Test.prefab", fake_root)
+                resolve_scope_path("Assets/Sample/Test.prefab", fake_root)
                 doubled_warnings = [
                     x for x in w if "Path doubling detected" in str(x.message)
                 ]
@@ -631,35 +697,35 @@ class ResolveScopePathTests(unittest.TestCase):
 
 class HasPathDoublingTests(unittest.TestCase):
     def test_detects_doubled_assets(self) -> None:
-        path = "Assets/Tyunta/Assets/Tyunta/Materials/foo.mat"
+        path = "Assets/Sample/Assets/Sample/Materials/foo.mat"
         self.assertTrue(
             has_path_doubling(path),
             msg=f"doubled segment must be detected in {path!r}",
         )
 
     def test_no_doubling_for_normal_path(self) -> None:
-        path = "Assets/Tyunta/Materials/foo.mat"
+        path = "Assets/Sample/Materials/foo.mat"
         self.assertFalse(
             has_path_doubling(path),
             msg=f"single-segment path must not trigger doubling: {path!r}",
         )
 
     def test_detects_windows_backslash_path(self) -> None:
-        path = "Assets\\Tyunta\\Assets\\Tyunta\\Materials\\foo.mat"
+        path = "Assets\\Sample\\Assets\\Sample\\Materials\\foo.mat"
         self.assertTrue(
             has_path_doubling(path),
             msg=f"backslash separator must still surface doubling: {path!r}",
         )
 
     def test_no_doubling_for_absolute_path(self) -> None:
-        path = "/project/Assets/Tyunta/Materials/foo.mat"
+        path = "/project/Assets/Sample/Materials/foo.mat"
         self.assertFalse(
             has_path_doubling(path),
             msg=f"single Assets segment with absolute prefix must not trigger doubling: {path!r}",
         )
 
     def test_detects_case_insensitive(self) -> None:
-        path = "assets/Tyunta/Assets/Tyunta/Materials/foo.mat"
+        path = "assets/Sample/Assets/Sample/Materials/foo.mat"
         self.assertTrue(
             has_path_doubling(path),
             msg=f"case-insensitive doubling detection must surface: {path!r}",

@@ -1,6 +1,7 @@
 # Local environment
 .venv/
-.serena/
+.serena/*
+!.serena/project.yml
 .claude/
 .superpowers/
 .takt/

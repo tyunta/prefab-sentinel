@@ -8,6 +8,7 @@ from mcp.server.fastmcp import FastMCP
 
 from prefab_sentinel.editor_bridge import send_action
 from prefab_sentinel.json_io import dump_json
+from prefab_sentinel.mcp_helpers import normalize_material_value
 from prefab_sentinel.mcp_validation import require_write_audit
 
 __all__ = [
@@ -152,6 +153,45 @@ def register_editor_write_tools(server: FastMCP) -> None:
         if material_asset_path:
             kwargs["material_path"] = material_asset_path
         return send_action(action="set_material", **kwargs)
+
+    @server.tool()
+    def editor_set_material_property(
+        hierarchy_path: str,
+        material_index: int,
+        property_name: str,
+        value: str | list | int | float,
+        confirm: bool = False,
+        change_reason: str | None = None,
+    ) -> dict[str, Any]:
+        """Set a shader property value on a material at runtime.
+
+        Type is determined from shader definition (not from the value format).
+
+        Args:
+            hierarchy_path: Hierarchy path to the GameObject with a Renderer.
+            material_index: Material slot index (0-based).
+            property_name: Shader property name (e.g. "_Color", "_MainTex").
+            value: Value as string. Format depends on shader type:
+                Float/Range: "0.5"
+                Int: "2"
+                Color: "[1, 0.8, 0.6, 1]" (RGBA)
+                Vector: "[0, 1, 0, 0]" (XYZW)
+                Texture: "guid:abc123..." or "path:Assets/Tex/foo.png" or "" (null)
+            confirm: Must be ``True`` for this write-class tool.
+            change_reason: Non-empty audit reason recorded with the write.
+        """
+        audit_err = require_write_audit(
+            "editor_set_material_property", confirm, change_reason,
+        )
+        if audit_err is not None:
+            return audit_err
+        return send_action(
+            action="set_material_property",
+            hierarchy_path=hierarchy_path,
+            material_index=material_index,
+            property_name=property_name,
+            property_value=normalize_material_value(value),
+        )
 
     @server.tool()
     def editor_find_renderers_by_material(
