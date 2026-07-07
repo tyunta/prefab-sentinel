@@ -280,6 +280,87 @@ class InspectWiringPaginationTests(unittest.TestCase):
         # Sanity: every merged component contributes one null reference.
         self.assertEqual(self.TOTAL, first.data["null_reference_count"])
 
+    def test_context_nested_cache_reuses_duplicate_child_source(self) -> None:
+        from prefab_sentinel.session_cache import SessionCacheManager
+        from prefab_sentinel.unity_assets import decode_text_file
+        from prefab_sentinel.unity_yaml_parser import split_yaml_blocks
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            assets = root / "Assets"
+            assets.mkdir(parents=True, exist_ok=True)
+
+            child_text = (
+                YAML_HEADER
+                + make_gameobject("100", "ChildObj", ["110", "200"])
+                + make_transform("110", "100")
+                + make_monobehaviour("200", "100", guid=_SCRIPT_GUID)
+            )
+            (assets / "Child.prefab").write_text(child_text, encoding="utf-8")
+            _write_meta(assets / "Child.prefab.meta", _CHILD_GUID)
+
+            base_text = (
+                YAML_HEADER
+                + make_gameobject("10", "BaseRoot", ["20", "30"])
+                + make_transform("20", "10")
+                + make_monobehaviour("30", "10", guid=_SCRIPT_GUID)
+                + make_prefab_instance("40", _CHILD_GUID)
+                + make_prefab_instance("41", _CHILD_GUID)
+            )
+            base_path = assets / "Base.prefab"
+            base_path.write_text(base_text, encoding="utf-8")
+            _write_meta(assets / "Base.prefab.meta", _BASE_GUID)
+
+            cache = SessionCacheManager()
+            cache.project_root = root
+            pv, rr = _services_for_root(root)
+            with (
+                patch(
+                    "prefab_sentinel.nested_prefab_cache.decode_text_file",
+                    wraps=decode_text_file,
+                ) as decode_text,
+                patch(
+                    "prefab_sentinel.nested_prefab_cache.split_yaml_blocks",
+                    wraps=split_yaml_blocks,
+                ) as cache_split_blocks,
+                patch(
+                    "prefab_sentinel.udon_wiring.split_yaml_blocks",
+                    wraps=split_yaml_blocks,
+                ) as wiring_split_blocks,
+            ):
+                resp = inspect_wiring(
+                    pv,
+                    rr,
+                    target_path=base_path.relative_to(root).as_posix(),
+                    inspection_context=cache.inspection_context(),
+                )
+
+        components = resp.data["components"]
+        source_prefabs = [item.get("source_prefab", "") for item in components]
+        self.assertEqual(
+            (
+                True,
+                3,
+                ["", "Assets/Child.prefab", "Assets/Child.prefab"],
+                1,
+                2,
+                1,
+            ),
+            (
+                resp.success,
+                resp.data["component_count"],
+                source_prefabs,
+                decode_text.call_count,
+                cache_split_blocks.call_count,
+                wiring_split_blocks.call_count,
+            ),
+            msg=(
+                "context wiring inspection should preserve merged component order "
+                "and decode/cache-parse a duplicate nested child once while "
+                f"reusing parsed blocks for wiring analysis; response={resp!r}"
+            ),
+        )
+
 
 class AggregatorWiringScanMaxPageSizeTests(unittest.TestCase):
     """``validate_all_wiring`` invokes ``inspect_wiring`` with the
@@ -319,12 +400,191 @@ class AggregatorWiringScanMaxPageSizeTests(unittest.TestCase):
                 resp = validate_all_wiring(pv, rr)
 
         self.assertTrue(resp.success)
-        self.assertGreaterEqual(len(recorded), 2)
+        self.assertEqual(2, len(recorded))
         for call in recorded:
             self.assertEqual(
                 INSPECT_WIRING_PAGE_SIZE_MAX, call["page_size"],
                 f"aggregator must pass the documented inclusive upper bound: {call}",
             )
+
+
+    def test_aggregator_uses_ordered_runner_for_sorted_merge(self) -> None:
+        from prefab_sentinel.contracts import ToolResponse
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            assets = root / "Assets"
+            assets.mkdir(parents=True, exist_ok=True)
+            for stem in ("A", "B"):
+                (assets / f"{stem}.prefab").write_text(YAML_HEADER, encoding="utf-8")
+                _write_meta(assets / f"{stem}.prefab.meta", _SCRIPT_GUID[:31] + stem[0])
+
+            pv, rr = _services_for_root(root)
+            submitted_calls: list[list[Path]] = []
+            execution_calls: list[list[Path]] = []
+            inspect_calls: list[dict[str, object]] = []
+
+            def run_in_reverse(items, worker, *, max_workers=None):
+                self.assertIsNone(max_workers)
+                submitted = list(items)
+                submitted_calls.append(submitted)
+                execution_paths: list[Path] = []
+                by_path = {}
+                for path in reversed(submitted):
+                    execution_paths.append(path)
+                    by_path[path] = worker(path)
+                execution_calls.append(execution_paths)
+                return [by_path[path] for path in submitted]
+
+            def fake_inspect_wiring(prefab_variant, reference_resolver, target_path, **kwargs):
+                inspect_calls.append({"target_path": target_path, **kwargs})
+                null_names = ["a"] if Path(target_path).name == "A.prefab" else ["b", "c"]
+                return ToolResponse(
+                    success=True,
+                    severity=Severity.INFO,
+                    code="INSPECT_WIRING_RESULT",
+                    message="child scan completed",
+                    data={"components": [{"null_field_names": null_names}]},
+                    diagnostics=[],
+                )
+
+            with (
+                patch(
+                    "prefab_sentinel.orchestrator_wiring.run_ordered",
+                    side_effect=run_in_reverse,
+                    create=True,
+                ) as run_ordered,
+                patch(
+                    "prefab_sentinel.orchestrator_wiring.inspect_wiring",
+                    side_effect=fake_inspect_wiring,
+                ),
+            ):
+                resp = validate_all_wiring(pv, rr)
+
+        self.assertEqual(1, run_ordered.call_count)
+        self.assertEqual(list(reversed(submitted_calls[0])), execution_calls[0])
+        self.assertEqual([
+            INSPECT_WIRING_PAGE_SIZE_MAX,
+            INSPECT_WIRING_PAGE_SIZE_MAX,
+        ], [call["page_size"] for call in inspect_calls])
+        self.assertEqual(2, resp.data["files_scanned"])
+        self.assertEqual(2, resp.data["total_components"])
+        self.assertEqual(3, resp.data["total_null_refs"])
+        self.assertEqual([
+            {"file": str(assets / "A.prefab"), "null_refs": 1, "components": 1},
+            {"file": str(assets / "B.prefab"), "null_refs": 2, "components": 1},
+        ], resp.data["null_refs_by_file"])
+
+    def test_aggregator_uses_context_guid_index_before_workers(self) -> None:
+        from prefab_sentinel import orchestrator_wiring as wiring_module
+        from prefab_sentinel.inspection_context import ProjectInspectionContext
+        from prefab_sentinel.nested_prefab_cache import NestedPrefabCache
+        from prefab_sentinel.services.prefab_variant import service as variant_service
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            assets = root / "Assets"
+            assets.mkdir(parents=True, exist_ok=True)
+            base_text = (
+                YAML_HEADER
+                + make_gameobject("10", "BaseRoot", ["20", "30"])
+                + make_transform("20", "10")
+                + make_monobehaviour(
+                    "30", "10", guid=_SCRIPT_GUID,
+                    fields={"someRef": "{fileID: 0}"},
+                )
+            )
+            base_path = assets / "Base.prefab"
+            base_path.write_text(base_text, encoding="utf-8")
+            _write_meta(assets / "Base.prefab.meta", _BASE_GUID)
+            variant_text = f"""{YAML_HEADER}--- !u!1001 &100100000
+PrefabInstance:
+  m_SourcePrefab: {{fileID: 100100000, guid: {_BASE_GUID}, type: 3}}
+"""
+            (assets / "Variant.prefab").write_text(variant_text, encoding="utf-8")
+            _write_meta(assets / "Variant.prefab.meta", _CHILD_GUID)
+
+            pv, rr = _services_for_root(root)
+            context = ProjectInspectionContext(
+                project_root=root,
+                guid_index={_BASE_GUID: base_path},
+                script_name_map={_SCRIPT_GUID: "WiringScript"},
+                nested_prefab_cache=NestedPrefabCache(),
+            )
+            worker_active = False
+            real_run_ordered = wiring_module.run_ordered
+            original_collect = variant_service.collect_project_guid_index
+
+            def run_with_worker_guard(items, worker, *, max_workers=None):
+                nonlocal worker_active
+
+                def guarded_worker(item):
+                    nonlocal worker_active
+                    worker_active = True
+                    try:
+                        return worker(item)
+                    finally:
+                        worker_active = False
+
+                return real_run_ordered(items, guarded_worker, max_workers=max_workers)
+
+            def guarded_collect(project_root: Path):
+                if worker_active:
+                    raise AssertionError("variant GUID index built in worker")
+                return original_collect(project_root)
+
+            with (
+                patch(
+                    "prefab_sentinel.orchestrator_wiring.run_ordered",
+                    side_effect=run_with_worker_guard,
+                    create=True,
+                ),
+                patch(
+                    "prefab_sentinel.services.prefab_variant.service.collect_project_guid_index",
+                    side_effect=guarded_collect,
+                ),
+            ):
+                resp = validate_all_wiring(
+                    pv,
+                    rr,
+                    target_path="Assets/Variant.prefab",
+                    inspection_context=context,
+                )
+
+        self.assertTrue(resp.success)
+        self.assertEqual(1, resp.data["files_scanned"])
+        self.assertEqual(1, resp.data["total_components"])
+        self.assertEqual(1, resp.data["total_null_refs"])
+
+    def test_no_target_aggregate_scans_project_relative_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            assets = root / "Assets"
+            assets.mkdir(parents=True, exist_ok=True)
+            prefab = assets / "Solo.prefab"
+            text = (
+                YAML_HEADER
+                + make_gameobject("10", "SoloRoot", ["20", "30", "31"])
+                + make_transform("20", "10")
+                + make_monobehaviour(
+                    "30", "10", guid=_SCRIPT_GUID,
+                    fields={"someRef": "{fileID: 0}"},
+                )
+                + make_monobehaviour("31", "10", guid=_SCRIPT_GUID)
+            )
+            prefab.write_text(text, encoding="utf-8")
+            _write_meta(assets / "Solo.prefab.meta", _BASE_GUID)
+
+            pv, rr = _services_for_root(root)
+            resp = validate_all_wiring(pv, rr)
+
+        self.assertEqual((True, "VALIDATE_WIRING_OK"), (resp.success, resp.code))
+        self.assertEqual(1, resp.data["files_scanned"])
+        self.assertEqual(2, resp.data["total_components"])
+        self.assertEqual(1, resp.data["total_null_refs"])
+        self.assertEqual([
+            {"file": str(prefab), "null_refs": 1, "components": 2},
+        ], resp.data["null_refs_by_file"])
 
 
 class ValidateAllWiringDiagnosticsBaselineTests(unittest.TestCase):

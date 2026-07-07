@@ -3,7 +3,9 @@ from __future__ import annotations
 import tempfile
 import unittest
 import warnings
+from collections.abc import Callable
 from pathlib import Path
+from unittest.mock import patch
 
 from prefab_sentinel.unity_assets import (
     DEFAULT_EXCLUDED_DIR_NAMES,
@@ -606,6 +608,32 @@ class CollectProjectGuidIndexTests(unittest.TestCase):
                 meta.write_text(f"guid: {guid}\n", encoding="utf-8")
             index = collect_project_guid_index(root)
         self.assertEqual(len(index), 20)
+
+    def test_guid_index_scan_uses_shared_runner(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            for i in range(3):
+                guid = f"{i:032x}"
+                meta = root / f"file_{i}.cs.meta"
+                meta.write_text(f"guid: {guid}\n", encoding="utf-8")
+
+            def run_immediately(
+                items: list[tuple[Path, Path]],
+                worker: Callable[[tuple[Path, Path]], tuple[str | None, Path]],
+                *,
+                max_workers: int | None = None,
+            ) -> list[tuple[str | None, Path]]:
+                self.assertIsNone(max_workers)
+                return [worker(item) for item in items]
+
+            with patch(
+                "prefab_sentinel.unity_assets.run_ordered",
+                side_effect=run_immediately,
+            ) as run_ordered:
+                index = collect_project_guid_index(root)
+
+        run_ordered.assert_called_once()
+        self.assertEqual({f"{i:032x}" for i in range(3)}, set(index))
 
 
 class FindProjectRootTests(unittest.TestCase):

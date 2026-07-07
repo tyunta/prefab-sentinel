@@ -7,6 +7,7 @@ import os
 import sys
 import tempfile
 import unittest
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -158,6 +159,52 @@ class ReferenceResolverServiceTests(unittest.TestCase):
             self.assertIn("target_guid", details[0])
             self.assertIn("file_id", details[0])
 
+    def test_scan_broken_references_uses_ordered_runner(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_sample_project(root)
+            svc = ReferenceResolverService(project_root=root)
+            submitted_calls: list[list[Path]] = []
+            execution_calls: list[list[Path]] = []
+
+            def run_in_reverse(
+                items: list[Path],
+                worker: Callable[[Path], object],
+                *,
+                max_workers: int | None = None,
+            ) -> list[object]:
+                self.assertIsNone(max_workers)
+                submitted = list(items)
+                submitted_calls.append(submitted)
+                execution_paths: list[Path] = []
+                by_path = {}
+                for path in reversed(submitted):
+                    execution_paths.append(path)
+                    by_path[path] = worker(path)
+                execution_calls.append(execution_paths)
+                return [by_path[path] for path in submitted]
+
+            with patch(
+                "prefab_sentinel.services.reference_resolver.run_ordered",
+                side_effect=run_in_reverse,
+            ) as run_ordered:
+                response = svc.scan_broken_references(
+                    "Assets",
+                    include_diagnostics=True,
+                    max_diagnostics=1,
+                    top_missing_breakdown=True,
+                )
+
+            self.assertEqual(2, run_ordered.call_count)
+            self.assertEqual(2, len(submitted_calls[1]))
+            self.assertEqual(list(reversed(submitted_calls[1])), execution_calls[1])
+            self.assertEqual((False, "REF_SCAN_BROKEN"), (response.success, response.code))
+            self.assertEqual(2, response.data["broken_count"])
+            self.assertEqual(2, response.data["broken_occurrences"])
+            self.assertEqual(1, response.data["returned_diagnostics"])
+            self.assertEqual(1, response.data["truncated_diagnostics"])
+            self.assertEqual("Assets/Variant.prefab", response.diagnostics[0].path)
+
     def test_scan_broken_references_honors_details_limit(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -256,6 +303,46 @@ class ReferenceResolverServiceTests(unittest.TestCase):
                 0,
                 msg=f"usages beyond the cap should be reported as truncated: {usage.data!r}",
             )
+
+    def test_where_used_uses_ordered_runner_before_usage_cap(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_sample_project(root)
+            svc = ReferenceResolverService(project_root=root)
+            submitted_calls: list[list[Path]] = []
+            execution_calls: list[list[Path]] = []
+
+            def run_in_reverse(
+                items: list[Path],
+                worker: Callable[[Path], object],
+                *,
+                max_workers: int | None = None,
+            ) -> list[object]:
+                self.assertIsNone(max_workers)
+                submitted = list(items)
+                submitted_calls.append(submitted)
+                execution_paths: list[Path] = []
+                by_path = {}
+                for path in reversed(submitted):
+                    execution_paths.append(path)
+                    by_path[path] = worker(path)
+                execution_calls.append(execution_paths)
+                return [by_path[path] for path in submitted]
+
+            with patch(
+                "prefab_sentinel.services.reference_resolver.run_ordered",
+                side_effect=run_in_reverse,
+            ) as run_ordered:
+                usage = svc.where_used(BASE_GUID, scope="Assets", max_usages=1)
+
+            self.assertEqual(2, run_ordered.call_count)
+            self.assertEqual(2, len(submitted_calls[1]))
+            self.assertEqual(list(reversed(submitted_calls[1])), execution_calls[1])
+            self.assertEqual((True, "REF_WHERE_USED"), (usage.success, usage.code))
+            self.assertEqual(1, usage.data["returned_usages"])
+            self.assertEqual(5, usage.data["truncated_usages"])
+            self.assertEqual(6, usage.data["usage_count"])
+            self.assertEqual("Assets/Variant.prefab", usage.data["usages"][0]["path"])
 
     def test_where_used_returns_missing_scope_error(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -399,6 +486,35 @@ PrefabInstance:
                     svc._text_cache[f],
                     msg=f"preload should cache the on-disk text of {f}",
                 )
+
+    def test_preload_texts_uses_shared_runner_with_cpu_default(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_sample_project(root)
+            svc = ReferenceResolverService(project_root=root)
+            files = [
+                root / "Assets" / "Base.prefab",
+                root / "Assets" / "Variant.prefab",
+            ]
+
+            def run_immediately(
+                items: list[Path],
+                worker: Callable[[Path], str],
+                *,
+                max_workers: int | None = None,
+            ) -> list[str]:
+                self.assertIsNone(max_workers)
+                return [worker(path) for path in items]
+
+            with patch(
+                "prefab_sentinel.services.reference_resolver.run_ordered",
+                side_effect=run_immediately,
+            ) as run_ordered:
+                svc.preload_texts(files)
+
+            run_ordered.assert_called_once()
+            self.assertEqual(files[0].read_text(encoding="utf-8"), svc._text_cache[files[0]])
+            self.assertEqual(files[1].read_text(encoding="utf-8"), svc._text_cache[files[1]])
 
     def test_preload_texts_handles_unreadable(self) -> None:
         """_preload_texts should mark unreadable files in _unreadable_paths."""
@@ -2120,6 +2236,35 @@ PrefabInstance:
                 "read_only": True,
             },
             response.data,
+        )
+
+    def test_orchestrator_guid_invalidation_clears_prefab_variant_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_sample_project(root)
+            orchestrator = Phase1Orchestrator.default(project_root=root)
+
+            first = orchestrator.prefab_variant.resolve_prefab_chain("Assets/Variant.prefab")
+            self.assertEqual(
+                [
+                    {"path": "Assets/Variant.prefab", "guid": None},
+                    {"path": "Assets/Base.prefab", "guid": None},
+                ],
+                first.data["chain"],
+            )
+
+            (root / "Assets" / "Base.prefab").rename(root / "Assets" / "Moved.prefab")
+            (root / "Assets" / "Base.prefab.meta").rename(root / "Assets" / "Moved.prefab.meta")
+            orchestrator.invalidate_guid_index()
+
+            second = orchestrator.prefab_variant.resolve_prefab_chain("Assets/Variant.prefab")
+
+        self.assertEqual(
+            [
+                {"path": "Assets/Variant.prefab", "guid": None},
+                {"path": "Assets/Moved.prefab", "guid": None},
+            ],
+            second.data["chain"],
         )
 
     def test_resolve_chain_values_with_origin_pins_full_payload(self) -> None:

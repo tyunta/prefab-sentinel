@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_transform
 
@@ -188,6 +189,155 @@ class EffectiveHierarchyDiagnosticsTests(unittest.TestCase):
             msg=(
                 "unresolved nested source should warn while resolved sibling "
                 f"remains visible; observed payload={payload!r}"
+            ),
+        )
+
+    def test_unreadable_nested_source_diagnostic_is_sanitized(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            assets = root / "Assets"
+            assets.mkdir(parents=True, exist_ok=True)
+            child = assets / "Unreadable.prefab"
+            child.write_bytes(b"\xff")
+            child.with_suffix(child.suffix + ".meta").write_text(
+                f"fileFormatVersion: 2\nguid: {SOURCE_GUID}\n",
+                encoding="utf-8",
+            )
+            host = _write_prefab(
+                root,
+                "Host.prefab",
+                SECOND_SOURCE_GUID,
+                _host_prefab(_prefab_instance("9000", SOURCE_GUID)),
+            )
+            build_effective_hierarchy = _load_builder()
+
+            result = build_effective_hierarchy(
+                root, "Assets/Host.prefab", host.read_text(encoding="utf-8")
+            )
+
+        payload = result.to_dict()
+        self.assertEqual(
+            [
+                {
+                    "severity": "warning",
+                    "code": "EFFECTIVE_HIERARCHY_SOURCE_UNRESOLVED",
+                    "message": (
+                        f"Nested PrefabInstance source GUID {SOURCE_GUID} "
+                        "could not be decoded."
+                    ),
+                    "data": {
+                        "path": "Assets/Host.prefab",
+                        "location": "9000",
+                    },
+                }
+            ],
+            payload["diagnostics"],
+        )
+
+    def test_package_cache_fallback_matches_context_guid_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package_dir = root / "Library" / "PackageCache" / "com.example.pkg"
+            package_dir.mkdir(parents=True)
+            child = package_dir / "Nested.prefab"
+            child.write_text(_source_prefab("PackageNested"), encoding="utf-8")
+            child.with_suffix(child.suffix + ".meta").write_text(
+                f"fileFormatVersion: 2\nguid: {SOURCE_GUID}\n",
+                encoding="utf-8",
+            )
+            host = _write_prefab(
+                root,
+                "Host.prefab",
+                SECOND_SOURCE_GUID,
+                _host_prefab(_prefab_instance("9000", SOURCE_GUID)),
+            )
+            build_effective_hierarchy = _load_builder()
+            host_text = host.read_text(encoding="utf-8")
+
+            fallback_result = build_effective_hierarchy(
+                root, "Assets/Host.prefab", host_text,
+            )
+            context_result = build_effective_hierarchy(
+                root, "Assets/Host.prefab", host_text, guid_index={},
+            )
+
+        fallback_payload = fallback_result.to_dict()
+        context_payload = context_result.to_dict()
+        self.assertEqual(
+            (
+                [],
+                ["EFFECTIVE_HIERARCHY_SOURCE_UNRESOLVED"],
+                [],
+                ["EFFECTIVE_HIERARCHY_SOURCE_UNRESOLVED"],
+            ),
+            (
+                [node["name"] for node in fallback_payload["roots"][0]["children"]],
+                [diag["code"] for diag in fallback_payload["diagnostics"]],
+                [node["name"] for node in context_payload["roots"][0]["children"]],
+                [diag["code"] for diag in context_payload["diagnostics"]],
+            ),
+            msg=(
+                "effective hierarchy fallback must match the shared context "
+                f"package-cache policy; fallback={fallback_payload!r} context={context_payload!r}"
+            ),
+        )
+
+    def test_nested_cache_reuses_duplicate_child_source(self) -> None:
+        from prefab_sentinel.nested_prefab_cache import NestedPrefabCache
+        from prefab_sentinel.unity_assets import decode_text_file
+        from prefab_sentinel.unity_yaml_parser import split_yaml_blocks
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            child = _write_prefab(root, "Nested.prefab", SOURCE_GUID, _source_prefab())
+            host = _write_prefab(
+                root,
+                "Host.prefab",
+                SECOND_SOURCE_GUID,
+                _host_prefab(
+                    _prefab_instance("9000", SOURCE_GUID),
+                    _prefab_instance("9001", SOURCE_GUID),
+                ),
+            )
+            build_effective_hierarchy = _load_builder()
+
+            with (
+                patch(
+                    "prefab_sentinel.nested_prefab_cache.decode_text_file",
+                    wraps=decode_text_file,
+                ) as decode_text,
+                patch(
+                    "prefab_sentinel.nested_prefab_cache.split_yaml_blocks",
+                    wraps=split_yaml_blocks,
+                ) as cache_split_blocks,
+                patch(
+                    "prefab_sentinel.effective_hierarchy.parser.split_yaml_blocks",
+                    wraps=split_yaml_blocks,
+                ) as parser_split_blocks,
+            ):
+                result = build_effective_hierarchy(
+                    root,
+                    "Assets/Host.prefab",
+                    host.read_text(encoding="utf-8"),
+                    guid_index={SOURCE_GUID: child},
+                    nested_prefab_cache=NestedPrefabCache(),
+                )
+
+        payload = result.to_dict()
+        child_names = [node["name"] for node in payload["roots"][0]["children"]]
+        self.assertEqual(
+            (["NestedRoot", "NestedRoot"], 1, 1, 1, []),
+            (
+                child_names,
+                decode_text.call_count,
+                cache_split_blocks.call_count,
+                parser_split_blocks.call_count,
+                payload["diagnostics"],
+            ),
+            msg=(
+                "duplicate nested PrefabInstance siblings should preserve "
+                "serialized output order while decoding and parsing the "
+                f"child source once; payload={payload!r}"
             ),
         )
 

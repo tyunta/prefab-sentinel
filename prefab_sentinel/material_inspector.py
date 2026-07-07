@@ -8,9 +8,11 @@ Prefab Variants.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from prefab_sentinel.inspection_context import ProjectInspectionContext
 from prefab_sentinel.unity_assets import (
     REFERENCE_PATTERN,
     collect_project_guid_index,
@@ -145,22 +147,28 @@ def resolve_material_name(
 def inspect_materials(
     target_path: str,
     project_root: Path | None = None,
+    inspection_context: ProjectInspectionContext | None = None,
 ) -> MaterialInspectionResult:
     """Inspect material assignments for all renderers in a prefab/scene.
 
     For Prefab Variants, resolves the base prefab chain and marks each
     material slot as [override] or [inherited].
     """
-    # Import here to avoid circular dependency at module load time
     from prefab_sentinel.material_inspector_variant import (  # noqa: PLC0415
         collect_nested_renderers,
         inspect_variant_materials,
     )
 
-    proj_root = project_root or find_project_root(Path(target_path))
+    if inspection_context is not None:
+        proj_root = inspection_context.project_root or project_root
+        if proj_root is None:
+            proj_root = find_project_root(Path(target_path))
+        guid_index = dict(inspection_context.guid_index)
+    else:
+        proj_root = project_root or find_project_root(Path(target_path))
+        guid_index = collect_project_guid_index(proj_root, include_package_cache=False)
     path = resolve_scope_path(target_path, proj_root)
     text = decode_text_file(path)
-    guid_index = collect_project_guid_index(proj_root, include_package_cache=False)
 
     # Issue #125: ``is_variant_prefab`` is the single source of truth for
     # the variant-versus-base decision (it already encodes the
@@ -175,18 +183,33 @@ def inspect_materials(
     # 2. Parse m_Modifications to find material overrides
     if is_variant:
         return inspect_variant_materials(
-            target_path, path, text, proj_root, guid_index,
+            target_path,
+            path,
+            text,
+            proj_root,
+            guid_index,
+            nested_prefab_cache=(
+                inspection_context.nested_prefab_cache
+                if inspection_context is not None
+                else None
+            ),
         )
-    else:
-        result = inspect_base_materials(
-            target_path, text, proj_root, guid_index,
-        )
-        nested, nested_diags = collect_nested_renderers(
-            text, guid_index, proj_root,
-        )
-        result.renderers.extend(nested)
-        result.diagnostics.extend(nested_diags)
-        return result
+    result = inspect_base_materials(
+        target_path, text, proj_root, guid_index,
+    )
+    nested, nested_diags = collect_nested_renderers(
+        text,
+        guid_index,
+        proj_root,
+        nested_prefab_cache=(
+            inspection_context.nested_prefab_cache
+            if inspection_context is not None
+            else None
+        ),
+    )
+    result.renderers.extend(nested)
+    result.diagnostics.extend(nested_diags)
+    return result
 
 
 def inspect_base_materials(
@@ -194,13 +217,14 @@ def inspect_base_materials(
     text: str,
     project_root: Path,
     guid_index: dict[str, Path],
+    blocks: Sequence[YamlBlock] | None = None,
 ) -> MaterialInspectionResult:
     """Inspect materials on a non-variant prefab (or scene)."""
-    blocks = split_yaml_blocks(text)
-    game_objects = parse_game_objects(blocks)
+    parsed_blocks = list(blocks) if blocks is not None else split_yaml_blocks(text)
+    game_objects = parse_game_objects(parsed_blocks)
 
     renderers: list[RendererMaterials] = []
-    for block in blocks:
+    for block in parsed_blocks:
         if block.class_id not in RENDERER_CLASS_IDS:
             continue
         if block.is_stripped:

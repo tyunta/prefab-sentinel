@@ -11,6 +11,7 @@ from prefab_sentinel.diagnostics_baseline import (
     DiagnosticsBaseline,
     classify_current_keys,
 )
+from prefab_sentinel.inspection_context import ProjectInspectionContext
 from prefab_sentinel.material_validation_rules import (
     MaterialValidationRulesLoadResult,
     load_material_validation_rules,
@@ -28,6 +29,7 @@ def validate_materials(
     *,
     include_details: bool = False,
     diagnostics_baseline: DiagnosticsBaseline | None = None,
+    inspection_context: ProjectInspectionContext | None = None,
 ) -> ToolResponse:
     project_root = reference_resolver.project_root.resolve()
     scope_path = resolve_scope_path(scope, project_root)
@@ -67,6 +69,7 @@ def validate_materials(
         scope_path,
         rules,
         include_details=include_details,
+        inspection_context=inspection_context,
     ))
     if diagnostics_baseline is None:
         return response

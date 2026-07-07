@@ -7,11 +7,13 @@ function to keep symbol_tree.py focused on the data model and queries.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from pathlib import Path
 
 from prefab_sentinel.contracts import Diagnostic
 from prefab_sentinel.hierarchy import CLASS_NAMES
 from prefab_sentinel.material_asset_inspector import list_material_property_names
+from prefab_sentinel.nested_prefab_cache import NestedPrefabCache
 from prefab_sentinel.symbol_tree import SymbolKind, SymbolNode, SymbolTree
 from prefab_sentinel.udon_wiring import analyze_wiring
 from prefab_sentinel.unity_assets import (
@@ -25,6 +27,7 @@ from prefab_sentinel.unity_yaml_parser import (
     MAX_NESTED_DEPTH,
     TRANSFORM_CLASS_IDS,
     ComponentInfo,
+    YamlBlock,
     parse_components,
     parse_game_objects,
     parse_transforms,
@@ -92,6 +95,36 @@ def build_symbol_tree(
     include_properties: bool = False,
     expand_nested: bool = False,
     guid_to_asset_path: dict[str, Path] | None = None,
+    nested_prefab_cache: NestedPrefabCache | None = None,
+    project_root: Path | None = None,
+    _nested_depth: int = 0,
+    diagnostics: list[Diagnostic] | None = None,
+) -> SymbolTree:
+    """Build a symbol tree from Unity YAML text."""
+    return _build_symbol_tree_with_blocks(
+        text,
+        source_path,
+        script_map,
+        include_properties=include_properties,
+        expand_nested=expand_nested,
+        guid_to_asset_path=guid_to_asset_path,
+        nested_prefab_cache=nested_prefab_cache,
+        project_root=project_root,
+        _nested_depth=_nested_depth,
+        diagnostics=diagnostics,
+    )
+
+def _build_symbol_tree_with_blocks(
+    text: str,
+    source_path: str,
+    script_map: dict[str, str] | None = None,
+    *,
+    include_properties: bool = False,
+    expand_nested: bool = False,
+    guid_to_asset_path: dict[str, Path] | None = None,
+    nested_prefab_cache: NestedPrefabCache | None = None,
+    project_root: Path | None = None,
+    blocks: Sequence[YamlBlock] | None = None,
     _nested_depth: int = 0,
     diagnostics: list[Diagnostic] | None = None,
 ) -> SymbolTree:
@@ -108,6 +141,8 @@ def build_symbol_tree(
             their child Prefab's tree (recursive).
         guid_to_asset_path: GUID -> Path map for resolving nested Prefabs.
             Required when expand_nested=True.
+        nested_prefab_cache: Optional session cache for child Prefab documents.
+        project_root: Root used to derive stable cached child asset paths.
         _nested_depth: Internal recursion depth counter (do not set externally).
         diagnostics: Optional sink for per-instance decode-failure diagnostics.
             When supplied, each undecodable nested prefab contributes one
@@ -117,7 +152,7 @@ def build_symbol_tree(
     """
     script_map = script_map or {}
 
-    blocks = split_yaml_blocks(text)
+    blocks = list(blocks) if blocks is not None else split_yaml_blocks(text)
     if not blocks:
         return SymbolTree(asset_path=source_path)
 
@@ -137,7 +172,7 @@ def build_symbol_tree(
 
     wiring_by_fid: dict[str, list[tuple[str, str]]] = {}
     if include_properties:
-        wiring = analyze_wiring(text, source_path or "<unknown>")
+        wiring = analyze_wiring(text, source_path or "<unknown>", blocks=blocks)
         for comp in wiring.components:
             fields: list[tuple[str, str]] = []
             for f in comp.fields:
@@ -270,32 +305,82 @@ def build_symbol_tree(
             child_path = guid_to_asset_path.get(guid)
 
             resolved = False
+            diagnostic_emitted = False
             child_text = ""
+            child_blocks: Sequence[YamlBlock] | None = None
+            rel_path = guid
             if child_path is not None and child_path.exists():
-                try:
-                    child_text = decode_text_file(child_path)
-                    resolved = True
-                except (OSError, UnicodeDecodeError):
-                    resolved = False
-                    if diagnostics is not None:
-                        diagnostics.append(
-                            Diagnostic(
-                                path=child_path.as_posix(),
-                                location="nested_prefab_instance",
-                                detail="unreadable_file",
-                                evidence="unable to decode nested prefab as YAML",
+                if nested_prefab_cache is not None and project_root is not None:
+                    record = nested_prefab_cache.load_child(
+                        guid,
+                        child_path,
+                        project_root,
+                    )
+                    if record.diagnostic is None and record.text is not None:
+                        child_text = record.text
+                        child_blocks = record.blocks
+                        rel_path = record.rel_posix
+                        resolved = True
+                    elif diagnostics is not None:
+                        if record.path is None:
+                            if record.diagnostic is not None:
+                                diagnostics.append(record.diagnostic)
+                        else:
+                            diagnostics.append(
+                                Diagnostic(
+                                    path=record.path.as_posix(),
+                                    location="nested_prefab_instance",
+                                    detail="unreadable_file",
+                                    evidence="unable to decode nested prefab as YAML",
+                                )
                             )
-                        )
+                        diagnostic_emitted = True
+                else:
+                    try:
+                        child_text = decode_text_file(child_path)
+                        rel_path = child_path.as_posix()
+                        resolved = True
+                    except (OSError, UnicodeDecodeError):
+                        resolved = False
+                        if diagnostics is not None:
+                            diagnostics.append(
+                                Diagnostic(
+                                    path=child_path.as_posix(),
+                                    location="nested_prefab_instance",
+                                    detail="unreadable_file",
+                                    evidence="unable to decode nested prefab as YAML",
+                                )
+                            )
+                            diagnostic_emitted = True
+
+            if (
+                not resolved
+                and diagnostics is not None
+                and not diagnostic_emitted
+            ):
+                diagnostics.append(
+                    Diagnostic(
+                        path="" if child_path is None else child_path.as_posix(),
+                        location="nested_prefab_instance",
+                        detail="NESTED_PREFAB_SOURCE_UNRESOLVED",
+                        evidence=(
+                            f"Nested PrefabInstance source GUID {guid} "
+                            "could not be resolved."
+                        ),
+                    )
+                )
 
             if resolved:
-                rel_path = child_path.as_posix()  # type: ignore[union-attr]
-                child_tree = build_symbol_tree(
+                child_tree = _build_symbol_tree_with_blocks(
                     child_text,
                     rel_path,
                     script_map,
                     include_properties=include_properties,
                     expand_nested=True,
                     guid_to_asset_path=guid_to_asset_path,
+                    nested_prefab_cache=nested_prefab_cache,
+                    project_root=project_root,
+                    blocks=child_blocks,
                     _nested_depth=_nested_depth + 1,
                     diagnostics=diagnostics,
                 )

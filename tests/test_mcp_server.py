@@ -2382,14 +2382,12 @@ class TestFindReferencingAssetsDirectPayload(unittest.TestCase):
     def test_error_raises_tool_error(self) -> None:
         from mcp.server.fastmcp.exceptions import ToolError
 
-
-
         server = create_server()
         mock_step = ToolResponse(
             success=False,
             severity=Severity.ERROR,
             code="REF404",
-            message="Scope path status could not be read.",
+            message="scope path status could not be read",
             data={},
             diagnostics=[],
         )
@@ -2403,7 +2401,7 @@ class TestFindReferencingAssetsDirectPayload(unittest.TestCase):
                 ))
             message = str(ctx.exception)
             self.assertIn("REF404", message)
-            self.assertIn("Scope path status could not be read.", message)
+            self.assertIn("scope path status could not be read", message)
             self.assertNotIn("PermissionError", message)
             self.assertNotIn("OSError", message)
 

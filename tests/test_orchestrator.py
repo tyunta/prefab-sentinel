@@ -1853,6 +1853,128 @@ class TestValidateFieldRename(unittest.TestCase):
         self.assertEqual(1, result.data["affected_count"])
         self.assertFalse(result.data["conflict"])
 
+    def test_rename_uses_ordered_runner_for_yaml_scan(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            orch, root, guid = self._setup_project(td)
+            (root / "Assets" / "Other.prefab").write_text(
+                "%YAML 1.1\n"
+                "%TAG !u! tag:unity3d.com,2011:\n"
+                "--- !u!114 &2001\n"
+                "MonoBehaviour:\n"
+                "  m_ObjectHideFlags: 0\n"
+                f"  m_Script: {{fileID: 11500000, guid: {guid}, type: 3}}\n"
+                "  moveSpeed: 7.0\n",
+                encoding="utf-8",
+            )
+            submitted_calls: list[list[Path]] = []
+            execution_calls: list[list[Path]] = []
+
+            def run_in_reverse(items, worker, *, max_workers=None):
+                self.assertIsNone(max_workers)
+                submitted = list(items)
+                submitted_calls.append(submitted)
+                execution_paths: list[Path] = []
+                by_path = {}
+                for path in reversed(submitted):
+                    execution_paths.append(path)
+                    by_path[path] = worker(path)
+                execution_calls.append(execution_paths)
+                return [by_path[path] for path in submitted]
+
+            with patch(
+                "prefab_sentinel.orchestrator_fields.run_ordered",
+                side_effect=run_in_reverse,
+                create=True,
+            ) as run_ordered:
+                result = orch.validate_field_rename(
+                    str(root / "Assets" / "Player.cs"), "moveSpeed", "runSpeed"
+                )
+
+        self.assertEqual(1, run_ordered.call_count)
+        self.assertEqual(list(reversed(submitted_calls[0])), execution_calls[0])
+        self.assertEqual("CSF_RENAME_OK", result.code)
+        self.assertEqual(2, result.data["affected_count"])
+        self.assertEqual([
+            "Assets/Other.prefab",
+            "Assets/Player.prefab",
+        ], [asset["path"] for asset in result.data["affected_assets"]])
+
+    def test_rename_uses_inspection_context_guid_index_for_guid_flow(self) -> None:
+        from prefab_sentinel.inspection_context import ProjectInspectionContext
+        from prefab_sentinel.nested_prefab_cache import NestedPrefabCache
+        from prefab_sentinel.orchestrator_fields import validate_field_rename
+
+        base_guid = "aaaa1111bbbb2222cccc3333dddd4444"
+        derived_guid = "eeee1111ffff2222aaaa3333bbbb4444"
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            assets = root / "Assets"
+            assets.mkdir()
+            base_cs = assets / "Player.cs"
+            base_cs.write_text(
+                "public class Player : MonoBehaviour {\n"
+                "    public float moveSpeed;\n"
+                "    public int health;\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            Path(str(base_cs) + ".meta").write_text(
+                f"fileFormatVersion: 2\nguid: {base_guid}\n",
+                encoding="utf-8",
+            )
+            derived_cs = assets / "DerivedPlayer.cs"
+            derived_cs.write_text(
+                "public class DerivedPlayer : Player {\n"
+                "    public int bonus;\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            Path(str(derived_cs) + ".meta").write_text(
+                f"fileFormatVersion: 2\nguid: {derived_guid}\n",
+                encoding="utf-8",
+            )
+            for prefab_name, script_guid in (
+                ("Player.prefab", base_guid),
+                ("Derived.prefab", derived_guid),
+            ):
+                (assets / prefab_name).write_text(
+                    "%YAML 1.1\n"
+                    "%TAG !u! tag:unity3d.com,2011:\n"
+                    "--- !u!114 &1001\n"
+                    "MonoBehaviour:\n"
+                    "  m_ObjectHideFlags: 0\n"
+                    f"  m_Script: {{fileID: 11500000, guid: {script_guid}, type: 3}}\n"
+                    "  moveSpeed: 5.0\n",
+                    encoding="utf-8",
+                )
+            context = ProjectInspectionContext(
+                project_root=root,
+                guid_index={base_guid: base_cs, derived_guid: derived_cs},
+                script_name_map={},
+                nested_prefab_cache=NestedPrefabCache(),
+            )
+            resolver = ReferenceResolverService(project_root=root)
+
+            with patch(
+                "prefab_sentinel.unity_assets.collect_project_guid_index",
+                side_effect=AssertionError("GUID index should come from context"),
+            ):
+                result = validate_field_rename(
+                    resolver,
+                    base_guid,
+                    "moveSpeed",
+                    "runSpeed",
+                    inspection_context=context,
+                )
+
+        self.assertEqual((True, "CSF_RENAME_OK"), (result.success, result.code))
+        self.assertEqual(2, result.data["affected_count"])
+        self.assertEqual(1, result.data["derived_guids_scanned"])
+        self.assertEqual(
+            ["Assets/Derived.prefab", "Assets/Player.prefab"],
+            [asset["path"] for asset in result.data["affected_assets"]],
+        )
+
     def test_rename_detects_conflict(self) -> None:
 
 
@@ -2002,6 +2124,60 @@ class TestCheckFieldCoverage(unittest.TestCase):
         # legacyField is in YAML but not in C#, so it is orphaned.
         orphaned_names = {e["field_name"] for e in result.data["orphaned_paths"]}
         self.assertIn("legacyField", orphaned_names)
+
+    def test_coverage_uses_ordered_runner_for_yaml_scan(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            orch, root = self._setup_coverage_project(td)
+            guid = "aaaa1111bbbb2222cccc3333dddd4444"
+            (root / "Assets" / "Other.prefab").write_text(
+                "%YAML 1.1\n"
+                "%TAG !u! tag:unity3d.com,2011:\n"
+                "--- !u!114 &2001\n"
+                "MonoBehaviour:\n"
+                "  m_ObjectHideFlags: 0\n"
+                f"  m_Script: {{fileID: 11500000, guid: {guid}, type: 3}}\n"
+                "  moveSpeed: 8.0\n"
+                "  health: 80\n"
+                "  legacyField: old_value\n",
+                encoding="utf-8",
+            )
+            submitted_calls: list[list[Path]] = []
+            execution_calls: list[list[Path]] = []
+
+            def run_in_reverse(items, worker, *, max_workers=None):
+                self.assertIsNone(max_workers)
+                submitted = list(items)
+                submitted_calls.append(submitted)
+                execution_paths: list[Path] = []
+                by_path = {}
+                for path in reversed(submitted):
+                    execution_paths.append(path)
+                    by_path[path] = worker(path)
+                execution_calls.append(execution_paths)
+                return [by_path[path] for path in submitted]
+
+            with patch(
+                "prefab_sentinel.orchestrator_fields.run_ordered",
+                side_effect=run_in_reverse,
+                create=True,
+            ) as run_ordered:
+                result = orch.check_field_coverage("Assets")
+
+        self.assertEqual(1, run_ordered.call_count)
+        self.assertEqual(list(reversed(submitted_calls[0])), execution_calls[0])
+        self.assertEqual("CSF_COVERAGE_OK", result.code)
+        self.assertEqual(2, result.data["components_checked"])
+        self.assertEqual(1, result.data["scripts_checked"])
+        self.assertEqual(2, result.data["unused_count"])
+        self.assertEqual(2, result.data["orphaned_count"])
+        self.assertEqual([
+            "Assets/Other.prefab",
+            "Assets/Player.prefab",
+        ], [entry["path"] for entry in result.data["unused_fields"]])
+        self.assertEqual([
+            "Assets/Other.prefab",
+            "Assets/Player.prefab",
+        ], [entry["path"] for entry in result.data["orphaned_paths"]])
 
     def test_all_fields_matched(self) -> None:
 
@@ -2325,6 +2501,58 @@ class TestNestedWiringTraversal(unittest.TestCase):
                 ),
             )
 
+    def test_nested_cache_missing_child_diagnostic_is_emitted(self) -> None:
+        from prefab_sentinel.inspection_context import ProjectInspectionContext
+        from prefab_sentinel.nested_prefab_cache import NestedPrefabCache
+        from prefab_sentinel.orchestrator_wiring import inspect_wiring
+        from tests.yaml_helpers import (
+            YAML_HEADER,
+            make_gameobject,
+            make_prefab_instance,
+            make_transform,
+        )
+
+        missing_guid = "99999999999999999999999999999999"
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            assets_dir = tmp_path / "Assets"
+            assets_dir.mkdir()
+            base_text = (
+                YAML_HEADER
+                + make_gameobject("10", "BaseRoot", ["20"])
+                + make_transform("20", "10")
+                + make_prefab_instance("30", missing_guid)
+            )
+            base_path = _write_prefab_with_meta(
+                assets_dir,
+                "Base.prefab",
+                "66666666666666666666666666666666",
+                base_text,
+            )
+            orch = _make_orchestrator()
+            orch.prefab_variant.project_root = tmp_path
+            orch.reference_resolver.project_root = tmp_path
+            context = ProjectInspectionContext(
+                project_root=tmp_path,
+                guid_index={},
+                script_name_map={},
+                nested_prefab_cache=NestedPrefabCache(),
+            )
+
+            result = inspect_wiring(
+                orch.prefab_variant,
+                orch.reference_resolver,
+                base_path.relative_to(tmp_path).as_posix(),
+                inspection_context=context,
+            )
+
+        self.assertEqual("INSPECT_WIRING_RESULT", result.code)
+        self.assertEqual(
+            ["NESTED_PREFAB_SOURCE_UNRESOLVED"],
+            [diag.detail for diag in result.diagnostics],
+        )
+        self.assertEqual(Severity.WARNING, result.severity)
+
     def test_udon_only_filter_with_nested(self) -> None:
         """Child has 2 MonoBehaviours — one UdonSharp, one custom.
 
@@ -2596,6 +2824,38 @@ class InspectMaterialsRelativePathTests(unittest.TestCase):
         self.assertTrue(result.success)
         self.assertEqual("INSPECT_MATERIALS_RESULT", result.code)
 
+    def test_inspect_materials_read_error_message_is_sanitized(self) -> None:
+        from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_transform
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            assets = root / "Assets"
+            assets.mkdir()
+            prefab = assets / "Test.prefab"
+            prefab.write_text(
+                YAML_HEADER
+                + make_gameobject("100", "Root", ["200"])
+                + make_transform("200", "100"),
+                encoding="utf-8",
+            )
+
+            orch = _make_orchestrator()
+            orch.prefab_variant.project_root = root
+            with patch(
+                "prefab_sentinel.orchestrator_inspect._inspect_materials",
+                side_effect=OSError("secret host path denied"),
+            ):
+                result = orch.inspect_materials("Assets/Test.prefab")
+
+        self.assertEqual(
+            (
+                False,
+                "INSPECT_MATERIALS_READ_ERROR",
+                "Failed to inspect materials: target asset could not be read.",
+            ),
+            (result.success, result.code, result.message),
+        )
+
     def test_inspect_material_asset_relative_path(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -2622,6 +2882,85 @@ class InspectMaterialsRelativePathTests(unittest.TestCase):
 
         self.assertTrue(result.success)
         self.assertEqual("INSPECT_MATERIAL_ASSET_RESULT", result.code)
+
+    def test_inspect_material_asset_read_error_message_is_sanitized(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            assets = root / "Assets"
+            assets.mkdir()
+            material = assets / "Mat.mat"
+            material.write_text("%YAML 1.1\n", encoding="utf-8")
+
+            orch = _make_orchestrator()
+            orch.prefab_variant.project_root = root
+            with patch(
+                "prefab_sentinel.orchestrator_inspect._inspect_material_asset",
+                side_effect=OSError("secret host path denied"),
+            ):
+                result = orch.inspect_material_asset("Assets/Mat.mat")
+
+        self.assertEqual(
+            (
+                False,
+                "INSPECT_MATERIAL_ASSET_READ_ERROR",
+                "Failed to inspect material asset: target asset could not be read.",
+            ),
+            (result.success, result.code, result.message),
+        )
+
+    def test_inspect_material_asset_uses_provider_guid_index(self) -> None:
+        from prefab_sentinel.inspection_context import ProjectInspectionContext
+        from prefab_sentinel.nested_prefab_cache import NestedPrefabCache
+        from prefab_sentinel.services.prefab_variant import PrefabVariantService
+
+        shader_guid = "abcdef01234567890abcdef012345678"
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            assets = root / "Assets"
+            assets.mkdir()
+            shader = assets / "Shared.shader"
+            shader.write_text("Shader \"Shared/Test\" {}\n", encoding="utf-8")
+            shader.with_suffix(shader.suffix + ".meta").write_text(
+                f"fileFormatVersion: 2\nguid: {shader_guid}\n",
+                encoding="utf-8",
+            )
+            mat = assets / "Test.mat"
+            mat.write_text(
+                "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n"
+                "--- !u!21 &2100000\nMaterial:\n"
+                "  m_Name: Test\n"
+                f"  m_Shader: {{fileID: 4800000, guid: {shader_guid}, type: 3}}\n"
+                "  m_SavedProperties:\n"
+                "    serializedVersion: 3\n"
+                "    m_TexEnvs: []\n"
+                "    m_Ints: []\n"
+                "    m_Floats: []\n"
+                "    m_Colors: []\n",
+                encoding="utf-8",
+            )
+            context = ProjectInspectionContext(
+                project_root=root,
+                guid_index={shader_guid: shader},
+                script_name_map={},
+                nested_prefab_cache=NestedPrefabCache(),
+            )
+            orch = Phase1Orchestrator(
+                reference_resolver=ReferenceResolverService(project_root=root),
+                prefab_variant=PrefabVariantService(project_root=root),
+                runtime_validation=MagicMock(),
+                serialized_object=MagicMock(),
+                inspection_context_provider=lambda: context,
+            )
+
+            with patch(
+                "prefab_sentinel.material_asset_inspector.collect_project_guid_index",
+                side_effect=AssertionError("material asset rebuilt GUID index"),
+            ):
+                result = orch.inspect_material_asset("Assets/Test.mat")
+
+        self.assertTrue(result.success)
+        self.assertEqual("Shared", result.data["shader"]["name"])
+        self.assertEqual("Assets/Shared.shader", result.data["shader"]["path"])
 
     def test_inspect_wiring_relative_path_guid_resolution(self) -> None:
         from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
@@ -2725,6 +3064,39 @@ class TestInspectHierarchyExpand(unittest.TestCase):
         # Response data records the expand mode active.
         self.assertEqual(True, response.data["expand_monobehaviour"])
 
+    def test_expand_flag_uses_supplied_context_script_map(self) -> None:
+        from prefab_sentinel.inspection_context import ProjectInspectionContext
+        from prefab_sentinel.nested_prefab_cache import NestedPrefabCache
+        from prefab_sentinel.orchestrator_inspect import inspect_hierarchy
+        from prefab_sentinel.services.prefab_variant import PrefabVariantService
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._write_project_with_script(root)
+            svc = PrefabVariantService(project_root=root)
+            context = ProjectInspectionContext(
+                project_root=root,
+                guid_index={},
+                script_name_map={self.SCRIPT_GUID: "CachedController"},
+                nested_prefab_cache=NestedPrefabCache(),
+            )
+
+            with patch(
+                "prefab_sentinel.orchestrator_inspect.collect_project_guid_index",
+                side_effect=AssertionError("unexpected GUID index rebuild"),
+            ):
+                response = inspect_hierarchy(
+                    svc,
+                    "Assets/Test.prefab",
+                    expand_monobehaviour=True,
+                    inspection_context=context,
+                )
+
+        self.assertTrue(response.success, msg=response.message)
+        tree = response.data["tree"]
+        self.assertIn("CachedController", tree)
+        self.assertNotIn("MonoBehaviour", tree)
+
     def test_prefab_instance_expansion_also_substitutes_script_class_name(self) -> None:
         from prefab_sentinel.orchestrator_inspect import inspect_hierarchy
         from prefab_sentinel.services.prefab_variant import PrefabVariantService
@@ -2790,7 +3162,7 @@ class TestInspectHierarchyExpand(unittest.TestCase):
         self.assertTrue(response.success)
         self.assertEqual(Severity.WARNING, response.severity)
         self.assertEqual(True, response.data["script_index_unavailable"])
-        # Fallback: rendered tree carries the plain MonoBehaviour label.
+        self.assertEqual("project GUID index unavailable.", response.diagnostics[0].evidence)
         tree = response.data["tree"]
         self.assertIn("MonoBehaviour", tree)
 
@@ -3017,6 +3389,72 @@ class EffectiveInspectorDelegationTests(unittest.TestCase):
             expand_monobehaviour=True,
             expand_prefab_instances=True,
         )
+
+    def test_internal_inspection_context_is_forwarded_to_issue_targeted_helpers(self) -> None:
+        from prefab_sentinel.inspection_context import ProjectInspectionContext
+        from prefab_sentinel.nested_prefab_cache import NestedPrefabCache
+        from prefab_sentinel.orchestrator import (
+            orchestrator_fields,
+            orchestrator_inspect,
+            orchestrator_material_validation,
+            orchestrator_wiring,
+        )
+
+        root = Path("/fake/project")
+        context = ProjectInspectionContext(
+            project_root=root,
+            guid_index={"scriptguid": root / "Assets" / "Player.cs"},
+            script_name_map={"scriptguid": "Player"},
+            nested_prefab_cache=NestedPrefabCache(),
+        )
+        orch = Phase1Orchestrator(
+            reference_resolver=MagicMock(),
+            prefab_variant=MagicMock(),
+            runtime_validation=MagicMock(),
+            serialized_object=MagicMock(),
+            inspection_context_provider=lambda: context,
+        )
+
+        delegated = _ok_response("OK", {"read_only": True})
+        with (
+            patch.object(orchestrator_inspect, "inspect_hierarchy", return_value=delegated) as hierarchy,
+            patch.object(orchestrator_wiring, "inspect_wiring", return_value=delegated) as wiring,
+            patch.object(orchestrator_inspect, "inspect_materials", return_value=delegated) as materials,
+            patch.object(
+                orchestrator_material_validation,
+                "validate_materials",
+                return_value=delegated,
+            ) as material_validation,
+            patch.object(
+                orchestrator_fields,
+                "validate_field_rename",
+                return_value=delegated,
+            ) as field_rename,
+            patch.object(
+                orchestrator_fields,
+                "check_field_coverage",
+                return_value=delegated,
+            ) as field_coverage,
+        ):
+            self.assertIs(delegated, orch.inspect_hierarchy("Assets/Host.prefab"))
+            self.assertIs(delegated, orch.inspect_wiring("Assets/Host.prefab"))
+            self.assertIs(delegated, orch.inspect_materials("Assets/Host.prefab"))
+            self.assertIs(delegated, orch.validate_materials("Assets"))
+            self.assertIs(
+                delegated,
+                orch.validate_field_rename("Assets/Player.cs", "old", "new"),
+            )
+            self.assertIs(delegated, orch.check_field_coverage("Assets"))
+
+        for helper in (
+            hierarchy,
+            wiring,
+            materials,
+            material_validation,
+            field_rename,
+            field_coverage,
+        ):
+            self.assertIs(context, helper.call_args.kwargs["inspection_context"])
 
 
     def test_inspect_transform_effective_values_delegates_to_helper(self) -> None:

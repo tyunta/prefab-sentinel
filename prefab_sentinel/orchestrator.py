@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ from prefab_sentinel import (
 )
 from prefab_sentinel.contracts import ToolResponse
 from prefab_sentinel.editor_bridge import bridge_status, send_action
+from prefab_sentinel.inspection_context import ProjectInspectionContext
 from prefab_sentinel.services.prefab_variant import PrefabVariantService
 from prefab_sentinel.services.reference_resolver import ReferenceResolverService
 from prefab_sentinel.services.runtime_validation import RuntimeValidationService
@@ -32,9 +34,14 @@ class Phase1Orchestrator:
     prefab_variant: PrefabVariantService
     runtime_validation: RuntimeValidationService
     serialized_object: SerializedObjectService
+    inspection_context_provider: Callable[[], ProjectInspectionContext] | None = None
 
     @classmethod
-    def default(cls, project_root: Path | None = None) -> Phase1Orchestrator:
+    def default(
+        cls,
+        project_root: Path | None = None,
+        inspection_context_provider: Callable[[], ProjectInspectionContext] | None = None,
+    ) -> Phase1Orchestrator:
         """Create an orchestrator with default-configured service instances.
 
         Args:
@@ -52,7 +59,13 @@ class Phase1Orchestrator:
                 project_root=project_root,
                 prefab_variant=pv,
             ),
+            inspection_context_provider=inspection_context_provider,
         )
+
+    def _inspection_context_kwargs(self) -> dict[str, ProjectInspectionContext]:
+        if self.inspection_context_provider is None:
+            return {}
+        return {"inspection_context": self.inspection_context_provider()}
 
     def maybe_auto_refresh(self) -> str:
         """Trigger AssetDatabase.Refresh if Editor Bridge is connected.
@@ -79,8 +92,9 @@ class Phase1Orchestrator:
         self.reference_resolver.invalidate_text_cache(path)
 
     def invalidate_guid_index(self) -> None:
-        """Delegate GUID index invalidation to reference resolver."""
+        """Invalidate services that cache project GUID resolution state."""
         self.reference_resolver.invalidate_guid_index()
+        self.prefab_variant.invalidate_guid_index()
 
     def invalidate_before_cache(self) -> None:
         """Delegate before-cache invalidation to serialized object service."""
@@ -212,7 +226,12 @@ class Phase1Orchestrator:
             ``ToolResponse`` with ``data.affected_assets`` and ``data.conflict``.
         """
         return orchestrator_fields.validate_field_rename(
-            self.reference_resolver, script_path_or_guid, old_name, new_name, scope,
+            self.reference_resolver,
+            script_path_or_guid,
+            old_name,
+            new_name,
+            scope,
+            **self._inspection_context_kwargs(),
         )
 
     def check_field_coverage(
@@ -231,7 +250,9 @@ class Phase1Orchestrator:
             ``ToolResponse`` with ``data.unused_fields`` and ``data.orphaned_paths``.
         """
         return orchestrator_fields.check_field_coverage(
-            self.reference_resolver, scope,
+            self.reference_resolver,
+            scope,
+            **self._inspection_context_kwargs(),
         )
 
     # ------------------------------------------------------------------
@@ -308,6 +329,7 @@ class Phase1Orchestrator:
             summary_only=summary_only, script_filter=script_filter,
             include_out_of_scope_diagnostics=include_out_of_scope_diagnostics,
             diagnostics_baseline=diagnostics_baseline,
+            **self._inspection_context_kwargs(),
         )
 
     def validate_all_wiring(
@@ -329,6 +351,7 @@ class Phase1Orchestrator:
             self.reference_resolver,
             target_path=target_path,
             diagnostics_baseline=diagnostics_baseline,
+            **self._inspection_context_kwargs(),
         )
 
     # ------------------------------------------------------------------
@@ -367,6 +390,7 @@ class Phase1Orchestrator:
             show_components=show_components,
             expand_monobehaviour=expand_monobehaviour,
             expand_prefab_instances=expand_prefab_instances,
+            **self._inspection_context_kwargs(),
         )
 
 
@@ -421,7 +445,9 @@ class Phase1Orchestrator:
             material slots, and ``data.tree`` with a formatted text summary.
         """
         return orchestrator_inspect.inspect_materials(
-            self.prefab_variant, target_path,
+            self.prefab_variant,
+            target_path,
+            **self._inspection_context_kwargs(),
         )
 
     def inspect_material_asset(
@@ -443,6 +469,7 @@ class Phase1Orchestrator:
         """
         return orchestrator_inspect.inspect_material_asset(
             self.prefab_variant, target_path,
+            **self._inspection_context_kwargs(),
         )
 
 
@@ -458,6 +485,7 @@ class Phase1Orchestrator:
             scope,
             include_details=include_details,
             diagnostics_baseline=diagnostics_baseline,
+            **self._inspection_context_kwargs(),
         )
 
     # ------------------------------------------------------------------

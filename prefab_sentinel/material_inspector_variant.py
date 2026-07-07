@@ -23,6 +23,7 @@ from prefab_sentinel.material_inspector import (
     parse_renderer_materials,
     resolve_material_name,
 )
+from prefab_sentinel.nested_prefab_cache import NestedPrefabCache
 from prefab_sentinel.unity_assets import (
     SOURCE_PREFAB_PATTERN,
     decode_text_file,
@@ -240,22 +241,43 @@ def collect_nested_renderers(
     base_text: str,
     guid_index: dict[str, Path],
     project_root: Path,
+    nested_prefab_cache: NestedPrefabCache | None = None,
 ) -> tuple[list[RendererMaterials], list[str]]:
     """Collect renderers from Nested Prefab instances in *base_text*.
 
     Returns (renderers, diagnostics).
     """
     renderers: list[RendererMaterials] = []
-
-    for child in iter_nested_prefab_children(base_text, guid_index, project_root):
-        child_result = inspect_base_materials(
-            str(child.path), child.text, project_root, guid_index,
-        )
-        for r in child_result.renderers:
-            r.source_prefab = child.rel_posix
-        renderers.extend(child_result.renderers)
-
     diagnostics: list[str] = []
+
+    if nested_prefab_cache is None:
+        for child in iter_nested_prefab_children(base_text, guid_index, project_root):
+            child_result = inspect_base_materials(
+                str(child.path), child.text, project_root, guid_index,
+            )
+            for r in child_result.renderers:
+                r.source_prefab = child.rel_posix
+            renderers.extend(child_result.renderers)
+    else:
+        for record in nested_prefab_cache.prefetch_children(
+            base_text, guid_index, project_root,
+        ).children:
+            if record.diagnostic is not None:
+                diagnostics.append(record.diagnostic.evidence)
+                continue
+            if record.text is None or record.path is None:
+                continue
+            child_result = inspect_base_materials(
+                str(record.path),
+                record.text,
+                project_root,
+                guid_index,
+                blocks=record.blocks,
+            )
+            for r in child_result.renderers:
+                r.source_prefab = record.rel_posix
+            renderers.extend(child_result.renderers)
+
     if not renderers:
         diagnostics.append(
             "No renderer blocks found in base prefab or nested prefabs"
@@ -269,6 +291,7 @@ def inspect_variant_materials(
     variant_text: str,
     project_root: Path,
     guid_index: dict[str, Path],
+    nested_prefab_cache: NestedPrefabCache | None = None,
 ) -> MaterialInspectionResult:
     """Inspect materials on a Prefab Variant.
 
@@ -281,7 +304,6 @@ def inspect_variant_materials(
     current_text = variant_text
     base_prefab_path_str: str | None = None
     base_text: str | None = None
-    source_guid = ""
     depth_limit = 12
 
     for _ in range(depth_limit):
@@ -292,9 +314,6 @@ def inspect_variant_materials(
         if parent_guid in visited:
             break
         visited.add(parent_guid)
-        # Remember the first source_guid for override parsing
-        if not source_guid:
-            source_guid = parent_guid
         parent_path = guid_index.get(parent_guid)
         if parent_path is None or not parent_path.exists():
             break
@@ -316,7 +335,7 @@ def inspect_variant_materials(
         if has_renderer_blocks(parent_text):
             break
         # Stop if parent is a base prefab (has real GameObjects).
-        # Only continue walking variant→variant chains.
+        # Only continue walking variant-to-variant chains.
         if parse_game_objects(split_yaml_blocks(parent_text)):
             break
         current_text = parent_text
@@ -388,7 +407,10 @@ def inspect_variant_materials(
     diagnostics: list[str] = []
     if base_text is not None:
         nested, nested_diags = collect_nested_renderers(
-            base_text, guid_index, project_root,
+            base_text,
+            guid_index,
+            project_root,
+            nested_prefab_cache=nested_prefab_cache,
         )
         renderers.extend(nested)
         diagnostics.extend(nested_diags)

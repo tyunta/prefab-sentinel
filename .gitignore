@@ -40,3 +40,4 @@ obj/
 *.user
 *.suo
 .vs/
+.serena/

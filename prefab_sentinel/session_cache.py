@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from prefab_sentinel.inspection_context import ProjectInspectionContext
+from prefab_sentinel.nested_prefab_cache import NestedPrefabCache
 from prefab_sentinel.orchestrator import Phase1Orchestrator
 from prefab_sentinel.symbol_tree import SymbolTree, build_script_name_map
 from prefab_sentinel.symbol_tree_builder import build_symbol_tree
@@ -51,6 +53,7 @@ class SessionCacheManager:
         self._orchestrator: Phase1Orchestrator | None = None
         self._guid_index: dict[str, Path] | None = None
         self._script_name_map: dict[str, str] | None = None
+        self._nested_prefab_cache = NestedPrefabCache()
         self._symbol_cache: dict[Path, _SymbolCacheEntry] = {}
 
     # ------------------------------------------------------------------
@@ -74,6 +77,7 @@ class SessionCacheManager:
         if self._orchestrator is None:
             self._orchestrator = Phase1Orchestrator.default(
                 project_root=self._project_root,
+                inspection_context_provider=self.inspection_context,
             )
         return self._orchestrator
 
@@ -94,6 +98,15 @@ class SessionCacheManager:
                 self._project_root, include_package_cache=False,
             )
         return self._guid_index
+
+    def inspection_context(self) -> ProjectInspectionContext:
+        """Return current project-wide read inputs for one inspection call."""
+        return ProjectInspectionContext(
+            project_root=self._project_root,
+            guid_index=self.guid_index(),
+            script_name_map=self.script_name_map(),
+            nested_prefab_cache=self._nested_prefab_cache,
+        )
 
     def get_symbol_tree(
         self,
@@ -131,6 +144,8 @@ class SessionCacheManager:
             include_properties=include_properties,
             expand_nested=expand_nested,
             guid_to_asset_path=guid_to_asset_path,
+            nested_prefab_cache=self._nested_prefab_cache,
+            project_root=self._project_root,
         )
 
         if not expand_nested:
@@ -157,8 +172,9 @@ class SessionCacheManager:
         self._orchestrator = None
         self._guid_index = None
         self._script_name_map = None
+        self._nested_prefab_cache.clear()
         self._symbol_cache.clear()
-        logger.debug("Invalidated GUID index + script map + SymbolTree + orchestrator")
+        logger.debug("Invalidated GUID index + script map + SymbolTree + nested prefab cache + orchestrator")
 
     def invalidate_script_map(self) -> None:
         """Clear only the script name map (trigger: .cs change).
@@ -180,6 +196,7 @@ class SessionCacheManager:
 
         Unlike invalidate_guid_index, this does NOT re-create the orchestrator.
         """
+        self._nested_prefab_cache.invalidate_path(path)
         if self._orchestrator is not None:
             self._orchestrator.invalidate_text_cache(path)
             self._orchestrator.invalidate_before_cache()
@@ -191,6 +208,7 @@ class SessionCacheManager:
         self._orchestrator = None
         self._guid_index = None
         self._script_name_map = None
+        self._nested_prefab_cache.clear()
         self._symbol_cache.clear()
         logger.debug("Invalidated all caches")
 
