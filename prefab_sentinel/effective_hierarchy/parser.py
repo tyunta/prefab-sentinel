@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 
 from prefab_sentinel.hierarchy import CLASS_NAMES, ComponentDescriptor
 from prefab_sentinel.services.prefab_variant.overrides import parse_overrides
@@ -25,11 +26,15 @@ _TRANSFORM_PARENT_PATTERN = re.compile(
 )
 
 
-def _parse_asset(asset_path: str, text: str) -> _AssetModel:
-    blocks = split_yaml_blocks(text)
-    game_objects = parse_game_objects(blocks)
-    transforms = parse_transforms(blocks)
-    components = parse_components(blocks)
+def _parse_asset(
+    asset_path: str,
+    text: str,
+    blocks: Sequence[YamlBlock] | None = None,
+) -> _AssetModel:
+    parsed_blocks = list(blocks) if blocks is not None else split_yaml_blocks(text)
+    game_objects = parse_game_objects(parsed_blocks)
+    transforms = parse_transforms(parsed_blocks)
+    components = parse_components(parsed_blocks)
     transform_by_game_object = {
         transform.game_object_file_id: transform
         for transform in transforms.values()
@@ -40,15 +45,15 @@ def _parse_asset(asset_path: str, text: str) -> _AssetModel:
         for transform in transforms.values()
         if transform.game_object_file_id
     }
-    instances = _instances_by_parent(blocks)
+    instances = _instances_by_parent(parsed_blocks)
     return _AssetModel(
         asset_path=asset_path,
         text=text,
-        blocks=blocks,
+        blocks=parsed_blocks,
         game_objects=game_objects,
         transforms=transforms,
         components=components,
-        blocks_by_file_id={block.file_id: block for block in blocks},
+        blocks_by_file_id={block.file_id: block for block in parsed_blocks},
         transform_by_game_object=transform_by_game_object,
         game_object_by_transform=game_object_by_transform,
         instances_by_parent=instances,
@@ -96,3 +101,12 @@ def _component_descriptors(
                 )
             )
     return descriptors
+
+
+def _is_root_game_object(model: _AssetModel, go_file_id: str) -> bool:
+    transform = model.transform_by_game_object.get(go_file_id)
+    if transform is None:
+        return False
+    if transform.father_file_id in ("", "0"):
+        return True
+    return transform.father_file_id not in model.game_object_by_transform

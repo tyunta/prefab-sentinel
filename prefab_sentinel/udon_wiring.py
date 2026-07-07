@@ -7,6 +7,7 @@ detects null references, internal fileID mismatches, and duplicate wiring.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from prefab_sentinel.contracts import Diagnostic, Severity, max_severity
@@ -169,6 +170,7 @@ def analyze_wiring(
     *,
     udon_only: bool = False,
     override_map: dict[str, set[str]] | None = None,
+    blocks: Sequence[YamlBlock] | None = None,
 ) -> WiringResult:
     """Analyze MonoBehaviour field wiring in a Unity YAML file.
 
@@ -178,13 +180,14 @@ def analyze_wiring(
         udon_only: When ``True``, only report UdonSharp components.
         override_map: Optional mapping of component fileID → set of
             overridden property paths (used for Variant annotation).
+        blocks: Optional pre-parsed YAML blocks for cached nested Prefabs.
     """
-    blocks = split_yaml_blocks(text)
-    local_file_ids = {block.file_id for block in blocks}
-    game_objects = parse_game_objects(blocks)
+    parsed_blocks = list(blocks) if blocks is not None else split_yaml_blocks(text)
+    local_file_ids = {block.file_id for block in parsed_blocks}
+    game_objects = parse_game_objects(parsed_blocks)
 
     components: list[ComponentWiring] = []
-    for block in blocks:
+    for block in parsed_blocks:
         parsed = parse_monobehaviour_fields(block)
         if parsed is None:
             continue

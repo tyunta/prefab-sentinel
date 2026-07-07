@@ -1055,6 +1055,107 @@ class TestBuildSymbolTreeDiagnostics(unittest.TestCase):
         self.assertEqual(1, len(sink))
         self.assertEqual("unreadable_file", sink[0].detail)
 
+    def test_nested_cache_reuses_child_and_preserves_unreadable_diagnostic(self) -> None:
+        from unittest.mock import patch
+
+        from prefab_sentinel.nested_prefab_cache import NestedPrefabCache
+        from prefab_sentinel.unity_assets import decode_text_file
+        from prefab_sentinel.unity_yaml_parser import split_yaml_blocks
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            good_path = self._write_good_prefab(root)
+            bad_path = self._write_bad_prefab(root)
+            guid_map = {self.BAD_GUID: bad_path, self.GOOD_GUID: good_path}
+            text = (
+                YAML_HEADER
+                + make_gameobject("100", "Avatar", ["200"])
+                + make_transform("200", "100")
+                + make_prefab_instance("300", self.BAD_GUID, transform_parent="200")
+                + make_prefab_instance("400", self.GOOD_GUID, transform_parent="200")
+                + make_prefab_instance("500", self.GOOD_GUID, transform_parent="200")
+            )
+
+            sink: list[Diagnostic] = []
+            with (
+                patch(
+                    "prefab_sentinel.nested_prefab_cache.decode_text_file",
+                    wraps=decode_text_file,
+                ) as decode_text,
+                patch(
+                    "prefab_sentinel.nested_prefab_cache.split_yaml_blocks",
+                    wraps=split_yaml_blocks,
+                ) as cache_split_blocks,
+                patch(
+                    "prefab_sentinel.symbol_tree_builder.split_yaml_blocks",
+                    wraps=split_yaml_blocks,
+                ) as tree_split_blocks,
+            ):
+                tree = build_symbol_tree(
+                    text,
+                    "test.prefab",
+                    expand_nested=True,
+                    guid_to_asset_path=guid_map,
+                    nested_prefab_cache=NestedPrefabCache(),
+                    project_root=root,
+                    diagnostics=sink,
+                )
+
+        prefab_nodes = [
+            child
+            for child in tree.roots[0].children
+            if child.kind == SymbolKind.PREFAB_INSTANCE
+        ]
+        expanded_counts = [len(node.children) for node in prefab_nodes]
+        diagnostic_details = [diag.detail for diag in sink]
+        self.assertEqual(
+            (3, [0, 1, 1], ["unreadable_file"], 2, 1, 1),
+            (
+                len(prefab_nodes),
+                expanded_counts,
+                diagnostic_details,
+                decode_text.call_count,
+                cache_split_blocks.call_count,
+                tree_split_blocks.call_count,
+            ),
+            msg=(
+                "cached symbol-tree nested expansion should preserve markers, "
+                "unreadable diagnostics, and one decode/cache-parse per unique "
+                f"child path while reusing parsed blocks; nodes={prefab_nodes!r} sink={sink!r}"
+            ),
+        )
+
+    def test_nested_cache_missing_child_records_unresolved_diagnostic(self) -> None:
+        from prefab_sentinel.nested_prefab_cache import NestedPrefabCache
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            text = (
+                YAML_HEADER
+                + make_gameobject("100", "Avatar", ["200"])
+                + make_transform("200", "100")
+                + make_prefab_instance("300", self.BAD_GUID, transform_parent="200")
+            )
+            sink: list[Diagnostic] = []
+            tree = build_symbol_tree(
+                text,
+                "test.prefab",
+                expand_nested=True,
+                guid_to_asset_path={},
+                nested_prefab_cache=NestedPrefabCache(),
+                project_root=root,
+                diagnostics=sink,
+            )
+
+        prefab_nodes = [
+            child
+            for child in tree.roots[0].children
+            if child.kind == SymbolKind.PREFAB_INSTANCE
+        ]
+        self.assertEqual(1, len(prefab_nodes))
+        self.assertEqual(f"[Unresolved: {self.BAD_GUID}]", prefab_nodes[0].name)
+        self.assertEqual(["NESTED_PREFAB_SOURCE_UNRESOLVED"], [diag.detail for diag in sink])
+
 
 if __name__ == "__main__":
     unittest.main()

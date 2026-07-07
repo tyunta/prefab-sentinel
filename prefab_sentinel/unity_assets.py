@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from prefab_sentinel.parallel_scan import run_ordered
 from prefab_sentinel.wsl_compat import to_wsl_path
 
 UNITY_TEXT_ASSET_SUFFIXES = {
@@ -190,34 +191,26 @@ def _scan_meta_files(
     index: dict[str, Path],
     project_root: Path,
 ) -> None:
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    meta_paths: dict[Path, Path] = {}
+    meta_paths: list[tuple[Path, Path]] = []
     for root, dirnames, filenames in os.walk(scan_root):
-        dirnames[:] = [dirname for dirname in dirnames if dirname.lower() not in excluded]
-        for filename in filenames:
+        dirnames[:] = sorted(
+            dirname for dirname in dirnames if dirname.lower() not in excluded
+        )
+        for filename in sorted(filenames):
             if not filename.lower().endswith(".meta"):
                 continue
             meta_path = Path(root) / filename
             asset_path = _indexed_asset_path(meta_path, project_root)
             if asset_path is not None:
-                meta_paths[meta_path] = asset_path
+                meta_paths.append((meta_path, asset_path))
 
-    if not meta_paths:
-        return
+    def extract_indexed_guid(item: tuple[Path, Path]) -> tuple[str | None, Path]:
+        meta_path, asset_path = item
+        return _extract_guid_safe(meta_path), asset_path
 
-    with ThreadPoolExecutor(
-        max_workers=min(10, len(meta_paths)),
-    ) as pool:
-        futures = {
-            pool.submit(_extract_guid_safe, meta_path): asset_path
-            for meta_path, asset_path in meta_paths.items()
-        }
-        for future in as_completed(futures):
-            asset_path = futures[future]
-            guid = future.result()
-            if guid:
-                index[guid] = asset_path
+    for guid, asset_path in run_ordered(meta_paths, extract_indexed_guid):
+        if guid:
+            index[guid] = asset_path
 
 
 def collect_project_guid_index(

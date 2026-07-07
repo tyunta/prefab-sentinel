@@ -12,6 +12,8 @@ from prefab_sentinel.contracts import (
     error_response,
     success_response,
 )
+from prefab_sentinel.inspection_context import ProjectInspectionContext
+from prefab_sentinel.parallel_scan import run_ordered
 from prefab_sentinel.services.reference_resolver import ReferenceResolverService
 from prefab_sentinel.unity_assets import (
     GAMEOBJECT_BEARING_SUFFIXES,
@@ -77,9 +79,11 @@ def validate_field_rename(
     old_name: str,
     new_name: str,
     scope: str | None = None,
+    inspection_context: ProjectInspectionContext | None = None,
 ) -> ToolResponse:
     from prefab_sentinel.csharp_fields import parse_class_info
     from prefab_sentinel.csharp_fields_resolve import (
+        build_class_name_index,
         find_derived_guids,
         resolve_script_fields,
     )
@@ -87,11 +91,16 @@ def validate_field_rename(
     from prefab_sentinel.unity_yaml_parser import CLASS_ID_MONOBEHAVIOUR, split_yaml_blocks
 
     project_root = reference_resolver.project_root
+    context_guid_index = (
+        None if inspection_context is None else inspection_context.guid_index
+    )
+    diagnostics: list[Diagnostic] = []
 
     try:
         guid, cs_path, fields = resolve_script_fields(
             script_path_or_guid,
             project_root=project_root,
+            _guid_index=context_guid_index,
         )
     except (FileNotFoundError, ValueError) as exc:
         return error_response(
@@ -120,7 +129,6 @@ def validate_field_rename(
         if f.name == old_name
     )
 
-    diagnostics: list[Diagnostic] = []
     scan_guids: set[str] = set()
     if guid:
         scan_guids.add(guid)
@@ -138,8 +146,20 @@ def validate_field_rename(
         else:
             info = parse_class_info(source, hint_name=cs_path.stem)
             if info:
+                class_index = (
+                    None
+                    if context_guid_index is None
+                    else build_class_name_index(
+                        project_root,
+                        _guid_index=context_guid_index,
+                        diagnostics=diagnostics,
+                    )
+                )
                 derived = find_derived_guids(
-                    info.name, project_root, diagnostics=diagnostics
+                    info.name,
+                    project_root,
+                    _class_index=class_index,
+                    diagnostics=diagnostics,
                 )
                 scan_guids.update(derived)
 
@@ -156,33 +176,40 @@ def validate_field_rename(
             if f.suffix.lower() in GAMEOBJECT_BEARING_SUFFIXES
         ]
         reference_resolver.preload_texts(yaml_files)
-        for yaml_path in yaml_files:
+
+        def collect_affected(yaml_path: Path) -> list[dict[str, Any]]:
             text = reference_resolver.read_text(yaml_path)
             if text is None:
-                continue
+                return []
             if not any(g in text for g in scan_guids):
-                continue
+                return []
             blocks = split_yaml_blocks(text)
+            found: list[dict[str, Any]] = []
             for block in blocks:
                 if block.class_id != CLASS_ID_MONOBEHAVIOUR:
                     continue
                 if not any(g in block.text for g in scan_guids):
                     continue
                 yaml_fields = extract_monobehaviour_field_names(block)
-                if old_name in yaml_fields:
-                    rel = _relative_path(yaml_path, project_root)
-                    block_guid = ""
-                    for g in scan_guids:
-                        if g in block.text:
-                            block_guid = g
-                            break
-                    entry: dict[str, Any] = {
-                        "path": rel,
-                        "file_id": block.file_id,
-                    }
-                    if block_guid and block_guid != guid:
-                        entry["via_derived_guid"] = block_guid
-                    affected.append(entry)
+                if old_name not in yaml_fields:
+                    continue
+                rel = _relative_path(yaml_path, project_root)
+                block_guid = ""
+                for g in scan_guids:
+                    if g in block.text:
+                        block_guid = g
+                        break
+                entry: dict[str, Any] = {
+                    "path": rel,
+                    "file_id": block.file_id,
+                }
+                if block_guid and block_guid != guid:
+                    entry["via_derived_guid"] = block_guid
+                found.append(entry)
+            return found
+
+        for entries in run_ordered(yaml_files, collect_affected):
+            affected.extend(entries)
 
     return success_response(
         "CSF_RENAME_OK",
@@ -206,6 +233,7 @@ def validate_field_rename(
 def check_field_coverage(
     reference_resolver: ReferenceResolverService,
     scope: str,
+    inspection_context: ProjectInspectionContext | None = None,
 ) -> ToolResponse:
     from prefab_sentinel.csharp_fields import build_field_map
     from prefab_sentinel.csharp_fields_resolve import (
@@ -218,7 +246,10 @@ def check_field_coverage(
     project_root = reference_resolver.project_root
     scope_path = resolve_scope_path(scope, project_root)
 
-    guid_index = collect_project_guid_index(project_root, include_package_cache=False)
+    if inspection_context is not None:
+        guid_index = dict(inspection_context.guid_index)
+    else:
+        guid_index = collect_project_guid_index(project_root, include_package_cache=False)
     cs_by_guid: dict[str, Path] = {
         g: p for g, p in guid_index.items() if p.suffix == ".cs"
     }
@@ -231,7 +262,6 @@ def check_field_coverage(
         project_root, _guid_index=guid_index, diagnostics=diagnostics
     )
 
-    field_cache: dict[str, set[str]] = {}
     unused_fields: list[dict[str, Any]] = []
     orphaned_paths: list[dict[str, Any]] = []
     scripts_checked: set[str] = set()
@@ -243,11 +273,13 @@ def check_field_coverage(
         if f.suffix.lower() in GAMEOBJECT_BEARING_SUFFIXES
     ]
     reference_resolver.preload_texts(yaml_files)
-    for yaml_path in yaml_files:
+
+    def collect_component_records(yaml_path: Path) -> list[dict[str, Any]]:
         text = reference_resolver.read_text(yaml_path)
         if text is None:
-            continue
+            return []
         blocks = split_yaml_blocks(text)
+        records: list[dict[str, Any]] = []
         for block in blocks:
             if block.class_id != CLASS_ID_MONOBEHAVIOUR:
                 continue
@@ -262,39 +294,57 @@ def check_field_coverage(
             if cs_path is None:
                 continue
 
+            records.append({
+                "path": _relative_path(yaml_path, project_root),
+                "file_id": block.file_id,
+                "script_guid": script_guid,
+                "class_name": cs_path.stem,
+                "yaml_fields": set(extract_monobehaviour_field_names(block)),
+            })
+        return records
+
+    payloads = run_ordered(yaml_files, collect_component_records)
+    encountered_guids = sorted({
+        record["script_guid"]
+        for records in payloads
+        for record in records
+    })
+    field_cache: dict[str, set[str]] = {}
+    for script_guid in encountered_guids:
+        resolved = resolve_inherited_fields(
+            script_guid,
+            project_root,
+            _field_map=_field_map,
+            _class_index=_class_index,
+            diagnostics=diagnostics,
+        )
+        field_cache[script_guid] = {f.name for f in resolved}
+
+    for records in payloads:
+        for record in records:
+            script_guid = record["script_guid"]
             components_checked += 1
-
-            if script_guid not in field_cache:
-                resolved = resolve_inherited_fields(
-                    script_guid,
-                    project_root,
-                    _field_map=_field_map,
-                    _class_index=_class_index,
-                    diagnostics=diagnostics,
-                )
-                field_cache[script_guid] = {f.name for f in resolved}
-                scripts_checked.add(script_guid)
-
+            scripts_checked.add(script_guid)
             cs_fields = field_cache[script_guid]
-            yaml_fields = set(extract_monobehaviour_field_names(block))
-            rel = _relative_path(yaml_path, project_root)
+            yaml_fields = record["yaml_fields"]
+            rel = record["path"]
 
             for name in sorted(yaml_fields - cs_fields):
                 orphaned_paths.append({
                     "path": rel,
-                    "file_id": block.file_id,
+                    "file_id": record["file_id"],
                     "field_name": name,
                     "script_guid": script_guid,
-                    "class_name": cs_path.stem,
+                    "class_name": record["class_name"],
                 })
 
             for name in sorted(cs_fields - yaml_fields):
                 unused_fields.append({
                     "path": rel,
-                    "file_id": block.file_id,
+                    "file_id": record["file_id"],
                     "field_name": name,
                     "script_guid": script_guid,
-                    "class_name": cs_path.stem,
+                    "class_name": record["class_name"],
                 })
 
     return success_response(

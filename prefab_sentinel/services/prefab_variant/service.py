@@ -7,6 +7,7 @@ concerns live in ``serialized_object`` and ``orchestrator_patch``.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 
 from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse, error_response, success_response
@@ -39,6 +40,12 @@ class PrefabVariantService:
         if self._guid_index is None:
             self._guid_index = collect_project_guid_index(self.project_root)
         return self._guid_index
+
+    def preload_guid_index(self, guid_index: Mapping[str, Path]) -> None:
+        self._guid_index = dict(guid_index)
+
+    def invalidate_guid_index(self) -> None:
+        self._guid_index = None
 
     def _relative(self, path: Path) -> str:
         return relative_to_root(path, self.project_root)

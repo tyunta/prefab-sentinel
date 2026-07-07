@@ -4,6 +4,7 @@ import fnmatch
 import os
 import time
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 
 from prefab_sentinel.contracts import (
@@ -14,8 +15,10 @@ from prefab_sentinel.contracts import (
     success_response,
 )
 from prefab_sentinel.diagnostics_baseline import DiagnosticKeyRecord
+from prefab_sentinel.parallel_scan import run_ordered
 from prefab_sentinel.unity_assets import (
     DEFAULT_EXCLUDED_DIR_NAMES,
+    ReferenceMatch,
     collect_project_guid_index,
     decode_text_file,
     extract_local_file_ids,
@@ -103,6 +106,26 @@ def _path_status_exists(path: Path) -> tuple[bool, OSError | None]:
     except OSError as exc:
         return False, exc
     return True, None
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceReferencePayload:
+    path: Path
+    relative_path: str
+    references: tuple[ReferenceMatch, ...]
+    local_ids: set[str]
+
+
+@dataclass(frozen=True, slots=True)
+class _UnreadableSourcePayload:
+    path: Path
+    relative_path: str
+
+
+@dataclass(frozen=True, slots=True)
+class _WhereUsedPayload:
+    path: Path
+    usages: list[dict[str, str | int]]
 
 
 class ReferenceResolverService:
@@ -254,34 +277,28 @@ class ReferenceResolverService:
             return None
 
     def preload_texts(
-        self, paths: list[Path], max_workers: int = 10,
+        self, paths: list[Path], max_workers: int | None = None,
     ) -> None:
         """Pre-populate ``_text_cache`` by reading files in parallel."""
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
         uncached = [
             p for p in paths
             if p not in self._text_cache and p not in self._unreadable_paths
         ]
-        if not uncached:
-            return
-        with ThreadPoolExecutor(
-            max_workers=min(max_workers, len(uncached)),
-        ) as pool:
-            futures = {
-                pool.submit(self._read_text_uncached, p): p for p in uncached
-            }
-            for future in as_completed(futures):
-                path = futures[future]
-                try:
-                    text = future.result()
-                except OSError:
-                    text = None
-                if text is not None:
-                    self._text_cache[path] = text
-                else:
-                    self._text_cache[path] = None
-                    self._unreadable_paths.add(path)
+
+        def read_text(path: Path) -> tuple[Path, str | None]:
+            try:
+                return path, self._read_text_uncached(path)
+            except OSError:
+                return path, None
+
+        for path, text in run_ordered(
+            uncached, read_text, max_workers=max_workers,
+        ):
+            if text is not None:
+                self._text_cache[path] = text
+            else:
+                self._text_cache[path] = None
+                self._unreadable_paths.add(path)
 
     def _local_ids(self, path: Path) -> set[str]:
         cached = self._local_id_cache.get(path)
@@ -597,14 +614,33 @@ class ReferenceResolverService:
                 )
             )
 
-        for file_path in files:
-            scanned_files += 1
+        def collect_source_payload(
+            file_path: Path,
+        ) -> _SourceReferencePayload | _UnreadableSourcePayload:
+            src_path = self._relative(file_path)
             text = self.read_text(file_path)
             if text is None:
+                return _UnreadableSourcePayload(file_path, src_path)
+            references = tuple(
+                iter_references(text, include_location=include_diagnostics)
+            )
+            local_ids: set[str] = set()
+            if any(ref.file_id != "0" and not ref.guid for ref in references):
+                local_ids = extract_local_file_ids(text)
+            return _SourceReferencePayload(
+                file_path,
+                src_path,
+                references,
+                local_ids,
+            )
+
+        for payload in run_ordered(files, collect_source_payload):
+            scanned_files += 1
+            if isinstance(payload, _UnreadableSourcePayload):
                 unreadable_files += 1
                 diagnostics.append(
                     Diagnostic(
-                        path=self._relative(file_path),
+                        path=payload.relative_path,
                         location="",
                         detail="unreadable_file",
                         evidence=(
@@ -616,8 +652,7 @@ class ReferenceResolverService:
                 )
                 continue
 
-            local_ids: set[str] | None = None
-            references = iter_references(text, include_location=include_diagnostics)
+            references = payload.references
             scanned_refs += len(references)
 
             for ref in references:
@@ -625,7 +660,7 @@ class ReferenceResolverService:
                     continue
 
                 location = f"{ref.line}:{ref.column}" if ref.line and ref.column else ""
-                src_path = self._relative(file_path)
+                src_path = payload.relative_path
 
                 if ref.guid:
                     if is_unity_builtin_guid(ref.guid):
@@ -681,9 +716,7 @@ class ReferenceResolverService:
                     continue
 
                 if ref.file_id != "0":
-                    if local_ids is None:
-                        local_ids = extract_local_file_ids(text)
-                    if ref.file_id in local_ids:
+                    if ref.file_id in payload.local_ids:
                         continue
                     record_issue(
                         ("missing_local_id_local", src_path, ref.file_id),
@@ -833,7 +866,7 @@ class ReferenceResolverService:
             if scope_error is not None:
                 return error_response(
                     "REF404",
-                    f"scope path status could not be read: {scope_error}",
+                    "scope path status could not be read",
                     data={"scope": scope, "read_only": True},
                 )
             if not scope_exists:
@@ -860,7 +893,7 @@ class ReferenceResolverService:
             if candidate_error is not None:
                 return error_response(
                     "REF404",
-                    f"target asset path status could not be read: {candidate_error}",
+                    "target asset path status could not be read",
                     data={"asset_or_guid": asset_or_guid, "read_only": True},
                 )
             if not candidate_exists:
@@ -874,7 +907,7 @@ class ReferenceResolverService:
             if meta_error is not None:
                 return error_response(
                     "REF001",
-                    f"target meta path status could not be read: {meta_error}",
+                    "target meta path status could not be read",
                     data={"asset_or_guid": asset_or_guid, "read_only": True},
                 )
             if not meta_exists:
@@ -885,10 +918,10 @@ class ReferenceResolverService:
                 )
             try:
                 guid = extract_meta_guid(meta_path) or ""
-            except (OSError, UnicodeDecodeError) as exc:
+            except (OSError, UnicodeDecodeError):
                 return error_response(
                     "REF001",
-                    f"target meta metadata could not be read: {exc}",
+                    "target meta metadata could not be read",
                     data={"asset_or_guid": asset_or_guid, "read_only": True},
                 )
             if not looks_like_guid(guid):
@@ -905,26 +938,32 @@ class ReferenceResolverService:
             scan_scope_path = self.project_root
         files = self.collect_scope_files(scan_scope_path, exclude_patterns)
         self.preload_texts(files)
-        scanned_files = 0
-        truncated_usages = 0
-        for path in files:
-            scanned_files += 1
+
+        def collect_usage_payload(path: Path) -> _WhereUsedPayload:
             text = self.read_text(path)
             if text is None:
-                continue
+                return _WhereUsedPayload(path, [])
+            found_usages: list[dict[str, str | int]] = []
             references = iter_references(text, include_location=True)
             for ref in references:
                 if ref.guid == guid:
-                    usage = {
+                    found_usages.append({
                         "path": self._relative(path),
                         "line": ref.line,
                         "column": ref.column,
                         "reference": ref.raw,
-                    }
-                    if len(usages) < max_usages:
-                        usages.append(usage)
-                    else:
-                        truncated_usages += 1
+                    })
+            return _WhereUsedPayload(path, found_usages)
+
+        scanned_files = 0
+        truncated_usages = 0
+        for payload in run_ordered(files, collect_usage_payload):
+            scanned_files += 1
+            for usage in payload.usages:
+                if len(usages) < max_usages:
+                    usages.append(usage)
+                else:
+                    truncated_usages += 1
 
         if usages:
             severity = Severity.INFO

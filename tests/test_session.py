@@ -68,7 +68,21 @@ class TestOrchestratorCaching(unittest.TestCase):
         session = ProjectSession(project_root=root)
         session.get_orchestrator()
 
-        mock_cls.default.assert_called_once_with(project_root=root)
+        mock_cls.default.assert_called_once()
+        self.assertEqual(root, mock_cls.default.call_args.kwargs["project_root"])
+
+    @patch("prefab_sentinel.session_cache.Phase1Orchestrator")
+    def test_passes_internal_inspection_context_provider(
+        self, mock_cls: MagicMock
+    ) -> None:
+        root = Path("/fake/project")
+        session = ProjectSession(project_root=root)
+        session.get_orchestrator()
+
+        provider = mock_cls.default.call_args.kwargs["inspection_context_provider"]
+        self.assertEqual(root, mock_cls.default.call_args.kwargs["project_root"])
+        self.assertEqual("inspection_context", provider.__name__)
+        self.assertIs(provider.__self__, session._cache)
 
     @patch("prefab_sentinel.session_cache.Phase1Orchestrator")
     def test_recreated_after_guid_invalidation(self, mock_cls: MagicMock) -> None:
@@ -160,6 +174,30 @@ class TestGuidIndexCaching(unittest.TestCase):
         mock_collect.assert_called_once_with(root, include_package_cache=False)
 
     @patch("prefab_sentinel.session_cache.collect_project_guid_index")
+    @patch("prefab_sentinel.session_cache.build_script_name_map")
+    def test_inspection_context_reuses_cached_guid_and_script_maps(
+        self, mock_build: MagicMock, mock_collect: MagicMock
+    ) -> None:
+        from prefab_sentinel.inspection_context import ProjectInspectionContext
+
+        root = Path("/fake/project")
+        guid_index = {"scriptguid": root / "Assets" / "Player.cs"}
+        script_map = {"scriptguid": "Player"}
+        mock_collect.return_value = guid_index
+        mock_build.return_value = script_map
+        session = ProjectSession(project_root=root)
+
+        context1 = session._cache.inspection_context()
+        context2 = session._cache.inspection_context()
+
+        self.assertIsInstance(context1, ProjectInspectionContext)
+        self.assertEqual(root, context1.project_root)
+        self.assertIs(context1.guid_index, context2.guid_index)
+        self.assertIs(context1.script_name_map, context2.script_name_map)
+        mock_collect.assert_called_once_with(root, include_package_cache=False)
+        mock_build.assert_called_once_with(guid_index)
+
+    @patch("prefab_sentinel.session_cache.collect_project_guid_index")
     def test_returns_empty_when_no_root(self, mock_collect: MagicMock) -> None:
         session = ProjectSession()
         result = session.guid_index()
@@ -181,6 +219,48 @@ class TestGuidIndexCaching(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # SymbolTree mtime caching
 # ---------------------------------------------------------------------------
+
+
+    def test_invalidate_guid_index_clears_nested_prefab_cache(self) -> None:
+        from prefab_sentinel.unity_assets import decode_text_file
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            assets = root / "Assets"
+            assets.mkdir()
+            child = assets / "Child.prefab"
+            child.write_text("%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Child\n", encoding="utf-8")
+            guid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            host = (
+                "%YAML 1.1\n"
+                "--- !u!1001 &1001\n"
+                "PrefabInstance:\n"
+                f"  m_SourcePrefab: {{fileID: 100100000, guid: {guid}, type: 3}}\n"
+            )
+            session = ProjectSession(project_root=root)
+            context = session._cache.inspection_context()
+            with patch(
+                "prefab_sentinel.nested_prefab_cache.decode_text_file",
+                wraps=decode_text_file,
+            ) as decode_text:
+                context.nested_prefab_cache.prefetch_children(
+                    host,
+                    {guid: child},
+                    root,
+                )
+                context.nested_prefab_cache.prefetch_children(
+                    host,
+                    {guid: child},
+                    root,
+                )
+                session.invalidate_guid_index()
+                session._cache.inspection_context().nested_prefab_cache.prefetch_children(
+                    host,
+                    {guid: child},
+                    root,
+                )
+
+        self.assertEqual(2, decode_text.call_count)
 
 
 class TestSymbolTreeCaching(unittest.TestCase):

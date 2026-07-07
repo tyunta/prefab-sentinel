@@ -8,6 +8,7 @@ core parser in ``csharp_fields`` and require a Unity project root.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from pathlib import Path
 
 from prefab_sentinel.contracts import Diagnostic
@@ -43,22 +44,24 @@ _INHERITANCE_STOP_CLASSES = frozenset({
 def resolve_script_fields(
     script_path_or_guid: str,
     project_root: Path | None = None,
+    _guid_index: Mapping[str, Path] | None = None,
 ) -> tuple[str, Path, list[CSharpField]]:
     """Resolve a script identifier to (guid, cs_path, fields).
 
     Accepts either a ``.cs`` file path or a 32-char GUID string.
-    GUID resolution requires ``project_root``.
+    GUID resolution requires ``project_root`` unless ``_guid_index`` is supplied.
 
     Args:
         script_path_or_guid: ``.cs`` file path or 32-char GUID.
-        project_root: Unity project root (required for GUID resolution).
+        project_root: Unity project root (required for GUID resolution without a cached index).
+        _guid_index: Pre-built GUID index to avoid redundant project scans.
 
     Returns:
         Tuple of (guid, cs_path, list_of_all_fields).
 
     Raises:
         FileNotFoundError: If the script cannot be found.
-        ValueError: If GUID resolution is requested without project_root.
+        ValueError: If GUID resolution is requested without project_root or a cached index.
     """
     from prefab_sentinel.unity_assets import (
         collect_project_guid_index,
@@ -69,12 +72,15 @@ def resolve_script_fields(
     identifier = script_path_or_guid.strip()
 
     if looks_like_guid(identifier):
-        if project_root is None:
+        if _guid_index is not None:
+            guid_index = _guid_index
+        elif project_root is not None:
+            guid_index = collect_project_guid_index(
+                project_root, include_package_cache=False
+            )
+        else:
             msg = "project_root is required for GUID resolution"
             raise ValueError(msg)
-        guid_index = collect_project_guid_index(
-            project_root, include_package_cache=False
-        )
         asset_path = guid_index.get(identifier.lower())
         if asset_path is None or asset_path.suffix != ".cs":
             msg = f"No .cs file found for GUID: {identifier}"
@@ -88,9 +94,12 @@ def resolve_script_fields(
     if not cs_path.is_file():
         # Try class name resolution via GUID index stem matching
         if project_root is not None:
-            guid_index = collect_project_guid_index(
-                project_root, include_package_cache=False
-            )
+            if _guid_index is not None:
+                guid_index = _guid_index
+            else:
+                guid_index = collect_project_guid_index(
+                    project_root, include_package_cache=False
+                )
             stem_matches: list[tuple[str, Path]] = [
                 (g, p) for g, p in guid_index.items()
                 if p.suffix == ".cs" and p.stem == identifier
@@ -129,7 +138,7 @@ def _strip_namespace(name: str) -> str:
 
 def build_class_name_index(
     project_root: Path,
-    _guid_index: dict[str, Path] | None = None,
+    _guid_index: Mapping[str, Path] | None = None,
     *,
     diagnostics: list[Diagnostic] | None = None,
 ) -> dict[str, tuple[str, Path]]:

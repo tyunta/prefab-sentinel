@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from prefab_sentinel.contracts import (
@@ -18,6 +18,7 @@ from prefab_sentinel.effective_hierarchy import (
     build_effective_hierarchy,
 )
 from prefab_sentinel.hierarchy import HierarchyNode, analyze_hierarchy, format_tree
+from prefab_sentinel.inspection_context import ProjectInspectionContext
 from prefab_sentinel.material_asset_inspector import (
     format_material_asset,
     inspect_material_asset as _inspect_material_asset,
@@ -33,22 +34,19 @@ from prefab_sentinel.unity_assets import GAMEOBJECT_BEARING_SUFFIXES, collect_pr
 
 def _build_script_name_resolver(
     project_root: Path,
+    script_name_map: Mapping[str, str] | None = None,
 ) -> Callable[[str], str | None]:
-    """Build a script-name resolver keyed by Unity script GUID.
-
-    The resolver maps a 32-char Unity script GUID to the ``.cs`` file's
-    stem (the conventional class name) by consulting the project's GUID
-    index.  Non-script GUIDs and unknown GUIDs return ``None``.
-    """
-    index = collect_project_guid_index(project_root, include_package_cache=False)
+    """Build a script-name resolver keyed by Unity script GUID."""
+    if script_name_map is None:
+        index = collect_project_guid_index(project_root, include_package_cache=False)
+        script_name_map = {
+            guid: path.stem
+            for guid, path in index.items()
+            if path.suffix.lower() == ".cs"
+        }
 
     def _resolve(guid: str) -> str | None:
-        path = index.get(guid)
-        if path is None:
-            return None
-        if path.suffix.lower() != ".cs":
-            return None
-        return path.stem
+        return script_name_map.get(guid.lower())
 
     return _resolve
 
@@ -98,6 +96,7 @@ def inspect_hierarchy(
     show_components: bool = True,
     expand_monobehaviour: bool = False,
     expand_prefab_instances: bool = False,
+    inspection_context: ProjectInspectionContext | None = None,
 ) -> ToolResponse:
     text_or_error = read_target_file(prefab_variant, target_path, "INSPECT_HIERARCHY")
     if isinstance(text_or_error, ToolResponse):
@@ -137,26 +136,43 @@ def inspect_hierarchy(
     script_index_unavailable = False
     if expand_monobehaviour:
         try:
-            monobehaviour_resolver = _build_script_name_resolver(
-                prefab_variant.project_root
+            script_name_map = (
+                inspection_context.script_name_map
+                if inspection_context is not None
+                else None
             )
-        except (OSError, RuntimeError) as exc:
+            monobehaviour_resolver = _build_script_name_resolver(
+                prefab_variant.project_root,
+                script_name_map,
+            )
+        except (OSError, RuntimeError):
             script_index_unavailable = True
             diagnostics.append(
                 Diagnostic(
                     path=target_path,
                     location="expand_monobehaviour",
                     detail="warning",
-                    evidence=f"project GUID index unavailable: {exc}",
+                    evidence="project GUID index unavailable.",
                 )
             )
 
     if expand_prefab_instances:
+        guid_index = (
+            inspection_context.guid_index
+            if inspection_context is not None
+            else None
+        )
         effective = build_effective_hierarchy(
             prefab_variant.project_root,
             target_path,
             host_text,
             max_depth=max_depth,
+            guid_index=guid_index,
+            nested_prefab_cache=(
+                inspection_context.nested_prefab_cache
+                if inspection_context is not None
+                else None
+            ),
         )
         diagnostics.extend(effective.diagnostics)
         effective_data = effective.to_dict()
@@ -319,6 +335,7 @@ def inspect_hierarchy(
 def inspect_materials(
     prefab_variant: PrefabVariantService,
     target_path: str,
+    inspection_context: ProjectInspectionContext | None = None,
 ) -> ToolResponse:
     text_or_error = read_target_file(prefab_variant, target_path, "INSPECT_MATERIALS")
     if isinstance(text_or_error, ToolResponse):
@@ -335,11 +352,15 @@ def inspect_materials(
         )
 
     try:
-        result = _inspect_materials(target_path, project_root=prefab_variant.project_root)
-    except (OSError, UnicodeDecodeError) as exc:
+        result = _inspect_materials(
+            target_path,
+            project_root=prefab_variant.project_root,
+            inspection_context=inspection_context,
+        )
+    except (OSError, UnicodeDecodeError):
         return error_response(
             "INSPECT_MATERIALS_READ_ERROR",
-            f"Failed to inspect materials: {exc}",
+            "Failed to inspect materials: target asset could not be read.",
             data={"target_path": target_path, "read_only": True},
         )
 
@@ -396,6 +417,8 @@ def inspect_materials(
 def inspect_material_asset(
     prefab_variant: PrefabVariantService,
     target_path: str,
+    *,
+    inspection_context: ProjectInspectionContext | None = None,
 ) -> ToolResponse:
     text_or_error = read_target_file(prefab_variant, target_path, "INSPECT_MATERIAL_ASSET")
     if isinstance(text_or_error, ToolResponse):
@@ -410,11 +433,19 @@ def inspect_material_asset(
         )
 
     try:
-        result = _inspect_material_asset(target_path, project_root=prefab_variant.project_root)
-    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        result = _inspect_material_asset(
+            target_path,
+            project_root=prefab_variant.project_root,
+            guid_index=(
+                inspection_context.guid_index
+                if inspection_context is not None
+                else None
+            ),
+        )
+    except (OSError, UnicodeDecodeError, ValueError):
         return error_response(
             "INSPECT_MATERIAL_ASSET_READ_ERROR",
-            f"Failed to inspect material asset: {exc}",
+            "Failed to inspect material asset: target asset could not be read.",
             data={"target_path": target_path, "read_only": True},
         )
 

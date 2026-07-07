@@ -903,6 +903,384 @@ class TestMaterialValidatorTmpEvidence(unittest.TestCase):
         )
 
 
+class TestMaterialValidatorEvidenceBuilder(unittest.TestCase):
+    def test_evidence_builder_uses_ordered_runner_for_path_ordered_merge(self) -> None:
+        from prefab_sentinel.material_validator import _build_evidence
+
+        with _project() as tmp:
+            project_root = _project_root(tmp)
+            scope = project_root / "Assets" / "UI"
+            _write_shader_meta(project_root, "Assets/Shaders/Good.shader", GOOD_SHADER_GUID)
+            _write_asset(
+                project_root,
+                "Assets/UI/Shared.mat",
+                _material_yaml("Shared"),
+                guid=MATCH_MATERIAL_GUID,
+            )
+            _write_asset(
+                project_root,
+                "Assets/UI/IconFont.asset",
+                _font_asset_yaml(atlas_guid=ATLAS_GUID),
+                guid=FONT_GUID,
+            )
+            _write_asset(
+                project_root,
+                "Assets/UI/A.prefab",
+                _prefab_with_renderers((MATCH_MATERIAL_GUID,)),
+            )
+            _write_asset(
+                project_root,
+                "Assets/UI/B.prefab",
+                _prefab_with_renderers(
+                    (MATCH_MATERIAL_GUID,),
+                    tmp_font_guid=FONT_GUID,
+                    tmp_material_guid=MATCH_MATERIAL_GUID,
+                ),
+            )
+            bad_path = _write_binary_asset(
+                project_root,
+                "Assets/UI/ZBroken.prefab",
+                b"\xff",
+            )
+            resolver = ReferenceResolverService(project_root=project_root)
+            submitted_calls: list[list[Path]] = []
+            execution_calls: list[list[Path]] = []
+
+            def run_in_reverse(items, worker, *, max_workers=None):
+                self.assertIsNone(max_workers)
+                submitted = list(items)
+                submitted_calls.append(submitted)
+                execution_paths: list[Path] = []
+                by_path = {}
+                for path in reversed(submitted):
+                    execution_paths.append(path)
+                    by_path[path] = worker(path)
+                execution_calls.append(execution_paths)
+                return [by_path[path] for path in submitted]
+
+            with patch(
+                "prefab_sentinel.material_validator.run_ordered",
+                side_effect=run_in_reverse,
+                create=True,
+            ) as run_ordered:
+                state = _build_evidence(resolver, scope)
+
+        self.assertEqual(1, run_ordered.call_count)
+        self.assertEqual(list(reversed(submitted_calls[0])), execution_calls[0])
+        self.assertEqual(5, state.scanned_targets)
+        self.assertEqual([
+            "Assets/UI/A.prefab",
+            "Assets/UI/B.prefab",
+            "Assets/UI/IconFont.asset",
+            "Assets/UI/Shared.mat",
+        ], [entry.path for entry in state.folder_entries])
+        self.assertEqual([
+            "Assets/UI/A.prefab",
+            "Assets/UI/B.prefab",
+        ], [slot.source_path for slot in state.renderer_slots])
+        self.assertEqual(["Assets/UI/B.prefab"], [entry.source_path for entry in state.tmp_entries])
+        self.assertEqual(["Assets/UI/Shared.mat"], [mat.path for mat in state.direct_materials])
+        self.assertEqual(["Assets/UI/Shared.mat"], sorted(state.material_cache))
+        self.assertEqual([
+            ("MATERIAL_VALIDATION_READ_ERROR", str(bad_path.relative_to(project_root))),
+        ], [(diag.detail, diag.path) for diag in state.read_errors])
+
+    def test_evidence_builder_uses_context_guid_index_for_material_paths(self) -> None:
+        from prefab_sentinel.inspection_context import ProjectInspectionContext
+        from prefab_sentinel.material_validator import _build_evidence
+        from prefab_sentinel.nested_prefab_cache import NestedPrefabCache
+
+        with _project() as tmp:
+            project_root = _project_root(tmp)
+            scope = project_root / "Assets" / "UI"
+            _write_shader_meta(project_root, "Assets/Shaders/Good.shader", GOOD_SHADER_GUID)
+            material_path = _write_asset(
+                project_root,
+                "Assets/UI/Shared.mat",
+                _material_yaml("Shared"),
+                guid=MATCH_MATERIAL_GUID,
+            )
+            _write_asset(
+                project_root,
+                "Assets/UI/A.prefab",
+                _prefab_with_renderers((MATCH_MATERIAL_GUID,)),
+            )
+            resolver = ReferenceResolverService(project_root=project_root)
+            context = ProjectInspectionContext(
+                project_root=project_root,
+                guid_index={MATCH_MATERIAL_GUID: material_path},
+                script_name_map={},
+                nested_prefab_cache=NestedPrefabCache(),
+            )
+
+            with patch(
+                "prefab_sentinel.services.reference_resolver.collect_project_guid_index",
+                side_effect=AssertionError("context guid index was not used"),
+            ):
+                state = _build_evidence(
+                    resolver,
+                    scope,
+                    inspection_context=context,
+                )
+
+        self.assertEqual(
+            ["Assets/UI/Shared.mat"],
+            [slot.material_path for slot in state.renderer_slots],
+        )
+        self.assertEqual(["Assets/UI/Shared.mat"], sorted(state.material_cache))
+
+    def test_evidence_builder_workers_use_preloaded_text_snapshots(self) -> None:
+        from prefab_sentinel.inspection_context import ProjectInspectionContext
+        from prefab_sentinel.material_validator import _build_evidence
+        from prefab_sentinel.nested_prefab_cache import NestedPrefabCache
+
+        with _project() as tmp:
+            project_root = _project_root(tmp)
+            scope = project_root / "Assets" / "UI"
+            _write_shader_meta(project_root, "Assets/Shaders/Good.shader", GOOD_SHADER_GUID)
+            material_path = _write_asset(
+                project_root,
+                "Assets/UI/Shared.mat",
+                _material_yaml("Shared"),
+                guid=MATCH_MATERIAL_GUID,
+            )
+            font_path = _write_asset(
+                project_root,
+                "Assets/UI/IconFont.asset",
+                _font_asset_yaml(atlas_guid=ATLAS_GUID),
+                guid=FONT_GUID,
+            )
+            atlas_path = _write_asset(
+                project_root,
+                "Assets/UI/FontAtlas.png",
+                "%YAML 1.1\n",
+                guid=ATLAS_GUID,
+            )
+            _write_asset(
+                project_root,
+                "Assets/UI/A.prefab",
+                _prefab_with_renderers(
+                    (MATCH_MATERIAL_GUID,),
+                    tmp_font_guid=FONT_GUID,
+                    tmp_material_guid=MATCH_MATERIAL_GUID,
+                ),
+            )
+            resolver = ReferenceResolverService(project_root=project_root)
+            context = ProjectInspectionContext(
+                project_root=project_root,
+                guid_index={
+                    MATCH_MATERIAL_GUID: material_path,
+                    FONT_GUID: font_path,
+                    ATLAS_GUID: atlas_path,
+                },
+                script_name_map={},
+                nested_prefab_cache=NestedPrefabCache(),
+            )
+            original_read_text = resolver.read_text
+            in_worker = False
+
+            def run_with_worker_guard(items, worker, *, max_workers=None):
+                self.assertIsNone(max_workers)
+                nonlocal in_worker
+                results = []
+                for item in items:
+                    in_worker = True
+                    try:
+                        results.append(worker(item))
+                    finally:
+                        in_worker = False
+                return results
+
+            def guarded_read_text(path: Path):
+                if in_worker:
+                    raise AssertionError("worker must not mutate resolver text caches")
+                return original_read_text(path)
+
+            with patch.object(resolver, "read_text", side_effect=guarded_read_text), patch(
+                "prefab_sentinel.material_validator.run_ordered",
+                side_effect=run_with_worker_guard,
+                create=True,
+            ):
+                state = _build_evidence(
+                    resolver,
+                    scope,
+                    inspection_context=context,
+                )
+
+        self.assertEqual(["Assets/UI/A.prefab"], [slot.source_path for slot in state.renderer_slots])
+        self.assertEqual(["Assets/UI/A.prefab"], [entry.source_path for entry in state.tmp_entries])
+        self.assertEqual(["Assets/UI/Shared.mat"], sorted(state.material_cache))
+
+    def test_resolve_asset_path_uses_resolver_fallback_after_guid_index_miss(self) -> None:
+        from prefab_sentinel.material_validator import _resolve_asset_path
+        from prefab_sentinel.unity_assets import UNITY_DEFAULT_RESOURCES_GUID
+
+        with _project() as tmp:
+            project_root = _project_root(tmp)
+            _write_shader_meta(project_root, "Assets/Shaders/Good.shader", GOOD_SHADER_GUID)
+            _write_asset(
+                project_root,
+                "Assets/UI/Shared.mat",
+                _material_yaml("Shared"),
+                guid=MATCH_MATERIAL_GUID,
+            )
+            resolver = ReferenceResolverService(project_root=project_root)
+
+            with patch.object(
+                resolver,
+                "resolve_reference",
+                wraps=resolver.resolve_reference,
+            ) as resolve_reference:
+                self.assertEqual(
+                    "Assets/UI/Shared.mat",
+                    _resolve_asset_path(
+                        resolver,
+                        MATCH_MATERIAL_GUID,
+                        "2100000",
+                        guid_index={},
+                    ),
+                )
+                self.assertEqual(1, resolve_reference.call_count)
+
+            with patch.object(
+                resolver,
+                "resolve_reference",
+                wraps=resolver.resolve_reference,
+            ) as resolve_reference:
+                self.assertIsNone(
+                    _resolve_asset_path(
+                        resolver,
+                        UNITY_DEFAULT_RESOURCES_GUID,
+                        "10202",
+                        guid_index={},
+                    )
+                )
+                self.assertEqual(1, resolve_reference.call_count)
+
+    def test_direct_material_evidence_uses_context_guid_index(self) -> None:
+        from prefab_sentinel.inspection_context import ProjectInspectionContext
+        from prefab_sentinel.material_validator import _build_evidence
+        from prefab_sentinel.nested_prefab_cache import NestedPrefabCache
+
+        with _project() as tmp:
+            project_root = _project_root(tmp)
+            scope = project_root / "Assets" / "UI"
+            shader_path = project_root / "Assets" / "Shaders" / "Good.shader"
+            _write_shader_meta(project_root, "Assets/Shaders/Good.shader", GOOD_SHADER_GUID)
+            material_path = _write_asset(
+                project_root,
+                "Assets/UI/Shared.mat",
+                _material_yaml("Shared"),
+                guid=MATCH_MATERIAL_GUID,
+            )
+            resolver = ReferenceResolverService(project_root=project_root)
+            context = ProjectInspectionContext(
+                project_root=project_root,
+                guid_index={
+                    GOOD_SHADER_GUID: shader_path,
+                    MATCH_MATERIAL_GUID: material_path,
+                },
+                script_name_map={},
+                nested_prefab_cache=NestedPrefabCache(),
+            )
+
+            with patch(
+                "prefab_sentinel.material_asset_inspector.collect_project_guid_index",
+                side_effect=AssertionError("material asset parser rebuilt GUID index"),
+            ):
+                state = _build_evidence(
+                    resolver,
+                    scope,
+                    inspection_context=context,
+                )
+
+        self.assertEqual(["Assets/UI/Shared.mat"], [mat.path for mat in state.direct_materials])
+        self.assertEqual(GOOD_SHADER_GUID, state.direct_materials[0].shader_guid)
+        self.assertEqual("Assets/Shaders/Good.shader", state.direct_materials[0].shader_path)
+
+    def test_evidence_builder_resolves_guid_index_misses_before_workers(self) -> None:
+        from prefab_sentinel.inspection_context import ProjectInspectionContext
+        from prefab_sentinel.material_validator import _build_evidence
+        from prefab_sentinel.nested_prefab_cache import NestedPrefabCache
+
+        with _project() as tmp:
+            project_root = _project_root(tmp)
+            scope = project_root / "Assets" / "UI"
+            _write_shader_meta(project_root, "Assets/Shaders/Good.shader", GOOD_SHADER_GUID)
+            _write_asset(
+                project_root,
+                "Assets/UI/Shared.mat",
+                _material_yaml("Shared"),
+                guid=MATCH_MATERIAL_GUID,
+            )
+            _write_asset(
+                project_root,
+                "Assets/UI/A.prefab",
+                _prefab_with_renderers((MATCH_MATERIAL_GUID,)),
+            )
+            resolver = ReferenceResolverService(project_root=project_root)
+            context = ProjectInspectionContext(
+                project_root=project_root,
+                guid_index={},
+                script_name_map={},
+                nested_prefab_cache=NestedPrefabCache(),
+            )
+            original_guid_map = resolver._guid_map
+            in_worker = False
+
+            def run_with_worker_guard(items, worker, *, max_workers=None):
+                self.assertIsNone(max_workers)
+                nonlocal in_worker
+                results = []
+                for item in items:
+                    in_worker = True
+                    try:
+                        results.append(worker(item))
+                    finally:
+                        in_worker = False
+                return results
+
+            def guarded_guid_map(index_root=None):
+                if in_worker:
+                    raise AssertionError("guid map build in worker")
+                return original_guid_map(index_root)
+
+            with patch.object(resolver, "_guid_map", side_effect=guarded_guid_map), patch(
+                "prefab_sentinel.material_validator.run_ordered",
+                side_effect=run_with_worker_guard,
+                create=True,
+            ):
+                state = _build_evidence(
+                    resolver,
+                    scope,
+                    inspection_context=context,
+                )
+
+        self.assertEqual(["Assets/UI/Shared.mat"], [slot.material_path for slot in state.renderer_slots])
+
+    def test_resolve_asset_path_validates_file_id_on_guid_index_hit(self) -> None:
+        from prefab_sentinel.material_validator import _resolve_asset_path
+
+        with _project() as tmp:
+            project_root = _project_root(tmp)
+            material_path = _write_asset(
+                project_root,
+                "Assets/UI/Shared.mat",
+                _material_yaml("Shared"),
+                guid=MATCH_MATERIAL_GUID,
+            )
+            resolver = ReferenceResolverService(project_root=project_root)
+
+            self.assertIsNone(
+                _resolve_asset_path(
+                    resolver,
+                    MATCH_MATERIAL_GUID,
+                    "123456",
+                    guid_index={MATCH_MATERIAL_GUID: material_path},
+                )
+            )
+
+
 class TestMaterialValidatorReadFailures(unittest.TestCase):
     def test_unreadable_supported_asset_returns_error_diagnostic(self) -> None:
         with _project() as tmp:

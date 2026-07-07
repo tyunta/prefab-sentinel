@@ -4,15 +4,23 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from prefab_sentinel.contracts import Diagnostic, Severity, error_response, success_response
+from prefab_sentinel.inspection_context import ProjectInspectionContext
 from prefab_sentinel.material_asset_inspector import inspect_material_asset
 from prefab_sentinel.material_inspector import RENDERER_CLASS_NAMES, parse_renderer_materials
 from prefab_sentinel.material_validation_rules import MaterialValidationRules
+from prefab_sentinel.parallel_scan import run_ordered
 from prefab_sentinel.services.reference_resolver import ReferenceResolverService
+from prefab_sentinel.unity_assets import (
+    extract_local_file_ids,
+    is_unity_text_asset,
+    normalize_guid,
+)
 from prefab_sentinel.unity_assets_path import relative_to_root
 from prefab_sentinel.unity_yaml_parser import (
     CLASS_ID_MONOBEHAVIOUR,
@@ -90,14 +98,24 @@ class _ValidationState:
     read_errors: list[Diagnostic] = field(default_factory=list)
 
 
+@dataclass(slots=True)
+class _FileEvidencePayload:
+    state: _ValidationState
+
+
 def validate_materials(
     reference_resolver: ReferenceResolverService,
     scope_path: Path,
     rules: MaterialValidationRules,
     *,
     include_details: bool = False,
+    inspection_context: ProjectInspectionContext | None = None,
 ):
-    state = _build_evidence(reference_resolver, scope_path)
+    state = _build_evidence(
+        reference_resolver,
+        scope_path,
+        inspection_context=inspection_context,
+    )
     data = _response_data(state, rules, include_details)
 
     if state.read_errors:
@@ -126,29 +144,148 @@ def validate_materials(
     )
 
 
+
+def _read_asset_text(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+def _asset_reference_pairs(blocks_by_path: Mapping[Path, list[YamlBlock]]) -> set[tuple[str, str]]:
+    pairs: set[tuple[str, str]] = set()
+    for blocks in blocks_by_path.values():
+        components = parse_components(blocks)
+        block_by_file_id = {block.file_id: block for block in blocks}
+        for component in components.values():
+            if component.class_id not in RENDERER_CLASS_NAMES:
+                continue
+            block = block_by_file_id[component.file_id]
+            for _file_id, guid in parse_renderer_materials(block):
+                pairs.add((normalize_guid(guid), "2100000"))
+        for block in blocks:
+            if block.class_id != CLASS_ID_MONOBEHAVIOUR:
+                continue
+            font_match = _TMP_FONT_REF.search(block.text)
+            material_match = _TMP_MATERIAL_REF.search(block.text)
+            if font_match is None or material_match is None:
+                continue
+            pairs.add((normalize_guid(font_match.group(2)), font_match.group(1)))
+            pairs.add((normalize_guid(material_match.group(2)), material_match.group(1)))
+    return pairs
+
+
+def _resolution_snapshot(
+    reference_resolver: ReferenceResolverService,
+    reference_pairs: set[tuple[str, str]],
+    guid_index: Mapping[str, Path],
+) -> tuple[dict[tuple[str, str], str | None], dict[Path, set[str]]]:
+    resolved_paths: dict[tuple[str, str], str | None] = {}
+    local_ids_by_path: dict[Path, set[str]] = {}
+    for guid, file_id in sorted(reference_pairs):
+        indexed_path = guid_index.get(guid)
+        if indexed_path is None:
+            response = reference_resolver.resolve_reference(guid, file_id)
+            asset_path = response.data.get("asset_path") if response.success else None
+            resolved_paths[(guid, file_id)] = asset_path if isinstance(asset_path, str) else None
+            continue
+        path = _project_asset_path(reference_resolver, str(indexed_path))
+        if path is None or file_id == "0" or not is_unity_text_asset(path):
+            continue
+        if not ReferenceResolverService._should_validate_external_file_id(path):
+            continue
+        text = reference_resolver.read_text(path)
+        local_ids_by_path[path] = extract_local_file_ids(text) if text is not None else set()
+    return resolved_paths, local_ids_by_path
+
+
+def _file_id_is_valid_for_path(
+    reference_resolver: ReferenceResolverService,
+    path: Path,
+    file_id: str,
+    local_ids_by_path: Mapping[Path, set[str]] | None,
+) -> bool:
+    if file_id == "0" or not is_unity_text_asset(path):
+        return True
+    if not ReferenceResolverService._should_validate_external_file_id(path):
+        return True
+    local_ids = (
+        local_ids_by_path.get(path)
+        if local_ids_by_path is not None
+        else reference_resolver._local_ids(path)
+    )
+    return not local_ids or file_id in local_ids
+
+
 def _build_evidence(
     reference_resolver: ReferenceResolverService,
     scope_path: Path,
+    *,
+    inspection_context: ProjectInspectionContext | None = None,
 ) -> _ValidationState:
+    guid_index = None if inspection_context is None else inspection_context.guid_index
     files = reference_resolver.collect_scope_files(scope_path)
+    file_texts = {path: reference_resolver.read_text(path) for path in files}
+    file_blocks = {
+        path: split_yaml_blocks(text)
+        for path, text in file_texts.items()
+        if text is not None
+    }
+    resolved_asset_paths: dict[tuple[str, str], str | None] | None = None
+    local_ids_by_path: dict[Path, set[str]] | None = None
+    if guid_index is not None:
+        reference_pairs = _asset_reference_pairs(file_blocks)
+        resolved_asset_paths, local_ids_by_path = _resolution_snapshot(
+            reference_resolver,
+            reference_pairs,
+            guid_index,
+        )
     state = _ValidationState(scanned_targets=len(files))
-    for path in files:
+
+    def build_file_payload(path: Path) -> _FileEvidencePayload:
         rel_path = _relative(reference_resolver, path)
-        text = reference_resolver.read_text(path)
+        file_state = _ValidationState(scanned_targets=1)
+        text = file_texts[path]
         if text is None:
-            state.read_errors.append(_diagnostic(
+            file_state.read_errors.append(_diagnostic(
                 "MATERIAL_VALIDATION_READ_ERROR", rel_path, "", "Unreadable Unity text asset.", "error",
             ))
-            continue
-        blocks = split_yaml_blocks(text)
-        state.folder_entries.append(_folder_evidence(rel_path, path, blocks))
+            return _FileEvidencePayload(file_state)
+        blocks = file_blocks[path]
+        file_state.folder_entries.append(_folder_evidence(rel_path, path, blocks))
         if path.suffix.lower() == ".mat" and _has_class(blocks, "21"):
-            material = _material_for_path(reference_resolver, path, rel_path)
+            material = _material_for_path(
+                reference_resolver,
+                path,
+                rel_path,
+                guid_index=guid_index,
+            )
             if material is not None:
-                state.direct_materials.append(material)
-                state.material_cache[rel_path] = material
-        _collect_renderer_slots(reference_resolver, state, rel_path, blocks)
-        _collect_tmp_entries(reference_resolver, state, rel_path, blocks)
+                file_state.direct_materials.append(material)
+                file_state.material_cache[rel_path] = material
+        _collect_renderer_slots(
+            reference_resolver, file_state, rel_path, blocks,
+            guid_index=guid_index,
+            resolved_asset_paths=resolved_asset_paths,
+            local_ids_by_path=local_ids_by_path,
+        )
+        _collect_tmp_entries(
+            reference_resolver, file_state, rel_path, blocks,
+            guid_index=guid_index,
+            resolved_asset_paths=resolved_asset_paths,
+            local_ids_by_path=local_ids_by_path,
+        )
+        return _FileEvidencePayload(file_state)
+
+    for payload in run_ordered(files, build_file_payload):
+        file_state = payload.state
+        state.folder_entries.extend(file_state.folder_entries)
+        state.direct_materials.extend(file_state.direct_materials)
+        state.renderer_slots.extend(file_state.renderer_slots)
+        state.tmp_entries.extend(file_state.tmp_entries)
+        state.diagnostics.extend(file_state.diagnostics)
+        state.read_errors.extend(file_state.read_errors)
+        for material_path, material in file_state.material_cache.items():
+            state.material_cache.setdefault(material_path, material)
     return state
 
 
@@ -157,6 +294,10 @@ def _collect_renderer_slots(
     state: _ValidationState,
     source_path: str,
     blocks: list[YamlBlock],
+    *,
+    guid_index: Mapping[str, Path] | None = None,
+    resolved_asset_paths: Mapping[tuple[str, str], str | None] | None = None,
+    local_ids_by_path: Mapping[Path, set[str]] | None = None,
 ) -> None:
     hierarchy = _hierarchy_map(blocks)
     components = parse_components(blocks)
@@ -166,8 +307,20 @@ def _collect_renderer_slots(
             continue
         block = block_by_file_id[component.file_id]
         for index, (_file_id, guid) in enumerate(parse_renderer_materials(block)):
-            material_path = _resolve_asset_path(reference_resolver, guid, "2100000")
-            material = _cached_material(reference_resolver, state, material_path)
+            material_path = _resolve_asset_path(
+                reference_resolver,
+                guid,
+                "2100000",
+                guid_index=guid_index,
+                resolved_asset_paths=resolved_asset_paths,
+                local_ids_by_path=local_ids_by_path,
+            )
+            material = _cached_material(
+                reference_resolver,
+                state,
+                material_path,
+                guid_index=guid_index,
+            )
             location = f"renderer_slot:{hierarchy.get(component.game_object_file_id, '')}[{index}]"
             if material_path is None:
                 state.diagnostics.append(_diagnostic(
@@ -192,6 +345,10 @@ def _collect_tmp_entries(
     state: _ValidationState,
     source_path: str,
     blocks: list[YamlBlock],
+    *,
+    guid_index: Mapping[str, Path] | None = None,
+    resolved_asset_paths: Mapping[tuple[str, str], str | None] | None = None,
+    local_ids_by_path: Mapping[Path, set[str]] | None = None,
 ) -> None:
     hierarchy = _hierarchy_map(blocks)
     components = parse_components(blocks)
@@ -206,9 +363,21 @@ def _collect_tmp_entries(
         go_id = "" if component is None else component.game_object_file_id
         font_guid = font_match.group(2).lower()
         material_guid = material_match.group(2).lower()
-        font_path = _resolve_asset_path(reference_resolver, font_guid, font_match.group(1))
+        font_path = _resolve_asset_path(
+            reference_resolver,
+            font_guid,
+            font_match.group(1),
+            guid_index=guid_index,
+            resolved_asset_paths=resolved_asset_paths,
+            local_ids_by_path=local_ids_by_path,
+        )
         material_path = _resolve_asset_path(
-            reference_resolver, material_guid, material_match.group(1),
+            reference_resolver,
+            material_guid,
+            material_match.group(1),
+            guid_index=guid_index,
+            resolved_asset_paths=resolved_asset_paths,
+            local_ids_by_path=local_ids_by_path,
         )
         state.tmp_entries.append(_TmpEvidence(
             source_path=source_path,
@@ -217,7 +386,12 @@ def _collect_tmp_entries(
             font_asset_path=font_path,
             material_preset_guid=material_guid,
             material_preset_path=material_path,
-            material=_cached_material(reference_resolver, state, material_path),
+            material=_cached_material(
+                reference_resolver,
+                state,
+                material_path,
+                guid_index=guid_index,
+            ),
             atlas_references=_atlas_references(reference_resolver, font_path),
         ))
 
@@ -364,12 +538,18 @@ def _material_for_path(
     reference_resolver: ReferenceResolverService,
     path: Path,
     rel_path: str,
+    *,
+    guid_index: Mapping[str, Path] | None = None,
 ) -> _MaterialEvidence | None:
     try:
-        result = inspect_material_asset(str(path), reference_resolver.project_root)
+        result = inspect_material_asset(
+            str(path),
+            reference_resolver.project_root,
+            guid_index=guid_index,
+        )
     except (OSError, UnicodeDecodeError, ValueError):
         return None
-    text = reference_resolver.read_text(path) or ""
+    text = _read_asset_text(path) or ""
     ztest = next((item.value for item in result.floats if item.name == "_ZTest"), None)
     return _MaterialEvidence(
         path=rel_path,
@@ -405,6 +585,8 @@ def _cached_material(
     reference_resolver: ReferenceResolverService,
     state: _ValidationState,
     material_path: str | None,
+    *,
+    guid_index: Mapping[str, Path] | None = None,
 ) -> _MaterialEvidence | None:
     if material_path is None or not material_path.lower().endswith(".mat"):
         return None
@@ -415,7 +597,12 @@ def _cached_material(
     cached = state.material_cache.get(rel_path)
     if cached is not None:
         return cached
-    material = _material_for_path(reference_resolver, path, rel_path)
+    material = _material_for_path(
+        reference_resolver,
+        path,
+        rel_path,
+        guid_index=guid_index,
+    )
     if material is not None:
         state.material_cache[rel_path] = material
     return material
@@ -452,7 +639,27 @@ def _resolve_asset_path(
     reference_resolver: ReferenceResolverService,
     guid: str,
     file_id: str,
+    *,
+    guid_index: Mapping[str, Path] | None = None,
+    resolved_asset_paths: Mapping[tuple[str, str], str | None] | None = None,
+    local_ids_by_path: Mapping[Path, set[str]] | None = None,
 ) -> str | None:
+    normalized_guid = normalize_guid(guid)
+    if guid_index is not None:
+        indexed_path = guid_index.get(normalized_guid)
+        if indexed_path is not None:
+            resolved_path = _project_asset_path(reference_resolver, str(indexed_path))
+            if resolved_path is None or not _file_id_is_valid_for_path(
+                reference_resolver,
+                resolved_path,
+                file_id,
+                local_ids_by_path,
+            ):
+                return None
+            return relative_to_root(resolved_path, reference_resolver.project_root)
+        if resolved_asset_paths is not None:
+            return resolved_asset_paths.get((normalized_guid, file_id))
+
     response = reference_resolver.resolve_reference(guid, file_id)
     if not response.success:
         return None
@@ -473,7 +680,7 @@ def _atlas_references(
     if path is None:
         return ()
     rel_path = relative_to_root(path, reference_resolver.project_root)
-    text = reference_resolver.read_text(path)
+    text = _read_asset_text(path)
     if text is None or "m_AtlasTextures:" not in text:
         return ()
     return tuple(

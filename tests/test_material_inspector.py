@@ -372,6 +372,72 @@ class TestInspectMaterialsIntegration(unittest.TestCase):
             self.assertEqual(result.renderers[0].renderer_type, "SkinnedMeshRenderer")
             self.assertEqual(len(result.renderers[0].slots), 1)
 
+    def test_context_guid_map_reuses_session_index_without_output_drift(self) -> None:
+        from unittest.mock import patch
+
+        from prefab_sentinel.session_cache import SessionCacheManager
+        from prefab_sentinel.unity_assets import collect_project_guid_index
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            text = (
+                YAML_HEADER
+                + make_gameobject("1", "MeshObj", ["2", "3"])
+                + make_transform("2", "1")
+                + make_skinned_mesh_renderer("3", "1", [MAT_GUID_A])
+            )
+            assets_dir = tmp_path / "Assets"
+            assets_dir.mkdir()
+            prefab_path = assets_dir / "test.prefab"
+            prefab_path.write_text(text, encoding="utf-8")
+            mat_path = assets_dir / "MatA.mat"
+            mat_path.write_text(
+                "%YAML 1.1\n--- !u!21 &2100000\nMaterial:\n  m_Name: MatA\n",
+                encoding="utf-8",
+            )
+            (assets_dir / "MatA.mat.meta").write_text(
+                f"fileFormatVersion: 2\nguid: {MAT_GUID_A}\n",
+                encoding="utf-8",
+            )
+
+            baseline = inspect_materials(str(prefab_path), project_root=tmp_path)
+            cache = SessionCacheManager()
+            cache.project_root = tmp_path
+            with patch(
+                "prefab_sentinel.session_cache.collect_project_guid_index",
+                wraps=collect_project_guid_index,
+            ) as collect_shared:
+                first_context = cache.inspection_context()
+                second_context = cache.inspection_context()
+            self.assertEqual(1, collect_shared.call_count)
+            self.assertIs(first_context.guid_index, second_context.guid_index)
+
+            with patch(
+                "prefab_sentinel.material_inspector.collect_project_guid_index",
+                side_effect=AssertionError("material inspector rebuilt GUID index"),
+            ):
+                first = inspect_materials(
+                    str(prefab_path),
+                    project_root=tmp_path,
+                    inspection_context=first_context,
+                )
+                second = inspect_materials(
+                    str(prefab_path),
+                    project_root=tmp_path,
+                    inspection_context=second_context,
+                )
+
+        self.assertEqual(baseline.renderers, first.renderers)
+        self.assertEqual(first.renderers, second.renderers)
+        self.assertEqual(1, len(first.renderers))
+        slot = first.renderers[0].slots[0]
+        self.assertEqual(("MatA", "Assets/MatA.mat", MAT_GUID_A, False), (
+            slot.material_name,
+            slot.material_path,
+            slot.material_guid,
+            slot.is_override,
+        ))
+
     def test_variant_with_material_override(self) -> None:
         """Write base + variant to disk, verify override detection."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -712,6 +778,95 @@ class TestNestedPrefabMaterialFallback(unittest.TestCase):
             self.assertGreater(len(result.renderers), 0)
             self.assertIn("Child.prefab", result.renderers[0].source_prefab)
 
+    def test_context_nested_cache_reuses_duplicate_child_renderer_source(self) -> None:
+        from unittest.mock import patch
+
+        from prefab_sentinel.session_cache import SessionCacheManager
+        from prefab_sentinel.unity_assets import decode_text_file
+        from prefab_sentinel.unity_yaml_parser import split_yaml_blocks
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            project = tmp_path / "Assets"
+            project.mkdir()
+
+            child = project / "Child.prefab"
+            child_text = (
+                YAML_HEADER
+                + make_gameobject("500", "Body", ["600", "700"])
+                + make_transform("600", "500")
+                + make_skinned_mesh_renderer(
+                    "700", "500", material_guids=[self.MAT_GUID]
+                )
+            )
+            child.write_text(child_text, encoding="utf-8")
+            (project / "Child.prefab.meta").write_text(
+                f"fileFormatVersion: 2\nguid: {self.CHILD_GUID}\n",
+                encoding="utf-8",
+            )
+
+            mat = project / "TestMat.mat"
+            mat.write_text(
+                "%YAML 1.1\n--- !u!21 &2100000\nMaterial:\n  m_Name: TestMat\n",
+                encoding="utf-8",
+            )
+            (project / "TestMat.mat.meta").write_text(
+                f"fileFormatVersion: 2\nguid: {self.MAT_GUID}\n",
+                encoding="utf-8",
+            )
+
+            base = project / "Base.prefab"
+            base_text = (
+                YAML_HEADER
+                + make_gameobject("100", "Avatar", ["200"])
+                + make_transform("200", "100")
+                + make_prefab_instance("300", self.CHILD_GUID)
+                + make_prefab_instance("301", self.CHILD_GUID)
+            )
+            base.write_text(base_text, encoding="utf-8")
+            (project / "Base.prefab.meta").write_text(
+                "fileFormatVersion: 2\nguid: 11112222333344445555666677778888\n",
+                encoding="utf-8",
+            )
+
+            cache = SessionCacheManager()
+            cache.project_root = tmp_path
+            with (
+                patch(
+                    "prefab_sentinel.nested_prefab_cache.decode_text_file",
+                    wraps=decode_text_file,
+                ) as decode_text,
+                patch(
+                    "prefab_sentinel.nested_prefab_cache.split_yaml_blocks",
+                    wraps=split_yaml_blocks,
+                ) as cache_split_blocks,
+                patch(
+                    "prefab_sentinel.material_inspector.split_yaml_blocks",
+                    wraps=split_yaml_blocks,
+                ) as material_split_blocks,
+            ):
+                result = inspect_materials(
+                    str(base),
+                    project_root=tmp_path,
+                    inspection_context=cache.inspection_context(),
+                )
+
+        self.assertEqual(
+            (["Assets/Child.prefab", "Assets/Child.prefab"], 1, 2, 1, []),
+            (
+                [renderer.source_prefab for renderer in result.renderers],
+                decode_text.call_count,
+                cache_split_blocks.call_count,
+                material_split_blocks.call_count,
+                result.diagnostics,
+            ),
+            msg=(
+                "context material inspection should preserve duplicate nested "
+                "renderer order and decode/cache-parse the shared child once "
+                f"while reusing parsed blocks for renderer inspection; {result!r}"
+            ),
+        )
+
     def test_nested_fallback_no_renderer_anywhere_produces_diagnostics(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             project = Path(tmpdir) / "Assets"
@@ -897,7 +1052,7 @@ class TestNestedRecursiveTraversal(unittest.TestCase):
             )
             _write_prefab_with_meta(assets_dir, "Leaf.prefab", _LEAF_GUID, leaf_text)
 
-            # Mid.prefab — has PrefabInstance → Leaf, no direct renderers
+            # Mid.prefab has PrefabInstance to Leaf, no direct renderers.
             mid_text = (
                 YAML_HEADER
                 + make_gameobject("10", "MidRoot", ["20"])
@@ -906,7 +1061,7 @@ class TestNestedRecursiveTraversal(unittest.TestCase):
             )
             _write_prefab_with_meta(assets_dir, "Mid.prefab", _MID_GUID, mid_text)
 
-            # Base.prefab — has PrefabInstance → Mid, no direct renderers
+            # Base.prefab has PrefabInstance to Mid, no direct renderers.
             base_text = (
                 YAML_HEADER
                 + make_gameobject("100", "BaseRoot", ["200"])
@@ -929,7 +1084,7 @@ class TestNestedRecursiveTraversal(unittest.TestCase):
             # Issue #222 Phase 1: concretise the previous
             # ``assertGreaterEqual(_, 1)`` / ``assertTrue(any(...))`` pair.
             # The fixture defines exactly one SkinnedMeshRenderer (on
-            # Leaf.prefab) reachable from Variant through Base → Mid →
+            # Leaf.prefab) reachable from Variant through Base to Mid to
             # Leaf, so the observed count is deterministically one.
             source_prefabs = [r.source_prefab for r in result.renderers]
             self.assertEqual(1, len(result.renderers), f"renderers={result.renderers}")
@@ -1002,7 +1157,7 @@ class TestNestedRecursiveTraversal(unittest.TestCase):
             assets_dir = tmp_path / "Assets"
             assets_dir.mkdir()
 
-            # Build a chain: level_0 → level_1 → ... → level_11
+            # Build a chain from level_0 through level_11.
             guids = [f"{i:032x}" for i in range(12)]
 
             # level_11 (deepest, unreachable) has a renderer
@@ -1016,7 +1171,7 @@ class TestNestedRecursiveTraversal(unittest.TestCase):
                 assets_dir, "level_11.prefab", guids[11], deepest_text,
             )
 
-            # level_10 has a renderer AND a PrefabInstance → level_11
+            # level_10 has a renderer and a PrefabInstance to level_11.
             level10_text = (
                 YAML_HEADER
                 + make_gameobject("1", "ReachableMesh", ["2", "3"])
@@ -1090,7 +1245,7 @@ class TestNestedRecursiveTraversal(unittest.TestCase):
             )
             _write_prefab_with_meta(assets_dir, "Leaf.prefab", _LEAF_GUID, leaf_text)
 
-            # Mid.prefab — PrefabInstance → Leaf, no direct renderers
+            # Mid.prefab has PrefabInstance to Leaf, no direct renderers.
             mid_text = (
                 YAML_HEADER
                 + make_gameobject("10", "MidRoot", ["20"])
@@ -1099,7 +1254,7 @@ class TestNestedRecursiveTraversal(unittest.TestCase):
             )
             _write_prefab_with_meta(assets_dir, "Mid.prefab", _MID_GUID, mid_text)
 
-            # Base text — PrefabInstance → Mid
+            # Base text has PrefabInstance to Mid.
             base_text = (
                 YAML_HEADER
                 + make_gameobject("100", "BaseRoot", ["200"])

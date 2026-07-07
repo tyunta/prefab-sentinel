@@ -62,6 +62,7 @@ class WhereUsedFilesystemStatusErrorTests(unittest.TestCase):
             message_match="scope path status",
             data={"scope": "Assets", "read_only": True},
         )
+        self.assertEqual("scope path status could not be read", response.message)
 
     def test_target_asset_status_os_error_returns_ref404(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -84,6 +85,7 @@ class WhereUsedFilesystemStatusErrorTests(unittest.TestCase):
             message_match="target asset path status",
             data={"asset_or_guid": "Assets/Target.asset", "read_only": True},
         )
+        self.assertEqual("target asset path status could not be read", response.message)
 
     def test_target_meta_status_permission_error_returns_ref001(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -108,6 +110,7 @@ class WhereUsedFilesystemStatusErrorTests(unittest.TestCase):
             message_match="target meta path status",
             data={"asset_or_guid": "Assets/Target.asset", "read_only": True},
         )
+        self.assertEqual("target meta path status could not be read", response.message)
 
     def test_target_meta_read_os_error_returns_ref001(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -137,3 +140,4 @@ class WhereUsedFilesystemStatusErrorTests(unittest.TestCase):
             message_match="target meta metadata",
             data={"asset_or_guid": "Assets/Target.asset", "read_only": True},
         )
+        self.assertEqual("target meta metadata could not be read", response.message)

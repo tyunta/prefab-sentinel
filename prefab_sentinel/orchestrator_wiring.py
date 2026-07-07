@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from pathlib import Path
 from typing import cast
 
@@ -18,7 +19,10 @@ from prefab_sentinel.diagnostics_baseline import (
     DiagnosticsBaseline,
     classify_current_keys,
 )
+from prefab_sentinel.inspection_context import ProjectInspectionContext
+from prefab_sentinel.nested_prefab_cache import NestedPrefabCache
 from prefab_sentinel.orchestrator_variant import read_target_file, resolve_variant_base
+from prefab_sentinel.parallel_scan import run_ordered
 from prefab_sentinel.services.prefab_variant import PrefabVariantService
 from prefab_sentinel.services.reference_resolver import ReferenceResolverService
 from prefab_sentinel.udon_wiring import ComponentWiring, WiringResult, analyze_wiring
@@ -26,7 +30,7 @@ from prefab_sentinel.unity_assets import (
     GAMEOBJECT_BEARING_SUFFIXES,
     collect_project_guid_index,
 )
-from prefab_sentinel.unity_yaml_parser import iter_nested_prefab_children
+from prefab_sentinel.unity_yaml_parser import YamlBlock, iter_nested_prefab_children
 
 # Issue #197: pagination contract for inspect_wiring.
 #
@@ -126,13 +130,23 @@ def _collect_nested_wiring_components(
     guid_index: dict[str, Path],
     project_root: Path,
     guid_to_name: dict[str, str],
-) -> tuple[list[dict[str, object]], list[WiringResult]]:
+    nested_prefab_cache: NestedPrefabCache | None = None,
+) -> tuple[list[dict[str, object]], list[WiringResult], list[Diagnostic]]:
     components: list[dict[str, object]] = []
     nested_results: list[WiringResult] = []
+    nested_cache_diagnostics: list[Diagnostic] = []
 
-    for child in iter_nested_prefab_children(text, guid_index, project_root):
+    def append_child_wiring(
+        child_text: str,
+        child_path: Path,
+        child_rel: str,
+        child_blocks: Sequence[YamlBlock] | None = None,
+    ) -> None:
         child_result = analyze_wiring(
-            child.text, str(child.path), udon_only=udon_only,
+            child_text,
+            str(child_path),
+            udon_only=udon_only,
+            blocks=child_blocks,
         )
         nested_results.append(child_result)
 
@@ -141,10 +155,29 @@ def _collect_nested_wiring_components(
             go = child_gos.get(comp.game_object_file_id)
             go_name = go.name if go and go.name else ""
             components.append(
-                _component_to_dict(comp, go_name, guid_to_name, source_prefab=child.rel_posix)
+                _component_to_dict(comp, go_name, guid_to_name, source_prefab=child_rel)
             )
 
-    return components, nested_results
+    if nested_prefab_cache is None:
+        for child in iter_nested_prefab_children(text, guid_index, project_root):
+            append_child_wiring(child.text, child.path, child.rel_posix)
+    else:
+        for record in nested_prefab_cache.prefetch_children(
+            text, guid_index, project_root,
+        ).children:
+            if record.diagnostic is not None:
+                nested_cache_diagnostics.append(record.diagnostic)
+                continue
+            if record.text is None or record.path is None:
+                continue
+            append_child_wiring(
+                record.text,
+                record.path,
+                record.rel_posix,
+                record.blocks,
+            )
+
+    return components, nested_results, nested_cache_diagnostics
 
 
 # ------------------------------------------------------------------
@@ -400,6 +433,7 @@ def inspect_wiring(
     script_filter: str = "",
     include_out_of_scope_diagnostics: bool = False,
     diagnostics_baseline: DiagnosticsBaseline | None = None,
+    inspection_context: ProjectInspectionContext | None = None,
 ) -> ToolResponse:
     # Issue #197: validate page_size before any I/O so a misconfigured
     # caller short-circuits before the YAML scan.
@@ -457,14 +491,19 @@ def inspect_wiring(
     proj_root: Path | None = None
     guid_index: dict[str, Path] = {}
     guid_to_name: dict[str, str] = {}
-    try:
-        proj_root = prefab_variant.project_root
-        guid_index = collect_project_guid_index(proj_root, include_package_cache=False)
-        for guid, asset_path in guid_index.items():
-            if asset_path.suffix == ".cs":
-                guid_to_name[guid] = asset_path.stem
-    except Exception as exc:
-        logging.getLogger(__name__).debug("GUID index build failed (best-effort): %s", exc)
+    if inspection_context is not None:
+        proj_root = inspection_context.project_root or prefab_variant.project_root
+        guid_index = dict(inspection_context.guid_index)
+        guid_to_name = dict(inspection_context.script_name_map)
+    else:
+        try:
+            proj_root = prefab_variant.project_root
+            guid_index = collect_project_guid_index(proj_root, include_package_cache=False)
+            for guid, asset_path in guid_index.items():
+                if asset_path.suffix == ".cs":
+                    guid_to_name[guid] = asset_path.stem
+        except Exception as exc:
+            logging.getLogger(__name__).debug("GUID index build failed (best-effort): %s", exc)
 
     component_summaries: list[dict[str, object]] = []
     for comp in result.components:
@@ -477,13 +516,28 @@ def inspect_wiring(
     nested_null_refs: list[Diagnostic] = []
     nested_broken_refs: list[Diagnostic] = []
     nested_dup_refs: list[Diagnostic] = []
-    if proj_root is not None and guid_index:
-        nested_components, nested_results = _collect_nested_wiring_components(
+    if proj_root is not None:
+        (
+            nested_components,
+            nested_results,
+            nested_cache_diagnostics,
+        ) = _collect_nested_wiring_components(
             text,
             udon_only=udon_only,
             guid_index=guid_index,
             project_root=proj_root,
             guid_to_name=guid_to_name,
+            nested_prefab_cache=(
+                inspection_context.nested_prefab_cache
+                if inspection_context is not None
+                else None
+            ),
+        )
+        diagnostics.extend(
+            _copy_diagnostics_with_default_severity(
+                nested_cache_diagnostics,
+                Severity.WARNING,
+            )
         )
         component_summaries.extend(nested_components)
         for nr in nested_results:
@@ -760,7 +814,9 @@ def validate_all_wiring(
     *,
     target_path: str = "",
     diagnostics_baseline: DiagnosticsBaseline | None = None,
+    inspection_context: ProjectInspectionContext | None = None,
 ) -> ToolResponse:
+    project_root: Path | None = None
     if target_path:
         paths = [Path(target_path)]
     else:
@@ -792,6 +848,15 @@ def validate_all_wiring(
             data=data,
         )
 
+    scan_targets = (
+        [(path, path.relative_to(project_root).as_posix()) for path in paths]
+        if project_root is not None
+        else [(path, target_path) for path in paths]
+    )
+
+    if inspection_context is not None:
+        prefab_variant.preload_guid_index(inspection_context.guid_index)
+
     total_components = 0
     total_null_refs = 0
     null_refs_by_file: list[dict[str, object]] = []
@@ -802,59 +867,67 @@ def validate_all_wiring(
         if diagnostics_baseline is not None else None
     )
 
-    for p in paths:
+    def inspect_path(
+        scan_target: tuple[Path, str],
+    ) -> tuple[Path, ToolResponse | None, Exception | None]:
+        path, worker_target_path = scan_target
         try:
-            # Issue #197: pass the documented inclusive upper bound for
-            # page_size so the per-file scan returns the merged
-            # components list on a single page; the aggregate envelope
-            # never paginates.
             result = inspect_wiring(
-                prefab_variant, reference_resolver, target_path=str(p),
+                prefab_variant, reference_resolver, target_path=worker_target_path,
                 page_size=INSPECT_WIRING_PAGE_SIZE_MAX,
                 diagnostics_baseline=collection_baseline,
+                inspection_context=inspection_context,
             )
-            resp_dict = result.to_dict()
-            if not resp_dict.get("success", False):
-                baseline_key_set_complete = False
-                continue
-            response_data = resp_dict.get("data")
-            if not isinstance(response_data, dict):
-                baseline_key_set_complete = False
-                continue
-            raw_components = response_data.get("components", [])
-            if not isinstance(raw_components, list):
-                baseline_key_set_complete = False
-                continue
-            components = [
-                component
-                for component in raw_components
-                if isinstance(component, dict)
-            ]
-            comp_count = len(components)
-            null_count = sum(
-                len(raw_names)
-                for component in components
-                for raw_names in (component.get("null_field_names"),)
-                if isinstance(raw_names, list)
-            )
-            total_components += comp_count
-            total_null_refs += null_count
-            if diagnostics_baseline is not None:
-                diagnostic_key_records.extend(
-                    _diagnostic_key_records_from_classification(response_data)
-                )
-            if null_count > 0:
-                null_refs_by_file.append({
-                    "file": str(p),
-                    "null_refs": null_count,
-                    "components": comp_count,
-                })
         except Exception as exc:
+            return path, None, exc
+        return path, result, None
+
+    for p, result, exc in run_ordered(scan_targets, inspect_path):
+        if exc is not None:
             baseline_key_set_complete = False
             logging.getLogger(__name__).debug(
                 "validate_all_wiring: skipped %s: %s", p, exc,
             )
             continue
+        if result is None:
+            baseline_key_set_complete = False
+            continue
+        resp_dict = result.to_dict()
+        if not resp_dict.get("success", False):
+            baseline_key_set_complete = False
+            continue
+        response_data = resp_dict.get("data")
+        if not isinstance(response_data, dict):
+            baseline_key_set_complete = False
+            continue
+        raw_components = response_data.get("components", [])
+        if not isinstance(raw_components, list):
+            baseline_key_set_complete = False
+            continue
+        components = [
+            component
+            for component in raw_components
+            if isinstance(component, dict)
+        ]
+        comp_count = len(components)
+        null_count = sum(
+            len(raw_names)
+            for component in components
+            for raw_names in (component.get("null_field_names"),)
+            if isinstance(raw_names, list)
+        )
+        total_components += comp_count
+        total_null_refs += null_count
+        if diagnostics_baseline is not None:
+            diagnostic_key_records.extend(
+                _diagnostic_key_records_from_classification(response_data)
+            )
+        if null_count > 0:
+            null_refs_by_file.append({
+                "file": str(p),
+                "null_refs": null_count,
+                "components": comp_count,
+            })
 
     data = {
         "files_scanned": len(paths),

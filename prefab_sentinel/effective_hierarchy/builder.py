@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 
 from prefab_sentinel.contracts import Diagnostic, Severity
-from prefab_sentinel.unity_assets import decode_text_file
-from prefab_sentinel.unity_assets_path import relative_to_root
+from prefab_sentinel.nested_prefab_cache import NestedPrefabCache
 from prefab_sentinel.unity_yaml_parser import TransformInfo
 
 from .models import (
@@ -20,20 +20,24 @@ from .overrides import (
     _override_value,
     _target_overrides,
 )
-from .parser import _component_descriptors, _parse_asset
+from .parser import _component_descriptors, _is_root_game_object, _parse_asset
 from .paths import _join_symbol_path
+from .source_loader import _load_nested_source
 
 
 class _EffectiveHierarchyBuilder:
     def __init__(
         self,
         project_root: Path,
-        guid_index: dict[str, Path],
+        guid_index: Mapping[str, Path],
         max_depth: int | None,
+        *,
+        nested_prefab_cache: NestedPrefabCache | None = None,
     ) -> None:
         self._project_root = project_root
         self._guid_index = guid_index
         self._max_depth = max_depth
+        self._nested_prefab_cache = nested_prefab_cache
         self.diagnostics: list[Diagnostic] = []
 
     def build_roots(self, model: _AssetModel) -> list[EffectiveHierarchyNode]:
@@ -48,7 +52,7 @@ class _EffectiveHierarchyBuilder:
                 transform_stack=(),
             )
             for go_file_id in model.game_objects
-            if self._is_root_game_object(model, go_file_id)
+            if _is_root_game_object(model, go_file_id)
         ]
         roots.extend(
             self._expand_parent_instances(
@@ -234,18 +238,25 @@ class _EffectiveHierarchyBuilder:
                 f"Nested PrefabInstance source GUID {instance.source_guid} could not be resolved.",
             )
             return []
-        try:
-            source_text = decode_text_file(source_path)
-        except (OSError, UnicodeDecodeError) as exc:
+        source_asset_path, source_text, source_blocks, load_warning = _load_nested_source(
+            instance.source_guid,
+            source_path,
+            self._project_root,
+            self._nested_prefab_cache,
+        )
+        if load_warning is not None:
             self._add_warning(
                 host_model.asset_path,
                 instance.file_id,
                 "EFFECTIVE_HIERARCHY_SOURCE_UNRESOLVED",
-                f"Nested PrefabInstance source GUID {instance.source_guid} could not be decoded: {exc}.",
+                load_warning,
             )
             return []
-        source_asset_path = relative_to_root(source_path, self._project_root)
-        source_model = _parse_asset(source_asset_path, source_text)
+        source_model = _parse_asset(
+            source_asset_path,
+            source_text,
+            blocks=source_blocks,
+        )
         instance_path = (
             (*context.instance_path, instance.file_id)
             if context is not None
@@ -271,17 +282,8 @@ class _EffectiveHierarchyBuilder:
                 transform_stack=(),
             )
             for go_file_id in source_model.game_objects
-            if self._is_root_game_object(source_model, go_file_id)
+            if _is_root_game_object(source_model, go_file_id)
         ]
-
-    @staticmethod
-    def _is_root_game_object(model: _AssetModel, go_file_id: str) -> bool:
-        transform = model.transform_by_game_object.get(go_file_id)
-        if transform is None:
-            return False
-        if transform.father_file_id in ("", "0"):
-            return True
-        return transform.father_file_id not in model.game_object_by_transform
 
     def _add_warning(
         self, asset_path: str, location: str, code: str, message: str
