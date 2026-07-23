@@ -47,9 +47,7 @@ EDITOR_BRIDGE: Path = TOOLS_DIR / "PrefabSentinel.EditorBridge.cs"
 EDITOR_CONTROL_REQUEST: Path = TOOLS_DIR / "PrefabSentinel.Dispatch.EditorControlRequest.cs"
 ACTION_REGISTRY: Path = TOOLS_DIR / "PrefabSentinel.Dispatch.ActionRegistry.cs"
 INPUT_VALIDATORS: Path = TOOLS_DIR / "PrefabSentinel.Properties.InputValidators.cs"
-EDITOR_SCRIPT_PATH_CLASSIFIER: Path = (
-    TOOLS_DIR / "PrefabSentinel.MenuScriptWatch.EditorScriptPathClassifier.cs"
-)
+EDITOR_SCRIPT_PATH_CLASSIFIER: Path = TOOLS_DIR / "PrefabSentinel.MenuScriptWatch.EditorScriptPathClassifier.cs"
 CONSOLE_REQUEST_VALIDATOR: Path = TOOLS_DIR / "PrefabSentinel.ConsoleCapture.RequestValidator.cs"
 RUN_SCRIPT_COMPILE_VALIDATORS: Path = TOOLS_DIR / "PrefabSentinel.RunScriptCompile.Validators.cs"
 RUN_SCRIPT_COMPILE_REDACTION: Path = TOOLS_DIR / "PrefabSentinel.RunScriptCompile.Redaction.cs"
@@ -61,6 +59,7 @@ UI_ELEMENT_ALLOWLIST: Path = TOOLS_DIR / "PrefabSentinel.UiElement.Allowlist.cs"
 # appears only inside ``// ...`` or ``/* ... */`` documentation.
 _CS_BLOCK_COMMENT_RE = re.compile(r"/\*[\s\S]*?\*/")
 _CS_LINE_COMMENT_RE = re.compile(r"//[^\n]*")
+
 
 def _strip_cs_comments(source: str) -> str:
     return _CS_LINE_COMMENT_RE.sub("", _CS_BLOCK_COMMENT_RE.sub("", source))
@@ -224,9 +223,6 @@ class TestApplyPropertyValueTypes(unittest.TestCase):
         )
 
 
-
-
-
 class TestTypedPropertyWriterSource(unittest.TestCase):
     def _property_writer_source(self) -> str:
         return _read(TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.PropertyWrite.cs")
@@ -244,12 +240,8 @@ class TestTypedPropertyWriterSource(unittest.TestCase):
         body = _extract_method(writer, "WriteObjectReferenceValue")
         self.assertIn("ResolveExpectedObjectReferenceType(prop)", body)
         self.assertIn("ResolveTypedObjectReference", body)
-        resolver_source = _read(
-            TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.PropertyObjectReference.cs"
-        )
-        expected_type = _extract_method(
-            resolver_source, "ResolveExpectedObjectReferenceType"
-        )
+        resolver_source = _read(TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.PropertyObjectReference.cs")
+        expected_type = _extract_method(resolver_source, "ResolveExpectedObjectReferenceType")
         self.assertIn("EDITOR_CTRL_SET_PROP_OBJECT_REF_TYPE_MISMATCH", expected_type)
         resolver = _extract_method(resolver_source, "ResolveTypedObjectReference")
         for token in (
@@ -261,9 +253,7 @@ class TestTypedPropertyWriterSource(unittest.TestCase):
                 self.assertIn(token, resolver)
 
     def test_object_reference_resolver_prefers_asset_paths_over_hierarchy_shorthand(self) -> None:
-        resolver_source = _read(
-            TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.PropertyObjectReference.cs"
-        )
+        resolver_source = _read(TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.PropertyObjectReference.cs")
         resolver = _extract_method(resolver_source, "ResolveTypedObjectReference")
         asset_lookup = resolver.find("AssetDatabase.LoadAssetAtPath(reference, expectedType)")
         hierarchy_lookup = resolver.find("TryResolveGameObjectInActiveStage(goPath")
@@ -290,7 +280,9 @@ class TestTypedPropertyWriterSource(unittest.TestCase):
         source = self._property_writer_source()
         self.assertIn("internal readonly struct PropertyWriteResult", source)
         self.assertIn("EditorControlData ErrorData", source)
-        handler = _extract_method(_read(TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Properties.cs"), "HandleEditorSetProperty")
+        handler = _extract_method(
+            _read(TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Properties.cs"), "HandleEditorSetProperty"
+        )
         self.assertIn("writeResult.ErrorData", handler)
 
 
@@ -338,10 +330,7 @@ class TestHandleEditorSetPropertyQuaternion(unittest.TestCase):
         self.assertIn(
             "QuaternionInputValidator.NotNormalizedCode",
             body,
-            msg=(
-                "A non-unit-norm quaternion must surface the dedicated "
-                "QuaternionInputValidator.NotNormalizedCode."
-            ),
+            msg=("A non-unit-norm quaternion must surface the dedicated QuaternionInputValidator.NotNormalizedCode."),
         )
 
     def test_handle_editor_set_property_quaternion_tolerance_constant(self) -> None:
@@ -510,11 +499,9 @@ class TestRunScriptShortPoll(unittest.TestCase):
         # Specific failure message: name the anchor the caller-facing
         # hint must reference so a regression surfaces concretely.
         self.assertIn(
-            "editor_execute_menu_item", body,
-            msg=(
-                "Compile-pending response must hint at the persistent "
-                "helper alternative (editor_execute_menu_item)."
-            ),
+            "editor_execute_menu_item",
+            body,
+            msg=("Compile-pending response must hint at the persistent helper alternative (editor_execute_menu_item)."),
         )
 
     def test_completion_poll_has_no_assembly_mtime_gate(self) -> None:
@@ -545,7 +532,8 @@ class TestRunScriptShortPoll(unittest.TestCase):
         """
         source = _read(BRIDGE)
         self.assertNotIn(
-            "RunScriptPreReloadWatchdog", source,
+            "RunScriptPreReloadWatchdog",
+            source,
             msg=(
                 "the deadline-only pre-reload run-script watchdog must be "
                 "removed once the shared compile barrier owns the deadline."
@@ -564,7 +552,8 @@ class TestRunScriptShortPoll(unittest.TestCase):
             with self.subTest(handler=handler):
                 body = _extract_method(source, handler)
                 self.assertIn(
-                    "ScheduleCompileBarrier", body,
+                    "ScheduleCompileBarrier",
+                    body,
                     msg=(
                         f"{handler} must route compilation through "
                         "ScheduleCompileBarrier so a snippet compile failure "
@@ -691,9 +680,7 @@ def _action_registry_hashset(field: str) -> str:
     )
     if match is None:
         raise AssertionError(f"ActionRegistry.{field} HashSet initialiser not found")
-    return _extract_braced_block(
-        source, match.end(), f"ActionRegistry.{field} HashSet initialiser"
-    )
+    return _extract_braced_block(source, match.end(), f"ActionRegistry.{field} HashSet initialiser")
 
 
 class TestFireAndReturnRecompileRemovedFromRequestDto(unittest.TestCase):
@@ -707,10 +694,7 @@ class TestFireAndReturnRecompileRemovedFromRequestDto(unittest.TestCase):
         self.assertNotIn(
             "reimport_paths",
             body,
-            msg=(
-                "#71: the retired fire-and-return recompile surface's "
-                "reimport_paths request field must be gone."
-            ),
+            msg=("#71: the retired fire-and-return recompile surface's reimport_paths request field must be gone."),
         )
 
     def test_request_declares_wait_for_compile_field(self) -> None:
@@ -718,10 +702,7 @@ class TestFireAndReturnRecompileRemovedFromRequestDto(unittest.TestCase):
         self.assertIn(
             "public bool wait_for_compile",
             body,
-            msg=(
-                "#70: the request DTO must declare the wait_for_compile "
-                "compile-awareness field."
-            ),
+            msg=("#70: the request DTO must declare the wait_for_compile compile-awareness field."),
         )
 
 
@@ -814,9 +795,7 @@ class TestHandleCaptureConsoleLogsBoundCheck(unittest.TestCase):
 
     def test_out_of_range_code_pinned_on_validator(self) -> None:
         source = _strip_cs_comments(CONSOLE_REQUEST_VALIDATOR.read_text(encoding="utf-8"))
-        self.assertIn(
-            'MaxEntriesOutOfRangeCode =', source
-        )
+        self.assertIn("MaxEntriesOutOfRangeCode =", source)
         self.assertIn('"EDITOR_CTRL_MAX_ENTRIES_OUT_OF_RANGE"', source)
 
 
@@ -911,9 +890,7 @@ class TestRecompileAndWaitTimeoutBoundCheck(unittest.TestCase):
 
     def test_out_of_range_code_pinned_on_validator(self) -> None:
         source = _strip_cs_comments(RUN_SCRIPT_COMPILE_VALIDATORS.read_text(encoding="utf-8"))
-        self.assertIn(
-            'OutOfRangeCode = "EDITOR_CTRL_COMPILE_TIMEOUT_OUT_OF_RANGE"', source
-        )
+        self.assertIn('OutOfRangeCode = "EDITOR_CTRL_COMPILE_TIMEOUT_OUT_OF_RANGE"', source)
 
 
 class TestRunScriptNoSleep(unittest.TestCase):
@@ -981,8 +958,7 @@ class TestRecompileAndWaitDomainReloadResume(unittest.TestCase):
         )
         self.assertIsNotNone(
             branch_match,
-            "ResumePendingAsyncRunners must contain the "
-            "editor_recompile_and_wait branch",
+            "ResumePendingAsyncRunners must contain the editor_recompile_and_wait branch",
         )
         if branch_match is None:
             self.fail("ResumePendingAsyncRunners editor_recompile_and_wait branch not found")
@@ -1055,10 +1031,15 @@ class TestCreateUiElementSource(unittest.TestCase):
         # Constant-value pin on the relocated allowlist membership.
         source = _strip_cs_comments(UI_ELEMENT_ALLOWLIST.read_text(encoding="utf-8"))
         for token in (
-            '"Image"', '"TextMeshProUGUI"', '"Button"', '"Slider"', '"Toggle"',
+            '"Image"',
+            '"TextMeshProUGUI"',
+            '"Button"',
+            '"Slider"',
+            '"Toggle"',
         ):
             self.assertIn(
-                token, source,
+                token,
+                source,
                 f"canonical allowed type set must include {token}",
             )
 
@@ -1097,7 +1078,7 @@ class TestCreateUiElementSource(unittest.TestCase):
         # mutation of either site fires the assertion.
         self.assertIn("UiElementDefaultTmpFontAssetPath", body)
         self.assertIn(
-            'UiElementDefaultTmpFontAssetPath =\n'
+            "UiElementDefaultTmpFontAssetPath =\n"
             '            "Assets/TextMesh Pro/Resources/Fonts & Materials/'
             'LiberationSans SDF.asset"',
             source,
@@ -1342,9 +1323,7 @@ def _read_serialized_property_partials() -> str:
     present = set(_bridge_partial_filenames())
     missing = [name for name in filenames if name not in present]
     if missing:
-        raise AssertionError(
-            f"SerializedProperty bridge partial family is missing: {missing!r}"
-        )
+        raise AssertionError(f"SerializedProperty bridge partial family is missing: {missing!r}")
     return "\n".join(_read(TOOLS_DIR / name) for name in filenames)
 
 
@@ -1514,14 +1493,10 @@ class TestBridgePartialSizing(unittest.TestCase):
                     if line.lstrip().startswith("namespace "):
                         break
                     header_lines.append(line)
-                concern_comments = [
-                    line for line in header_lines
-                    if re.match(r"\s*//\s*\S", line)
-                ]
+                concern_comments = [line for line in header_lines if re.match(r"\s*//\s*\S", line)]
                 self.assertTrue(
                     concern_comments,
-                    f"{name}: small partial ({line_count} lines) must "
-                    "carry a leading single-line concern comment.",
+                    f"{name}: small partial ({line_count} lines) must carry a leading single-line concern comment.",
                 )
 
     def test_legacy_oversized_allowlist_contains_no_dead_entry(self) -> None:
@@ -1569,7 +1544,7 @@ class TestOperationalRulesPartialInventory(unittest.TestCase):
             if stem == head:
                 continue
             assert stem.startswith(head + "."), stem
-            concerns.add(stem[len(head) + 1:])
+            concerns.add(stem[len(head) + 1 :])
         return concerns
 
     def test_inventory_line_lists_every_present_partial(self) -> None:
@@ -1759,6 +1734,211 @@ class TestAddUdonSharpComponentHandler(unittest.TestCase):
                 self.assertIn(code, scope)
 
 
+    def test_generic_add_uses_udonsharp_undo_for_fresh_proxy(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleEditorAddComponent")
+        self.assertIn(
+            "CheckUdonProgramAssetReady(compType)",
+            body,
+            "Program-asset readiness must be checked before UdonSharp scene mutation.",
+        )
+        preflight = body.index("CheckUdonProgramAssetReady(compType)")
+        setup_add = body.index(
+            "InvokeUdonSharpUndoAddComponent(go, compType, out added)",
+        )
+        self.assertLess(preflight, setup_add)
+        self.assertIn(
+            "added = Undo.AddComponent(go, compType)",
+            body,
+            "Non-UdonSharp components must retain the ordinary Undo.AddComponent path.",
+        )
+
+    def test_stranded_proxy_runs_setup_with_undo_and_rechecks_backing(self) -> None:
+        body = _extract_method(
+            _read(BRIDGE),
+            "HandleExistingUdonSharpAddComponent",
+        )
+        self.assertNotIn(
+            "CreateBehaviourForProxy",
+            body,
+            "CreateBehaviourForProxy does not create a missing backing behaviour.",
+        )
+        self.assertIn('"RunBehaviourSetupWithUndo"', body)
+        self.assertIn("BindingFlags.NonPublic | BindingFlags.Static", body)
+        first_lookup = body.index("getBacking.Invoke")
+        setup = body.index("setupWithUndo.Invoke", first_lookup)
+        second_lookup = body.index("getBacking.Invoke", setup)
+        null_guard = body.index("if (backing == null)", second_lookup)
+        self.assertLess(first_lookup, setup)
+        self.assertLess(setup, second_lookup)
+        self.assertLess(second_lookup, null_guard)
+
+    def test_udonsharp_setup_failures_do_not_fall_through_to_generic_add(self) -> None:
+        body = _extract_method(
+            _read(BRIDGE),
+            "HandleExistingUdonSharpAddComponent",
+        )
+        self.assertNotRegex(body, r"intentional\s+best-effort")
+        self.assertGreaterEqual(
+            body.count('"EDITOR_CTRL_UDON_ADD_COMPONENT_FAILED"'),
+            4,
+            "Missing UdonSharp setup APIs, invocation errors, and a null backing "
+            "must all fail with the existing typed component-add envelope.",
+        )
+
+
+class TestUdonSharpEditorControlIntegrationFixtures(unittest.TestCase):
+    _INTEGRATION = TOOLS_DIR / "PrefabSentinel.UnityIntegrationTests.cs"
+
+    def test_fixture_selector_requires_a_program_asset(self) -> None:
+        source = _read(self._INTEGRATION)
+        self.assertIn(
+            "FindReadyUdonSharpBehaviourType",
+            source,
+            "The live fixture must select a UdonSharp type with a compiled program asset.",
+        )
+        selector = _extract_method(source, "FindReadyUdonSharpBehaviourType")
+        for token in (
+            "UdonSharpEditor.UdonSharpEditorUtility",
+            '"GetUdonSharpProgramAsset"',
+            "System.Reflection.BindingFlags.Public",
+            "System.Reflection.BindingFlags.Static",
+            "programAsset != null",
+            '"SerializedProgramAsset"',
+            "serializedProgramAsset != null",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, selector)
+
+    def test_idempotent_and_relink_probes_use_ready_fixture_selector(self) -> None:
+        source = _read(self._INTEGRATION)
+        for method_name in (
+            "Test_EditorCtrl_AddComponent_UdonSharp_Idempotent",
+            "Test_EditorCtrl_AddComponent_UdonSharp_Relinks_StrandedProxy",
+        ):
+            with self.subTest(method=method_name):
+                body = _extract_method(source, method_name)
+                self.assertIn("FindReadyUdonSharpBehaviourType()", body)
+                self.assertNotIn("FindUdonSharpBehaviourType()", body)
+
+
+class TestUnityIntegrationSuiteSceneIsolation(unittest.TestCase):
+    """The synchronous Unity suite must not leak scenes or test assets."""
+
+    _INTEGRATION = TOOLS_DIR / "PrefabSentinel.UnityIntegrationTests.cs"
+
+    def _source(self) -> str:
+        return _read(self._INTEGRATION)
+
+    def test_sync_suite_does_not_register_deferred_run_script_probe(self) -> None:
+        body = _extract_method(self._source(), "RunTestSuite")
+
+        self.assertNotIn(
+            "Test_EditorCtrl_RunScript_StuckDetectionTriggersRecovery",
+            body,
+            msg=(
+                "The domain-reload/deferred run_script probe must not run inside "
+                "the synchronous integration suite."
+            ),
+        )
+
+    def test_scene_preflight_precedes_all_fixture_mutation(self) -> None:
+        body = _extract_method(self._source(), "RunTestSuite")
+
+        snapshot_index = body.index("EditorSceneManager.GetSceneManagerSetup()")
+        validation_index = body.index(
+            "ValidateOriginalSceneSetup(originalSceneSetup)"
+        )
+        fixture_mutation_index = body.index(
+            "AssetDatabase.IsValidFolder(TestAssetDir)"
+        )
+
+        self.assertLess(snapshot_index, validation_index)
+        self.assertLess(validation_index, fixture_mutation_index)
+
+    def test_scene_preflight_rejects_loaded_unsaved_or_dirty_scenes(self) -> None:
+        body = _extract_method(self._source(), "ValidateOriginalSceneSetup")
+
+        for expected in (
+            "if (!setup.isLoaded) continue",
+            "string.IsNullOrEmpty(setup.path)",
+            "SceneManager.GetSceneByPath(setup.path)",
+            "scene.isDirty",
+            "InvalidOperationException",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, body)
+
+    def test_finally_restores_setup_before_checked_asset_cleanup(self) -> None:
+        body = _extract_method(self._source(), "RunTestSuite")
+        finally_index = body.rindex("finally")
+        restore_index = body.index(
+            "RestoreOriginalSceneSetup(originalSceneSetup)",
+            finally_index,
+        )
+        cleanup_index = body.index("CleanupTestAssets()", finally_index)
+
+        self.assertLess(restore_index, cleanup_index)
+
+    def test_restore_value_pins_loaded_test_scene_absence(self) -> None:
+        restore_body = _extract_method(
+            self._source(), "RestoreOriginalSceneSetup"
+        )
+        self.assertRegex(
+            restore_body,
+            r"EditorSceneManager\.RestoreSceneManagerSetup\(\s*"
+            r"originalSceneSetup\)",
+        )
+        self.assertIn("AssertNoLoadedTestScenes()", restore_body)
+
+        assertion_body = _extract_method(
+            self._source(), "AssertNoLoadedTestScenes"
+        )
+        for expected in (
+            "SceneManager.sceneCount",
+            "scene.isLoaded",
+            'scene.path.StartsWith(TestAssetDir + "/", StringComparison.Ordinal)',
+            "InvalidOperationException",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, assertion_body)
+
+    def test_asset_cleanup_value_pins_delete_success(self) -> None:
+        cleanup_body = _extract_method(self._source(), "CleanupTestAssets")
+        delete_index = cleanup_body.index("DeleteAssetOrThrow(TestAssetDir)")
+        refresh_index = cleanup_body.index(
+            "AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport)"
+        )
+        self.assertLess(delete_index, refresh_index)
+
+        delete_body = _extract_method(self._source(), "DeleteAssetOrThrow")
+        self.assertIn(
+            "bool deleted = AssetDatabase.DeleteAsset(assetPath)",
+            delete_body,
+        )
+        self.assertIn("if (!deleted)", delete_body)
+
+    def test_each_case_unloads_test_scenes_before_checked_fixture_delete(
+        self,
+    ) -> None:
+        body = _extract_method(self._source(), "RunTestSuite")
+        marker = "foreach (var (name, method) in tests)"
+        loop_body = _extract_braced_block(
+            body,
+            body.index(marker) + len(marker),
+            "RunTestSuite case loop",
+        )
+
+        restore_index = loop_body.index(
+            "RestoreOriginalSceneSetup(originalSceneSetup)"
+        )
+        delete_index = loop_body.index("DeleteAssetOrThrow(prefabPath)")
+        create_index = loop_body.index("prefabPath = CreateTestPrefab()")
+
+        self.assertLess(restore_index, delete_index)
+        self.assertLess(delete_index, create_index)
+        self.assertNotIn("Undo.ClearAll", loop_body)
+
+
 class TestSetUdonSharpFieldHandler(unittest.TestCase):
     """Issue #119 — ``HandleSetUdonSharpField`` must locate the field
     via the SerializedObject surface, route VRChat URL fields, and
@@ -1810,10 +1990,7 @@ class TestSetUdonSharpFieldHandler(unittest.TestCase):
         self.assertIn(
             "WritePropertyValue",
             body,
-            msg=(
-                "HandleSetUdonSharpField must apply values through the "
-                "unified WritePropertyValue layer (issue #24)."
-            ),
+            msg=("HandleSetUdonSharpField must apply values through the unified WritePropertyValue layer (issue #24)."),
         )
         self.assertIn(
             "EDITOR_CTRL_UDON_SET_FIELD_FAILED",
@@ -2057,21 +2234,15 @@ class TestBestEffortCatchWarnings(unittest.TestCase):
     """
 
     # (relative path, enclosing method name, minimum typed-catch count).
-    # The minimum count locks two-site method bodies (e.g.
-    # ``HandleUdonSharpAddComponentIdempotent`` and
-    # ``TryIsFixedBufferProperty``) to require both catches typed; a
-    # half-fixed regression therefore fails the audit. After issue
-    # #138's split of the legacy HierarchyComponents.cs partial,
-    # ``HandleUdonSharpAddComponentIdempotent`` lives in the
-    # ``Components.cs`` partial.
+    # The minimum count locks multi-catch method bodies (for example
+    # ``TryIsFixedBufferProperty`` and ``WriteAtomic``) so a
+    # half-fixed regression still fails the audit.
     # Issues #152 / #153 raise ``WriteAtomic`` to ``min_typed=2`` so both
     # the outer atomic-write fallback and the inner direct-write
     # fallback are typed catch sites with the warn-level template; a
     # half-fixed regression that reverts the inner stage to bare catch
     # therefore fails the audit.
     _SITES = (
-        ("PrefabSentinel.UnityEditorControlBridge.Components.cs",
-         "HandleUdonSharpAddComponentIdempotent", 2),
         ("PrefabSentinel.EditorBridge.cs", "ProcessRequest", 1),
         ("PrefabSentinel.EditorBridge.cs", "WriteAtomic", 2),
         ("PrefabSentinel.EditorBridge.cs", "TryDelete", 1),
@@ -2096,9 +2267,7 @@ class TestBestEffortCatchWarnings(unittest.TestCase):
     def test_every_site_emits_typed_catch_with_mandated_warning(self) -> None:
         for file_name, method_name, min_typed in self._SITES:
             with self.subTest(file=file_name, method=method_name):
-                text = _strip_cs_comments(
-                    (TOOLS_DIR / file_name).read_text(encoding="utf-8")
-                )
+                text = _strip_cs_comments((TOOLS_DIR / file_name).read_text(encoding="utf-8"))
                 body = self._read_method_body(text, method_name)
                 # The mandated warning string anchors on the enclosing
                 # method name plus ``ex.GetType().Name`` and
@@ -2118,8 +2287,8 @@ class TestBestEffortCatchWarnings(unittest.TestCase):
                 # File.WriteAllText fallback at line 231 in
                 # EditorBridge.cs).  The audit asserts that every
                 # documented catch site at this method name is typed:
-                # for two-site methods (``HandleUdonSharpAddComponentIdempotent``
-                # and ``TryIsFixedBufferProperty``) ``min_typed`` is 2,
+                # for multi-catch methods such as ``TryIsFixedBufferProperty``
+                # and ``WriteAtomic``, ``min_typed`` is 2,
                 # so a half-fixed regression where one of two catches
                 # reverts to untyped is caught.
                 typed_catches = re.findall(
@@ -2134,24 +2303,20 @@ class TestBestEffortCatchWarnings(unittest.TestCase):
                     f"{len(typed_catches)}",
                 )
 
-    def test_udonsharp_idempotent_sites_carry_intentional_comment(self) -> None:
-        """The two HandleUdonSharpAddComponentIdempotent sites carry an
-        inline comment marking the failure as intentional best-effort
-        (per Method Contracts; one comment per site)."""
-        path = TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Components.cs"
+    def test_udonsharp_idempotent_failures_are_not_best_effort(self) -> None:
+        """UdonSharp setup failures must surface as typed errors.
+
+        Falling through to the ordinary AddComponent path leaves another
+        stranded proxy and reports a misleading success.
+        """
+        path = (
+            TOOLS_DIR
+            / "PrefabSentinel.UnityEditorControlBridge.UdonSharpInvocation.cs"
+        )
         text = path.read_text(encoding="utf-8")
-        body = _extract_method(text, "HandleUdonSharpAddComponentIdempotent")
-        # The two catch sites surround reflective Invoke calls
-        # (``GetBackingUdonBehaviour`` and ``CreateBehaviourForProxy``).
-        intentional_comments = re.findall(
-            r"intentional best-effort", body, flags=re.IGNORECASE
-        )
-        self.assertGreaterEqual(
-            len(intentional_comments),
-            2,
-            "Expected two 'intentional best-effort' comments at the "
-            "UdonSharp idempotent-reuse catch sites.",
-        )
+        body = _extract_method(text, "HandleExistingUdonSharpAddComponent")
+        self.assertNotRegex(body, r"intentional\s+best-effort")
+        self.assertIn('"EDITOR_CTRL_UDON_ADD_COMPONENT_FAILED"', body)
 
     def test_write_atomic_inner_fallback_has_no_commentary_only_catch(self) -> None:
         """Issue #152 — ``WriteAtomic`` had an inner ``catch { /* best
@@ -2203,9 +2368,7 @@ class TestBestEffortCatchWarnings(unittest.TestCase):
         match = re.search(r"catch\s*\(\s*Exception\s+ex\s*\)\s*\{", method_body)
         if not match:
             return ""
-        return _extract_braced_block(
-            method_body, match.end(), "outer catch (Exception ex) block"
-        )
+        return _extract_braced_block(method_body, match.end(), "outer catch (Exception ex) block")
 
     def test_write_response_outer_fallback_uses_warn_level_template(self) -> None:
         """Issue #153 — the two response-writer methods'
@@ -2227,9 +2390,7 @@ class TestBestEffortCatchWarnings(unittest.TestCase):
             ("PrefabSentinel.UnityPatchBridge.Diagnostics.cs", "WriteResponseSafe"),
         ):
             with self.subTest(file=file_name, method=method_name):
-                text = _strip_cs_comments(
-                    (TOOLS_DIR / file_name).read_text(encoding="utf-8")
-                )
+                text = _strip_cs_comments((TOOLS_DIR / file_name).read_text(encoding="utf-8"))
                 body = _extract_method(text, method_name)
                 outer_catch = self._extract_outer_catch_block(body)
                 self.assertTrue(
@@ -2240,9 +2401,7 @@ class TestBestEffortCatchWarnings(unittest.TestCase):
                 # ``Debug.LogWarning`` carrying the project template.
                 self.assertRegex(
                     outer_catch,
-                    r"^\s*Debug\.LogWarning\(\s*\$\"\[PrefabSentinel\]\s+"
-                    + re.escape(method_name)
-                    + r":",
+                    r"^\s*Debug\.LogWarning\(\s*\$\"\[PrefabSentinel\]\s+" + re.escape(method_name) + r":",
                     f"{file_name}::{method_name}: outer catch must emit Debug.LogWarning with project template",
                 )
                 # No ``Debug.LogError`` inside the catch-family scope
@@ -2267,9 +2426,7 @@ class TestEditorAsmdefUiReferences(unittest.TestCase):
         if not isinstance(manifest, dict):
             self.fail("PrefabSentinel.Editor.asmdef root must be an object")
         references = manifest.get("references")
-        if not isinstance(references, list) or not all(
-            isinstance(item, str) for item in references
-        ):
+        if not isinstance(references, list) or not all(isinstance(item, str) for item in references):
             self.fail("PrefabSentinel.Editor.asmdef references must be a string list")
         return references
 
@@ -2328,9 +2485,7 @@ class TestCompileBarrierSource(unittest.TestCase):
         # exactly once. After consolidation only ScheduleCompileBarrier
         # subscribes to the per-assembly compile-finished event.
         source = _read(BRIDGE)
-        subscribe_count = source.count(
-            "CompilationPipeline.assemblyCompilationFinished +="
-        )
+        subscribe_count = source.count("CompilationPipeline.assemblyCompilationFinished +=")
         self.assertEqual(
             1,
             subscribe_count,
@@ -2367,8 +2522,7 @@ class TestCompileBarrierSource(unittest.TestCase):
             "{msg.file}(",
             body,
             msg=(
-                "the diagnostic must not be prefixed twice with the "
-                "file(line,col): prefix (#68 double-prefix defect)"
+                "the diagnostic must not be prefixed twice with the file(line,col): prefix (#68 double-prefix defect)"
             ),
         )
 
@@ -2407,14 +2561,10 @@ class TestCompileBarrierSource(unittest.TestCase):
         # no MCP envelope.
         body = _extract_method(_read(BRIDGE), "ScheduleCompileBarrier")
         match = re.search(r"catch\s*\(\s*Exception\s+\w+\s*\)\s*\{", body)
-        self.assertIsNotNone(
-            match, "the barrier must catch a failing compile trigger"
-        )
+        self.assertIsNotNone(match, "the barrier must catch a failing compile trigger")
         if match is None:
             self.fail("the barrier must catch a failing compile trigger")
-        catch_body = _extract_braced_block(
-            body, match.end(), "ScheduleCompileBarrier schedule-failure catch"
-        )
+        catch_body = _extract_braced_block(body, match.end(), "ScheduleCompileBarrier schedule-failure catch")
         self.assertIn("Debug.LogWarning", catch_body)
         self.assertIn("onScheduleFailure", catch_body)
         self.assertNotRegex(
@@ -2433,21 +2583,15 @@ class TestCompileBarrierSource(unittest.TestCase):
         # code cross-emission.
         body = _extract_method(_read(BRIDGE), "HandleRecompileAndWait")
         match = re.search(r"onScheduleFailure\s*=\s*\(\s*\)\s*=>\s*\{", body)
-        self.assertIsNotNone(
-            match, "HandleRecompileAndWait must supply an onScheduleFailure action"
-        )
+        self.assertIsNotNone(match, "HandleRecompileAndWait must supply an onScheduleFailure action")
         if match is None:
             self.fail("HandleRecompileAndWait must supply an onScheduleFailure action")
-        action = _extract_braced_block(
-            body, match.end(), "recompile onScheduleFailure action"
-        )
+        action = _extract_braced_block(body, match.end(), "recompile onScheduleFailure action")
         self.assertIn("EDITOR_CTRL_RECOMPILE_SCHEDULE_FAILED", action)
         self.assertIn("ScheduleFailureEnvelope.RedactedMessage()", action)
         self.assertNotIn("EDITOR_CTRL_RECOMPILE_TIMEOUT", action)
         self.assertNotRegex(action, r"\.Message\b")
-        redaction = _strip_cs_comments(
-            RUN_SCRIPT_COMPILE_REDACTION.read_text(encoding="utf-8")
-        )
+        redaction = _strip_cs_comments(RUN_SCRIPT_COMPILE_REDACTION.read_text(encoding="utf-8"))
         self.assertIn(
             "editor_recompile_and_wait: failed to schedule compilation.",
             redaction,
@@ -2618,7 +2762,6 @@ class BridgeBackgroundCompileDeferralSourceTests(unittest.TestCase):
         self.assertNotIn("elapsedSec: 0f", cleanup_body)
         self.assertNotIn("budgetSec: 0f", cleanup_body)
 
-
     def test_run_script_poll_deferred_marker_does_not_redefer_after_focus_return(self) -> None:
         source = _read(BRIDGE)
         pending_body = _extract_class_body(source, "PendingAsyncRunner")
@@ -2657,12 +2800,8 @@ class BridgeBackgroundCompileDeferralSourceTests(unittest.TestCase):
             "bool backgroundDeferredNow = BackgroundCompileDeferralClassifier.Classify(",
             cleanup_body,
         )
-        foreground_index = cleanup_body.find(
-            "if (backgroundDeferredBefore && editorFocused == true)"
-        )
-        deferred_index = cleanup_body.find(
-            "if (backgroundDeferredNow || backgroundDeferredBefore)"
-        )
+        foreground_index = cleanup_body.find("if (backgroundDeferredBefore && editorFocused == true)")
+        deferred_index = cleanup_body.find("if (backgroundDeferredNow || backgroundDeferredBefore)")
         complete_index = cleanup_body.find("PendingAsyncRunner.Complete(completionFile)")
         self.assertNotEqual(-1, foreground_index)
         self.assertNotEqual(-1, deferred_index)
@@ -2704,17 +2843,13 @@ class BridgeBackgroundCompileDeferralSourceTests(unittest.TestCase):
             "                    && backgroundDeferredBefore\n"
             "                    && editorFocused == true"
         )
-        clear_index = deadline_body.find(
-            "PendingAsyncRunner.ClearBackgroundDeferred(responsePath)"
-        )
+        clear_index = deadline_body.find("PendingAsyncRunner.ClearBackgroundDeferred(responsePath)")
         submit_guard_index = deadline_body.find(
             'else if (entry.action == "run_script_submit"\n'
             "                    && (backgroundDeferredNow || backgroundDeferredBefore)"
         )
         background_timeout_index = deadline_body.find("else if (backgroundDeferredNow)")
-        mark_index = deadline_body.find(
-            "PendingAsyncRunner.MarkBackgroundDeferred(responsePath)"
-        )
+        mark_index = deadline_body.find("PendingAsyncRunner.MarkBackgroundDeferred(responsePath)")
         retained_return_index = deadline_body.find("return;", mark_index)
         complete_index = deadline_body.find("PendingAsyncRunner.Complete(responsePath)")
         cleanup_index = deadline_body.find("CleanupRunScriptTempFiles(scriptAbs, metaAbs)")
@@ -2774,9 +2909,7 @@ class BridgeBackgroundCompileDeferralSourceTests(unittest.TestCase):
             "HandleRunScriptSubmit writeCompileDeadline action",
         )
         focus_index = deadline_body.find("ObserveEditorFocused()")
-        classifier_index = deadline_body.find(
-            "BackgroundCompileDeferralClassifier.Classify"
-        )
+        classifier_index = deadline_body.find("BackgroundCompileDeferralClassifier.Classify")
         retained_return_index = deadline_body.find("return;", classifier_index)
         pending_index = deadline_body.find("writeCompilePending()")
         self.assertNotEqual(-1, focus_index)
@@ -2825,12 +2958,8 @@ class TmpFontMissingMessageBranching(unittest.TestCase):
             handler_body,
         )
         if match is None:
-            raise AssertionError(
-                "tmpFontMissing branch not found in HandleEditorCreateUiElement"
-            )
-        return _extract_braced_block(
-            handler_body, match.end(), "tmpFontMissing branch"
-        )
+            raise AssertionError("tmpFontMissing branch not found in HandleEditorCreateUiElement")
+        return _extract_braced_block(handler_body, match.end(), "tmpFontMissing branch")
 
     def test_branch_delegates_to_font_missing_message(self) -> None:
         """The branch must route arm selection + message construction
@@ -3056,10 +3185,7 @@ class TestHandleGetEditorStateReadsFiveFlags(unittest.TestCase):
         # fifth (issue #40) reads the unsaved-changes helper.
         checks = (
             ("is_playing = EditorApplication.isPlaying" in body),
-            (
-                "is_will_change_playmode = "
-                "EditorApplication.isPlayingOrWillChangePlaymode"
-            ) in body,
+            ("is_will_change_playmode = EditorApplication.isPlayingOrWillChangePlaymode") in body,
             ("is_compiling = EditorApplication.isCompiling" in body),
             ("is_building_player = BuildPipeline.isBuildingPlayer" in body),
             ("has_unsaved_changes = HasUnsavedEditorChanges()" in body),
@@ -3081,14 +3207,10 @@ class TestHandleGetEditorStateReadsFiveFlags(unittest.TestCase):
             r"class\s+EditorStateSnapshot\s*\{",
             body,
         )
-        self.assertIsNotNone(
-            match, msg="EditorStateSnapshot class declaration not found"
-        )
+        self.assertIsNotNone(match, msg="EditorStateSnapshot class declaration not found")
         if match is None:
             self.fail("EditorStateSnapshot class declaration not found")
-        snapshot_body = _extract_braced_block(
-            body, match.end(), "EditorStateSnapshot body"
-        )
+        snapshot_body = _extract_braced_block(body, match.end(), "EditorStateSnapshot body")
         bool_fields = set(re.findall(r"public\s+bool\s+(\w+)\s*=", snapshot_body))
         expected_flags = {
             "is_playing",
@@ -3100,10 +3222,97 @@ class TestHandleGetEditorStateReadsFiveFlags(unittest.TestCase):
         self.assertEqual(
             expected_flags,
             expected_flags & bool_fields,
-            msg=(
-                "EditorStateSnapshot must carry the five play/compile/dirty "
-                f"flags; found {sorted(bool_fields)}"
-            ),
+            msg=(f"EditorStateSnapshot must carry the five play/compile/dirty flags; found {sorted(bool_fields)}"),
+        )
+
+
+class EditorStateDirtyIdentitySourceTests(unittest.TestCase):
+    def test_snapshot_declares_dirty_identity_and_provenance_fields(self) -> None:
+        body = _read(BRIDGE)
+        match = re.search(r"class\s+EditorStateSnapshot\s*\{", body)
+        self.assertIsNotNone(match, msg="EditorStateSnapshot class declaration not found")
+        if match is None:
+            self.fail("EditorStateSnapshot class declaration not found")
+        snapshot_body = _extract_braced_block(body, match.end(), "EditorStateSnapshot body")
+
+        checks = {
+            "state_source": "public string state_source = string.Empty" in snapshot_body,
+            "dirty_scene_paths": "public string[] dirty_scene_paths = Array.Empty<string>()" in snapshot_body,
+            "dirty_prefab_paths": "public string[] dirty_prefab_paths = Array.Empty<string>()" in snapshot_body,
+            "dirty_material_paths": "public string[] dirty_material_paths = Array.Empty<string>()" in snapshot_body,
+            "dirty_asset_paths": "public string[] dirty_asset_paths = Array.Empty<string>()" in snapshot_body,
+        }
+
+        self.assertEqual(
+            {
+                "state_source": True,
+                "dirty_scene_paths": True,
+                "dirty_prefab_paths": True,
+                "dirty_material_paths": True,
+                "dirty_asset_paths": True,
+            },
+            checks,
+            msg=f"EditorStateSnapshot dirty/provenance field checks={checks}",
+        )
+
+    def test_handler_populates_live_provenance_and_dirty_identities(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleGetEditorState")
+        checks = {
+            "live_editor_source": 'state_source = "live_editor"' in body,
+            "dirty_helper": "PopulateDirtyIdentityStatus(snapshot, diagnostics)" in body,
+            "success_code": 'BuildSuccess(\n                "EDITOR_CTRL_EDITOR_STATE_OK"' in body,
+            "diagnostics_retained": "response.diagnostics = diagnostics.ToArray()" in body,
+            "warning_on_limited": 'if (diagnostics.Count > 0) response.severity = "warning"' in body,
+        }
+
+        self.assertEqual(
+            {
+                "live_editor_source": True,
+                "dirty_helper": True,
+                "success_code": True,
+                "diagnostics_retained": True,
+                "warning_on_limited": True,
+            },
+            checks,
+            msg=f"HandleGetEditorState live dirty identity checks={checks}",
+        )
+
+    def test_dirty_identity_helpers_report_category_specific_limited_diagnostics(self) -> None:
+        source = _read(BRIDGE)
+        helper_names = {
+            "dirty_scene_paths": "CollectDirtyScenePaths",
+            "dirty_prefab_paths": "CollectDirtyPrefabPaths",
+            "dirty_material_paths": "CollectDirtyMaterialPaths",
+            "dirty_asset_paths": "CollectDirtyAssetPaths",
+        }
+        checks: dict[str, bool] = {}
+        for category, helper_name in helper_names.items():
+            helper_body = _extract_method(source, helper_name)
+            checks[category] = f'LimitedEditorStateDiagnostic("{category}", ex)' in helper_body
+
+        self.assertEqual(
+            {
+                "dirty_scene_paths": True,
+                "dirty_prefab_paths": True,
+                "dirty_material_paths": True,
+                "dirty_asset_paths": True,
+            },
+            checks,
+            msg=f"dirty identity limited diagnostic checks={checks}",
+        )
+
+    def test_root_bridge_keeps_load_bearing_constants(self) -> None:
+        root_source = _strip_cs_comments(BRIDGE.read_text(encoding="utf-8"))
+        checks = {
+            "BridgeVersion": "public const string BridgeVersion" in root_source,
+            "ProtocolVersion": "public const int ProtocolVersion" in root_source,
+            "DefaultCapacity": "public const int DefaultCapacity = 1000" in root_source,
+        }
+
+        self.assertEqual(
+            {"BridgeVersion": True, "ProtocolVersion": True, "DefaultCapacity": True},
+            checks,
+            msg=f"root bridge constant anchor checks={checks}",
         )
 
 
@@ -3157,9 +3366,7 @@ class TestHandleGetEditorStateOperatorContextSource(unittest.TestCase):
         }
         forbidden_tokens = {
             "EditorSceneManager.Save": "EditorSceneManager.Save" in body,
-            "SaveCurrentModifiedScenesIfUserWantsTo": (
-                "SaveCurrentModifiedScenesIfUserWantsTo" in body
-            ),
+            "SaveCurrentModifiedScenesIfUserWantsTo": ("SaveCurrentModifiedScenesIfUserWantsTo" in body),
             "StageUtility.GoToMainStage": "StageUtility.GoToMainStage" in body,
             "ClearDirtiness": "ClearDirtiness" in body,
         }
@@ -3181,9 +3388,7 @@ class TestHandleGetEditorStateOperatorContextSource(unittest.TestCase):
             "diagnostic_code": "EDITOR_STATE_ENUMERATION_LIMITED" in source,
             "warning_severity": 'severity = "warning"' in source,
             "success_response": "BuildSuccess(" in body,
-            "response_severity_gate": (
-                'if (diagnostics.Count > 0) response.severity = "warning";' in body
-            ),
+            "response_severity_gate": ('if (diagnostics.Count > 0) response.severity = "warning";' in body),
             "catch_exception": "catch (Exception" in source,
         }
         self.assertEqual(
@@ -3207,9 +3412,7 @@ class TestRunFromPathsExceptionBoundary(unittest.TestCase):
     """
 
     def _run_from_paths_body(self) -> str:
-        return _strip_cs_comments(
-            _extract_method(_read(BRIDGE), "RunFromPaths")
-        )
+        return _strip_cs_comments(_extract_method(_read(BRIDGE), "RunFromPaths"))
 
     def test_action_switch_runs_inside_a_try_catch(self) -> None:
         body = self._run_from_paths_body()
@@ -3230,10 +3433,7 @@ class TestRunFromPathsExceptionBoundary(unittest.TestCase):
         self.assertIn(
             "EDITOR_CTRL_HANDLER_EXCEPTION",
             body,
-            msg=(
-                "The dispatch exception boundary must emit the "
-                "EDITOR_CTRL_HANDLER_EXCEPTION envelope."
-            ),
+            msg=("The dispatch exception boundary must emit the EDITOR_CTRL_HANDLER_EXCEPTION envelope."),
         )
 
     def test_envelope_names_action_and_redacts_exception_type(self) -> None:
@@ -3253,9 +3453,7 @@ class TestRunFromPathsExceptionBoundary(unittest.TestCase):
         if catch_match is None:
             self.fail("handler-exception catch guarding DispatchAction not found")
         catch_var = catch_match.group(1)
-        catch_body = _extract_braced_block(
-            body, catch_match.end(), "RunFromPaths handler-exception catch"
-        )
+        catch_body = _extract_braced_block(body, catch_match.end(), "RunFromPaths handler-exception catch")
         self.assertIn(
             "request.action",
             catch_body,
@@ -3264,10 +3462,7 @@ class TestRunFromPathsExceptionBoundary(unittest.TestCase):
         self.assertIn(
             f"{catch_var}.GetType().Name",
             catch_body,
-            msg=(
-                "the handler-exception envelope must redact the exception "
-                "to its type name"
-            ),
+            msg=("the handler-exception envelope must redact the exception to its type name"),
         )
         # No stack trace nor raw exception message may reach the envelope
         # message; the only permitted exception-derived value is the type
@@ -3280,10 +3475,7 @@ class TestRunFromPathsExceptionBoundary(unittest.TestCase):
         self.assertIn(
             "Debug.LogWarning",
             catch_body,
-            msg=(
-                "the full exception detail must be mirrored to the Unity "
-                "console"
-            ),
+            msg=("the full exception detail must be mirrored to the Unity console"),
         )
 
 
@@ -3310,16 +3502,11 @@ class TestRecompileNoOpImporterWarning(unittest.TestCase):
         self.assertIn(
             "CollectImporterErrorDiagnostics",
             body,
-            msg=(
-                "the no-op recompile response must collect importer-error "
-                "diagnostics from the console buffer."
-            ),
+            msg=("the no-op recompile response must collect importer-error diagnostics from the console buffer."),
         )
 
     def test_collector_uses_importer_error_classifier(self) -> None:
-        collector = _extract_method(
-            _read(BRIDGE), "CollectImporterErrorDiagnostics"
-        )
+        collector = _extract_method(_read(BRIDGE), "CollectImporterErrorDiagnostics")
         self.assertIn(
             "ImporterErrorClassifier.IsImporterError",
             collector,
@@ -3330,11 +3517,9 @@ class TestRecompileNoOpImporterWarning(unittest.TestCase):
         )
 
     def test_collector_supplies_disabled_sequence_and_request_selectors(self) -> None:
-        collector = _extract_method(
-            _read(BRIDGE), "CollectImporterErrorDiagnostics"
-        )
+        collector = _extract_method(_read(BRIDGE), "CollectImporterErrorDiagnostics")
         self.assertIn(
-            "\"all\",\n                -1,\n                string.Empty,\n                newestFirst: false",
+            '"all",\n                -1,\n                string.Empty,\n                newestFirst: false',
             collector,
             msg=(
                 "the importer-error collector snapshots the full console "
@@ -3347,9 +3532,7 @@ class TestRecompileNoOpImporterWarning(unittest.TestCase):
         # When importer errors are present the no-op response must carry
         # warning severity and the detected importer errors as diagnostics
         # rather than reporting a silent success.
-        body = _strip_cs_comments(
-            _extract_method(_read(BRIDGE), "WriteRecompileNoOpResponse")
-        )
+        body = _strip_cs_comments(_extract_method(_read(BRIDGE), "WriteRecompileNoOpResponse"))
         self.assertIn(
             'severity = "warning"',
             body,
@@ -3361,10 +3544,7 @@ class TestRecompileNoOpImporterWarning(unittest.TestCase):
         self.assertRegex(
             body,
             r"diagnostics\s*=\s*importerErrors\.ToArray\(\)",
-            msg=(
-                "the warning response must list the detected importer "
-                "errors as diagnostics."
-            ),
+            msg=("the warning response must list the detected importer errors as diagnostics."),
         )
 
     def test_noop_importer_response_carries_operator_context(self) -> None:
@@ -3409,9 +3589,7 @@ def _extract_catch_block(method_body: str, exception_pattern: str) -> str:
         method_body,
     )
     if match is None:
-        raise AssertionError(
-            f"Catch block matching pattern {exception_pattern!r} not found"
-        )
+        raise AssertionError(f"Catch block matching pattern {exception_pattern!r} not found")
     return _extract_braced_block(
         method_body,
         match.end(),
@@ -3427,7 +3605,8 @@ class TestRunScriptPollFrameRuntimeCatchesNoLeakInEnvelope(unittest.TestCase):
     ) -> None:
         body = _extract_method(_read(BRIDGE), "RunScriptPollFrame")
         catch_body = _extract_catch_block(
-            body, r"TargetInvocationException\s+tie",
+            body,
+            r"TargetInvocationException\s+tie",
         )
         # Strip the Debug.LogWarning interpolation up to the next line
         # so the warning's diagnostic interpolation does not match
@@ -3438,9 +3617,7 @@ class TestRunScriptPollFrameRuntimeCatchesNoLeakInEnvelope(unittest.TestCase):
             "",
             catch_body,
         )
-        offenders = [
-            token for token in _LEAK_TOKENS if token in envelope_segment
-        ]
+        offenders = [token for token in _LEAK_TOKENS if token in envelope_segment]
         self.assertEqual(
             [],
             offenders,
@@ -3459,9 +3636,7 @@ class TestRunScriptPollFrameRuntimeCatchesNoLeakInEnvelope(unittest.TestCase):
             "",
             catch_body,
         )
-        offenders = [
-            token for token in _LEAK_TOKENS if token in envelope_segment
-        ]
+        offenders = [token for token in _LEAK_TOKENS if token in envelope_segment]
         self.assertEqual(
             [],
             offenders,
@@ -3481,7 +3656,8 @@ class TestRunScriptPollFrameRuntimeCatchesRouteToConsole(unittest.TestCase):
     ) -> None:
         body = _extract_method(_read(BRIDGE), "RunScriptPollFrame")
         catch_body = _extract_catch_block(
-            body, r"TargetInvocationException\s+tie",
+            body,
+            r"TargetInvocationException\s+tie",
         )
         # The original caught exception identifier (``inner``) must be
         # interpolated into the console warning so the detail is not
@@ -3529,9 +3705,7 @@ class TestHandleRunScriptStageRefreshCatchesNoLeak(unittest.TestCase):
             "",
             catch_body,
         )
-        offenders = [
-            token for token in _LEAK_TOKENS if token in envelope_segment
-        ]
+        offenders = [token for token in _LEAK_TOKENS if token in envelope_segment]
         self.assertEqual(
             (
                 offenders,
@@ -3545,6 +3719,7 @@ class TestHandleRunScriptStageRefreshCatchesNoLeak(unittest.TestCase):
                 "caught exception identifier into Debug.LogWarning."
             ),
         )
+
 
 class TestEditorControlDataDeclaresNoExceptionTextField(unittest.TestCase):
     """Issue #216: the shared response data shape carries no exception text."""
@@ -3590,9 +3765,7 @@ class TestHandleRunIntegrationTestsCatchNoLeakInEnvelope(unittest.TestCase):
             "",
             catch_body,
         )
-        offenders = [
-            token for token in _LEAK_TOKENS if token in envelope_segment
-        ]
+        offenders = [token for token in _LEAK_TOKENS if token in envelope_segment]
         self.assertEqual(
             [],
             offenders,
@@ -3683,9 +3856,7 @@ class TestBuildRecompileReloadWaitPollDrainsImportQueue(unittest.TestCase):
     """
 
     def test_reload_complete_drains_before_writing_success(self) -> None:
-        body = _extract_method(
-            _read(BRIDGE), "BuildRecompileAndWaitReloadComplete"
-        )
+        body = _extract_method(_read(BRIDGE), "BuildRecompileAndWaitReloadComplete")
         # End-state ordering: the import-queue drain must come before the
         # success ``WriteResponse`` call so a freshly compiled asset path
         # resolves immediately.
@@ -3777,22 +3948,15 @@ class TestRunScriptCompilePendingResponseDeadlinePath(unittest.TestCase):
 
     def test_pending_codes_pinned_on_selector(self) -> None:
         source = _strip_cs_comments(RUN_SCRIPT_COMPILE_VALIDATORS.read_text(encoding="utf-8"))
-        self.assertIn(
-            'RecoveryCode = "EDITOR_CTRL_RUN_SCRIPT_RECOVERY"', source
-        )
-        self.assertIn(
-            'TimeoutCode = "EDITOR_RUN_SCRIPT_COMPILE_TIMEOUT"', source
-        )
+        self.assertIn('RecoveryCode = "EDITOR_CTRL_RUN_SCRIPT_RECOVERY"', source)
+        self.assertIn('TimeoutCode = "EDITOR_RUN_SCRIPT_COMPILE_TIMEOUT"', source)
 
     def test_recovery_response_carries_operator_context(self) -> None:
         body = _extract_method(_read(BRIDGE), "RunScriptCompilePendingResponse")
         self.assertIn(
             "operator_context = BuildEditorOperatorContext()",
             body,
-            msg=(
-                "Manual recovery responses must carry operator context like "
-                "the central bridge response builders."
-            ),
+            msg=("Manual recovery responses must carry operator context like the central bridge response builders."),
         )
 
 
@@ -3831,7 +3995,7 @@ class TestHasEditorScriptChangedSinceScopeExpanded(unittest.TestCase):
             r'"Assets/Editor"',
             msg=(
                 "HasEditorScriptChangedSince must not hard-code "
-                "``\"Assets/Editor\"`` as a single walk root literal — "
+                '``"Assets/Editor"`` as a single walk root literal — '
                 "feature-scoped Editor folders nested under Assets/ must "
                 "participate (issue #248)."
             ),
@@ -3932,7 +4096,7 @@ class ScreenshotViewAllowlistSourceTests(unittest.TestCase):
         reject_pos = body.find('"EDITOR_CTRL_SCREENSHOT_VIEW_INVALID"')
         # Path.Combine(... $"{request.view}_ ...) is the filename
         # composition site we anchor against.
-        filename_pos = body.find('{request.view}_')
+        filename_pos = body.find("{request.view}_")
         self.assertEqual(
             (True, True, True),
             (
@@ -3990,17 +4154,15 @@ class ScreenshotViewAllowlistSourceTests(unittest.TestCase):
             ('"scene"' in body, '"game"' in body),
             msg=(
                 "Bridge-side allowlist must enumerate both "
-                "lower-case ASCII selectors (``\"scene\"`` and "
-                "``\"game\"``) so the two layers cannot drift (#259)."
+                'lower-case ASCII selectors (``"scene"`` and '
+                '``"game"``) so the two layers cannot drift (#259).'
             ),
         )
 
 
 class TestScreenshotCropBoundsSource(unittest.TestCase):
     _SCREENSHOT = TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Screenshot.cs"
-    _TARGET_CAPTURE = (
-        TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Screenshot.TargetCapture.cs"
-    )
+    _TARGET_CAPTURE = TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Screenshot.TargetCapture.cs"
 
     def _method_body(self, method_name: str) -> str:
         return _extract_method(_read(self._SCREENSHOT), method_name)
@@ -4055,18 +4217,12 @@ class TestScreenshotCropBoundsSource(unittest.TestCase):
         self.assertLess(
             crop_index,
             render_index,
-            msg=(
-                "Expected object-capture crop validation via "
-                "ResolveTargetPixelCrop before RenderSceneViewToTexture."
-            ),
+            msg=("Expected object-capture crop validation via ResolveTargetPixelCrop before RenderSceneViewToTexture."),
         )
         self.assertLess(
             crop_index,
             read_index,
-            msg=(
-                "Expected object-capture crop validation via "
-                "ResolveTargetPixelCrop before ReadPixels."
-            ),
+            msg=("Expected object-capture crop validation via ResolveTargetPixelCrop before ReadPixels."),
         )
 
         resolver_body = self._target_method_body("ResolveTargetPixelCrop")
@@ -4082,8 +4238,7 @@ class TestScreenshotCropBoundsSource(unittest.TestCase):
             '"EDITOR_CTRL_CROP_ROI_OUT_OF_BOUNDS"',
             resolver_body,
             msg=(
-                "Expected ResolveTargetPixelCrop to preserve the existing "
-                "EDITOR_CTRL_CROP_ROI_OUT_OF_BOUNDS envelope."
+                "Expected ResolveTargetPixelCrop to preserve the existing EDITOR_CTRL_CROP_ROI_OUT_OF_BOUNDS envelope."
             ),
         )
 
@@ -4092,19 +4247,30 @@ class TestScreenshotCropBoundsSource(unittest.TestCase):
         self.assertIn(
             "ScreenshotCropBounds.FitsWithinFrame",
             body,
-            msg=(
-                "Expected HandleCaptureScreenshot scene pixel crops to use "
-                "ScreenshotCropBounds.FitsWithinFrame."
-            ),
+            msg=("Expected HandleCaptureScreenshot scene pixel crops to use ScreenshotCropBounds.FitsWithinFrame."),
         )
         self.assertNotRegex(
             body,
             r"cropBounds\.x\s*\+\s*cropBounds\.w|"
             r"cropBounds\.y\s*\+\s*cropBounds\.h",
-            msg=(
-                "HandleCaptureScreenshot must not use direct int edge "
-                "addition for scene pixel crop bounds."
-            ),
+            msg=("HandleCaptureScreenshot must not use direct int edge addition for scene pixel crop bounds."),
+        )
+
+
+    def test_omitted_crop_smoke_uses_applied_label_as_presence_discriminator(self) -> None:
+        integration = _read(
+            TOOLS_DIR / "PrefabSentinel.UnityIntegrationTests.cs",
+        )
+        body = _extract_method(
+            integration,
+            "Test_EditorCtrl_TargetScreenshot_OmittedDefaultsDispatch",
+        )
+        self.assertIn("resp.data.crop_roi_applied != string.Empty", body)
+        self.assertNotIn(
+            "resp.data.crop_bounds != null",
+            body,
+            "JsonUtility inline custom classes cannot preserve null; the applied "
+            "label is the stable no-crop discriminator.",
         )
 
 
@@ -4122,9 +4288,7 @@ class ScreenshotObjectCaptureSourceTests(unittest.TestCase):
     entries for target capture).
     """
 
-    _TARGET_CAPTURE_PARTIAL = (
-        TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Screenshot.TargetCapture.cs"
-    )
+    _TARGET_CAPTURE_PARTIAL = TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Screenshot.TargetCapture.cs"
 
     _BRIDGE_CODES = (
         "EDITOR_CTRL_SCREENSHOT_TARGET_NOT_FOUND",
@@ -4132,13 +4296,9 @@ class ScreenshotObjectCaptureSourceTests(unittest.TestCase):
         "EDITOR_CTRL_SCREENSHOT_ANGLE_INVALID",
     )
 
-    _DOCS_API_REFERENCE = (
-        Path(__file__).resolve().parent.parent / "docs" / "api-reference.md"
-    )
+    _DOCS_API_REFERENCE = Path(__file__).resolve().parent.parent / "docs" / "api-reference.md"
 
-    _DOCS_TOOLS = (
-        Path(__file__).resolve().parent.parent / "docs" / "tools.md"
-    )
+    _DOCS_TOOLS = Path(__file__).resolve().parent.parent / "docs" / "tools.md"
 
     def _screenshot_partial_body(self) -> str:
         self.assertTrue(
@@ -4170,9 +4330,7 @@ class ScreenshotObjectCaptureSourceTests(unittest.TestCase):
             self._TARGET_CAPTURE_PARTIAL.exists(),
             msg="Screenshot.TargetCapture partial must exist for issue #87 split.",
         )
-        screenshot_body = _strip_cs_comments(
-            _read(TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Screenshot.cs")
-        )
+        screenshot_body = _strip_cs_comments(_read(TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Screenshot.cs"))
         dispatch_body = _extract_method(screenshot_body, "HandleCaptureScreenshot")
         self.assertIn(
             "HandleObjectCaptureScreenshot(request, outputPath)",
@@ -4202,10 +4360,7 @@ class ScreenshotObjectCaptureSourceTests(unittest.TestCase):
         self.assertIn(
             "ObjectCaptureFramingMath",
             body,
-            msg=(
-                "The target-capture partial must invoke the Unity-free "
-                "ObjectCaptureFramingMath helper (#84/#90)."
-            ),
+            msg=("The target-capture partial must invoke the Unity-free ObjectCaptureFramingMath helper (#84/#90)."),
         )
 
     def test_handler_uses_shared_renderer_bounds_before_framing_math(self) -> None:
@@ -4354,10 +4509,10 @@ class ScreenshotObjectCaptureSourceTests(unittest.TestCase):
         for code in self._BRIDGE_CODES:
             with self.subTest(code=code):
                 self.assertIn(
-                    f'"{code}"', body,
+                    f'"{code}"',
+                    body,
                     msg=(
-                        f"The target-capture partial must reference the "
-                        f"bridge-side error code literal {code!r} (#84)."
+                        f"The target-capture partial must reference the bridge-side error code literal {code!r} (#84)."
                     ),
                 )
 
@@ -4377,11 +4532,9 @@ class ScreenshotObjectCaptureSourceTests(unittest.TestCase):
         for code in wrapper_codes + self._BRIDGE_CODES:
             with self.subTest(code=code):
                 self.assertIn(
-                    code, docs,
-                    msg=(
-                        f"docs/api-reference.md must document the new "
-                        f"error code {code!r} introduced by issue #84."
-                    ),
+                    code,
+                    docs,
+                    msg=(f"docs/api-reference.md must document the new error code {code!r} introduced by issue #84."),
                 )
 
     def test_tools_registry_mentions_target_and_angle(self) -> None:
@@ -4389,7 +4542,8 @@ class ScreenshotObjectCaptureSourceTests(unittest.TestCase):
         for literal in ("target", "angle", "SCREENSHOT_ANGLE_PRESETS"):
             with self.subTest(literal=literal):
                 self.assertIn(
-                    literal, docs,
+                    literal,
+                    docs,
                     msg=(
                         f"docs/tools.md must mention {literal!r} so the "
                         f"editor_screenshot registry entry exposes the "
@@ -4399,12 +4553,8 @@ class ScreenshotObjectCaptureSourceTests(unittest.TestCase):
 
 
 class CameraScreenshotFramingDocsTests(unittest.TestCase):
-    _DOCS_API_REFERENCE = (
-        Path(__file__).resolve().parent.parent / "docs" / "api-reference.md"
-    )
-    _DOCS_TOOLS = (
-        Path(__file__).resolve().parent.parent / "docs" / "tools.md"
-    )
+    _DOCS_API_REFERENCE = Path(__file__).resolve().parent.parent / "docs" / "api-reference.md"
+    _DOCS_TOOLS = Path(__file__).resolve().parent.parent / "docs" / "tools.md"
 
     def test_api_reference_documents_fit_mode_and_new_diagnostics(self) -> None:
         docs = self._DOCS_API_REFERENCE.read_text(encoding="utf-8")
@@ -4438,9 +4588,7 @@ class CameraScreenshotFramingDocsTests(unittest.TestCase):
 
     def test_tools_reference_documents_screenshot_fit_mode(self) -> None:
         docs = self._DOCS_TOOLS.read_text(encoding="utf-8")
-        editor_screenshot_row = next(
-            line for line in docs.splitlines() if line.startswith("| `editor_screenshot`")
-        )
+        editor_screenshot_row = next(line for line in docs.splitlines() if line.startswith("| `editor_screenshot`"))
         for token in ("fit_mode", "both_axes", "max_axis", "width", "height", "target"):
             with self.subTest(token=token):
                 self.assertIn(token, editor_screenshot_row)
@@ -4598,9 +4746,7 @@ class RendererFramingBoundsPolicySourceTests(unittest.TestCase):
 
 
 class ObjectCaptureBoundsEvidenceSourceTests(unittest.TestCase):
-    _TARGET_CAPTURE_PARTIAL = (
-        TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Screenshot.TargetCapture.cs"
-    )
+    _TARGET_CAPTURE_PARTIAL = TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Screenshot.TargetCapture.cs"
 
     def _object_capture_body(self) -> str:
         self.assertTrue(
@@ -4645,9 +4791,7 @@ class ObjectCaptureBoundsEvidenceSourceTests(unittest.TestCase):
 
 
 class ObjectCaptureBoundsPolicyErrorSourceTests(unittest.TestCase):
-    _TARGET_CAPTURE_PARTIAL = (
-        TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Screenshot.TargetCapture.cs"
-    )
+    _TARGET_CAPTURE_PARTIAL = TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Screenshot.TargetCapture.cs"
 
     def _object_capture_body(self) -> str:
         return _extract_method(
@@ -4696,7 +4840,7 @@ class FrameSelectedBoundsEvidenceSourceTests(unittest.TestCase):
             "data.excluded_count = excludedRecords.Count",
             "data.bounds_contributors = ToContributorEntries(includedRecords)",
             "data.excluded_renderers = ToContributorEntries(excludedRecords)",
-            "data.bounds_source = \"rect_transform\"",
+            'data.bounds_source = "rect_transform"',
         ):
             with self.subTest(literal=literal):
                 self.assertIn(
@@ -4736,7 +4880,7 @@ class GeometryMeasureDistanceSourceTests(unittest.TestCase):
         source = _read(TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Geometry.cs")
         body = _extract_method(source, "HandleMeasureDistance")
         validation_idx = body.find("ValidateBoundsSourceSelector(")
-        pivot_idx = body.find("request.distance_mode == \"pivot\"")
+        pivot_idx = body.find('request.distance_mode == "pivot"')
         self.assertNotEqual(
             -1,
             validation_idx,
@@ -4756,9 +4900,7 @@ class GeometryMeasureDistanceSourceTests(unittest.TestCase):
 
 
 class ScreenshotWorldSpaceUiSourceTests(unittest.TestCase):
-    _TARGET_CAPTURE_PARTIAL = (
-        TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Screenshot.TargetCapture.cs"
-    )
+    _TARGET_CAPTURE_PARTIAL = TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Screenshot.TargetCapture.cs"
     _WORLD_SPACE_UI_PARTIAL = (
         TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Screenshot.TargetCapture.WorldSpaceUi.cs"
     )
@@ -4782,10 +4924,10 @@ class ScreenshotWorldSpaceUiSourceTests(unittest.TestCase):
             self._world_space_ui_body(),
             "HandleWorldSpaceUiCaptureScreenshot",
         )
-        self.assertIn("angle != \"front\" && angle != \"back\" && angle != \"current_camera\"", body)
+        self.assertIn('angle != "front" && angle != "back" && angle != "current_camera"', body)
         self.assertIn("EDITOR_CTRL_SCREENSHOT_ANGLE_INVALID", body)
-        self.assertIn("angle == \"back\"", body)
-        self.assertIn("angle == \"current_camera\"", body)
+        self.assertIn('angle == "back"', body)
+        self.assertIn('angle == "current_camera"', body)
         self.assertIn("cam.transform.forward", body)
 
     def test_ui_capture_front_uses_readable_side_of_rect_transform(self) -> None:
@@ -4841,7 +4983,7 @@ class ScreenshotWorldSpaceUiSourceTests(unittest.TestCase):
             "HandleWorldSpaceUiCaptureScreenshot",
         )
         for token in (
-            "bounds_source = \"rect_transform\"",
+            'bounds_source = "rect_transform"',
             "bounds_center = Vector3ToArray(center)",
             "bounds_extents = Vector3ToArray(extents)",
             "ui_normal = Vector3ToArray(uiNormal)",
@@ -4858,16 +5000,10 @@ class ScreenshotWorldSpaceUiSourceTests(unittest.TestCase):
             self._world_space_ui_body(),
             "HandleWorldSpaceUiCaptureScreenshot",
         )
-        width_index = body.find(
-            "int w = request.width > 0 ? request.width : (int)sceneView.position.width;"
-        )
-        height_index = body.find(
-            "int h = request.height > 0 ? request.height : (int)sceneView.position.height;"
-        )
+        width_index = body.find("int w = request.width > 0 ? request.width : (int)sceneView.position.width;")
+        height_index = body.find("int h = request.height > 0 ? request.height : (int)sceneView.position.height;")
         aspect_index = body.find("float aspect = (float)w / (float)h;")
-        padded_index = body.find(
-            "float paddedHalfHeight = Math.Max(extents.y, extents.x / Math.Max(aspect, 0.001f))"
-        )
+        padded_index = body.find("float paddedHalfHeight = Math.Max(extents.y, extents.x / Math.Max(aspect, 0.001f))")
 
         self.assertNotEqual(
             -1,
@@ -4906,8 +5042,8 @@ class ScreenshotWorldSpaceUiSourceTests(unittest.TestCase):
         read_index = body.index("ReadPixels(new Rect(readX, readY, readW, readH)", texture_index)
         response_index = body.index("BuildSuccess(", read_index)
         for token in (
-            'width = readW',
-            'height = readH',
+            "width = readW",
+            "height = readH",
             'crop_roi_applied = pixelRectApplied != null ? "pixel_rect" : string.Empty',
             "crop_bounds = pixelRectApplied",
         ):
@@ -4937,15 +5073,11 @@ class ScreenshotWorldSpaceUiSourceTests(unittest.TestCase):
             self._world_space_ui_body(),
             "ShouldUseWorldSpaceUiCapture",
         )
-        renderer_short_circuit_index = body.index(
-            'if (request.target_mode == "renderer") return false;'
-        )
+        renderer_short_circuit_index = body.index('if (request.target_mode == "renderer") return false;')
         canvas_index = body.index("Canvas canvas = ResolveRelevantCanvas(target);")
         rect_index = body.index("bool hasRect =")
         no_rect_auto_fallback_index = body.index("if (!wantsUi) return false;")
-        canvas_guard_index = body.index(
-            "canvas == null || canvas.renderMode != RenderMode.WorldSpace"
-        )
+        canvas_guard_index = body.index("canvas == null || canvas.renderMode != RenderMode.WorldSpace")
         final_ui_route_index = body.rfind("return true;")
 
         self.assertLess(
@@ -5029,10 +5161,7 @@ class HandleSetCameraSizeFieldSourceTests(unittest.TestCase):
         self.assertIn(
             "request.size",
             body,
-            msg=(
-                "HandleSetCamera must consume the orbit-radius field "
-                "under the name ``request.size`` (#81)."
-            ),
+            msg=("HandleSetCamera must consume the orbit-radius field under the name ``request.size`` (#81)."),
         )
 
     def test_handle_set_camera_does_not_reference_request_distance(self) -> None:
@@ -5054,9 +5183,7 @@ class EditorSetCameraDocsRenameTests(unittest.TestCase):
     ``distance`` does not appear in the Pivot-orbit row.
     """
 
-    _DOCS_PATH = (
-        Path(__file__).resolve().parent.parent / "docs" / "api-reference.md"
-    )
+    _DOCS_PATH = Path(__file__).resolve().parent.parent / "docs" / "api-reference.md"
 
     def _pivot_orbit_row(self) -> str:
         text = self._DOCS_PATH.read_text(encoding="utf-8")
@@ -5359,7 +5486,8 @@ class EditorControlBridgeRequestSchemaTests(unittest.TestCase):
         for field in self._NEW_REQUEST_FIELDS:
             with self.subTest(field=field):
                 self.assertIn(
-                    field, body,
+                    field,
+                    body,
                     msg=f"EditorControlRequest missing new field '{field}'.",
                 )
 
@@ -5386,7 +5514,8 @@ class EditorControlBridgeRequestSchemaTests(unittest.TestCase):
         for field in self._NEW_RESPONSE_FIELDS:
             with self.subTest(field=field):
                 self.assertIn(
-                    field, body,
+                    field,
+                    body,
                     msg=f"EditorControlData missing new response field '{field}'.",
                 )
 
@@ -5403,9 +5532,7 @@ class EditorControlBridgeScreenshotCameraStateRestoreTests(unittest.TestCase):
     the regression net (justified in spec.md Tier 3 Justification).
     """
 
-    _SCREENSHOT_PARTIAL = (
-        "PrefabSentinel.UnityEditorControlBridge.Screenshot.cs"
-    )
+    _SCREENSHOT_PARTIAL = "PrefabSentinel.UnityEditorControlBridge.Screenshot.cs"
 
     def test_screenshot_partial_exists(self) -> None:
         path = TOOLS_DIR / self._SCREENSHOT_PARTIAL
@@ -5518,21 +5645,17 @@ class EditorControlBridgeDispatcherRoutingTests(unittest.TestCase):
                 self.assertIn(
                     f'case "{action}":',
                     body,
-                    msg=(
-                        f"RunFromPaths missing dispatcher case for "
-                        f"action '{action}'."
-                    ),
+                    msg=(f"RunFromPaths missing dispatcher case for action '{action}'."),
                 )
                 self.assertIn(
-                    handler, body,
-                    msg=(
-                        f"RunFromPaths case for '{action}' must route "
-                        f"to '{handler}'."
-                    ),
+                    handler,
+                    body,
+                    msg=(f"RunFromPaths case for '{action}' must route to '{handler}'."),
                 )
 
     def test_python_supported_action_set_lists_every_new_action(self) -> None:
         from prefab_sentinel.editor_bridge import SUPPORTED_ACTIONS
+
         for action in self._NEW_ACTIONS:
             with self.subTest(action=action):
                 self.assertIn(action, SUPPORTED_ACTIONS)
@@ -5551,10 +5674,7 @@ class AssetOpsSourceTests(unittest.TestCase):
 
     def _source(self) -> str:
         return "\n".join(
-            _read(path)
-            for path in sorted(
-                TOOLS_DIR.glob("PrefabSentinel.UnityEditorControlBridge.AssetOps*.cs")
-            )
+            _read(path) for path in sorted(TOOLS_DIR.glob("PrefabSentinel.UnityEditorControlBridge.AssetOps*.cs"))
         )
 
     def test_asset_ops_partial_exists_and_declares_partial_class(self) -> None:
@@ -5718,8 +5838,8 @@ class EditorSerializedPropertyBridgeSourceTests(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, body)
         list_builder = _extract_method(source, "BuildSerializedPropertyListJson")
-        self.assertIn('\\\"items\\\"', list_builder)
-        self.assertNotIn('\\\"properties\\\"', list_builder)
+        self.assertIn('\\"items\\"', list_builder)
+        self.assertNotIn('\\"properties\\"', list_builder)
         collector = _extract_method(source, "CollectSerializedPropertyList")
         self.assertIn("SerializedPropertyTraversalOptions.Parse(1, 1, string.Empty)", collector)
         self.assertIn(
@@ -5737,15 +5857,12 @@ class EditorSerializedPropertyBridgeSourceTests(unittest.TestCase):
 
     def test_serialized_property_helpers_do_not_keep_unused_state(self) -> None:
         value_intent = _strip_cs_comments(
-            (TOOLS_DIR / "PrefabSentinel.SerializedProperty.ValueIntent.cs").read_text(
-                encoding="utf-8"
-            )
+            (TOOLS_DIR / "PrefabSentinel.SerializedProperty.ValueIntent.cs").read_text(encoding="utf-8")
         )
         target = _strip_cs_comments(
-            (
-                TOOLS_DIR
-                / "PrefabSentinel.UnityEditorControlBridge.SerializedProperty.Target.cs"
-            ).read_text(encoding="utf-8")
+            (TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.SerializedProperty.Target.cs").read_text(
+                encoding="utf-8"
+            )
         )
         for token in ("ObjectReferencePath", "HasCursor"):
             with self.subTest(token=token):
@@ -5777,6 +5894,18 @@ class EditorSerializedPropertyBridgeSourceTests(unittest.TestCase):
         for token in ("hierarchy_path", "GetHierarchyPath", "AssetDatabase.GetAssetPath"):
             with self.subTest(token=token):
                 self.assertIn(token, object_reference)
+
+    def test_json_string_writer_escapes_every_c0_control_character(self) -> None:
+        body = self._method("AppendJsonString")
+        control_guard = r"if (c <= '\u001F')"
+        self.assertIn(control_guard, body)
+        self.assertLess(body.index(control_guard), body.index("switch (c)"))
+        for token in (
+            'json.Append("\\\\u");',
+            'ToString("x4", CultureInfo.InvariantCulture)',
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
 
     def test_property_not_found_suggestions_use_raw_property_paths(self) -> None:
         source = self._source()
@@ -5826,6 +5955,302 @@ class EditorSerializedPropertyBridgeSourceTests(unittest.TestCase):
         ):
             with self.subTest(token=token):
                 self.assertIn(token, body)
+
+
+class TestInspectorSerializedSurfaceSource(unittest.TestCase):
+    _PARTIAL = TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.InspectorSurface.cs"
+
+    _PAYLOAD = TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.InspectorSurface.Payload.cs"
+
+    def _source(self) -> str:
+        return _strip_cs_comments(_read(self._PARTIAL) + _read(self._PAYLOAD))
+
+    def test_action_is_registered_in_both_runtimes_and_dispatched(self) -> None:
+        from prefab_sentinel.editor_bridge import SUPPORTED_ACTIONS
+
+        action = "editor_inspect_serialized_surface"
+        registry = _action_registry_hashset("Supported")
+        dispatcher = _extract_method(_read(BRIDGE), "DispatchAction")
+
+        self.assertEqual(
+            (True, True, True),
+            (
+                f'"{action}"' in registry,
+                action in SUPPORTED_ACTIONS,
+                f'case "{action}":' in dispatcher and "HandleInspectSerializedSurface" in dispatcher,
+            ),
+            msg="serialized-surface action must be registered and routed in C# and Python",
+        )
+
+    def test_last_saved_scopes_have_paired_cleanup_and_raw_property_payload(self) -> None:
+        source = self._source()
+        required = (
+            "PrefabUtility.LoadPrefabContents",
+            "PrefabUtility.UnloadPrefabContents",
+            "EditorSceneManager.OpenScene",
+            "OpenSceneMode.Additive",
+            "EditorSceneManager.CloseScene",
+            "AssetDatabase.LoadAssetAtPath<ScriptableObject>",
+            "new SerializedObject",
+            "GetIterator",
+            "propertyPath",
+            "displayName",
+            "propertyType",
+            "source_value",
+            "effective_value",
+            "prefabOverride",
+            "TryGetGUIDAndLocalFileIdentifier",
+            "local_file_id",
+            "object_reference",
+            "missing",
+        )
+
+        self.assertEqual(
+            tuple(True for _ in required),
+            tuple(token in source for token in required),
+            msg="last-saved surface partial is missing a lifecycle, property, or one-hop identity contract",
+        )
+        self.assertNotIn("EditorSceneManager.OpenPreviewScene", source)
+        self.assertNotIn("EditorSceneManager.ClosePreviewScene", source)
+
+    def test_dirty_scriptable_object_blocks_last_saved_surface_inspection(self) -> None:
+        body = _extract_method(
+            _read(self._PARTIAL),
+            "InspectScriptableObjectSurface",
+        )
+        dirty_guard = body.find("EditorUtility.IsDirty(target)")
+        surface_build = body.find("BuildInspectorSurfaceResponse")
+
+        self.assertEqual(
+            {
+                "dirty_guard": True,
+                "structured_code": True,
+                "actionable_message": True,
+                "guard_precedes_surface_build": True,
+            },
+            {
+                "dirty_guard": dirty_guard >= 0,
+                "structured_code": '"EDITOR_CTRL_INSPECTOR_SURFACE_DIRTY"' in body,
+                "actionable_message": (
+                    "unsaved changes" in body
+                    and "last-saved serialized surface" in body
+                ),
+                "guard_precedes_surface_build": 0 <= dirty_guard < surface_build,
+            },
+            msg=(
+                "dirty ScriptableObject state must block inspection before live in-memory "
+                "values can be reported as the last-saved surface"
+            ),
+        )
+
+    def test_float_and_double_surface_values_are_round_trip_and_json_safe(self) -> None:
+        source = _strip_cs_comments(_read(self._PAYLOAD))
+
+        self.assertEqual(
+            {
+                "numeric_type_dispatch": True,
+                "double_accessor": True,
+                "float_accessor": True,
+                "double_non_finite_guard": True,
+                "float_non_finite_guard": True,
+                "round_trip_invariant": True,
+                "non_finite_json_null": True,
+            },
+            {
+                "numeric_type_dispatch": (
+                    "property.numericType == SerializedPropertyNumericType.Double"
+                    in source
+                ),
+                "double_accessor": (
+                    "BuildInspectorFloatingPointJson(property.doubleValue)"
+                    in source
+                ),
+                "float_accessor": (
+                    "BuildInspectorFloatingPointJson(property.floatValue)"
+                    in source
+                ),
+                "double_non_finite_guard": (
+                    "double.IsNaN(value) || double.IsInfinity(value)"
+                    in source
+                ),
+                "float_non_finite_guard": (
+                    "float.IsNaN(value) || float.IsInfinity(value)"
+                    in source
+                ),
+                "round_trip_invariant": (
+                    'value.ToString("R", CultureInfo.InvariantCulture)'
+                    in source
+                ),
+                "non_finite_json_null": (
+                    '? "null"' in source
+                ),
+            },
+            msg=(
+                "Float/Double serialized values must preserve Unity numericType precision, "
+                "while NaN and infinities become valid JSON null"
+            ),
+        )
+
+    def test_last_saved_action_does_not_resolve_through_live_stage_or_yaml(self) -> None:
+        source = self._source()
+        forbidden = (
+            "TryResolveGameObjectInActiveStage",
+            "PrefabStageUtility.GetCurrentPrefabStage",
+            "GameObject.Find",
+            "ReadAllText",
+            "File.Read",
+        )
+
+        self.assertEqual(
+            tuple(False for _ in forbidden),
+            tuple(token in source for token in forbidden),
+            msg="serialized surface must not fall through to live-stage or YAML/file parsing",
+        )
+
+    def test_inspector_handler_does_not_mutate_request_asset_path(self) -> None:
+        handler = _extract_method(
+            _read(self._PARTIAL),
+            "HandleInspectSerializedSurface",
+        )
+
+        self.assertNotIn(
+            "request.asset_path =",
+            handler,
+            msg="read-only Inspector dispatch must not rewrite caller-owned request identity",
+        )
+
+    def test_inspector_paths_are_project_relative_and_root_bound_before_loading(self) -> None:
+        partial = _read(self._PARTIAL)
+        handler = _extract_method(partial, "HandleInspectSerializedSurface")
+        validator = _extract_method(partial, "TryValidateInspectorAssetPath")
+        request = _read(EDITOR_CONTROL_REQUEST)
+
+        self.assertEqual(
+            (True, True, True, True, True, True),
+            (
+                "public string expected_project_root" in request,
+                "TryValidateInspectorAssetPath" in handler,
+                handler.index("TryValidateInspectorAssetPath") < handler.index("Path.GetExtension"),
+                "Path.IsPathRooted" in validator,
+                "CurrentProjectRoot()" in validator,
+                "Application.dataPath" in validator and "Path.GetFullPath" in validator,
+            ),
+            msg="Inspector asset paths must be root-bound before any Unity asset load is selected",
+        )
+
+
+    def test_target_payload_exposes_unity_local_file_id_for_exact_writer_probe(self) -> None:
+        payload_source = _read(self._PAYLOAD)
+        target_body = _extract_method(payload_source, "BuildInspectorTargetJson")
+
+        required_tokens = (
+            "bool hasTargetLocalId = AssetDatabase.TryGetGUIDAndLocalFileIdentifier(",
+            "out targetLocalId)",
+            "local_file_id",
+            "targetLocalId.ToString(CultureInfo.InvariantCulture)",
+        )
+        for token in required_tokens:
+            with self.subTest(token=token):
+                self.assertIn(
+                    token,
+                    target_body,
+                    msg=f"inspected target identity is missing writer address evidence {token!r}.",
+                )
+
+
+class TestInspectorCandidateDiscoverySource(unittest.TestCase):
+    _PARTIAL = TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.InspectorSurface.cs"
+
+    _PAYLOAD = TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.InspectorSurface.Payload.cs"
+
+    def _source(self) -> str:
+        return _strip_cs_comments(_read(self._PARTIAL) + _read(self._PAYLOAD))
+
+    def test_candidate_discovery_is_bounded_to_target_and_public_editor_selection(self) -> None:
+        source = self._source()
+        required = (
+            "MonoScript.FromMonoBehaviour",
+            "MonoScript.FromScriptableObject",
+            "Editor.CreateEditor",
+            "custom_editor_candidates",
+            "source_candidates_status",
+            "source_candidates_reasons",
+        )
+        forbidden = (
+            "UnityEditorInternal",
+            "TypeCache",
+            "BindingFlags.NonPublic",
+            "BindingFlags.Instance | BindingFlags.NonPublic",
+            "GetCustomAttributes",
+        )
+        expected = {
+            **{token: True for token in required},
+            **{token: False for token in forbidden},
+        }
+        observed = {token: token in source for token in (*required, *forbidden)}
+
+        self.assertEqual(
+            expected,
+            observed,
+            msg="candidate discovery must remain target-bounded and use only public Unity APIs",
+        )
+
+    def test_generic_inspector_fallback_is_not_a_custom_editor_candidate(self) -> None:
+        source = self._source()
+
+        self.assertIn(
+            '"UnityEditor.GenericInspector"',
+            source,
+            msg="Unity's generic fallback inspector must be excluded explicitly",
+        )
+        self.assertIn(
+            "Attribute.IsDefined(editorType, typeof(CustomEditor), true)",
+            source,
+            msg=(
+                "an active editor is a custom-editor candidate only when its "
+                "selected type carries Unity's CustomEditor attribute"
+            ),
+        )
+        self.assertNotIn(
+            "activeEditor.GetType() != typeof(Editor)",
+            source,
+            msg="subclassing Editor alone must not classify GenericInspector as custom",
+        )
+
+    def test_candidate_payload_bounds_and_degradation_reasons_are_deterministic(
+        self,
+    ) -> None:
+        body = _extract_method(
+            _read(self._PAYLOAD),
+            "AppendInspectorCandidateFields",
+        )
+
+        for token in (
+            "runtimeSourceAvailable && editorSelectionComplete",
+            '"The target has no public MonoScript source."',
+            '"Unity could not select an active editor for the target."',
+            "if (scriptPath != null)",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+
+        self.assertNotIn(
+            'scriptPath != null ? JsonString(scriptPath) : "null"',
+            body,
+            msg="an unavailable runtime script is degradation evidence, not a source candidate",
+        )
+        self.assertEqual(
+            (1, 1, 1),
+            (
+                body.count("runtime_component"),
+                body.count("runtime_script"),
+                body.count(r'\"active\":true'),
+            ),
+            msg=(
+                "candidate producer must emit at most one runtime component, "
+                "one available runtime script, and one selected custom editor"
+            ),
+        )
 
 
 class EditorSerializedPropertyWriterScopeTests(unittest.TestCase):
@@ -6102,7 +6527,7 @@ class EditorSerializedPropertyDocsTests(unittest.TestCase):
         self.assertIn("editor_serialized_property_write", testing)
 
 
-class EditorAssetOpsDocsTests(unittest.TestCase):
+class PatchAndEditorAssetDocsTests(unittest.TestCase):
     _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
     def _doc(self, relative: str) -> str:
@@ -6111,8 +6536,8 @@ class EditorAssetOpsDocsTests(unittest.TestCase):
     def test_tools_catalog_lists_editor_asset_category_and_tools(self) -> None:
         text = self._doc("docs/tools.md")
         for token in (
-            "現在 98 件",
-            "18 カテゴリ",
+            "現在 101 件",
+            "19 カテゴリ",
             "**editor_assets**",
             "### editor_assets",
             "prefab_sentinel/mcp_tools_editor_assets.py",
@@ -6130,15 +6555,99 @@ class EditorAssetOpsDocsTests(unittest.TestCase):
     def test_configuration_lists_confirm_report_requirements(self) -> None:
         text = self._doc("CONFIGURATION.md")
         for tool in ("editor_create_generated_asset", "editor_move_asset"):
-            rows = [
-                line for line in text.splitlines()
-                if f"`{tool}`" in line and line.startswith("|")
-            ]
+            rows = [line for line in text.splitlines() if f"`{tool}`" in line and line.startswith("|")]
             self.assertEqual(1, len(rows), msg=f"missing audit row for {tool}")
             self.assertIn("✅", rows[0], msg=f"{tool} must require change_reason")
             self.assertIn("`out_report`", rows[0], msg=f"{tool} must require out_report")
         self.assertIn("dry-run", text)
         self.assertIn("OUT_REPORT_REQUIRED", text)
+
+    def test_patch_apply_report_requirement_is_documented_as_conditional(self) -> None:
+        configuration = self._doc("CONFIGURATION.md")
+        tools_doc = self._doc("docs/tools.md")
+        execution = self._doc("docs/execution-reference.md")
+        agents = self._doc("AGENTS.md")
+        readme = self._doc("README.md")
+
+        patch_rows = [line for line in configuration.splitlines() if line.startswith("| `patch_apply`")]
+        self.assertEqual(1, len(patch_rows))
+        self.assertIn("exactly one open Prefab", patch_rows[0])
+        for text in (tools_doc, execution, agents, readme):
+            self.assertIn("exactly one open Prefab", text)
+        self.assertNotIn(
+            "`patch_apply` / `set_properties` / `editor_create_generated_asset`",
+            tools_doc,
+        )
+
+        patch_section = execution.split("## Patch / attestation", maxsplit=1)[1].split(
+            "## `set_properties`",
+            maxsplit=1,
+        )[0]
+        self.assertIn("confirmed exactly one open Prefab transaction", patch_section)
+        self.assertNotIn("（`--confirm` 時は必須）", patch_section)
+        self.assertNotIn(
+            "`--out-report` 指定時に結果 envelope を JSON ファイルに保存する",
+            patch_section,
+        )
+
+    def test_open_prefab_docs_separate_public_and_dedicated_writers(self) -> None:
+        execution = self._doc("docs/execution-reference.md")
+        tools_doc = self._doc("docs/tools.md")
+        api_reference = self._doc("docs/api-reference.md")
+
+        transaction = execution.split(
+            "### Exactly-one open Prefab composition transaction (#156)",
+            maxsplit=1,
+        )[1].split("## `patch_apply` 入力スキーマ", maxsplit=1)[0]
+        for operation in (
+            "`instantiate_prefab`",
+            "`rename_object`",
+            "`find_game_object`",
+            "`find_component`",
+            "`set`",
+        ):
+            self.assertIn(operation, transaction)
+
+        public_examples = execution.split(
+            "### 例 1: Prefab のプロパティ編集（public `patch_apply` open mode）",
+            maxsplit=1,
+        )[1].split("### 例 3:", maxsplit=1)[0]
+        for stale_token in (
+            '"component":',
+            '"file_id":',
+            '"insert_array_element"',
+            '"remove_array_element"',
+        ):
+            self.assertNotIn(stale_token, public_examples)
+
+        self.assertIn("dedicated serialized-value route", execution)
+        self.assertIn("`INVALID_PLAN_SCHEMA`", execution)
+        set_property_rows = [
+            line for line in tools_doc.splitlines() if line.startswith("| `set_propert")
+        ]
+        self.assertEqual(2, len(set_property_rows))
+        for row in set_property_rows:
+            self.assertIn("local fileID", row)
+            self.assertIn("dedicated serialized-value route", row)
+
+        apply_rejected_rows = [
+            line for line in api_reference.splitlines() if line.startswith("| `SER_APPLY_REJECTED`")
+        ]
+        self.assertEqual(1, len(apply_rejected_rows))
+        self.assertIn("dedicated serialized-value", apply_rejected_rows[0])
+
+    def test_external_patch_bridge_resource_retention_contract_is_pinned(self) -> None:
+        execution = self._doc("docs/execution-reference.md")
+        bridge_tests = self._doc("tests/test_unity_patch_bridge.py")
+
+        for token in (
+            "IPC 送信から除外",
+            "response metadata と postcondition 解決に保持",
+            "`executed: false` / `applied: 0`",
+            "`success` / `severity` / `code` を捏造しない",
+        ):
+            self.assertIn(token, execution)
+        self.assertNotIn("or response summaries", bridge_tests)
 
     def test_tool_conventions_document_dry_run_and_asset_boundaries(self) -> None:
         text = self._doc("docs/tool-conventions.md")
@@ -6258,9 +6767,7 @@ class PrefabStagePersistFixSourceInvariantTests(unittest.TestCase):
       caller-supplied request flag.
     """
 
-    _PREFAB_STAGE_PARTIAL = (
-        TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.PrefabStage.cs"
-    )
+    _PREFAB_STAGE_PARTIAL = TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.PrefabStage.cs"
 
     def _resolver_body(self) -> str:
         # Issue #38: the resolution logic (normalization, stage walk,
@@ -6310,13 +6817,16 @@ class PrefabStagePersistFixSourceInvariantTests(unittest.TestCase):
         # active-stage branch.
         guard_idx = body.find("if (stage == null)")
         self.assertNotEqual(
-            -1, guard_idx,
+            -1,
+            guard_idx,
             msg="no-stage guard ``if (stage == null)`` is missing",
         )
         open_idx = body.find("{", guard_idx)
         self.assertNotEqual(-1, open_idx, msg="no-stage guard body missing")
         no_stage_branch = _extract_braced_block(
-            body, open_idx + 1, "no-stage branch",
+            body,
+            open_idx + 1,
+            "no-stage branch",
         )
         # The active-stage branch is the source past the no-stage block.
         block_end = body.index(no_stage_branch) + len(no_stage_branch)
@@ -6324,10 +6834,7 @@ class PrefabStagePersistFixSourceInvariantTests(unittest.TestCase):
         self.assertNotIn(
             "GameObject.Find",
             active_branch,
-            msg=(
-                "Active-stage branch must NOT call GameObject.Find "
-                "(issue #264 scene-leak regression)."
-            ),
+            msg=("Active-stage branch must NOT call GameObject.Find (issue #264 scene-leak regression)."),
         )
 
     def test_resolver_inactive_stage_terminal_uses_scene_find(self) -> None:
@@ -6344,7 +6851,6 @@ class PrefabStagePersistFixSourceInvariantTests(unittest.TestCase):
                 "scene via ``GameObject.Find`` as its no-stage path."
             ),
         )
-
 
     def test_close_handler_persists_via_prefab_asset_api(self) -> None:
         body = self._close_handler_body()
@@ -6401,12 +6907,15 @@ class PrefabStagePersistFixSourceInvariantTests(unittest.TestCase):
         # ``didSave = true;`` assignment exists inside it.
         save_branch_start = body.find("if (request.save_on_close)")
         self.assertNotEqual(
-            -1, save_branch_start,
+            -1,
+            save_branch_start,
             msg="save-requested branch guard missing",
         )
         open_idx = body.find("{", save_branch_start)
         save_branch = _extract_braced_block(
-            body, open_idx + 1, "save-requested branch",
+            body,
+            open_idx + 1,
+            "save-requested branch",
         )
         self.assertNotRegex(
             save_branch,
@@ -6426,7 +6935,8 @@ class PrefabStagePersistFixSourceInvariantTests(unittest.TestCase):
         body = self._close_handler_body()
         save_branch_start = body.find("if (request.save_on_close)")
         self.assertNotEqual(
-            -1, save_branch_start,
+            -1,
+            save_branch_start,
             msg=(
                 "``if (request.save_on_close)`` guard must be present "
                 "in the close handler so its body can be extracted."
@@ -6434,22 +6944,22 @@ class PrefabStagePersistFixSourceInvariantTests(unittest.TestCase):
         )
         open_idx = body.find("{", save_branch_start)
         save_branch = _extract_braced_block(
-            body, open_idx + 1, "save-requested branch",
+            body,
+            open_idx + 1,
+            "save-requested branch",
         )
         # The persistence call must live inside the save branch.
         self.assertIn(
             "PrefabUtility.SaveAsPrefabAsset",
             save_branch,
-            msg=(
-                "PrefabUtility.SaveAsPrefabAsset call must be inside "
-                "the ``if (request.save_on_close)`` block."
-            ),
+            msg=("PrefabUtility.SaveAsPrefabAsset call must be inside the ``if (request.save_on_close)`` block."),
         )
         # And the close-handler body must contain exactly one call to
         # the persistence API.  No second call means the no-save
         # branch cannot persist.
         self.assertEqual(
-            1, body.count("PrefabUtility.SaveAsPrefabAsset"),
+            1,
+            body.count("PrefabUtility.SaveAsPrefabAsset"),
             msg=(
                 "HandleClosePrefab must contain exactly one "
                 "PrefabUtility.SaveAsPrefabAsset call (inside the "
@@ -6465,15 +6975,14 @@ class PrefabStagePersistFixSourceInvariantTests(unittest.TestCase):
         # the code and the documented message substring.
         guard_idx = body.find("if (stage == null)")
         self.assertNotEqual(
-            -1, guard_idx,
-            msg=(
-                "HandleClosePrefab must guard on ``stage == null`` "
-                "before attempting persistence."
-            ),
+            -1,
+            guard_idx,
+            msg=("HandleClosePrefab must guard on ``stage == null`` before attempting persistence."),
         )
         persistence_idx = body.find("PrefabUtility.SaveAsPrefabAsset")
         self.assertNotEqual(
-            -1, persistence_idx,
+            -1,
+            persistence_idx,
             msg=(
                 "PrefabUtility.SaveAsPrefabAsset call site must be "
                 "present in the close handler so its position can be "
@@ -6481,29 +6990,19 @@ class PrefabStagePersistFixSourceInvariantTests(unittest.TestCase):
             ),
         )
         self.assertLess(
-            guard_idx, persistence_idx,
-            msg=(
-                "The no-active-stage guard must run before the "
-                "persistence call to avoid dereferencing a null "
-                "stage."
-            ),
+            guard_idx,
+            persistence_idx,
+            msg=("The no-active-stage guard must run before the persistence call to avoid dereferencing a null stage."),
         )
         self.assertIn(
             "EDITOR_CTRL_PREFAB_STAGE_CLOSE_FAILED",
             body,
-            msg=(
-                "Close handler must emit "
-                "EDITOR_CTRL_PREFAB_STAGE_CLOSE_FAILED on the "
-                "no-active-stage path."
-            ),
+            msg=("Close handler must emit EDITOR_CTRL_PREFAB_STAGE_CLOSE_FAILED on the no-active-stage path."),
         )
         self.assertIn(
             "no Prefab Stage is currently active",
             body,
-            msg=(
-                "No-active-stage envelope must carry the documented "
-                "message."
-            ),
+            msg=("No-active-stage envelope must carry the documented message."),
         )
 
     def test_close_handler_persistence_exception_carries_message(self) -> None:
@@ -6529,10 +7028,7 @@ class PrefabStagePersistFixSourceInvariantTests(unittest.TestCase):
         self.assertIn(
             "EDITOR_CTRL_PREFAB_STAGE_CLOSE_FAILED",
             body,
-            msg=(
-                "Close-handler exception path must emit the "
-                "documented error code."
-            ),
+            msg=("Close-handler exception path must emit the documented error code."),
         )
 
 
@@ -6553,9 +7049,7 @@ class TestResolveGameObjectDelegation(unittest.TestCase):
     the ``EDITOR_CTRL_HIERARCHY_PATH_AMBIGUOUS`` envelope.
     """
 
-    _PREFAB_STAGE_PARTIAL = (
-        TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.PrefabStage.cs"
-    )
+    _PREFAB_STAGE_PARTIAL = TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.PrefabStage.cs"
 
     def _resolver_body(self) -> str:
         return _strip_cs_comments(
@@ -6571,8 +7065,7 @@ class TestResolveGameObjectDelegation(unittest.TestCase):
             "SymbolPathResolver.Resolve",
             body,
             msg=(
-                "TryResolveGameObjectInActiveStage must delegate segment "
-                "resolution to the shared SymbolPathResolver."
+                "TryResolveGameObjectInActiveStage must delegate segment resolution to the shared SymbolPathResolver."
             ),
         )
 
@@ -6596,18 +7089,12 @@ class TestResolveGameObjectDelegation(unittest.TestCase):
         self.assertIn(
             "SymbolPathOutcome.Ambiguous",
             body,
-            msg=(
-                "The resolver must branch on the SymbolPathResolver "
-                "ambiguity signal."
-            ),
+            msg=("The resolver must branch on the SymbolPathResolver ambiguity signal."),
         )
         self.assertIn(
             "EDITOR_CTRL_HIERARCHY_PATH_AMBIGUOUS",
             body,
-            msg=(
-                "An ambiguous live path must map to the "
-                "EDITOR_CTRL_HIERARCHY_PATH_AMBIGUOUS envelope."
-            ),
+            msg=("An ambiguous live path must map to the EDITOR_CTRL_HIERARCHY_PATH_AMBIGUOUS envelope."),
         )
 
 
@@ -6750,29 +7237,18 @@ class MenuScriptWatchSplitSourceInvariantTests(unittest.TestCase):
     inventory).
     """
 
-    _MENU_SCRIPT_WATCH_PARTIAL = (
-        TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.MenuScriptWatch.cs"
-    )
-    _MENU_PARTIAL = (
-        TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Menu.cs"
-    )
-    _AGENTS_MD = (
-        Path(__file__).resolve().parent.parent / "AGENTS.md"
-    )
+    _MENU_SCRIPT_WATCH_PARTIAL = TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.MenuScriptWatch.cs"
+    _MENU_PARTIAL = TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Menu.cs"
+    _AGENTS_MD = Path(__file__).resolve().parent.parent / "AGENTS.md"
 
     def test_dedicated_partial_declares_detector_with_documented_signature(
         self,
     ) -> None:
         self.assertTrue(
             self._MENU_SCRIPT_WATCH_PARTIAL.is_file(),
-            msg=(
-                "MenuScriptWatch partial must exist at the canonical "
-                "path (issue #262)."
-            ),
+            msg=("MenuScriptWatch partial must exist at the canonical path (issue #262)."),
         )
-        text = _strip_cs_comments(
-            self._MENU_SCRIPT_WATCH_PARTIAL.read_text(encoding="utf-8")
-        )
+        text = _strip_cs_comments(self._MENU_SCRIPT_WATCH_PARTIAL.read_text(encoding="utf-8"))
         self.assertRegex(
             text,
             r"private\s+static\s+bool\s+HasEditorScriptChangedSince\(\s*long\s+sinceUnixMs\s*\)",
@@ -6822,9 +7298,7 @@ class MenuScriptWatchSplitSourceInvariantTests(unittest.TestCase):
         ``EditorScriptPathClassifier`` (as ``EditorSegment`` /
         ``RunScriptTempSegment``).
         """
-        text = _strip_cs_comments(
-            self._MENU_SCRIPT_WATCH_PARTIAL.read_text(encoding="utf-8")
-        )
+        text = _strip_cs_comments(self._MENU_SCRIPT_WATCH_PARTIAL.read_text(encoding="utf-8"))
         self.assertIn("MenuExecuteAssetsRoot", text)
         # The two relocated constants must no longer be declared here.
         self.assertNotIn("MenuExecuteEditorSegment", text)
@@ -6841,10 +7315,7 @@ class MenuScriptWatchSplitSourceInvariantTests(unittest.TestCase):
         self.assertIn(
             "MenuScriptWatch",
             text,
-            msg=(
-                "AGENTS.md partial inventory must list the new "
-                "MenuScriptWatch partial (issue #262)."
-            ),
+            msg=("AGENTS.md partial inventory must list the new MenuScriptWatch partial (issue #262)."),
         )
 
 
@@ -6898,7 +7369,7 @@ class TestScreenshotRoutingUsesClassifier(unittest.TestCase):
             stripped,
             r'string\.Equals\([^)]*"scene"[^)]*\)',
             msg=(
-                "Free-standing string.Equals(..., \"scene\", ...) "
+                'Free-standing string.Equals(..., "scene", ...) '
                 "comparison present in the screenshot partial; route "
                 "the decision through "
                 "ScreenshotViewAllowlistClassifier.IsSceneView instead "
@@ -6989,9 +7460,7 @@ class TestAddComponentInitialPropertyDiagnostics(unittest.TestCase):
         )
         if match is None:
             self.fail("properties_json parse catch block not found in HandleEditorAddComponent")
-        catch_body = _extract_braced_block(
-            body, match.end(), "properties_json parse catch block"
-        )
+        catch_body = _extract_braced_block(body, match.end(), "properties_json parse catch block")
         self.assertIn(
             "diagList.Add",
             catch_body,
@@ -7006,9 +7475,7 @@ class TestAddComponentInitialPropertyDiagnostics(unittest.TestCase):
 
 def _extract_class_body(source: str, class_name: str) -> str:
     """Return the brace-delimited body of a named C# class."""
-    match = re.search(
-        rf"class\s+{re.escape(class_name)}\b[^{{]*{{", source
-    )
+    match = re.search(rf"class\s+{re.escape(class_name)}\b[^{{]*{{", source)
     if match is None:
         raise AssertionError(f"class {class_name} not found in source")
     return _extract_braced_block(source, match.end(), f"class {class_name}")
@@ -7025,9 +7492,7 @@ class TestReparentDedicatedWireField(unittest.TestCase):
     """
 
     def test_request_declares_parent_hierarchy_path_field(self) -> None:
-        source = _strip_cs_comments(
-            EDITOR_CONTROL_REQUEST.read_text(encoding="utf-8")
-        )
+        source = _strip_cs_comments(EDITOR_CONTROL_REQUEST.read_text(encoding="utf-8"))
         self.assertRegex(
             source,
             r"public\s+string\s+parent_hierarchy_path\s*=",
@@ -7043,10 +7508,7 @@ class TestReparentDedicatedWireField(unittest.TestCase):
         self.assertIn(
             "request.parent_hierarchy_path",
             body,
-            msg=(
-                "HandleEditorSetParent must read the parent address from "
-                "request.parent_hierarchy_path (issue #56)."
-            ),
+            msg=("HandleEditorSetParent must read the parent address from request.parent_hierarchy_path (issue #56)."),
         )
 
     def test_set_parent_handler_does_not_read_rename_field(self) -> None:
@@ -7114,23 +7576,17 @@ class TestCreateAnimationClipSinglePath(unittest.TestCase):
     """
 
     def test_request_drops_directory_and_stem_clip_fields(self) -> None:
-        source = _strip_cs_comments(
-            EDITOR_CONTROL_REQUEST.read_text(encoding="utf-8")
-        )
+        source = _strip_cs_comments(EDITOR_CONTROL_REQUEST.read_text(encoding="utf-8"))
         self.assertNotRegex(
             source,
             r"public\s+string\s+target_dir\s*=",
-            msg=(
-                "EditorControlRequest must no longer declare the "
-                "directory-form target_dir clip field (issue #53)."
-            ),
+            msg=("EditorControlRequest must no longer declare the directory-form target_dir clip field (issue #53)."),
         )
         self.assertNotRegex(
             source,
             r"public\s+string\s+animation_clip_name\s*=",
             msg=(
-                "EditorControlRequest must no longer declare the "
-                "stem-form animation_clip_name clip field (issue #53)."
+                "EditorControlRequest must no longer declare the stem-form animation_clip_name clip field (issue #53)."
             ),
         )
 
@@ -7139,10 +7595,7 @@ class TestCreateAnimationClipSinglePath(unittest.TestCase):
         self.assertIn(
             "request.asset_path",
             body,
-            msg=(
-                "HandleCreateAnimationClip must read the single "
-                "request.asset_path field (issue #53)."
-            ),
+            msg=("HandleCreateAnimationClip must read the single request.asset_path field (issue #53)."),
         )
 
     def test_clip_handler_does_not_read_directory_or_stem_fields(self) -> None:
@@ -7150,18 +7603,12 @@ class TestCreateAnimationClipSinglePath(unittest.TestCase):
         self.assertNotIn(
             "request.target_dir",
             body,
-            msg=(
-                "HandleCreateAnimationClip must not read the removed "
-                "request.target_dir field (issue #53)."
-            ),
+            msg=("HandleCreateAnimationClip must not read the removed request.target_dir field (issue #53)."),
         )
         self.assertNotIn(
             "request.animation_clip_name",
             body,
-            msg=(
-                "HandleCreateAnimationClip must not read the removed "
-                "request.animation_clip_name field (issue #53)."
-            ),
+            msg=("HandleCreateAnimationClip must not read the removed request.animation_clip_name field (issue #53)."),
         )
 
     def test_clip_handler_enforces_anim_extension(self) -> None:
@@ -7169,10 +7616,7 @@ class TestCreateAnimationClipSinglePath(unittest.TestCase):
         self.assertIn(
             ".anim",
             body,
-            msg=(
-                "HandleCreateAnimationClip must enforce the .anim "
-                "extension on the supplied asset path (issue #53)."
-            ),
+            msg=("HandleCreateAnimationClip must enforce the .anim extension on the supplied asset path (issue #53)."),
         )
 
 
@@ -7210,7 +7654,7 @@ class TestRunScriptPollFailureEnvelopeSource(unittest.TestCase):
             msg="Async poll completion must preserve failed inner severity.",
         )
         self.assertIn(
-            "? \"EDITOR_CTRL_RUN_SCRIPT_POLL_COMPLETED\"\n                                : inner.code",
+            '? "EDITOR_CTRL_RUN_SCRIPT_POLL_COMPLETED"\n                                : inner.code',
             body,
             msg="Failed async poll completion must keep the runtime/compile error code.",
         )
@@ -7237,11 +7681,26 @@ class TestClientSimSideEffectAssetCandidatesSource(unittest.TestCase):
     def test_clientsim_report_uses_snapshot_asset_candidates(self) -> None:
         source = _read(TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.cs")
         body = _extract_method(source, "BuildSideEffectReport")
+        symmetric_body = _extract_method(source, "SymmetricDifference")
         self.assertIn(
-            "asset_change_candidates = Difference(\n                    after?.AssetChangeCandidates,\n                    before?.AssetChangeCandidates)",
+            "asset_change_candidates = SymmetricDifference(\n                    after?.AssetChangeCandidates,\n                    before?.AssetChangeCandidates)",
             body,
-            msg="ClientSim side-effect report must serialize observed asset candidates.",
+            msg=(
+                "ClientSim side-effect report must detect both newly dirty and "
+                "newly clean/unloaded asset candidates."
+            ),
         )
+        for token in (
+            "Difference(left, right)",
+            "Difference(right, left)",
+            "combined.AddRange",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(
+                    token,
+                    symmetric_body,
+                    msg="Asset-candidate symmetric difference lost one direction.",
+                )
 
     def test_clientsim_snapshot_collects_dirty_asset_candidates(self) -> None:
         source = _read(TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.cs")
@@ -7262,6 +7721,404 @@ class TestClientSimSideEffectAssetCandidatesSource(unittest.TestCase):
             collect_body,
             msg="Dirty project assets must be included as asset-change candidates.",
         )
+
+
+class TestClientSimPlayModeLifecycleSource(unittest.TestCase):
+    def test_runtime_dispatcher_waits_for_clientsim_async_response(self) -> None:
+        runtime_source = _read(TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.cs")
+        dispatcher_source = _read(TOOLS_DIR / "PrefabSentinel.EditorBridge.cs")
+        process_body = _extract_method(dispatcher_source, "ProcessRequest")
+
+        self.assertIn(
+            'public static readonly HashSet<string> AsyncActions',
+            runtime_source,
+            msg="Runtime validation must declare its deferred response actions.",
+        )
+        self.assertIn(
+            '"run_clientsim"',
+            runtime_source,
+            msg="ClientSim must be classified as a deferred runtime response.",
+        )
+        self.assertIn(
+            "isRuntime\n                && UnityRuntimeValidationBridge.AsyncActions.Contains(header.action)",
+            process_body,
+            msg="The dispatcher must not synthesize EDITOR_BRIDGE_NO_RESPONSE for ClientSim.",
+        )
+
+    def test_clientsim_uses_reload_safe_editor_play_mode_lifecycle(self) -> None:
+        source = _read(TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.cs")
+
+        required_tokens = (
+            "[InitializeOnLoad]",
+            "SessionState.SetString",
+            "SessionState.GetString",
+            "EditorApplication.playModeStateChanged",
+            "PlayModeStateChange.EnteredPlayMode",
+            "PlayModeStateChange.EnteredEditMode",
+            "EditorApplication.EnterPlaymode()",
+            "EditorApplication.ExitPlaymode()",
+            "EditorSceneManager.playModeStartScene",
+            "CLIENTSIM_ENTER_PLAY_MODE_TIMEOUT",
+            "CLIENTSIM_READY_TIMEOUT",
+            "CLIENTSIM_EXIT_PLAY_MODE_TIMEOUT",
+        )
+        for token in required_tokens:
+            with self.subTest(token=token):
+                self.assertIn(
+                    token,
+                    source,
+                    msg=f"ClientSim lifecycle is missing required editor transition {token!r}.",
+                )
+
+    def test_clientsim_requires_the_requested_scene_to_be_the_only_active_scene(self) -> None:
+        source = _read(TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.cs")
+        begin_body = _extract_method(source, "Begin")
+
+        required_tokens = (
+            "SceneManager.sceneCount != 1",
+            "SceneManager.GetActiveScene()",
+            "activeScene.path",
+            "CLIENTSIM_ACTIVE_SCENE_REQUIRED",
+            "EditorSceneManager.playModeStartScene = null",
+        )
+        for token in required_tokens:
+            with self.subTest(token=token):
+                self.assertIn(
+                    token,
+                    begin_body,
+                    msg=f"ClientSim active-scene preflight is missing {token!r}.",
+                )
+
+    def test_clientsim_preflights_runtime_loader_settings_before_play_mode(self) -> None:
+        source = _read(TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.cs")
+        preflight_body = _extract_method(source, "TryPreflightClientSim")
+
+        required_tokens = (
+            "VRC.SDK3.ClientSim.ClientSimSettings, VRC.ClientSim",
+            "VRC.SDK3.ClientSim.ClientSimMain, VRC.ClientSim",
+            '"enableClientSim"',
+            '"HasInstance"',
+            '"IsNetworkReady"',
+            "RUN_CLIENTSIM_DISABLED",
+        )
+        for token in required_tokens:
+            with self.subTest(token=token):
+                self.assertIn(
+                    token,
+                    preflight_body,
+                    msg=f"ClientSim package/settings preflight is missing {token!r}.",
+                )
+
+    def test_play_mode_callback_preserves_terminal_exit_phase(self) -> None:
+        source = _read(TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.cs")
+        callback_body = _extract_method(source, "OnPlayModeStateChanged")
+
+        entering_guard = (
+            "change == PlayModeStateChange.EnteredPlayMode\n"
+            "                && string.Equals(\n"
+            "                    state.phase,\n"
+            "                    EnteringPlayModePhase,"
+        )
+        self.assertIn(
+            entering_guard,
+            callback_body,
+            msg=(
+                "EnteredPlayMode may advance only an entering operation; otherwise a "
+                "late callback can reopen a terminal operation that is already exiting."
+            ),
+        )
+        self.assertIn(
+            "string.Equals(state.phase, ExitingPlayModePhase",
+            callback_body,
+            msg="A late EnteredPlayMode callback must retain exit ownership.",
+        )
+
+    def test_reconcile_never_replaces_a_persisted_terminal_outcome(self) -> None:
+        source = _read(TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.cs")
+        reconcile_body = _extract_method(source, "ReconcilePersistedState")
+
+        terminal_guard = "if (state.terminalSet\n                && !string.Equals("
+        self.assertIn(
+            terminal_guard,
+            reconcile_body,
+            msg=(
+                "Reload reconciliation must force a persisted terminal operation back "
+                "to its exit phase before checking ClientSim readiness."
+            ),
+        )
+
+    def test_clientsim_ready_uses_one_live_scene_instance_not_resource_prefab(self) -> None:
+        source = _read(TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.cs")
+        ready_body = _extract_method(source, "TryGetClientSimReady")
+
+        required_tokens = (
+            "EditorUtility.IsPersistent(component.gameObject)",
+            "Scene instanceScene = component.gameObject.scene;",
+            "!instanceScene.IsValid() || !instanceScene.isLoaded",
+            "liveInstances.Count == 0",
+            "liveInstances.Count != 1",
+            "isNetworkReady.Invoke(liveInstances[0], null)",
+        )
+        for token in required_tokens:
+            with self.subTest(token=token):
+                self.assertIn(
+                    token,
+                    ready_body,
+                    msg=(
+                        "ClientSim readiness must exclude persistent Resources prefab "
+                        f"objects and require one loaded live instance: {token!r}"
+                    ),
+                )
+
+    def test_clientsim_response_state_clears_from_atomic_publish_result(self) -> None:
+        source = _read(TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.cs")
+        publish_body = _extract_method(source, "TryWriteResponseAtomically")
+        finish_body = _extract_method(source, "Finish")
+        corrupt_body = _extract_method(source, "ReconcileCorruptLeaseOnly")
+
+        self.assertIn(
+            "internal static bool TryWriteResponseAtomically",
+            publish_body,
+            msg="ClientSim publication needs an explicit producer success result.",
+        )
+        self.assertIn(
+            "File.Move(tmpPath, responsePath);",
+            publish_body,
+            msg="The terminal response must be published by an atomic move.",
+        )
+        self.assertNotIn(
+            "File.WriteAllText(responsePath",
+            publish_body,
+            msg="Strict ClientSim publication must not fall back to a partial direct write.",
+        )
+        strict_call = "UnityRuntimeValidationBridge.TryWriteResponseAtomically("
+        self.assertIn(
+            strict_call,
+            finish_body,
+            msg="Normal ClientSim completion must use strict atomic publication.",
+        )
+        self.assertIn(
+            strict_call,
+            corrupt_body,
+            msg="Corrupt-state recovery must retain its lease when publication fails.",
+        )
+        for body in (finish_body, corrupt_body):
+            with self.subTest(method_body=body.splitlines()[0]):
+                self.assertIn(
+                    "if (responsePublished)",
+                    body,
+                    msg="State may clear only from an explicit publication result.",
+                )
+        publish_index = finish_body.index("TryWriteResponseAtomically")
+        clear_index = finish_body.index("ClearPersistedState")
+        self.assertLess(
+            publish_index,
+            clear_index,
+            msg="Persisted restoration ownership must clear only after atomic publication.",
+        )
+
+    def test_clientsim_restoration_failure_retains_lease_for_retry(self) -> None:
+        source = _read(TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.cs")
+        finish_body = _extract_method(source, "Finish")
+        corrupt_body = _extract_method(source, "ReconcileCorruptLeaseOnly")
+
+        finish_failure = (
+            "if (!RestorePlayModeStartScene(lease, out restoreError))\n"
+            "                {"
+        )
+        self.assertIn(
+            finish_failure,
+            finish_body,
+            msg="Normal completion must detect an un-restored start-scene setting.",
+        )
+        failure_start = finish_body.index(finish_failure)
+        failure_end = finish_body.index("\n                }", failure_start)
+        failure_block = finish_body[failure_start:failure_end]
+        self.assertIn(
+            "SetTerminal(",
+            failure_block,
+            msg="A failed restoration must persist its terminal outcome.",
+        )
+        self.assertIn(
+            '"CLIENTSIM_RESTORE_FAILED"',
+            failure_block,
+            msg="A failed restoration must persist typed failure evidence.",
+        )
+        self.assertIn(
+            "return;",
+            failure_block,
+            msg="A failed restoration must not publish or clear its lease.",
+        )
+
+        restore_index = corrupt_body.index("RestorePlayModeStartScene")
+        retry_guard_index = corrupt_body.index("if (!restored)", restore_index)
+        publish_index = corrupt_body.index("TryWriteResponseAtomically")
+        self.assertLess(
+            retry_guard_index,
+            publish_index,
+            msg="Corrupt-state recovery must retain its lease until restoration succeeds.",
+        )
+        retry_block_end = corrupt_body.index("\n            }", retry_guard_index)
+        self.assertIn(
+            "return;",
+            corrupt_body[retry_guard_index:retry_block_end],
+            msg="Corrupt-state restore failure must stop before response publication.",
+        )
+
+    def test_clientsim_side_effect_difference_preserves_duplicate_multiplicity(self) -> None:
+        source = _read(TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.cs")
+        difference_body = _extract_method(source, "Difference")
+
+        required_tokens = (
+            "new Dictionary<string, int>(StringComparer.Ordinal)",
+            "remaining.TryGetValue(value, out int count)",
+            "remaining.Remove(value);",
+            "remaining[value] = count - 1;",
+            "diff.Add(value);",
+        )
+        for token in required_tokens:
+            with self.subTest(token=token):
+                self.assertIn(
+                    token,
+                    difference_body,
+                    msg=(
+                        "Side-effect diff must be a multiset difference so duplicate "
+                        f"siblings/components remain observable: {token!r}"
+                    ),
+                )
+        self.assertNotIn(
+            "HashSet<string>",
+            difference_body,
+            msg="A set difference collapses duplicate-name objects and components.",
+        )
+
+    def test_clientsim_persists_full_operation_and_independent_restoration_lease(self) -> None:
+        source = _read(TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.cs")
+
+        required_tokens = (
+            "OperationStateKey",
+            "RestorationLeaseKey",
+            "UnityRuntimeValidationBridge.RuntimeRequest request",
+            "previousStartSceneGuid",
+            "previousStartSceneWasNull",
+            "targetSceneGuid",
+            "responsePath",
+        )
+        for token in required_tokens:
+            with self.subTest(token=token):
+                self.assertIn(
+                    token,
+                    source,
+                    msg=f"ClientSim reload recovery state is missing {token!r}.",
+                )
+
+    def test_clientsim_never_creates_an_edit_mode_runner_or_calls_private_startup(self) -> None:
+        source = _read(TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.cs")
+
+        forbidden_tokens = (
+            "[ExecuteAlways]",
+            "RuntimeValidationRunner : MonoBehaviour",
+            '__PrefabSentinelRuntimeValidationRunner',
+            "AddComponent<RuntimeValidationRunner>",
+            "InitializeClientSim",
+            "OpenScene(sceneAssetPath, OpenSceneMode.Single)",
+            "ClientSimMain.CreateInstance",
+        )
+        for token in forbidden_tokens:
+            with self.subTest(token=token):
+                self.assertNotIn(
+                    token,
+                    source,
+                    msg=f"ClientSim must remain Play Mode-owned; found forbidden path {token!r}.",
+                )
+
+    def test_clientsim_report_distinguishes_runtime_objects_from_residual_garbage(self) -> None:
+        source = _read(TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.cs")
+        report_body = _extract_method(source, "BuildSideEffectReport")
+
+        required_tokens = (
+            "before",
+            "runtime",
+            "after",
+            "roots_runtime",
+            "hierarchy_runtime",
+            "components_runtime",
+            "residual_added_gameobjects",
+            "residual_added_components",
+        )
+        for token in required_tokens:
+            with self.subTest(token=token):
+                self.assertIn(
+                    token,
+                    report_body,
+                    msg=f"ClientSim three-point side-effect report is missing {token!r}.",
+                )
+
+    def test_clientsim_response_is_written_after_restoration_and_before_state_clear(self) -> None:
+        source = _read(TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.cs")
+        finish_body = _extract_method(source, "Finish")
+
+        restore_index = finish_body.find("RestorePlayModeStartScene")
+        response_index = finish_body.find(
+            "UnityRuntimeValidationBridge.TryWriteResponseAtomically"
+        )
+        clear_index = finish_body.find("ClearPersistedState()")
+        self.assertGreaterEqual(
+            restore_index,
+            0,
+            msg="ClientSim completion must restore the prior Play Mode start scene.",
+        )
+        self.assertGreater(
+            response_index,
+            restore_index,
+            msg="ClientSim must not report completion before restoring editor state.",
+        )
+        self.assertGreater(
+            clear_index,
+            response_index,
+            msg="Exactly-once recovery state must remain until publication succeeds.",
+        )
+
+    def test_clientsim_deadline_starts_before_snapshot_and_preflight(self) -> None:
+        source = _read(TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.cs")
+        begin_body = _extract_method(source, "Begin")
+
+        deadline_index = begin_body.index("double operationDeadline")
+        snapshot_index = begin_body.index("CaptureSceneSnapshot(activeScene)")
+        preflight_index = begin_body.index("TryPreflightClientSim(request)")
+        lease_index = begin_body.index("SaveRestorationLease(lease)")
+        self.assertLess(deadline_index, snapshot_index)
+        self.assertLess(deadline_index, preflight_index)
+        self.assertIn(
+            "operationDeadline = operationDeadline,",
+            begin_body,
+            msg="The persisted deadline must use the request-start absolute deadline.",
+        )
+        timeout_guard = begin_body.index(
+            "if (EditorApplication.timeSinceStartup >= operationDeadline)"
+        )
+        self.assertLess(
+            timeout_guard,
+            lease_index,
+            msg="Expired preflight must stop before acquiring a restoration lease.",
+        )
+        self.assertIn(
+            '"CLIENTSIM_PREFLIGHT_TIMEOUT"',
+            begin_body[timeout_guard:lease_index],
+        )
+
+    def test_clientsim_dirty_asset_snapshot_never_loads_every_project_asset(
+        self,
+    ) -> None:
+        source = _read(TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.cs")
+        body = _extract_method(source, "DirtyAssetPaths")
+
+        self.assertNotIn("AssetDatabase.GetAllAssetPaths", body)
+        self.assertNotIn("AssetDatabase.LoadMainAssetAtPath", body)
+        self.assertIn("Resources.FindObjectsOfTypeAll<UnityEngine.Object>()", body)
+        self.assertIn("EditorUtility.IsPersistent(asset)", body)
+        self.assertIn("EditorUtility.IsDirty(asset)", body)
+        self.assertIn("AssetDatabase.GetAssetPath(asset)", body)
 
 
 class TestCompileAwareRefreshWiring(unittest.TestCase):
@@ -7346,15 +8203,12 @@ class TestFireAndReturnRecompileActionAbsent(unittest.TestCase):
         )
 
     def test_reimport_diagnostic_helper_is_absent(self) -> None:
-        redaction = _strip_cs_comments(
-            RUN_SCRIPT_COMPILE_REDACTION.read_text(encoding="utf-8")
-        )
+        redaction = _strip_cs_comments(RUN_SCRIPT_COMPILE_REDACTION.read_text(encoding="utf-8"))
         self.assertNotIn(
             "ReimportDiagnostic",
             redaction,
             msg=(
-                "#71: the reimport-diagnostic redaction helper, referenced "
-                "only by the retired handler, must be removed"
+                "#71: the reimport-diagnostic redaction helper, referenced only by the retired handler, must be removed"
             ),
         )
 
@@ -7539,9 +8393,8 @@ class SetCameraProjectionTransitionGuardSourceTests(unittest.TestCase):
         )
 
     def test_projection_guard_uses_public_state_without_reflection_or_wait(self) -> None:
-        sources = (
-            self._handle_set_camera_body()
-            + _read(TOOLS_DIR / "PrefabSentinel.Camera.ProjectionStateStability.cs")
+        sources = self._handle_set_camera_body() + _read(
+            TOOLS_DIR / "PrefabSentinel.Camera.ProjectionStateStability.cs"
         )
         for forbidden in (
             "m_Ortho",
@@ -7591,9 +8444,7 @@ class TestGenericCollectionUsingDirective(unittest.TestCase):
         offenders: list[str] = []
         for path in sorted(TOOLS_DIR.glob("PrefabSentinel*.cs")):
             text = path.read_text(encoding="utf-8")
-            if self.GENERIC_TYPE_REGEX.search(text) and (
-                self.USING_DIRECTIVE not in text
-            ):
+            if self.GENERIC_TYPE_REGEX.search(text) and (self.USING_DIRECTIVE not in text):
                 offenders.append(path.name)
         self.assertEqual(
             [],
@@ -7614,9 +8465,7 @@ class TestUnityBridgeCSharpLanguageVersionSource(unittest.TestCase):
     it, but Unity rejected the deployed file with CS8773 under C# 9.0.
     """
 
-    FILE_SCOPED_NAMESPACE_REGEX = re.compile(
-        r"(?m)^\s*namespace\s+[A-Za-z_][A-Za-z0-9_.]*\s*;"
-    )
+    FILE_SCOPED_NAMESPACE_REGEX = re.compile(r"(?m)^\s*namespace\s+[A-Za-z_][A-Za-z0-9_.]*\s*;")
 
     def test_bridge_files_do_not_use_file_scoped_namespaces(self) -> None:
         offenders: list[str] = []
@@ -7658,9 +8507,7 @@ class TestUnityBridgeCSharpLanguageVersionSource(unittest.TestCase):
 
     def test_run_script_result_channels_avoids_nullable_reference_annotations(self) -> None:
         source = _strip_cs_comments(
-            (TOOLS_DIR / "PrefabSentinel.RunScript.ResultChannels.cs").read_text(
-                encoding="utf-8"
-            )
+            (TOOLS_DIR / "PrefabSentinel.RunScript.ResultChannels.cs").read_text(encoding="utf-8")
         )
         nullable_reference_annotation = re.compile(
             r"\b(?:object|string|RunScriptValue|List<RunScriptOutputEntry>)\s*\?"
@@ -7676,9 +8523,7 @@ class TestUnityBridgeCSharpLanguageVersionSource(unittest.TestCase):
         )
 
     def test_run_script_result_channels_declares_nullable_disabled_context(self) -> None:
-        source = (TOOLS_DIR / "PrefabSentinel.RunScript.ResultChannels.cs").read_text(
-            encoding="utf-8"
-        )
+        source = (TOOLS_DIR / "PrefabSentinel.RunScript.ResultChannels.cs").read_text(encoding="utf-8")
         self.assertIn(
             "#nullable disable",
             source,

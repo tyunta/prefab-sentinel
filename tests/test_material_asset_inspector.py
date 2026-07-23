@@ -180,6 +180,92 @@ class TestOrchestratorInspectMaterialAsset(unittest.TestCase):
         self.assertEqual(resp.data["texture_count"], 2)
         self.assertIn("tree", resp.data)
 
+    def test_summary_mode_returns_selected_projection_without_full_payload(self) -> None:
+        project_root = FIXTURES.parent.parent
+        orch = Phase1Orchestrator.default(project_root=project_root)
+        try:
+            resp = orch.inspect_material_asset(
+                target_path=(FIXTURES / "standard_textured.mat")
+                .relative_to(project_root)
+                .as_posix(),
+                mode="summary",
+                property_names=["_MainTex", "_Glossiness", "_Color", "_Missing"],
+            )
+        except TypeError as exc:
+            self.fail(
+                "Expected inspect_material_asset summary mode response, "
+                f"observed unsupported signature: {exc}."
+            )
+
+        self.assertEqual(
+            (
+                True,
+                "INSPECT_MATERIAL_ASSET_RESULT",
+                "summary",
+                "Standard",
+                {
+                    "name": "_MainTex",
+                    "guid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
+                    "path": "",
+                },
+                {
+                    "texture_count": 2,
+                    "float_count": 5,
+                    "color_count": 2,
+                    "int_count": 0,
+                },
+                False,
+                False,
+            ),
+            (
+                resp.success,
+                resp.code,
+                resp.data["mode"],
+                resp.data["shader"]["name"],
+                resp.data["main_texture"],
+                resp.data["counts"],
+                "properties" in resp.data,
+                "tree" in resp.data,
+            ),
+        )
+        self.assertEqual(
+            {
+                "_MainTex": {"kind": "texture", "guid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1"},
+                "_Glossiness": {"kind": "float", "value": 0.8},
+                "_Color": {
+                    "kind": "color",
+                    "value": {"r": 1.0, "g": 0.5, "b": 0.25, "a": 1.0},
+                },
+            },
+            resp.data["selected_properties"],
+        )
+
+    def test_invalid_material_asset_mode_returns_typed_error(self) -> None:
+        project_root = FIXTURES.parent.parent
+        orch = Phase1Orchestrator.default(project_root=project_root)
+        try:
+            resp = orch.inspect_material_asset(
+                target_path=(FIXTURES / "standard_textured.mat")
+                .relative_to(project_root)
+                .as_posix(),
+                mode="compact",
+            )
+        except TypeError as exc:
+            self.fail(
+                "Expected INSPECT_MATERIAL_ASSET_INVALID_MODE envelope, "
+                f"observed unsupported signature: {exc}."
+            )
+
+        assert_error_envelope(
+            resp,
+            code="INSPECT_MATERIAL_ASSET_INVALID_MODE",
+            message_match="Unsupported material inspection mode",
+        )
+        self.assertEqual(
+            ["full", "summary"],
+            resp.data["accepted_modes"],
+        )
+
     def test_not_mat_file(self) -> None:
         project_root = FIXTURES.parent.parent
         orch = Phase1Orchestrator.default(project_root=project_root)
@@ -197,3 +283,21 @@ class TestOrchestratorInspectMaterialAsset(unittest.TestCase):
         # resp.code)``) to exact equality so renaming the code to a
         # suffix-preserving but semantically-shifted form trips this row.
         assert_error_envelope(resp, code="INSPECT_MATERIAL_ASSET_FILE_NOT_FOUND")
+
+    def test_resolution_failure_returns_read_error_envelope(self) -> None:
+        from unittest.mock import patch
+
+        orch = Phase1Orchestrator.default(project_root=FIXTURES.parent.parent)
+        with patch.object(Path, "resolve", side_effect=OSError("resolve failed")):
+            try:
+                resp = orch.inspect_material_asset(target_path="Assets/Test.mat")
+            except OSError as exc:
+                self.fail(f"inspect_material_asset leaked raw {type(exc).__name__}: {exc}")
+
+        assert_error_envelope(
+            resp,
+            code="INSPECT_MATERIAL_ASSET_READ_ERROR",
+            severity="error",
+            message_match="resolve failed",
+            data={"target_path": "Assets/Test.mat", "read_only": True},
+        )

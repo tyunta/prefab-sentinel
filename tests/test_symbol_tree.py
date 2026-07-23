@@ -861,6 +861,78 @@ class TestSymbolTreeNestedExpansion(unittest.TestCase):
             self.assertEqual(len(pi_dicts), 1)
             self.assertIn("source_prefab", pi_dicts[0])
 
+    def test_expanded_nested_nodes_expose_display_lookup_and_entry_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            child_path = self._write_child_prefab(Path(tmpdir))
+            guid_map = {self.CHILD_GUID: child_path}
+            tree = build_symbol_tree(
+                self._parent_text_with_instance(),
+                "Assets/Parent.prefab",
+                expand_nested=True,
+                guid_to_asset_path=guid_map,
+            )
+            overview = tree.to_overview(depth=3, detail="summary")
+
+        avatar = overview[0]
+        marker = next(
+            child for child in avatar["children"]
+            if child["kind"] == "prefab_instance"
+        )
+        child_root = marker["children"][0]
+        mesh_renderer = child_root["children"][1]
+
+        self.assertEqual(
+            (
+                "Avatar/[PrefabInstance: " + child_path.as_posix() + "]",
+                "source_only",
+                "prefab_instance_source",
+            ),
+            (
+                marker["display_path"],
+                marker["entry_kind"],
+                marker["entry_reason"],
+            ),
+        )
+        self.assertEqual(
+            {
+                "asset_path": "Assets/Parent.prefab",
+                "symbol_path": "Avatar/ChildRoot/MeshRenderer",
+                "expand_nested": True,
+            },
+            mesh_renderer["lookup"],
+        )
+        self.assertEqual(
+            "Avatar/[PrefabInstance: "
+            + child_path.as_posix()
+            + "]/ChildRoot/MeshRenderer",
+            mesh_renderer["display_path"],
+        )
+        self.assertEqual("effective_nested", mesh_renderer["entry_kind"])
+
+    def test_lookup_key_from_nested_metadata_resolves_effective_child(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            child_path = self._write_child_prefab(Path(tmpdir))
+            guid_map = {self.CHILD_GUID: child_path}
+            tree = build_symbol_tree(
+                self._parent_text_with_instance(),
+                "Assets/Parent.prefab",
+                expand_nested=True,
+                guid_to_asset_path=guid_map,
+            )
+            marker = tree.to_overview(depth=3)[0]["children"][1]
+            lookup = marker["children"][0]["children"][1]["lookup"]
+            matches = tree.query(str(lookup["symbol_path"]), depth=0)
+
+        self.assertEqual(1, len(matches))
+        self.assertEqual(
+            ("700", "MeshRenderer", "effective_nested"),
+            (
+                matches[0]["file_id"],
+                matches[0]["name"],
+                matches[0]["entry_kind"],
+            ),
+        )
+
 
 class TestSymbolTreeNestedResolution(unittest.TestCase):
     """Path resolution through PrefabInstance boundaries."""

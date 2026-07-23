@@ -249,12 +249,19 @@ class ProjectSession:
 
     def status(self) -> dict[str, Any]:
         """Return current cache diagnostics."""
+        import os
+
+        from prefab_sentinel.bridge_constants import BRIDGE_WATCH_DIR_ENV
+
         project_root = str(self._cache.project_root) if self._cache.project_root else None
+        configured_watch_dir = os.environ.get(BRIDGE_WATCH_DIR_ENV, "").strip()
         result = self._cache.cache_status()
         result["project_root"] = project_root
         result["expected_project_root"] = project_root
         result["session_id"] = self._session_id
         result["scope"] = str(self._scope) if self._scope else None
+        if configured_watch_dir:
+            result["configured_watch_dir"] = configured_watch_dir
         result["watcher_running"] = (
             self._watcher_task is not None and not self._watcher_task.done()
         )

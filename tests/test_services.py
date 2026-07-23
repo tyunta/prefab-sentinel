@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 from prefab_sentinel.contracts import Diagnostic, Severity
@@ -106,6 +106,44 @@ PrefabInstance:
 guid: {VARIANT_GUID}
 """,
     )
+
+def _write_capturing_patch_bridge(
+    bridge: Path,
+    captured_request: Path,
+) -> tuple[str, ...]:
+    bridge.write_text(
+        """
+import json
+import sys
+
+request = json.load(sys.stdin)
+with open(sys.argv[1], "w", encoding="utf-8") as output:
+    json.dump(request, output)
+print(
+    json.dumps(
+        {
+            "protocol_version": 2,
+            "success": True,
+            "severity": "info",
+            "code": "SER_APPLY_OK",
+            "message": "Bridge apply completed.",
+            "data": {
+                "target": request["resources"][0]["path"],
+                "op_count": len(request["ops"]),
+                "applied": len(request["ops"]),
+                "read_only": False,
+                "executed": True,
+                "protocol_version": 2,
+                "created_results": [],
+            },
+            "diagnostics": [],
+        }
+    )
+)
+""".strip(),
+        encoding="utf-8",
+    )
+    return (sys.executable, str(bridge), str(captured_request))
 
 
 class ReferenceResolverServiceTests(unittest.TestCase):
@@ -807,9 +845,6 @@ guid: {asset_guid}
         payload bound by value."""
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
-            # Single self-contained asset with a meta file but no
-            # references — ``scan_broken_references`` finds zero
-            # broken refs.
             write_file(
                 root / "Assets" / "Standalone.asset",
                 """%YAML 1.1
@@ -836,8 +871,10 @@ guid: 1111111111111111111111111111aaaa
         self.assertEqual(
             {
                 "scope": "Assets",
+                "scan_scope": "Assets",
                 "project_root": ".",
                 "scan_project_root": ".",
+                "guid_resolution_root": ".",
                 "read_only": True,
                 "details_included": False,
                 "max_diagnostics": 200,
@@ -932,8 +969,10 @@ guid: 2222222222222222222222222222bbbb
             message_match=r"[Bb]roken",
             data={
                 "scope": "Assets",
+                "scan_scope": "Assets",
                 "project_root": ".",
                 "scan_project_root": ".",
+                "guid_resolution_root": ".",
                 "read_only": True,
                 "details_included": False,
                 "max_diagnostics": 200,
@@ -1040,6 +1079,28 @@ guid: 2222222222222222222222222222bbbb
             data={
                 "scope": "Assets/Does/Not/Exist",
                 "read_only": True,
+            },
+        )
+
+    def test_scan_broken_references_missing_outside_scope_fails_as_outside_project(self) -> None:
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "Project"
+            root.mkdir()
+            outside_scope = Path(temp_dir) / "Outside" / "Missing"
+            svc = ReferenceResolverService(project_root=root)
+            response = svc.scan_broken_references(str(outside_scope))
+
+        assert_error_envelope(
+            response,
+            code="REF404",
+            severity="error",
+            message_match=r"outside the active project root",
+            data={
+                "scope": str(outside_scope),
+                "read_only": True,
+                "reason": "outside_project_root",
             },
         )
 
@@ -1209,6 +1270,29 @@ guid: 2222222222222222222222222222bbbb
             data={
                 "scope": "Assets/NotFound",
                 "read_only": True,
+            },
+        )
+
+    def test_where_used_missing_outside_scope_fails_as_outside_project(self) -> None:
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "Project"
+            root.mkdir()
+            _create_sample_project(root)
+            outside_scope = Path(temp_dir) / "Outside" / "Missing"
+            svc = ReferenceResolverService(project_root=root)
+            response = svc.where_used(BASE_GUID, scope=str(outside_scope))
+
+        assert_error_envelope(
+            response,
+            code="REF404",
+            severity="error",
+            message_match=r"outside the active project root",
+            data={
+                "scope": str(outside_scope),
+                "read_only": True,
+                "reason": "outside_project_root",
             },
         )
 
@@ -1614,6 +1698,47 @@ class PatchValidatorEnvelopeTests(unittest.TestCase):
             ),
         )
 
+    def test_validate_op_array_ops_with_file_id_target_are_accepted(self) -> None:
+        cases = (
+            (
+                {
+                    "op": "insert_array_element",
+                    "file_id": "300",
+                    "path": "m_Items.Array.data",
+                    "index": 1,
+                    "value": "new",
+                },
+                {"insert_index": 1, "value": "new"},
+            ),
+            (
+                {
+                    "op": "remove_array_element",
+                    "file_id": "300",
+                    "path": "m_Items.Array.data",
+                    "index": 2,
+                },
+                {"remove_index": 2},
+            ),
+        )
+        for op, expected_after in cases:
+            with self.subTest(operation=op["op"]):
+                result, diagnostics = self._run_validate_op(op)
+                self.assertEqual([], diagnostics)
+                self.assertIsInstance(result, dict)
+                self.assertEqual(
+                    (op["op"], "300", "m_Items.Array.data", expected_after),
+                    (
+                        result["op"],
+                        result["file_id"],
+                        result["path"],
+                        result["after"],
+                    ),
+                    msg=(
+                        "writer validation must preserve exact fileID addressing "
+                        f"for {op['op']}: {result!r}"
+                    ),
+                )
+
     def test_validate_op_set_preview_row_omits_unused_target_identifier(self) -> None:
         """Issue #37: a ``set`` preview row carries only the target
         identifier the op supplied — a component-targeted op omits the
@@ -1632,6 +1757,28 @@ class PatchValidatorEnvelopeTests(unittest.TestCase):
         self.assertEqual([], fid_diags)
         self.assertEqual("300", by_file_id["file_id"])
         self.assertNotIn("component", by_file_id)
+
+    def test_validate_op_file_id_precedence_ignores_unused_numeric_component(
+        self,
+    ) -> None:
+        result, diagnostics = self._run_validate_op(
+            {
+                "op": "set",
+                "component": "123",
+                "file_id": "300",
+                "path": "m_X",
+                "value": 1,
+            }
+        )
+
+        self.assertEqual([], diagnostics)
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(
+            ("123", "300"),
+            (result.get("component"), result.get("file_id")),
+            msg="file_id must win without validating the unused component selector",
+        )
 
     def test_validate_op_numeric_fileid_component_emits_likely_fileid(self) -> None:
         """Rejection family: a numeric component string (e.g. ``"123"``)
@@ -2772,6 +2919,200 @@ class RuntimeValidationServiceTests(unittest.TestCase):
             self.assertEqual("RUN_CONFIG_ERROR", response.code)
             self.assertIn("UNITYTOOL_BRIDGE_WATCH_DIR", response.message)
 
+    def test_editor_console_failure_redacts_the_bridge_response(self) -> None:
+        secret = "/private/editor/bridge-response.json"
+        bridge_response = {
+            "success": False,
+            "severity": "error",
+            "code": secret,
+            "message": f"failed at {secret}",
+            "data": {"executed": True, "path": secret},
+            "diagnostics": [{"message": secret}],
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_sample_project(root)
+            service = RuntimeValidationService(project_root=root)
+            with patch(
+                "prefab_sentinel.editor_bridge.send_action",
+                return_value=bridge_response,
+            ) as send_action:
+                response = service.collect_editor_console(
+                    since_timestamp="2026-07-13T00:00:00Z",
+                    max_lines=12,
+                )
+
+        self.assertEqual(
+            (
+                False,
+                Severity.ERROR,
+                "RUN_EDITOR_CONSOLE_ERROR",
+                "Editor console capture failed.",
+                {
+                    "since_timestamp": "2026-07-13T00:00:00Z",
+                    "read_only": True,
+                    "executed": True,
+                },
+            ),
+            (
+                response.success,
+                response.severity,
+                response.code,
+                response.message,
+                response.data,
+            ),
+        )
+        self.assertNotIn(secret, repr(response))
+        send_action.assert_called_once_with(
+            action="capture_console_logs",
+            max_entries=12,
+            since_seconds=0.0,
+            order="oldest_first",
+        )
+
+    def test_editor_console_rejects_malformed_bridge_response_schema(self) -> None:
+        cases = (
+            ("success", {"success": "false", "data": {"entries": []}}),
+            ("entries_type", {"success": True, "data": {"entries": "not-a-list"}}),
+            ("entries_missing", {"success": True, "data": {}}),
+            ("entry_type", {"success": True, "data": {"entries": ["corrupt"]}}),
+            ("message_missing", {"success": True, "data": {"entries": [{"log_type": "Log"}]}}),
+            (
+                "message_type",
+                {"success": True, "data": {"entries": [{"message": 1, "log_type": "Log"}]}},
+            ),
+            ("log_type_missing", {"success": True, "data": {"entries": [{"message": "ready"}]}}),
+            (
+                "log_type_type",
+                {"success": True, "data": {"entries": [{"message": "ready", "log_type": 1}]}},
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_sample_project(root)
+            service = RuntimeValidationService(project_root=root)
+
+            for label, bridge_response in cases:
+                with (
+                    self.subTest(label=label),
+                    patch(
+                        "prefab_sentinel.editor_bridge.send_action",
+                        return_value=bridge_response,
+                    ),
+                ):
+                    response = service.collect_editor_console(
+                        since_timestamp="2026-07-13T00:00:00Z",
+                        max_lines=12,
+                    )
+
+                    self.assertEqual(
+                        (
+                            False,
+                            Severity.ERROR,
+                            "RUN_EDITOR_CONSOLE_ERROR",
+                            "Editor console capture failed.",
+                            False,
+                        ),
+                        (
+                            response.success,
+                            response.severity,
+                            response.code,
+                            response.message,
+                            response.data["executed"],
+                        ),
+                        msg=f"malformed Bridge response was accepted: {response.to_dict()!r}",
+                    )
+
+    def test_editor_console_collects_well_formed_entries(self) -> None:
+        bridge_response = {
+            "success": True,
+            "data": {
+                "entries": [
+                    {"message": "ready", "log_type": "Log"},
+                    {"message": "plain", "log_type": ""},
+                ],
+                "executed": True,
+            },
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_sample_project(root)
+            service = RuntimeValidationService(project_root=root)
+
+            with patch(
+                "prefab_sentinel.editor_bridge.send_action",
+                return_value=bridge_response,
+            ):
+                response = service.collect_editor_console(
+                    since_timestamp="2026-07-13T00:00:00Z",
+                    max_lines=12,
+                )
+
+        self.assertEqual(
+            (
+                True,
+                Severity.INFO,
+                "RUN_EDITOR_CONSOLE_COLLECTED",
+                2,
+                ["[Log] ready", "plain"],
+                True,
+            ),
+            (
+                response.success,
+                response.severity,
+                response.code,
+                response.data["line_count"],
+                response.data["log_lines"],
+                response.data["executed"],
+            ),
+            msg=f"well-formed console entries were not projected exactly: {response.to_dict()!r}",
+        )
+
+    def test_compile_udonsharp_rejects_missing_watch_directory_without_creating_it(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_sample_project(root)
+            watch_dir = root / "missing-watch"
+            svc = RuntimeValidationService(project_root=root)
+
+            with patch.dict(
+                os.environ,
+                {
+                    "UNITYTOOL_BRIDGE_WATCH_DIR": str(watch_dir),
+                    "UNITYTOOL_UNITY_TIMEOUT_SEC": "1",
+                },
+                clear=False,
+            ):
+                response = svc.compile_udonsharp()
+
+            self.assertEqual(
+                (
+                    False,
+                    "error",
+                    "RUN_CONFIG_ERROR",
+                    (
+                        "UNITYTOOL_BRIDGE_WATCH_DIR must name an existing "
+                        "Editor Bridge watch directory."
+                    ),
+                    False,
+                    False,
+                ),
+                (
+                    response.success,
+                    response.severity,
+                    response.code,
+                    response.message,
+                    response.data["executed"],
+                    watch_dir.exists(),
+                ),
+                msg=(
+                    "runtime validation must require the resident Editor Bridge "
+                    f"watch directory without creating it: {response.to_dict()!r}"
+                ),
+            )
+
     def test_compile_udonsharp_reaches_unity_via_editor_bridge(self) -> None:
         """The compile dispatcher writes a request file to the watch
         directory and surfaces the responder's envelope unchanged.
@@ -2817,6 +3158,366 @@ class RuntimeValidationServiceTests(unittest.TestCase):
                 True,
                 response.data["executed"],
                 msg=f"bridge compile must report executed=True: {response.data!r}",
+            )
+
+    def test_validate_runtime_redacts_write_failure_and_cleans_partial_request(
+        self,
+    ) -> None:
+        secret = "/secret/runtime-write"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_sample_project(root)
+            write_file(root / "Assets" / "Scenes" / "Smoke.unity", "%YAML 1.1\n")
+            watch_dir = root / "watch"
+            watch_dir.mkdir()
+            original_rename = Path.rename
+
+            def fail_request_rename(path: Path, target: str | Path) -> Path:
+                if path.parent == watch_dir and path.name.endswith(
+                    ".request.json.tmp"
+                ):
+                    raise OSError(secret)
+                return original_rename(path, target)
+
+            orchestrator = Phase1Orchestrator.default(project_root=root)
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "UNITYTOOL_BRIDGE_WATCH_DIR": str(watch_dir),
+                        "UNITYTOOL_UNITY_TIMEOUT_SEC": "1",
+                    },
+                    clear=False,
+                ),
+                patch.object(Path, "rename", fail_request_rename),
+                self.assertLogs(
+                    "prefab_sentinel.services.runtime_validation.editor_bridge_invoke",
+                    level="ERROR",
+                ) as captured,
+            ):
+                response = orchestrator.validate_runtime(
+                    scene_path="Assets/Scenes/Smoke.unity"
+                )
+
+            self.assertEqual(
+                {
+                    "step": "compile_udonsharp",
+                    "result": {
+                        "success": False,
+                        "severity": "error",
+                        "code": "RUN_EDITOR_BRIDGE_WRITE",
+                        "message": "Failed to write editor bridge runtime request file.",
+                        "data": {
+                            "action": "compile_udonsharp",
+                            "read_only": True,
+                            "executed": False,
+                        },
+                        "diagnostics": [],
+                    },
+                },
+                response.data["steps"][1],
+                msg=(
+                    "public runtime validation must project only stable transport "
+                    f"metadata: {response.to_dict()!r}"
+                ),
+            )
+            self.assertEqual(
+                [
+                    "ERROR:prefab_sentinel.services.runtime_validation."
+                    "editor_bridge_invoke:Runtime Editor Bridge request write failed"
+                ],
+                captured.output,
+                msg=f"runtime write log must omit caught exception details: {captured.output!r}",
+            )
+            serialized = json.dumps(response.to_dict(), sort_keys=True)
+            self.assertNotIn(
+                secret,
+                serialized,
+                msg=f"runtime validation leaked the private write error: {serialized}",
+            )
+            self.assertNotIn(
+                str(watch_dir),
+                serialized,
+                msg=f"runtime validation leaked the watch directory: {serialized}",
+            )
+            self.assertEqual(
+                [],
+                list(watch_dir.iterdir()),
+                msg="failed request rename must not leave an IPC request artifact",
+            )
+
+    def test_validate_runtime_redacts_response_status_failure(self) -> None:
+        secret = "/secret/runtime-response-status"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_sample_project(root)
+            write_file(root / "Assets" / "Scenes" / "Smoke.unity", "%YAML 1.1\n")
+            watch_dir = root / "watch"
+            watch_dir.mkdir()
+            original_exists = Path.exists
+
+            def fail_response_status(path: Path) -> bool:
+                if path.parent == watch_dir and path.name.endswith(".response.json"):
+                    raise OSError(secret)
+                return original_exists(path)
+
+            orchestrator = Phase1Orchestrator.default(project_root=root)
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "UNITYTOOL_BRIDGE_WATCH_DIR": str(watch_dir),
+                        "UNITYTOOL_UNITY_TIMEOUT_SEC": "1",
+                    },
+                    clear=False,
+                ),
+                patch.object(Path, "exists", fail_response_status),
+                self.assertLogs(
+                    "prefab_sentinel.services.runtime_validation.editor_bridge_invoke",
+                    level="ERROR",
+                ) as captured,
+            ):
+                response = orchestrator.validate_runtime(
+                    scene_path="Assets/Scenes/Smoke.unity"
+                )
+
+            self.assertEqual(
+                {
+                    "success": False,
+                    "severity": "error",
+                    "code": "RUN_EDITOR_BRIDGE_RESPONSE",
+                    "message": (
+                        "Editor bridge runtime response file status could not be read."
+                    ),
+                    "data": {
+                        "action": "compile_udonsharp",
+                        "read_only": False,
+                        "executed": False,
+                    },
+                    "diagnostics": [],
+                },
+                response.data["steps"][1]["result"],
+                msg=f"public response-status envelope mismatch: {response.to_dict()!r}",
+            )
+            self.assertEqual(
+                [
+                    "ERROR:prefab_sentinel.services.runtime_validation."
+                    "editor_bridge_invoke:Runtime Editor Bridge response status probe failed"
+                ],
+                captured.output,
+                msg=f"response-status log must omit caught exception details: {captured.output!r}",
+            )
+            self.assertEqual(
+                [],
+                list(watch_dir.iterdir()),
+                msg="response-status failure must clean the pending request",
+            )
+
+    def test_validate_runtime_redacts_response_read_failure(self) -> None:
+        secret = "/secret/runtime-response-read"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_sample_project(root)
+            write_file(root / "Assets" / "Scenes" / "Smoke.unity", "%YAML 1.1\n")
+            watch_dir = root / "watch"
+            watch_dir.mkdir()
+            original_exists = Path.exists
+            original_read_text = Path.read_text
+
+            def response_is_ready(path: Path) -> bool:
+                if path.parent == watch_dir and path.name.endswith(".response.json"):
+                    return True
+                return original_exists(path)
+
+            def fail_response_read(
+                path: Path,
+                encoding: str | None = None,
+                errors: str | None = None,
+            ) -> str:
+                if path.parent == watch_dir and path.name.endswith(".response.json"):
+                    raise OSError(secret)
+                return original_read_text(path, encoding=encoding, errors=errors)
+
+            orchestrator = Phase1Orchestrator.default(project_root=root)
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "UNITYTOOL_BRIDGE_WATCH_DIR": str(watch_dir),
+                        "UNITYTOOL_UNITY_TIMEOUT_SEC": "1",
+                    },
+                    clear=False,
+                ),
+                patch.object(Path, "exists", response_is_ready),
+                patch.object(Path, "read_text", fail_response_read),
+                self.assertLogs(
+                    "prefab_sentinel.services.runtime_validation.editor_bridge_invoke",
+                    level="ERROR",
+                ) as captured,
+            ):
+                response = orchestrator.validate_runtime(
+                    scene_path="Assets/Scenes/Smoke.unity"
+                )
+
+            self.assertEqual(
+                {
+                    "success": False,
+                    "severity": "error",
+                    "code": "RUN_EDITOR_BRIDGE_RESPONSE",
+                    "message": "Editor bridge runtime response file could not be read.",
+                    "data": {
+                        "action": "compile_udonsharp",
+                        "read_only": False,
+                        "executed": False,
+                    },
+                    "diagnostics": [],
+                },
+                response.data["steps"][1]["result"],
+                msg=f"public response-read envelope mismatch: {response.to_dict()!r}",
+            )
+            self.assertEqual(
+                [
+                    "ERROR:prefab_sentinel.services.runtime_validation."
+                    "editor_bridge_invoke:Runtime Editor Bridge response read failed"
+                ],
+                captured.output,
+                msg=f"response-read log must omit caught exception details: {captured.output!r}",
+            )
+            self.assertEqual(
+                [],
+                list(watch_dir.iterdir()),
+                msg="response-read failure must clean request and response artifacts",
+            )
+
+    def test_validate_runtime_redacts_invalid_utf8_response(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_sample_project(root)
+            write_file(root / "Assets" / "Scenes" / "Smoke.unity", "%YAML 1.1\n")
+            watch_dir = root / "watch"
+            watch_dir.mkdir()
+            original_exists = Path.exists
+            original_read_text = Path.read_text
+
+            def response_is_ready(path: Path) -> bool:
+                if path.parent == watch_dir and path.name.endswith(".response.json"):
+                    return True
+                return original_exists(path)
+
+            def fail_response_decode(
+                path: Path,
+                encoding: str | None = None,
+                errors: str | None = None,
+            ) -> str:
+                if path.parent == watch_dir and path.name.endswith(".response.json"):
+                    raise UnicodeDecodeError(
+                        "utf-8",
+                        b"\xff",
+                        0,
+                        1,
+                        "invalid start byte",
+                    )
+                return original_read_text(path, encoding=encoding, errors=errors)
+
+            orchestrator = Phase1Orchestrator.default(project_root=root)
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "UNITYTOOL_BRIDGE_WATCH_DIR": str(watch_dir),
+                        "UNITYTOOL_UNITY_TIMEOUT_SEC": "1",
+                    },
+                    clear=False,
+                ),
+                patch.object(Path, "exists", response_is_ready),
+                patch.object(Path, "read_text", fail_response_decode),
+                self.assertLogs(
+                    "prefab_sentinel.services.runtime_validation.editor_bridge_invoke",
+                    level="ERROR",
+                ) as captured,
+            ):
+                response = orchestrator.validate_runtime(
+                    scene_path="Assets/Scenes/Smoke.unity"
+                )
+
+            self.assertEqual(
+                {
+                    "success": False,
+                    "severity": "error",
+                    "code": "RUN_EDITOR_BRIDGE_RESPONSE",
+                    "message": "Editor bridge runtime response file could not be read.",
+                    "data": {
+                        "action": "compile_udonsharp",
+                        "read_only": False,
+                        "executed": False,
+                    },
+                    "diagnostics": [],
+                },
+                response.data["steps"][1]["result"],
+                msg=f"invalid UTF-8 response envelope mismatch: {response.to_dict()!r}",
+            )
+            self.assertEqual(
+                [
+                    "ERROR:prefab_sentinel.services.runtime_validation."
+                    "editor_bridge_invoke:Runtime Editor Bridge response read failed"
+                ],
+                captured.output,
+                msg=f"decode failure log must omit exception details: {captured.output!r}",
+            )
+            self.assertEqual(
+                [],
+                list(watch_dir.iterdir()),
+                msg="decode failure must clean request and response artifacts",
+            )
+
+    def test_validate_runtime_redacts_timeout_transport_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_sample_project(root)
+            write_file(root / "Assets" / "Scenes" / "Smoke.unity", "%YAML 1.1\n")
+            watch_dir = root / "watch"
+            watch_dir.mkdir()
+            orchestrator = Phase1Orchestrator.default(project_root=root)
+
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "UNITYTOOL_BRIDGE_WATCH_DIR": str(watch_dir),
+                        "UNITYTOOL_UNITY_TIMEOUT_SEC": "1",
+                    },
+                    clear=False,
+                ),
+                patch(
+                    "prefab_sentinel.services.runtime_validation."
+                    "editor_bridge_invoke.time.monotonic",
+                    side_effect=[0.0, 2.0],
+                ),
+            ):
+                response = orchestrator.validate_runtime(
+                    scene_path="Assets/Scenes/Smoke.unity"
+                )
+
+            self.assertEqual(
+                {
+                    "success": False,
+                    "severity": "error",
+                    "code": "RUN_COMPILE_FAILED",
+                    "message": "Editor bridge runtime response timed out.",
+                    "data": {
+                        "action": "compile_udonsharp",
+                        "read_only": False,
+                        "executed": False,
+                    },
+                    "diagnostics": [],
+                },
+                response.data["steps"][1]["result"],
+                msg=f"public timeout envelope mismatch: {response.to_dict()!r}",
+            )
+            self.assertEqual(
+                [],
+                list(watch_dir.iterdir()),
+                msg="runtime timeout must clean the pending request",
             )
 
     def test_clientsim_missing_or_non_scene_path_is_typed_for_missing_scene(self) -> None:
@@ -3000,20 +3701,36 @@ GameObject:
 
             side_effect_report = {
                 "diff_complete": True,
+                "diff_warnings": [],
                 "scene_path": "Assets/Scenes/Smoke.unity",
-                "root_objects_before": ["World"],
-                "root_objects_after": ["World", "ClientSim"],
-                "hierarchy_paths_before": ["/World"],
-                "hierarchy_paths_after": ["/World", "/ClientSim"],
-                "components_before": {"/World": ["Transform"]},
-                "components_after": {"/World": ["Transform"], "/ClientSim": ["Transform"]},
+                "roots_before": ["World"],
+                "roots_runtime": ["World", "ClientSim"],
+                "roots_after": ["World", "ClientSim"],
+                "hierarchy_before": ["/World"],
+                "hierarchy_runtime": ["/World", "/ClientSim"],
+                "hierarchy_after": ["/World", "/ClientSim"],
+                "components_before": ["/World::Transform"],
+                "components_runtime": [
+                    "/World::Transform",
+                    "/ClientSim::Transform",
+                ],
+                "components_after": [
+                    "/World::Transform",
+                    "/ClientSim::Transform",
+                ],
                 "added_gameobjects": ["/ClientSim"],
                 "removed_gameobjects": [],
-                "added_components": [{"path": "/ClientSim", "component": "Transform"}],
+                "added_components": ["/ClientSim::Transform"],
                 "removed_components": [],
+                "residual_added_gameobjects": ["/ClientSim"],
+                "residual_removed_gameobjects": [],
+                "residual_added_components": ["/ClientSim::Transform"],
+                "residual_removed_components": [],
                 "dirty_before": False,
+                "dirty_runtime": True,
                 "dirty_after": True,
                 "dirty_count_before": 0,
+                "dirty_count_runtime": 1,
                 "dirty_count_after": 1,
                 "asset_change_candidates": ["Assets/Scenes/Smoke.unity"],
             }
@@ -3136,6 +3853,190 @@ GameObject:
                 [diagnostic["code"] for diagnostic in response.to_dict()["diagnostics"]],
                 msg=f"incomplete ClientSim diff diagnostics mismatch: {response.to_dict()!r}",
             )
+
+
+    def test_clientsim_transport_deadline_outlives_operation_cleanup(self) -> None:
+        from prefab_sentinel.services.runtime_validation.editor_bridge_invoke import (
+            _transport_timeout_sec,
+        )
+
+        self.assertEqual(
+            (45, 10),
+            (
+                _transport_timeout_sec("run_clientsim", 10),
+                _transport_timeout_sec("compile_udonsharp", 10),
+            ),
+            msg="ClientSim transport must retain a 30s exit grace and 5s dispatch margin.",
+        )
+
+    def test_clientsim_runtime_only_objects_are_not_cleanup_warnings(self) -> None:
+        from prefab_sentinel.services.runtime_validation.classification import (
+            clientsim_side_effect_codes,
+        )
+
+        report = {
+            "diff_complete": True,
+            "diff_warnings": [],
+            "added_gameobjects": ["/__ClientSimSystem"],
+            "removed_gameobjects": [],
+            "added_components": ["/__ClientSimSystem::ClientSimMain"],
+            "removed_components": [],
+            "residual_added_gameobjects": [],
+            "residual_removed_gameobjects": [],
+            "residual_added_components": [],
+            "residual_removed_components": [],
+            "dirty_before": False,
+            "dirty_after": False,
+            "dirty_count_before": 0,
+            "dirty_count_after": 0,
+            "asset_change_candidates": [],
+        }
+
+        self.assertEqual(
+            [],
+            clientsim_side_effect_codes(report),
+            msg="Expected transient runtime ClientSim objects must not be cleanup warnings.",
+        )
+
+    def test_clientsim_post_exit_residual_objects_are_cleanup_warnings(self) -> None:
+        from prefab_sentinel.services.runtime_validation.classification import (
+            clientsim_side_effect_codes,
+        )
+
+        report = {
+            "diff_complete": True,
+            "diff_warnings": [],
+            "added_gameobjects": [],
+            "removed_gameobjects": [],
+            "added_components": [],
+            "removed_components": [],
+            "residual_added_gameobjects": ["/__ClientSimSystem"],
+            "residual_removed_gameobjects": [],
+            "residual_added_components": ["/__ClientSimSystem::ClientSimMain"],
+            "residual_removed_components": [],
+            "dirty_before": False,
+            "dirty_after": False,
+            "dirty_count_before": 0,
+            "dirty_count_after": 0,
+            "asset_change_candidates": [],
+        }
+
+        self.assertEqual(
+            ["CLIENTSIM_SIDE_EFFECT_DIFF_DETECTED"],
+            clientsim_side_effect_codes(report),
+            msg="Post-exit residual objects must surface as cleanup regression warnings.",
+        )
+
+    def test_clientsim_side_effect_report_schema_fails_closed(self) -> None:
+        from prefab_sentinel.services.runtime_validation.classification import (
+            clientsim_side_effect_codes,
+        )
+
+        malformed_reports: tuple[object, ...] = (
+            None,
+            {},
+            {"diff_complete": True},
+        )
+        for report in malformed_reports:
+            with self.subTest(report=report):
+                self.assertEqual(
+                    ["CLIENTSIM_SIDE_EFFECT_DIFF_UNAVAILABLE"],
+                    clientsim_side_effect_codes(report),
+                    msg=f"Malformed ClientSim side-effect report escaped: {report!r}",
+                )
+
+    def test_clientsim_incomplete_runtime_snapshot_still_reports_trusted_residuals(self) -> None:
+        from prefab_sentinel.services.runtime_validation.classification import (
+            clientsim_side_effect_codes,
+        )
+
+        report = {
+            "diff_complete": False,
+            "diff_warnings": ["CLIENTSIM_SIDE_EFFECT_RUNTIME_UNAVAILABLE"],
+            "residual_added_gameobjects": ["/__ClientSimSystem"],
+            "residual_removed_gameobjects": [],
+            "residual_added_components": [],
+            "residual_removed_components": [],
+            "dirty_before": False,
+            "dirty_after": False,
+            "dirty_count_before": 0,
+            "dirty_count_after": 0,
+            "asset_change_candidates": [],
+        }
+
+        self.assertEqual(
+            [
+                "CLIENTSIM_SIDE_EFFECT_DIFF_UNAVAILABLE",
+                "CLIENTSIM_SIDE_EFFECT_DIFF_DETECTED",
+            ],
+            clientsim_side_effect_codes(report),
+            msg="A missing runtime snapshot must not hide trusted before/after residuals.",
+        )
+
+    def test_clientsim_missing_after_snapshot_does_not_claim_untrusted_residuals(self) -> None:
+        from prefab_sentinel.services.runtime_validation.classification import (
+            clientsim_side_effect_codes,
+        )
+
+        report = {
+            "diff_complete": False,
+            "diff_warnings": ["CLIENTSIM_SIDE_EFFECT_AFTER_UNAVAILABLE"],
+            "residual_added_gameobjects": [],
+            "residual_removed_gameobjects": ["/World"],
+            "residual_added_components": [],
+            "residual_removed_components": ["/World::Transform"],
+            "dirty_before": True,
+            "dirty_after": False,
+            "dirty_count_before": 1,
+            "dirty_count_after": 0,
+            "asset_change_candidates": ["Assets/Scenes/Smoke.unity"],
+        }
+
+        self.assertEqual(
+            ["CLIENTSIM_SIDE_EFFECT_DIFF_UNAVAILABLE"],
+            clientsim_side_effect_codes(report),
+            msg="Missing before/after snapshots must suppress untrustworthy cleanup claims.",
+        )
+
+    def test_clientsim_executed_gate_controls_side_effect_report_requirement(self) -> None:
+        from prefab_sentinel.contracts import ToolResponse
+        from prefab_sentinel.services.runtime_validation.editor_bridge_invoke import (
+            with_clientsim_side_effect_diagnostics,
+        )
+
+        rejected = ToolResponse(
+            success=False,
+            severity=Severity.ERROR,
+            code="CLIENTSIM_PREFLIGHT_FAILED",
+            message="ClientSim preflight failed.",
+            data={"executed": False},
+        )
+        rejected_result = with_clientsim_side_effect_diagnostics(rejected)
+        self.assertIs(
+            rejected,
+            rejected_result,
+            msg="A pre-Play rejection must not require a side-effect report.",
+        )
+
+        executed = ToolResponse(
+            success=True,
+            severity=Severity.INFO,
+            code="RUN_CLIENTSIM_OK",
+            message="ClientSim completed.",
+            data={"executed": True},
+        )
+        executed_result = with_clientsim_side_effect_diagnostics(executed)
+        self.assertEqual(
+            ("warning", ["CLIENTSIM_SIDE_EFFECT_DIFF_UNAVAILABLE"]),
+            (
+                executed_result.severity.value,
+                [
+                    diagnostic["code"]
+                    for diagnostic in executed_result.to_dict()["diagnostics"]
+                ],
+            ),
+            msg="An executed ClientSim response without a report must fail closed.",
+        )
 
     def test_classify_errors_detects_known_categories(self) -> None:
         svc = RuntimeValidationService(project_root=Path.cwd())
@@ -4332,9 +5233,63 @@ class SerializedObjectServiceTests(unittest.TestCase):
             )
 
             self.assertEqual(
-                (False, "SER_UNSUPPORTED_TARGET"),
-                (response.success, response.code),
-                msg=f"envelope mismatch: {response!r}",
+                (
+                    False,
+                    "SER_UNSUPPORTED_TARGET",
+                    {
+                        "op_count": 1,
+                        "applied": 0,
+                        "read_only": False,
+                        "executed": False,
+                    },
+                ),
+                (response.success, response.code, response.data),
+                msg=f"unsupported-target envelope exposed internal data: {response!r}",
+            )
+
+    def test_apply_and_save_redacts_bridge_configuration_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            target = root / "state.prefab"
+            target.write_text("%YAML 1.1\n", encoding="utf-8")
+
+            with patch.dict(
+                os.environ,
+                {"UNITYTOOL_PATCH_BRIDGE": '"'},
+                clear=False,
+            ):
+                svc = SerializedObjectService()
+                response = svc.apply_and_save(
+                    target=str(target),
+                    ops=[
+                        {
+                            "op": "set",
+                            "component": "Example.Component",
+                            "path": "nested.value",
+                            "value": 42,
+                        }
+                    ],
+                )
+
+            self.assertEqual(
+                (
+                    False,
+                    "SER_BRIDGE_CONFIG",
+                    "Unity bridge command configuration is invalid.",
+                    {
+                        "op_count": 1,
+                        "applied": 0,
+                        "read_only": False,
+                        "executed": False,
+                    },
+                ),
+                (
+                    response.success,
+                    response.code,
+                    response.message,
+                    response.data,
+                ),
+                msg=f"bridge-configuration envelope exposed parser details: {response!r}",
             )
 
     def test_apply_and_save_uses_unity_bridge_for_prefab_target(self) -> None:
@@ -4352,16 +5307,19 @@ request = json.load(sys.stdin)
 print(
     json.dumps(
         {
+            "protocol_version": 2,
             "success": True,
             "severity": "info",
             "code": "SER_APPLY_OK",
             "message": "Bridge apply completed.",
             "data": {
-                "target": request.get("target", ""),
-                "op_count": len(request.get("ops", [])),
-                "applied": len(request.get("ops", [])),
+                "target": request["resources"][0]["path"],
+                "op_count": len(request["ops"]),
+                "applied": len(request["ops"]),
                 "read_only": False,
                 "executed": True,
+                "protocol_version": 2,
+                "created_results": [],
             },
             "diagnostics": [],
         }
@@ -4391,42 +5349,98 @@ print(
             )
             self.assertEqual(1, response.data["applied"])
 
+    def test_apply_and_save_round_trips_through_configured_external_bridge(
+        self,
+    ) -> None:
+        from tests.bridge_test_helpers import EditorBridgeResponder
+
+        def respond(request: dict[str, object]) -> dict[str, object]:
+            target = request.get("target")
+            ops = request.get("ops")
+            if not isinstance(target, str):
+                raise AssertionError("target must be a string")
+            if not isinstance(ops, list):
+                raise AssertionError("ops must be a list")
+            return {
+                "protocol_version": 2,
+                "success": True,
+                "severity": "info",
+                "code": "SER_APPLY_OK",
+                "message": "Bridge apply completed.",
+                "data": {
+                    "target": target,
+                    "op_count": len(ops),
+                    "applied": len(ops),
+                    "read_only": False,
+                    "executed": True,
+                    "protocol_version": 2,
+                    "created_results": [],
+                },
+                "diagnostics": [],
+            }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            target = root / "Assets" / "state.prefab"
+            target.parent.mkdir()
+            target.write_text("%YAML 1.1\n", encoding="utf-8")
+            watch_dir = root / "watch"
+            bridge = Path(__file__).resolve().parents[1] / "tools" / "unity_patch_bridge.py"
+            service = SerializedObjectService(
+                bridge_command=(sys.executable, str(bridge)),
+                project_root=root,
+            )
+
+            with (
+                EditorBridgeResponder(watch_dir, respond) as responder,
+                patch.dict(
+                    os.environ,
+                    {
+                        "UNITYTOOL_BRIDGE_WATCH_DIR": str(watch_dir),
+                        "UNITYTOOL_UNITY_TIMEOUT_SEC": "10",
+                    },
+                    clear=False,
+                ),
+            ):
+                response = service.apply_and_save(
+                    target=str(target),
+                    ops=[
+                        {
+                            "op": "set",
+                            "component": "Example.Component",
+                            "path": "nested.value",
+                            "value": 42,
+                        }
+                    ],
+                )
+
+        self.assertEqual(
+            (True, "SER_APPLY_OK"),
+            (response.success, response.code),
+        )
+        self.assertEqual(
+            (
+                1,
+                str(target),
+                ["patch_apply"],
+            ),
+            (
+                response.data["applied"],
+                response.data["target"],
+                [request["action"] for request in responder.observed_requests],
+            ),
+        )
+
     def test_apply_and_save_uses_unity_bridge_for_material_target(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             target = root / "state.mat"
             target.write_text("%YAML 1.1\n", encoding="utf-8")
             bridge = root / "bridge.py"
-            bridge.write_text(
-                """
-import json
-import sys
+            captured_request = root / "request.json"
+            bridge_command = _write_capturing_patch_bridge(bridge, captured_request)
 
-request = json.load(sys.stdin)
-print(
-    json.dumps(
-        {
-            "success": True,
-            "severity": "info",
-            "code": "SER_APPLY_OK",
-            "message": "Bridge apply completed.",
-            "data": {
-                "target": request.get("target", ""),
-                "resource_kind": request.get("resources", [{}])[0].get("kind", ""),
-                "op_count": len(request.get("ops", [])),
-                "applied": len(request.get("ops", [])),
-                "read_only": False,
-                "executed": True,
-            },
-            "diagnostics": [],
-        }
-    )
-)
-""".strip(),
-                encoding="utf-8",
-            )
-
-            svc = SerializedObjectService(bridge_command=(sys.executable, str(bridge)))
+            svc = SerializedObjectService(bridge_command=bridge_command)
             response = svc.apply_and_save(
                 target=str(target),
                 ops=[
@@ -4444,7 +5458,8 @@ print(
                 (response.success, response.code),
                 msg=f"envelope mismatch: {response!r}",
             )
-            self.assertEqual("material", response.data["resource_kind"])
+            request = json.loads(captured_request.read_text(encoding="utf-8"))
+            self.assertEqual("material", request["resources"][0]["kind"])
 
     def test_apply_and_save_rejects_bridge_protocol_version_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -4494,13 +5509,496 @@ print(
                 msg=f"envelope mismatch: {response!r}",
             )
 
+    def test_apply_and_save_redacts_invalid_utf8_bridge_output(self) -> None:
+        for stream_name in ("stdout", "stderr"):
+            with self.subTest(stream=stream_name), tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                target = root / "state.prefab"
+                target.write_text("%YAML 1.1\n", encoding="utf-8")
+                bridge = root / "bridge.py"
+                bridge.write_text(
+                    f"""
+import json
+import sys
+
+json.load(sys.stdin)
+sys.{stream_name}.buffer.write(bytes([255]))
+""".strip(),
+                    encoding="utf-8",
+                )
+
+                svc = SerializedObjectService(
+                    bridge_command=(sys.executable, str(bridge))
+                )
+                response = svc.apply_and_save(
+                    target=str(target),
+                    ops=[
+                        {
+                            "op": "set",
+                            "component": "Example.Component",
+                            "path": "nested.value",
+                            "value": 42,
+                        }
+                    ],
+                )
+
+                self.assertEqual(
+                    (
+                        False,
+                        "SER_BRIDGE_PROTOCOL",
+                        "Unity bridge output must be valid JSON.",
+                        {
+                            "op_count": 1,
+                            "applied": 0,
+                            "read_only": False,
+                            "executed": False,
+                        },
+                    ),
+                    (
+                        response.success,
+                        response.code,
+                        response.message,
+                        response.data,
+                    ),
+                    msg=f"{stream_name} decode failure escaped safe envelope: {response!r}",
+                )
+
+    def test_apply_and_save_redacts_structurally_invalid_bridge_responses(
+        self,
+    ) -> None:
+        protocol_secret = "/secret/bridge-protocol-value"
+        cases: tuple[tuple[object, str, str], ...] = (
+            ([], "SER_BRIDGE_PROTOCOL", "Unity bridge response must be a JSON object."),
+            (None, "SER_BRIDGE_PROTOCOL", "Unity bridge response must be a JSON object."),
+            (
+                "scalar",
+                "SER_BRIDGE_PROTOCOL",
+                "Unity bridge response must be a JSON object.",
+            ),
+            (
+                {"protocol_version": protocol_secret},
+                "SER_BRIDGE_PROTOCOL_VERSION",
+                "Unity bridge protocol version mismatch.",
+            ),
+        )
+        for payload, expected_code, expected_message in cases:
+            with self.subTest(payload=payload), tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                target = root / "state.prefab"
+                target.write_text("%YAML 1.1\n", encoding="utf-8")
+                bridge = root / "bridge.py"
+                bridge.write_text(
+                    f"print({json.dumps(json.dumps(payload))})\n",
+                    encoding="utf-8",
+                )
+
+                svc = SerializedObjectService(
+                    bridge_command=(sys.executable, str(bridge))
+                )
+                response = svc.apply_and_save(
+                    target=str(target),
+                    ops=[
+                        {
+                            "op": "set",
+                            "component": "Example.Component",
+                            "path": "nested.value",
+                            "value": 42,
+                        }
+                    ],
+                )
+
+                self.assertEqual(
+                    (
+                        False,
+                        expected_code,
+                        expected_message,
+                        {
+                            "op_count": 1,
+                            "applied": 0,
+                            "read_only": False,
+                            "executed": False,
+                        },
+                    ),
+                    (
+                        response.success,
+                        response.code,
+                        response.message,
+                        response.data,
+                    ),
+                    msg=f"structured protocol failure exposed unsafe data: {response!r}",
+                )
+                self.assertNotIn(protocol_secret, repr(response))
+
+    def test_parse_bridge_response_rejects_malformed_envelope_fields(self) -> None:
+        from prefab_sentinel.services.serialized_object.resource_bridge_invoke import (
+            parse_bridge_response,
+        )
+
+        nested_target = "/outside/metadata.prefab"
+        valid_created_result = {
+            "handle": "nested",
+            "symbol_path": "Root/Nested",
+            "game_object_file_id": "1001",
+            "transform_file_id": "1002",
+            "source_asset_path": "Assets/Source.prefab",
+            "source_asset_guid": "0123456789abcdef0123456789abcdef",
+            "overrides": [
+                {
+                    "component": "Example.Controller",
+                    "property_path": "m_Target",
+                }
+            ],
+        }
+        valid_data = {
+            "target": "Assets/Target.prefab",
+            "op_count": 1,
+            "applied": 1,
+            "read_only": False,
+            "executed": True,
+            "protocol_version": 2,
+            "created_results": [],
+        }
+        valid = {
+            "protocol_version": 2,
+            "success": True,
+            "severity": "info",
+            "code": "SER_APPLY_OK",
+            "message": "Bridge apply completed.",
+            "data": valid_data,
+            "diagnostics": [],
+        }
+        cases = (
+            {**valid, "success": "false"},
+            {key: value for key, value in valid.items() if key != "protocol_version"},
+            {**valid, "unknown": "value"},
+            {**valid, "data": []},
+            {**valid, "data": {}},
+            {
+                **valid,
+                "data": {
+                    key: value
+                    for key, value in valid_data.items()
+                    if key != "created_results"
+                },
+            },
+            {**valid, "data": {**valid_data, "applied": "1"}},
+            {**valid, "data": {**valid_data, "applied": True}},
+            {**valid, "data": {**valid_data, "applied": -1}},
+            {**valid, "data": {**valid_data, "applied": 2}},
+            {**valid, "data": {**valid_data, "target": 1}},
+            {**valid, "data": {**valid_data, "op_count": True}},
+            {**valid, "data": {**valid_data, "read_only": 0}},
+            {**valid, "data": {**valid_data, "executed": "true"}},
+            {**valid, "data": {**valid_data, "protocol_version": True}},
+            {**valid, "data": {**valid_data, "created_results": {}}},
+            {
+                **valid,
+                "data": {
+                    **valid_data,
+                    "steps": [
+                        {
+                            "step": "nested",
+                            "result": {
+                                "data": {"target": "/outside/nested.prefab"},
+                            },
+                        }
+                    ],
+                },
+            },
+            {
+                **valid,
+                "data": {
+                    **valid_data,
+                    "metadata": {"target": nested_target},
+                },
+            },
+            {
+                **valid,
+                "data": {
+                    **valid_data,
+                    "created_results": [
+                        {
+                            **valid_created_result,
+                            "metadata": {"target": nested_target},
+                        }
+                    ],
+                },
+            },
+            {
+                **valid,
+                "data": {
+                    **valid_data,
+                    "created_results": [
+                        {
+                            **valid_created_result,
+                            "handle": 1,
+                        }
+                    ],
+                },
+            },
+            {
+                **valid,
+                "data": {
+                    **valid_data,
+                    "created_results": [
+                        {
+                            **valid_created_result,
+                            "overrides": [
+                                {
+                                    "component": "Example.Controller",
+                                    "property_path": "m_Target",
+                                    "metadata": {"target": nested_target},
+                                }
+                            ],
+                        }
+                    ],
+                },
+            },
+            {
+                **valid,
+                "success": False,
+                "severity": "error",
+                "code": "SER_APPLY_REJECTED",
+                "data": {
+                    **valid_data,
+                    "applied": 0,
+                    "read_only": True,
+                    "executed": False,
+                },
+            },
+            {
+                **valid,
+                "data": {
+                    **valid_data,
+                    "read_only": False,
+                    "executed": False,
+                },
+            },
+            {
+                **valid,
+                "diagnostics": [
+                    {
+                        "path": "",
+                        "location": "",
+                        "detail": "",
+                        "evidence": 1,
+                    }
+                ],
+            },
+            {
+                **valid,
+                "diagnostics": [
+                    {
+                        "path": "",
+                        "location": "",
+                        "detail": "",
+                        "evidence": "",
+                        "unknown": "value",
+                    }
+                ],
+            },
+        )
+
+        for payload in cases:
+            with self.subTest(payload=payload):
+                response = parse_bridge_response(
+                    payload,
+                    target_path=Path("Assets/Target.prefab"),
+                    ops=[{"op": "set"}],
+                )
+                self.assertEqual(
+                    (
+                        False,
+                        "SER_BRIDGE_PROTOCOL",
+                        "Unity bridge response schema is invalid.",
+                    ),
+                    (response.success, response.code, response.message),
+                )
+
+    def test_parse_bridge_response_rejects_failed_state_contradictions(self) -> None:
+        from prefab_sentinel.services.serialized_object.resource_bridge_invoke import (
+            parse_bridge_response,
+        )
+
+        contradictions = (
+            ("info", "BRIDGE_RESOURCE_FAILED"),
+            ("error", "SER_APPLY_OK"),
+        )
+        for severity, code in contradictions:
+            with self.subTest(severity=severity, code=code):
+                response = parse_bridge_response(
+                    {
+                        "protocol_version": 2,
+                        "success": False,
+                        "severity": severity,
+                        "code": code,
+                        "message": "Bridge apply failed.",
+                        "data": {
+                            "target": "Assets/Target.prefab",
+                            "op_count": 1,
+                            "applied": 0,
+                            "read_only": False,
+                            "executed": True,
+                            "protocol_version": 2,
+                            "created_results": [],
+                        },
+                        "diagnostics": [],
+                    },
+                    target_path=Path("Assets/Target.prefab"),
+                    ops=[{"op": "set"}],
+                )
+
+                self.assertEqual(
+                    (
+                        False,
+                        Severity.ERROR,
+                        "SER_BRIDGE_PROTOCOL",
+                        "Unity bridge response schema is invalid.",
+                    ),
+                    (
+                        response.success,
+                        response.severity,
+                        response.code,
+                        response.message,
+                    ),
+                )
+
+    def test_parse_bridge_response_rejects_successful_error_severities(self) -> None:
+        from prefab_sentinel.services.serialized_object.resource_bridge_invoke import (
+            parse_bridge_response,
+        )
+
+        for severity in ("error", "critical"):
+            with self.subTest(severity=severity):
+                response = parse_bridge_response(
+                    {
+                        "protocol_version": 2,
+                        "success": True,
+                        "severity": severity,
+                        "code": "SER_APPLY_OK",
+                        "message": "Bridge apply completed.",
+                        "data": {
+                            "target": "Assets/Target.prefab",
+                            "op_count": 1,
+                            "applied": 1,
+                            "read_only": False,
+                            "executed": True,
+                            "protocol_version": 2,
+                            "created_results": [],
+                        },
+                        "diagnostics": [],
+                    },
+                    target_path=Path("Assets/Target.prefab"),
+                    ops=[{"op": "set"}],
+                )
+
+                self.assertEqual(
+                    (
+                        False,
+                        Severity.ERROR,
+                        "SER_BRIDGE_PROTOCOL",
+                        "Unity bridge response schema is invalid.",
+                    ),
+                    (
+                        response.success,
+                        response.severity,
+                        response.code,
+                        response.message,
+                    ),
+                    msg="successful Bridge responses cannot carry error severity",
+                )
+
+    def test_parse_bridge_response_does_not_mutate_input_payload(self) -> None:
+        from prefab_sentinel.services.serialized_object.resource_bridge_invoke import (
+            parse_bridge_response,
+        )
+
+        created_result = {
+            "handle": "nested",
+            "symbol_path": "Root/Nested",
+            "game_object_file_id": "1001",
+            "transform_file_id": "1002",
+            "source_asset_path": "Assets/Source.prefab",
+            "source_asset_guid": "0123456789abcdef0123456789abcdef",
+            "overrides": [
+                {
+                    "component": "Example.Controller",
+                    "property_path": "m_Target",
+                }
+            ],
+        }
+        payload = {
+            "protocol_version": 2,
+            "success": True,
+            "severity": "info",
+            "code": "SER_APPLY_OK",
+            "message": "Bridge apply completed.",
+            "data": {
+                "target": "/outside/Target.prefab",
+                "op_count": 99,
+                "applied": 1,
+                "read_only": False,
+                "executed": True,
+                "protocol_version": 999,
+                "created_results": [created_result],
+            },
+            "diagnostics": [],
+        }
+        original = json.loads(json.dumps(payload))
+
+        response = parse_bridge_response(
+            payload,
+            target_path=Path("Assets/Target.prefab"),
+            ops=[
+                {
+                    "op": "instantiate_prefab",
+                    "prefab": "Assets/Source.prefab",
+                    "parent": "$root",
+                    "result": "nested",
+                }
+            ],
+            resource_kind="prefab",
+            resource_mode="open",
+        )
+
+        self.assertEqual(original, payload)
+        self.assertEqual(
+            {
+                "target": "Assets/Target.prefab",
+                "op_count": 1,
+                "applied": 1,
+                "read_only": False,
+                "executed": True,
+                "protocol_version": 2,
+                "created_results": [created_result],
+            },
+            response.data,
+        )
+        payload_data = cast(dict[str, object], payload["data"])
+        payload_results = cast(list[object], payload_data["created_results"])
+        payload_result = cast(dict[str, object], payload_results[0])
+        payload_overrides = cast(list[object], payload_result["overrides"])
+        response_results = cast(list[object], response.data["created_results"])
+        response_result = cast(dict[str, object], response_results[0])
+        response_overrides = cast(list[object], response_result["overrides"])
+
+        self.assertEqual("nested", response_result["handle"])
+        self.assertIsNot(payload_data, response.data)
+        self.assertIsNot(payload_results, response_results)
+        self.assertIsNot(payload_result, response_result)
+        self.assertIsNot(payload_overrides, response_overrides)
+        self.assertIsNot(payload_overrides[0], response_overrides[0])
+
     def test_apply_and_save_rejects_bridge_command_outside_allowlist(self) -> None:
+        secret = "/secret/forbidden-command"
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             target = root / "state.prefab"
             target.write_text("%YAML 1.1\n", encoding="utf-8")
 
-            svc = SerializedObjectService(bridge_command=("forbidden-bridge", "run"))
+            svc = SerializedObjectService(
+                bridge_command=("forbidden-bridge", secret)
+            )
             response = svc.apply_and_save(
                 target=str(target),
                 ops=[
@@ -4514,45 +6012,34 @@ print(
             )
 
             self.assertEqual(
-                (False, "SER_BRIDGE_DENIED"),
-                (response.success, response.code),
-                msg=f"envelope mismatch: {response!r}",
+                (
+                    False,
+                    "SER_BRIDGE_DENIED",
+                    {
+                        "op_count": 1,
+                        "applied": 0,
+                        "read_only": False,
+                        "executed": False,
+                    },
+                    False,
+                ),
+                (
+                    response.success,
+                    response.code,
+                    response.data,
+                    secret in json.dumps(response.to_dict(), sort_keys=True),
+                ),
+                msg=f"denied-command envelope exposed bridge details: {response!r}",
             )
 
     def test_apply_resource_plan_uses_unity_bridge_for_prefab_create_mode(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             bridge = root / "bridge.py"
-            bridge.write_text(
-                """
-import json
-import sys
+            captured_request = root / "request.json"
+            bridge_command = _write_capturing_patch_bridge(bridge, captured_request)
 
-request = json.load(sys.stdin)
-print(
-    json.dumps(
-        {
-            "success": True,
-            "severity": "info",
-            "code": "SER_APPLY_OK",
-            "message": "Bridge apply completed.",
-            "data": {
-                "target": request.get("target", ""),
-                "mode": request.get("resources", [{}])[0].get("mode", ""),
-                "op_count": len(request.get("ops", [])),
-                "applied": len(request.get("ops", [])),
-                "read_only": False,
-                "executed": True,
-            },
-            "diagnostics": [],
-        }
-    )
-)
-""".strip(),
-                encoding="utf-8",
-            )
-
-            svc = SerializedObjectService(bridge_command=(sys.executable, str(bridge)))
+            svc = SerializedObjectService(bridge_command=bridge_command)
             response = svc.apply_resource_plan(
                 resource={
                     "id": "prefab",
@@ -4571,44 +6058,18 @@ print(
                 (response.success, response.code),
                 msg=f"envelope mismatch: {response!r}",
             )
-            self.assertEqual("create", response.data["mode"])
+            request = json.loads(captured_request.read_text(encoding="utf-8"))
+            self.assertEqual("create", request["resources"][0]["mode"])
             self.assertEqual(2, response.data["applied"])
 
     def test_apply_resource_plan_forwards_prefab_hierarchy_ops_to_bridge(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             bridge = root / "bridge.py"
-            bridge.write_text(
-                """
-import json
-import sys
+            captured_request = root / "request.json"
+            bridge_command = _write_capturing_patch_bridge(bridge, captured_request)
 
-request = json.load(sys.stdin)
-print(
-    json.dumps(
-        {
-            "success": True,
-            "severity": "info",
-            "code": "SER_APPLY_OK",
-            "message": "Bridge apply completed.",
-            "data": {
-                "target": request.get("target", ""),
-                "mode": request.get("resources", [{}])[0].get("mode", ""),
-                "op_count": len(request.get("ops", [])),
-                "applied": len(request.get("ops", [])),
-                "request_ops": request.get("ops", []),
-                "read_only": False,
-                "executed": True,
-            },
-            "diagnostics": [],
-        }
-    )
-)
-""".strip(),
-                encoding="utf-8",
-            )
-
-            svc = SerializedObjectService(bridge_command=(sys.executable, str(bridge)))
+            svc = SerializedObjectService(bridge_command=bridge_command)
             response = svc.apply_resource_plan(
                 resource={
                     "id": "prefab",
@@ -4617,14 +6078,22 @@ print(
                     "mode": "create",
                 },
                 ops=[
-                    {"op": "create_prefab", "name": "GeneratedRoot", "result": "prefab_root"},
+                    {
+                        "op": "create_prefab",
+                        "name": "GeneratedRoot",
+                        "result": "prefab_root",
+                    },
                     {
                         "op": "create_game_object",
                         "name": "ChildA",
                         "parent": "$root",
                         "result": "child_a",
                     },
-                    {"op": "rename_object", "target": "$child_a", "name": "ChildRenamed"},
+                    {
+                        "op": "rename_object",
+                        "target": "$child_a",
+                        "name": "ChildRenamed",
+                    },
                     {"op": "save"},
                 ],
             )
@@ -4634,45 +6103,19 @@ print(
                 (response.success, response.code),
                 msg=f"envelope mismatch: {response!r}",
             )
-            self.assertEqual("create", response.data["mode"])
-            self.assertEqual("create_game_object", response.data["request_ops"][1]["op"])
-            self.assertEqual("$root", response.data["request_ops"][1]["parent"])
+            request = json.loads(captured_request.read_text(encoding="utf-8"))
+            self.assertEqual("create", request["resources"][0]["mode"])
+            self.assertEqual("create_game_object", request["ops"][1]["op"])
+            self.assertEqual("$root", request["ops"][1]["parent"])
 
     def test_apply_resource_plan_forwards_prefab_component_ops_to_bridge(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             bridge = root / "bridge.py"
-            bridge.write_text(
-                """
-import json
-import sys
+            captured_request = root / "request.json"
+            bridge_command = _write_capturing_patch_bridge(bridge, captured_request)
 
-request = json.load(sys.stdin)
-print(
-    json.dumps(
-        {
-            "success": True,
-            "severity": "info",
-            "code": "SER_APPLY_OK",
-            "message": "Bridge apply completed.",
-            "data": {
-                "target": request.get("target", ""),
-                "mode": request.get("resources", [{}])[0].get("mode", ""),
-                "op_count": len(request.get("ops", [])),
-                "applied": len(request.get("ops", [])),
-                "request_ops": request.get("ops", []),
-                "read_only": False,
-                "executed": True,
-            },
-            "diagnostics": [],
-        }
-    )
-)
-""".strip(),
-                encoding="utf-8",
-            )
-
-            svc = SerializedObjectService(bridge_command=(sys.executable, str(bridge)))
+            svc = SerializedObjectService(bridge_command=bridge_command)
             response = svc.apply_resource_plan(
                 resource={
                     "id": "prefab",
@@ -4704,47 +6147,20 @@ print(
                 (response.success, response.code),
                 msg=f"envelope mismatch: {response!r}",
             )
-            self.assertEqual("add_component", response.data["request_ops"][2]["op"])
-            self.assertEqual(
-                "UnityEngine.BoxCollider",
-                response.data["request_ops"][2]["type"],
-            )
+            request = json.loads(captured_request.read_text(encoding="utf-8"))
+            self.assertEqual("add_component", request["ops"][2]["op"])
+            self.assertEqual("UnityEngine.BoxCollider", request["ops"][2]["type"])
 
-    def test_apply_resource_plan_forwards_prefab_component_mutation_ops_to_bridge(self) -> None:
+    def test_apply_resource_plan_forwards_prefab_component_mutation_ops_to_bridge(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             bridge = root / "bridge.py"
-            bridge.write_text(
-                """
-import json
-import sys
+            captured_request = root / "request.json"
+            bridge_command = _write_capturing_patch_bridge(bridge, captured_request)
 
-request = json.load(sys.stdin)
-print(
-    json.dumps(
-        {
-            "success": True,
-            "severity": "info",
-            "code": "SER_APPLY_OK",
-            "message": "Bridge apply completed.",
-            "data": {
-                "target": request.get("target", ""),
-                "mode": request.get("resources", [{}])[0].get("mode", ""),
-                "op_count": len(request.get("ops", [])),
-                "applied": len(request.get("ops", [])),
-                "request_ops": request.get("ops", []),
-                "read_only": False,
-                "executed": True,
-            },
-            "diagnostics": [],
-        }
-    )
-)
-""".strip(),
-                encoding="utf-8",
-            )
-
-            svc = SerializedObjectService(bridge_command=(sys.executable, str(bridge)))
+            svc = SerializedObjectService(bridge_command=bridge_command)
             response = svc.apply_resource_plan(
                 resource={
                     "id": "prefab",
@@ -4775,46 +6191,19 @@ print(
                 (response.success, response.code),
                 msg=f"envelope mismatch: {response!r}",
             )
-            self.assertEqual("set", response.data["request_ops"][2]["op"])
-            self.assertEqual("$root_collider", response.data["request_ops"][2]["target"])
-            self.assertEqual("m_IsTrigger", response.data["request_ops"][2]["path"])
+            request = json.loads(captured_request.read_text(encoding="utf-8"))
+            self.assertEqual("set", request["ops"][2]["op"])
+            self.assertEqual("$root_collider", request["ops"][2]["target"])
+            self.assertEqual("m_IsTrigger", request["ops"][2]["path"])
 
     def test_apply_resource_plan_forwards_material_create_ops_to_bridge(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             bridge = root / "bridge.py"
-            bridge.write_text(
-                """
-import json
-import sys
+            captured_request = root / "request.json"
+            bridge_command = _write_capturing_patch_bridge(bridge, captured_request)
 
-request = json.load(sys.stdin)
-print(
-    json.dumps(
-        {
-            "success": True,
-            "severity": "info",
-            "code": "SER_APPLY_OK",
-            "message": "Bridge apply completed.",
-            "data": {
-                "target": request.get("target", ""),
-                "mode": request.get("resources", [{}])[0].get("mode", ""),
-                "kind": request.get("resources", [{}])[0].get("kind", ""),
-                "op_count": len(request.get("ops", [])),
-                "applied": len(request.get("ops", [])),
-                "request_ops": request.get("ops", []),
-                "read_only": False,
-                "executed": True,
-            },
-            "diagnostics": [],
-        }
-    )
-)
-""".strip(),
-                encoding="utf-8",
-            )
-
-            svc = SerializedObjectService(bridge_command=(sys.executable, str(bridge)))
+            svc = SerializedObjectService(bridge_command=bridge_command)
             response = svc.apply_resource_plan(
                 resource={
                     "id": "material",
@@ -4843,47 +6232,20 @@ print(
                 (response.success, response.code),
                 msg=f"envelope mismatch: {response!r}",
             )
-            self.assertEqual("create", response.data["mode"])
-            self.assertEqual("material", response.data["kind"])
-            self.assertEqual("create_asset", response.data["request_ops"][0]["op"])
-            self.assertEqual("Standard", response.data["request_ops"][0]["shader"])
+            request = json.loads(captured_request.read_text(encoding="utf-8"))
+            self.assertEqual("create", request["resources"][0]["mode"])
+            self.assertEqual("material", request["resources"][0]["kind"])
+            self.assertEqual("create_asset", request["ops"][0]["op"])
+            self.assertEqual("Standard", request["ops"][0]["shader"])
 
     def test_apply_resource_plan_forwards_material_open_ops_to_bridge(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             bridge = root / "bridge.py"
-            bridge.write_text(
-                """
-import json
-import sys
+            captured_request = root / "request.json"
+            bridge_command = _write_capturing_patch_bridge(bridge, captured_request)
 
-request = json.load(sys.stdin)
-print(
-    json.dumps(
-        {
-            "success": True,
-            "severity": "info",
-            "code": "SER_APPLY_OK",
-            "message": "Bridge apply completed.",
-            "data": {
-                "target": request.get("target", ""),
-                "mode": request.get("resources", [{}])[0].get("mode", ""),
-                "kind": request.get("resources", [{}])[0].get("kind", ""),
-                "op_count": len(request.get("ops", [])),
-                "applied": len(request.get("ops", [])),
-                "request_ops": request.get("ops", []),
-                "read_only": False,
-                "executed": True,
-            },
-            "diagnostics": [],
-        }
-    )
-)
-""".strip(),
-                encoding="utf-8",
-            )
-
-            svc = SerializedObjectService(bridge_command=(sys.executable, str(bridge)))
+            svc = SerializedObjectService(bridge_command=bridge_command)
             response = svc.apply_resource_plan(
                 resource={
                     "id": "material",
@@ -4906,46 +6268,19 @@ print(
                 (response.success, response.code),
                 msg=f"envelope mismatch: {response!r}",
             )
-            self.assertEqual("open", response.data["mode"])
-            self.assertEqual("material", response.data["kind"])
-            self.assertEqual("$asset", response.data["request_ops"][0]["target"])
+            request = json.loads(captured_request.read_text(encoding="utf-8"))
+            self.assertEqual("open", request["resources"][0]["mode"])
+            self.assertEqual("material", request["resources"][0]["kind"])
+            self.assertEqual("$asset", request["ops"][0]["target"])
 
     def test_apply_resource_plan_forwards_scene_create_ops_to_bridge(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             bridge = root / "bridge.py"
-            bridge.write_text(
-                """
-import json
-import sys
+            captured_request = root / "request.json"
+            bridge_command = _write_capturing_patch_bridge(bridge, captured_request)
 
-request = json.load(sys.stdin)
-print(
-    json.dumps(
-        {
-            "success": True,
-            "severity": "info",
-            "code": "SER_APPLY_OK",
-            "message": "Bridge apply completed.",
-            "data": {
-                "target": request.get("target", ""),
-                "mode": request.get("resources", [{}])[0].get("mode", ""),
-                "kind": request.get("resources", [{}])[0].get("kind", ""),
-                "op_count": len(request.get("ops", [])),
-                "applied": len(request.get("ops", [])),
-                "request_ops": request.get("ops", []),
-                "read_only": False,
-                "executed": True,
-            },
-            "diagnostics": [],
-        }
-    )
-)
-""".strip(),
-                encoding="utf-8",
-            )
-
-            svc = SerializedObjectService(bridge_command=(sys.executable, str(bridge)))
+            svc = SerializedObjectService(bridge_command=bridge_command)
             response = svc.apply_resource_plan(
                 resource={
                     "id": "scene",
@@ -4970,50 +6305,24 @@ print(
                 (response.success, response.code),
                 msg=f"envelope mismatch: {response!r}",
             )
-            self.assertEqual("create", response.data["mode"])
-            self.assertEqual("scene", response.data["kind"])
-            self.assertEqual("instantiate_prefab", response.data["request_ops"][1]["op"])
+            self.assertEqual([], response.data["created_results"])
+            request = json.loads(captured_request.read_text(encoding="utf-8"))
+            self.assertEqual("create", request["resources"][0]["mode"])
+            self.assertEqual("scene", request["resources"][0]["kind"])
+            self.assertEqual("instantiate_prefab", request["ops"][1]["op"])
             self.assertEqual(
                 "Assets/Prefabs/Example.prefab",
-                response.data["request_ops"][1]["prefab"],
+                request["ops"][1]["prefab"],
             )
 
     def test_apply_resource_plan_forwards_scene_open_ops_to_bridge(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             bridge = root / "bridge.py"
-            bridge.write_text(
-                """
-import json
-import sys
+            captured_request = root / "request.json"
+            bridge_command = _write_capturing_patch_bridge(bridge, captured_request)
 
-request = json.load(sys.stdin)
-print(
-    json.dumps(
-        {
-            "success": True,
-            "severity": "info",
-            "code": "SER_APPLY_OK",
-            "message": "Bridge apply completed.",
-            "data": {
-                "target": request.get("target", ""),
-                "mode": request.get("resources", [{}])[0].get("mode", ""),
-                "kind": request.get("resources", [{}])[0].get("kind", ""),
-                "op_count": len(request.get("ops", [])),
-                "applied": len(request.get("ops", [])),
-                "request_ops": request.get("ops", []),
-                "read_only": False,
-                "executed": True,
-            },
-            "diagnostics": [],
-        }
-    )
-)
-""".strip(),
-                encoding="utf-8",
-            )
-
-            svc = SerializedObjectService(bridge_command=(sys.executable, str(bridge)))
+            svc = SerializedObjectService(bridge_command=bridge_command)
             response = svc.apply_resource_plan(
                 resource={
                     "id": "scene",
@@ -5038,10 +6347,11 @@ print(
                 (response.success, response.code),
                 msg=f"envelope mismatch: {response!r}",
             )
-            self.assertEqual("open", response.data["mode"])
-            self.assertEqual("scene", response.data["kind"])
-            self.assertEqual("open_scene", response.data["request_ops"][0]["op"])
-            self.assertEqual("$scene", response.data["request_ops"][1]["parent"])
+            request = json.loads(captured_request.read_text(encoding="utf-8"))
+            self.assertEqual("open", request["resources"][0]["mode"])
+            self.assertEqual("scene", request["resources"][0]["kind"])
+            self.assertEqual("open_scene", request["ops"][0]["op"])
+            self.assertEqual("$scene", request["ops"][1]["parent"])
 
     def test_orchestrator_patch_apply_confirm_gate(self) -> None:
         orchestrator = Phase1Orchestrator.default()
@@ -5059,10 +6369,9 @@ print(
                 "ops": [
                     {
                         "resource": "variant",
-                        "op": "set",
-                        "component": "Example.Component",
-                        "path": "items.Array.size",
-                        "value": 3,
+                        "op": "rename_object",
+                        "target": "$root",
+                        "name": "Renamed",
                     }
                 ],
             },
@@ -5075,7 +6384,9 @@ print(
             (response.success, response.code),
             msg=f"envelope mismatch: {response!r}",
         )
-        step_codes = [step["result"]["code"] for step in response.data["steps"]]
+        step_codes = [
+            step["result"]["code"] for step in response.data["steps"]
+        ]
         self.assertIn("SER_CONFIRM_REQUIRED", step_codes)
 
     def test_orchestrator_patch_apply_confirm_executes_for_json_target(self) -> None:
@@ -5416,36 +6727,17 @@ class TestSerializedObjectServiceProjectRoot(unittest.TestCase):
             )
 
     def test_apply_resource_plan_sends_resolved_path_to_bridge(self) -> None:
-        """Relative Assets/ path must be resolved via project_root before reaching the bridge."""
+        """Relative Assets/ paths are resolved before Bridge dispatch."""
         with tempfile.TemporaryDirectory() as temp_dir:
             project_root = Path(temp_dir)
             assets_dir = project_root / "Assets" / "Sample" / "Materials"
             assets_dir.mkdir(parents=True)
-
-            # Bridge script that echoes the received target and resource path back
             bridge = project_root / "bridge.py"
-            bridge.write_text(
-                "import json, sys\n"
-                "req = json.load(sys.stdin)\n"
-                "print(json.dumps({\n"
-                '  "success": True, "severity": "info",\n'
-                '  "code": "SER_APPLY_OK",\n'
-                '  "message": "ok",\n'
-                '  "data": {\n'
-                '    "target": req.get("target", ""),\n'
-                '    "resource_path": req.get("resources", [{}])[0].get("path", ""),\n'
-                '    "op_count": len(req.get("ops", [])),\n'
-                '    "applied": len(req.get("ops", [])),\n'
-                '    "read_only": False, "executed": True,\n'
-                '    "mode": req.get("resources", [{}])[0].get("mode", "open"),\n'
-                "  },\n"
-                '  "diagnostics": [],\n'
-                "}))\n",
-                encoding="utf-8",
-            )
+            captured_request = project_root / "request.json"
+            bridge_command = _write_capturing_patch_bridge(bridge, captured_request)
 
             svc = SerializedObjectService(
-                bridge_command=(sys.executable, str(bridge)),
+                bridge_command=bridge_command,
                 project_root=project_root,
             )
             response = svc.apply_resource_plan(
@@ -5462,23 +6754,14 @@ class TestSerializedObjectServiceProjectRoot(unittest.TestCase):
             )
 
             self.assertTrue(response.success, response.message)
-            # The resource path sent to the bridge must be the resolved absolute path,
-            # not the raw relative input.
-            resource_path = response.data.get("resource_path", "")
-            self.assertTrue(
-                resource_path.replace("\\", "/").endswith(
-                    "Assets/Sample/Materials/Test.mat"
-                ),
-                f"Expected resolved path ending with Assets/Sample/Materials/Test.mat, "
-                f"got: {resource_path}",
-            )
-            # Must NOT contain path doubling
+            request = json.loads(captured_request.read_text(encoding="utf-8"))
+            resource_path = request["resources"][0]["path"]
             normalized = resource_path.replace("\\", "/")
-            self.assertNotIn(
-                "Assets/Sample/Assets/Sample",
-                normalized,
-                f"Path doubling detected in bridge request: {resource_path}",
+            self.assertTrue(
+                normalized.endswith("Assets/Sample/Materials/Test.mat"),
+                f"unexpected resolved Bridge path: {resource_path}",
             )
+            self.assertNotIn("Assets/Sample/Assets/Sample", normalized)
 
 
 class TestNumericComponentWarning(unittest.TestCase):

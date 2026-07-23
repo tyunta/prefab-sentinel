@@ -123,6 +123,40 @@ class WhereUsedPathFormErrorPathTests(unittest.TestCase):
             },
         )
 
+    def test_resolve_failure_returns_ref404(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            _seed_minimal_project(root)
+            svc = ReferenceResolverService(project_root=root)
+
+            from unittest.mock import patch
+
+            with patch.object(Path, "resolve", side_effect=OSError("resolve failed")):
+                try:
+                    response = svc.where_used("Assets/Target.asset")
+                except OSError as exc:
+                    response = type(
+                        "RaisedResponse",
+                        (),
+                        {
+                            "success": "raised",
+                            "severity": Severity.CRITICAL,
+                            "code": type(exc).__name__,
+                            "data": {"error": str(exc)},
+                        },
+                    )()
+
+        assert_error_envelope(
+            response,
+            code="REF404",
+            severity="error",
+            data={
+                "asset_or_guid": "Assets/Target.asset",
+                "read_only": True,
+                "error": "resolve failed",
+            },
+        )
+
     def test_meta_file_missing_returns_ref001(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
@@ -223,6 +257,31 @@ class WhereUsedPathFormErrorPathTests(unittest.TestCase):
         self.assertEqual(1, response.data["returned_usages"])
         usage_paths = [usage["path"] for usage in response.data["usages"]]
         self.assertIn("Assets/Referrer.asset", usage_paths)
+
+    def test_absolute_outside_asset_path_is_rejected_before_meta_probe(self) -> None:
+        with tempfile.TemporaryDirectory() as raw, tempfile.TemporaryDirectory() as outside_raw:
+            root = Path(raw)
+            _seed_minimal_project(root)
+            outside = Path(outside_raw) / "Secret.asset"
+            write_file(outside, "body\n")
+            write_file(
+                Path(str(outside) + ".meta"),
+                f"fileFormatVersion: 2\nguid: {_TARGET_GUID}\n",
+            )
+            svc = ReferenceResolverService(project_root=root)
+
+            response = svc.where_used(str(outside))
+
+        assert_error_envelope(
+            response,
+            code="REF404",
+            severity="error",
+            data={
+                "asset_or_guid": str(outside),
+                "read_only": True,
+                "reason": "outside_project_root",
+            },
+        )
 
 
 class WhereUsedMissingGuidScanTests(unittest.TestCase):
@@ -379,7 +438,7 @@ class WhereUsedMissingGuidScanTests(unittest.TestCase):
         self.assertEqual("Assets/Target.asset", response.data["asset_path"])
         self.assertEqual(False, response.data["asset_missing"])
 
-    def test_subdirectory_scope_limits_guid_index_root(self) -> None:
+    def test_subdirectory_scope_limits_where_used_scan_target(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             _seed_minimal_project(root)
@@ -415,8 +474,14 @@ class WhereUsedMissingGuidScanTests(unittest.TestCase):
             msg=f"subdirectory where_used scan mismatch: {response!r}",
         )
         self.assertEqual(
-            "Assets/Editor/PrefabSentinel",
-            response.data["scan_project_root"],
+            {
+                "scope": "Assets/Editor/PrefabSentinel",
+                "scan_project_root": ".",
+            },
+            {
+                key: response.data[key]
+                for key in ("scope", "scan_project_root")
+            },
         )
         self.assertEqual(
             ["Assets/Editor/PrefabSentinel/Referrer.asset"],

@@ -217,3 +217,69 @@ def assert_no_critical_errors(
             "read_only": True,
         },
     )
+
+def clientsim_side_effect_codes(report: object) -> list[str]:
+    unavailable = "CLIENTSIM_SIDE_EFFECT_DIFF_UNAVAILABLE"
+    detected = "CLIENTSIM_SIDE_EFFECT_DIFF_DETECTED"
+    if not isinstance(report, dict):
+        return [unavailable]
+
+    residual_keys = (
+        "residual_added_gameobjects",
+        "residual_removed_gameobjects",
+        "residual_added_components",
+        "residual_removed_components",
+        "asset_change_candidates",
+    )
+    string_list_keys = ("diff_warnings", *residual_keys)
+    if any(
+        not isinstance(report.get(key), list)
+        or any(not isinstance(value, str) for value in report[key])
+        for key in string_list_keys
+    ):
+        return [unavailable]
+    if not isinstance(report.get("diff_complete"), bool):
+        return [unavailable]
+    if any(
+        not isinstance(report.get(key), bool)
+        for key in ("dirty_before", "dirty_after")
+    ):
+        return [unavailable]
+    if any(
+        isinstance(report.get(key), bool)
+        or not isinstance(report.get(key), int)
+        for key in ("dirty_count_before", "dirty_count_after")
+    ):
+        return [unavailable]
+
+    diff_complete = report["diff_complete"]
+    diff_warnings = report["diff_warnings"]
+    codes = [] if diff_complete and not diff_warnings else [unavailable]
+    if diff_complete == bool(diff_warnings):
+        return codes
+
+    known_snapshot_warnings = {
+        "CLIENTSIM_SIDE_EFFECT_BEFORE_UNAVAILABLE",
+        "CLIENTSIM_SIDE_EFFECT_RUNTIME_UNAVAILABLE",
+        "CLIENTSIM_SIDE_EFFECT_AFTER_UNAVAILABLE",
+    }
+    if any(warning not in known_snapshot_warnings for warning in diff_warnings):
+        return codes
+    before_after_available = not any(
+        warning
+        in {
+            "CLIENTSIM_SIDE_EFFECT_BEFORE_UNAVAILABLE",
+            "CLIENTSIM_SIDE_EFFECT_AFTER_UNAVAILABLE",
+        }
+        for warning in diff_warnings
+    )
+    if not before_after_available:
+        return codes
+
+    if (
+        any(report[key] for key in residual_keys)
+        or report["dirty_before"] != report["dirty_after"]
+        or report["dirty_count_before"] != report["dirty_count_after"]
+    ):
+        codes.append(detected)
+    return codes

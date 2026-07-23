@@ -446,6 +446,310 @@ class ProjectStatusOperatorContextTests(unittest.TestCase):
         send.assert_called_once_with(action="get_editor_state", expected_project_root=None)
 
 
+class EditorStatusBlockerClassifierTests(unittest.TestCase):
+    def _classifiers(self) -> tuple[Callable[..., list[dict[str, Any]]], Callable[..., dict[str, Any] | None]]:
+        try:
+            from prefab_sentinel.editor_status_blockers import (
+                classify_status_blockers,
+                classify_tool_error_blocker,
+            )
+        except ModuleNotFoundError as exc:
+            self.fail(
+                "expected prefab_sentinel.editor_status_blockers classifier module, "
+                f"observed missing module {exc.name!r}"
+            )
+        return classify_status_blockers, classify_tool_error_blocker
+
+    def test_status_evidence_maps_to_shared_blocker_classes(self) -> None:
+        classify_status_blockers, _ = self._classifiers()
+
+        blockers = classify_status_blockers(
+            {"configured_watch_dir": "/expected/watch"},
+            {"connected": True, "watch_dir": "/actual/watch"},
+            {
+                "state_source": "live_editor",
+                "is_compiling": True,
+                "is_building_player": False,
+                "is_will_change_playmode": True,
+                "active_stage_kind": "prefab_stage",
+                "has_unsaved_changes": True,
+                "dirty_scene_paths": ["Assets/Scenes/Main.unity"],
+            },
+        )
+
+        by_class = {blocker["blocker_class"]: blocker for blocker in blockers}
+        expected = {
+            "watch_dir": {
+                "blocker_class": "watch_dir",
+                "state_source": "bridge_transport",
+                "message": "Configured watch directory differs from the Bridge-reported watch directory.",
+                "suggested_next_action": "Use the same watch directory for Codex and the Unity Editor Bridge.",
+                "evidence": {
+                    "configured_watch_dir": "/expected/watch",
+                    "bridge_watch_dir": "/actual/watch",
+                },
+            },
+            "compile_or_build": {
+                "blocker_class": "compile_or_build",
+                "state_source": "live_editor",
+                "message": "Unity is compiling scripts or building a player.",
+                "suggested_next_action": "Wait for Unity compile or build activity to finish, then retry the tool.",
+            },
+            "playmode_transition": {
+                "blocker_class": "playmode_transition",
+                "state_source": "live_editor",
+                "message": "Unity is entering or exiting Play Mode.",
+                "suggested_next_action": "Wait for the Play Mode transition to complete, then retry the tool.",
+            },
+            "prefab_stage_for_scene_bound_operation": {
+                "blocker_class": "prefab_stage_for_scene_bound_operation",
+                "state_source": "live_editor",
+                "message": "A Prefab Stage is active and can block scene-bound operations.",
+                "suggested_next_action": "Close the active Prefab Stage before running scene-bound Editor operations.",
+            },
+            "dirty_or_save_blocker": {
+                "blocker_class": "dirty_or_save_blocker",
+                "state_source": "live_editor",
+                "message": "Unity has dirty scenes, prefabs, materials, or assets.",
+                "suggested_next_action": "Save or intentionally discard dirty Unity state before relying on saved YAML.",
+            },
+        }
+        self.assertEqual(expected, by_class)
+
+    def test_tool_error_classifier_reuses_shared_vocabulary(self) -> None:
+        _, classify_tool_error_blocker = self._classifiers()
+
+        compile_blocker = classify_tool_error_blocker(
+            {"code": "EDITOR_CTRL_SCENE_WRITE_BLOCKED", "message": "blocked"},
+            {"state_source": "live_editor", "is_compiling": True},
+        )
+        dirty_blocker = classify_tool_error_blocker(
+            {"code": "EDITOR_CTRL_SAVE_BLOCKED", "message": "dirty"},
+            {"state_source": "live_editor", "has_unsaved_changes": True},
+        )
+        write_blocker = classify_tool_error_blocker(
+            {"code": "EDITOR_BRIDGE_WRITE", "message": "request write failed"},
+            None,
+        )
+        unknown_blocker = classify_tool_error_blocker(
+            {"code": "EDITOR_CTRL_UNKNOWN", "message": "generic failure"},
+            None,
+        )
+
+        self.assertEqual(
+            ("compile_or_build", "dirty_or_save_blocker", "watch_dir", None),
+            (
+                compile_blocker["blocker_class"] if compile_blocker else None,
+                dirty_blocker["blocker_class"] if dirty_blocker else None,
+                write_blocker["blocker_class"] if write_blocker else None,
+                unknown_blocker,
+            ),
+        )
+
+
+class ProjectStatusBlockerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.project_root, self.scope = _make_project(self._tmp)
+
+    def _run_status(self, bridge_envelope: dict[str, object]) -> dict[str, Any]:
+        session = ProjectSession(project_root=self.project_root)
+        registered = _register_session_tools(session)
+        get_status: Callable[[], object] = registered.get("get_project_status")
+        with (
+            patch.object(
+                mcp_tools_session,
+                "bridge_status",
+                return_value={"connected": True, "mode": "editor", "watch_dir": "/tmp"},
+            ),
+            patch.object(
+                mcp_tools_session,
+                "send_action",
+                return_value=bridge_envelope,
+            ),
+        ):
+            return require_mapping(get_status(), "get_project_status response")
+
+    def test_live_editor_dirty_identities_and_blockers_stay_successful(self) -> None:
+        bridge_envelope = {
+            "success": True,
+            "severity": "info",
+            "code": "EDITOR_CTRL_EDITOR_STATE_OK",
+            "message": "ok",
+            "data": {
+                "editor_state": {
+                    "state_source": "live_editor",
+                    "is_playing": False,
+                    "is_will_change_playmode": False,
+                    "is_compiling": True,
+                    "is_building_player": False,
+                    "has_unsaved_changes": True,
+                    "dirty_scene_paths": ["Assets/Scenes/Main.unity"],
+                    "dirty_prefab_paths": ["Assets/Prefabs/Avatar.prefab"],
+                    "dirty_material_paths": ["Assets/Materials/Body.mat"],
+                    "dirty_asset_paths": ["Assets/Data/Config.asset"],
+                }
+            },
+            "diagnostics": [],
+        }
+
+        response = self._run_status(bridge_envelope)
+        data = response["data"]
+        by_class = {blocker["blocker_class"]: blocker for blocker in data["blockers"]}
+
+        self.assertEqual((True, "warning"), (response["success"], response["severity"]))
+        self.assertEqual(
+            (
+                ["Assets/Scenes/Main.unity"],
+                ["Assets/Prefabs/Avatar.prefab"],
+                ["Assets/Materials/Body.mat"],
+                ["Assets/Data/Config.asset"],
+                "live_editor",
+                {
+                    "compile_or_build": {
+                        "blocker_class": "compile_or_build",
+                        "state_source": "live_editor",
+                        "message": "Unity is compiling scripts or building a player.",
+                        "suggested_next_action": "Wait for Unity compile or build activity to finish, then retry the tool.",
+                    },
+                    "dirty_or_save_blocker": {
+                        "blocker_class": "dirty_or_save_blocker",
+                        "state_source": "live_editor",
+                        "message": "Unity has dirty scenes, prefabs, materials, or assets.",
+                        "suggested_next_action": "Save or intentionally discard dirty Unity state before relying on saved YAML.",
+                    },
+                },
+            ),
+            (
+                data["dirty_scene_paths"],
+                data["dirty_prefab_paths"],
+                data["dirty_material_paths"],
+                data["dirty_asset_paths"],
+                data["state_source"],
+                by_class,
+            ),
+        )
+
+    def test_public_status_reports_configured_watch_dir_mismatch(self) -> None:
+        from prefab_sentinel.bridge_constants import BRIDGE_WATCH_DIR_ENV
+
+        bridge_envelope = {
+            "success": True,
+            "severity": "info",
+            "code": "EDITOR_CTRL_EDITOR_STATE_OK",
+            "message": "ok",
+            "data": {
+                "watch_dir": "/bridge/watch",
+                "editor_state": {
+                    "state_source": "live_editor",
+                    "is_playing": False,
+                    "is_will_change_playmode": False,
+                    "is_compiling": False,
+                    "is_building_player": False,
+                    "has_unsaved_changes": False,
+                    "dirty_scene_paths": [],
+                    "dirty_prefab_paths": [],
+                    "dirty_material_paths": [],
+                    "dirty_asset_paths": [],
+                },
+            },
+            "diagnostics": [],
+        }
+
+        with patch.dict(os.environ, {BRIDGE_WATCH_DIR_ENV: "/configured/watch"}):
+            response = self._run_status(bridge_envelope)
+
+        data = response["data"]
+        watch_dir_blockers = [
+            blocker
+            for blocker in data["blockers"]
+            if blocker["blocker_class"] == "watch_dir"
+        ]
+        self.assertEqual(
+            (
+                "/configured/watch",
+                [
+                    {
+                        "blocker_class": "watch_dir",
+                        "state_source": "bridge_transport",
+                        "message": "Configured watch directory differs from the Bridge-reported watch directory.",
+                        "suggested_next_action": "Use the same watch directory for Codex and the Unity Editor Bridge.",
+                        "evidence": {
+                            "configured_watch_dir": "/configured/watch",
+                            "bridge_watch_dir": "/tmp",
+                        },
+                    }
+                ],
+            ),
+            (data["configured_watch_dir"], watch_dir_blockers),
+        )
+
+    def test_public_status_reports_invalid_configured_watch_dir(self) -> None:
+        from prefab_sentinel.bridge_constants import BRIDGE_WATCH_DIR_ENV
+
+        with tempfile.NamedTemporaryFile() as tmp_file:
+            session = ProjectSession(project_root=self.project_root)
+            registered = _register_session_tools(session)
+            get_status: Callable[[], object] = registered.get("get_project_status")
+            with (
+                patch.dict(os.environ, {BRIDGE_WATCH_DIR_ENV: tmp_file.name}),
+                patch.object(
+                    mcp_tools_session,
+                    "bridge_status",
+                    return_value={
+                        "connected": False,
+                        "mode": "editor",
+                        "watch_dir": tmp_file.name,
+                    },
+                ),
+            ):
+                response = require_mapping(get_status(), "get_project_status response")
+                data = require_mapping(response["data"], "get_project_status data")
+                expected_watch_dir = tmp_file.name
+
+        self.assertEqual(
+            [
+                {
+                    "blocker_class": "watch_dir",
+                    "state_source": "bridge_transport",
+                    "message": "Configured Editor Bridge watch directory is not an existing directory.",
+                    "suggested_next_action": "Set UNITYTOOL_BRIDGE_WATCH_DIR to an existing Editor Bridge watch directory.",
+                    "evidence": {"configured_watch_dir": expected_watch_dir},
+                }
+            ],
+            data["blockers"],
+        )
+
+    def test_editor_state_failure_diagnostic_includes_bridge_connection_blocker(self) -> None:
+        bridge_failure = {
+            "success": False,
+            "severity": "error",
+            "code": "EDITOR_BRIDGE_TIMEOUT",
+            "message": "timed out",
+            "data": {"action": "get_editor_state"},
+            "diagnostics": [],
+        }
+
+        response = self._run_status(bridge_failure)
+        failure_diagnostics = [
+            diagnostic for diagnostic in response["diagnostics"]
+            if diagnostic["code"] == "BRIDGE_GET_EDITOR_STATE_FAILED"
+        ]
+
+        self.assertEqual((True, "warning", 1), (response["success"], response["severity"], len(failure_diagnostics)))
+        self.assertEqual(
+            (
+                "bridge_connection",
+                "Confirm Unity is running and the PrefabSentinel Editor Bridge watcher is active.",
+            ),
+            (
+                failure_diagnostics[0]["data"].get("blocker_class"),
+                failure_diagnostics[0]["data"].get("suggested_next_action"),
+            ),
+        )
+
+
 class ActivateProjectExpectedRootTests(unittest.TestCase):
     def test_activate_project_retains_expected_root_in_returned_and_subsequent_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

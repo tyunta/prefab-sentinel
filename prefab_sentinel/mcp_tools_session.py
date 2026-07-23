@@ -14,6 +14,11 @@ from prefab_sentinel.editor_bridge import (
     get_last_bridge_version,
     send_action,
 )
+from prefab_sentinel.editor_status_blockers import (
+    BRIDGE_CONNECTION,
+    classify_status_blockers,
+    classify_tool_error_blocker,
+)
 from prefab_sentinel.session import InvalidProjectRootError, ProjectSession
 from prefab_sentinel.wsl_compat import to_wsl_path
 
@@ -101,7 +106,14 @@ def _bridge_diagnostic_to_session_wire(
     )
     data = {
         key: diagnostic[key]
-        for key in ("path", "location", "evidence")
+        for key in (
+            "path",
+            "location",
+            "evidence",
+            "blocker_class",
+            "state_source",
+            "suggested_next_action",
+        )
         if key in diagnostic and diagnostic[key] not in (None, "")
     }
     return _build_session_diagnostic(code, message, severity=severity, data=data)
@@ -153,6 +165,11 @@ def _copy_editor_state_summary(status: dict[str, Any], editor_state: object) -> 
     if not isinstance(editor_state, dict):
         return
     for key in (
+        "state_source",
+        "is_playing",
+        "is_will_change_playmode",
+        "is_compiling",
+        "is_building_player",
         "active_stage_kind",
         "active_scene_path",
         "active_scene_name",
@@ -161,6 +178,10 @@ def _copy_editor_state_summary(status: dict[str, Any], editor_state: object) -> 
         "prefab_stage_is_dirty",
         "open_scenes",
         "has_unsaved_changes",
+        "dirty_scene_paths",
+        "dirty_prefab_paths",
+        "dirty_material_paths",
+        "dirty_asset_paths",
     ):
         if key in editor_state:
             status[key] = editor_state[key]
@@ -466,15 +487,18 @@ def register_session_tools(server: FastMCP, session: ProjectSession) -> None:
         status["actual_project_root"] = None
         status["project_root_consistent"] = None
 
+        current_bridge = bridge_status()
         editor_state: dict[str, Any] | None = None
-        if bridge_status().get("connected"):
+        blockers: list[dict[str, Any]] = []
+        if current_bridge.get("connected"):
             bridge_resp = send_action(
                 action="get_editor_state",
                 expected_project_root=None,
             )
             if bridge_resp.get("success"):
                 diagnostics.extend(_bridge_diagnostics_to_session_wire(bridge_resp))
-                editor_state = bridge_resp.get("data", {}).get("editor_state")
+                raw_editor_state = bridge_resp.get("data", {}).get("editor_state")
+                editor_state = raw_editor_state if isinstance(raw_editor_state, dict) else None
                 context = _operator_context(bridge_resp)
                 _copy_operator_context(status, context)
                 _copy_editor_state_summary(status, editor_state)
@@ -495,7 +519,22 @@ def register_session_tools(server: FastMCP, session: ProjectSession) -> None:
                             else None
                         ),
                     )
+                blockers.extend(
+                    classify_status_blockers(status, current_bridge, editor_state)
+                )
             else:
+                blocker = classify_tool_error_blocker(bridge_resp)
+                if blocker is None:
+                    blocker = {
+                        "blocker_class": BRIDGE_CONNECTION,
+                        "state_source": "bridge_transport",
+                        "message": "get_editor_state did not return live Editor state.",
+                        "suggested_next_action": (
+                            "Confirm Unity is running and the PrefabSentinel Editor "
+                            "Bridge watcher is active."
+                        ),
+                    }
+                blockers.append(blocker)
                 diagnostics.append(
                     _build_session_diagnostic(
                         "BRIDGE_GET_EDITOR_STATE_FAILED",
@@ -507,14 +546,26 @@ def register_session_tools(server: FastMCP, session: ProjectSession) -> None:
                         data={
                             "bridge_code": bridge_resp.get("code"),
                             "bridge_message": str(bridge_resp.get("message", "")),
+                            "blocker_class": blocker["blocker_class"],
+                            "state_source": blocker["state_source"],
+                            "suggested_next_action": blocker[
+                                "suggested_next_action"
+                            ],
                         },
                     )
                 )
+        else:
+            blockers.extend(classify_status_blockers(status, current_bridge, None))
         status["editor_state"] = editor_state
+        status["blockers"] = blockers
+
+        severity = _compose_envelope_severity(diagnostics)
+        if blockers and severity == Severity.INFO.value:
+            severity = Severity.WARNING.value
 
         return {
             "success": True,
-            "severity": _compose_envelope_severity(diagnostics),
+            "severity": severity,
             "code": "SESSION_STATUS",
             "message": "Current session status",
             "data": status,

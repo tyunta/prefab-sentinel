@@ -19,7 +19,7 @@ namespace PrefabSentinel
     public static partial class UnityEditorControlBridge
     {
         public const int ProtocolVersion = 1;
-        public const string BridgeVersion = "0.8.1";
+        public const string BridgeVersion = "0.8.9";
         private static readonly string BridgeSessionId = Guid.NewGuid().ToString("N");
         private static readonly string BridgeInstanceId = Guid.NewGuid().ToString("N");
 
@@ -72,41 +72,6 @@ namespace PrefabSentinel
             // ``ConsoleLogPhaseClassifier.Classify``; ``OnLogMessage``
             // only calls it to snapshot the phase at ingestion.
             public string phase = string.Empty;
-        }
-
-        // Issue #239 / #40: editor-state snapshot returned by the dedicated
-        // ``get_editor_state`` action.  Carries exactly the five live
-        // editor flags surfaced by the ``get_project_status`` MCP tool's
-        // ``editor_state`` field — adding a flag here is a contract
-        // change for both the Python tool and the C# bridge.  The fifth
-        // flag ``has_unsaved_changes`` (issue #40) reports whether the
-        // open scene or the active Prefab Stage holds unsaved edits; the
-        // offline symbol-reference tools consult it to attach a freshness
-        // marker noting the offline tree reflects last-saved disk.
-        [Serializable]
-        public sealed class EditorStateSnapshot
-        {
-            public bool is_playing = false;
-            public bool is_will_change_playmode = false;
-            public bool is_compiling = false;
-            public bool is_building_player = false;
-            public bool has_unsaved_changes = false;
-            public string active_stage_kind = string.Empty;
-            public string active_scene_path = string.Empty;
-            public string active_scene_name = string.Empty;
-            public string prefab_stage_asset_path = string.Empty;
-            public string prefab_stage_root_name = string.Empty;
-            public bool prefab_stage_is_dirty = false;
-            public EditorSceneStatus[] open_scenes = Array.Empty<EditorSceneStatus>();
-        }
-
-
-        [Serializable]
-        public sealed class EditorSceneStatus
-        {
-            public string path = string.Empty;
-            public string name = string.Empty;
-            public bool is_dirty = false;
         }
 
         [Serializable]
@@ -249,6 +214,7 @@ namespace PrefabSentinel
             public float[] target_bounds_extents = null;
 
             public string serialized_property_json = string.Empty;
+            public string serialized_surface_json = string.Empty;
             public bool read_only = true;
             public bool executed = false;
 
@@ -735,6 +701,9 @@ private static string DeriveTransportRequestId(string requestPath)
                     break;
                 case "editor_serialized_property_list":
                     response = HandleSerializedPropertyList(request);
+                    break;
+                case "editor_inspect_serialized_surface":
+                    response = HandleInspectSerializedSurface(request);
                     break;
                 case "editor_serialized_property_write":
                     response = HandleSerializedPropertyWrite(request);
@@ -1466,16 +1435,7 @@ private static string DeriveTransportRequestId(string requestPath)
                 EditorApplication.update += poll;
             }
         }
-        // ── Editor state snapshot (#239) ──
-
-        /// <summary>
-        /// Snapshot the five editor-state flags surfaced by the
-        /// ``get_project_status`` MCP tool.  Pure read of editor APIs;
-        /// no side effects.  Adding a field here is a contract change
-        /// shared with ``EditorStateSnapshot`` and the Python tool's
-        /// ``editor_state`` field.
-        /// </summary>
-private static EditorOperatorContext BuildEditorOperatorContext()
+        private static EditorOperatorContext BuildEditorOperatorContext()
         {
             return new EditorOperatorContext
             {
@@ -1491,143 +1451,6 @@ private static EditorOperatorContext BuildEditorOperatorContext()
         {
             return Path.GetFullPath(Path.Combine(Application.dataPath, ".."))
                 .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        }
-
-        private static EditorControlDiagnostic LimitedEditorStateDiagnostic(
-            string location,
-            Exception ex)
-        {
-            return new EditorControlDiagnostic
-            {
-                code = "EDITOR_STATE_ENUMERATION_LIMITED",
-                severity = "warning",
-                location = location,
-                detail = ex.Message,
-            };
-        }
-
-        private static EditorSceneStatus[] CollectOpenSceneStatuses(
-            List<EditorControlDiagnostic> diagnostics)
-        {
-            try
-            {
-                var scenes = new List<EditorSceneStatus>();
-                for (int i = 0; i < EditorSceneManager.sceneCount; i++)
-                {
-                    var scene = EditorSceneManager.GetSceneAt(i);
-                    scenes.Add(new EditorSceneStatus
-                    {
-                        path = scene.path ?? string.Empty,
-                        name = scene.name ?? string.Empty,
-                        is_dirty = scene.isDirty,
-                    });
-                }
-                return scenes.ToArray();
-            }
-            catch (Exception ex)
-            {
-                diagnostics.Add(LimitedEditorStateDiagnostic("open_scenes", ex));
-                return Array.Empty<EditorSceneStatus>();
-            }
-        }
-
-        private static void PopulateActiveSceneStatus(
-            EditorStateSnapshot snapshot,
-            List<EditorControlDiagnostic> diagnostics)
-        {
-            try
-            {
-                var activeScene = EditorSceneManager.GetActiveScene();
-                snapshot.active_scene_path = activeScene.path ?? string.Empty;
-                snapshot.active_scene_name = activeScene.name ?? string.Empty;
-            }
-            catch (Exception ex)
-            {
-                diagnostics.Add(LimitedEditorStateDiagnostic("active_scene", ex));
-            }
-        }
-
-        private static void PopulatePrefabStageStatus(
-            EditorStateSnapshot snapshot,
-            List<EditorControlDiagnostic> diagnostics)
-        {
-            try
-            {
-                var stage = PrefabStageUtility.GetCurrentPrefabStage();
-                if (EditorApplication.isPlayingOrWillChangePlaymode)
-                {
-                    snapshot.active_stage_kind = "play_mode";
-                }
-                else if (stage != null)
-                {
-                    snapshot.active_stage_kind = "prefab_stage";
-                    snapshot.prefab_stage_asset_path = stage.assetPath ?? string.Empty;
-                    snapshot.prefab_stage_root_name = stage.prefabContentsRoot != null
-                        ? stage.prefabContentsRoot.name
-                        : string.Empty;
-                    snapshot.prefab_stage_is_dirty = stage.scene.isDirty;
-                }
-                else
-                {
-                    snapshot.active_stage_kind = "scene";
-                }
-            }
-            catch (Exception ex)
-            {
-                diagnostics.Add(LimitedEditorStateDiagnostic("prefab_stage", ex));
-                if (string.IsNullOrEmpty(snapshot.active_stage_kind))
-                    snapshot.active_stage_kind = "scene";
-            }
-        }
-
-        private static EditorControlResponse HandleGetEditorState()
-        {
-            var diagnostics = new List<EditorControlDiagnostic>();
-            var snapshot = new EditorStateSnapshot
-            {
-                is_playing = EditorApplication.isPlaying,
-                is_will_change_playmode = EditorApplication.isPlayingOrWillChangePlaymode,
-                is_compiling = EditorApplication.isCompiling,
-                is_building_player = BuildPipeline.isBuildingPlayer,
-                has_unsaved_changes = HasUnsavedEditorChanges(),
-            };
-            PopulateActiveSceneStatus(snapshot, diagnostics);
-            PopulatePrefabStageStatus(snapshot, diagnostics);
-            snapshot.open_scenes = CollectOpenSceneStatuses(diagnostics);
-
-            var response = BuildSuccess(
-                "EDITOR_CTRL_EDITOR_STATE_OK",
-                "Editor state snapshot captured.",
-                new EditorControlData
-                {
-                    executed = true,
-                    editor_state = snapshot,
-                });
-            response.diagnostics = diagnostics.ToArray();
-            if (diagnostics.Count > 0) response.severity = "warning";
-            return response;
-        }
-
-        /// <summary>
-        /// Issue #40: report whether the editor holds unsaved scene or
-        /// Prefab Stage edits.  When a Prefab Stage is active, its preview
-        /// scene's ``isDirty`` flag is authoritative — the open background
-        /// scene is irrelevant while staging.  Otherwise every loaded
-        /// scene is inspected and the result is the OR of their ``isDirty``
-        /// flags.  Pure read; no side effects.
-        /// </summary>
-        private static bool HasUnsavedEditorChanges()
-        {
-            var stage = PrefabStageUtility.GetCurrentPrefabStage();
-            if (stage != null)
-                return stage.scene.isDirty;
-
-            for (int i = 0; i < EditorSceneManager.sceneCount; i++)
-            {
-                if (EditorSceneManager.GetSceneAt(i).isDirty)
-                    return true;
-            }
-            return false;
         }
 
         // ── Response Builders ──

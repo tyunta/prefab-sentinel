@@ -50,6 +50,11 @@ _CS_BLOCK_COMMENT_RE = re.compile(r"/\*[\s\S]*?\*/")
 _CS_LINE_COMMENT_RE = re.compile(r"//[^\n]*")
 
 
+_PATCH_OP_ASSIGNMENT_RE = re.compile(
+    r"\bop\.op\s*(?:\?\?|>>>|>>|<<|[+\-*/%&|^])?=(?![=>])"
+)
+
+
 def _strip_cs_comments(source: str) -> str:
     return _CS_LINE_COMMENT_RE.sub("", _CS_BLOCK_COMMENT_RE.sub("", source))
 
@@ -79,6 +84,7 @@ def _extract_method(source: str, method_name: str) -> str:
 
     raise AssertionError(f"Could not find closing brace for {method_name}")
 
+
 # Canonical core source name — the entry points (``ApplyFromJson`` and
 # ``ApplyFromPaths``) and the public ``ProtocolVersion`` constant live
 # here; external callers in ``PrefabSentinel.EditorBridge.cs`` and the
@@ -95,6 +101,8 @@ _EXPECTED_PARTIAL_NAMES = (
     _CORE,
     "PrefabSentinel.UnityPatchBridge.Payloads.cs",
     "PrefabSentinel.UnityPatchBridge.Prefab.cs",
+    "PrefabSentinel.UnityPatchBridge.OpenComposition.cs",
+    "PrefabSentinel.UnityPatchBridge.OpenCompositionAudit.cs",
     "PrefabSentinel.UnityPatchBridge.Asset.cs",
     "PrefabSentinel.UnityPatchBridge.Scene.cs",
     "PrefabSentinel.UnityPatchBridge.Resolve.cs",
@@ -120,8 +128,7 @@ class TestPatchBridgePartialLayout(unittest.TestCase):
         self.assertEqual(
             on_disk,
             expected,
-            "Patch-bridge partial inventory drift: on-disk set does "
-            "not match the documented inventory.",
+            "Patch-bridge partial inventory drift: on-disk set does not match the documented inventory.",
         )
 
 
@@ -138,9 +145,7 @@ class TestPatchBridgePartialDeclaresPartialClass(unittest.TestCase):
     def test_every_partial_declares_exactly_one_partial_class(self) -> None:
         for name in _EXPECTED_PARTIAL_NAMES:
             with self.subTest(name=name):
-                text = _strip_cs_comments(
-                    (_TOOLS_DIR / name).read_text(encoding="utf-8")
-                )
+                text = _strip_cs_comments((_TOOLS_DIR / name).read_text(encoding="utf-8"))
                 hits = re.findall(
                     r"public\s+static\s+partial\s+class\s+UnityPatchBridge\b",
                     text,
@@ -148,16 +153,13 @@ class TestPatchBridgePartialDeclaresPartialClass(unittest.TestCase):
                 self.assertEqual(
                     1,
                     len(hits),
-                    f"{name}: expected exactly 1 partial-class "
-                    f"declaration, got {len(hits)}",
+                    f"{name}: expected exactly 1 partial-class declaration, got {len(hits)}",
                 )
 
     def test_no_partial_declares_the_class_as_non_partial(self) -> None:
         for name in _EXPECTED_PARTIAL_NAMES:
             with self.subTest(name=name):
-                text = _strip_cs_comments(
-                    (_TOOLS_DIR / name).read_text(encoding="utf-8")
-                )
+                text = _strip_cs_comments((_TOOLS_DIR / name).read_text(encoding="utf-8"))
                 self.assertNotRegex(
                     text,
                     r"public\s+static\s+class\s+UnityPatchBridge\b",
@@ -189,8 +191,7 @@ class TestPatchBridgeCoreConstantsPresent(unittest.TestCase):
         self.assertRegex(
             text,
             r"public\s+const\s+int\s+ProtocolVersion\s*=\s*2\s*;",
-            "Canonical core source must declare 'public const int "
-            "ProtocolVersion = 2;'.",
+            "Canonical core source must declare 'public const int ProtocolVersion = 2;'.",
         )
         # The constant must NOT be redeclared in any other partial: a
         # duplicate declaration would compile (partials share the
@@ -200,14 +201,11 @@ class TestPatchBridgeCoreConstantsPresent(unittest.TestCase):
         # does not register as a redeclaration.
         for name in (n for n in _EXPECTED_PARTIAL_NAMES if n != _CORE):
             with self.subTest(name=name):
-                other_text = _strip_cs_comments(
-                    (_TOOLS_DIR / name).read_text(encoding="utf-8")
-                )
+                other_text = _strip_cs_comments((_TOOLS_DIR / name).read_text(encoding="utf-8"))
                 self.assertNotRegex(
                     other_text,
                     r"public\s+const\s+int\s+ProtocolVersion\b",
-                    f"{name}: ProtocolVersion must live only in the "
-                    f"canonical core source.",
+                    f"{name}: ProtocolVersion must live only in the canonical core source.",
                 )
 
     def test_thread_static_handle_slot_declared_in_canonical_core(self) -> None:
@@ -228,15 +226,32 @@ class TestPatchBridgeCoreConstantsPresent(unittest.TestCase):
         # a quoted-anchor comment does not register as a redeclaration.
         for name in (n for n in _EXPECTED_PARTIAL_NAMES if n != _CORE):
             with self.subTest(name=name):
-                other_text = _strip_cs_comments(
-                    (_TOOLS_DIR / name).read_text(encoding="utf-8")
-                )
+                other_text = _strip_cs_comments((_TOOLS_DIR / name).read_text(encoding="utf-8"))
                 self.assertNotRegex(
                     other_text,
                     r"\[ThreadStatic\][\s\S]{0,200}s_currentHandles\s*;",
-                    f"{name}: s_currentHandles must live only in the "
-                    f"canonical core source.",
+                    f"{name}: s_currentHandles must live only in the canonical core source.",
                 )
+
+
+class TestPatchBridgeRequestBoundary(unittest.TestCase):
+    def test_empty_operation_array_is_rejected_before_target_resolution(self) -> None:
+        source = _strip_cs_comments((_TOOLS_DIR / _CORE).read_text(encoding="utf-8"))
+        method = _extract_method(source, "ApplyFromPaths")
+        empty_guard = method.find("if (request.ops.Length == 0)")
+        target_resolution = method.find("TryResolveAssetPath")
+        guard_body = method[empty_guard:target_resolution]
+
+        self.assertEqual(
+            (True, True, True, True),
+            (
+                empty_guard < target_resolution,
+                '"UNITY_BRIDGE_SCHEMA"' in guard_body,
+                '"ops must contain at least one operation."' in guard_body,
+                "executed: false" in guard_body,
+            ),
+            msg="direct Unity IPC must reject empty operations before target resolution",
+        )
 
 
 class TestPatchBridgeOperationalRulesInventory(unittest.TestCase):
@@ -259,7 +274,7 @@ class TestPatchBridgeOperationalRulesInventory(unittest.TestCase):
             if stem == head:
                 continue
             assert stem.startswith(head + "."), stem
-            concerns.add(stem[len(head) + 1:])
+            concerns.add(stem[len(head) + 1 :])
         return concerns
 
     def test_operational_rules_list_every_present_partial_concern(self) -> None:
@@ -269,9 +284,349 @@ class TestPatchBridgeOperationalRulesInventory(unittest.TestCase):
                 self.assertIn(
                     concern,
                     text,
-                    f"AGENTS.md inventory line is missing patch-bridge "
-                    f"concern '{concern}'.",
+                    f"AGENTS.md inventory line is missing patch-bridge concern '{concern}'.",
                 )
+
+
+class TestOpenPrefabCompositionSource(unittest.TestCase):
+    def _source(self, filename: str) -> str:
+        path = _TOOLS_DIR / filename
+        self.assertTrue(path.is_file(), msg=f"missing Unity patch concern: {path}")
+        return _strip_cs_comments(path.read_text(encoding="utf-8"))
+
+    def test_patch_payload_carries_open_prefab_address_fields(self) -> None:
+        source = self._source(_CORE)
+        self.assertIn("public string symbol_path", source)
+        self.assertIn("public string relative_symbol_path", source)
+
+    def test_open_prefab_lifecycle_delegates_and_saves_exactly_once(self) -> None:
+        source = self._source("PrefabSentinel.UnityPatchBridge.Prefab.cs")
+        method = _extract_method(source, "ApplyPrefabOperations")
+        self.assertEqual(1, method.count("PrefabUtility.LoadPrefabContents("))
+        self.assertEqual(1, method.count("TryApplyOpenPrefabOp("))
+        self.assertEqual(1, method.count("PrefabUtility.SaveAsPrefabAsset("))
+        self.assertEqual(1, method.count("PrefabUtility.UnloadPrefabContents("))
+        self.assertNotIn("AssetDatabase.SaveAssets()", method)
+        self.assertNotIn("AssetDatabase.Refresh(", method)
+
+        save_index = method.index("PrefabUtility.SaveAsPrefabAsset(")
+        import_index = method.index(
+            "AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceSynchronousImport)",
+            save_index,
+        )
+        persisted_load_index = method.index(
+            "AssetDatabase.LoadAssetAtPath<GameObject>(assetPath)",
+            import_index,
+        )
+        audit_index = method.index(
+            "BuildCreatedResultAudits(request, handles, persistedPrefabRoot)",
+            persisted_load_index,
+        )
+        lifecycle_order = [save_index, import_index, persisted_load_index, audit_index]
+        self.assertEqual(sorted(lifecycle_order), lifecycle_order)
+        self.assertNotIn(
+            "reloadedPrefabRoot = PrefabUtility.LoadPrefabContents(",
+            method,
+        )
+        self.assertNotIn(
+            "PrefabUtility.UnloadPrefabContents(persistedPrefabRoot)",
+            method,
+        )
+        self.assertIn("PrefabUtility.UnloadPrefabContents(prefabRoot)", method)
+
+    def test_open_prefab_save_failure_precedes_refresh_audit_and_success(self) -> None:
+        source = self._source("PrefabSentinel.UnityPatchBridge.Prefab.cs")
+        method = _extract_method(source, "ApplyPrefabOperations")
+
+        self.assertEqual(
+            (True, True, True, True),
+            (
+                "out bool savedSuccessfully" in method,
+                "savedPrefab == null || !savedSuccessfully" in method,
+                '"UNITY_BRIDGE_APPLY"' in method,
+                method.index("savedPrefab == null || !savedSuccessfully")
+                < method.index(
+                    "AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceSynchronousImport)"
+                )
+                < method.index(
+                    "BuildCreatedResultAudits(request, handles, persistedPrefabRoot)"
+                ),
+            ),
+            msg="open-Prefab persistence must be a checked target-only gate before audit/success",
+        )
+
+    def test_public_bridge_exception_paths_are_sanitized(self) -> None:
+        for filename in (
+            "PrefabSentinel.UnityPatchBridge.Prefab.cs",
+            "PrefabSentinel.UnityPatchBridge.Asset.cs",
+            "PrefabSentinel.UnityPatchBridge.Scene.cs",
+        ):
+            with self.subTest(filename=filename):
+                source = self._source(filename)
+                self.assertNotIn("evidence = ex.ToString()", source)
+                self.assertNotIn("Unexpected apply exception: {ex.Message}", source)
+                self.assertIn("Debug.LogException(ex)", source)
+
+        core = self._source("PrefabSentinel.UnityPatchBridge.cs")
+        self.assertNotIn("Failed to parse request JSON: {ex.Message}", core)
+        self.assertIn("Debug.LogException(ex)", core)
+
+        mutation = self._source("PrefabSentinel.UnityPatchBridge.Mutation.cs")
+        for unsafe_assignment in (
+            'error = $"failed to assign Gradient value: {ex.Message}";',
+            'error = $"failed to assign generic value: {ex.Message}";',
+            'error = $"failed to assign Gradient keys: {ex.Message}";',
+            'error = $"failed to read generic boxedValue: {ex.Message}";',
+            "error = ex.Message;",
+            "error = $\"failed to create default instance for value type '{targetType.FullName}': {ex.Message}\";",
+        ):
+            with self.subTest(unsafe_assignment=unsafe_assignment):
+                self.assertNotIn(unsafe_assignment, mutation)
+        for stable_message in (
+            'error = "failed to assign Gradient value";',
+            'error = "failed to assign generic value";',
+            'error = "failed to assign Gradient keys";',
+            'error = "failed to read generic boxedValue";',
+            'error = "value_json could not be decoded";',
+            "error = $\"failed to create default instance for value type '{targetType.FullName}'\";",
+        ):
+            with self.subTest(stable_message=stable_message):
+                self.assertIn(stable_message, mutation)
+
+    def test_patch_op_assignment_pattern_covers_csharp_assignment_operators(
+        self,
+    ) -> None:
+        for operator in (
+            "=",
+            "+=",
+            "-=",
+            "*=",
+            "/=",
+            "%=",
+            "&=",
+            "|=",
+            "^=",
+            "<<=",
+            ">>=",
+            ">>>=",
+            "??=",
+        ):
+            with self.subTest(operator=operator):
+                self.assertRegex(
+                    f"op.op {operator} value;",
+                    _PATCH_OP_ASSIGNMENT_RE,
+                )
+
+        for expression in (
+            "op.op == value;",
+            "op.op != value;",
+            "op.op.Trim()",
+        ):
+            with self.subTest(expression=expression):
+                self.assertNotRegex(expression, _PATCH_OP_ASSIGNMENT_RE)
+
+    def test_patch_op_assignment_invariant_scans_every_open_prefab_consumer(
+        self,
+    ) -> None:
+        consumers = {
+            "TryApplyOpenPrefabOp": _extract_method(
+                self._source("PrefabSentinel.UnityPatchBridge.OpenComposition.cs"),
+                "TryApplyOpenPrefabOp",
+            ),
+            "BuildCreatedResultAudits": _extract_method(
+                self._source(
+                    "PrefabSentinel.UnityPatchBridge.OpenCompositionAudit.cs"
+                ),
+                "BuildCreatedResultAudits",
+            ),
+        }
+        for name, method in consumers.items():
+            with self.subTest(consumer=name):
+                self.assertNotRegex(method, _PATCH_OP_ASSIGNMENT_RE)
+
+        audit_method = consumers["BuildCreatedResultAudits"]
+        mutated_audit = audit_method.replace(
+            (
+                'if (!string.Equals(op.op.Trim(), "instantiate_prefab", '
+                "StringComparison.Ordinal))"
+            ),
+            (
+                "op.op += value;\n"
+                '                if (!string.Equals(op.op.Trim(), "instantiate_prefab", '
+                "StringComparison.Ordinal))"
+            ),
+            1,
+        )
+        self.assertNotEqual(audit_method, mutated_audit)
+        with self.assertRaisesRegex(AssertionError, "Regex matched"):
+            self.assertNotRegex(mutated_audit, _PATCH_OP_ASSIGNMENT_RE)
+
+
+    def test_open_prefab_success_payload_builds_selected_created_result_audit(
+        self,
+    ) -> None:
+        core = self._source("PrefabSentinel.UnityPatchBridge.cs")
+        prefab = self._source("PrefabSentinel.UnityPatchBridge.Prefab.cs")
+        composition = self._source("PrefabSentinel.UnityPatchBridge.OpenCompositionAudit.cs")
+
+        for field in (
+            "public CreatedResultAudit[] created_results",
+            "public string handle",
+            "public string symbol_path",
+            "public string game_object_file_id",
+            "public string transform_file_id",
+            "public string source_asset_path",
+            "public string source_asset_guid",
+            "public PropertyOverrideAudit[] overrides",
+            "public string component",
+            "public string property_path",
+        ):
+            with self.subTest(field=field):
+                self.assertIn(field, core)
+
+        lifecycle = _extract_method(prefab, "ApplyPrefabOperations")
+        self.assertIn(
+            "AssetDatabase.LoadAssetAtPath<GameObject>(assetPath)",
+            lifecycle,
+        )
+        self.assertIn(
+            "BuildCreatedResultAudits(request, handles, persistedPrefabRoot)",
+            lifecycle,
+        )
+        self.assertNotIn(
+            "reloadedPrefabRoot = PrefabUtility.LoadPrefabContents(",
+            lifecycle,
+        )
+        self.assertIn("created_results = createdResults", lifecycle)
+
+        audit_collection = _extract_method(composition, "BuildCreatedResultAudits")
+        self.assertIn(
+            'string.Equals(op.op.Trim(), "instantiate_prefab", StringComparison.Ordinal)',
+            audit_collection,
+        )
+        self.assertIn(
+            "string locator = BuildPostSaveSymbolPath(instance.transform)",
+            audit_collection,
+        )
+        self.assertIn(
+            "TryResolveHierarchyPathWithResolver(",
+            audit_collection,
+        )
+        self.assertIn("savedPrefab", audit_collection)
+        self.assertIn("BuildCreatedResultAudit(", audit_collection)
+        self.assertIn("persistedTransform.gameObject", audit_collection)
+
+        path_builder = _extract_method(composition, "BuildPostSaveSymbolPath")
+        self.assertIn("sameNameCount > 1", path_builder)
+        self.assertIn('$"{segment}#{sameNameIndex}"', path_builder)
+
+        for token in (
+            "GlobalObjectId.GetGlobalObjectIdSlow(persistedInstance)",
+            "GlobalObjectId.GetGlobalObjectIdSlow(persistedInstance.transform)",
+            "AssetDatabase.AssetPathToGUID(sourcePath)",
+            "PrefabUtility.GetPropertyModifications(persistedInstance)",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, composition)
+
+    def test_composition_concern_uses_prefab_and_strict_handle_apis(self) -> None:
+        source = self._source("PrefabSentinel.UnityPatchBridge.OpenComposition.cs")
+        for token in (
+            "TryResolveAssetPath(",
+            "PrefabUtility.InstantiatePrefab(",
+            "TryRegisterHandle(",
+            "TryResolveGameObjectHandle(",
+            "TryResolveExistingGameObject(",
+            "TryResolveRelativeGameObject(",
+            "TryFindUniqueComponentOnObject(",
+            "TryApplyOp(",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, source)
+
+
+class TestOpenPrefabUdonSharpSyncSource(unittest.TestCase):
+    """Issue #156 — open-composition writes to UdonSharp proxies must
+    synchronize the backing UdonBehaviour before the Prefab is saved.
+    """
+
+    @staticmethod
+    def _source(filename: str) -> str:
+        return _strip_cs_comments((_TOOLS_DIR / filename).read_text(encoding="utf-8"))
+
+    def _method(self, filename: str, method_name: str) -> str:
+        return _extract_method(self._source(filename), method_name)
+
+    def test_non_udon_components_do_not_require_udonsharp_editor_utility(self) -> None:
+        body = self._method(
+            "PrefabSentinel.UnityEditorControlBridge.UdonSharpInvocation.cs",
+            "TrySynchronizeUdonSharpProxy",
+        )
+        type_check = body.index("IsAssignableFrom(component.GetType())")
+        utility_lookup = body.index("ResolveUdonSharpEditorUtilityType()")
+        self.assertLess(type_check, utility_lookup)
+        self.assertIn("return true;", body[type_check:utility_lookup])
+
+    def test_linked_proxy_detection_and_utility_absence_are_fail_fast(self) -> None:
+        body = self._method(
+            "PrefabSentinel.UnityEditorControlBridge.UdonSharpInvocation.cs",
+            "TrySynchronizeUdonSharpProxy",
+        )
+        for token in (
+            "ResolveUdonSharpBehaviourType()",
+            "ResolveUdonSharpEditorUtilityType()",
+            '"IsProxyBehaviour"',
+            "is not a linked UdonSharp proxy",
+            '"CopyProxyToUdon"',
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+        self.assertIn("isProxyResult is bool isProxy", body)
+        self.assertIn("|| !isProxy", body)
+        self.assertIn("UdonSharpEditorUtility is unavailable", body)
+
+    def test_reflection_selects_one_assignable_public_static_overload(self) -> None:
+        body = self._method(
+            "PrefabSentinel.UnityEditorControlBridge.UdonSharpInvocation.cs",
+            "TryInvokeUniqueUdonSharpProxyMethod",
+        )
+        for token in (
+            "GetMethods(",
+            "BindingFlags.Public | BindingFlags.Static",
+            "parameters.Length != 1",
+            "parameters[0].ParameterType.IsAssignableFrom(proxy.GetType())",
+            "More than one compatible public static",
+            "Debug.LogException",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+        self.assertNotIn("GetMethod(", body)
+
+    def test_open_prefab_set_syncs_after_apply_and_before_save(self) -> None:
+        set_body = self._method(
+            "PrefabSentinel.UnityPatchBridge.OpenComposition.cs",
+            "TryApplyOpenPrefabSet",
+        )
+        mutation_index = set_body.index("TryApplyMutationOpToObject(")
+        sync_index = set_body.index("TrySynchronizeUdonSharpProxy(")
+        rejection_index = set_body.index('"udonsharp_sync_error"', sync_index)
+        self.assertEqual(
+            sorted((mutation_index, sync_index, rejection_index)),
+            [mutation_index, sync_index, rejection_index],
+        )
+
+        lifecycle = self._method(
+            "PrefabSentinel.UnityPatchBridge.Prefab.cs",
+            "ApplyPrefabOperations",
+        )
+        dispatch_index = lifecycle.index("TryApplyOpenPrefabOp(")
+        rejection_index = lifecycle.index('"SER_APPLY_REJECTED"', dispatch_index)
+        save_index = lifecycle.index("PrefabUtility.SaveAsPrefabAsset(")
+        self.assertEqual(
+            sorted((dispatch_index, rejection_index, save_index)),
+            [dispatch_index, rejection_index, save_index],
+            msg="a failed proxy sync must reject the op before Prefab persistence",
+        )
 
 
 class TestPatchSelectorNResolverDelegation(unittest.TestCase):
@@ -291,9 +646,7 @@ class TestPatchSelectorNResolverDelegation(unittest.TestCase):
     _RESOLVE_PARTIAL = _TOOLS_DIR / "PrefabSentinel.UnityPatchBridge.Resolve.cs"
 
     def _resolve_source(self) -> str:
-        return _strip_cs_comments(
-            self._RESOLVE_PARTIAL.read_text(encoding="utf-8")
-        )
+        return _strip_cs_comments(self._RESOLVE_PARTIAL.read_text(encoding="utf-8"))
 
     def test_selector_resolution_delegates_to_shared_resolver(self) -> None:
         source = self._resolve_source()
@@ -317,9 +670,7 @@ class TestPatchSelectorNResolverDelegation(unittest.TestCase):
             r"bool\s+TryFindUniqueComponent\s*\(",
             self._resolve_source(),
         )
-        self.assertIsNotNone(
-            match, msg="TryFindUniqueComponent declaration not found"
-        )
+        self.assertIsNotNone(match, msg="TryFindUniqueComponent declaration not found")
         match = require_not_none(match, "TryFindUniqueComponent declaration")
         source = self._resolve_source()
         start = match.start()
@@ -341,8 +692,7 @@ class TestPatchSelectorNResolverDelegation(unittest.TestCase):
             "TryResolveHierarchyPathWithResolver",
             body,
             msg=(
-                "TryFindUniqueComponent must resolve the selector's "
-                "hierarchy part through the resolver-backed helper."
+                "TryFindUniqueComponent must resolve the selector's hierarchy part through the resolver-backed helper."
             ),
         )
 
@@ -370,28 +720,19 @@ class TestPrefabApplyRejectionEnvelopeSource(unittest.TestCase):
         return _TOOLS_DIR / "PrefabSentinel.Prefab.ApplyRejectionEnvelope.cs"
 
     def test_handler_delegates_to_rejection_envelope(self) -> None:
-        text = _strip_cs_comments(
-            self._prefab_partial_path().read_text(encoding="utf-8")
-        )
+        text = _strip_cs_comments(self._prefab_partial_path().read_text(encoding="utf-8"))
         self.assertIn("PrefabApplyRejectionEnvelope.Build", text)
 
     def test_rejection_envelope_declares_new_code(self) -> None:
-        text = _strip_cs_comments(
-            self._envelope_path().read_text(encoding="utf-8")
-        )
+        text = _strip_cs_comments(self._envelope_path().read_text(encoding="utf-8"))
         self.assertIn(
             'RejectedCode = "SER_APPLY_REJECTED"',
             text,
-            msg=(
-                "PrefabApplyRejectionEnvelope must declare the documented "
-                "`SER_APPLY_REJECTED` code (issue #298)."
-            ),
+            msg=("PrefabApplyRejectionEnvelope must declare the documented `SER_APPLY_REJECTED` code (issue #298)."),
         )
 
     def test_rejection_envelope_carries_property_path_field(self) -> None:
-        text = _strip_cs_comments(
-            self._envelope_path().read_text(encoding="utf-8")
-        )
+        text = _strip_cs_comments(self._envelope_path().read_text(encoding="utf-8"))
         # The diagnostic payload's property-path key is named
         # ``property_path`` on the wire (matches the SerializedProperty
         # vocabulary the README error register uses).
@@ -405,9 +746,7 @@ class TestPrefabApplyRejectionEnvelopeSource(unittest.TestCase):
         )
 
     def test_rejection_envelope_carries_component_type_field(self) -> None:
-        text = _strip_cs_comments(
-            self._envelope_path().read_text(encoding="utf-8")
-        )
+        text = _strip_cs_comments(self._envelope_path().read_text(encoding="utf-8"))
         self.assertIn(
             "component_type",
             text,
@@ -418,9 +757,7 @@ class TestPrefabApplyRejectionEnvelopeSource(unittest.TestCase):
         )
 
     def test_rejection_envelope_carries_attempted_value_field(self) -> None:
-        text = _strip_cs_comments(
-            self._envelope_path().read_text(encoding="utf-8")
-        )
+        text = _strip_cs_comments(self._envelope_path().read_text(encoding="utf-8"))
         self.assertIn(
             "attempted_value",
             text,
@@ -430,11 +767,8 @@ class TestPrefabApplyRejectionEnvelopeSource(unittest.TestCase):
             ),
         )
 
-
     def test_attempted_value_summary_preserves_null_marker(self) -> None:
-        text = _strip_cs_comments(
-            self._prefab_partial_path().read_text(encoding="utf-8")
-        )
+        text = _strip_cs_comments(self._prefab_partial_path().read_text(encoding="utf-8"))
         body = _extract_method(text, "SummarizePatchOpValue")
         self.assertNotIn(
             "op.value_string ?? string.Empty",
@@ -474,8 +808,7 @@ class TestFileIdTargetedSetOp(unittest.TestCase):
             text,
             r"public\s+string\s+file_id\s*=",
             msg=(
-                "the PatchOp DTO must declare a file_id target field so "
-                "a set op can carry an exact fileID (issue #37)."
+                "the PatchOp DTO must declare a file_id target field so a set op can carry an exact fileID (issue #37)."
             ),
         )
 
@@ -486,10 +819,7 @@ class TestFileIdTargetedSetOp(unittest.TestCase):
         self.assertIn(
             "TryResolveComponentByFileId",
             text,
-            msg=(
-                "Resolve.cs must declare a fileID-based component "
-                "resolver (issue #37)."
-            ),
+            msg=("Resolve.cs must declare a fileID-based component resolver (issue #37)."),
         )
         self.assertIn(
             "GlobalObjectId",
@@ -515,10 +845,7 @@ class TestFileIdTargetedSetOp(unittest.TestCase):
         self.assertIn(
             "TryResolveComponentByFileId",
             text,
-            msg=(
-                "the set-op fileID branch must resolve through "
-                "TryResolveComponentByFileId (issue #37)."
-            ),
+            msg=("the set-op fileID branch must resolve through TryResolveComponentByFileId (issue #37)."),
         )
 
 
@@ -560,27 +887,35 @@ class TestPatchBridgeMutationNullContractSource(unittest.TestCase):
             msg="Required op must not use empty-string fallback routing.",
         )
 
-    def test_set_component_selector_does_not_require_file_id(self) -> None:
+    def test_value_op_component_selector_does_not_require_file_id(self) -> None:
         body = self._method_body("TryApplyOp")
         file_id_branch = body.find(
-            "isSetOp && op.file_id != null && op.file_id.Trim().Length > 0"
+            "if (op.file_id != null && op.file_id.Trim().Length > 0)"
         )
         component_null_branch = body.find("else if (op.component == null)")
 
         self.assertNotIn(
-            "if (isSetOp && op.file_id == null)",
+            "isSetOp && op.file_id",
             body,
-            msg="Component-targeted set ops must not fail only because file_id is absent.",
+            msg=(
+                "Every serialized value operation must be able to use the exact "
+                "fileID route, including array insert/remove probes."
+            ),
+        )
+        self.assertNotIn(
+            "if (op.file_id == null)",
+            body,
+            msg="Component-targeted value ops must not fail only because file_id is absent.",
         )
         self.assertNotEqual(
             -1,
             file_id_branch,
-            msg="Set-op file_id routing must run only when a file_id value is present.",
+            msg="Value-op file_id routing must run whenever a file_id value is present.",
         )
         self.assertLess(
             file_id_branch,
             component_null_branch,
-            msg="Set ops without file_id must continue into component selector routing.",
+            msg="Value ops without file_id must continue into component selector routing.",
         )
 
     def test_value_kind_null_is_rejected_before_assignment_routing(self) -> None:
@@ -776,10 +1111,7 @@ class TestPatchBridgeResolveNullContractSource(unittest.TestCase):
         self.assertIn(
             "result handle is null",
             resolve_source,
-            msg=(
-                "TryNormalizeResultHandle must report null op.result with "
-                "evidence 'result handle is null'."
-            ),
+            msg=("TryNormalizeResultHandle must report null op.result with evidence 'result handle is null'."),
         )
         self.assertNotIn(
             "NormalizeHandle(op.result)",
@@ -971,9 +1303,7 @@ class TestPatchBridgeResolveNullContractSource(unittest.TestCase):
 
     def test_target_path_canonicalizes_relative_assets_before_acceptance(self) -> None:
         body = self._method_body("TryResolveAssetPath")
-        canonical_index = body.find(
-            "Path.GetFullPath(Path.Combine(projectRoot, assetPath))"
-        )
+        canonical_index = body.find("Path.GetFullPath(Path.Combine(projectRoot, assetPath))")
         assets_root_index = body.find("Application.dataPath")
         containment_index = body.find("IsPathInsideDirectory(assetsRoot, fullTarget)")
         assets_prefix_index = body.find('StartsWith("Assets/"')
@@ -1061,10 +1391,7 @@ class TestPatchBridgeResolveNullContractSource(unittest.TestCase):
         self.assertNotEqual(
             -1,
             null_index,
-            msg=(
-                "TryParseComponentSelector must reject null with "
-                "'component selector is null'."
-            ),
+            msg=("TryParseComponentSelector must reject null with 'component selector is null'."),
         )
         self.assertLess(
             null_index,
@@ -1074,8 +1401,5 @@ class TestPatchBridgeResolveNullContractSource(unittest.TestCase):
         self.assertNotEqual(
             -1,
             empty_index,
-            msg=(
-                "TryParseComponentSelector must retain "
-                "'component selector is empty'."
-            ),
+            msg=("TryParseComponentSelector must retain 'component selector is empty'."),
         )

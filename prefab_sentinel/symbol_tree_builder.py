@@ -114,6 +114,66 @@ def build_symbol_tree(
         diagnostics=diagnostics,
     )
 
+
+def _join_symbol_path(parent: str, name: str) -> str:
+    if not parent:
+        return name
+    return f"{parent}/{name}"
+
+
+def _mark_source_prefab(node: SymbolNode, source_prefab: str) -> None:
+    if source_prefab and not node.source_prefab:
+        node.source_prefab = source_prefab
+    for child in node.children:
+        _mark_source_prefab(child, source_prefab)
+
+
+def _annotate_symbol_identity(
+    nodes: list[SymbolNode],
+    *,
+    asset_path: str,
+    lookup_parent: str = "",
+    display_parent: str = "",
+    nested: bool = False,
+) -> None:
+    for node in nodes:
+        display_path = _join_symbol_path(display_parent, node.name)
+        node.display_path = display_path
+        if node.kind == SymbolKind.PREFAB_INSTANCE:
+            node.entry_kind = node.entry_kind or "source_only"
+            if not node.entry_reason:
+                node.entry_reason = (
+                    "prefab_instance_source"
+                    if node.children
+                    else "unresolved_source_prefab_guid"
+                )
+            for child in node.children:
+                _mark_source_prefab(child, node.source_prefab)
+            _annotate_symbol_identity(
+                node.children,
+                asset_path=asset_path,
+                lookup_parent=lookup_parent,
+                display_parent=display_path,
+                nested=True,
+            )
+            continue
+
+        lookup_path = _join_symbol_path(lookup_parent, node.name)
+        if nested:
+            node.entry_kind = node.entry_kind or "effective_nested"
+            node.lookup = {
+                "asset_path": asset_path,
+                "symbol_path": lookup_path,
+                "expand_nested": True,
+            }
+        _annotate_symbol_identity(
+            node.children,
+            asset_path=asset_path,
+            lookup_parent=lookup_path,
+            display_parent=display_path,
+            nested=nested,
+        )
+
 def _build_symbol_tree_with_blocks(
     text: str,
     source_path: str,
@@ -412,6 +472,7 @@ def _build_symbol_tree_with_blocks(
             else:
                 roots.append(marker)
 
+    _annotate_symbol_identity(roots, asset_path=source_path)
     return SymbolTree(
         asset_path=source_path,
         roots=roots,

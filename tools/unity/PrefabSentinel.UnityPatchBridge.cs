@@ -50,6 +50,8 @@ namespace PrefabSentinel
             public string shader = string.Empty;
             public string prefab = string.Empty;
             public string component = string.Empty;
+            public string symbol_path = string.Empty;
+            public string relative_symbol_path = string.Empty;
             // Issue #37: exact-fileID target for set ops; enables unique
             // addressing of same-type siblings on one GameObject.
             public string file_id = string.Empty;
@@ -84,6 +86,29 @@ namespace PrefabSentinel
             public bool read_only = false;
             public bool executed = false;
             public int protocol_version = ProtocolVersion;
+            public CreatedResultAudit[] created_results =
+                Array.Empty<CreatedResultAudit>();
+        }
+
+
+        [Serializable]
+        private sealed class CreatedResultAudit
+        {
+            public string handle = string.Empty;
+            public string symbol_path = string.Empty;
+            public string game_object_file_id = string.Empty;
+            public string transform_file_id = string.Empty;
+            public string source_asset_path = string.Empty;
+            public string source_asset_guid = string.Empty;
+            public PropertyOverrideAudit[] overrides =
+                Array.Empty<PropertyOverrideAudit>();
+        }
+
+        [Serializable]
+        private sealed class PropertyOverrideAudit
+        {
+            public string component = string.Empty;
+            public string property_path = string.Empty;
         }
 
         [Serializable]
@@ -137,11 +162,12 @@ namespace PrefabSentinel
             }
             catch (Exception ex)
             {
+                Debug.LogException(ex);
                 WriteResponseSafe(
                     responsePath,
                     BuildError(
                         "UNITY_BRIDGE_REQUEST_JSON",
-                        $"Failed to parse request JSON: {ex.Message}",
+                        "Failed to parse request JSON.",
                         target: string.Empty,
                         opCount: 0,
                         executed: false
@@ -187,6 +213,21 @@ namespace PrefabSentinel
                     BuildError(
                         "UNITY_BRIDGE_SCHEMA",
                         "ops is required.",
+                        request.target,
+                        opCount: 0,
+                        executed: false
+                    )
+                );
+                return;
+            }
+
+            if (request.ops.Length == 0)
+            {
+                WriteResponseSafe(
+                    responsePath,
+                    BuildError(
+                        "UNITY_BRIDGE_SCHEMA",
+                        "ops must contain at least one operation.",
                         request.target,
                         opCount: 0,
                         executed: false

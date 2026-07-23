@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -9,9 +10,15 @@ from mcp.server.fastmcp import FastMCP
 from prefab_sentinel.json_io import load_json
 from prefab_sentinel.mcp_validation import require_change_reason
 from prefab_sentinel.patch_revert import revert_overrides as revert_overrides_impl
+from prefab_sentinel.patch_transaction_results import boundary_failure
 from prefab_sentinel.session import ProjectSession
 
 __all__ = ["register_patch_tools"]
+
+_LOGGER = logging.getLogger(__name__)
+
+
+
 
 
 def register_patch_tools(server: FastMCP, session: ProjectSession) -> None:
@@ -119,7 +126,6 @@ def register_patch_tools(server: FastMCP, session: ProjectSession) -> None:
         )
         return resp.to_dict()
 
-
     @server.tool()
     def delete_asset(
         asset_path: str,
@@ -194,9 +200,10 @@ def register_patch_tools(server: FastMCP, session: ProjectSession) -> None:
 
     @server.tool()
     def patch_apply(
-        plan: str | dict,
+        plan: Any,
         confirm: bool = False,
         change_reason: str = "",
+        out_report: str | None = None,
         scope: str | None = None,
         runtime_scene: str | None = None,
         runtime_profile: str = "default",
@@ -215,6 +222,7 @@ def register_patch_tools(server: FastMCP, session: ProjectSession) -> None:
             plan: Patch plan as JSON string. Must conform to plan_version "2".
             confirm: Set True to apply (False = dry-run only).
             change_reason: Required when confirm=True. Audit log reason.
+            out_report: Required audit report for a confirmed one-open-Prefab plan.
             scope: Directory for post-apply reference validation.
             runtime_scene: Scene path for post-apply runtime validation.
             runtime_profile: ClientSim profile for runtime validation.
@@ -228,17 +236,36 @@ def register_patch_tools(server: FastMCP, session: ProjectSession) -> None:
             return err
         if isinstance(plan, dict):
             plan_dict = plan
-        else:
+        elif isinstance(plan, str):
             try:
                 plan_dict = load_json(plan)
-            except (ValueError, TypeError) as exc:
+            except (ValueError, TypeError):
+                _LOGGER.debug("Invalid patch plan JSON", exc_info=True)
                 return {
-                    "success": False, "severity": "error", "code": "INVALID_PLAN_JSON",
-                    "message": f"Failed to parse plan JSON: {exc}",
-                    "data": {}, "diagnostics": [],
+                    "success": False,
+                    "severity": "error",
+                    "code": "INVALID_PLAN_JSON",
+                    "message": "Patch plan JSON is invalid.",
+                    "data": {},
+                    "diagnostics": [],
                 }
+        else:
+            plan_dict = plan
+        if not isinstance(plan_dict, dict):
+            return {
+                "success": False,
+                "severity": "error",
+                "code": "INVALID_PLAN_SCHEMA",
+                "message": "Plan validation failed: Patch plan root must be an object.",
+                "data": {},
+                "diagnostics": [],
+            }
 
-        orch = session.get_orchestrator()
+        try:
+            orch = session.get_orchestrator()
+        except Exception as exc:
+            return boundary_failure("apply", exc, state_unknown=False).to_dict()
+
         try:
             resp = orch.patch_apply(
                 plan=plan_dict,
@@ -247,6 +274,7 @@ def register_patch_tools(server: FastMCP, session: ProjectSession) -> None:
                 plan_sha256=None,
                 plan_signature=None,
                 change_reason=change_reason or None,
+                out_report=out_report,
                 scope=scope,
                 runtime_scene=runtime_scene,
                 runtime_profile=runtime_profile,
@@ -254,18 +282,32 @@ def register_patch_tools(server: FastMCP, session: ProjectSession) -> None:
                 runtime_since_timestamp=runtime_since_timestamp,
                 runtime_allow_warnings=runtime_allow_warnings,
                 runtime_max_diagnostics=runtime_max_diagnostics,
+                transactional=True,
             )
-        except ValueError as exc:
+        except ValueError:
+            _LOGGER.debug("Invalid patch plan schema", exc_info=True)
             return {
-                "success": False, "severity": "error",
+                "success": False,
+                "severity": "error",
                 "code": "INVALID_PLAN_SCHEMA",
-                "message": f"Plan validation failed: {exc}",
-                "data": {}, "diagnostics": [],
+                "message": "Patch plan schema is invalid.",
+                "data": {},
+                "diagnostics": [],
             }
+        except Exception as exc:
+            return boundary_failure("apply", exc, state_unknown=confirm).to_dict()
+
         result = resp.to_dict()
-        if confirm and resp.success:
-            orch_ref = session.get_orchestrator()
-            result["auto_refresh"] = orch_ref.maybe_auto_refresh()
+        result_data = result.get("data")
+        transaction_finalized = (
+            isinstance(result_data, dict)
+            and isinstance(result_data.get("transaction"), dict)
+        )
+        if confirm and resp.success and not transaction_finalized:
+            try:
+                result["auto_refresh"] = orch.maybe_auto_refresh()
+            except Exception as exc:
+                return boundary_failure("apply", exc, state_unknown=True).to_dict()
         return result
 
     @server.tool()

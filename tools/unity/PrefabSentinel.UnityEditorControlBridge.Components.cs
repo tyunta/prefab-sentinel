@@ -8,93 +8,6 @@ namespace PrefabSentinel
 {
     public static partial class UnityEditorControlBridge
     {
-        /// <summary>
-        /// Short-circuit ``editor_add_component`` for UdonSharp behaviours.
-        ///
-        /// Returns a reuse response when the GameObject already carries the
-        /// proxy + matching UdonBehaviour pair. Returns a relink response
-        /// when only a stranded proxy is present and a fresh UdonBehaviour
-        /// has been linked. Returns null in every other case so the caller
-        /// can fall through to the regular ``Undo.AddComponent`` path.
-        /// </summary>
-        private static EditorControlResponse HandleUdonSharpAddComponentIdempotent(
-            GameObject go, Type compType, string hierarchyPath)
-        {
-            var proxy = go.GetComponent(compType);
-            if (proxy == null) return null;
-
-            Type editorUtilType = ResolveUdonSharpEditorUtilityType();
-            if (editorUtilType == null) return null;
-
-            MethodInfo getBacking = editorUtilType.GetMethod(
-                "GetBackingUdonBehaviour",
-                BindingFlags.Public | BindingFlags.Static
-            );
-            if (getBacking == null) return null;
-
-            object backing;
-            try
-            {
-                backing = getBacking.Invoke(null, new object[] { proxy });
-            }
-            catch (Exception ex)
-            {
-                // Issue #137: intentional best-effort fallback. The
-                // reflective call into the optional UdonSharp editor
-                // utility may throw when the assembly version is older
-                // than expected; return ``null`` so the caller falls
-                // through to the regular ``Undo.AddComponent`` path.
-                Debug.LogWarning($"[PrefabSentinel] HandleUdonSharpAddComponentIdempotent: {ex.GetType().Name}: {ex.Message}");
-                return null;
-            }
-
-            if (backing != null)
-            {
-                return BuildSuccess(
-                    "EDITOR_CTRL_ADD_COMPONENT_REUSED",
-                    $"Existing UdonSharp pair reused for {compType.Name}",
-                    new EditorControlData
-                    {
-                        selected_object = go.name,
-                        asset_path = compType.FullName,
-                        executed = false,
-                        read_only = false,
-                    });
-            }
-
-            // Stranded proxy: link a freshly created UdonBehaviour to it.
-            MethodInfo createForProxy = editorUtilType.GetMethod(
-                "CreateBehaviourForProxy",
-                BindingFlags.Public | BindingFlags.Static
-            );
-            if (createForProxy == null) return null;
-
-            try
-            {
-                createForProxy.Invoke(null, new object[] { proxy });
-            }
-            catch (Exception ex)
-            {
-                // Issue #137: intentional best-effort fallback. The
-                // reflective call into ``CreateBehaviourForProxy`` may
-                // throw when the optional UdonSharp editor utility's
-                // signature drifts; return ``null`` so the caller falls
-                // through to the regular ``Undo.AddComponent`` path.
-                Debug.LogWarning($"[PrefabSentinel] HandleUdonSharpAddComponentIdempotent: {ex.GetType().Name}: {ex.Message}");
-                return null;
-            }
-
-            return BuildSuccess(
-                "EDITOR_CTRL_ADD_COMPONENT_RELINKED",
-                $"Existing proxy re-linked to new UdonBehaviour for {compType.Name}",
-                new EditorControlData
-                {
-                    selected_object = go.name,
-                    asset_path = compType.FullName,
-                    executed = true,
-                    read_only = false,
-                });
-        }
 
         private static EditorControlResponse HandleEditorAddComponent(EditorControlRequest request)
         {
@@ -114,21 +27,36 @@ namespace PrefabSentinel
                     $"Component type not found: {request.component_type}. " +
                     "Short names (e.g. 'BoxCollider') and fully qualified names both work.");
 
-            // Idempotency guard for UdonSharpBehaviour subclasses (issue #103).
-            // Adding the same UdonSharp class twice via the public AddComponent
-            // path otherwise produces a second proxy MonoBehaviour without a
-            // matching UdonBehaviour, leaving the GameObject with mismatched
-            // pairs. Short-circuit to a reuse / relink response when an
-            // existing proxy is detected.
             Type usbTypeForGuard = ResolveUdonSharpBehaviourType();
-            if (usbTypeForGuard != null && usbTypeForGuard.IsAssignableFrom(compType))
+            bool isUdonSharpComponent = usbTypeForGuard != null
+                && usbTypeForGuard.IsAssignableFrom(compType);
+            Component added;
+            if (isUdonSharpComponent)
             {
+                // Existing UdonSharp proxies are either complete pairs to
+                // reuse or stranded proxies to repair. The helper returns
+                // null only when no proxy exists yet.
                 EditorControlResponse idempotent =
-                    HandleUdonSharpAddComponentIdempotent(go, compType, request.hierarchy_path);
+                    HandleExistingUdonSharpAddComponent(
+                        go, compType, request.hierarchy_path);
                 if (idempotent != null) return idempotent;
+
+                EditorControlResponse programAssetErr =
+                    CheckUdonProgramAssetReady(compType);
+                if (programAssetErr != null) return programAssetErr;
+
+                // Fresh UdonSharp additions must use the setup-aware public
+                // entry point so the proxy and backing UdonBehaviour are
+                // created as one Undo operation.
+                EditorControlResponse createErr =
+                    InvokeUdonSharpUndoAddComponent(go, compType, out added);
+                if (createErr != null) return createErr;
+            }
+            else
+            {
+                added = Undo.AddComponent(go, compType);
             }
 
-            var added = Undo.AddComponent(go, compType);
             if (added == null)
                 return BuildError("EDITOR_CTRL_ADD_COMP_FAILED",
                     $"Failed to add component: {request.component_type}");
@@ -181,13 +109,10 @@ namespace PrefabSentinel
                 }
             }
 
-            // Check if the added type is UdonSharpBehaviour without a matching ProgramAsset.
-            // ``usbTypeForGuard`` was already resolved above via ``ResolveUdonSharpBehaviourType``;
-            // reuse it instead of walking ``AppDomain.CurrentDomain.GetAssemblies()`` a second time.
-            Type usbType = usbTypeForGuard;
-
+            // Keep the legacy post-add ProgramAsset diagnostic lookup for
+            // UdonSharp additions; type classification was cached above.
             bool udonProgramAssetMissing = false;
-            if (usbType != null && usbType.IsAssignableFrom(compType))
+            if (isUdonSharpComponent)
             {
                 udonProgramAssetMissing = true;
                 Type programAssetType = null;
@@ -236,12 +161,15 @@ namespace PrefabSentinel
                     executed = true,
                     read_only = false,
                 });
-            // Issue #27: ``diagList`` here holds only initial-property / parse failures (runtime-mod note appended below); escalate severity.
+            // Issue #27: diagList here holds only initial-property / parse failures
+            // (runtime-mod note appended below); escalate severity.
             if (diagList.Count > 0) resp.severity = "warning";
             diagList.Add(new EditorControlDiagnostic
             {
                 detail = "Runtime modification — save the scene (File > Save) to persist.",
-                evidence = "Undo.AddComponent"
+                evidence = isUdonSharpComponent
+                    ? "UdonSharpEditor.UdonSharpUndo.AddComponent"
+                    : "Undo.AddComponent"
             });
             if (udonProgramAssetMissing)
             {

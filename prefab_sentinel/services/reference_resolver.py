@@ -380,21 +380,47 @@ class ReferenceResolverService:
         files.sort()
         return files
 
-    def _resolve_scan_project_root(self, scope_path: Path) -> Path:
-        scope_anchor = scope_path if scope_path.is_dir() else scope_path.parent
-        resolved_anchor = scope_anchor.resolve()
-        assets_root = (self.project_root / "Assets").resolve()
+    def _scope_outside_project_response(
+        self,
+        scope: str,
+        scope_path: Path,
+    ) -> ToolResponse | None:
         try:
-            resolved_anchor.relative_to(assets_root)
+            scope_path.resolve().relative_to(self.project_root.resolve())
+        except OSError as exc:
+            return error_response(
+                "REF404",
+                "Scope path could not be resolved inside the active project root.",
+                data={
+                    "scope": scope,
+                    "read_only": True,
+                    "reason": "resolve_error",
+                    "error": str(exc),
+                },
+            )
         except ValueError:
-            pass
-        else:
-            if resolved_anchor != assets_root:
-                return resolved_anchor
-        candidate = find_project_root(resolved_anchor)
-        if (candidate / "Assets").exists():
-            return candidate
-        return self.project_root
+            return error_response(
+                "REF404",
+                "Scope path is outside the active project root.",
+                data={
+                    "scope": scope,
+                    "read_only": True,
+                    "reason": "outside_project_root",
+                },
+            )
+        return None
+
+    def _resolve_scan_project_root(self, scope_path: Path) -> Path:
+        try:
+            scope_anchor = scope_path if scope_path.is_dir() else scope_path.parent
+            resolved_anchor = scope_anchor.resolve()
+            candidate = find_project_root(resolved_anchor)
+            if not (candidate / "Assets").exists():
+                return self.project_root
+            candidate.resolve().relative_to(self.project_root.resolve())
+        except (OSError, ValueError):
+            return self.project_root
+        return candidate
 
     @staticmethod
     def _should_validate_external_file_id(target: Path) -> bool:
@@ -531,7 +557,17 @@ class ReferenceResolverService:
             ``ToolResponse`` with ``data.broken_count``, ``data.categories``,
             ``data.top_missing_asset_guids``, and optionally ``diagnostics``.
         """
-        scope_path = resolve_scope_path(scope, self.project_root)
+        try:
+            scope_path = resolve_scope_path(scope, self.project_root)
+        except (OSError, ValueError) as exc:
+            return error_response(
+                "REF404",
+                "Scope path could not be resolved.",
+                data={"scope": scope, "read_only": True, "error": str(exc)},
+            )
+        outside_project = self._scope_outside_project_response(scope, scope_path)
+        if outside_project is not None:
+            return outside_project
         try:
             scope_exists = scope_path.exists()
         except OSError:
@@ -745,10 +781,14 @@ class ReferenceResolverService:
                     f"Use --details to include individual diagnostics."
                 )
 
+        scan_scope = self._relative(scope_path)
+        guid_resolution_root = self._relative(scan_project_root)
         scan_data = {
-            "scope": self._relative(scope_path),
+            "scope": scan_scope,
+            "scan_scope": scan_scope,
             "project_root": self._relative(self.project_root),
-            "scan_project_root": self._relative(scan_project_root),
+            "scan_project_root": guid_resolution_root,
+            "guid_resolution_root": guid_resolution_root,
             "read_only": True,
             "ignore_asset_guids": sorted(ignore_guid_set),
             "details_included": include_diagnostics,
@@ -861,7 +901,17 @@ class ReferenceResolverService:
         scan_scope_path: Path | None = None
         scan_project_root = self.project_root
         if scope:
-            scan_scope_path = resolve_scope_path(scope, self.project_root)
+            try:
+                scan_scope_path = resolve_scope_path(scope, self.project_root)
+            except (OSError, ValueError) as exc:
+                return error_response(
+                    "REF404",
+                    "Scope path could not be resolved.",
+                    data={"scope": scope, "read_only": True, "error": str(exc)},
+                )
+            outside_project = self._scope_outside_project_response(scope, scan_scope_path)
+            if outside_project is not None:
+                return outside_project
             scope_exists, scope_error = _path_status_exists(scan_scope_path)
             if scope_error is not None:
                 return error_response(
@@ -888,7 +938,30 @@ class ReferenceResolverService:
                     data={"asset_or_guid": asset_or_guid, "read_only": True},
                 )
         else:
-            candidate = resolve_scope_path(asset_or_guid, self.project_root)
+            try:
+                candidate = resolve_scope_path(asset_or_guid, self.project_root)
+            except (OSError, ValueError) as exc:
+                return error_response(
+                    "REF404",
+                    "Target asset path could not be resolved.",
+                    data={
+                        "asset_or_guid": asset_or_guid,
+                        "read_only": True,
+                        "error": str(exc),
+                    },
+                )
+            try:
+                candidate.relative_to(self.project_root)
+            except ValueError:
+                return error_response(
+                    "REF404",
+                    "Target asset path is outside the active project root.",
+                    data={
+                        "asset_or_guid": asset_or_guid,
+                        "read_only": True,
+                        "reason": "outside_project_root",
+                    },
+                )
             candidate_exists, candidate_error = _path_status_exists(candidate)
             if candidate_error is not None:
                 return error_response(

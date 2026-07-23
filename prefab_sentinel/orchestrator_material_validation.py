@@ -28,13 +28,29 @@ def validate_materials(
     scope: str,
     *,
     include_details: bool = False,
+    timeout_sec: float | None = None,
     diagnostics_baseline: DiagnosticsBaseline | None = None,
     inspection_context: ProjectInspectionContext | None = None,
 ) -> ToolResponse:
-    project_root = reference_resolver.project_root.resolve()
-    scope_path = resolve_scope_path(scope, project_root)
+    try:
+        project_root = reference_resolver.project_root.resolve()
+        scope_path = resolve_scope_path(scope, project_root)
+    except (OSError, ValueError) as exc:
+        return cast(ToolResponse, error_response(
+            "MATERIAL_VALIDATION_SCOPE_NOT_FOUND",
+            "Material validation scope could not be resolved inside the project.",
+            data={"scope": scope, "read_only": True, "error": str(exc)},
+        ))
+    try:
+        scope_exists = scope_path.exists()
+    except OSError as exc:
+        return cast(ToolResponse, error_response(
+            "MATERIAL_VALIDATION_SCOPE_NOT_FOUND",
+            "Material validation scope status could not be read inside the project.",
+            data={"scope": scope, "read_only": True, "error": str(exc)},
+        ))
     if (
-        not scope_path.exists()
+        not scope_exists
         or scope_path == project_root
         or not _is_inside_project(scope_path, project_root)
     ):
@@ -69,9 +85,10 @@ def validate_materials(
         scope_path,
         rules,
         include_details=include_details,
+        timeout_sec=timeout_sec,
         inspection_context=inspection_context,
     ))
-    if diagnostics_baseline is None:
+    if diagnostics_baseline is None or response.code == "INSPECTION_TIMEOUT":
         return response
 
     data = dict(response.data)

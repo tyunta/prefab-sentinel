@@ -321,6 +321,7 @@ def register_validation_tools(server: FastMCP, session: ProjectSession) -> None:
     def validate_materials(
         scope: str | None = None,
         include_details: bool = False,
+        timeout_sec: float | None = None,
     ) -> dict[str, Any]:
         """Run static material/shader/TMP/icon-font validation for a scope.
 
@@ -350,6 +351,7 @@ def register_validation_tools(server: FastMCP, session: ProjectSession) -> None:
         return orch.validate_materials(
             scope=resolved_scope,
             include_details=include_details,
+            timeout_sec=timeout_sec,
             diagnostics_baseline=baseline_result.baseline,
         ).to_dict()
 
@@ -362,6 +364,7 @@ def register_validation_tools(server: FastMCP, session: ProjectSession) -> None:
         summary_only: bool = False,
         script_filter: str = "",
         include_out_of_scope_diagnostics: bool = False,
+        timeout_sec: float | None = None,
     ) -> dict[str, Any]:
         """Analyze MonoBehaviour field wiring in a Prefab or Scene.
 
@@ -407,6 +410,7 @@ def register_validation_tools(server: FastMCP, session: ProjectSession) -> None:
             summary_only=summary_only,
             script_filter=script_filter,
             include_out_of_scope_diagnostics=include_out_of_scope_diagnostics,
+            timeout_sec=timeout_sec,
             diagnostics_baseline=baseline_result.baseline,
         )
         return resp.to_dict()
@@ -535,14 +539,22 @@ def register_validation_tools(server: FastMCP, session: ProjectSession) -> None:
         return resp.to_dict()
 
     @server.tool()
-    def inspect_material_asset(asset_path: str) -> dict[str, Any]:
+    def inspect_material_asset(
+        asset_path: str,
+        mode: str = "full",
+        property_names: list[str] | None = None,
+    ) -> dict[str, Any]:
         """Inspect shader, properties, and texture references in a .mat file.
 
         Args:
             asset_path: Path to a .mat file.
         """
         orch = session.get_orchestrator()
-        resp = orch.inspect_material_asset(target_path=asset_path)
+        resp = orch.inspect_material_asset(
+            target_path=asset_path,
+            mode=mode,
+            property_names=property_names,
+        )
         return resp.to_dict()
 
     @server.tool()
@@ -569,6 +581,7 @@ def register_validation_tools(server: FastMCP, session: ProjectSession) -> None:
         show_components: bool = True,
         expand_monobehaviour: bool = False,
         expand_prefab_instances: bool = False,
+        timeout_sec: float | None = None,
     ) -> dict[str, Any]:
         """Display the GameObject hierarchy tree of a Unity asset.
 
@@ -583,6 +596,7 @@ def register_validation_tools(server: FastMCP, session: ProjectSession) -> None:
             expand_prefab_instances: Expand nested PrefabInstance source
                 children into the saved-YAML effective hierarchy (issue #96,
                 default: False).
+            timeout_sec: Optional inspection timeout in seconds.
         """
         orch = session.get_orchestrator()
         resp = orch.inspect_hierarchy(
@@ -591,6 +605,7 @@ def register_validation_tools(server: FastMCP, session: ProjectSession) -> None:
             show_components=show_components,
             expand_monobehaviour=expand_monobehaviour,
             expand_prefab_instances=expand_prefab_instances,
+            timeout_sec=timeout_sec,
         )
         return resp.to_dict()
 
@@ -629,6 +644,7 @@ def register_validation_tools(server: FastMCP, session: ProjectSession) -> None:
     @server.tool()
     def validate_all_wiring(
         asset_path: str = "",
+        timeout_sec: float | None = None,
     ) -> dict[str, Any]:
         """Scan all .prefab/.unity files in scope for null references.
 
@@ -645,6 +661,7 @@ def register_validation_tools(server: FastMCP, session: ProjectSession) -> None:
         orch = session.get_orchestrator()
         return orch.validate_all_wiring(
             target_path=asset_path,
+            timeout_sec=timeout_sec,
             diagnostics_baseline=baseline_result.baseline,
         ).to_dict()
 

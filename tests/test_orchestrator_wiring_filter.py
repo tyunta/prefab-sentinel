@@ -189,6 +189,108 @@ def _build_mixed_duplicate_reference_fixture(root: Path) -> Path:
     return base_path
 
 
+def _build_scroll_rect_optional_null_fixture(
+    root: Path,
+    filename: str = "ScrollRectOptional.prefab",
+    *,
+    include_unknown_null: bool = True,
+) -> Path:
+    assets = root / "Assets"
+    scripts = assets / "Scripts"
+    scripts.mkdir(parents=True, exist_ok=True)
+
+    (scripts / "ScrollRect.cs").write_text("", encoding="utf-8")
+    _write_meta(scripts / "ScrollRect.cs.meta", _FOO_SCRIPT_GUID)
+
+    fields = {"m_HorizontalScrollbar": "{fileID: 0}"}
+    if include_unknown_null:
+        fields["content"] = "{fileID: 0}"
+    base_text = (
+        YAML_HEADER
+        + make_gameobject("10", "ScrollView", ["20", "30"])
+        + make_transform("20", "10")
+        + make_monobehaviour(
+            "30",
+            "10",
+            guid=_FOO_SCRIPT_GUID,
+            fields=fields,
+        )
+    )
+    base_path = assets / filename
+    base_path.write_text(base_text, encoding="utf-8")
+    _write_meta(assets / f"{filename}.meta", "55555555555555555555555555555555")
+    return base_path
+
+
+def _build_expected_button_duplicate_fixture(root: Path) -> Path:
+    assets = root / "Assets"
+    scripts = assets / "Scripts"
+    scripts.mkdir(parents=True, exist_ok=True)
+
+    (scripts / "Button.cs").write_text("", encoding="utf-8")
+    _write_meta(scripts / "Button.cs.meta", _FOO_SCRIPT_GUID)
+    (scripts / "PanelBinder.cs").write_text("", encoding="utf-8")
+    _write_meta(scripts / "PanelBinder.cs.meta", _BAR_SCRIPT_GUID)
+
+    base_text = (
+        YAML_HEADER
+        + make_gameobject("10", "Root", ["20", "30", "40"])
+        + make_transform("20", "10")
+        + make_monobehaviour(
+            "30",
+            "10",
+            guid=_FOO_SCRIPT_GUID,
+            fields={"m_TargetGraphic": "{fileID: 60}"},
+        )
+        + make_monobehaviour(
+            "40",
+            "10",
+            guid=_BAR_SCRIPT_GUID,
+            fields={"background": "{fileID: 60}"},
+        )
+        + make_gameobject("60", "BackgroundImage", ["61"])
+        + make_transform("61", "60")
+    )
+    base_path = assets / "ExpectedButtonDuplicate.prefab"
+    base_path.write_text(base_text, encoding="utf-8")
+    _write_meta(assets / "ExpectedButtonDuplicate.prefab.meta", "66666666666666666666666666666666")
+    return base_path
+
+
+def _build_nested_non_effective_wiring_fixture(root: Path) -> Path:
+    from tests.yaml_helpers import make_prefab_instance  # noqa: PLC0415
+
+    assets = root / "Assets"
+    scripts = assets / "Scripts"
+    scripts.mkdir(parents=True, exist_ok=True)
+
+    (scripts / "FooBehaviour.cs").write_text("", encoding="utf-8")
+    _write_meta(scripts / "FooBehaviour.cs.meta", _FOO_SCRIPT_GUID)
+
+    child_text = (
+        YAML_HEADER
+        + make_gameobject("100", "ChildRoot", ["110", "200", "201"])
+        + make_transform("110", "100")
+        + make_monobehaviour("200", "0", guid=_FOO_SCRIPT_GUID)
+        + make_monobehaviour("201", "100", guid=_FOO_SCRIPT_GUID)
+    )
+    child_path = assets / "ChildNonEffective.prefab"
+    child_path.write_text(child_text, encoding="utf-8")
+    _write_meta(child_path.with_suffix(".prefab.meta"), "77777777777777777777777777777777")
+
+    base_text = (
+        YAML_HEADER
+        + make_gameobject("10", "BaseRoot", ["20", "30"])
+        + make_transform("20", "10")
+        + make_monobehaviour("30", "10", guid=_FOO_SCRIPT_GUID)
+        + make_prefab_instance("40", "77777777777777777777777777777777")
+    )
+    base_path = assets / "NestedNonEffective.prefab"
+    base_path.write_text(base_text, encoding="utf-8")
+    _write_meta(base_path.with_suffix(".prefab.meta"), "88888888888888888888888888888888")
+    return base_path
+
+
 def _services_for_root(root: Path) -> tuple[PrefabVariantService, ReferenceResolverService]:
     pv = PrefabVariantService(project_root=root)
     rr = ReferenceResolverService(project_root=root)
@@ -295,6 +397,572 @@ class InspectWiringFilterAndSummaryTests(unittest.TestCase):
         ):
             self.assertIn(key, resp.data)
 
+    def test_inspect_wiring_success_includes_progress_next_action(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            base = _build_three_class_fixture(root)
+            resp = self._run(root, base)
+
+        self.assertEqual(
+            (
+                "inspect_wiring",
+                "Use summary_only or script_filter when the full component list is too broad.",
+            ),
+            (
+                resp.data["current_or_slowest_step"],
+                resp.data["suggested_next_action"],
+            ),
+        )
+
+    def test_scrollrect_optional_null_keeps_cause_and_counts_actionability(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            base = _build_scroll_rect_optional_null_fixture(root)
+            pv, rr = _services_for_root(root)
+            target_path = base.relative_to(root).as_posix()
+            with patch(
+                "prefab_sentinel.orchestrator_wiring.collect_project_guid_index",
+                return_value={
+                    _FOO_SCRIPT_GUID: root / "Assets" / "Scripts" / "ScrollRect.cs",
+                },
+            ):
+                resp = inspect_wiring(pv, rr, target_path=target_path)
+
+        classifications = resp.data["components"][0]["null_field_classifications"]
+        observed = {
+            entry["name"]: (entry["kind"], entry.get("actionability"))
+            for entry in classifications
+        }
+        self.assertEqual(
+            {
+                "m_HorizontalScrollbar": ("unwired", "optional"),
+                "content": ("unwired", "actionable"),
+            },
+            observed,
+        )
+        self.assertEqual(
+            {
+                "actionable": 1,
+                "expected": 0,
+                "optional": 1,
+            },
+            resp.data["actionability_counts"],
+        )
+
+    def test_optional_only_null_downgrades_response_severity(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            base = _build_scroll_rect_optional_null_fixture(
+                root,
+                include_unknown_null=False,
+            )
+            pv, rr = _services_for_root(root)
+            target_path = base.relative_to(root).as_posix()
+            with patch(
+                "prefab_sentinel.orchestrator_wiring.collect_project_guid_index",
+                return_value={
+                    _FOO_SCRIPT_GUID: root / "Assets" / "Scripts" / "ScrollRect.cs",
+                },
+            ):
+                resp = inspect_wiring(pv, rr, target_path=target_path)
+
+        self.assertEqual(
+            (
+                True,
+                Severity.INFO,
+                {"actionable": 0, "expected": 0, "optional": 1},
+            ),
+            (resp.success, resp.severity, resp.data["actionability_counts"]),
+        )
+
+    def test_inspect_wiring_timeout_includes_partial_counts_and_next_action(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            path = _build_scroll_rect_optional_null_fixture(root)
+            pv, rr = _services_for_root(root)
+            target_path = path.relative_to(root).as_posix()
+            with patch(
+                "prefab_sentinel.orchestrator_wiring.collect_project_guid_index",
+                return_value={
+                    _FOO_SCRIPT_GUID: root / "Assets" / "Scripts" / "ScrollRect.cs",
+                },
+            ):
+                try:
+                    resp = inspect_wiring(
+                        pv,
+                        rr,
+                        target_path=target_path,
+                        timeout_sec=0,
+                    )
+                except TypeError as exc:
+                    self.fail(
+                        "Expected inspect_wiring timeout_sec envelope, "
+                        f"observed unsupported signature: {exc}."
+                    )
+
+        self.assertEqual(
+            (
+                False,
+                Severity.ERROR,
+                "INSPECTION_TIMEOUT",
+                1,
+                "inspect_wiring",
+                "Use a narrower scope or script_filter.",
+            ),
+            (
+                resp.success,
+                resp.severity,
+                resp.code,
+                resp.data["partial_counts"]["components"],
+                resp.data["current_or_slowest_step"],
+                resp.data["suggested_next_action"],
+            ),
+        )
+
+    def test_inspect_wiring_positive_timeout_uses_elapsed_budget(self) -> None:
+        from prefab_sentinel import orchestrator_wiring as wiring_module
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            path = _build_scroll_rect_optional_null_fixture(root)
+            pv, rr = _services_for_root(root)
+            target_path = path.relative_to(root).as_posix()
+            original = wiring_module.analyze_wiring
+            clock = iter((0.0, 0.002))
+
+            def slow_analyze(*args, **kwargs):
+                return original(*args, **kwargs)
+
+            with (
+                patch.object(wiring_module, "analyze_wiring", side_effect=slow_analyze),
+                patch("time.monotonic", side_effect=lambda: next(clock, 0.002)),
+                patch(
+                    "prefab_sentinel.orchestrator_wiring.collect_project_guid_index",
+                    return_value={
+                        _FOO_SCRIPT_GUID: root / "Assets" / "Scripts" / "ScrollRect.cs",
+                    },
+                ),
+            ):
+                resp = inspect_wiring(
+                    pv,
+                    rr,
+                    target_path=target_path,
+                    timeout_sec=0.001,
+                )
+
+        self.assertEqual(
+            (
+                False,
+                Severity.ERROR,
+                "INSPECTION_TIMEOUT",
+                1,
+                "inspect_wiring",
+                "Use a narrower scope or script_filter.",
+            ),
+            (
+                resp.success,
+                resp.severity,
+                resp.code,
+                resp.data["partial_counts"]["components"],
+                resp.data["current_or_slowest_step"],
+                resp.data["suggested_next_action"],
+            ),
+        )
+
+    def test_button_target_graphic_duplicate_is_expected_but_unknown_stays_actionable(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            expected_base = _build_expected_button_duplicate_fixture(root)
+            pv, rr = _services_for_root(root)
+            target_path = expected_base.relative_to(root).as_posix()
+            with patch(
+                "prefab_sentinel.orchestrator_wiring.collect_project_guid_index",
+                return_value={
+                    _FOO_SCRIPT_GUID: root / "Assets" / "Scripts" / "Button.cs",
+                    _BAR_SCRIPT_GUID: root / "Assets" / "Scripts" / "PanelBinder.cs",
+                },
+            ):
+                expected_resp = inspect_wiring(pv, rr, target_path=target_path)
+
+        self.assertEqual(
+            (Severity.INFO, {"expected": 1, "actionable": 0}),
+            (
+                expected_resp.severity,
+                {
+                    "expected": expected_resp.data["actionability_counts"]["expected"],
+                    "actionable": expected_resp.data["actionability_counts"]["actionable"],
+                },
+            ),
+        )
+        self.assertEqual(
+            [
+                (
+                    "duplicate_reference",
+                    "expected",
+                    "info",
+                )
+            ],
+            [
+                (
+                    row["category"],
+                    row["actionability"],
+                    row["severity"],
+                )
+                for row in expected_resp.data["diagnostic_actionability"]
+            ],
+        )
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            unknown_base = _build_duplicate_reference_fixture(root)
+            unknown_resp = self._run(root, unknown_base)
+
+        self.assertEqual(
+            (Severity.WARNING, {"expected": 0, "actionable": 2}),
+            (
+                unknown_resp.severity,
+                {
+                    "expected": unknown_resp.data["actionability_counts"]["expected"],
+                    "actionable": unknown_resp.data["actionability_counts"]["actionable"],
+                },
+            ),
+        )
+
+    def test_validate_all_wiring_aggregates_actionability_in_path_order(self) -> None:
+        from prefab_sentinel.orchestrator_wiring import validate_all_wiring  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            _build_scroll_rect_optional_null_fixture(
+                root,
+                filename="AOptional.prefab",
+                include_unknown_null=False,
+            )
+            _build_three_class_fixture(root)
+            pv, rr = _services_for_root(root)
+            response = validate_all_wiring(pv, rr)
+
+        self.assertEqual(
+            (
+                ["AOptional.prefab", "Base.prefab"],
+                {
+                    "actionable": 1,
+                    "expected": 0,
+                    "optional": 1,
+                },
+                {
+                    "queued_targets": 2,
+                    "scanned_targets": 2,
+                    "components": 4,
+                    "null_references": 2,
+                },
+            ),
+            (
+                [Path(item["file"]).name for item in response.data["null_refs_by_file"]],
+                response.data["actionability_counts"],
+                response.data["partial_counts"],
+            ),
+        )
+
+    def test_validate_all_wiring_success_includes_progress_next_action(self) -> None:
+        from prefab_sentinel.orchestrator_wiring import validate_all_wiring  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            _build_scroll_rect_optional_null_fixture(
+                root,
+                filename="AOptional.prefab",
+                include_unknown_null=False,
+            )
+            pv, rr = _services_for_root(root)
+            response = validate_all_wiring(pv, rr)
+
+        self.assertEqual(
+            (
+                "validate_all_wiring",
+                "Use target_path for a narrower scan when the project-wide summary is too broad.",
+            ),
+            (
+                response.data["current_or_slowest_step"],
+                response.data["suggested_next_action"],
+            ),
+        )
+
+    def test_validate_all_wiring_uses_child_totals_when_page_is_truncated(self) -> None:
+        from prefab_sentinel.contracts import ToolResponse
+        from prefab_sentinel.orchestrator_wiring import validate_all_wiring
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            _build_scroll_rect_optional_null_fixture(root, include_unknown_null=False)
+            pv, rr = _services_for_root(root)
+            component_page = [
+                {"file_id": str(index), "null_field_names": ["missing"]}
+                for index in range(500)
+            ]
+            child_response = ToolResponse(
+                success=True,
+                severity=Severity.WARNING,
+                code="INSPECT_WIRING_RESULT",
+                message="ok",
+                data={
+                    "components": component_page,
+                    "component_count": 600,
+                    "null_reference_count": 600,
+                    "actionability_counts": {
+                        "actionable": 600,
+                        "expected": 0,
+                        "optional": 0,
+                    },
+                },
+                diagnostics=[],
+            )
+            with patch(
+                "prefab_sentinel.orchestrator_wiring.inspect_wiring",
+                return_value=child_response,
+            ):
+                response = validate_all_wiring(pv, rr)
+
+        self.assertEqual(
+            (
+                600,
+                600,
+                {
+                    "actionable": 600,
+                    "expected": 0,
+                    "optional": 0,
+                },
+                600,
+                600,
+            ),
+            (
+                response.data["total_components"],
+                response.data["total_null_refs"],
+                response.data["actionability_counts"],
+                response.data["partial_counts"]["components"],
+                response.data["partial_counts"]["null_references"],
+            ),
+        )
+
+    def test_validate_all_wiring_positive_timeout_returns_completed_child_partial(self) -> None:
+        from prefab_sentinel.contracts import ToolResponse
+        from prefab_sentinel.orchestrator_wiring import validate_all_wiring
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            _build_scroll_rect_optional_null_fixture(root, include_unknown_null=False)
+            pv, rr = _services_for_root(root)
+            child_response = ToolResponse(
+                success=True,
+                severity=Severity.WARNING,
+                code="INSPECT_WIRING_RESULT",
+                message="ok",
+                data={
+                    "components": [{"file_id": "1", "null_field_names": ["missing"]}],
+                    "component_count": 1,
+                    "null_reference_count": 1,
+                    "actionability_counts": {
+                        "actionable": 1,
+                        "expected": 0,
+                        "optional": 0,
+                    },
+                },
+                diagnostics=[],
+            )
+            clock = iter((0.0, 0.002, 0.002))
+
+            def slow_child(*args, **kwargs):
+                return child_response
+
+            with (
+                patch(
+                    "prefab_sentinel.orchestrator_wiring.inspect_wiring",
+                    side_effect=slow_child,
+                ),
+                patch("time.monotonic", side_effect=lambda: next(clock, 0.002)),
+            ):
+                response = validate_all_wiring(pv, rr, timeout_sec=0.001)
+
+        self.assertEqual(
+            (
+                False,
+                Severity.ERROR,
+                "INSPECTION_TIMEOUT",
+                1,
+                1,
+                "validate_all_wiring",
+                "Use a narrower scope or target_path.",
+            ),
+            (
+                response.success,
+                response.severity,
+                response.code,
+                response.data["partial_counts"]["scanned_targets"],
+                response.data["partial_counts"]["null_references"],
+                response.data["current_or_slowest_step"],
+                response.data["suggested_next_action"],
+            ),
+        )
+
+    def test_validate_all_wiring_threads_remaining_timeout_to_child_scan(self) -> None:
+        from prefab_sentinel.contracts import ToolResponse
+        from prefab_sentinel.orchestrator_wiring import validate_all_wiring
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            _build_scroll_rect_optional_null_fixture(root, include_unknown_null=False)
+            pv, rr = _services_for_root(root)
+            child_response = ToolResponse(
+                success=True,
+                severity=Severity.INFO,
+                code="INSPECT_WIRING_RESULT",
+                message="ok",
+                data={
+                    "components": [],
+                    "component_count": 0,
+                    "null_reference_count": 0,
+                    "actionability_counts": {
+                        "actionable": 0,
+                        "expected": 0,
+                        "optional": 0,
+                    },
+                },
+                diagnostics=[],
+            )
+            observed_timeouts: list[float | None] = []
+            clock = iter((0.0, 0.0, 0.002))
+
+            def child(*args, **kwargs):
+                observed_timeouts.append(kwargs.get("timeout_sec"))
+                return child_response
+
+            with (
+                patch(
+                    "prefab_sentinel.orchestrator_wiring.inspect_wiring",
+                    side_effect=child,
+                ),
+                patch("time.monotonic", side_effect=lambda: next(clock, 0.002)),
+            ):
+                response = validate_all_wiring(pv, rr, timeout_sec=0.001)
+
+        self.assertEqual("INSPECTION_TIMEOUT", response.code)
+        self.assertEqual(1, len(observed_timeouts))
+        self.assertIsNotNone(observed_timeouts[0])
+        self.assertAlmostEqual(0.001, observed_timeouts[0] or 0.0, places=6)
+
+    def test_validate_all_wiring_reports_child_exception_as_failed_scan(self) -> None:
+        from prefab_sentinel.orchestrator_wiring import validate_all_wiring
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            _build_scroll_rect_optional_null_fixture(root, include_unknown_null=False)
+            pv, rr = _services_for_root(root)
+
+            with patch(
+                "prefab_sentinel.orchestrator_wiring.inspect_wiring",
+                side_effect=RuntimeError("boom"),
+            ):
+                response = validate_all_wiring(pv, rr)
+
+        self.assertEqual(
+            (
+                False,
+                Severity.ERROR,
+                "VALIDATE_WIRING_CHILD_SCAN_FAILED",
+                0,
+                0,
+                1,
+                "child_scan_exception",
+            ),
+            (
+                response.success,
+                response.severity,
+                response.code,
+                response.data["files_scanned"],
+                response.data["partial_counts"]["scanned_targets"],
+                len(response.data["failed_targets"]),
+                response.diagnostics[0].detail,
+            ),
+        )
+        self.assertIn("boom", response.diagnostics[0].evidence)
+
+    def test_validate_all_wiring_reports_failed_child_response(self) -> None:
+        from prefab_sentinel.contracts import ToolResponse
+        from prefab_sentinel.orchestrator_wiring import validate_all_wiring
+
+        child_response = ToolResponse(
+            success=False,
+            severity=Severity.ERROR,
+            code="INSPECT_WIRING_FAILED",
+            message="child failed",
+            data={"target_path": "Assets/ScrollRectOptional.prefab"},
+            diagnostics=[],
+        )
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            _build_scroll_rect_optional_null_fixture(root, include_unknown_null=False)
+            pv, rr = _services_for_root(root)
+
+            with patch(
+                "prefab_sentinel.orchestrator_wiring.inspect_wiring",
+                return_value=child_response,
+            ):
+                response = validate_all_wiring(pv, rr)
+
+        self.assertEqual(
+            (
+                False,
+                Severity.ERROR,
+                "VALIDATE_WIRING_CHILD_SCAN_FAILED",
+                0,
+                0,
+                1,
+                "INSPECT_WIRING_FAILED",
+            ),
+            (
+                response.success,
+                response.severity,
+                response.code,
+                response.data["files_scanned"],
+                response.data["partial_counts"]["scanned_targets"],
+                len(response.data["failed_targets"]),
+                response.data["failed_targets"][0]["code"],
+            ),
+        )
+
+    def test_nested_non_effective_entries_explain_entry_kind_and_reason(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            base = _build_nested_non_effective_wiring_fixture(root)
+            pv, rr = _services_for_root(root)
+            target_path = base.relative_to(root).as_posix()
+            with patch(
+                "prefab_sentinel.orchestrator_wiring.collect_project_guid_index",
+                return_value={
+                    _FOO_SCRIPT_GUID: root / "Assets" / "Scripts" / "FooBehaviour.cs",
+                    "77777777777777777777777777777777": root
+                    / "Assets"
+                    / "ChildNonEffective.prefab",
+                },
+            ):
+                resp = inspect_wiring(pv, rr, target_path=target_path)
+
+        non_effective = {
+            component["file_id"]: (
+                component.get("entry_kind"),
+                component.get("entry_reason"),
+            )
+            for component in resp.data["components"]
+            if component.get("source_prefab") == "Assets/ChildNonEffective.prefab"
+        }
+        self.assertEqual(
+            {
+                "200": ("source_only", "missing_game_object_file_id"),
+                "201": ("placeholder", "no_serialized_fields"),
+            },
+            non_effective,
+        )
+
     def test_clean_filter_reports_out_of_scope_counts_without_raising_severity(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
@@ -302,7 +970,7 @@ class InspectWiringFilterAndSummaryTests(unittest.TestCase):
             resp = self._run(root, base, script_filter="FooBehaviour")
 
         self.assertEqual(
-            (True, Severity.INFO, 0, 1, 1),
+            (True, Severity.INFO, 0, 1, 0),
             (
                 resp.success,
                 resp.severity,
@@ -326,10 +994,11 @@ class InspectWiringFilterAndSummaryTests(unittest.TestCase):
             )
 
         self.assertEqual(
-            (1, "Null reference: Root.targetRef"),
+            (1, "Null reference: Root.targetRef", 0),
             (
                 len(resp.data.get("out_of_scope_diagnostics", [])),
                 resp.data.get("out_of_scope_diagnostics", [{}])[0].get("code"),
+                len(resp.diagnostics),
             ),
         )
 
@@ -409,6 +1078,10 @@ class InspectWiringFilterAndSummaryTests(unittest.TestCase):
                     for row in resp.data.get("filtered_diagnostics", [])
                 ],
             },
+        )
+        self.assertEqual(
+            [("warning", "Null reference: Root.targetRef")],
+            [(diag.severity, diag.detail) for diag in resp.diagnostics],
         )
 
 
@@ -529,6 +1202,20 @@ class InspectWiringFilterAndSummaryTests(unittest.TestCase):
         self.assertEqual(1, resp.data["component_count"])
         self.assertEqual(1, len(resp.data["components"]))
         self.assertEqual("FooBehaviour", resp.data["components"][0]["script_name"])
+        self.assertEqual(
+            (1, 0),
+            (
+                resp.data["partial_counts"]["components"],
+                resp.data["partial_counts"]["null_references"],
+            ),
+        )
+        self.assertEqual(
+            [
+                {"name": "components", "completed": True, "count": 1},
+                {"name": "null_references", "completed": True, "count": 0},
+            ],
+            resp.data["progress_summary"],
+        )
 
     def test_dotted_fq_name_filter_narrows_by_suffix(self) -> None:
         """Issue #227 — a dotted fully-qualified name filter normalises
@@ -564,6 +1251,20 @@ class InspectWiringFilterAndSummaryTests(unittest.TestCase):
                 resp.data["diagnostic_counts"]["filtered"]["total"],
                 resp.data["diagnostic_counts"]["out_of_scope"]["total"],
             ),
+        )
+        self.assertEqual(
+            (0, 0),
+            (
+                resp.data["partial_counts"]["components"],
+                resp.data["partial_counts"]["null_references"],
+            ),
+        )
+        self.assertEqual(
+            [
+                {"name": "components", "completed": True, "count": 0},
+                {"name": "null_references", "completed": True, "count": 0},
+            ],
+            resp.data["progress_summary"],
         )
 
     def test_summary_mode_suppresses_slice_and_pagination(self) -> None:

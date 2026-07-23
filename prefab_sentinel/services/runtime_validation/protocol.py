@@ -83,6 +83,11 @@ def parse_runtime_response(
         return protocol_error("Unity runtime response field 'message' must be a string.", base_data)
     if not isinstance(data, dict):
         return protocol_error("Unity runtime response field 'data' must be an object.", base_data)
+    if action == "run_clientsim" and not isinstance(data.get("executed"), bool):
+        return protocol_error(
+            "Unity runtime response field 'data.executed' must be a boolean.",
+            base_data,
+        )
     if not isinstance(diagnostics_payload, list):
         return protocol_error("Unity runtime response field 'diagnostics' must be an array.", base_data)
 

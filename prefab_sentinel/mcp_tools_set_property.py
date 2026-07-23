@@ -3,17 +3,23 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from mcp.server.fastmcp import FastMCP
 
-from prefab_sentinel.json_io import dump_json
+from prefab_sentinel.contracts import ToolResponse, error_dict
 from prefab_sentinel.mcp_helpers import (
     read_asset,
     resolve_component_with_type,
 )
 from prefab_sentinel.mcp_validation import require_change_reason
 from prefab_sentinel.patch_plan import PLAN_VERSION
+from prefab_sentinel.patch_transaction_io import (
+    reserve_transaction_report,
+    validate_transaction_report_path,
+    write_report_payload,
+)
+from prefab_sentinel.patch_transaction_results import boundary_failure
 from prefab_sentinel.services.prefab_variant.overrides import (
     iter_base_property_values,
 )
@@ -21,6 +27,9 @@ from prefab_sentinel.services.serialized_object.property_diagnostics import (
     resolve_property_not_found,
 )
 from prefab_sentinel.session import ProjectSession
+
+if TYPE_CHECKING:
+    from prefab_sentinel.symbol_tree import SymbolNode
 
 __all__ = ["register_set_property_tools"]
 
@@ -64,6 +73,70 @@ def _collect_known_property_paths(text: str, file_id: str) -> list[str]:
     return out
 
 
+def _write_set_properties_report(
+    report_path: Path,
+    operation_response: dict[str, Any],
+) -> dict[str, Any]:
+    try:
+        write_report_payload(report_path, operation_response)
+    except OSError:
+        result_key = (
+            "operation_result"
+            if operation_response["success"]
+            else "operation_error"
+        )
+        return error_dict(
+            "OUT_REPORT_WRITE_FAILED",
+            "Operation completed but the report file could not be written.",
+            data={result_key: operation_response},
+        )
+    return operation_response
+
+def _project_writer_response(
+    response: ToolResponse,
+    confirmed: bool,
+) -> tuple[dict[str, Any], bool]:
+    result = response.to_dict()
+    response_data = dict(result["data"])
+    result["data"] = response_data
+    state_unknown = (
+        confirmed
+        and not response.success
+        and response_data.get("read_only") is False
+    )
+    if state_unknown:
+        response_data["state_unknown"] = True
+    return result, state_unknown
+
+
+def _resolve_writer_target(
+    session: ProjectSession,
+    asset_path: str,
+    symbol_path: str,
+) -> tuple[str, Path, SymbolNode, str] | dict[str, Any]:
+    try:
+        text, resolved = read_asset(asset_path, session.project_root)
+        tree = session.get_symbol_tree(
+            resolved,
+            text,
+            include_properties=False,
+        )
+        node, component_name, error = resolve_component_with_type(
+            tree,
+            symbol_path,
+            asset_path,
+        )
+    except Exception as exc:
+        return boundary_failure("preflight", exc).to_dict()
+    if error is not None:
+        return error
+    assert node is not None
+    assert component_name is not None
+    return text, resolved, node, component_name
+
+
+
+
 def register_set_property_tools(server: FastMCP, session: ProjectSession) -> None:
     """Register property-setting tools on *server*."""
 
@@ -96,15 +169,10 @@ def register_set_property_tools(server: FastMCP, session: ProjectSession) -> Non
         err = require_change_reason(confirm, change_reason)
         if err is not None:
             return err
-        text, resolved = read_asset(asset_path, session.project_root)
-        tree = session.get_symbol_tree(resolved, text, include_properties=False)
-        node, component_name, err = resolve_component_with_type(
-            tree, symbol_path, asset_path,
-        )
-        if err is not None:
-            return err
-        assert node is not None
-        assert component_name is not None
+        preflight = _resolve_writer_target(session, asset_path, symbol_path)
+        if isinstance(preflight, dict):
+            return preflight
+        text, resolved, node, component_name = preflight
 
         # Issue #37: the set op identifies its target by the resolved
         # symbol node's exact fileID, so an asset with several same-type
@@ -123,18 +191,34 @@ def register_set_property_tools(server: FastMCP, session: ProjectSession) -> Non
             ],
         }
 
-        orch = session.get_orchestrator()
-        resp = orch.patch_apply(
-            plan=plan,
-            dry_run=(not confirm),
-            confirm=confirm,
-            change_reason=change_reason or None,
-        )
+        mutation_state_unknown = False
+        try:
+            orch = session.get_orchestrator()
+            mutation_state_unknown = confirm
+            resp = orch.serialized_value_patch_apply(
+                plan=plan,
+                dry_run=(not confirm),
+                confirm=confirm,
+                change_reason=change_reason or None,
+            )
+        except Exception as exc:
+            result = boundary_failure(
+                "apply",
+                exc,
+                state_unknown=mutation_state_unknown,
+            ).to_dict()
+            if mutation_state_unknown:
+                session.invalidate_symbol_tree(resolved)
+            return result
 
-        result = resp.to_dict()
-        if confirm and resp.success:
+        result, returned_state_unknown = _project_writer_response(resp, confirm)
+        if confirm and (resp.success or returned_state_unknown):
             session.invalidate_symbol_tree(resolved)
-            result["auto_refresh"] = orch.maybe_auto_refresh()
+        if confirm and resp.success:
+            try:
+                result["auto_refresh"] = orch.maybe_auto_refresh()
+            except Exception as exc:
+                return boundary_failure("apply", exc, state_unknown=True).to_dict()
         result["symbol_resolution"] = {
             "symbol_path": symbol_path,
             "resolved_component": component_name,
@@ -161,9 +245,8 @@ def register_set_property_tools(server: FastMCP, session: ProjectSession) -> Non
         - confirm=True: applies changes to disk (requires change_reason + out_report).
         - dry_run=True: explicit preview flag (overrides confirm if both are True).
 
-        Issue #41: ``symbol_path`` resolves directly to a component (the
-        same component-resolution path ``set_property`` uses) — there is
-        no separate ``component`` argument.
+        Issue #41: symbol_path resolves directly to a component through the
+        same component-resolution path set_property uses.
 
         Args:
             asset_path: Asset file path (.prefab, .unity, .asset).
@@ -202,7 +285,6 @@ def register_set_property_tools(server: FastMCP, session: ProjectSession) -> Non
                 "data": {},
                 "diagnostics": [],
             }
-
         if effective_confirm and session.project_root is None:
             return {
                 "success": False,
@@ -213,33 +295,20 @@ def register_set_property_tools(server: FastMCP, session: ProjectSession) -> Non
                 "diagnostics": [],
             }
 
-        report_path = Path(out_report).resolve() if out_report else None
-        if (
-            report_path is not None
-            and session.project_root is not None
-            and not report_path.is_relative_to(Path(session.project_root).resolve())
-        ):
-            return {
-                "success": False,
-                "severity": "error",
-                "code": "OUT_REPORT_OUTSIDE_PROJECT",
-                "message": (
-                    f"out_report must be within the project root: "
-                    f"{Path(session.project_root).resolve()}"
-                ),
-                "data": {},
-                "diagnostics": [],
-            }
+        report_path: Path | None = None
+        if effective_confirm:
+            assert session.project_root is not None
+            report_candidate = validate_transaction_report_path(
+                Path(session.project_root),
+                out_report,
+            )
+            if isinstance(report_candidate, ToolResponse):
+                return report_candidate.to_dict()
 
-        text, resolved = read_asset(asset_path, session.project_root)
-        tree = session.get_symbol_tree(resolved, text, include_properties=False)
-        node, component_name, err = resolve_component_with_type(
-            tree, symbol_path, asset_path,
-        )
-        if err is not None:
-            return err
-        assert node is not None
-        assert component_name is not None
+        preflight = _resolve_writer_target(session, asset_path, symbol_path)
+        if isinstance(preflight, dict):
+            return preflight
+        text, resolved, node, component_name = preflight
 
         known_paths = _collect_known_property_paths(text, node.file_id)
         for field_path in properties:
@@ -251,9 +320,6 @@ def register_set_property_tools(server: FastMCP, session: ProjectSession) -> Non
                     known_paths,
                 ).to_dict()
 
-        # Issue #37: each set op identifies its target by the resolved
-        # symbol node's exact fileID, so an asset with several same-type
-        # components on one GameObject resolves to the intended one.
         ops = [
             {
                 "resource": "target",
@@ -266,22 +332,58 @@ def register_set_property_tools(server: FastMCP, session: ProjectSession) -> Non
         ]
         plan: dict[str, object] = {
             "plan_version": PLAN_VERSION,
-            "resources": [{"id": "target", "path": asset_path, "mode": "open"}],
+            "resources": [
+                {"id": "target", "path": asset_path, "mode": "open"}
+            ],
             "ops": ops,
         }
 
-        orch = session.get_orchestrator()
-        resp = orch.patch_apply(
-            plan=plan,
-            dry_run=effective_dry_run,
-            confirm=effective_confirm,
-            change_reason=change_reason or None,
-        )
+        if effective_confirm:
+            assert session.project_root is not None
+            reservation = reserve_transaction_report(
+                Path(session.project_root),
+                out_report,
+            )
+            if isinstance(reservation, ToolResponse):
+                return reservation.to_dict()
+            report_path = reservation
 
-        result = resp.to_dict()
-        if effective_confirm and resp.success:
+        mutation_state_unknown = False
+        try:
+            orch = session.get_orchestrator()
+            mutation_state_unknown = effective_confirm
+            resp = orch.serialized_value_patch_apply(
+                plan=plan,
+                dry_run=effective_dry_run,
+                confirm=effective_confirm,
+                change_reason=change_reason or None,
+            )
+        except Exception as exc:
+            result = boundary_failure(
+                "apply",
+                exc,
+                state_unknown=mutation_state_unknown,
+            ).to_dict()
+            if mutation_state_unknown:
+                session.invalidate_symbol_tree(resolved)
+            if report_path is not None:
+                return _write_set_properties_report(report_path, result)
+            return result
+
+        result, returned_state_unknown = _project_writer_response(
+            resp,
+            effective_confirm,
+        )
+        if effective_confirm and (resp.success or returned_state_unknown):
             session.invalidate_symbol_tree(resolved)
-            result["auto_refresh"] = orch.maybe_auto_refresh()
+        if effective_confirm and resp.success:
+            try:
+                result["auto_refresh"] = orch.maybe_auto_refresh()
+            except Exception as exc:
+                result = boundary_failure("apply", exc, state_unknown=True).to_dict()
+                if report_path is not None:
+                    return _write_set_properties_report(report_path, result)
+                return result
         result["symbol_resolution"] = {
             "symbol_path": symbol_path,
             "resolved_component": component_name,
@@ -290,10 +392,6 @@ def register_set_property_tools(server: FastMCP, session: ProjectSession) -> Non
             "fields": list(properties.keys()),
         }
 
-        if report_path is not None and effective_confirm:
-            report_path.write_text(
-                dump_json(result) + "\n",
-                encoding="utf-8",
-            )
-
+        if report_path is not None:
+            return _write_set_properties_report(report_path, result)
         return result

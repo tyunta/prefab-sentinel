@@ -1,0 +1,541 @@
+{
+  "cases": [
+    {
+      "actual_arguments": {
+        "script_filter": "BenchmarkMatch",
+        "summary_only": true,
+        "target_path": "Assets/Benchmark/InspectionTarget.prefab"
+      },
+      "budget_enforced": false,
+      "complete": true,
+      "current_budget_comparable": true,
+      "id": "inspect_wiring_cold",
+      "invocation_classification": "native",
+      "response_codes": [
+        "INSPECT_WIRING_RESULT",
+        "INSPECT_WIRING_RESULT",
+        "INSPECT_WIRING_RESULT",
+        "INSPECT_WIRING_RESULT",
+        "INSPECT_WIRING_RESULT"
+      ],
+      "samples_sec": [
+        0.21409436099929735,
+        0.20713432802585885,
+        0.21073820197489113,
+        0.21104893402662128,
+        0.20712263201130554
+      ],
+      "statistics": {
+        "mad_sec": 0.0033561590244062245,
+        "max_sec": 0.21409436099929735,
+        "median_sec": 0.21073820197489113,
+        "min_sec": 0.20712263201130554,
+        "p95_sec": 0.21409436099929735
+      },
+      "status": "observed"
+    },
+    {
+      "actual_arguments": {
+        "script_filter": "BenchmarkMatch",
+        "summary_only": true,
+        "target_path": "Assets/Benchmark/InspectionTarget.prefab"
+      },
+      "budget_enforced": false,
+      "complete": true,
+      "current_budget_comparable": true,
+      "id": "inspect_wiring_warm",
+      "invocation_classification": "native",
+      "response_codes": [
+        "INSPECT_WIRING_RESULT",
+        "INSPECT_WIRING_RESULT",
+        "INSPECT_WIRING_RESULT",
+        "INSPECT_WIRING_RESULT",
+        "INSPECT_WIRING_RESULT"
+      ],
+      "samples_sec": [
+        0.20676197699503973,
+        0.20826449000742286,
+        0.207557303016074,
+        0.21066736499778926,
+        0.206873518996872
+      ],
+      "statistics": {
+        "mad_sec": 0.0007071869913488626,
+        "max_sec": 0.21066736499778926,
+        "median_sec": 0.207557303016074,
+        "min_sec": 0.20676197699503973,
+        "p95_sec": 0.21066736499778926
+      },
+      "status": "observed"
+    },
+    {
+      "actual_arguments": {
+        "expand_monobehaviour": true,
+        "expand_prefab_instances": true,
+        "show_components": true,
+        "target_path": "Assets/Benchmark/InspectionTarget.prefab"
+      },
+      "budget_enforced": false,
+      "complete": true,
+      "current_budget_comparable": true,
+      "id": "inspect_hierarchy_cold",
+      "invocation_classification": "native",
+      "response_codes": [
+        "INSPECT_HIERARCHY_RESULT",
+        "INSPECT_HIERARCHY_RESULT",
+        "INSPECT_HIERARCHY_RESULT",
+        "INSPECT_HIERARCHY_RESULT",
+        "INSPECT_HIERARCHY_RESULT"
+      ],
+      "samples_sec": [
+        0.28596216498408467,
+        0.28728544601472095,
+        0.28268352895975113,
+        0.2893611899926327,
+        0.284573546028696
+      ],
+      "statistics": {
+        "mad_sec": 0.0013886189553886652,
+        "max_sec": 0.2893611899926327,
+        "median_sec": 0.28596216498408467,
+        "min_sec": 0.28268352895975113,
+        "p95_sec": 0.2893611899926327
+      },
+      "status": "observed"
+    },
+    {
+      "actual_arguments": {
+        "expand_monobehaviour": true,
+        "expand_prefab_instances": true,
+        "show_components": true,
+        "target_path": "Assets/Benchmark/InspectionTarget.prefab"
+      },
+      "budget_enforced": false,
+      "complete": true,
+      "current_budget_comparable": true,
+      "id": "inspect_hierarchy_warm",
+      "invocation_classification": "native",
+      "response_codes": [
+        "INSPECT_HIERARCHY_RESULT",
+        "INSPECT_HIERARCHY_RESULT",
+        "INSPECT_HIERARCHY_RESULT",
+        "INSPECT_HIERARCHY_RESULT",
+        "INSPECT_HIERARCHY_RESULT"
+      ],
+      "samples_sec": [
+        0.28767130500636995,
+        0.2862096029566601,
+        0.3079547689994797,
+        0.2934514390071854,
+        0.31436829204903916
+      ],
+      "statistics": {
+        "mad_sec": 0.007241836050525308,
+        "max_sec": 0.31436829204903916,
+        "median_sec": 0.2934514390071854,
+        "min_sec": 0.2862096029566601,
+        "p95_sec": 0.31436829204903916
+      },
+      "status": "observed"
+    },
+    {
+      "actual_arguments": {
+        "target_path": "Assets/Benchmark/Materials/Material000.mat"
+      },
+      "budget_enforced": false,
+      "complete": true,
+      "current_budget_comparable": false,
+      "id": "inspect_material_asset_summary_cold",
+      "invocation_classification": "historical-equivalent",
+      "response_codes": [
+        "INSPECT_MATERIAL_ASSET_RESULT",
+        "INSPECT_MATERIAL_ASSET_RESULT",
+        "INSPECT_MATERIAL_ASSET_RESULT",
+        "INSPECT_MATERIAL_ASSET_RESULT",
+        "INSPECT_MATERIAL_ASSET_RESULT"
+      ],
+      "samples_sec": [
+        0.11245092598255724,
+        0.11195884499466047,
+        0.11189082701457664,
+        0.11222163098864257,
+        0.10716725699603558
+      ],
+      "statistics": {
+        "mad_sec": 0.00026278599398210645,
+        "max_sec": 0.11245092598255724,
+        "median_sec": 0.11195884499466047,
+        "min_sec": 0.10716725699603558,
+        "p95_sec": 0.11245092598255724
+      },
+      "status": "observed"
+    },
+    {
+      "actual_arguments": {
+        "target_path": "Assets/Benchmark/Materials/Material000.mat"
+      },
+      "budget_enforced": false,
+      "complete": true,
+      "current_budget_comparable": false,
+      "id": "inspect_material_asset_summary_warm",
+      "invocation_classification": "historical-equivalent",
+      "response_codes": [
+        "INSPECT_MATERIAL_ASSET_RESULT",
+        "INSPECT_MATERIAL_ASSET_RESULT",
+        "INSPECT_MATERIAL_ASSET_RESULT",
+        "INSPECT_MATERIAL_ASSET_RESULT",
+        "INSPECT_MATERIAL_ASSET_RESULT"
+      ],
+      "samples_sec": [
+        0.10664275899762288,
+        0.10488734202226624,
+        0.10427163098938763,
+        0.10615421296097338,
+        0.10370926395989954
+      ],
+      "statistics": {
+        "mad_sec": 0.0011780780623666942,
+        "max_sec": 0.10664275899762288,
+        "median_sec": 0.10488734202226624,
+        "min_sec": 0.10370926395989954,
+        "p95_sec": 0.10664275899762288
+      },
+      "status": "observed"
+    },
+    {
+      "actual_arguments": {
+        "include_details": false,
+        "scope": "Assets/Benchmark"
+      },
+      "budget_enforced": false,
+      "complete": true,
+      "current_budget_comparable": true,
+      "id": "validate_materials_cold",
+      "invocation_classification": "native",
+      "response_codes": [
+        "MATERIAL_VALIDATION_OK",
+        "MATERIAL_VALIDATION_OK",
+        "MATERIAL_VALIDATION_OK"
+      ],
+      "samples_sec": [
+        26.18938125000568,
+        25.66479128098581,
+        25.758624135050923
+      ],
+      "statistics": {
+        "mad_sec": 0.09383285406511277,
+        "max_sec": 26.18938125000568,
+        "median_sec": 25.758624135050923,
+        "min_sec": 25.66479128098581,
+        "p95_sec": 26.18938125000568
+      },
+      "status": "observed"
+    }
+  ],
+  "dependency_mapping": {
+    "#143": {
+      "inspect_hierarchy_cold": {
+        "evidence": "Fresh expanded hierarchy call executes issue #143 scan scheduling.",
+        "impact": "direct"
+      },
+      "inspect_hierarchy_warm": {
+        "evidence": "Excluded warmup changes the measured hierarchy session state.",
+        "impact": "indirect"
+      },
+      "inspect_material_asset_summary_cold": {
+        "evidence": "Fresh material lookup executes shared issue #143 inspection scheduling.",
+        "impact": "direct"
+      },
+      "inspect_material_asset_summary_warm": {
+        "evidence": "Excluded material warmup changes the measured session state.",
+        "impact": "indirect"
+      },
+      "inspect_wiring_cold": {
+        "evidence": "Fresh-session call executes the issue #143 ordered parallel scan path.",
+        "impact": "direct"
+      },
+      "inspect_wiring_warm": {
+        "evidence": "Excluded warmup populates state produced through the issue #143 scan path.",
+        "impact": "indirect"
+      },
+      "validate_materials_cold": {
+        "evidence": "Broad validation executes the issue #143 ordered scan runner.",
+        "impact": "direct"
+      }
+    },
+    "#144": {
+      "inspect_hierarchy_cold": {
+        "evidence": "Expanded hierarchy consumes the shared GUID/script context.",
+        "impact": "direct"
+      },
+      "inspect_hierarchy_warm": {
+        "evidence": "Measured warm hierarchy call consumes the shared context.",
+        "impact": "direct"
+      },
+      "inspect_material_asset_summary_cold": {
+        "evidence": "Material lookup consumes the shared GUID context.",
+        "impact": "direct"
+      },
+      "inspect_material_asset_summary_warm": {
+        "evidence": "Measured warm material lookup consumes shared context.",
+        "impact": "direct"
+      },
+      "inspect_wiring_cold": {
+        "evidence": "Filtered wiring consumes the shared project inspection context.",
+        "impact": "direct"
+      },
+      "inspect_wiring_warm": {
+        "evidence": "Measured warm wiring call consumes the shared cached context.",
+        "impact": "direct"
+      },
+      "validate_materials_cold": {
+        "evidence": "Broad validation consumes one shared project context.",
+        "impact": "direct"
+      }
+    },
+    "#145": {
+      "inspect_hierarchy_cold": {
+        "evidence": "Hierarchy inspection does not run reference validation.",
+        "impact": "non-impact"
+      },
+      "inspect_hierarchy_warm": {
+        "evidence": "Hierarchy inspection does not run reference validation.",
+        "impact": "non-impact"
+      },
+      "inspect_material_asset_summary_cold": {
+        "evidence": "Narrow material inspection does not run where-used.",
+        "impact": "non-impact"
+      },
+      "inspect_material_asset_summary_warm": {
+        "evidence": "Narrow material inspection does not run where-used.",
+        "impact": "non-impact"
+      },
+      "inspect_wiring_cold": {
+        "evidence": "Reference validation and where-used parallelism are not invoked.",
+        "impact": "non-impact"
+      },
+      "inspect_wiring_warm": {
+        "evidence": "Reference validation and where-used parallelism are not invoked.",
+        "impact": "non-impact"
+      },
+      "validate_materials_cold": {
+        "evidence": "Material validation has its own evidence runner.",
+        "impact": "non-impact"
+      }
+    },
+    "#146": {
+      "inspect_hierarchy_cold": {
+        "evidence": "Hierarchy inspection does not invoke validate-all-wiring.",
+        "impact": "non-impact"
+      },
+      "inspect_hierarchy_warm": {
+        "evidence": "Hierarchy inspection does not invoke validate-all-wiring.",
+        "impact": "non-impact"
+      },
+      "inspect_material_asset_summary_cold": {
+        "evidence": "Material inspection does not invoke validate-all-wiring.",
+        "impact": "non-impact"
+      },
+      "inspect_material_asset_summary_warm": {
+        "evidence": "Material inspection does not invoke validate-all-wiring.",
+        "impact": "non-impact"
+      },
+      "inspect_wiring_cold": {
+        "evidence": "Single-file wiring does not invoke validate-all-wiring.",
+        "impact": "non-impact"
+      },
+      "inspect_wiring_warm": {
+        "evidence": "Single-file wiring does not invoke validate-all-wiring.",
+        "impact": "non-impact"
+      },
+      "validate_materials_cold": {
+        "evidence": "Material validation does not invoke validate-all-wiring.",
+        "impact": "non-impact"
+      }
+    },
+    "#147": {
+      "inspect_hierarchy_cold": {
+        "evidence": "Hierarchy does not collect material evidence.",
+        "impact": "non-impact"
+      },
+      "inspect_hierarchy_warm": {
+        "evidence": "Hierarchy does not collect material evidence.",
+        "impact": "non-impact"
+      },
+      "inspect_material_asset_summary_cold": {
+        "evidence": "Single material parsing bypasses broad evidence collection.",
+        "impact": "non-impact"
+      },
+      "inspect_material_asset_summary_warm": {
+        "evidence": "Single material parsing bypasses broad evidence collection.",
+        "impact": "non-impact"
+      },
+      "inspect_wiring_cold": {
+        "evidence": "Wiring does not collect material evidence.",
+        "impact": "non-impact"
+      },
+      "inspect_wiring_warm": {
+        "evidence": "Wiring does not collect material evidence.",
+        "impact": "non-impact"
+      },
+      "validate_materials_cold": {
+        "evidence": "Broad validation executes issue #147 material evidence collection.",
+        "impact": "direct"
+      }
+    },
+    "#148": {
+      "inspect_hierarchy_cold": {
+        "evidence": "Serialized-field impact scans are not invoked.",
+        "impact": "non-impact"
+      },
+      "inspect_hierarchy_warm": {
+        "evidence": "Serialized-field impact scans are not invoked.",
+        "impact": "non-impact"
+      },
+      "inspect_material_asset_summary_cold": {
+        "evidence": "Serialized-field impact scans are not invoked.",
+        "impact": "non-impact"
+      },
+      "inspect_material_asset_summary_warm": {
+        "evidence": "Serialized-field impact scans are not invoked.",
+        "impact": "non-impact"
+      },
+      "inspect_wiring_cold": {
+        "evidence": "Serialized-field impact scans are not invoked.",
+        "impact": "non-impact"
+      },
+      "inspect_wiring_warm": {
+        "evidence": "Serialized-field impact scans are not invoked.",
+        "impact": "non-impact"
+      },
+      "validate_materials_cold": {
+        "evidence": "Serialized-field impact scans are not invoked.",
+        "impact": "non-impact"
+      }
+    },
+    "#149": {
+      "inspect_hierarchy_cold": {
+        "evidence": "Expanded hierarchy reads nested sources through the cache.",
+        "impact": "direct"
+      },
+      "inspect_hierarchy_warm": {
+        "evidence": "Warm hierarchy reuses cached nested source blocks.",
+        "impact": "direct"
+      },
+      "inspect_material_asset_summary_cold": {
+        "evidence": "Material asset inspection has no nested Prefab input.",
+        "impact": "non-impact"
+      },
+      "inspect_material_asset_summary_warm": {
+        "evidence": "Material asset inspection has no nested Prefab input.",
+        "impact": "non-impact"
+      },
+      "inspect_wiring_cold": {
+        "evidence": "Nested wiring reads source Prefabs through the issue #149 cache.",
+        "impact": "direct"
+      },
+      "inspect_wiring_warm": {
+        "evidence": "Warm wiring reuses the issue #149 nested Prefab cache.",
+        "impact": "direct"
+      },
+      "validate_materials_cold": {
+        "evidence": "Broad material evidence does not expand nested Prefabs.",
+        "impact": "non-impact"
+      }
+    },
+    "#154": {
+      "inspect_hierarchy_cold": {
+        "evidence": "Measured response uses issue #154 timeout/progress completeness.",
+        "impact": "direct"
+      },
+      "inspect_hierarchy_warm": {
+        "evidence": "Measured response uses issue #154 timeout/progress completeness.",
+        "impact": "direct"
+      },
+      "inspect_material_asset_summary_cold": {
+        "evidence": "The measured summary mode is the issue #154 narrow path.",
+        "impact": "direct"
+      },
+      "inspect_material_asset_summary_warm": {
+        "evidence": "The measured summary mode is the issue #154 narrow path.",
+        "impact": "direct"
+      },
+      "inspect_wiring_cold": {
+        "evidence": "Measured response uses issue #154 timeout/progress completeness.",
+        "impact": "direct"
+      },
+      "inspect_wiring_warm": {
+        "evidence": "Measured response uses issue #154 timeout/progress completeness.",
+        "impact": "direct"
+      },
+      "validate_materials_cold": {
+        "evidence": "Broad response completeness follows issue #154 semantics.",
+        "impact": "direct"
+      }
+    }
+  },
+  "environment": {
+    "commit": "e49e938d01d046c19383a7803796503d8c174323",
+    "cpu": "x86_64",
+    "fixture_hash": "677597323d63c010d333080c05c2822ff9a5ef9f05b88fc61577ba01061b102c",
+    "operating_system": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+    "python_version": "3.13.7",
+    "worker_count": 32
+  },
+  "evidence_kind": "historical-baseline",
+  "fixture": {
+    "cardinalities": {
+      "game_objects": 512,
+      "hierarchy_depth": 8,
+      "matching_mono_behaviours": 128,
+      "material_assets": 256,
+      "material_slot_references": 1024,
+      "mono_behaviours": 256,
+      "nested_instances": 16,
+      "non_matching_mono_behaviours": 128,
+      "renderer_host_assets": 64,
+      "source_prefabs": 4,
+      "summary_material_properties": 64
+    },
+    "hash": "677597323d63c010d333080c05c2822ff9a5ef9f05b88fc61577ba01061b102c",
+    "version": "synthetic-unity-project.v1"
+  },
+  "historical_invocations": [
+    {
+      "arguments": {
+        "script_filter": "BenchmarkMatch",
+        "summary_only": true,
+        "target_path": "Assets/Benchmark/InspectionTarget.prefab"
+      },
+      "case_ids": [
+        "inspect_wiring_cold",
+        "inspect_wiring_warm"
+      ],
+      "classification": "native",
+      "method": "inspect_wiring"
+    },
+    {
+      "actual_arguments": {
+        "target_path": "Assets/Benchmark/Materials/Material000.mat"
+      },
+      "case_ids": [
+        "inspect_material_asset_summary_cold",
+        "inspect_material_asset_summary_warm"
+      ],
+      "classification": "historical-equivalent",
+      "excluded_from_current_budget_semantics": true,
+      "method": "inspect_material_asset",
+      "unavailable_arguments": {
+        "mode": "summary",
+        "property_names": [
+          "_MainTex",
+          "_Benchmark00",
+          "_Benchmark16",
+          "_Benchmark32",
+          "_Benchmark63"
+        ]
+      }
+    }
+  ],
+  "schema_version": "inspection-performance-report.v1"
+}

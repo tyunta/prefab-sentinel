@@ -35,7 +35,7 @@ flowchart LR
 
 ### orchestrator
 
-`prefab_sentinel.orchestrator*` モジュール群。`inspect_wiring` / `inspect_variant` / `validate_refs` / `patch_apply` / `delete_assets` などのユースケース単位で複数 service を編成し、実行計画と停止条件を管理する。応答は常に `ToolResponse.to_dict()` 経由で `success / severity / code / message / data / diagnostics` エンベロープに正規化する。`critical` / `error` が 1 件でも生じれば後続を停止する fail-fast 原則。`delete_assets` は dry-run 計画を返し、confirmed apply では Editor Bridge の AssetDatabase action に委譲して削除後の broken-reference delta を返す。`orchestrator_postcondition` と `orchestrator_validation` は mutation testing の P0 監査対象（[TESTING.md の Mutation testing 節](./TESTING.md#mutation-testing)）。
+`prefab_sentinel.orchestrator*` モジュール群。`inspect_wiring` / `inspect_variant` / `validate_refs` / `patch_apply` / `delete_assets` などのユースケース単位で複数 service を編成し、実行計画と停止条件を管理する。応答は常に `ToolResponse.to_dict()` 経由で `success / severity / code / message / data / diagnostics` エンベロープに正規化する。`critical` / `error` が 1 件でも生じれば後続を停止する fail-fast 原則。`delete_assets` は dry-run 計画を返し、confirmed apply では Editor Bridge の AssetDatabase action に委譲して削除後の broken-reference delta を返す。`patch_transaction` は exactly one open Prefab のときだけ既存 executor を transaction-wrap し、`patch_transaction_diagnostics` が stable diagnostic key partition、`patch_transaction_results` / `patch_transaction_io` が terminal report と exact-byte rollback を所有する。multi-resource、create mode、non-Prefab は従来 executor のまま。`orchestrator_postcondition` と `orchestrator_validation` は mutation testing の P0 監査対象（[TESTING.md の Mutation testing 節](./TESTING.md#mutation-testing)）。
 
 ### mcp_tools
 
@@ -45,9 +45,21 @@ flowchart LR
 
 `tools/unity_patch_bridge.py`（Python 側中継）と `tools/unity/PrefabSentinel.*.cs`（Unity Editor 内 C# 実装）の対で構成する常駐 Editor Bridge。`UNITYTOOL_BRIDGE_WATCH_DIR` 配下に `{uuid}.request.json` を書き込み、`{uuid}.response.json` の出現をポーリングする file-IPC のみが Unity との連携経路（issue #270 で Unity batchmode 経路は削除済み）。C# 側は `EditorApplication.update` で 500 ms 間隔のディスパッチを行い、`UnityEditorControlBridge` と `UnityPatchBridge` をそれぞれ概念単位の partial class に分割している（partial inventory は AGENTS.md「設計原則」を参照）。Project asset の確定削除は `UnityEditorControlBridge.AssetDelete` partial が `AssetDatabase.DeleteAssets` で実行し、Python filesystem delete は使用しない。
 
+### benchmarking
+
+`prefab_sentinel/benchmarking/` は inspection semantics から独立した測定境界。versioned manifest を検証し、synthetic project を生成し、各 measured trial に fresh orchestrator を供給して public inspection call だけを計時する。sampling / aggregation / fixed-budget 判定 / environment fingerprint / report persistence を所有するが、inspection 実装・timeout/progress semantics・checked-in baseline の更新は所有しない。full timing は weekly / manual に限定し、push / PR は deterministic contract tests のみを実行する。
+
 ### skills
 
-`skills/` 配下の運用プロトコル。`guide` / `variant-safe-edit` / `prefab-reference-repair` / `udon-log-triage` / `knowledge-acquisition` の 5 つで、各 `SKILL.md` にツール呼び出し順と停止条件を記述する。Claude Code / Codex CLI に Plugin として導入された場合は `/prefab-sentinel:<skill>` で呼び出す（[README.md のセットアップ節](./README.md#セットアップ)参照）。
+`skills/` 配下の運用プロトコル。各 `SKILL.md` にツール呼び出し順と停止条件を記述する。Inspector profile の project-local author/repair は `prefab-sentinel:inspector-profile-authoring` が担当し、schema を複製せず package resource を参照する。Claude Code / Codex CLI に Plugin として導入された場合は `/prefab-sentinel:<skill>` で呼び出す（[README.md のセットアップ節](./README.md#セットアップ)参照）。
+
+### Inspector profiles
+
+`UnityEditorControlBridge.InspectorSurface` owns the Editor-authoritative, last-saved SerializedObject read for components and ScriptableObjects. It returns raw property paths, effective values, optional override origin, one-hop ObjectReference identity, and bounded source/custom-editor candidates. It does not read YAML or unsaved live Inspector state.
+
+`prefab_sentinel.inspector_profiles` owns the closed declarative `inspector-profile.v1` schema, secure project-local discovery, whole-profile mechanical validation, requested-view rendering, and writable gates. `InspectorProfileApplication` coordinates those mechanics with the Editor Bridge and maps them to the three MCP envelopes. Profiles under `.prefab-sentinel/profiles/` are data, not executable extensions.
+
+`prefab-sentinel:inspector-profile-authoring` owns procedural evidence collection and safe draft/promotion order. It may promote a current-surface-validated read-only profile, but it cannot bypass profile validation or existing writer/audit gates.
 
 ## サービス仕様（詳細）
 

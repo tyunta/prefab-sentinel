@@ -91,7 +91,11 @@ def copy_asset(
     return _execute_write_op(
         orch,
         _copy_asset,
-        {"source_path": str(source_path), "dest_path": str(dest_path)},
+        {
+            "source_path": str(source_path),
+            "dest_path": str(dest_path),
+            "project_root": orch.reference_resolver.project_root,
+        },
         diag_path=source_path,
         reason_error_code="ASSET_OP_REASON_REQUIRED",
         dry_run=dry_run,
@@ -110,7 +114,11 @@ def rename_asset(
     return _execute_write_op(
         orch,
         _rename_asset,
-        {"asset_path": str(asset_path), "new_name": str(new_name)},
+        {
+            "asset_path": str(asset_path),
+            "new_name": str(new_name),
+            "project_root": orch.reference_resolver.project_root,
+        },
         diag_path=asset_path,
         reason_error_code="ASSET_OP_REASON_REQUIRED",
         dry_run=dry_run,

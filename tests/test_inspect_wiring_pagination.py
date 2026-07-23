@@ -644,6 +644,7 @@ class ValidateAllWiringDiagnosticsBaselineTests(unittest.TestCase):
 
     def test_aggregate_baseline_omits_classification_when_child_scan_fails(self) -> None:
         from prefab_sentinel.diagnostics_baseline import DiagnosticsBaseline
+        from prefab_sentinel.inspection_context import ProjectInspectionContext
 
         class FailedChildScan:
             def to_dict(self) -> dict[str, object]:
@@ -679,6 +680,8 @@ class ValidateAllWiringDiagnosticsBaselineTests(unittest.TestCase):
                 target_path: str,
                 page_size: int,
                 diagnostics_baseline: DiagnosticsBaseline | None,
+                timeout_sec: float | None = None,
+                inspection_context: ProjectInspectionContext | None = None,
             ):
                 if target_path.endswith("Broken.prefab"):
                     return FailedChildScan()
@@ -688,6 +691,8 @@ class ValidateAllWiringDiagnosticsBaselineTests(unittest.TestCase):
                     target_path=target_path,
                     page_size=page_size,
                     diagnostics_baseline=diagnostics_baseline,
+                    timeout_sec=timeout_sec,
+                    inspection_context=inspection_context,
                 )
 
             with patch(
@@ -700,7 +705,22 @@ class ValidateAllWiringDiagnosticsBaselineTests(unittest.TestCase):
                     diagnostics_baseline=baseline,
                 )
 
-        self.assertEqual(2, response.data["files_scanned"])
+        self.assertEqual(
+            (
+                False,
+                "VALIDATE_WIRING_CHILD_SCAN_FAILED",
+                1,
+                1,
+                "INSPECT_WIRING_FAILED",
+            ),
+            (
+                response.success,
+                response.code,
+                response.data["files_scanned"],
+                len(response.data["failed_targets"]),
+                response.data["failed_targets"][0]["code"],
+            ),
+        )
         self.assertEqual(2, inspect_mock.call_count)
         self.assertNotIn("diagnostics_baseline", response.data)
 

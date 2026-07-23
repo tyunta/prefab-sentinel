@@ -175,18 +175,19 @@ namespace PrefabSentinel
             }
             catch (Exception ex)
             {
+                Debug.LogException(ex);
                 diagnostics.Add(
                     new BridgeDiagnostic
                     {
                         path = request.target,
                         location = "apply",
                         detail = "exception",
-                        evidence = ex.ToString()
+                        evidence = "Unexpected apply exception."
                     }
                 );
                 return BuildError(
                     "UNITY_BRIDGE_APPLY_EXCEPTION",
-                    $"Unexpected apply exception: {ex.Message}",
+                    "Unexpected apply exception.",
                     request.target,
                     request.ops.Length,
                     executed: true,
@@ -669,18 +670,19 @@ namespace PrefabSentinel
             }
             catch (Exception ex)
             {
+                Debug.LogException(ex);
                 diagnostics.Add(
                     new BridgeDiagnostic
                     {
                         path = request.target,
                         location = "apply",
                         detail = "exception",
-                        evidence = ex.ToString()
+                        evidence = "Unexpected apply exception."
                     }
                 );
                 return BuildError(
                     "UNITY_BRIDGE_APPLY_EXCEPTION",
-                    $"Unexpected apply exception: {ex.Message}",
+                    "Unexpected apply exception.",
                     request.target,
                     request.ops.Length,
                     executed: true,

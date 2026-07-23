@@ -84,6 +84,24 @@ class TestMaybeAutoRefresh(unittest.TestCase):
                     result = orch.maybe_auto_refresh()
                     self.assertEqual("false", result)
 
+    def test_false_when_refresh_returns_error_envelope(self) -> None:
+        orch = self._make_orchestrator()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.dict(
+                os.environ,
+                {BRIDGE_WATCH_DIR_ENV: tmpdir},
+                clear=False,
+            ):
+                with patch("prefab_sentinel.orchestrator.send_action") as mock_send:
+                    mock_send.return_value = {
+                        "success": False,
+                        "code": "EDITOR_CTRL_REFRESH_FAILED",
+                    }
+                    result = orch.maybe_auto_refresh()
+
+        self.assertEqual("false", result)
+        mock_send.assert_called_once_with(action="refresh_asset_database")
+
 
 if __name__ == "__main__":
     unittest.main()

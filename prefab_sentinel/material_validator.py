@@ -11,6 +11,7 @@ from typing import Any
 
 from prefab_sentinel.contracts import Diagnostic, Severity, error_response, success_response
 from prefab_sentinel.inspection_context import ProjectInspectionContext
+from prefab_sentinel.inspection_progress import InspectionProgress
 from prefab_sentinel.material_asset_inspector import inspect_material_asset
 from prefab_sentinel.material_inspector import RENDERER_CLASS_NAMES, parse_renderer_materials
 from prefab_sentinel.material_validation_rules import MaterialValidationRules
@@ -109,14 +110,54 @@ def validate_materials(
     rules: MaterialValidationRules,
     *,
     include_details: bool = False,
+    timeout_sec: float | None = None,
     inspection_context: ProjectInspectionContext | None = None,
 ):
+    import time
+
+    deadline = time.monotonic() + timeout_sec if timeout_sec is not None else None
+
+    def timed_out() -> bool:
+        return deadline is not None and time.monotonic() >= deadline
+
     state = _build_evidence(
         reference_resolver,
         scope_path,
         inspection_context=inspection_context,
+        deadline=deadline,
+    )
+    progress = InspectionProgress()
+    material_count = len(state.material_cache)
+    progress.record_stage(
+        "scanned_targets", completed=True, count=state.scanned_targets,
+    )
+    progress.record_stage("materials", completed=True, count=material_count)
+    progress.record_stage(
+        "renderer_slots", completed=True, count=len(state.renderer_slots),
     )
     data = _response_data(state, rules, include_details)
+    data.update(progress.to_data(
+        current_or_slowest_step="material_validation",
+        suggested_next_action=(
+            "Use include_details for evidence or inspect_material_asset "
+            "summary mode for a narrower material view."
+        ),
+    ))
+
+    if timed_out():
+        timeout_data = dict(data)
+        timeout_data.update(progress.to_data(
+            current_or_slowest_step="material_validation",
+            suggested_next_action=(
+                "Use a narrower scope or inspect_material_asset summary mode."
+            ),
+        ))
+        return error_response(
+            "INSPECTION_TIMEOUT",
+            "Material validation timed out after partial evidence collection.",
+            severity=Severity.ERROR,
+            data=timeout_data,
+        )
 
     if state.read_errors:
         return error_response(
@@ -221,15 +262,26 @@ def _build_evidence(
     scope_path: Path,
     *,
     inspection_context: ProjectInspectionContext | None = None,
+    deadline: float | None = None,
 ) -> _ValidationState:
+    import time
+
+    def deadline_reached() -> bool:
+        return deadline is not None and time.monotonic() >= deadline
+
     guid_index = None if inspection_context is None else inspection_context.guid_index
     files = reference_resolver.collect_scope_files(scope_path)
-    file_texts = {path: reference_resolver.read_text(path) for path in files}
-    file_blocks = {
-        path: split_yaml_blocks(text)
-        for path, text in file_texts.items()
-        if text is not None
-    }
+    file_texts: dict[Path, str | None] = {}
+    file_blocks: dict[Path, list[YamlBlock]] = {}
+    files_to_scan: list[Path] = []
+    for path in files:
+        if files_to_scan and deadline_reached():
+            break
+        text = reference_resolver.read_text(path)
+        file_texts[path] = text
+        if text is not None:
+            file_blocks[path] = split_yaml_blocks(text)
+        files_to_scan.append(path)
     resolved_asset_paths: dict[tuple[str, str], str | None] | None = None
     local_ids_by_path: dict[Path, set[str]] | None = None
     if guid_index is not None:
@@ -239,7 +291,7 @@ def _build_evidence(
             reference_pairs,
             guid_index,
         )
-    state = _ValidationState(scanned_targets=len(files))
+    state = _ValidationState(scanned_targets=0)
 
     def build_file_payload(path: Path) -> _FileEvidencePayload:
         rel_path = _relative(reference_resolver, path)
@@ -276,8 +328,9 @@ def _build_evidence(
         )
         return _FileEvidencePayload(file_state)
 
-    for payload in run_ordered(files, build_file_payload):
+    def merge_payload(payload: _FileEvidencePayload) -> None:
         file_state = payload.state
+        state.scanned_targets += file_state.scanned_targets
         state.folder_entries.extend(file_state.folder_entries)
         state.direct_materials.extend(file_state.direct_materials)
         state.renderer_slots.extend(file_state.renderer_slots)
@@ -286,6 +339,15 @@ def _build_evidence(
         state.read_errors.extend(file_state.read_errors)
         for material_path, material in file_state.material_cache.items():
             state.material_cache.setdefault(material_path, material)
+
+    if deadline is None:
+        for payload in run_ordered(files_to_scan, build_file_payload):
+            merge_payload(payload)
+    else:
+        for path in files_to_scan:
+            merge_payload(build_file_payload(path))
+            if deadline_reached():
+                break
     return state
 
 

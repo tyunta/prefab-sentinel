@@ -164,5 +164,40 @@ class TestFullMypyWorkflowGate(unittest.TestCase):
         )
 
 
+class TestPerformanceBenchmarkWorkflow(unittest.TestCase):
+    def test_full_benchmark_is_weekly_manual_read_only_and_always_uploads_report(self) -> None:
+        text = _strip_yaml_comments(_CI_PATH.read_text(encoding="utf-8"))
+        match = re.search(
+            r"(?ms)^  performance-benchmarks:\s*\n(?P<body>.*?)(?=^  [A-Za-z0-9_-]+:|\Z)",
+            text,
+        )
+        self.assertIsNotNone(
+            match,
+            "performance-benchmarks job block not found.",
+        )
+        match = require_not_none(match, "performance-benchmarks job block")
+        body = match.group("body")
+
+        observed = (
+            tuple(re.findall(r"cron:\s*[\"']([^\"']+)[\"']", text)),
+            "permissions:\n  contents: read\n  pull-requests: read" in text,
+            "if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'" in body,
+            "scripts/run_performance_benchmarks.py" in body and "--enforce" in body,
+            "--baseline-ref" not in body and "--baseline-out" not in body,
+            "uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" in body,
+            "if: always()" in body and "path: performance-report.json" in body,
+            tuple(token in body for token in ("git add", "git commit", "git push")),
+        )
+
+        self.assertEqual(
+            (("17 3 * * 1",), True, True, True, True, True, True, (False, False, False)),
+            observed,
+            msg=(
+                "performance workflow must remain weekly/manual, least-privilege, "
+                "host-portable, immutable, enforce-only, and artifact-preserving"
+            ),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -276,21 +276,25 @@ namespace PrefabSentinel
         internal static TestSuiteResult RunTestSuite()
         {
             float suiteStart = Time.realtimeSinceStartup;
-
-            // Create fixture directory
-            if (!AssetDatabase.IsValidFolder(TestAssetDir))
-            {
-                string parent = Path.GetDirectoryName(TestAssetDir).Replace('\\', '/');
-                string folder = Path.GetFileName(TestAssetDir);
-                if (!AssetDatabase.IsValidFolder(parent))
-                    AssetDatabase.CreateFolder("Assets", Path.GetFileName(parent));
-                AssetDatabase.CreateFolder(parent, folder);
-            }
+            var originalSceneSetup =
+                UnityEditor.SceneManagement.EditorSceneManager.GetSceneManagerSetup();
+            ValidateOriginalSceneSetup(originalSceneSetup);
 
             string prefabPath = null;
             string materialPath = null;
             try
             {
+                // Create fixture directory only after the original scene
+                // setup is proven safe to close and restore.
+                if (!AssetDatabase.IsValidFolder(TestAssetDir))
+                {
+                    string parent = Path.GetDirectoryName(TestAssetDir).Replace('\\', '/');
+                    string folder = Path.GetFileName(TestAssetDir);
+                    if (!AssetDatabase.IsValidFolder(parent))
+                        AssetDatabase.CreateFolder("Assets", Path.GetFileName(parent));
+                    AssetDatabase.CreateFolder(parent, folder);
+                }
+
                 prefabPath = CreateTestPrefab();
                 materialPath = CreateTestMaterial();
                 AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
@@ -406,9 +410,6 @@ namespace PrefabSentinel
                         Test_EditorCtrl_FrameSelected_UsesPostUpdateBoundsForRectTransform),
                     ("EditorCtrl_FrameSelected_UnaffectedForNonRect",
                         Test_EditorCtrl_FrameSelected_UnaffectedForNonRect),
-                    // Phase 1 issue #116 — run-script stuck detection / recovery
-                    ("EditorCtrl_RunScript_StuckDetectionTriggersRecovery",
-                        Test_EditorCtrl_RunScript_StuckDetectionTriggersRecovery),
                     // Phase 1 issue #117 — non-fatal classification & console filter
                     ("EditorCtrl_SaveAsPrefab_NonFatalUdonSharpNRECountsButDoesNotFail",
                         Test_EditorCtrl_SaveAsPrefab_NonFatalUdonSharpNRECountsButDoesNotFail),
@@ -457,8 +458,10 @@ namespace PrefabSentinel
                 int passed = 0;
                 foreach (var (name, method) in tests)
                 {
-                    // Re-create prefab before each test to isolate state
-                    AssetDatabase.DeleteAsset(prefabPath);
+                    // Restore first so a scene created by the previous
+                    // case cannot retain a reference to the fixture.
+                    RestoreOriginalSceneSetup(originalSceneSetup);
+                    DeleteAssetOrThrow(prefabPath);
                     prefabPath = CreateTestPrefab();
                     AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
 
@@ -499,7 +502,80 @@ namespace PrefabSentinel
             }
             finally
             {
+                RestoreOriginalSceneSetup(originalSceneSetup);
                 CleanupTestAssets();
+            }
+        }
+
+
+        /// <summary>
+        /// Reject scene state that cannot be restored without discarding user
+        /// work. Validation runs before the suite creates or deletes assets.
+        /// </summary>
+        private static void ValidateOriginalSceneSetup(
+            UnityEditor.SceneManagement.SceneSetup[] originalSceneSetup)
+        {
+            foreach (var setup in originalSceneSetup)
+            {
+                if (!setup.isLoaded) continue;
+                if (string.IsNullOrEmpty(setup.path))
+                {
+                    throw new InvalidOperationException(
+                        "Integration tests require every loaded scene to be saved "
+                        + "before fixture mutation.");
+                }
+
+                var scene =
+                    UnityEngine.SceneManagement.SceneManager.GetSceneByPath(setup.path);
+                if (!scene.IsValid() || !scene.isLoaded)
+                {
+                    throw new InvalidOperationException(
+                        $"Loaded scene setup could not be resolved: {setup.path}.");
+                }
+                if (scene.isDirty)
+                {
+                    throw new InvalidOperationException(
+                        $"Integration tests require a clean loaded scene: {setup.path}.");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Restore the caller's loaded/active scene arrangement and prove no
+        /// scene from the transient asset directory remains loaded.
+        /// </summary>
+        private static void RestoreOriginalSceneSetup(
+            UnityEditor.SceneManagement.SceneSetup[] originalSceneSetup)
+        {
+            UnityEditor.SceneManagement.EditorSceneManager.RestoreSceneManagerSetup(
+                originalSceneSetup);
+            AssertNoLoadedTestScenes();
+        }
+
+        private static void AssertNoLoadedTestScenes()
+        {
+            int sceneCount = UnityEngine.SceneManagement.SceneManager.sceneCount;
+            for (int index = 0; index < sceneCount; index++)
+            {
+                var scene =
+                    UnityEngine.SceneManagement.SceneManager.GetSceneAt(index);
+                if (scene.isLoaded
+                    && !string.IsNullOrEmpty(scene.path)
+                    && scene.path.StartsWith(TestAssetDir + "/", StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        $"Test scene remained loaded after setup restore: {scene.path}.");
+                }
+            }
+        }
+
+        private static void DeleteAssetOrThrow(string assetPath)
+        {
+            bool deleted = AssetDatabase.DeleteAsset(assetPath);
+            if (!deleted)
+            {
+                throw new InvalidOperationException(
+                    $"AssetDatabase.DeleteAsset failed for required fixture: {assetPath}.");
             }
         }
 
@@ -562,10 +638,14 @@ namespace PrefabSentinel
 
         private static void CleanupTestAssets()
         {
+            if (!AssetDatabase.IsValidFolder(TestAssetDir)) return;
+
+            DeleteAssetOrThrow(TestAssetDir);
+            AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
             if (AssetDatabase.IsValidFolder(TestAssetDir))
             {
-                AssetDatabase.DeleteAsset(TestAssetDir);
-                AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+                throw new InvalidOperationException(
+                    $"Test asset directory still exists after deletion: {TestAssetDir}.");
             }
         }
 
@@ -1225,14 +1305,14 @@ namespace PrefabSentinel
         private static TestCaseResult Test_Set_ValueKindMismatch(string prefabPath, string materialPath)
         {
             const string name = "Set_ValueKindMismatch";
-            // Set a bool property (m_IsTrigger) with an unparseable string value.
-            // Bridge should reject: TryReadBoolValue fails on "not_a_bool".
+            // Assignment rejection is distinct from SaveAsPrefabAsset failure:
+            // the stable apply-rejection envelope is SER_APPLY_REJECTED.
             string ops = "[{\"op\":\"set\","
                 + "\"component\":\"BoxCollider\","
                 + "\"path\":\"m_IsTrigger\","
                 + "\"value_kind\":\"string\",\"value_string\":\"not_a_bool\"}]";
             var resp = RunBridge(BuildPrefabRequest(prefabPath, ops));
-            return AssertBridgeFailure(name, resp, "UNITY_BRIDGE_APPLY") ?? Pass(name);
+            return AssertBridgeFailure(name, resp, "SER_APPLY_REJECTED") ?? Pass(name);
         }
 
         private static TestCaseResult Test_ProtocolVersionMismatch(string prefabPath, string materialPath)
@@ -1962,7 +2042,7 @@ namespace PrefabSentinel
                 + "\",\"kind\":\"prefab\",\"mode\":\"open\""
                 + ",\"ops\":[]}";
             var resp = RunBridge(json);
-            return AssertBridgeSuccess(name, resp, 0) ?? Pass(name);
+            return AssertBridgeFailure(name, resp, "UNITY_BRIDGE_SCHEMA") ?? Pass(name);
         }
 
         // ----------------------------------------------------------------
@@ -2359,10 +2439,12 @@ namespace PrefabSentinel
                         + $"{resp.data.width}x{resp.data.height}, expected SceneView defaults "
                         + $"{expectedWidth}x{expectedHeight}.");
                 }
+                // JsonUtility uses Unity inline serialization for custom
+                // classes, which cannot preserve null. crop_roi_applied is
+                // therefore the stable response discriminator for no crop;
+                // crop_bounds may deserialize as a zero-valued object.
                 if (resp.data.crop_roi_applied != string.Empty)
                     return Fail(name, $"Omitted crop_roi applied '{resp.data.crop_roi_applied}'.");
-                if (resp.data.crop_bounds != null)
-                    return Fail(name, "Omitted crop_roi unexpectedly returned crop_bounds.");
                 return Pass(name);
             }
             finally
@@ -2639,37 +2721,105 @@ namespace PrefabSentinel
             return null;
         }
 
-        private static TestCaseResult Test_EditorCtrl_AddComponent_UdonSharp_Idempotent(
-            string prefabPath, string materialPath)
-        {
-            const string name = "EditorCtrl_AddComponent_UdonSharp_Idempotent";
-            Type usbType = FindUdonSharpBehaviourType();
-            if (usbType == null)
-                return Pass(name, "Skipped: UdonSharp not present in this Editor.");
 
-            // Find a concrete subclass of UdonSharpBehaviour to exercise the
-            // idempotency guard against (the abstract base itself would be
-            // rejected by AddComponent).
-            Type concrete = null;
-            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+        /// <summary>
+        /// Resolve a concrete UdonSharpBehaviour whose program asset exists
+        /// and has a compiled SerializedProgramAsset. The live probes require
+        /// this precondition; selecting the first loaded subclass makes their
+        /// result depend on unrelated project assemblies.
+        /// </summary>
+        private static Type FindReadyUdonSharpBehaviourType()
+        {
+            Type usbType = FindUdonSharpBehaviourType();
+            if (usbType == null) return null;
+
+            Type editorUtilType = null;
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                editorUtilType = assembly.GetType(
+                    "UdonSharpEditor.UdonSharpEditorUtility", false);
+                if (editorUtilType != null) break;
+            }
+            if (editorUtilType == null) return null;
+
+            System.Reflection.MethodInfo getProgramAsset =
+                editorUtilType.GetMethod(
+                    "GetUdonSharpProgramAsset",
+                    System.Reflection.BindingFlags.Public
+                        | System.Reflection.BindingFlags.Static,
+                    null,
+                    new Type[] { typeof(Type) },
+                    null);
+            if (getProgramAsset == null) return null;
+
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
             {
                 Type[] types;
-                try { types = asm.GetTypes(); }
+                try
+                {
+                    types = assembly.GetTypes();
+                }
                 catch (System.Reflection.ReflectionTypeLoadException ex)
                 {
                     types = Array.FindAll(ex.Types, t => t != null);
                 }
-                foreach (var t in types)
+
+                foreach (Type candidate in types)
                 {
-                    if (t == null || t.IsAbstract) continue;
-                    if (!usbType.IsAssignableFrom(t)) continue;
-                    concrete = t;
-                    break;
+                    if (candidate == null || candidate.IsAbstract) continue;
+                    if (!usbType.IsAssignableFrom(candidate)) continue;
+
+                    object programAsset;
+                    object serializedProgramAsset;
+                    try
+                    {
+                        programAsset = getProgramAsset.Invoke(
+                            null, new object[] { candidate });
+                        if (programAsset == null) continue;
+
+                        System.Reflection.PropertyInfo serializedProperty =
+                            programAsset.GetType().GetProperty(
+                                "SerializedProgramAsset",
+                                System.Reflection.BindingFlags.Public
+                                    | System.Reflection.BindingFlags.Instance);
+                        if (serializedProperty == null) continue;
+                        serializedProgramAsset =
+                            serializedProperty.GetValue(programAsset);
+                    }
+                    catch (System.Reflection.TargetInvocationException)
+                    {
+                        continue;
+                    }
+                    catch (ArgumentException)
+                    {
+                        continue;
+                    }
+
+                    if (programAsset != null
+                        && serializedProgramAsset != null
+                        && (!(serializedProgramAsset is UnityEngine.Object unityObject)
+                            || unityObject != null))
+                    {
+                        return candidate;
+                    }
                 }
-                if (concrete != null) break;
             }
+
+            return null;
+        }
+
+        private static TestCaseResult Test_EditorCtrl_AddComponent_UdonSharp_Idempotent(
+            string prefabPath, string materialPath)
+        {
+            const string name = "EditorCtrl_AddComponent_UdonSharp_Idempotent";
+            Type concrete = FindReadyUdonSharpBehaviourType();
             if (concrete == null)
-                return Pass(name, "Skipped: no concrete UdonSharpBehaviour type available.");
+            {
+                return Pass(
+                    name,
+                    "Skipped: no concrete UdonSharpBehaviour with a compiled "
+                    + "program asset is available.");
+            }
 
             var go = new GameObject("UdonIdempotentTarget");
             try
@@ -2678,27 +2828,57 @@ namespace PrefabSentinel
                 string goPath = "/" + go.name;
                 string extra = "\"hierarchy_path\":\"" + EscapeJsonString(goPath) + "\","
                              + "\"component_type\":\"" + EscapeJsonString(concrete.FullName) + "\"";
-                // First add — establishes the proxy + UdonBehaviour pair.
-                var first = RunEditorControlBridge(BuildEditorControlRequest("editor_add_component", extra));
-                if (first == null || !first.success)
-                    return Pass(name, "Skipped: initial add_component did not succeed (UdonSharp setup unavailable).");
 
-                // Second add — must short-circuit through the idempotency
-                // guard and return EDITOR_CTRL_ADD_COMPONENT_REUSED with no
-                // additional component on the GameObject.
-                var second = RunEditorControlBridge(BuildEditorControlRequest("editor_add_component", extra));
-                if (second == null) return Fail(name, "Second add_component returned null response.");
+                var first = RunEditorControlBridge(
+                    BuildEditorControlRequest("editor_add_component", extra));
+                if (first == null)
+                    return Fail(name, "Initial add_component returned null response.");
+                if (!first.success)
+                {
+                    return Fail(
+                        name,
+                        $"Initial add_component failed: code={first.code}, "
+                        + $"message={first.message}.");
+                }
+
+                int afterFirstCount = go.GetComponents<Component>().Length;
+                if (afterFirstCount <= beforeCount)
+                {
+                    return Fail(
+                        name,
+                        "Initial add_component reported success without adding "
+                        + $"the UdonSharp pair: before={beforeCount}, "
+                        + $"after={afterFirstCount}.");
+                }
+
+                var second = RunEditorControlBridge(
+                    BuildEditorControlRequest("editor_add_component", extra));
+                if (second == null)
+                    return Fail(name, "Second add_component returned null response.");
                 if (!second.success)
-                    return Fail(name, $"Expected success on reuse, got code={second.code}, message={second.message}.");
+                {
+                    return Fail(
+                        name,
+                        $"Expected success on reuse, got code={second.code}, "
+                        + $"message={second.message}.");
+                }
                 if (second.code != "EDITOR_CTRL_ADD_COMPONENT_REUSED")
-                    return Fail(name, $"Expected code=EDITOR_CTRL_ADD_COMPONENT_REUSED, got {second.code}.");
+                {
+                    return Fail(
+                        name,
+                        "Expected code=EDITOR_CTRL_ADD_COMPONENT_REUSED, "
+                        + $"got {second.code}.");
+                }
 
-                int afterCount = go.GetComponents<Component>().Length;
-                if (afterCount != beforeCount + 2 && afterCount != beforeCount + 1)
-                    // proxy + backing UdonBehaviour normally adds 2 components;
-                    // some setups only add 1 (proxy alone). Either is fine —
-                    // what matters is that the second call did not add more.
-                    return Fail(name, $"Component count grew unexpectedly after reuse: before={beforeCount}, after={afterCount}.");
+                int afterSecondCount = go.GetComponents<Component>().Length;
+                if (afterSecondCount != afterFirstCount)
+                {
+                    return Fail(
+                        name,
+                        "Component count changed on reuse: "
+                        + $"after_first={afterFirstCount}, "
+                        + $"after_second={afterSecondCount}.");
+                }
 
                 return Pass(name);
             }
@@ -2712,50 +2892,43 @@ namespace PrefabSentinel
             string prefabPath, string materialPath)
         {
             const string name = "EditorCtrl_AddComponent_UdonSharp_Relinks_StrandedProxy";
-            Type usbType = FindUdonSharpBehaviourType();
-            if (usbType == null)
-                return Pass(name, "Skipped: UdonSharp not present in this Editor.");
-
-            // Resolve a concrete subclass and the editor utility once per call
-            // (kept local because the relink path may be unavailable on older
-            // UdonSharp versions even when the proxy type exists).
-            Type concrete = null;
-            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
-            {
-                Type[] types;
-                try { types = asm.GetTypes(); }
-                catch (System.Reflection.ReflectionTypeLoadException ex)
-                {
-                    types = Array.FindAll(ex.Types, t => t != null);
-                }
-                foreach (var t in types)
-                {
-                    if (t == null || t.IsAbstract) continue;
-                    if (!usbType.IsAssignableFrom(t)) continue;
-                    concrete = t;
-                    break;
-                }
-                if (concrete != null) break;
-            }
+            Type concrete = FindReadyUdonSharpBehaviourType();
             if (concrete == null)
-                return Pass(name, "Skipped: no concrete UdonSharpBehaviour type available.");
+            {
+                return Pass(
+                    name,
+                    "Skipped: no concrete UdonSharpBehaviour with a compiled "
+                    + "program asset is available.");
+            }
 
             var go = new GameObject("UdonRelinkTarget");
             try
             {
                 // Stranded proxy: directly add the proxy MonoBehaviour without
-                // a backing UdonBehaviour, simulating the bug from #103.
+                // a backing UdonBehaviour, simulating the broken pair.
                 go.AddComponent(concrete);
                 string goPath = "/" + go.name;
                 string extra = "\"hierarchy_path\":\"" + EscapeJsonString(goPath) + "\","
                              + "\"component_type\":\"" + EscapeJsonString(concrete.FullName) + "\"";
 
-                var resp = RunEditorControlBridge(BuildEditorControlRequest("editor_add_component", extra));
-                if (resp == null) return Fail(name, "add_component returned null response.");
+                var resp = RunEditorControlBridge(
+                    BuildEditorControlRequest("editor_add_component", extra));
+                if (resp == null)
+                    return Fail(name, "add_component returned null response.");
                 if (!resp.success)
-                    return Pass(name, "Skipped: relink path unavailable (UdonSharpEditorUtility.CreateBehaviourForProxy missing).");
+                {
+                    return Fail(
+                        name,
+                        $"Expected stranded-proxy repair to succeed, got "
+                        + $"code={resp.code}, message={resp.message}.");
+                }
                 if (resp.code != "EDITOR_CTRL_ADD_COMPONENT_RELINKED")
-                    return Fail(name, $"Expected code=EDITOR_CTRL_ADD_COMPONENT_RELINKED, got {resp.code}.");
+                {
+                    return Fail(
+                        name,
+                        "Expected code=EDITOR_CTRL_ADD_COMPONENT_RELINKED, "
+                        + $"got {resp.code}.");
+                }
                 return Pass(name);
             }
             finally
@@ -2911,68 +3084,7 @@ namespace PrefabSentinel
             }
         }
 
-        // ----------------------------------------------------------------
-        // Phase 1 issue #116 — run_script stuck-detection / recovery
-        // ----------------------------------------------------------------
 
-        private static TestCaseResult Test_EditorCtrl_RunScript_StuckDetectionTriggersRecovery(
-            string prefabPath, string materialPath)
-        {
-            const string name = "EditorCtrl_RunScript_StuckDetectionTriggersRecovery";
-
-            // Inject a snippet that compiles cleanly. Stuck detection is
-            // observable only when the compiler is genuinely pending; on
-            // a clean asset state the compile usually completes well
-            // under the 15 s budget. The integration test asserts the
-            // happy-path response shape — the diagnostics fields must be
-            // populated on every compile-pending response — and treats the
-            // recovery turn as a soft expectation when the harness can
-            // actually pin the compiler.
-            string code = "public static class PrefabSentinelTempScript { public static void Run() { } }";
-            string tempId = "stuck_detect_" + Guid.NewGuid().ToString("N").Substring(0, 8);
-            string extra = "\"code\":\"" + EscapeJsonString(code) + "\","
-                         + "\"temp_id\":\"" + EscapeJsonString(tempId) + "\","
-                         + "\"compile_timeout\":1," // tiny budget to force compile-pending
-                         + "\"confirm\":true,"
-                         + "\"change_reason\":\"integration test stuck-detect\"";
-
-            var first = RunEditorControlBridge(BuildEditorControlRequest("run_script", extra));
-            if (first == null) return Fail(name, "First run_script returned null response.");
-
-            // First call may complete immediately if compile is quick; in
-            // that case the stuck-detection scenario is not exercised and
-            // we skip rather than mis-fail.
-            if (first.success && first.code != "EDITOR_CTRL_RUN_SCRIPT_COMPILE")
-                return Pass(name, "Skipped: compile completed under tiny budget; stuck-detection not exercised.");
-            if (first.code != "EDITOR_CTRL_RUN_SCRIPT_COMPILE")
-                return Fail(name, $"Expected first response code=EDITOR_CTRL_RUN_SCRIPT_COMPILE, got {first.code}.");
-
-            // Diagnostics payload must be present on every compile-pending
-            // response — covers the spec's "every compile-pending response
-            // carries diagnostic facts" requirement.
-            if (first.data.diagnostic_temp_files == null)
-                return Fail(name, "First compile-pending response missing diagnostic_temp_files.");
-            if (string.IsNullOrEmpty(first.data.diagnostic_last_domain_reload))
-                return Fail(name, "First compile-pending response missing diagnostic_last_domain_reload.");
-
-            // With a pinned temp_id and the identical snippet on a second
-            // identical snippet, the stuck-detection counter increments to 2
-            // (≥ RunScriptStuckThreshold) and the bridge deterministically
-            // returns EDITOR_CTRL_RUN_SCRIPT_RECOVERY after clearing the
-            // temp area. Per spec, the recovery response carries an empty
-            // diagnostic_temp_files list (the dir is wiped before the
-            // diagnostics readback).
-            var second = RunEditorControlBridge(BuildEditorControlRequest("run_script", extra));
-            if (second == null) return Fail(name, "Second run_script returned null response.");
-            if (second.code != "EDITOR_CTRL_RUN_SCRIPT_RECOVERY")
-                return Fail(name,
-                    $"Expected EDITOR_CTRL_RUN_SCRIPT_RECOVERY on second consecutive stuck call, got {second.code}.");
-            if (second.data.diagnostic_temp_files == null
-                || second.data.diagnostic_temp_files.Length != 0)
-                return Fail(name,
-                    "Recovery response must report an empty diagnostic_temp_files (temp dir was just cleared).");
-            return Pass(name);
-        }
 
         // ----------------------------------------------------------------
         // Phase 1 issue #117 — non-fatal classification & console filter

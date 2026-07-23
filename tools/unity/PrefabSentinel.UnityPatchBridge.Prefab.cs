@@ -11,6 +11,8 @@ namespace PrefabSentinel
         {
             int applied = 0;
             List<BridgeDiagnostic> diagnostics = new List<BridgeDiagnostic>();
+            Dictionary<string, UnityEngine.Object> handles =
+                new Dictionary<string, UnityEngine.Object>(StringComparer.Ordinal);
             GameObject prefabRoot = null;
             try
             {
@@ -25,28 +27,26 @@ namespace PrefabSentinel
                         executed: true
                     );
                 }
+                handles["root"] = prefabRoot;
 
                 for (int i = 0; i < request.ops.Length; i++)
                 {
                     PatchOp op = request.ops[i];
-                    if (!TryApplyOp(prefabRoot, request.target, op, i, diagnostics))
-                    {
-                        // Issue #298: the SerializedObject apply
-                        // rejection path now emits a structured
-                        // envelope carrying property_path,
-                        // component_type, and attempted_value so known
-                        // traps (such as AudioSource.m_Priority) are
-                        // diagnosable from the response alone. The
-                        // pre-existing exception path is unchanged and
-                        // retains its UNITY_BRIDGE_APPLY_EXCEPTION
-                        // code for unexpected exceptions outside the
-                        // rejection contract.
-                        BridgeDiagnostic[] failureDiagnostics = BuildPrefabApplyRejectionDiagnostics(
+                    if (!TryApplyOpenPrefabOp(
+                            prefabRoot,
                             request.target,
                             op,
                             i,
-                            diagnostics
-                        );
+                            handles,
+                            diagnostics))
+                    {
+                        BridgeDiagnostic[] failureDiagnostics =
+                            BuildPrefabApplyRejectionDiagnostics(
+                                request.target,
+                                op,
+                                i,
+                                diagnostics
+                            );
                         return BuildError(
                             "SER_APPLY_REJECTED",
                             "SerializedObject apply rejected by Unity.",
@@ -60,9 +60,49 @@ namespace PrefabSentinel
                     applied += 1;
                 }
 
-                PrefabUtility.SaveAsPrefabAsset(prefabRoot, assetPath);
-                AssetDatabase.SaveAssets();
-                AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+                GameObject savedPrefab = PrefabUtility.SaveAsPrefabAsset(
+                    prefabRoot,
+                    assetPath,
+                    out bool savedSuccessfully);
+                if (savedPrefab == null || !savedSuccessfully)
+                {
+                    diagnostics.Add(
+                        new BridgeDiagnostic
+                        {
+                            path = request.target,
+                            location = "save",
+                            detail = "apply_error",
+                            evidence = "PrefabUtility.SaveAsPrefabAsset did not persist the prefab asset."
+                        }
+                    );
+                    return BuildError(
+                        "UNITY_BRIDGE_APPLY",
+                        "Failed to save prefab asset.",
+                        request.target,
+                        request.ops.Length,
+                        executed: true,
+                        applied: applied,
+                        diagnostics: diagnostics.ToArray()
+                    );
+                }
+                AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceSynchronousImport);
+
+                GameObject persistedPrefabRoot =
+                    AssetDatabase.LoadAssetAtPath<GameObject>(assetPath);
+                if (persistedPrefabRoot == null)
+                {
+                    return BuildError(
+                        "UNITY_BRIDGE_PREFAB_LOAD",
+                        "Failed to load persisted prefab asset.",
+                        request.target,
+                        request.ops.Length,
+                        executed: true,
+                        applied: applied
+                    );
+                }
+
+                CreatedResultAudit[] createdResults =
+                    BuildCreatedResultAudits(request, handles, persistedPrefabRoot);
                 return new BridgeResponse
                 {
                     protocol_version = ProtocolVersion,
@@ -77,25 +117,27 @@ namespace PrefabSentinel
                         applied = applied,
                         read_only = false,
                         executed = true,
-                        protocol_version = ProtocolVersion
+                        protocol_version = ProtocolVersion,
+                        created_results = createdResults
                     },
                     diagnostics = Array.Empty<BridgeDiagnostic>()
                 };
             }
             catch (Exception ex)
             {
+                Debug.LogException(ex);
                 diagnostics.Add(
                     new BridgeDiagnostic
                     {
                         path = request.target,
                         location = "apply",
                         detail = "exception",
-                        evidence = ex.ToString()
+                        evidence = "Unexpected apply exception."
                     }
                 );
                 return BuildError(
                     "UNITY_BRIDGE_APPLY_EXCEPTION",
-                    $"Unexpected apply exception: {ex.Message}",
+                    "Unexpected apply exception.",
                     request.target,
                     request.ops.Length,
                     executed: true,
@@ -957,18 +999,19 @@ namespace PrefabSentinel
             }
             catch (Exception ex)
             {
+                Debug.LogException(ex);
                 diagnostics.Add(
                     new BridgeDiagnostic
                     {
                         path = request.target,
                         location = "apply",
                         detail = "exception",
-                        evidence = ex.ToString()
+                        evidence = "Unexpected apply exception."
                     }
                 );
                 return BuildError(
                     "UNITY_BRIDGE_APPLY_EXCEPTION",
-                    $"Unexpected apply exception: {ex.Message}",
+                    "Unexpected apply exception.",
                     request.target,
                     request.ops.Length,
                     executed: true,

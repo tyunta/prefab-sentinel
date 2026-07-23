@@ -43,6 +43,7 @@ from prefab_sentinel.mcp_tools_editor_udonsharp import (
 )
 from prefab_sentinel.mcp_tools_editor_view import register_editor_view_tools
 from prefab_sentinel.mcp_tools_editor_write import register_editor_write_tools
+from prefab_sentinel.mcp_tools_inspector_profiles import register_inspector_profile_tools
 from prefab_sentinel.mcp_tools_patch import register_patch_tools
 from prefab_sentinel.mcp_tools_session import register_session_tools
 from prefab_sentinel.mcp_tools_set_property import register_set_property_tools
@@ -74,7 +75,7 @@ def create_server(
     Returns:
         A configured ``FastMCP`` server instance ready to run.
     """
-    _root = Path(project_root) if project_root else None
+    _root = Path(project_root).resolve() if project_root else None
     session = ProjectSession(project_root=_root)
 
     @asynccontextmanager
@@ -107,6 +108,7 @@ def create_server(
     register_component_tools(server, session)
     register_copy_component_fields_tool(server, session)
     register_validation_tools(server, session)
+    register_inspector_profile_tools(server, session)
     register_patch_tools(server, session)
     register_editor_view_tools(server)
     register_editor_write_tools(server)

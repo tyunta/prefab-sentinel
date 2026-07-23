@@ -61,9 +61,37 @@ MCP ツールが返す応答エンベロープの形状とエラーコードの�
 
 wire `severity` の決定規則（issue #4）: `Diagnostic` dataclass は任意の per-item `severity`（`str | None`、既定 `None`）を持つ。`_diagnostic_to_wire` は **diagnostic 自身の `severity` が設定されていればそれを優先**し、`None` のときはエンベロープの `severity` を継承する（`diag.severity or default_severity`）。これにより 1 つのエンベロープ内で個々の diagnostic が異なる severity を運べる（例: envelope が `error` でも一部 diagnostic は `warning`）。per-item `severity` は `Severity` 語彙に対して検証されない任意文字列であり、設定しない限り wire 出力は従来と byte-identical。
 
+## inspection progress / timeout metadata
+
+長時間化しやすい read-only inspection / validation (`inspect_hierarchy`, `inspect_wiring`, `validate_all_wiring`, `validate_materials`) は、完了応答または timeout 応答の `data` に次の共通 metadata を載せる。
+
+| field | 説明 |
+|-------|------|
+| `progress_summary[]` | 実行済み stage の ordered summary。各要素は少なくとも `name`, `completed` を持ち、信頼できる count がある場合だけ `count` を持つ。 |
+| `partial_counts` | stage 名から count への dict。実測できた count だけを載せ、推測値は入れない。 |
+| `current_or_slowest_step` | timeout / partial 応答で operator が見るべき現在または遅い stage。完了応答では省略される場合がある。 |
+| `suggested_next_action` | scope narrowing や `inspect_material_asset(mode="summary")` など、次に取るべき具体的な縮小手順。 |
+
+`INSPECTION_TIMEOUT` は incomplete scan を表す successful/failed の通常結果とは別の typed timeout envelope であり、`diagnostics_baseline` は incomplete current key を分類できないため載せない。
+
+## wiring actionability metadata
+
+`inspect_wiring` / `validate_all_wiring` は raw null-cause / duplicate-cause label を保持したまま、別軸として `actionability` を返す。語彙は `actionable`, `expected`, `optional`。unknown null / duplicate は常に `actionable` に残し、known pattern だけを `optional` または `expected` に分類する。summary には `actionability_counts` が入り、`script_filter` 使用時は matched component / field を中心に数え、out-of-scope diagnostics は明示 opt-in まで畳む。nested prefab の `source_only` / `placeholder` は `entry_kind` として表し、actionability count には混ぜない。
+
+known initial patterns:
+
+- uGUI `ScrollRect` の horizontal scrollbar 未配線 null は `optional`。
+- uGUI `Button.m_TargetGraphic` と script の `background` field が同一 Image を指す duplicate は `expected` で、diagnostic severity は info に下げる。
+
+## `inspect_material_asset` response
+
+`inspect_material_asset(asset_path, mode="full", property_names=None)` は既定 `full` では従来の structured material tree / properties shape を返す。`mode="summary"` は shader identity、main texture、requested property values、kind 別 counts、`read_only=true` の narrow projection だけを返し、full tree / properties arrays は返さない。`property_names` は summary mode の selected properties を絞るための opt-in で、unknown property は selected result に合成しない。
+
+未知の `mode` は `INSPECT_MATERIAL_ASSET_INVALID_MODE` を返し、`data.accepted_modes` に `full` / `summary` を載せる。fallback で full mode に戻さない。
+
 ## `validate_materials` response
 
-`validate_materials(scope: str | None = None, include_details: bool = False)` は read-only の静的 Material / shader / TMP / icon-font validator。`scope` は file または directory を受け付け、明示 scope が無い場合だけ activate 済み session scope を使う。明示 scope と session scope のどちらも無い場合は project root scan にフォールバックせず、`MATERIAL_VALIDATION_SCOPE_REQUIRED` を返す。
+`validate_materials(scope: str | None = None, include_details: bool = False, timeout_sec: float | None = None)` は read-only の静的 Material / shader / TMP / icon-font validator。`scope` は file または directory を受け付け、明示 scope が無い場合だけ activate 済み session scope を使う。明示 scope と session scope のどちらも無い場合は project root scan にフォールバックせず、`MATERIAL_VALIDATION_SCOPE_REQUIRED` を返す。完了応答は deterministic evidence order を維持しつつ `progress_summary` / `partial_counts` を返す。timeout 応答は `INSPECTION_TIMEOUT` で、`suggested_next_action` は scope narrowing または `inspect_material_asset(mode="summary")` を案内する。
 
 成功・失敗コード:
 
@@ -98,6 +126,21 @@ diagnostic code:
 | `MATERIAL_FOLDER_POLICY_VIOLATION` | `warning` | loaded `folder_policies` の disallowed extension または classifiable asset kind に該当した。unknown kind は silent。 |
 | `MATERIAL_VALIDATION_READ_ERROR` | `error` | supported Unity text asset を UTF-8 text として読めない等の per-file read failure。 |
 
+## `get_project_status` live/saved status metadata
+
+`get_project_status()` は session / cache / scope の saved state に加え、Bridge が接続済みの場合だけ live `get_editor_state` を呼んで `data.editor_state` と status top-level summary fields を更新する。live 由来の fields は `state_source="live_editor"` を伴う。offline symbol / serialized YAML inspection の authority は saved disk であり、未保存 Unity state はこの status surface で確認する。
+
+`data.blockers[]` は shared blocker vocabulary を使う:
+
+- `watch_dir`
+- `bridge_connection`
+- `compile_or_build`
+- `playmode_transition`
+- `prefab_stage_for_scene_bound_operation`
+- `dirty_or_save_blocker`
+
+各 blocker は `blocker_class`, `state_source`, `message`, `suggested_next_action` を持つ。dirty identity fields (`dirty_scene_paths`, `dirty_prefab_paths`, `dirty_material_paths`, `dirty_asset_paths`) は live Editor API が列挙できた範囲だけ返る。Bridge が connected と報告された後に `get_editor_state` が失敗した場合も status envelope は `success=true` のまま warning となり、diagnostic `data` に `blocker_class` と `suggested_next_action` を載せる。
+
 ## SerializedProperty editor payload (issue #112)
 
 `editor_serialized_property_read` / `editor_serialized_property_list` / `editor_serialized_property_write` は live Editor Bridge の標準エンベロープを返す。Bridge からの raw carrier は `data.serialized_property_json` で、Python MCP wrapper は可能な場合に decode して `data.serialized_property` に同じ payload を格納する。decode できない carrier は envelope の `data.serialized_property_json` として残し、インフラ例外に丸めない。
@@ -124,6 +167,64 @@ diagnostic code:
 
 どちらの tool も `confirm=False` dry-run では audit/report 引数を検証せず Bridge に AssetDatabase state を問い合わせる。`confirm=True` では Python 境界で `project_root` → `out_report` → `change_reason` の順に検証し、`out_report` へ最終 response と同一 JSON を排他作成する。
 
+## Inspector profile responses
+
+The three read-only Inspector profile tools use the standard envelope and require an Editor Bridge for serialized values.
+
+- `inspect_serialized_surface(asset_path, symbol_path=None, include_override_origin=False)` returns `INSPECTOR_SERIALIZED_SURFACE_OK`. `data.surface` contains the last-saved target identity (including Unity's numeric `target.local_file_id` when available), ordered raw properties, current effective values, optional override origins, one-hop ObjectReference identities, and bounded source/custom-editor candidate evidence. Array `element_type` preserves Unity's raw `SerializedProperty.arrayElementType`; profile validation treats Unity's `PPtr<T>` form as compatible with declarative `ObjectReference`, while other element types remain exact matches.
+- `inspect_with_profile(asset_path, view_name, symbol_path=None, include_override_origin=False)` returns one requested semantic view as `INSPECTOR_PROFILE_VIEW_OK`, or one of the distinct authoring/blocker states below. It never expands all views implicitly and never emits a patch plan.
+- `validate_inspector_profile(profile_path, asset_path, symbol_path=None)` returns `INSPECTOR_PROFILE_VALIDATION_RESULT` only after whole-profile validation against a current surface. Mechanical success does not prove semantic truth and does not promote the profile.
+
+A writer-enabled profile path is mechanically addressable only when the same Editor inspection that produced the surface also returns one exact target `local_file_id`, and the existing serialized-value writer accepts every declared operation over the complete view address set with `dry_run=true` and `confirm=false`. The Bridge obtains that identity with `AssetDatabase.TryGetGUIDAndLocalFileIdentifier`; validation does not reparse YAML or re-resolve a symbol path. It then uses the real resource grammar: a Prefab component carries that exact `file_id`, while a ScriptableObject root uses the open-asset `$asset` handle (the raw-surface address contract already guarantees that `.asset` inspection targets the root main asset). Scene writable declarations fail closed because the current scene writer has no exact local-fileID-to-component-handle grammar; semantic scene views remain readable. Writable `fields` entries require `expected_type`; writable `zipped_arrays` columns require `element_type`. Validation translates `set`, `set_element`, `append_row`, and `remove_row` to their actual scalar, element, insertion, or removal addresses and runs the real orchestrator dry-run; a missing ID, unsupported resource address, or rejected probe disables that writable declaration.
+
+Authoring-state `data` includes `recommended_profile_path`, composite target identity and canonical address, `surface_summary`, an `inspect_serialized_surface` retry descriptor shaped as `surface_ref={"tool":"inspect_serialized_surface","args":{...}}`, `source_candidates_status`, `source_candidates_reasons` when degraded, at most two unique source candidates and one active custom-editor candidate, an empty degraded PropertyDrawer candidate set, the required authoring skill, and the next action. A `runtime_script` candidate is emitted only when Unity provides a non-empty project-relative script path; absence remains explicit in the target identity and degradation reasons instead of a null-path candidate. When no current surface exists, `surface_summary.available=false` and no serialized values are fabricated.
+
+Unity's built-in `UnityEditor.GenericInspector` fallback is not a custom-editor candidate. A missing public `MonoScript` path degrades candidate discovery with `The target has no public MonoScript source.`; failure to select an active editor adds `Unity could not select an active editor for the target.` in that deterministic order.
+
+ScriptableObject `.asset` inspection rejects a canonical loaded target while `EditorUtility.IsDirty(target)` is true. The Bridge returns `EDITOR_CTRL_INSPECTOR_SURFACE_DIRTY`, and the MCP boundary reports `INSPECTOR_SURFACE_UNAVAILABLE` with that Bridge diagnostic instead of presenting unsaved in-memory values as the last-saved surface. Finite `Float` properties preserve Unity's `numericType`: `Double` uses `doubleValue`, other floating-point values use `floatValue`, and both are emitted with invariant round-trip formatting. JSON has no non-finite numeric literals, so NaN and positive/negative infinity are represented as `null` rather than producing an invalid surface payload.
+
+`recommended_profile_path` and project-local `profile_path` values are relative to the activated project. A selected bundled profile uses the stable `profiles/<filename>` identifier. Profile discovery and validation failures return stable diagnostics without absolute host or package paths.
+
+When the Bridge is unavailable, full runtime identity and surface validation cannot be completed. Offline screening therefore preserves `INSPECTOR_SURFACE_UNAVAILABLE` when a profile matches the known composite identity, or when a profile without a fixed script GUID/fileID has the same short managed type as the offline script filename. Unknown assembly is not treated as a mismatch at this screening stage. This relaxed check is used only to decide whether `INSPECTOR_PROFILE_REQUIRED` would be premature: normal profile selection is unchanged, unrelated short types still allow authoring, and matching invalid or same-priority ambiguous profiles remain fail-closed surface blockers until the Bridge returns.
+
+For a `fields` view, each rendered field preserves optional declarative `group` and `enum_map` metadata. The raw effective `value` remains unchanged. When `enum_map` is present, `enum_label` is the mapped label for an integer value or an Enum payload's integer `index`; it is `null` when no mapping exists or no integer key can be derived. Profiles do not execute any mapping logic beyond this literal key lookup.
+
+After required request fields are validated, all three operations require an activated Unity project before address validation, profile access, or Editor Bridge dispatch. An inactive session performs no Bridge call and returns `PROJECT_NOT_ACTIVATED` with the operation-specific fixed message:
+
+- `inspect_serialized_surface`: `Activate a Unity project before inspecting a serialized surface.`
+- `inspect_with_profile`: `Activate a Unity project before inspecting with a profile.`
+- `validate_inspector_profile`: `Activate a Unity project before validating an inspector profile.`
+
+| code | success | severity | meaning |
+|------|---------|----------|---------|
+| `INSPECTOR_SERIALIZED_SURFACE_OK` | `true` | `info` | The Editor Bridge returned the last-saved raw surface. |
+| `INSPECTOR_PROFILE_VIEW_OK` | `true` | `info` or `warning` | Exactly one requested view rendered; warning indicates a current zipped-array mismatch. |
+| `INSPECTOR_PROFILE_VALIDATION_RESULT` | `true` | `info` or `warning` | The explicit profile is mechanically valid; warning retains current length mismatches and disables affected writes. |
+| `PROJECT_NOT_ACTIVATED` | `false` | `error` | No Unity project is active; the operation stops before address, profile, or Editor Bridge work. |
+| `INSPECTOR_SURFACE_ADDRESS_INVALID` | `false` | `error` | The component/ScriptableObject address shape is invalid; `data.field` identifies the offending field. |
+| `INSPECTOR_SURFACE_TARGET_NOT_FOUND` | `false` | `error` | The last-saved asset/object/component cannot be resolved; `data.address` preserves the request. |
+| `INSPECTOR_SURFACE_UNAVAILABLE` | `false` | `warning` | The current Editor-authoritative surface is unavailable. No YAML or live-state fallback is used. |
+| `INSPECTOR_PROFILE_REQUIRED` | `false` | `info` | No profile identity matches; a complete authoring payload is returned. |
+| `INSPECTOR_PROFILE_INCOMPLETE` | `false` | `info` | The matching valid profile lacks the requested view; available views and unrelated length warnings are retained. |
+| `INSPECTOR_PROFILE_INVALID` | `false` | `warning` | Discovery conflict, unsafe file, schema error, or whole-profile mechanical failure blocks rendering. |
+| `INSPECTOR_VIEW_NAME_REQUIRED` | `false` | `error` | A present but empty `view_name` is rejected before target/profile/Bridge work. |
+
+`INSPECTOR_ZIPPED_ARRAY_LENGTH_MISMATCH` is a warning entry carrying each current length. It does not invalidate the declarative profile by itself, but the affected view is non-writable. `INSPECTOR_PROFILE_PATH_UNSAFE` is the mechanical diagnostic used when an explicit profile path escapes its allowed root or is not a regular non-symlink JSON file.
+
+## ClientSim lifecycle response
+
+`validate_runtime(profile="clientsim")` is an explicit, audited Play Mode operation. Before entering Play Mode, the requested scene must already be the only loaded scene and the active scene; otherwise `CLIENTSIM_ACTIVE_SCENE_REQUIRED` is returned without changing Editor state. The Bridge fixes the absolute operation deadline before snapshot/preflight work, snapshots the current in-memory scene, rejects a dirty scene unless `allow_dirty_before=true`, verifies the public ClientSim settings/readiness API, leases the previous `EditorSceneManager.playModeStartScene`, temporarily sets that property to `null`, and enters Play Mode without opening or saving another scene. If preflight consumes the deadline, `CLIENTSIM_PREFLIGHT_TIMEOUT` is returned before a lease or Play Mode change. Readiness excludes persistent Resources prefab assets from `Resources.FindObjectsOfTypeAll` and requires exactly one non-persistent component in a valid loaded scene before invoking public `IsNetworkReady`.
+
+The operation and an independent restoration lease are persisted in `SessionState` across domain reloads. A terminal outcome always retains ownership through Play Mode exit, restores the previous start-scene setting by GUID, captures the post-exit scene, and publishes the response with a strict atomic temp-file move. A failed restoration retains both retry evidence and the lease and publishes no response until restoration succeeds. Persisted state is cleared from the producer's successful publication result, not from a racy post-publication existence check; this path never uses the synchronous direct-write fallback. Python's file-IPC polling deadline is the requested ClientSim operation timeout plus a fixed 30-second exit-cleanup grace and 5-second dispatch margin; the operation timeout sent to Unity is not extended.
+
+`data.executed` is a required boolean on every Bridge `run_clientsim` response. A pre-Play rejection has `executed=false` and does not require a side-effect report; `executed=true` requires a structurally complete `data.side_effect_report`. The report distinguishes `before`, `runtime`, and `after` root/hierarchy/component snapshots. `added_*` / `removed_*` describe runtime-vs-before changes; `residual_added_*` / `residual_removed_*` describe after-vs-before changes that remain after cleanup. Differences preserve duplicate multiplicity, so an added same-name sibling or repeated same-type component remains observable. Dirty-asset candidates are collected only from already loaded persistent dirty objects; observation never loads every project asset. `asset_change_candidates` is the symmetric before/after multiset difference, so both newly dirty and newly clean or unloaded assets remain observable.
+
+Python cleanup classification requires exact booleans for `diff_complete` and dirty flags, non-boolean integers for dirty counts, and string arrays for `diff_warnings`, every `residual_*` field, and `asset_change_candidates`. A missing or malformed executed report produces `CLIENTSIM_SIDE_EFFECT_DIFF_UNAVAILABLE` instead of being treated as clean. `diff_complete=false` also produces that diagnostic. When only the runtime snapshot is unavailable, valid before/after residual, dirty, and asset differences still additionally produce `CLIENTSIM_SIDE_EFFECT_DIFF_DETECTED`; when the before or after snapshot is unavailable, those derived cleanup differences are not trusted. Expected runtime-only ClientSim objects remain evidence without a cleanup warning. A successful smoke check returns `RUN_CLIENTSIM_OK`; package/API absence or disabled settings returns a pre-Play skip response.
+
+## Open Prefab transaction response (#156)
+
+Exactly one `kind="prefab"`, `mode="open"` resource with `confirm=true` returns `data.transaction`. `status` is `not_started`, `committed`, `rolled_back`, or `rollback_failed`. `report_written=true` means the JSON at `out_report` equals the complete terminal response. Across public patch responses, `data.target`, every `data.targets[]` item, every `data.resources[].path`, and nested `steps[*].result.data.target` values are project-relative POSIX paths. Open Prefab terminal `out_report`, successful `rollback_result.data.target`, and the same path-bearing fields inside `original_result` follow that boundary; contained resolved paths remain internal to reservation, persistence, restoration, and Bridge execution. A successful rollback restores the exact disk preimage and then synchronizes the Editor AssetDatabase; `rollback_result.data.auto_refresh` is exactly `"true"`. Refresh failure or an unavailable Bridge makes the terminal `status="rollback_failed"`, `severity="critical"`, `code="PATCH_ROLLBACK_FAILED"`, with `rollback_result.data.boundary="rollback_sync"` and `state_unknown=true`. If raw applied step data cannot be projected during rollback, the exact preimage restoration and refresh remain authoritative, `original_result` becomes the sanitized `data.boundary="projection"` failure, and the `rolled_back` terminal is still persisted instead of leaking a projection exception. `rollback_result` retains restoration evidence, and `diagnostics_baseline` reports exact `new` / `known` / `resolved` stable-key partitions. `created_results` contains only selected `instantiate_prefab` result handles: post-save `symbol_path`, root GameObject/Transform file IDs, source asset path/GUID, and actual component/property override pairs. The host accepts a successful Bridge response only when `applied == op_count` and those selected handles exactly match unique, non-empty `created_results` identities; it deliberately does not enumerate every created descendant or component.
+
 ## エラーコード規約
 
 | コード | 説明 |
@@ -142,9 +243,31 @@ diagnostic code:
 | `MATERIAL_VALIDATION_SCOPE_NOT_FOUND` | `validate_materials` の resolved scope が存在しない、project root 外、または usable scope として扱えない場合。`severity="error"`。 |
 | `MATERIAL_RULES_INVALID` | project root の `config/material_validation_rules.json` が unreadable / invalid JSON / schema 不一致だった場合。`validate_materials` は validation scan を開始せず `severity="error"` で停止する。 |
 | `MATERIAL_VALIDATION_READ_ERROR` | `validate_materials` が in-scope supported Unity text asset の read/decode failure を検出し、validation の信頼性を保てない場合。`severity="error"`。 |
+| `INSPECTION_TIMEOUT` | `inspect_hierarchy` / `inspect_wiring` / `validate_all_wiring` / `validate_materials` が timeout 後に reliable partial data を返す場合。`data.progress_summary`, `data.partial_counts`, `data.current_or_slowest_step`, `data.suggested_next_action` を含み、incomplete scan では `diagnostics_baseline` を載せない。 |
+| `INSPECT_MATERIAL_ASSET_INVALID_MODE` | `inspect_material_asset` が `full` / `summary` 以外の mode を受け取った場合。`data.accepted_modes` に受理値を載せ、material parse は開始しない。 |
 | `RUN001` | Udon runtime exception |
 | `RUN002` | ClientSim startup failure |
+| `RUN_CLIENTSIM_OK` / `RUN_CLIENTSIM_SKIPPED` / `RUN_CLIENTSIM_DISABLED` | ClientSim reached public network-ready state, or was skipped before Play because the package/API is unavailable or ClientSim is disabled. |
+| `CLIENTSIM_CONFIRM_REQUIRED` | `profile="clientsim"`, `confirm=true`, or non-empty `change_reason` is missing; Play Mode is not entered. |
+| `CLIENTSIM_ALREADY_RUNNING` | Another persisted ClientSim operation or restoration lease owns cleanup. |
+| `CLIENTSIM_EDITOR_NOT_READY` | Unity is already playing or changing Play Mode. |
+| `CLIENTSIM_ACTIVE_SCENE_REQUIRED` | The requested scene is not the sole loaded active scene. |
+| `CLIENTSIM_DIRTY_SCENE` | The active scene is dirty while `allow_dirty_before=false`. |
+| `CLIENTSIM_START_SCENE_UNRESTORABLE` / `CLIENTSIM_RESTORE_FAILED` | The previous Play Mode start scene cannot be leased or restored safely. |
+| `CLIENTSIM_PREFLIGHT_TIMEOUT` | Snapshot/settings preflight consumed the operation deadline; no restoration lease is acquired and Play Mode is not entered. |
+| `CLIENTSIM_ENTER_PLAY_MODE_FAILED` / `CLIENTSIM_ENTER_PLAY_MODE_TIMEOUT` | Unity rejected Play Mode entry or did not enter before the operation deadline. |
+| `CLIENTSIM_READY_CHECK_FAILED` / `CLIENTSIM_READY_TIMEOUT` | Public ClientSim readiness inspection failed or did not become ready before the operation deadline. |
+| `CLIENTSIM_EXIT_PLAY_MODE_FAILED` / `CLIENTSIM_EXIT_PLAY_MODE_TIMEOUT` | Play Mode exit failed or exceeded the cleanup deadline; restoration ownership remains persisted until stable Edit Mode. |
+| `CLIENTSIM_UNEXPECTED_PLAY_MODE_EXIT` / `CLIENTSIM_STATE_INVALID` / `CLIENTSIM_STATE_CORRUPT` | The persisted lifecycle and actual Editor state diverged; the Bridge exits/restores before responding. |
+| `CLIENTSIM_SIDE_EFFECT_DIFF_UNAVAILABLE` | Cleanup evidence is missing, malformed, or incomplete. This warning never classifies an executed run as clean. |
+| `CLIENTSIM_SIDE_EFFECT_DIFF_DETECTED` | Trusted before/after evidence contains residual hierarchy/component changes, dirty-state changes, or symmetric dirty-asset candidate changes. It may accompany `CLIENTSIM_SIDE_EFFECT_DIFF_UNAVAILABLE` when only the runtime snapshot is missing. |
 | `CHANGE_REASON_REQUIRED` | `confirm=True` で呼ばれた書き込み系ツールが `change_reason` を欠いた場合。`editor_run_script` は `confirm=False` や空文字の `change_reason` も同コードで拒否する（監査トレイル強制）。 |
+| `OUT_REPORT_REQUIRED` / `OUT_REPORT_OUTSIDE_PROJECT` / `OUT_REPORT_WRITE_FAILED` | `set_properties` confirmed report preflight uses `OUT_REPORT_REQUIRED`, `OUT_REPORT_OUTSIDE_PROJECT`, and `OUT_REPORT_WRITE_FAILED`: missing report は required、project 外は outside-project、missing/non-directory parent、existing/unwritable reservation は write-failed として、いずれも writer dispatch 前に拒否する。Exactly-one open Prefab transaction も同じ path partition を共有し、さらに transaction 固有の one-shot reservation child の launch/timeout/exit/status/create/release failure を mutation 前に `OUT_REPORT_WRITE_FAILED` で拒否する。descriptor は child のみが所有して終了時に解放され、parent は close/retry しない。post-exit cleanup failure で残った空予約は外部除去まで同一パスを占有する。transaction の terminal persistence failure は rollback 後も同 code を `data.transaction.report_result` に保持し、`report_written=false` にする。 |
+| `PATCH_APPLY_RESULT` | SerializedValue apply boundary の stable terminal code。`set_property` / `set_properties` の asset read・symbol-tree parse preflight 例外は `data.boundary="preflight"` を返し、resolved host path や raw exception を公開せず writer dispatch 前に停止する。dedicated writer exception は `data.boundary="apply"` と confirm 状態に応じた `data.state_unknown` を返す。両 writer の dedicated writer が例外を送出せず `success=false` を返し、`data.read_only=false` の場合も、公開応答は `data.state_unknown=true` を追加する。caller は後続 write の前に serialized state を再検査する。Open Prefab transaction では通常 terminal として使用し、preflight failure は `status="not_started"`、post-mutation failure + restoration success は exact message `patch.apply validation failed; transaction rolled back.` と `status="rolled_back"` を返す。 |
+| `PATCH_ROLLBACK_FAILED` | Post-mutation failure 後の exact preimage restoration も失敗した critical terminal。exact message `patch.apply validation failed and automatic rollback failed.` と元 failure / rollback result / report result を保持する。 |
+| `ASSET_RENAME_INVALID_PATH` | offline `rename_asset` が project root 外へ解決される source asset path を受け取った場合。`data.input_path` / `data.normalized_candidate_path` / `data.resolution_root` / `data.reason` と `rename_source_resolution` diagnostic を返し、raw `ValueError` は公開境界へ出さない。 |
+| `ASSET_RENAME_INVALID_NAME` | offline `rename_asset` が `new_name` に bare filename 以外（path separator、parent segment、absolute / drive-rooted name、project root 外 destination）を受け取った場合。cross-directory move は `rename_asset` の責務外とし、`data.input_name` と `data.reason` を返して source asset を変更しない。 |
+| `ASSET_OP_WRITE_FAILED` | offline `copy_asset` / `rename_asset` の confirmed write / rename / rollback が失敗した場合。cleanup unlink / rollback failure は元の write failure を置き換えず `diagnostics[]` に追加する。 |
 | `ASSET_DELETE_DRY_RUN` | `delete_asset` / `delete_assets` の dry-run 計画成功。`data.targets[]` に asset / `.meta` / reference impact、`data.pre_delete_broken_references` に削除前 baseline、`data.related_candidates[]` に deterministic UdonSharp generated program 候補、`data.decision_required[]` に ambiguous UdonSharp generated program 候補の判断材料を返す。 |
 | `ASSET_DELETE_APPLIED` | Unity Editor Bridge の `delete_assets` action が AssetDatabase delete を完了した成功応答。`data.broken_reference_delta` を必ず返し、delta 増加時も AssetDatabase 成功なら failure に変換しない。 |
 | `ASSET_DELETE_NOT_FOUND` | 削除対象の `Assets/...` asset が存在しないため dry-run / apply を拒否した場合。 |
@@ -164,18 +287,21 @@ diagnostic code:
 | `ASSET_SOURCE_NOT_FOUND` / `ASSET_SOURCE_LOAD_FAILED` / `ASSET_SOURCE_IS_FOLDER` / `ASSET_DESTINATION_EXISTS` / `ASSET_DESTINATION_META_EXISTS` / `ASSET_DESTINATION_PARENT_NOT_FOUND` / `ASSET_DESTINATION_PARENT_NOT_FOLDER` | Bridge move dry-run / confirm が AssetDatabase source/destination/parent state で拒否した場合。source `.meta` だけが存在する場合は `ASSET_SOURCE_NOT_FOUND` と `data.meta_exists` で evidence を返す。 |
 | `ASSET_MOVE_FAILED` / `ASSET_MOVE_SAVE_OR_REFRESH_FAILED` / `ASSET_MOVE_POSTCHECK_FAILED` / `ASSET_MOVE_DIRTY_POSTCHECK_FAILED` | Confirm move 開始後の AssetDatabase.MoveAsset error string、SaveAssets/Refresh exception、GUID/name/load/dirty final postcheck failure。残存または不明状態は `PARTIAL_SIDE_EFFECT_REQUIRES_REVIEW` warning diagnostic を伴う。 |
 | `UNITY_BRIDGE_INVALID_RESPONSE` | #116 Python projector が Bridge root/envelope/diagnostics/success data の malformed response を検出した場合。`data.state_unknown=true` と `PARTIAL_SIDE_EFFECT_REQUIRES_REVIEW` diagnostic を返す。 |
-| `OUT_REPORT_WRITE_FAILED` | #116 confirmed operation は完了したが report file の exclusive final-response write に失敗した場合。元 operation result/error を `data.operation_result` または `data.operation_error` に保持し、rollback は行わない。 |
+| `OUT_REPORT_WRITE_FAILED` | `set_properties` または #116 confirmed operation が report destination の preflight/reservation に失敗した場合、または operation 完了後に exclusive final-response write を確定できない場合。preflight failure は mutation 前に停止する。`set_properties` の dedicated writer が例外を送出した場合は raw exception を公開せず、`PATCH_APPLY_RESULT`、`data.boundary="apply"`、`data.state_unknown=true` の terminal failure を予約済み report に確定する。その failure の確定自体に失敗した場合は `OUT_REPORT_WRITE_FAILED` の `data.operation_error` に保持する。その他の post-operation failure も元 operation result/error を `data.operation_result` または `data.operation_error` に保持し、raw filesystem path/exception を公開しない。 |
 | `SER003` | `set_properties` が dry-run 段階でチェーン上に解決できない property path を検出した場合（issue #109）。`severity="error"`、`data.suggestions` に近似候補（最大 5 件）、`diagnostics[].detail` に `property_not_found` を載せる。issue #41 で `set_properties` は `symbol_path` を直接 component に解決するため、component 不在は `SYMBOL_NOT_FOUND` で表面化する（`SER003` の `component_not_found` 経路は廃止）。 |
-| `SER_APPLY_REJECTED` | `patch_apply` の Prefab 経路で `SerializedObject.ApplyModifiedPropertiesWithoutUndo()` 直前のバリデーション（`TryApplyOp`）が op を拒否した場合（issue #298）。`severity="error"`。`diagnostics` 配列には各失敗 op の `BridgeDiagnostic` に加え、`property_path` / `component_type` / `attempted_value` を `evidence` に埋めた summary 行が末尾に追加される。`AudioSource.m_Priority` 等の既知トラップを応答だけで診断できることが目的。issue #37 以降、`set` op の `file_id` ターゲットがアセット内のどの component にも解決しない場合も、この経路で `apply_error` diagnostic（未解決 fileID を `evidence` に明示、`location` は `ops[N].file_id`）として fail-fast で表面化する。Editor 例外路は `UNITY_BRIDGE_APPLY_EXCEPTION` のまま（未捕捉例外と rejection を別コードで区別）。 |
+| `SER_APPLY_REJECTED` | dedicated serialized-value 経路の `set` / `insert_array_element` / `remove_array_element` が `SerializedObject.ApplyModifiedPropertiesWithoutUndo()` 直前のバリデーション（`TryApplyOp`）で拒否された場合（issue #298）。`severity="error"`。`diagnostics` 配列には各失敗 op の `BridgeDiagnostic` に加え、`property_path` / `component_type` / `attempted_value` を `evidence` に埋めた summary 行が末尾に追加される。`AudioSource.m_Priority` 等の既知トラップを応答だけで診断できることが目的。issue #37 以降、serialized-value op にある `file_id` がアセット内のどの component にも解決しない場合も、この経路で `apply_error` diagnostic（未解決 fileID を `evidence` に明示、`location` は `ops[N].file_id`）として fail-fast で表面化する。Editor 例外路は `UNITY_BRIDGE_APPLY_EXCEPTION` のまま（未捕捉例外と rejection を別コードで区別）。 |
 | `BRIDGE_LEGACY_SCHEMA_REJECTED` | `unity_patch_bridge` がレガシー形状（トップレベル `target` キー）のリクエストを受け取った場合。v2 スキーマ（`{plan_version, resources, ops}`）のみを受け入れる。互換レイヤは存在しない。 |
 | `EDITOR_CTRL_RUN_SCRIPT_OK` / `..._COMPILE` / `..._RUNTIME` / `..._BAD_ID` | `editor_run_script` の成功 / コンパイル失敗 / 実行例外 / 不正 temp id。 |
 | `EDITOR_CTRL_RUN_SCRIPT_RECOVERY` | 同一スニペットが 2 回連続で `..._COMPILE` 拒否された場合に発火する `severity="warning"` 応答（issue #116）。Bridge は temp ディレクトリを掃除し、`AssetDatabase.Refresh` で再コンパイルを要求した上で、診断ペイロード（`diagnostic_compiling` / `diagnostic_temp_files` / `diagnostic_last_domain_reload`）を返す。次回呼び出しはクリーンな状態で再試行できる。 |
 | `EDITOR_CTRL_ADD_COMPONENT_REUSED` / `..._RELINKED` | `editor_add_component` が UdonSharp 派生型に対して呼ばれ、既存ペアが見つかった（reuse）または孤立 proxy に新規 UdonBehaviour を再リンクした（relinked）場合の `severity="info"` 成功応答（issue #103）。 |
+| `EDITOR_CTRL_UDON_ADD_COMPONENT_FAILED` | `editor_add_component` / `editor_add_udonsharp_component` が UdonSharp の setup-aware add または孤立 proxy の再リンクを完了できなかった場合の `severity="error"`。`editor_add_component` は UdonSharp 派生型を通常の `Undo.AddComponent` へフォールバックせず、ProgramAsset readiness、`UdonSharpUndo.AddComponent`、`RunBehaviourSetupWithUndo`、再取得した backing UdonBehaviour の postcondition のいずれかが失敗した時点で停止する。 |
 | `EDITOR_CTRL_CAMERA_CONFLICT` | `editor_set_camera` が `position` と `pivot` を同時指定、または `look_at` を `position` 抜きで指定した場合（issue #112）。 |
 | `EDITOR_CTRL_CAMERA_PROJECTION_TRANSITION` | `editor_set_camera(position=...)` が SceneView projection transition 中と判定された場合（SceneView と backing Camera の orthographic state mismatch、または perspective `fieldOfView` が non-finite / non-positive）。`severity="error"`。Bridge は private SceneView internals を reflection せず、自動 wait / retry もせず、caller に settle 後の再試行を要求する。 |
 | `EDITOR_CTRL_INVALID_CLASSIFICATION_FILTER` | `editor_console` の `classification_filter` が `all` / `non_fatal` / `fatal` 以外の場合（issue #117）。 |
 | `EDITOR_CTRL_INVALID_PHASE_FILTER` | `editor_console` の `phase_filter` が `all` / `edit` / `play` / `build` 以外の場合（issue #239）。`severity="error"`、メッセージで受理可能な値を列挙。Bridge 境界で buffer に触れる前に拒否される。 |
-| `EDITOR_CTRL_EDITOR_STATE_OK` | `get_editor_state` action の成功時応答コード（issue #239 / issue #40）。`get_project_status` MCP ツールと offline symbol-reference ツールから内部的に発火し、`data.editor_state` に play/build/compile bool フラグ、`has_unsaved_changes`、active scene / Prefab Stage、`active_stage_kind`、dirty state、project root identity、bridge/plugin/session/instance identity を返す。live Bridge response には `operator_context` が同梱され、caller は reached Unity project root と expected ProjectSession root を比較できる。通常は `severity="info"`、ただし scene / stage / dirty-category enumeration が一部失敗して `EDITOR_STATE_ENUMERATION_LIMITED` diagnostics を含む場合は successful warning response になり、`get_project_status` もその diagnostic と warning severity を引き継ぐ。 |
+| `EDITOR_CTRL_EDITOR_STATE_OK` | `get_editor_state` action の成功時応答コード（issue #239 / issue #40 / issue #155）。`get_project_status` MCP ツールと offline symbol-reference ツールから内部的に発火し、`data.editor_state` に play/build/compile bool フラグ、`has_unsaved_changes`、active scene / Prefab Stage、`active_stage_kind`, `state_source="live_editor"`, dirty scene/prefab/material/asset identity arrays、project root identity、bridge/plugin/session/instance identity を返す。live Bridge response には `operator_context` が同梱され、caller は reached Unity project root と expected ProjectSession root を比較できる。通常は `severity="info"`、ただし scene / stage / dirty-category enumeration が一部失敗して `EDITOR_STATE_ENUMERATION_LIMITED` diagnostics を含む場合は successful warning response になり、`get_project_status` もその diagnostic と warning severity を引き継ぐ。 |
+| `EDITOR_CTRL_INSPECTOR_SURFACE_DIRTY` | `.asset` の canonical ScriptableObject が未保存変更を持つため、last-saved raw surface として読み取れない場合。`severity="error"`。Bridge は live 値を返さず、MCP は `INSPECTOR_SURFACE_UNAVAILABLE` と本コードの diagnostic を返す。 |
+| `EDITOR_BRIDGE_WATCH_DIR_MISSING` / `EDITOR_BRIDGE_WATCH_DIR_NOT_FOUND` / `EDITOR_BRIDGE_TIMEOUT` | Bridge transport setup / response timeout failure。`data.blocker_class` は `watch_dir` または `bridge_connection`、`data.suggested_next_action` は watch-dir setup または Unity Bridge watcher 確認を案内する。`EDITOR_BRIDGE_TIMEOUT_INVALID` は caller input error なので blocker metadata を付けない。 |
 | `EDITOR_BRIDGE_PROJECT_ROOT_MISMATCH` | Session-aware Editor Bridge call が expected ProjectSession root と `operator_context.project_root` の不一致、または actual root の欠落を検出した場合の typed failure / diagnostic。通常の bridge operations では `success=false`, `severity="error"` で返し、`data.action`, `data.request_id`, `data.expected_project_root`, `data.actual_project_root`（存在する場合）、bridge session/instance identity を含める。`get_project_status` では status envelope 自体を成功扱いに保ち、`project_root_consistent=false` と warning diagnostic で wrong-editor 接続を診断可能にする。 |
 | `EDITOR_CTRL_HIERARCHY_PATH_AMBIGUOUS` | Editor Bridge が `hierarchy_path` セグメントを解決した際、同名兄弟に一致し `#N` 一意化トークンを伴わない場合（issue #38, #59）。`severity="error"`。first-sibling を勝手に選ばず解決を停止する。issue #59 以降、全ての hierarchy-bound ハンドラが ambiguity-aware な `TryResolveGameObjectInActiveStage` 経由で解決するため、曖昧パスはこの dedicated envelope で一律に拒否される（`hierarchy_path` を取らない `list_roots` / `find_renderers_by_material` は解決を行わないため対象外）。真の miss は各ハンドラ既存の `*_NOT_FOUND` を返す。 |
 | `EDITOR_CTRL_UDON_ADD_NO_PROGRAM_ASSET` | `editor_add_udonsharp_component` が対象型の UdonSharpProgramAsset を見つけられなかった場合（issue #46）。`severity="error"`。メッセージは `editor_create_udon_program_asset` で生成し再コンパイルする次手順を明示する。raw な `NullReferenceException` 文字列を漏らさない。 |

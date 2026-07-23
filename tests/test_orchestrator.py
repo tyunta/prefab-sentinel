@@ -132,7 +132,8 @@ class InspectVariantTests(unittest.TestCase):
         self.assertTrue(result.success)
         self.assertEqual(5, len(result.data["steps"]))
         self.assertEqual(
-            "resolve_chain_values_with_origin", result.data["steps"][4]["step"],
+            "resolve_chain_values_with_origin",
+            result.data["steps"][4]["step"],
         )
 
     def test_show_origin_false_keeps_four_steps(self) -> None:
@@ -151,13 +152,16 @@ class DiffVariantTests(unittest.TestCase):
     """Tests for diff_variant() orchestrator method."""
 
     def _chain_response(
-        self, values: list[dict], chain: list[dict] | None = None,
+        self,
+        values: list[dict],
+        chain: list[dict] | None = None,
     ) -> ToolResponse:
         return _ok_response(
             code="PVR_CHAIN_VALUES_WITH_ORIGIN",
             data={
                 "variant_path": "Assets/Leaf.prefab",
-                "chain": chain or [
+                "chain": chain
+                or [
                     {"path": "Assets/Leaf.prefab", "depth": 0},
                     {"path": "Assets/Base.prefab", "depth": 1},
                 ],
@@ -169,15 +173,30 @@ class DiffVariantTests(unittest.TestCase):
 
     def test_returns_only_leaf_overrides(self) -> None:
         orch = _make_orchestrator()
-        orch.prefab_variant.resolve_chain_values_with_origin.return_value = (
-            self._chain_response([
-                {"target_file_id": "42", "property_path": "speed",
-                 "value": "5.0", "origin_path": "Assets/Leaf.prefab", "origin_depth": 0},
-                {"target_file_id": "42", "property_path": "speed",
-                 "value": "3.0", "origin_path": "Assets/Base.prefab", "origin_depth": 1},
-                {"target_file_id": "42", "property_path": "health",
-                 "value": "100", "origin_path": "Assets/Base.prefab", "origin_depth": 1},
-            ])
+        orch.prefab_variant.resolve_chain_values_with_origin.return_value = self._chain_response(
+            [
+                {
+                    "target_file_id": "42",
+                    "property_path": "speed",
+                    "value": "5.0",
+                    "origin_path": "Assets/Leaf.prefab",
+                    "origin_depth": 0,
+                },
+                {
+                    "target_file_id": "42",
+                    "property_path": "speed",
+                    "value": "3.0",
+                    "origin_path": "Assets/Base.prefab",
+                    "origin_depth": 1,
+                },
+                {
+                    "target_file_id": "42",
+                    "property_path": "health",
+                    "value": "100",
+                    "origin_path": "Assets/Base.prefab",
+                    "origin_depth": 1,
+                },
+            ]
         )
         result = orch.diff_variant("Assets/Leaf.prefab")
         self.assertTrue(result.success)
@@ -188,13 +207,23 @@ class DiffVariantTests(unittest.TestCase):
 
     def test_includes_base_value(self) -> None:
         orch = _make_orchestrator()
-        orch.prefab_variant.resolve_chain_values_with_origin.return_value = (
-            self._chain_response([
-                {"target_file_id": "42", "property_path": "speed",
-                 "value": "5.0", "origin_path": "Assets/Leaf.prefab", "origin_depth": 0},
-                {"target_file_id": "42", "property_path": "speed",
-                 "value": "3.0", "origin_path": "Assets/Base.prefab", "origin_depth": 1},
-            ])
+        orch.prefab_variant.resolve_chain_values_with_origin.return_value = self._chain_response(
+            [
+                {
+                    "target_file_id": "42",
+                    "property_path": "speed",
+                    "value": "5.0",
+                    "origin_path": "Assets/Leaf.prefab",
+                    "origin_depth": 0,
+                },
+                {
+                    "target_file_id": "42",
+                    "property_path": "speed",
+                    "value": "3.0",
+                    "origin_path": "Assets/Base.prefab",
+                    "origin_depth": 1,
+                },
+            ]
         )
         result = orch.diff_variant("Assets/Leaf.prefab")
         diff = result.data["diffs"][0]
@@ -205,11 +234,16 @@ class DiffVariantTests(unittest.TestCase):
     def test_new_property_has_no_base(self) -> None:
         """A property added only in the variant has no base value."""
         orch = _make_orchestrator()
-        orch.prefab_variant.resolve_chain_values_with_origin.return_value = (
-            self._chain_response([
-                {"target_file_id": "42", "property_path": "newField",
-                 "value": "hello", "origin_path": "Assets/Leaf.prefab", "origin_depth": 0},
-            ])
+        orch.prefab_variant.resolve_chain_values_with_origin.return_value = self._chain_response(
+            [
+                {
+                    "target_file_id": "42",
+                    "property_path": "newField",
+                    "value": "hello",
+                    "origin_path": "Assets/Leaf.prefab",
+                    "origin_depth": 0,
+                },
+            ]
         )
         result = orch.diff_variant("Assets/Leaf.prefab")
         self.assertEqual(1, result.data["diff_count"])
@@ -219,26 +253,44 @@ class DiffVariantTests(unittest.TestCase):
 
     def test_non_variant_passes_through_error(self) -> None:
         orch = _make_orchestrator()
-        orch.prefab_variant.resolve_chain_values_with_origin.return_value = (
-            _error_response("PVR404")
-        )
+        orch.prefab_variant.resolve_chain_values_with_origin.return_value = _error_response("PVR404")
         result = orch.diff_variant("Assets/NotExist.prefab")
         self.assertFalse(result.success)
         self.assertEqual("PVR404", result.code)
 
     def test_component_filter(self) -> None:
         orch = _make_orchestrator()
-        orch.prefab_variant.resolve_chain_values_with_origin.return_value = (
-            self._chain_response([
-                {"target_file_id": "42", "property_path": "moveSpeed",
-                 "value": "5.0", "origin_path": "Assets/Leaf.prefab", "origin_depth": 0},
-                {"target_file_id": "42", "property_path": "moveSpeed",
-                 "value": "3.0", "origin_path": "Assets/Base.prefab", "origin_depth": 1},
-                {"target_file_id": "42", "property_path": "jumpForce",
-                 "value": "10.0", "origin_path": "Assets/Leaf.prefab", "origin_depth": 0},
-                {"target_file_id": "42", "property_path": "jumpForce",
-                 "value": "8.0", "origin_path": "Assets/Base.prefab", "origin_depth": 1},
-            ])
+        orch.prefab_variant.resolve_chain_values_with_origin.return_value = self._chain_response(
+            [
+                {
+                    "target_file_id": "42",
+                    "property_path": "moveSpeed",
+                    "value": "5.0",
+                    "origin_path": "Assets/Leaf.prefab",
+                    "origin_depth": 0,
+                },
+                {
+                    "target_file_id": "42",
+                    "property_path": "moveSpeed",
+                    "value": "3.0",
+                    "origin_path": "Assets/Base.prefab",
+                    "origin_depth": 1,
+                },
+                {
+                    "target_file_id": "42",
+                    "property_path": "jumpForce",
+                    "value": "10.0",
+                    "origin_path": "Assets/Leaf.prefab",
+                    "origin_depth": 0,
+                },
+                {
+                    "target_file_id": "42",
+                    "property_path": "jumpForce",
+                    "value": "8.0",
+                    "origin_path": "Assets/Base.prefab",
+                    "origin_depth": 1,
+                },
+            ]
         )
         result = orch.diff_variant("Assets/Leaf.prefab", component_filter="move")
         self.assertEqual(1, result.data["diff_count"])
@@ -251,9 +303,7 @@ class DiffVariantTests(unittest.TestCase):
             {"path": "Assets/Mid.prefab", "depth": 1},
             {"path": "Assets/Base.prefab", "depth": 2},
         ]
-        orch.prefab_variant.resolve_chain_values_with_origin.return_value = (
-            self._chain_response([], chain=chain)
-        )
+        orch.prefab_variant.resolve_chain_values_with_origin.return_value = self._chain_response([], chain=chain)
         result = orch.diff_variant("Assets/Leaf.prefab")
         self.assertEqual(chain, result.data["chain"])
         self.assertEqual(0, result.data["diff_count"])
@@ -261,19 +311,35 @@ class DiffVariantTests(unittest.TestCase):
     def test_closest_ancestor_used_as_base(self) -> None:
         """In a 3-level chain, the mid-level value is used as base, not the root."""
         orch = _make_orchestrator()
-        orch.prefab_variant.resolve_chain_values_with_origin.return_value = (
-            self._chain_response([
-                {"target_file_id": "42", "property_path": "speed",
-                 "value": "9.0", "origin_path": "Assets/Leaf.prefab", "origin_depth": 0},
-                {"target_file_id": "42", "property_path": "speed",
-                 "value": "7.0", "origin_path": "Assets/Mid.prefab", "origin_depth": 1},
-                {"target_file_id": "42", "property_path": "speed",
-                 "value": "3.0", "origin_path": "Assets/Base.prefab", "origin_depth": 2},
-            ], chain=[
+        orch.prefab_variant.resolve_chain_values_with_origin.return_value = self._chain_response(
+            [
+                {
+                    "target_file_id": "42",
+                    "property_path": "speed",
+                    "value": "9.0",
+                    "origin_path": "Assets/Leaf.prefab",
+                    "origin_depth": 0,
+                },
+                {
+                    "target_file_id": "42",
+                    "property_path": "speed",
+                    "value": "7.0",
+                    "origin_path": "Assets/Mid.prefab",
+                    "origin_depth": 1,
+                },
+                {
+                    "target_file_id": "42",
+                    "property_path": "speed",
+                    "value": "3.0",
+                    "origin_path": "Assets/Base.prefab",
+                    "origin_depth": 2,
+                },
+            ],
+            chain=[
                 {"path": "Assets/Leaf.prefab", "depth": 0},
                 {"path": "Assets/Mid.prefab", "depth": 1},
                 {"path": "Assets/Base.prefab", "depth": 2},
-            ])
+            ],
         )
         result = orch.diff_variant("Assets/Leaf.prefab")
         diff = result.data["diffs"][0]
@@ -286,7 +352,6 @@ class ReadTargetFilePathResolutionTests(unittest.TestCase):
     """_read_target_file resolves relative paths via project_root."""
 
     def test_relative_path_resolved_via_project_root(self) -> None:
-
 
         with tempfile.TemporaryDirectory() as tmpdir:
             assets = Path(tmpdir) / "Assets"
@@ -303,7 +368,6 @@ class ReadTargetFilePathResolutionTests(unittest.TestCase):
 
     def test_absolute_path_is_rejected(self) -> None:
 
-
         with tempfile.TemporaryDirectory() as tmpdir:
             target = Path(tmpdir) / "Test.prefab"
             target.write_text("%YAML 1.1\n--- !u!1 &100\nGameObject:\n  m_Name: Y\n")
@@ -318,7 +382,6 @@ class ReadTargetFilePathResolutionTests(unittest.TestCase):
 
     def test_nonexistent_relative_path_returns_error(self) -> None:
 
-
         with tempfile.TemporaryDirectory() as tmpdir:
             orch = _make_orchestrator()
             orch.prefab_variant.project_root = Path(tmpdir)
@@ -329,10 +392,36 @@ class ReadTargetFilePathResolutionTests(unittest.TestCase):
             self.assertFalse(response.success)
             self.assertEqual("TEST_FILE_NOT_FOUND", response.code)
 
+    def test_inspect_hierarchy_resolution_failure_returns_envelope(self) -> None:
+        from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orch = _make_orchestrator()
+            orch.prefab_variant.project_root = Path(tmpdir)
+
+            with patch.object(Path, "resolve", side_effect=OSError("resolve failed")):
+                try:
+                    response = orch.inspect_hierarchy("Assets/Test.prefab")
+                except OSError as exc:
+                    response = ToolResponse(
+                        False,
+                        Severity.ERROR,
+                        type(exc).__name__,
+                        str(exc),
+                        {},
+                    )
+
+        assert_error_envelope(
+            response,
+            code="INSPECT_HIERARCHY_READ_ERROR",
+            severity="error",
+            message_match="resolve failed",
+            data={"target_path": "Assets/Test.prefab", "read_only": True},
+        )
+
 
 class FileTypeGuardTests(unittest.TestCase):
     def test_inspect_wiring_warns_on_controller_file(self) -> None:
-
 
         text = "--- !u!91 &100\nAnimatorController:\n  m_Name: Test\n"
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -348,7 +437,6 @@ class FileTypeGuardTests(unittest.TestCase):
 
     def test_inspect_wiring_warns_on_anim_file(self) -> None:
 
-
         text = "--- !u!74 &100\nAnimationClip:\n  m_Name: Test\n"
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -361,7 +449,6 @@ class FileTypeGuardTests(unittest.TestCase):
         self.assertEqual("INSPECT_WIRING_NO_MONOBEHAVIOURS", result.code)
 
     def test_inspect_hierarchy_warns_on_anim_file(self) -> None:
-
 
         text = "--- !u!74 &100\nAnimationClip:\n  m_Name: Test\n"
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -377,7 +464,6 @@ class FileTypeGuardTests(unittest.TestCase):
 
     def test_inspect_structure_annotates_checks_on_controller_file(self) -> None:
 
-
         text = "--- !u!91 &100\nAnimatorController:\n  m_Name: Test\n"
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -391,7 +477,6 @@ class FileTypeGuardTests(unittest.TestCase):
         self.assertIn(".controller", result.data["skip_reason"])
 
     def test_inspect_structure_all_checks_on_prefab(self) -> None:
-
 
         from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_transform
 
@@ -410,7 +495,6 @@ class FileTypeGuardTests(unittest.TestCase):
     def test_inspect_wiring_normal_on_prefab(self) -> None:
         """Prefab files should proceed normally, not trigger the guard."""
 
-
         from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
 
         text = YAML_HEADER + make_gameobject("100", "Obj", ["200"]) + make_monobehaviour("200", "100")
@@ -426,7 +510,6 @@ class FileTypeGuardTests(unittest.TestCase):
 class InspectWiringTests(unittest.TestCase):
     def test_script_name_and_game_object_name(self) -> None:
         """inspect_wiring should include script_name and game_object_name in component summaries."""
-
 
         from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
 
@@ -456,7 +539,6 @@ class InspectWiringTests(unittest.TestCase):
     def test_script_name_empty_when_guid_index_has_no_match(self) -> None:
         """script_name should be empty when the script GUID cannot be resolved."""
 
-
         from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
 
         text = (
@@ -483,7 +565,6 @@ class InspectWiringTests(unittest.TestCase):
 
     def test_null_ratio_and_null_field_names_in_output(self) -> None:
         """inspect_wiring output includes null_ratio and null_field_names per component."""
-
 
         from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
 
@@ -536,7 +617,6 @@ class InspectWiringVariantTests(unittest.TestCase):
 
     def test_variant_resolves_base_wiring(self) -> None:
 
-
         base_text = self._make_base_text()
         variant_text = self._make_variant_text()
 
@@ -572,7 +652,6 @@ class InspectWiringVariantTests(unittest.TestCase):
 
     def test_non_variant_has_no_variant_fields(self) -> None:
 
-
         from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
 
         text = YAML_HEADER + make_gameobject("100", "Obj", ["200"]) + make_monobehaviour("200", "100")
@@ -590,7 +669,6 @@ class InspectWiringVariantTests(unittest.TestCase):
 
     def test_variant_chain_resolution_failure_falls_through(self) -> None:
         """If chain resolution returns no usable base, analyze the variant text as-is."""
-
 
         variant_text = self._make_variant_text()
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -643,7 +721,6 @@ class InspectWiringVariantOverrideAnnotationTests(unittest.TestCase):
     def test_variant_override_count_in_response(self) -> None:
         """Component with overrides should have override_count in response."""
 
-
         base_text = self._make_base_text()
         variant_text = self._make_variant_text()
 
@@ -691,7 +768,6 @@ class InspectWiringVariantOverrideAnnotationTests(unittest.TestCase):
     def test_non_variant_no_override_fields(self) -> None:
         """Non-variant should not have override_count or is_overridden in response."""
 
-
         from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
 
         text = (
@@ -720,9 +796,7 @@ class ValidateAllWiringTests(unittest.TestCase):
         from tests.yaml_helpers import YAML_HEADER, make_gameobject, make_monobehaviour
 
         text = (
-            YAML_HEADER
-            + make_gameobject("100", "TestObj", ["200"])
-            + make_monobehaviour("200", "100", guid="abcd" * 8)
+            YAML_HEADER + make_gameobject("100", "TestObj", ["200"]) + make_monobehaviour("200", "100", guid="abcd" * 8)
         )
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -749,9 +823,7 @@ class ValidateAllWiringTests(unittest.TestCase):
 class InspectWhereUsedTests(unittest.TestCase):
     def test_passthrough(self) -> None:
         orch = _make_orchestrator()
-        orch.reference_resolver.where_used.return_value = _ok_response(
-            "WHERE_USED_OK", {"usages": []}
-        )
+        orch.reference_resolver.where_used.return_value = _ok_response("WHERE_USED_OK", {"usages": []})
         result = orch.inspect_where_used("abc123", scope="Assets/")
         self.assertTrue(result.success)
         self.assertEqual("INSPECT_WHERE_USED_RESULT", result.code)
@@ -761,9 +833,7 @@ class InspectWhereUsedTests(unittest.TestCase):
 class ValidateRefsTests(unittest.TestCase):
     def test_passthrough(self) -> None:
         orch = _make_orchestrator()
-        orch.reference_resolver.scan_broken_references.return_value = _ok_response(
-            "REF_SCAN_OK", {"broken_count": 0}
-        )
+        orch.reference_resolver.scan_broken_references.return_value = _ok_response("REF_SCAN_OK", {"broken_count": 0})
         result = orch.validate_refs("Assets/")
         self.assertTrue(result.success)
         self.assertEqual("VALIDATE_REFS_RESULT", result.code)
@@ -780,9 +850,7 @@ class ValidateRefsTests(unittest.TestCase):
         from prefab_sentinel.orchestrator import orchestrator_wiring
 
         baseline = DiagnosticsBaseline(
-            known_diagnostics=(
-                "inspect_wiring:null_reference:Assets/Base.prefab:40:targetRef",
-            ),
+            known_diagnostics=("inspect_wiring:null_reference:Assets/Base.prefab:40:targetRef",),
             path="/project/config/diagnostics_baseline.json",
             status="loaded",
         )
@@ -811,9 +879,7 @@ class ValidateRuntimeTests(unittest.TestCase):
         orch = _make_orchestrator()
         orch.runtime_validation.compile_udonsharp.return_value = _ok_response()
         orch.runtime_validation.run_clientsim.return_value = _ok_response()
-        orch.runtime_validation.collect_unity_console.return_value = _ok_response(
-            data={"log_lines": []}
-        )
+        orch.runtime_validation.collect_unity_console.return_value = _ok_response(data={"log_lines": []})
         orch.runtime_validation.classify_errors.return_value = _ok_response()
         orch.runtime_validation.assert_no_critical_errors.return_value = _ok_response()
 
@@ -853,9 +919,7 @@ class ValidateRuntimeTests(unittest.TestCase):
         orch = _make_orchestrator()
         orch.runtime_validation.compile_udonsharp.return_value = _ok_response()
         orch.runtime_validation.run_clientsim.return_value = _ok_response()
-        orch.runtime_validation.collect_unity_console.return_value = _ok_response(
-            data={"log_lines": []}
-        )
+        orch.runtime_validation.collect_unity_console.return_value = _ok_response(data={"log_lines": []})
         orch.runtime_validation.classify_errors.return_value = _ok_response()
         orch.runtime_validation.assert_no_critical_errors.return_value = _ok_response()
 
@@ -865,7 +929,8 @@ class ValidateRuntimeTests(unittest.TestCase):
         # Severity must not exceed warning even when the scene path is
         # missing — the leading step never aborts the pipeline.
         self.assertIn(
-            steps[0]["result"]["severity"], {"info", "warning"},
+            steps[0]["result"]["severity"],
+            {"info", "warning"},
         )
 
     @staticmethod
@@ -918,12 +983,8 @@ class ValidateRuntimeTests(unittest.TestCase):
         orch = _make_orchestrator()
         orch.runtime_validation.compile_udonsharp.return_value = _ok_response()
         orch.runtime_validation.run_clientsim.return_value = _ok_response()
-        orch.runtime_validation.collect_unity_console.return_value = _ok_response(
-            data={"log_lines": []}
-        )
-        orch.runtime_validation.classify_errors.return_value = self._classify_step_response(
-            [classify_diag]
-        )
+        orch.runtime_validation.collect_unity_console.return_value = _ok_response(data={"log_lines": []})
+        orch.runtime_validation.classify_errors.return_value = self._classify_step_response([classify_diag])
         orch.runtime_validation.assert_no_critical_errors.return_value = _ok_response()
 
         with patch(
@@ -975,12 +1036,8 @@ class ValidateRuntimeTests(unittest.TestCase):
         orch = _make_orchestrator()
         orch.runtime_validation.compile_udonsharp.return_value = _ok_response()
         orch.runtime_validation.run_clientsim.return_value = _ok_response()
-        orch.runtime_validation.collect_unity_console.return_value = _ok_response(
-            data={"log_lines": []}
-        )
-        orch.runtime_validation.classify_errors.return_value = self._classify_step_response(
-            [classify_diag]
-        )
+        orch.runtime_validation.collect_unity_console.return_value = _ok_response(data={"log_lines": []})
+        orch.runtime_validation.classify_errors.return_value = self._classify_step_response([classify_diag])
         orch.runtime_validation.assert_no_critical_errors.return_value = _ok_response()
 
         with patch(
@@ -1008,9 +1065,7 @@ class PostconditionSchemaValidationTests(unittest.TestCase):
             validate_postcondition_schema,
         )
 
-        return validate_postcondition_schema(
-            postcondition, resource_ids=resource_ids or set()
-        )
+        return validate_postcondition_schema(postcondition, resource_ids=resource_ids or set())
 
     # --- non-object / missing type -------------------------------------
 
@@ -1151,9 +1206,7 @@ class PostconditionSchemaValidationTests(unittest.TestCase):
     def test_broken_refs_negative_count_emits_post_schema_error(self) -> None:
         from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
 
-        result = self._validate(
-            {"type": "broken_refs", "scope": "Assets/", "expected_count": -1}
-        )
+        result = self._validate({"type": "broken_refs", "scope": "Assets/", "expected_count": -1})
         assert_error_envelope(
             result,
             code="POST_SCHEMA_ERROR",
@@ -1172,9 +1225,7 @@ class PostconditionSchemaValidationTests(unittest.TestCase):
         a negative integer; the envelope must carry the same payload shape."""
         from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
 
-        result = self._validate(
-            {"type": "broken_refs", "scope": "Assets/", "expected_count": "five"}
-        )
+        result = self._validate({"type": "broken_refs", "scope": "Assets/", "expected_count": "five"})
         assert_error_envelope(
             result,
             code="POST_SCHEMA_ERROR",
@@ -1263,9 +1314,7 @@ class PostconditionSchemaValidationTests(unittest.TestCase):
         )
 
     def test_broken_refs_accept_emits_post_schema_ok(self) -> None:
-        result = self._validate(
-            {"type": "broken_refs", "scope": "Assets/", "expected_count": 0}
-        )
+        result = self._validate({"type": "broken_refs", "scope": "Assets/", "expected_count": 0})
         self.assertTrue(result.success)
         self.assertEqual("POST_SCHEMA_OK", result.code)
         self.assertEqual(Severity.INFO, result.severity)
@@ -1398,9 +1447,7 @@ class PostconditionEvaluatorTests(unittest.TestCase):
     def test_broken_refs_count_mismatch_emits_post_broken_refs_failed(self) -> None:
         from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
 
-        scan = _ok_response(
-            "REF_SCAN_BROKEN", data={"broken_count": 7, "read_only": True}
-        )
+        scan = _ok_response("REF_SCAN_BROKEN", data={"broken_count": 7, "read_only": True})
         result = self._evaluate(
             {"type": "broken_refs", "scope": "Assets/", "expected_count": 0},
             scan_response=scan,
@@ -1422,9 +1469,7 @@ class PostconditionEvaluatorTests(unittest.TestCase):
         )
 
     def test_broken_refs_count_match_emits_post_broken_refs_ok(self) -> None:
-        scan = _ok_response(
-            "REF_SCAN_OK", data={"broken_count": 0, "read_only": True}
-        )
+        scan = _ok_response("REF_SCAN_OK", data={"broken_count": 0, "read_only": True})
         result = self._evaluate(
             {"type": "broken_refs", "scope": "Assets/", "expected_count": 0},
             scan_response=scan,
@@ -1459,11 +1504,27 @@ class PatchApplyTests(unittest.TestCase):
             "postconditions": [],
         }
 
+    def _plan_with_unused_resource(self) -> dict:
+        return {
+            "plan_version": 2,
+            "resources": [
+                {"id": "used", "path": "used.json", "kind": "json", "mode": "open"},
+                {"id": "unused", "path": "unused.json", "kind": "json", "mode": "open"},
+            ],
+            "ops": [
+                {
+                    "resource": "used",
+                    "op": "set",
+                    "property_path": "key",
+                    "value": "value",
+                }
+            ],
+            "postconditions": [],
+        }
+
     def _make_orch_with_dry_run(self) -> MockedPhase1Orchestrator:
         orch = _make_orchestrator()
-        orch.serialized_object.dry_run_resource_plan.return_value = _ok_response(
-            "DRY_RUN_OK"
-        )
+        orch.serialized_object.dry_run_resource_plan.return_value = _ok_response("DRY_RUN_OK")
         return orch
 
     def test_dry_run_returns_without_apply(self) -> None:
@@ -1486,13 +1547,46 @@ class PatchApplyTests(unittest.TestCase):
 
     def test_confirm_gate_passes(self) -> None:
         orch = self._make_orch_with_dry_run()
-        orch.serialized_object.apply_resource_plan.return_value = _ok_response(
-            "APPLY_OK"
-        )
+        orch.serialized_object.apply_resource_plan.return_value = _ok_response("APPLY_OK", data={"applied": 1})
         result = orch.patch_apply(self._minimal_plan(), dry_run=False, confirm=True)
         self.assertTrue(result.success)
         self.assertFalse(result.data["read_only"])
         orch.serialized_object.apply_resource_plan.assert_called_once()
+
+    def test_existing_writer_prefab_plan_does_not_acquire_transaction_gate(self) -> None:
+        orch = self._make_orch_with_dry_run()
+        orch.serialized_object.apply_resource_plan.return_value = _ok_response("APPLY_OK", data={"applied": 1})
+        orch.prefab_variant.list_overrides.return_value = _ok_response("OVERRIDES_OK")
+        plan = self._minimal_plan(
+            kind="prefab",
+            path="Assets/test.prefab",
+            mode="open",
+        )
+
+        result = orch.patch_apply(
+            plan,
+            dry_run=False,
+            confirm=True,
+            change_reason="existing writer",
+        )
+
+        self.assertEqual(
+            (
+                True,
+                "PATCH_APPLY_RESULT",
+                [
+                    "dry_run_patch",
+                    "list_overrides_preflight",
+                    "apply_and_save",
+                ],
+            ),
+            (
+                result.success,
+                result.code,
+                [step["step"] for step in result.data.get("steps", [])],
+            ),
+            msg=f"existing writer semantics changed: {result.to_dict()!r}",
+        )
 
     def test_single_resource_step_naming(self) -> None:
         orch = self._make_orch_with_dry_run()
@@ -1521,6 +1615,184 @@ class PatchApplyTests(unittest.TestCase):
         self.assertIn("dry_run_patch:res1", step_names)
         self.assertIn("dry_run_patch:res2", step_names)
 
+    def test_unused_resource_is_omitted_from_core_execution(self) -> None:
+        orch = self._make_orch_with_dry_run()
+
+        result = orch.patch_apply(self._plan_with_unused_resource(), dry_run=True)
+
+        orch.serialized_object.dry_run_resource_plan.assert_called_once_with(
+            resource={
+                "id": "used",
+                "path": "used.json",
+                "kind": "json",
+                "mode": "open",
+            },
+            ops=[{"op": "set", "property_path": "key", "value": "value"}],
+        )
+        self.assertEqual(
+            (
+                True,
+                2,
+                [
+                    {
+                        "id": "used",
+                        "kind": "json",
+                        "path": "used.json",
+                        "mode": "open",
+                        "executed": True,
+                        "applied": 0,
+                    },
+                    {
+                        "id": "unused",
+                        "kind": "json",
+                        "path": "unused.json",
+                        "mode": "open",
+                        "executed": False,
+                        "applied": 0,
+                    },
+                ],
+                ["dry_run_patch:used"],
+            ),
+            (
+                result.success,
+                result.data["resource_count"],
+                result.data["resources"],
+                [step["step"] for step in result.data["steps"]],
+            ),
+            msg=f"dry-run resource metadata must distinguish dispatched declarations: {result.to_dict()!r}",
+        )
+
+    def test_unused_resource_is_omitted_from_confirmed_core_execution(self) -> None:
+        orch = self._make_orch_with_dry_run()
+        orch.serialized_object.apply_resource_plan.return_value = _ok_response(
+            "APPLY_OK",
+            data={"applied": 1},
+        )
+
+        result = orch.patch_apply(
+            self._plan_with_unused_resource(),
+            dry_run=False,
+            confirm=True,
+        )
+
+        orch.serialized_object.apply_resource_plan.assert_called_once_with(
+            resource={
+                "id": "used",
+                "path": "used.json",
+                "kind": "json",
+                "mode": "open",
+            },
+            ops=[{"op": "set", "property_path": "key", "value": "value"}],
+        )
+        self.assertEqual(
+            (
+                True,
+                False,
+                2,
+                [
+                    {
+                        "id": "used",
+                        "kind": "json",
+                        "path": "used.json",
+                        "mode": "open",
+                        "executed": True,
+                        "applied": 1,
+                    },
+                    {
+                        "id": "unused",
+                        "kind": "json",
+                        "path": "unused.json",
+                        "mode": "open",
+                        "executed": False,
+                        "applied": 0,
+                    },
+                ],
+                ["dry_run_patch:used", "apply_and_save:used"],
+            ),
+            (
+                result.success,
+                result.data["read_only"],
+                result.data["resource_count"],
+                result.data["resources"],
+                [step["step"] for step in result.data["steps"]],
+            ),
+            msg=f"confirmed resource metadata must distinguish applied declarations: {result.to_dict()!r}",
+        )
+
+    def test_unsuccessful_apply_stops_before_next_resource_dispatch(self) -> None:
+        orch = self._make_orch_with_dry_run()
+        orch.serialized_object.apply_resource_plan.side_effect = [
+            ToolResponse(
+                success=False,
+                severity=Severity.INFO,
+                code="SER_APPLY_OK",
+                message="Contradictory Bridge response.",
+                data={"applied": 0},
+                diagnostics=[],
+            ),
+            AssertionError("second resource must not be dispatched"),
+        ]
+        plan = {
+            "plan_version": 2,
+            "resources": [
+                {"id": "one", "path": "one.json", "kind": "json", "mode": "open"},
+                {"id": "two", "path": "two.json", "kind": "json", "mode": "open"},
+            ],
+            "ops": [
+                {
+                    "resource": resource_id,
+                    "op": "set",
+                    "property_path": "key",
+                    "value": resource_id,
+                }
+                for resource_id in ("one", "two")
+            ],
+            "postconditions": [],
+        }
+
+        result = orch.patch_apply(plan, dry_run=False, confirm=True)
+
+        self.assertEqual(
+            (
+                False,
+                True,
+                [
+                    "dry_run_patch:one",
+                    "dry_run_patch:two",
+                    "apply_and_save:one",
+                ],
+                1,
+            ),
+            (
+                result.success,
+                result.data["fail_fast_triggered"],
+                [step["step"] for step in result.data["steps"]],
+                orch.serialized_object.apply_resource_plan.call_count,
+            ),
+            msg=f"an unsuccessful apply must stop resource dispatch: {result.to_dict()!r}",
+        )
+
+    def test_globally_empty_plan_is_rejected_before_resource_execution(self) -> None:
+        orch = self._make_orch_with_dry_run()
+        plan = {
+            "plan_version": 2,
+            "resources": [{"id": "unused", "path": "unused.json", "kind": "json", "mode": "open"}],
+            "ops": [],
+            "postconditions": [],
+        }
+
+        result = orch.patch_apply(plan, dry_run=True)
+
+        self.assertEqual(
+            (False, Severity.ERROR, "INVALID_PLAN_SCHEMA", 0),
+            (
+                result.success,
+                result.severity,
+                result.code,
+                orch.serialized_object.dry_run_resource_plan.call_count,
+            ),
+        )
+
     def test_dry_run_fail_fast_on_error(self) -> None:
         orch = _make_orchestrator()
         orch.serialized_object.dry_run_resource_plan.return_value = _error_response()
@@ -1538,39 +1810,63 @@ class PatchApplyTests(unittest.TestCase):
         self.assertTrue(result.data["fail_fast_triggered"])
         orch.serialized_object.dry_run_resource_plan.assert_not_called()
 
+    def test_postcondition_schema_precedes_globally_empty_execution_gate(self) -> None:
+        orch = self._make_orch_with_dry_run()
+        plan = self._minimal_plan()
+        plan["ops"] = []
+        plan["postconditions"] = [{"type": "asset_exists"}]
+
+        result = orch.patch_apply(plan, dry_run=True)
+
+        self.assertEqual(
+            (False, "PATCH_APPLY_RESULT", ["postcondition_schema:asset_exists[0]"], 0),
+            (
+                result.success,
+                result.code,
+                [step["step"] for step in result.data["steps"]],
+                orch.serialized_object.dry_run_resource_plan.call_count,
+            ),
+        )
+
     def test_preflight_ref_scan_when_scope_set(self) -> None:
         orch = self._make_orch_with_dry_run()
-        orch.serialized_object.apply_resource_plan.return_value = _ok_response()
-        orch.reference_resolver.scan_broken_references.return_value = _ok_response(
-            "REF_SCAN_OK"
-        )
-        result = orch.patch_apply(
-            self._minimal_plan(), dry_run=False, confirm=True, scope="Assets/"
-        )
+        orch.serialized_object.apply_resource_plan.return_value = _ok_response(data={"applied": 1})
+        orch.reference_resolver.scan_broken_references.return_value = _ok_response("REF_SCAN_OK")
+        result = orch.patch_apply(self._minimal_plan(), dry_run=False, confirm=True, scope="Assets/")
         step_names = [s["step"] for s in result.data["steps"]]
         self.assertIn("scan_broken_references_preflight", step_names)
 
     def test_no_preflight_ref_scan_when_no_scope(self) -> None:
         orch = self._make_orch_with_dry_run()
-        orch.serialized_object.apply_resource_plan.return_value = _ok_response()
-        result = orch.patch_apply(
-            self._minimal_plan(), dry_run=False, confirm=True, scope=None
-        )
+        orch.serialized_object.apply_resource_plan.return_value = _ok_response(data={"applied": 1})
+        result = orch.patch_apply(self._minimal_plan(), dry_run=False, confirm=True, scope=None)
         step_names = [s["step"] for s in result.data["steps"]]
         self.assertNotIn("scan_broken_references_preflight", step_names)
 
     def test_list_overrides_for_prefab_open(self) -> None:
+        from prefab_sentinel.orchestrator_patch import patch_apply
+
         orch = self._make_orch_with_dry_run()
-        orch.serialized_object.apply_resource_plan.return_value = _ok_response()
+        orch.serialized_object.apply_resource_plan.return_value = _ok_response(data={"applied": 1})
         orch.prefab_variant.list_overrides.return_value = _ok_response()
         plan = self._minimal_plan(kind="prefab", path="Assets/test.prefab", mode="open")
-        result = orch.patch_apply(plan, dry_run=False, confirm=True)
-        step_names = [s["step"] for s in result.data["steps"]]
-        self.assertIn("list_overrides_preflight", step_names)
+
+        result = patch_apply(
+            orch,
+            plan,
+            dry_run=False,
+            confirm=True,
+            _transaction_bypass=True,
+        )
+
+        self.assertEqual(
+            ["dry_run_patch", "list_overrides_preflight", "apply_and_save"],
+            [step["step"] for step in result.data["steps"]],
+        )
 
     def test_no_list_overrides_for_json(self) -> None:
         orch = self._make_orch_with_dry_run()
-        orch.serialized_object.apply_resource_plan.return_value = _ok_response()
+        orch.serialized_object.apply_resource_plan.return_value = _ok_response(data={"applied": 1})
         plan = self._minimal_plan(kind="json", path="test.json", mode="open")
         result = orch.patch_apply(plan, dry_run=False, confirm=True)
         step_names = [s["step"] for s in result.data["steps"]]
@@ -1578,7 +1874,7 @@ class PatchApplyTests(unittest.TestCase):
 
     def test_no_list_overrides_for_prefab_create(self) -> None:
         orch = self._make_orch_with_dry_run()
-        orch.serialized_object.apply_resource_plan.return_value = _ok_response()
+        orch.serialized_object.apply_resource_plan.return_value = _ok_response(data={"applied": 1})
         orch.prefab_variant.list_overrides.return_value = _ok_response()
         plan = self._minimal_plan(kind="prefab", path="Assets/test.prefab", mode="create")
         result = orch.patch_apply(plan, dry_run=False, confirm=True)
@@ -1587,12 +1883,10 @@ class PatchApplyTests(unittest.TestCase):
 
     def test_runtime_validation_when_scene_set(self) -> None:
         orch = self._make_orch_with_dry_run()
-        orch.serialized_object.apply_resource_plan.return_value = _ok_response()
+        orch.serialized_object.apply_resource_plan.return_value = _ok_response(data={"applied": 1})
         orch.runtime_validation.compile_udonsharp.return_value = _ok_response()
         orch.runtime_validation.run_clientsim.return_value = _ok_response()
-        orch.runtime_validation.collect_unity_console.return_value = _ok_response(
-            data={"log_lines": []}
-        )
+        orch.runtime_validation.collect_unity_console.return_value = _ok_response(data={"log_lines": []})
         orch.runtime_validation.classify_errors.return_value = _ok_response()
         orch.runtime_validation.assert_no_critical_errors.return_value = _ok_response()
 
@@ -1606,12 +1900,34 @@ class PatchApplyTests(unittest.TestCase):
         self.assertIn("compile_udonsharp", step_names)
         self.assertIn("run_clientsim", step_names)
 
+    def test_compile_failure_stops_before_clientsim(self) -> None:
+        orch = self._make_orch_with_dry_run()
+        orch.serialized_object.apply_resource_plan.return_value = _ok_response(data={"applied": 1})
+        orch.runtime_validation.compile_udonsharp.return_value = _error_response()
+
+        result = orch.patch_apply(
+            self._minimal_plan(),
+            dry_run=False,
+            confirm=True,
+            runtime_scene="Assets/Scenes/Test.unity",
+        )
+
+        self.assertEqual(
+            (False, True, ["dry_run_patch", "apply_and_save", "compile_udonsharp"]),
+            (
+                result.success,
+                result.data["fail_fast_triggered"],
+                [step["step"] for step in result.data["steps"]],
+            ),
+            msg=f"compile failure must terminate runtime validation immediately: {result.to_dict()!r}",
+        )
+        orch.runtime_validation.run_clientsim.assert_not_called()
+        orch.runtime_validation.collect_unity_console.assert_not_called()
+
     def test_no_runtime_validation_when_no_scene(self) -> None:
         orch = self._make_orch_with_dry_run()
-        orch.serialized_object.apply_resource_plan.return_value = _ok_response()
-        result = orch.patch_apply(
-            self._minimal_plan(), dry_run=False, confirm=True, runtime_scene=None
-        )
+        orch.serialized_object.apply_resource_plan.return_value = _ok_response(data={"applied": 1})
+        result = orch.patch_apply(self._minimal_plan(), dry_run=False, confirm=True, runtime_scene=None)
         step_names = [s["step"] for s in result.data["steps"]]
         self.assertNotIn("compile_udonsharp", step_names)
 
@@ -1623,9 +1939,7 @@ class PatchApplyTests(unittest.TestCase):
 
     def test_change_reason_stripped(self) -> None:
         orch = self._make_orch_with_dry_run()
-        result = orch.patch_apply(
-            self._minimal_plan(), dry_run=True, change_reason="  test reason  "
-        )
+        result = orch.patch_apply(self._minimal_plan(), dry_run=True, change_reason="  test reason  ")
         self.assertEqual("test reason", result.data["change_reason"])
 
     def test_change_reason_none(self) -> None:
@@ -1633,13 +1947,33 @@ class PatchApplyTests(unittest.TestCase):
         result = orch.patch_apply(self._minimal_plan(), dry_run=True, change_reason=None)
         self.assertIsNone(result.data["change_reason"])
 
-    def test_success_with_warnings(self) -> None:
+    def test_unsuccessful_warning_apply_stops_fail_fast(self) -> None:
         orch = _make_orchestrator()
         orch.serialized_object.dry_run_resource_plan.return_value = _ok_response()
-        orch.serialized_object.apply_resource_plan.return_value = _warning_response()
-        result = orch.patch_apply(self._minimal_plan(), dry_run=False, confirm=True)
-        self.assertFalse(result.success)
-        self.assertIn("warnings", result.message)
+        orch.serialized_object.apply_resource_plan.return_value = _warning_response(
+            data={"applied": 0},
+        )
+
+        result = orch.patch_apply(
+            self._minimal_plan(),
+            dry_run=False,
+            confirm=True,
+        )
+
+        self.assertEqual(
+            (
+                False,
+                True,
+                "patch.apply stopped by fail-fast policy due to apply failure.",
+                1,
+            ),
+            (
+                result.success,
+                result.data["fail_fast_triggered"],
+                result.message,
+                orch.serialized_object.apply_resource_plan.call_count,
+            ),
+        )
 
 
 class EvaluatePostconditionTests(unittest.TestCase):
@@ -1677,9 +2011,7 @@ class EvaluatePostconditionTests(unittest.TestCase):
 
     def test_broken_refs_count_match(self) -> None:
         orch = _make_orchestrator()
-        orch.reference_resolver.scan_broken_references.return_value = _ok_response(
-            "REF_SCAN_OK", {"broken_count": 0}
-        )
+        orch.reference_resolver.scan_broken_references.return_value = _ok_response("REF_SCAN_OK", {"broken_count": 0})
         result = orch._evaluate_postcondition(
             {"type": "broken_refs", "scope": "Assets/", "expected_count": 0},
             resource_map={},
@@ -1703,9 +2035,7 @@ class EvaluatePostconditionTests(unittest.TestCase):
 
     def test_broken_refs_scan_error(self) -> None:
         orch = _make_orchestrator()
-        orch.reference_resolver.scan_broken_references.return_value = _error_response(
-            "REF404"
-        )
+        orch.reference_resolver.scan_broken_references.return_value = _error_response("REF404")
         result = orch._evaluate_postcondition(
             {"type": "broken_refs", "scope": "Assets/", "expected_count": 0},
             resource_map={},
@@ -1724,14 +2054,11 @@ class TestListSerializedFields(unittest.TestCase):
 
     def test_list_fields_by_path(self) -> None:
 
-
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             cs = root / "Test.cs"
             cs.write_text(
-                "public float speed;\n"
-                "[SerializeField] private int health;\n"
-                "private float _internal;\n",
+                "public float speed;\n[SerializeField] private int health;\nprivate float _internal;\n",
                 encoding="utf-8",
             )
             meta = Path(str(cs) + ".meta")
@@ -1750,7 +2077,6 @@ class TestListSerializedFields(unittest.TestCase):
         self.assertEqual("aaaa1111bbbb2222cccc3333dddd4444", result.data["script_guid"])
 
     def test_list_fields_by_guid(self) -> None:
-
 
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -1772,7 +2098,6 @@ class TestListSerializedFields(unittest.TestCase):
 
     def test_nonexistent_path_returns_error(self) -> None:
 
-
         with tempfile.TemporaryDirectory() as td:
             orch = self._make_orch_with_root(Path(td))
             result = orch.list_serialized_fields("/nonexistent/Test.cs")
@@ -1781,7 +2106,6 @@ class TestListSerializedFields(unittest.TestCase):
         self.assertEqual("CSF_RESOLVE_FAILED", result.code)
 
     def test_response_has_read_only_flag(self) -> None:
-
 
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -1805,9 +2129,7 @@ class TestValidateFieldRename(unittest.TestCase):
         # C# script
         cs = assets / "Player.cs"
         cs.write_text(
-            "public float moveSpeed;\n"
-            "public int health;\n"
-            "private float _internal;\n",
+            "public float moveSpeed;\npublic int health;\nprivate float _internal;\n",
             encoding="utf-8",
         )
         meta = Path(str(cs) + ".meta")
@@ -1841,12 +2163,9 @@ class TestValidateFieldRename(unittest.TestCase):
 
     def test_rename_finds_affected_assets(self) -> None:
 
-
         with tempfile.TemporaryDirectory() as td:
             orch, root, guid = self._setup_project(td)
-            result = orch.validate_field_rename(
-                str(root / "Assets" / "Player.cs"), "moveSpeed", "runSpeed"
-            )
+            result = orch.validate_field_rename(str(root / "Assets" / "Player.cs"), "moveSpeed", "runSpeed")
 
         self.assertTrue(result.success)
         self.assertEqual("CSF_RENAME_OK", result.code)
@@ -1886,18 +2205,19 @@ class TestValidateFieldRename(unittest.TestCase):
                 side_effect=run_in_reverse,
                 create=True,
             ) as run_ordered:
-                result = orch.validate_field_rename(
-                    str(root / "Assets" / "Player.cs"), "moveSpeed", "runSpeed"
-                )
+                result = orch.validate_field_rename(str(root / "Assets" / "Player.cs"), "moveSpeed", "runSpeed")
 
         self.assertEqual(1, run_ordered.call_count)
         self.assertEqual(list(reversed(submitted_calls[0])), execution_calls[0])
         self.assertEqual("CSF_RENAME_OK", result.code)
         self.assertEqual(2, result.data["affected_count"])
-        self.assertEqual([
-            "Assets/Other.prefab",
-            "Assets/Player.prefab",
-        ], [asset["path"] for asset in result.data["affected_assets"]])
+        self.assertEqual(
+            [
+                "Assets/Other.prefab",
+                "Assets/Player.prefab",
+            ],
+            [asset["path"] for asset in result.data["affected_assets"]],
+        )
 
     def test_rename_uses_inspection_context_guid_index_for_guid_flow(self) -> None:
         from prefab_sentinel.inspection_context import ProjectInspectionContext
@@ -1912,10 +2232,7 @@ class TestValidateFieldRename(unittest.TestCase):
             assets.mkdir()
             base_cs = assets / "Player.cs"
             base_cs.write_text(
-                "public class Player : MonoBehaviour {\n"
-                "    public float moveSpeed;\n"
-                "    public int health;\n"
-                "}\n",
+                "public class Player : MonoBehaviour {\n    public float moveSpeed;\n    public int health;\n}\n",
                 encoding="utf-8",
             )
             Path(str(base_cs) + ".meta").write_text(
@@ -1924,9 +2241,7 @@ class TestValidateFieldRename(unittest.TestCase):
             )
             derived_cs = assets / "DerivedPlayer.cs"
             derived_cs.write_text(
-                "public class DerivedPlayer : Player {\n"
-                "    public int bonus;\n"
-                "}\n",
+                "public class DerivedPlayer : Player {\n    public int bonus;\n}\n",
                 encoding="utf-8",
             )
             Path(str(derived_cs) + ".meta").write_text(
@@ -1977,24 +2292,18 @@ class TestValidateFieldRename(unittest.TestCase):
 
     def test_rename_detects_conflict(self) -> None:
 
-
         with tempfile.TemporaryDirectory() as td:
             orch, root, guid = self._setup_project(td)
-            result = orch.validate_field_rename(
-                str(root / "Assets" / "Player.cs"), "moveSpeed", "health"
-            )
+            result = orch.validate_field_rename(str(root / "Assets" / "Player.cs"), "moveSpeed", "health")
 
         self.assertTrue(result.success)
         self.assertTrue(result.data["conflict"])
 
     def test_rename_nonexistent_field(self) -> None:
 
-
         with tempfile.TemporaryDirectory() as td:
             orch, root, guid = self._setup_project(td)
-            result = orch.validate_field_rename(
-                str(root / "Assets" / "Player.cs"), "nonExistent", "newName"
-            )
+            result = orch.validate_field_rename(str(root / "Assets" / "Player.cs"), "nonExistent", "newName")
 
         self.assertFalse(result.success)
         self.assertEqual("CSF_FIELD_NOT_FOUND", result.code)
@@ -2002,19 +2311,15 @@ class TestValidateFieldRename(unittest.TestCase):
 
     def test_rename_script_not_found(self) -> None:
 
-
         with tempfile.TemporaryDirectory() as td:
             orch = _make_orchestrator()
             orch.reference_resolver.project_root = Path(td)
-            result = orch.validate_field_rename(
-                "/nonexistent/Test.cs", "speed", "velocity"
-            )
+            result = orch.validate_field_rename("/nonexistent/Test.cs", "speed", "velocity")
 
         self.assertFalse(result.success)
         self.assertEqual("CSF_RESOLVE_FAILED", result.code)
 
     def test_rename_with_scope(self) -> None:
-
 
         with tempfile.TemporaryDirectory() as td:
             orch, root, guid = self._setup_project(td)
@@ -2030,7 +2335,6 @@ class TestValidateFieldRename(unittest.TestCase):
         self.assertEqual(1, result.data["affected_count"])
 
     def test_rename_with_scope_excluding_file(self) -> None:
-
 
         with tempfile.TemporaryDirectory() as td:
             orch, root, guid = self._setup_project(td)
@@ -2049,12 +2353,9 @@ class TestValidateFieldRename(unittest.TestCase):
 
     def test_rename_response_has_read_only_flag(self) -> None:
 
-
         with tempfile.TemporaryDirectory() as td:
             orch, root, guid = self._setup_project(td)
-            result = orch.validate_field_rename(
-                str(root / "Assets" / "Player.cs"), "moveSpeed", "runSpeed"
-            )
+            result = orch.validate_field_rename(str(root / "Assets" / "Player.cs"), "moveSpeed", "runSpeed")
 
         self.assertTrue(result.data["read_only"])
 
@@ -2073,9 +2374,7 @@ class TestCheckFieldCoverage(unittest.TestCase):
         # C# script with 3 serialized fields
         cs = assets / "Player.cs"
         cs.write_text(
-            "public float moveSpeed;\n"
-            "public int health;\n"
-            "public string playerName;\n",
+            "public float moveSpeed;\npublic int health;\npublic string playerName;\n",
             encoding="utf-8",
         )
         meta = Path(str(cs) + ".meta")
@@ -2108,7 +2407,6 @@ class TestCheckFieldCoverage(unittest.TestCase):
         return orch, root
 
     def test_detects_unused_and_orphaned(self) -> None:
-
 
         with tempfile.TemporaryDirectory() as td:
             orch, root = self._setup_coverage_project(td)
@@ -2170,17 +2468,22 @@ class TestCheckFieldCoverage(unittest.TestCase):
         self.assertEqual(1, result.data["scripts_checked"])
         self.assertEqual(2, result.data["unused_count"])
         self.assertEqual(2, result.data["orphaned_count"])
-        self.assertEqual([
-            "Assets/Other.prefab",
-            "Assets/Player.prefab",
-        ], [entry["path"] for entry in result.data["unused_fields"]])
-        self.assertEqual([
-            "Assets/Other.prefab",
-            "Assets/Player.prefab",
-        ], [entry["path"] for entry in result.data["orphaned_paths"]])
+        self.assertEqual(
+            [
+                "Assets/Other.prefab",
+                "Assets/Player.prefab",
+            ],
+            [entry["path"] for entry in result.data["unused_fields"]],
+        )
+        self.assertEqual(
+            [
+                "Assets/Other.prefab",
+                "Assets/Player.prefab",
+            ],
+            [entry["path"] for entry in result.data["orphaned_paths"]],
+        )
 
     def test_all_fields_matched(self) -> None:
-
 
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -2223,7 +2526,6 @@ class TestCheckFieldCoverage(unittest.TestCase):
 
     def test_no_yaml_files_in_scope(self) -> None:
 
-
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             empty = root / "Empty"
@@ -2242,7 +2544,6 @@ class TestCheckFieldCoverage(unittest.TestCase):
         self.assertEqual(0, result.data["orphaned_count"])
 
     def test_external_script_skipped(self) -> None:
-
 
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -2274,7 +2575,6 @@ class TestCheckFieldCoverage(unittest.TestCase):
         self.assertEqual(0, result.data["components_checked"])
 
     def test_response_has_read_only_flag(self) -> None:
-
 
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -2330,14 +2630,18 @@ _SCRIPT_GUID_CUSTOM = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1"
 
 
 def _write_prefab_with_meta(
-    assets_dir: Path, name: str, guid: str, text: str,
+    assets_dir: Path,
+    name: str,
+    guid: str,
+    text: str,
 ) -> Path:
     """Write a .prefab and its .meta to disk, returning the prefab path."""
     prefab_path = assets_dir / name
     prefab_path.write_text(text, encoding="utf-8")
     meta_path = assets_dir / f"{name}.meta"
     meta_path.write_text(
-        f"fileFormatVersion: 2\nguid: {guid}\n", encoding="utf-8",
+        f"fileFormatVersion: 2\nguid: {guid}\n",
+        encoding="utf-8",
     )
     return prefab_path
 
@@ -2372,7 +2676,10 @@ class TestNestedWiringTraversal(unittest.TestCase):
                 + "  myRef: {fileID: 1}\n"
             )
             _write_prefab_with_meta(
-                assets_dir, "Child.prefab", _CHILD_WIRING_GUID, child_text,
+                assets_dir,
+                "Child.prefab",
+                _CHILD_WIRING_GUID,
+                child_text,
             )
 
             # Base.prefab has PrefabInstance to Child, no direct MonoBehaviours.
@@ -2383,7 +2690,10 @@ class TestNestedWiringTraversal(unittest.TestCase):
                 + make_prefab_instance("30", _CHILD_WIRING_GUID)
             )
             base_path = _write_prefab_with_meta(
-                assets_dir, "Base.prefab", "66666666666666666666666666666666", base_text,
+                assets_dir,
+                "Base.prefab",
+                "66666666666666666666666666666666",
+                base_text,
             )
 
             orch = _make_orchestrator()
@@ -2416,7 +2726,6 @@ class TestNestedWiringTraversal(unittest.TestCase):
                 ],
             )
 
-
     def test_nested_diagnostics_are_emitted_and_classified(self) -> None:
         from prefab_sentinel.diagnostics_baseline import DiagnosticsBaseline
         from tests.yaml_helpers import (
@@ -2444,7 +2753,10 @@ class TestNestedWiringTraversal(unittest.TestCase):
                 )
             )
             _write_prefab_with_meta(
-                assets_dir, "Child.prefab", _CHILD_WIRING_GUID, child_text,
+                assets_dir,
+                "Child.prefab",
+                _CHILD_WIRING_GUID,
+                child_text,
             )
 
             base_text = (
@@ -2454,7 +2766,10 @@ class TestNestedWiringTraversal(unittest.TestCase):
                 + make_prefab_instance("30", _CHILD_WIRING_GUID)
             )
             base_path = _write_prefab_with_meta(
-                assets_dir, "Base.prefab", "66666666666666666666666666666666", base_text,
+                assets_dir,
+                "Base.prefab",
+                "66666666666666666666666666666666",
+                base_text,
             )
             known_key = "inspect_wiring:internal_broken_ref:Assets/Child.prefab:3:childRef"
             baseline = DiagnosticsBaseline(
@@ -2494,10 +2809,7 @@ class TestNestedWiringTraversal(unittest.TestCase):
                     result.data["internal_broken_ref_count"],
                     result.data["diagnostic_counts"]["filtered"]["total"],
                     [row["code"] for row in result.data["filtered_diagnostics"]],
-                    [
-                        item["key"]
-                        for item in result.data["diagnostics_baseline"]["known"]
-                    ],
+                    [item["key"] for item in result.data["diagnostics_baseline"]["known"]],
                 ),
             )
 
@@ -2587,7 +2899,10 @@ class TestNestedWiringTraversal(unittest.TestCase):
                 + "  serializedProgramAsset: {fileID: 11400000, guid: deadbeefdeadbeefdeadbeefdeadbeef, type: 2}\n"
             )
             _write_prefab_with_meta(
-                assets_dir, "Child.prefab", _CHILD_WIRING_GUID, child_text,
+                assets_dir,
+                "Child.prefab",
+                _CHILD_WIRING_GUID,
+                child_text,
             )
 
             # Base.prefab has PrefabInstance to Child only.
@@ -2598,7 +2913,10 @@ class TestNestedWiringTraversal(unittest.TestCase):
                 + make_prefab_instance("30", _CHILD_WIRING_GUID)
             )
             base_path = _write_prefab_with_meta(
-                assets_dir, "Base.prefab", "66666666666666666666666666666666", base_text,
+                assets_dir,
+                "Base.prefab",
+                "66666666666666666666666666666666",
+                base_text,
             )
 
             orch = _make_orchestrator()
@@ -2610,9 +2928,7 @@ class TestNestedWiringTraversal(unittest.TestCase):
                 result = orch.inspect_wiring(base_path.relative_to(tmp_path).as_posix(), udon_only=True)
 
             self.assertEqual("INSPECT_WIRING_RESULT", result.code)
-            nested_components = [
-                c for c in result.data["components"] if "source_prefab" in c
-            ]
+            nested_components = [c for c in result.data["components"] if "source_prefab" in c]
             self.assertEqual(1, result.data["component_count"])
             self.assertEqual(
                 [("Assets/Child.prefab", "4", _SCRIPT_GUID_UDON_SHARP, True)],
@@ -2654,7 +2970,10 @@ class TestNestedWiringTraversal(unittest.TestCase):
                 + "  childRef: {fileID: 1}\n"
             )
             _write_prefab_with_meta(
-                assets_dir, "Child.prefab", _CHILD_WIRING_GUID, child_text,
+                assets_dir,
+                "Child.prefab",
+                _CHILD_WIRING_GUID,
+                child_text,
             )
 
             # Base.prefab has direct MonoBehaviour plus PrefabInstance to Child.
@@ -2667,7 +2986,10 @@ class TestNestedWiringTraversal(unittest.TestCase):
                 + make_prefab_instance("40", _CHILD_WIRING_GUID)
             )
             base_path = _write_prefab_with_meta(
-                assets_dir, "Base.prefab", "66666666666666666666666666666666", base_text,
+                assets_dir,
+                "Base.prefab",
+                "66666666666666666666666666666666",
+                base_text,
             )
 
             orch = _make_orchestrator()
@@ -2682,7 +3004,8 @@ class TestNestedWiringTraversal(unittest.TestCase):
             comps = result.data["components"]
             # Total should be 2: 1 base + 1 nested
             self.assertEqual(
-                result.data["component_count"], 2,
+                result.data["component_count"],
+                2,
                 f"Expected 2 components (base + nested), got {result.data['component_count']}",
             )
             base_comps = [c for c in comps if "source_prefab" not in c]
@@ -2700,9 +3023,7 @@ class InspectHierarchyVariantClassificationTests(unittest.TestCase):
     """
 
     def _copy_fixtures_into_assets(self, root: Path) -> None:
-        fixtures = (
-            Path(__file__).parent / "fixtures" / "variant_misclassification"
-        )
+        fixtures = Path(__file__).parent / "fixtures" / "variant_misclassification"
         assets = root / "Assets"
         assets.mkdir(parents=True, exist_ok=True)
         for child in fixtures.iterdir():
@@ -2739,11 +3060,7 @@ class InspectHierarchyVariantClassificationTests(unittest.TestCase):
             root = Path(tmp)
             assets = root / "Assets"
             assets.mkdir(parents=True, exist_ok=True)
-            base_text = (
-                YAML_HEADER
-                + make_gameobject("100", "SourceRoot", ["200"])
-                + make_transform("200", "100")
-            )
+            base_text = YAML_HEADER + make_gameobject("100", "SourceRoot", ["200"]) + make_transform("200", "100")
             variant_instance = InspectHierarchyPrefabInstanceExpansionTests._prefab_instance(
                 "9000",
                 base_guid,
@@ -2793,7 +3110,8 @@ class InspectHierarchyVariantClassificationTests(unittest.TestCase):
         self.assertTrue(response.success, msg=response.message)
         self.assertEqual(True, response.data.get("is_variant"))
         self.assertEqual(
-            "Assets/Chair.prefab", response.data.get("base_prefab_path"),
+            "Assets/Chair.prefab",
+            response.data.get("base_prefab_path"),
         )
 
 
@@ -2833,9 +3151,7 @@ class InspectMaterialsRelativePathTests(unittest.TestCase):
             assets.mkdir()
             prefab = assets / "Test.prefab"
             prefab.write_text(
-                YAML_HEADER
-                + make_gameobject("100", "Root", ["200"])
-                + make_transform("200", "100"),
+                YAML_HEADER + make_gameobject("100", "Root", ["200"]) + make_transform("200", "100"),
                 encoding="utf-8",
             )
 
@@ -2919,7 +3235,7 @@ class InspectMaterialsRelativePathTests(unittest.TestCase):
             assets = root / "Assets"
             assets.mkdir()
             shader = assets / "Shared.shader"
-            shader.write_text("Shader \"Shared/Test\" {}\n", encoding="utf-8")
+            shader.write_text('Shader "Shared/Test" {}\n', encoding="utf-8")
             shader.with_suffix(shader.suffix + ".meta").write_text(
                 f"fileFormatVersion: 2\nguid: {shader_guid}\n",
                 encoding="utf-8",
@@ -2977,11 +3293,7 @@ class InspectMaterialsRelativePathTests(unittest.TestCase):
             meta.write_text(f"fileFormatVersion: 2\nguid: {guid}\n", encoding="utf-8")
 
             prefab = assets / "Test.prefab"
-            text = (
-                YAML_HEADER
-                + make_gameobject("100", "Obj", ["200"])
-                + make_monobehaviour("200", "100", guid=guid)
-            )
+            text = YAML_HEADER + make_gameobject("100", "Obj", ["200"]) + make_monobehaviour("200", "100", guid=guid)
             prefab.write_text(text, encoding="utf-8")
 
             orch = _make_orchestrator()
@@ -3051,9 +3363,7 @@ class TestInspectHierarchyExpand(unittest.TestCase):
             self._write_project_with_script(root)
             svc = PrefabVariantService(project_root=root)
 
-            response = inspect_hierarchy(
-                svc, "Assets/Test.prefab", expand_monobehaviour=True
-            )
+            response = inspect_hierarchy(svc, "Assets/Test.prefab", expand_monobehaviour=True)
 
         self.assertTrue(response.success, msg=response.message)
         # Tree carries the resolved script class name; the generic
@@ -3155,9 +3465,7 @@ class TestInspectHierarchyExpand(unittest.TestCase):
                 "prefab_sentinel.orchestrator_inspect.collect_project_guid_index",
                 side_effect=OSError("simulated index build failure"),
             ):
-                response = inspect_hierarchy(
-                    svc, "Assets/Test.prefab", expand_monobehaviour=True
-                )
+                response = inspect_hierarchy(svc, "Assets/Test.prefab", expand_monobehaviour=True)
 
         self.assertTrue(response.success)
         self.assertEqual(Severity.WARNING, response.severity)
@@ -3212,8 +3520,6 @@ class TestInspectHierarchyExpand(unittest.TestCase):
             "INSPECT_HIERARCHY_RECT_PARENT_UNRESOLVED",
             diagnostic_codes,
         )
-
-
 
 
 class InspectHierarchyPrefabInstanceExpansionTests(unittest.TestCase):
@@ -3304,13 +3610,10 @@ class InspectHierarchyPrefabInstanceExpansionTests(unittest.TestCase):
             svc = PrefabVariantService(project_root=root)
 
             try:
-                response = inspect_hierarchy(
-                    svc, "Assets/Host.prefab", expand_prefab_instances=True
-                )
+                response = inspect_hierarchy(svc, "Assets/Host.prefab", expand_prefab_instances=True)
             except TypeError as exc:
                 self.fail(
-                    "expected expand_prefab_instances=True to return effective hierarchy; "
-                    f"observed TypeError: {exc}"
+                    f"expected expand_prefab_instances=True to return effective hierarchy; observed TypeError: {exc}"
                 )
 
         nested = response.data["roots"][0]["children"][0]
@@ -3334,6 +3637,72 @@ class InspectHierarchyPrefabInstanceExpansionTests(unittest.TestCase):
                 nested["origin"]["override_host"]["property_paths"],
             ),
             msg=f"expanded inspect_hierarchy lost effective metadata: {response.to_dict()!r}",
+        )
+
+    def test_expanded_mode_success_includes_progress_next_action(self) -> None:
+        from prefab_sentinel.orchestrator_inspect import inspect_hierarchy
+        from prefab_sentinel.services.prefab_variant import PrefabVariantService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_project(root)
+            svc = PrefabVariantService(project_root=root)
+            response = inspect_hierarchy(svc, "Assets/Host.prefab", expand_prefab_instances=True)
+
+        self.assertEqual(
+            (
+                "hierarchy_analysis",
+                "Use max_depth or disable prefab instance expansion when the hierarchy output is too broad.",
+            ),
+            (
+                response.data["current_or_slowest_step"],
+                response.data["suggested_next_action"],
+            ),
+        )
+
+    def test_expanded_mode_timeout_uses_elapsed_budget(self) -> None:
+        from prefab_sentinel import orchestrator_inspect as inspect_module
+        from prefab_sentinel.orchestrator_inspect import inspect_hierarchy
+        from prefab_sentinel.services.prefab_variant import PrefabVariantService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_project(root)
+            svc = PrefabVariantService(project_root=root)
+            original = inspect_module.build_effective_hierarchy
+            clock = iter((0.0, 0.002))
+
+            def slow_build(*args, **kwargs):
+                return original(*args, **kwargs)
+
+            with (
+                patch.object(inspect_module, "build_effective_hierarchy", side_effect=slow_build),
+                patch("time.monotonic", side_effect=lambda: next(clock, 0.002)),
+            ):
+                response = inspect_hierarchy(
+                    svc,
+                    "Assets/Host.prefab",
+                    expand_prefab_instances=True,
+                    timeout_sec=0.001,
+                )
+
+        self.assertEqual(
+            (
+                False,
+                Severity.ERROR,
+                "INSPECTION_TIMEOUT",
+                1,
+                "hierarchy_analysis",
+                "Use a narrower scope or lower expansion settings.",
+            ),
+            (
+                response.success,
+                response.severity,
+                response.code,
+                response.data["partial_counts"]["roots"],
+                response.data["current_or_slowest_step"],
+                response.data["suggested_next_action"],
+            ),
         )
 
     def test_non_gameobject_asset_warning_remains_when_expansion_requested(self) -> None:
@@ -3388,6 +3757,7 @@ class EffectiveInspectorDelegationTests(unittest.TestCase):
             show_components=False,
             expand_monobehaviour=True,
             expand_prefab_instances=True,
+            timeout_sec=None,
         )
 
     def test_internal_inspection_context_is_forwarded_to_issue_targeted_helpers(self) -> None:
@@ -3456,13 +3826,10 @@ class EffectiveInspectorDelegationTests(unittest.TestCase):
         ):
             self.assertIs(context, helper.call_args.kwargs["inspection_context"])
 
-
     def test_inspect_transform_effective_values_delegates_to_helper(self) -> None:
         orch = _make_orchestrator()
         delegated = _ok_response("INSPECT_TRANSFORM_VALUES", {"read_only": True})
-        with patch(
-            "prefab_sentinel.effective_transform_inspector.inspect_transform_effective_values"
-        ) as inspect:
+        with patch("prefab_sentinel.effective_transform_inspector.inspect_transform_effective_values") as inspect:
             inspect.return_value = delegated
             try:
                 result = orch.inspect_transform_effective_values(
@@ -3482,13 +3849,10 @@ class EffectiveInspectorDelegationTests(unittest.TestCase):
             "HostRoot/NestedRoot",
         )
 
-
     def test_inspect_unity_event_listeners_delegates_to_helper(self) -> None:
         orch = _make_orchestrator()
         delegated = _ok_response("INSPECT_UNITY_EVENT_LISTENERS", {"read_only": True})
-        with patch(
-            "prefab_sentinel.unity_event_listener_inspector.inspect_unity_event_listeners"
-        ) as inspect:
+        with patch("prefab_sentinel.unity_event_listener_inspector.inspect_unity_event_listeners") as inspect:
             inspect.return_value = delegated
             try:
                 result = orch.inspect_unity_event_listeners(

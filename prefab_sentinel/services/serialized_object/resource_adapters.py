@@ -19,6 +19,9 @@ from prefab_sentinel.services.serialized_object.asset_create_ops import (
 from prefab_sentinel.services.serialized_object.prefab_create_dispatch import (
     validate_prefab_create_ops,
 )
+from prefab_sentinel.services.serialized_object.prefab_open_dispatch import (
+    validate_prefab_open_ops,
+)
 from prefab_sentinel.services.serialized_object.resource_plan import (
     ResourcePlanContext,
     resource_plan_apply_invalid_response,
@@ -98,11 +101,12 @@ class _PrefabResourceAdapter(_BridgeBackedAdapter):
     supported_modes = frozenset({"open", "create"})
 
     def dry_run(self, service, context):  # type: ignore[override]
-        if context.mode == "open":
-            return service.dry_run_patch(target=context.target, ops=context.ops)
-        diagnostics, preview = validate_prefab_create_ops(
-            context.target, context.ops
+        validator = (
+            validate_prefab_open_ops
+            if context.mode == "open"
+            else validate_prefab_create_ops
         )
+        diagnostics, preview = validator(context.target, context.ops)
         if diagnostics:
             return resource_plan_invalid_response(
                 context=context, diagnostics=diagnostics, read_only=True

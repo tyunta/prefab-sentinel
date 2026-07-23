@@ -1,9 +1,10 @@
-"""Per-op schema validator for JSON-target ``dry_run_patch`` plans.
+"""Schema validators for JSON-target plans and Unity bridge responses.
 
 ``validate_op`` checks a single open-mode operation and returns the
 matching diff-preview row, or ``None`` when the op is rejected.  It
 resolves the ``before`` value through ``resolve_before_value`` so the
 preview reflects the current state of the Prefab Variant chain.
+Created-result and diagnostic helpers validate the bridge response shape.
 """
 
 from __future__ import annotations
@@ -22,6 +23,70 @@ if TYPE_CHECKING:
     from prefab_sentinel.services.serialized_object.service import (
         SerializedObjectService,
     )
+
+
+_CREATED_RESULT_STRING_FIELDS = (
+    "handle",
+    "symbol_path",
+    "game_object_file_id",
+    "transform_file_id",
+    "source_asset_path",
+    "source_asset_guid",
+)
+_CREATED_RESULT_FIELDS = frozenset((*_CREATED_RESULT_STRING_FIELDS, "overrides"))
+_PROPERTY_OVERRIDE_FIELDS = frozenset({"component", "property_path"})
+_BRIDGE_DIAGNOSTIC_FIELDS = frozenset({"path", "location", "detail", "evidence"})
+
+
+def _property_override_is_valid(value: object) -> bool:
+    if not isinstance(value, dict) or set(value) != _PROPERTY_OVERRIDE_FIELDS:
+        return False
+    return all(type(value[field]) is str for field in _PROPERTY_OVERRIDE_FIELDS)
+
+
+def _created_result_is_valid(value: object) -> bool:
+    if not isinstance(value, dict) or set(value) != _CREATED_RESULT_FIELDS:
+        return False
+    if any(
+        type(value[field]) is not str or not value[field].strip()
+        for field in _CREATED_RESULT_STRING_FIELDS
+    ):
+        return False
+    overrides = value["overrides"]
+    return isinstance(overrides, list) and all(
+        _property_override_is_valid(item) for item in overrides
+    )
+
+
+def created_results_are_valid(
+    value: object,
+    *,
+    expected_handles: set[str] | None = None,
+) -> bool:
+    if not isinstance(value, list) or not all(
+        _created_result_is_valid(item) for item in value
+    ):
+        return False
+    handles = [item["handle"] for item in value]
+    return len(handles) == len(set(handles)) and (
+        expected_handles is None or set(handles) == expected_handles
+    )
+
+
+def bridge_diagnostics_are_valid(diagnostics: object) -> bool:
+    return isinstance(diagnostics, list) and all(
+        isinstance(item, dict)
+        and set(item) == _BRIDGE_DIAGNOSTIC_FIELDS
+        and all(type(item[field]) is str for field in _BRIDGE_DIAGNOSTIC_FIELDS)
+        for item in diagnostics
+    )
+
+
+def parse_bridge_diagnostics(payload: list[dict[str, str]]) -> list[Diagnostic]:
+    return [
+        Diagnostic(item["path"], item["location"], item["detail"], item["evidence"])
+        for item in payload
+    ]
 
 
 def validate_op(
@@ -67,10 +132,10 @@ def validate_op(
                 )
             )
         return None
-    # Issue #37: a ``set`` op may target its component by a type-name
-    # ``component`` selector or an exact ``file_id``; when both are
-    # present ``file_id`` wins. Array ops still require ``component``.
-    if op_name == "set" and file_id:
+    # Writable profile probes must retain their exact local fileID for every
+    # value operation. Component selectors remain supported for existing callers;
+    # when both identifiers are present, file_id wins.
+    if file_id:
         target_id = file_id
     elif component:
         target_id = component
@@ -80,15 +145,11 @@ def validate_op(
                 path=target,
                 location=f"ops[{index}] ({op_label}).component",
                 detail="schema_error",
-                evidence=(
-                    "component or file_id is required"
-                    if op_name == "set"
-                    else "component is required"
-                ),
+                evidence="component or file_id is required",
             )
         )
         return None
-    if component and component.lstrip("-").isdigit():
+    if not file_id and component and component.lstrip("-").isdigit():
         diagnostics.append(
             Diagnostic(
                 path=target,
@@ -212,21 +273,27 @@ def validate_op(
                 )
             )
             return None
-        return {
+        entry = {
             "op": op_name,
-            "component": component,
             "path": property_path,
-            "before": resolve_before_value(service, target, component, property_path),
+            "before": resolve_before_value(service, target, target_id, property_path),
             "after": {"insert_index": item_index, "value": op.get("value")},
         }
+    else:
+        entry = {
+            "op": op_name,
+            "path": property_path,
+            "before": resolve_before_value(service, target, target_id, property_path),
+            "after": {"remove_index": item_index},
+        }
+    if component:
+        entry["component"] = component
+    if file_id:
+        entry["file_id"] = file_id
+    return entry
 
-    return {
-        "op": op_name,
-        "component": component,
-        "path": property_path,
-        "before": resolve_before_value(service, target, component, property_path),
-        "after": {"remove_index": item_index},
-    }
 
-
-__all__ = ["validate_op"]
+__all__ = [
+    "bridge_diagnostics_are_valid", "created_results_are_valid",
+    "parse_bridge_diagnostics", "validate_op",
+]

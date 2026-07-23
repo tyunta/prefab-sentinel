@@ -1,7 +1,8 @@
 # Local environment
 .venv/
-.serena/*
-!.serena/project.yml
+**/.serena/**
+!/.serena/
+!/.serena/project.yml
 .claude/
 .superpowers/
 .takt/
@@ -15,6 +16,7 @@ sample/
 report/
 reports/
 report-*.md
+performance-report.json
 
 # Out-of-repo planning/spec drafts (local-only)
 docs/superpowers/

@@ -63,6 +63,7 @@ namespace PrefabSentinel
             "editor_set_property",
             "editor_serialized_property_read",
             "editor_serialized_property_list",
+            "editor_inspect_serialized_surface",
             "editor_serialized_property_write",
             "safe_save_prefab",
             "editor_set_parent",

@@ -29,13 +29,21 @@ from prefab_sentinel.contracts import Severity
 from tests._assertion_helpers import assert_error_envelope
 
 
-class _StubOrchestrator:
-    """Minimal stand-in for ``Phase1Orchestrator`` carrying just the
-    ``maybe_auto_refresh`` hook ``orchestrator_write`` reads.
-    """
+class _StubReferenceResolver:
+    def __init__(self, project_root: object | None = None) -> None:
+        self.project_root = project_root
 
-    def __init__(self, refresh_marker: str = "skipped") -> None:
+
+class _StubOrchestrator:
+    """Minimal stand-in for ``Phase1Orchestrator`` carrying write hooks."""
+
+    def __init__(
+        self,
+        refresh_marker: str = "skipped",
+        project_root: object | None = None,
+    ) -> None:
         self._refresh_marker = refresh_marker
+        self.reference_resolver = _StubReferenceResolver(project_root)
         self.refresh_calls = 0
 
     def maybe_auto_refresh(self) -> str:
@@ -133,6 +141,98 @@ class OrchestratorWriteHelperTests(unittest.TestCase):
             severity="error",
             message_match=r"change_reason is required when confirm=True",
         )
+
+    def test_copy_asset_dry_run_passes_project_root_to_core(self) -> None:
+        project_root = object()
+        orch = _StubOrchestrator(project_root=project_root)
+        core_result: dict[str, Any] = {
+            "success": True,
+            "severity": "info",
+            "code": "ASSET_COPY_DRY_RUN",
+            "message": "ok",
+            "data": {"source_path": "Assets/A.mat"},
+            "diagnostics": [],
+        }
+        with mock.patch.object(
+            orchestrator_write,
+            "_copy_asset",
+            return_value=core_result,
+        ) as mock_core:
+            response = orchestrator_write.copy_asset(
+                orch,  # type: ignore[arg-type]
+                source_path="Assets/A.mat",
+                dest_path="Assets/B.mat",
+                dry_run=True,
+                change_reason=None,
+            )
+
+        kwargs = mock_core.call_args.kwargs
+        self.assertEqual(
+            (True, "ASSET_COPY_DRY_RUN", True, project_root),
+            (
+                response.success,
+                response.code,
+                kwargs["dry_run"],
+                kwargs.get("project_root"),
+            ),
+        )
+
+    def test_rename_asset_dry_run_passes_project_root_to_core(self) -> None:
+        project_root = object()
+        orch = _StubOrchestrator(project_root=project_root)
+        core_result: dict[str, Any] = {
+            "success": True,
+            "severity": "info",
+            "code": "ASSET_RENAME_DRY_RUN",
+            "message": "ok",
+            "data": {"asset_path": "Assets/A.mat"},
+            "diagnostics": [],
+        }
+        with mock.patch.object(
+            orchestrator_write,
+            "_rename_asset",
+            return_value=core_result,
+        ) as mock_core:
+            response = orchestrator_write.rename_asset(
+                orch,  # type: ignore[arg-type]
+                asset_path="Assets/A.mat",
+                new_name="B.mat",
+                dry_run=True,
+                change_reason=None,
+            )
+
+        kwargs = mock_core.call_args.kwargs
+        self.assertEqual(
+            (True, "ASSET_RENAME_DRY_RUN", True, project_root),
+            (
+                response.success,
+                response.code,
+                kwargs["dry_run"],
+                kwargs.get("project_root"),
+            ),
+        )
+
+    def test_rename_asset_invalid_source_path_returns_structured_envelope(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_root = Path(tmpdir) / "Project"
+            project_root.mkdir()
+            orch = _StubOrchestrator(project_root=project_root)
+            response = orchestrator_write.rename_asset(
+                orch,  # type: ignore[arg-type]
+                asset_path="../outside.mat",
+                new_name="renamed.mat",
+                dry_run=True,
+                change_reason=None,
+            )
+
+        self.assertEqual(
+            (False, Severity.ERROR, "ASSET_RENAME_INVALID_PATH"),
+            (response.success, response.severity, response.code),
+        )
+        self.assertEqual("rename_source_resolution", response.diagnostics[0].detail)
 
     def test_rename_asset_confirm_without_change_reason_returns_envelope(
         self,

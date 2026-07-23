@@ -1,0 +1,38 @@
+{
+  "schema_version": "inspector_profile.v1",
+  "target": {
+    "managed_type": "Example.Component",
+    "assembly": "Example.Assembly"
+  },
+  "generated_by": {
+    "kind": "ai-skill",
+    "skill": "prefab-sentinel:inspector-profile-authoring",
+    "created_at": "2026-07-10T00:00:00Z",
+    "source": "PROFILE_AUTHORING_REQUIRED",
+    "mcp_tool": "inspect_with_profile"
+  },
+  "confidence": "low",
+  "evidence": [
+    {
+      "kind": "serialized_surface",
+      "detail": "Replace this template evidence with the observed current surface."
+    }
+  ],
+  "limitations": [
+    "Replace the example target, paths, confidence, and evidence before validation."
+  ],
+  "views": [
+    {
+      "name": "example_fields",
+      "kind": "fields",
+      "evidence": [],
+      "limitations": [],
+      "fields": [
+        {
+          "name": "example",
+          "path": "exampleField"
+        }
+      ]
+    }
+  ]
+}

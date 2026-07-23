@@ -6,6 +6,7 @@ import os
 import sys
 import time
 import uuid
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -40,7 +41,19 @@ from _bridge_codes import (
     BRIDGE_WATCH_DIR_MISSING,
 )
 
-from prefab_sentinel.patch_plan import PLAN_VERSION as PROTOCOL_VERSION, iter_resource_batches, normalize_patch_plan
+from prefab_sentinel.patch_plan import (
+    PLAN_VERSION as PROTOCOL_VERSION,
+    bridge_response_state_is_valid,
+    iter_resource_batches,
+    normalize_patch_plan,
+)
+from prefab_sentinel.services.serialized_object.patch_validator import (
+    bridge_diagnostics_are_valid as _bridge_diagnostics_are_valid,
+)
+from prefab_sentinel.services.serialized_object.resource_bridge_invoke import (
+    _BRIDGE_RESPONSE_FIELDS,
+    _bridge_data_is_valid,
+)
 from prefab_sentinel.wsl_compat import to_wsl_path
 
 SUPPORTED_SUFFIXES = {
@@ -66,6 +79,7 @@ SUPPORTED_OP_NAMES = {
     "create_prefab",
     "create_root",
     "create_game_object",
+    "find_game_object",
     "instantiate_prefab",
     "rename_object",
     "reparent",
@@ -76,6 +90,8 @@ SUPPORTED_OP_NAMES = {
     "save_scene",
 }
 _SEVERITY_ORDER = {"info": 0, "warning": 1, "error": 2, "critical": 3}
+
+
 
 
 def _emit(payload: dict[str, Any]) -> int:
@@ -109,21 +125,23 @@ def _error_response(
     }
 
 
+
+
+
+
+
+
+
+
+
 def _finalize_unity_response(
     *,
     payload: dict[str, Any],
     target: str,
     op_count: int,
 ) -> dict[str, Any]:
-    protocol_raw = payload.get(
-        "protocol_version",
-        PROTOCOL_VERSION,
-    )
-    try:
-        protocol_version = int(protocol_raw)
-    except (TypeError, ValueError):
-        protocol_version = -1
-    if protocol_version != PROTOCOL_VERSION:
+    protocol_raw = payload.get("protocol_version")
+    if type(protocol_raw) is not int or protocol_raw != PROTOCOL_VERSION:
         return _error_response(
             code=BRIDGE_PROTOCOL_VERSION,
             message="Bridge protocol version mismatch.",
@@ -133,37 +151,48 @@ def _finalize_unity_response(
             },
         )
 
-    schema_error = _validate_unity_response_envelope(payload)
+    schema_error = _validate_unity_response_envelope(payload, op_count=op_count)
     if schema_error is not None:
         return schema_error
 
-    response = dict(payload)
-    response["protocol_version"] = PROTOCOL_VERSION
-    data = dict(response.get("data", {}))
-    data.setdefault("target", target)
-    data.setdefault("op_count", op_count)
-    data.setdefault("read_only", False)
-    data.setdefault("executed", True)
-    data.setdefault("protocol_version", PROTOCOL_VERSION)
-    response["data"] = data
-    return response
+    data = dict(payload["data"])
+    data["target"] = target
+    data["op_count"] = op_count
+    data["protocol_version"] = PROTOCOL_VERSION
+    return {
+        "protocol_version": PROTOCOL_VERSION,
+        "success": payload["success"],
+        "severity": payload["severity"],
+        "code": payload["code"],
+        "message": payload["message"],
+        "data": data,
+        "diagnostics": [dict(item) for item in payload["diagnostics"]],
+    }
 
 
-def _validate_unity_response_envelope(payload: dict[str, Any]) -> dict[str, Any] | None:
-    required_fields = ("success", "severity", "code", "message", "data", "diagnostics")
-    missing_fields = [field for field in required_fields if field not in payload]
-    if missing_fields:
+def _validate_unity_response_envelope(
+    payload: dict[str, Any],
+    *,
+    op_count: int,
+) -> dict[str, Any] | None:
+    if set(payload) != _BRIDGE_RESPONSE_FIELDS:
+        missing_fields = sorted(_BRIDGE_RESPONSE_FIELDS - set(payload))
+        unknown_fields = sorted(set(payload) - _BRIDGE_RESPONSE_FIELDS)
         return _error_response(
             code=BRIDGE_UNITY_RESPONSE_SCHEMA,
-            message="Editor Bridge response is missing required fields.",
-            data={"missing_fields": missing_fields},
+            message="Editor Bridge response fields do not match the BridgeResponse schema.",
+            data={
+                "missing_fields": missing_fields,
+                "unknown_fields": unknown_fields,
+            },
         )
-    if not isinstance(payload.get("success"), bool):
+    success = payload["success"]
+    if type(success) is not bool:
         return _error_response(
             code=BRIDGE_UNITY_RESPONSE_SCHEMA,
             message="Editor Bridge response field 'success' must be a boolean.",
         )
-    severity = payload.get("severity")
+    severity = payload["severity"]
     if not isinstance(severity, str) or severity not in VALID_SEVERITIES:
         return _error_response(
             code=BRIDGE_UNITY_RESPONSE_SCHEMA,
@@ -173,26 +202,41 @@ def _validate_unity_response_envelope(payload: dict[str, Any]) -> dict[str, Any]
                 + "."
             ),
         )
-    code = payload.get("code")
+    code = payload["code"]
     if not isinstance(code, str) or not code.strip():
         return _error_response(
             code=BRIDGE_UNITY_RESPONSE_SCHEMA,
             message="Editor Bridge response field 'code' must be a non-empty string.",
         )
-    if not isinstance(payload.get("message"), str):
+    if not isinstance(payload["message"], str):
         return _error_response(
             code=BRIDGE_UNITY_RESPONSE_SCHEMA,
             message="Editor Bridge response field 'message' must be a string.",
         )
-    if not isinstance(payload.get("data"), dict):
+    if not _bridge_data_is_valid(payload["data"], op_count=op_count):
         return _error_response(
             code=BRIDGE_UNITY_RESPONSE_SCHEMA,
-            message="Editor Bridge response field 'data' must be an object.",
+            message="Editor Bridge response field 'data' does not match the BridgeData schema.",
         )
-    if not isinstance(payload.get("diagnostics"), list):
+
+    data = payload["data"]
+    if (
+        data["read_only"]
+        or (success and not data["executed"])
+        or not bridge_response_state_is_valid(
+            success=success,
+            severity=severity,
+            code=code,
+        )
+    ):
         return _error_response(
             code=BRIDGE_UNITY_RESPONSE_SCHEMA,
-            message="Editor Bridge response field 'diagnostics' must be an array.",
+            message="Editor Bridge response execution state is contradictory.",
+        )
+    if not _bridge_diagnostics_are_valid(payload["diagnostics"]):
+        return _error_response(
+            code=BRIDGE_UNITY_RESPONSE_SCHEMA,
+            message="Editor Bridge diagnostics do not match the BridgeDiagnostic schema.",
         )
     return None
 
@@ -233,6 +277,8 @@ def _normalize_bridge_op(op: object) -> object:
         "type",
         "shader",
         "prefab",
+        "symbol_path",
+        "relative_symbol_path",
     ):
         if key in op:
             normalized[key] = op[key]
@@ -243,8 +289,95 @@ def _normalize_bridge_op(op: object) -> object:
     return normalized
 
 
-def _normalize_bridge_ops(ops: list[object]) -> list[object]:
+def _normalize_bridge_ops(ops: Sequence[object]) -> list[object]:
     return [_normalize_bridge_op(op) for op in ops]
+
+
+def _validate_find_game_object_op(
+    op: dict[str, object],
+    location: str,
+) -> dict[str, str] | None:
+    result = op.get("result")
+    if not isinstance(result, str) or not result.strip():
+        return {
+            "location": f"{location}.result",
+            "error": "find_game_object requires a non-empty 'result'",
+        }
+
+    has_symbol_path = "symbol_path" in op
+    has_file_id = "file_id" in op
+    has_target = "target" in op
+    has_relative_path = "relative_symbol_path" in op
+    has_existing_address = has_symbol_path or has_file_id
+    has_generated_address = has_target or has_relative_path
+    if has_existing_address == has_generated_address:
+        return {
+            "location": location,
+            "error": "find_game_object requires exactly one existing or generated address",
+        }
+
+    if has_existing_address:
+        if has_symbol_path == has_file_id:
+            return {
+                "location": f"{location}.symbol_path",
+                "error": "find_game_object requires exactly one of symbol_path or file_id",
+            }
+        field = "symbol_path" if has_symbol_path else "file_id"
+        value = op.get(field)
+        if isinstance(value, bool) or not isinstance(value, (int, str)) or not str(value).strip():
+            return {
+                "location": f"{location}.{field}",
+                "error": f"find_game_object '{field}' must be a non-empty address",
+            }
+        return None
+
+    target = op.get("target")
+    if not isinstance(target, str) or not target.strip():
+        return {
+            "location": f"{location}.target",
+            "error": "generated find_game_object requires a non-empty 'target'",
+        }
+    relative_path = op.get("relative_symbol_path")
+    if not isinstance(relative_path, str) or not relative_path.strip():
+        return {
+            "location": f"{location}.relative_symbol_path",
+            "error": "generated find_game_object requires a non-empty 'relative_symbol_path'",
+        }
+    return None
+
+
+# The transport also serves dedicated serialized-value writers. Public
+# patch_apply keeps its stricter five-op grammar in prefab_open_dispatch.
+_OPEN_PREFAB_OP_NAMES = frozenset(
+    {
+        "instantiate_prefab",
+        "rename_object",
+        "find_game_object",
+        "find_component",
+        "set",
+        "insert_array_element",
+        "remove_array_element",
+    }
+)
+
+
+def _validate_open_prefab_operation_names(
+    plan: dict[str, Any],
+) -> dict[str, Any] | None:
+    resource_modes = {
+        resource["id"]: (resource["kind"], resource["mode"])
+        for resource in plan["resources"]
+    }
+    for index, op in enumerate(plan["ops"]):
+        if (
+            resource_modes[op["resource"]] == ("prefab", "open")
+            and str(op.get("op", "")).strip() not in _OPEN_PREFAB_OP_NAMES
+        ):
+            return {
+                "location": f"ops[{index}].op",
+                "error": "open prefab operation is unsupported",
+            }
+    return None
 
 
 def _validate_bridge_ops(
@@ -252,6 +385,9 @@ def _validate_bridge_ops(
     *,
     require_resource: bool,
 ) -> dict[str, Any] | None:
+    if not ops:
+        return {"location": "ops", "error": "operations must be a non-empty array"}
+
     for index, op in enumerate(ops):
         location = f"ops[{index}]"
         if not isinstance(op, dict):
@@ -325,6 +461,12 @@ def _validate_bridge_ops(
                     "location": f"{location}.parent",
                     "error": "create_game_object requires a non-empty 'parent'",
                 }
+            continue
+
+        if op_name == "find_game_object":
+            error = _validate_find_game_object_op(op, location)
+            if error is not None:
+                return error
             continue
 
         if op_name == "instantiate_prefab":
@@ -407,22 +549,21 @@ def _validate_bridge_ops(
         file_id = op.get("file_id")
         has_component = isinstance(component, str) and bool(component.strip())
         has_target = isinstance(target, str) and bool(target.strip())
-        # Issue #37: a ``set`` op may identify its target component by an
-        # exact 'file_id' instead of a 'component' selector.
+        # Issue #37: value mutation ops may identify their target component
+        # by an exact 'file_id' instead of a component selector.
         has_file_id = isinstance(file_id, str) and bool(file_id.strip())
-        if (
-            not has_component
-            and not has_target
-            and not (op_name == "set" and has_file_id)
-        ):
+        is_value_op = op_name in {
+            "set",
+            "insert_array_element",
+            "remove_array_element",
+        }
+        if not has_component and not has_target and not (is_value_op and has_file_id):
             return {
                 "location": location,
                 "error": (
-                    "set op requires a non-empty 'component', 'target', "
-                    "or 'file_id'"
-                    if op_name == "set"
-                    else "mutation op requires a non-empty 'component' or "
-                    "'target'"
+                    f"{op_name} op requires a non-empty 'component', 'target', or 'file_id'"
+                    if is_value_op
+                    else "mutation op requires a non-empty 'component' or 'target'"
                 ),
             }
 
@@ -430,10 +571,10 @@ def _validate_bridge_ops(
         if not isinstance(path, str) or not path.strip():
             return {"location": f"{location}.path", "error": "path is required"}
 
-        if op_name == "set" and "value" not in op:
+        if op_name in {"set", "insert_array_element"} and "value" not in op:
             return {
                 "location": location,
-                "error": "set operation requires 'value'",
+                "error": f"{op_name} operation requires 'value'",
             }
 
         if op_name in {"insert_array_element", "remove_array_element"}:
@@ -459,10 +600,7 @@ def _max_response_severity(responses: list[dict[str, Any]]) -> str:
     if not responses:
         return "info"
     return max(
-        (
-            str(response.get("severity", "error"))
-            for response in responses
-        ),
+        (str(response.get("severity", "error")) for response in responses),
         key=lambda value: _SEVERITY_ORDER.get(value, _SEVERITY_ORDER["error"]),
     )
 
@@ -470,22 +608,48 @@ def _max_response_severity(responses: list[dict[str, Any]]) -> str:
 def _resource_summary(
     resource: dict[str, Any],
     ops: list[dict[str, Any]],
-    response: dict[str, Any],
+    response: dict[str, Any] | None,
 ) -> dict[str, Any]:
+    summary = {
+        "id": resource["id"],
+        "kind": resource["kind"],
+        "path": resource["path"],
+        "mode": resource["mode"],
+        "op_count": len(ops),
+        "applied": 0,
+        "executed": response is not None,
+    }
+    if response is None:
+        return summary
+
     data = response.get("data", {})
     if not isinstance(data, dict):
         data = {}
-    return {
-        "id": resource.get("id"),
-        "kind": resource.get("kind"),
-        "path": resource.get("path"),
-        "mode": resource.get("mode"),
-        "op_count": len(ops),
-        "applied": data.get("applied", 0),
-        "success": response.get("success", False),
-        "severity": response.get("severity", "error"),
-        "code": response.get("code", ""),
+    summary.update(
+        {
+            "applied": data.get("applied", 0),
+            "success": response.get("success", False),
+            "severity": response.get("severity", "error"),
+            "code": response.get("code", ""),
+        }
+    )
+    return summary
+
+
+def _resource_summaries(
+    *,
+    resource_batches: list[tuple[dict[str, Any], list[dict[str, Any]]]],
+    executable_batches: list[tuple[dict[str, Any], list[dict[str, Any]]]],
+    responses: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    responses_by_id = {
+        resource["id"]: response
+        for (resource, _), response in zip(executable_batches, responses, strict=True)
     }
+    return [
+        _resource_summary(resource, ops, responses_by_id.get(resource["id"]))
+        for resource, ops in resource_batches
+    ]
 
 
 def _finalize_bridge_plan_response(
@@ -493,26 +657,31 @@ def _finalize_bridge_plan_response(
     plan: dict[str, Any],
     responses: list[dict[str, Any]],
     resource_batches: list[tuple[dict[str, Any], list[dict[str, Any]]]],
+    executable_batches: list[tuple[dict[str, Any], list[dict[str, Any]]]],
 ) -> dict[str, Any]:
-    if len(responses) == 1:
-        response = dict(responses[0])
-        data = dict(response.get("data", {}))
-        data["plan_version"] = plan.get("plan_version", PROTOCOL_VERSION)
-        data["resource_count"] = 1
-        data["resources"] = [
-            _resource_summary(resource_batches[0][0], resource_batches[0][1], responses[0])
-        ]
-        response["data"] = data
-        response["protocol_version"] = PROTOCOL_VERSION
-        return response
+    malformed_response = next(
+        (
+            response
+            for response in responses
+            if response.get("success") is False
+            and response.get("code") == BRIDGE_UNITY_RESPONSE_SCHEMA
+        ),
+        None,
+    )
+    if malformed_response is not None:
+        return dict(malformed_response)
 
+    if len(resource_batches) == 1 and len(responses) == 1:
+        return dict(responses[0])
+
+    resource_summaries = _resource_summaries(
+        resource_batches=resource_batches,
+        executable_batches=executable_batches,
+        responses=responses,
+    )
     success = all(bool(response.get("success", False)) for response in responses)
-    resource_summaries = [
-        _resource_summary(resource, ops, response)
-        for (resource, ops), response in zip(resource_batches, responses, strict=True)
-    ]
     applied_total = sum(
-        int(summary["applied"]) if isinstance(summary.get("applied"), int) else 0
+        int(summary["applied"]) if type(summary.get("applied")) is int else 0
         for summary in resource_summaries
     )
     severity = _max_response_severity(responses)
@@ -592,40 +761,50 @@ def _run_via_editor_bridge(
 
     # Atomic write: .tmp → rename to avoid partial reads by the watcher.
     try:
-        watch_dir.mkdir(parents=True, exist_ok=True)
         tmp_file.write_text(
             json.dumps(request_payload, ensure_ascii=False),
             encoding="utf-8",
         )
         tmp_file.rename(request_file)
-    except OSError as exc:
+    except OSError:
+        _try_delete(tmp_file)
+        _try_delete(request_file)
         return _error_response(
             code=BRIDGE_EDITOR_WRITE,
             message="Failed to write editor bridge request file.",
             data={
                 "resource_id": resource.get("id"),
                 "target": target,
-                "request_file": str(request_file),
-                "error": str(exc),
             },
         )
 
     # Poll for response.
     deadline = time.monotonic() + timeout_sec
     while time.monotonic() < deadline:
-        if response_file.exists():
+        try:
+            response_ready = response_file.exists()
+        except OSError:
+            _try_delete(request_file)
+            _try_delete(response_file)
+            return _error_response(
+                code=BRIDGE_EDITOR_RESPONSE_READ,
+                message="Editor bridge response file status could not be read.",
+                data={
+                    "resource_id": resource.get("id"),
+                    "target": target,
+                },
+            )
+        if response_ready:
             try:
                 raw = response_file.read_text(encoding="utf-8")
                 unity_payload = json.loads(raw)
-            except (OSError, json.JSONDecodeError) as exc:
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
                 return _error_response(
                     code=BRIDGE_EDITOR_RESPONSE_READ,
                     message="Editor bridge response file could not be read.",
                     data={
                         "resource_id": resource.get("id"),
                         "target": target,
-                        "response_file": str(response_file),
-                        "error": str(exc),
                     },
                 )
             finally:
@@ -639,21 +818,11 @@ def _run_via_editor_bridge(
                     data={"resource_id": resource.get("id"), "target": target},
                 )
 
-            response = _finalize_unity_response(
+            return _finalize_unity_response(
                 payload=unity_payload,
                 target=target,
                 op_count=len(ops),
             )
-            data = response.get("data", {})
-            if isinstance(data, dict):
-                data.setdefault("resource_id", resource.get("id"))
-                data.setdefault("resource_kind", resource.get("kind"))
-                data.setdefault("resource_mode", resource.get("mode"))
-                # ``bridge_mode`` is always "editor" since the batchmode dispatch
-                # path was removed in issue #270; retained as a stable transport
-                # tag for response-shape callers and pinned by tests.
-                data["bridge_mode"] = "editor"
-            return response
 
         time.sleep(DEFAULT_EDITOR_POLL_INTERVAL)
 
@@ -666,7 +835,6 @@ def _run_via_editor_bridge(
             "resource_id": resource.get("id"),
             "target": target,
             "timeout_sec": timeout_sec,
-            "request_file": str(request_file),
         },
     )
 
@@ -712,12 +880,11 @@ def main(argv: list[str] | None = None, stdin: TextIO | None = None) -> int:
 
     try:
         request = json.loads(raw)
-    except json.JSONDecodeError as exc:
+    except json.JSONDecodeError:
         return _emit(
             _error_response(
                 code=BRIDGE_REQUEST_JSON,
                 message="Bridge request must be valid JSON.",
-                data={"error": str(exc)},
             )
         )
 
@@ -746,19 +913,15 @@ def main(argv: list[str] | None = None, stdin: TextIO | None = None) -> int:
             )
         )
 
-    protocol_raw = request.get("protocol_version")
-    try:
-        protocol_version = int(protocol_raw)
-    except (TypeError, ValueError):
-        protocol_version = -1
-    if protocol_version != PROTOCOL_VERSION:
+    protocol_version = request.get("protocol_version")
+    if type(protocol_version) is not int or protocol_version != PROTOCOL_VERSION:
         return _emit(
             _error_response(
                 code=BRIDGE_PROTOCOL_VERSION,
                 message="Bridge protocol version mismatch.",
                 data={
                     "expected_protocol_version": PROTOCOL_VERSION,
-                    "received_protocol_version": protocol_raw,
+                    "received_protocol_version": protocol_version,
                 },
             )
         )
@@ -766,11 +929,21 @@ def main(argv: list[str] | None = None, stdin: TextIO | None = None) -> int:
     request_plan = {key: value for key, value in request.items() if key != "protocol_version"}
     try:
         plan = normalize_patch_plan(request_plan)
-    except ValueError as exc:
+    except ValueError:
         return _emit(
             _error_response(
                 code=BRIDGE_REQUEST_SCHEMA,
-                message=str(exc),
+                message="Bridge request schema is invalid.",
+            )
+        )
+
+    mode_schema_error = _validate_open_prefab_operation_names(plan)
+    if mode_schema_error is not None:
+        return _emit(
+            _error_response(
+                code=BRIDGE_REQUEST_SCHEMA,
+                message="ops contain an operation unsupported by the resource mode.",
+                data=mode_schema_error,
             )
         )
 
@@ -821,6 +994,18 @@ def main(argv: list[str] | None = None, stdin: TextIO | None = None) -> int:
             )
         )
     watch_dir = Path(to_wsl_path(watch_dir_raw))
+    try:
+        watch_dir_ready = watch_dir.is_dir()
+    except OSError:
+        watch_dir_ready = False
+    if not watch_dir_ready:
+        return _emit(
+            _error_response(
+                code=BRIDGE_WATCH_DIR_MISSING,
+                message=(f"{BRIDGE_WATCH_DIR_ENV} must name an existing Editor Bridge watch directory."),
+            )
+        )
+    executable_batches = [batch for batch in resource_batches if batch[1]]
     responses = [
         _run_via_editor_bridge(
             watch_dir=watch_dir,
@@ -828,7 +1013,7 @@ def main(argv: list[str] | None = None, stdin: TextIO | None = None) -> int:
             resource=resource,
             ops=resource_ops,
         )
-        for resource, resource_ops in resource_batches
+        for resource, resource_ops in executable_batches
     ]
 
     return _emit(
@@ -836,6 +1021,7 @@ def main(argv: list[str] | None = None, stdin: TextIO | None = None) -> int:
             plan=plan,
             responses=responses,
             resource_batches=resource_batches,
+            executable_batches=executable_batches,
         )
     )
 

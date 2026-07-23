@@ -4,6 +4,25 @@
 
 ## [Unreleased]
 
+## [0.8.9] - 2026-07-23
+
+### Added
+
+- AI エージェントが Unity Inspector 上の値を安全に読み取り、プロジェクトごとの確認用 profile を作れるようにした。custom inspector が絡む component や ScriptableObject でも、どの値を確認できるかを事前に検証しやすくなった。
+- 主要な検査経路に synthetic benchmark を追加した。大きめの prefab / hierarchy / material 検査で、更新後に極端な遅さが入り込んでいないかを継続的に確認できる。
+
+### Changed
+
+- ClientSim を使う実行時検証の安全性を上げた。対象 scene が明確に読み込まれている場合だけ Play Mode に入り、検証後は Editor の状態と scene の汚れを確認してから結果を返す。
+- Inspector profile の書き込み可否判定を実際の対象に合わせて確認するようにした。AI エージェントが「書ける」と判断したのに実際の対象へ安全に届かない、という誤案内を減らした。
+- wheel 配布物に含める Unity Bridge / knowledge ファイルの選別を厳密にした。ローカル作業用 metadata が package に混入しにくくなった。
+
+### Fixed
+
+- Inspector profile で missing reference、配列の対応ずれ、dirty asset、特殊な float 値を含む場合の報告を安定化した。AI エージェントが Inspector 状態を読んだときの見落としや誤報を減らした。
+- UdonSharp を含む open Prefab への変更で、保存前に proxy と backing behaviour の同期を確認するようにした。同期できない場合は保存せず戻すため、Prefab に中途半端な変更が残りにくくなった。
+- ClientSim 検証の終了後に残った GameObject / Component / dirty asset を警告できるようにした。実行中だけ存在したものと、検証後も残った副作用を区別しやすくなった。
+
 ## [0.8.1] - 2026-07-07
 
 ### Added
