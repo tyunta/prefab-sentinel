@@ -119,9 +119,20 @@ class SetComponentFieldsSER003Tests(unittest.TestCase):
     def _setup_server_and_prefab(self, td: Path) -> tuple[Any, Path]:
         from prefab_sentinel.mcp_server import create_server  # noqa: PLC0415
 
-        prefab_path = td / "test.prefab"
+        assets = td / "Assets"
+        assets.mkdir()
+        prefab_path = assets / "test.prefab"
         prefab_path.write_text(_meshrenderer_prefab(), encoding="utf-8")
         server = create_server()
+        activation = _run_call_tool(server.call_tool(
+            "activate_project",
+            {"scope": "Assets", "project_root": str(td)},
+        ))
+        self.assertEqual(
+            (True, "SESSION_ACTIVATED"),
+            (activation["success"], activation["code"]),
+            activation,
+        )
         return server, prefab_path
 
     def test_set_properties_returns_ser003_for_unknown_property(self) -> None:

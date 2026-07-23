@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 from prefab_sentinel.contracts import (
@@ -19,6 +19,7 @@ from prefab_sentinel.effective_hierarchy import (
 )
 from prefab_sentinel.hierarchy import HierarchyNode, analyze_hierarchy, format_tree
 from prefab_sentinel.inspection_context import ProjectInspectionContext
+from prefab_sentinel.inspection_progress import InspectionProgress
 from prefab_sentinel.material_asset_inspector import (
     format_material_asset,
     inspect_material_asset as _inspect_material_asset,
@@ -96,13 +97,34 @@ def inspect_hierarchy(
     show_components: bool = True,
     expand_monobehaviour: bool = False,
     expand_prefab_instances: bool = False,
+    timeout_sec: float | None = None,
     inspection_context: ProjectInspectionContext | None = None,
 ) -> ToolResponse:
+    import time
+
+    deadline = time.monotonic() + timeout_sec if timeout_sec is not None else None
+
+    def timed_out() -> bool:
+        return deadline is not None and time.monotonic() >= deadline
+
+    def timeout_response() -> ToolResponse:
+        return error_response(
+            "INSPECTION_TIMEOUT",
+            "inspect.hierarchy timed out after partial analysis.",
+            severity=Severity.ERROR,
+            data=progress.to_data(
+                current_or_slowest_step="hierarchy_analysis",
+                suggested_next_action="Use a narrower scope or lower expansion settings.",
+            ),
+        )
+
     text_or_error = read_target_file(prefab_variant, target_path, "INSPECT_HIERARCHY")
     if isinstance(text_or_error, ToolResponse):
         return text_or_error
     text = text_or_error
     host_text = text
+    progress = InspectionProgress()
+    progress.record_stage("loaded_targets", completed=True, count=1)
 
     suffix = Path(target_path).suffix.lower()
     if suffix not in GAMEOBJECT_BEARING_SUFFIXES:
@@ -175,6 +197,9 @@ def inspect_hierarchy(
             ),
         )
         diagnostics.extend(effective.diagnostics)
+        progress.record_stage("roots", completed=True, count=len(effective.roots))
+        if timed_out():
+            return timeout_response()
         effective_data = effective.to_dict()
         effective_data.pop("diagnostics", None)
         effective_data["target_path"] = target_path
@@ -185,6 +210,13 @@ def inspect_hierarchy(
             show_components=show_components,
             monobehaviour_resolver=monobehaviour_resolver,
         )
+        effective_data.update(progress.to_data(
+            current_or_slowest_step="hierarchy_analysis",
+            suggested_next_action=(
+                "Use max_depth or disable prefab instance expansion when "
+                "the hierarchy output is too broad."
+            ),
+        ))
         effective_data["expand_prefab_instances"] = True
         if expand_monobehaviour:
             effective_data["expand_monobehaviour"] = True
@@ -202,6 +234,14 @@ def inspect_hierarchy(
         )
 
     result = analyze_hierarchy(text, override_counts=override_counts)
+    progress.record_stage(
+        "game_objects", completed=True, count=result.total_game_objects,
+    )
+    progress.record_stage(
+        "components", completed=True, count=result.total_components,
+    )
+    if timed_out():
+        return timeout_response()
     tree_text = format_tree(
         result,
         max_depth=max_depth,
@@ -314,6 +354,13 @@ def inspect_hierarchy(
         "tree": tree_text,
         "roots": serialized_roots,
     }
+    data.update(progress.to_data(
+        current_or_slowest_step="hierarchy_analysis",
+        suggested_next_action=(
+            "Use max_depth or disable prefab instance expansion when the "
+            "hierarchy output is too broad."
+        ),
+    ))
     if is_variant:
         data["is_variant"] = True
         data["base_prefab_path"] = base_prefab_path
@@ -418,8 +465,21 @@ def inspect_material_asset(
     prefab_variant: PrefabVariantService,
     target_path: str,
     *,
+    mode: str = "full",
+    property_names: Sequence[str] | None = None,
     inspection_context: ProjectInspectionContext | None = None,
 ) -> ToolResponse:
+    if mode not in ("full", "summary"):
+        return error_response(
+            "INSPECT_MATERIAL_ASSET_INVALID_MODE",
+            f"Unsupported material inspection mode: {mode}",
+            data={
+                "target_path": target_path,
+                "read_only": True,
+                "accepted_modes": ["full", "summary"],
+            },
+        )
+
     text_or_error = read_target_file(prefab_variant, target_path, "INSPECT_MATERIAL_ASSET")
     if isinstance(text_or_error, ToolResponse):
         return text_or_error
@@ -449,8 +509,6 @@ def inspect_material_asset(
             data={"target_path": target_path, "read_only": True},
         )
 
-    tree_text = format_material_asset(result)
-
     tex_data = [
         {
             "name": t.name,
@@ -464,7 +522,57 @@ def inspect_material_asset(
     float_data = [{"name": f.name, "value": f.value} for f in result.floats]
     color_data = [{"name": c.name, "value": c.value} for c in result.colors]
     int_data = [{"name": i.name, "value": i.value} for i in result.ints]
+    counts = {
+        "texture_count": len(result.textures),
+        "float_count": len(result.floats),
+        "color_count": len(result.colors),
+        "int_count": len(result.ints),
+    }
 
+    if mode == "summary":
+        requested = set(property_names or [])
+        selected: dict[str, object] = {}
+        for texture in result.textures:
+            if texture.name in requested:
+                selected[texture.name] = {"kind": "texture", "guid": texture.guid}
+        for float_prop in result.floats:
+            if float_prop.name in requested:
+                selected[float_prop.name] = {"kind": "float", "value": float_prop.value}
+        for color in result.colors:
+            if color.name in requested:
+                selected[color.name] = {"kind": "color", "value": color.value}
+        for int_prop in result.ints:
+            if int_prop.name in requested:
+                selected[int_prop.name] = {"kind": "int", "value": int_prop.value}
+        main_texture = next(
+            (
+                {"name": t.name, "guid": t.guid, "path": t.path}
+                for t in result.textures
+                if t.name == "_MainTex"
+            ),
+            None,
+        )
+        return success_response(
+            "INSPECT_MATERIAL_ASSET_RESULT",
+            "inspect.material_asset completed (read-only).",
+            data={
+                "target_path": target_path,
+                "read_only": True,
+                "mode": "summary",
+                "material_name": result.material_name,
+                "shader": {
+                    "guid": result.shader.guid,
+                    "file_id": result.shader.file_id,
+                    "name": result.shader.name,
+                    "path": result.shader.path,
+                },
+                "main_texture": main_texture,
+                "selected_properties": selected,
+                "counts": counts,
+            },
+        )
+
+    tree_text = format_material_asset(result)
     data: dict[str, object] = {
         "target_path": target_path,
         "read_only": True,

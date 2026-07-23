@@ -177,8 +177,10 @@ class MissingGuidContractTests(unittest.TestCase):
         single-Base.prefab fixture (one scanned file, zero references)."""
         return {
             "scope": scope,
+            "scan_scope": scope,
             "project_root": ".",
             "scan_project_root": ".",
+            "guid_resolution_root": ".",
             "read_only": True,
             "details_included": False,
             "max_diagnostics": 200,
@@ -211,8 +213,10 @@ class MissingGuidContractTests(unittest.TestCase):
         missing-GUID Base+Variant fixture."""
         return {
             "scope": scope,
+            "scan_scope": scope,
             "project_root": ".",
             "scan_project_root": ".",
+            "guid_resolution_root": ".",
             "read_only": True,
             "details_included": False,
             "max_diagnostics": 200,
@@ -336,6 +340,152 @@ class MissingGuidContractTests(unittest.TestCase):
                 ],
             },
             response.data,
+        )
+
+
+class ValidateRefsResolutionRootTests(unittest.TestCase):
+    def test_assets_file_and_directory_scopes_resolve_guids_from_project_root(self) -> None:
+        shared_script_guid = "11111111111111111111111111111111"
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            write_file(root / "Assets" / "Shared" / "SharedScript.cs", "class SharedScript {}\n")
+            write_file(
+                root / "Assets" / "Shared" / "SharedScript.cs.meta",
+                f"fileFormatVersion: 2\nguid: {shared_script_guid}\n",
+            )
+            write_file(
+                root / "Assets" / "Prefab" / "Subject.prefab",
+                f"""%YAML 1.1
+--- !u!1 &100100000
+GameObject:
+  m_Name: Subject
+--- !u!114 &11400000
+MonoBehaviour:
+  m_GameObject: {{fileID: 100100000}}
+  m_Script: {{fileID: 11500000, guid: {shared_script_guid}, type: 3}}
+""",
+            )
+            write_file(
+                root / "Assets" / "Prefab" / "Subject.prefab.meta",
+                f"fileFormatVersion: 2\nguid: {BASE_GUID}\n",
+            )
+
+            resolver = ReferenceResolverService(project_root=root)
+            response = validate_refs(resolver, scope="Assets/Prefab/Subject.prefab")
+
+        step_data = response.data["steps"][0]["result"]["data"]
+        self.assertEqual((True, "VALIDATE_REFS_RESULT"), (response.success, response.code))
+        self.assertEqual(
+            {
+                "scope": "Assets/Prefab/Subject.prefab",
+                "scan_scope": "Assets/Prefab/Subject.prefab",
+                "guid_resolution_root": ".",
+                "scan_project_root": ".",
+                "project_root": ".",
+                "scanned_files": 1,
+                "missing_asset_unique_count": 0,
+            },
+            {
+                "scope": step_data["scope"],
+                "scan_scope": step_data["scan_scope"],
+                "guid_resolution_root": step_data["guid_resolution_root"],
+                "scan_project_root": step_data["scan_project_root"],
+                "project_root": step_data["project_root"],
+                "scanned_files": step_data["scanned_files"],
+                "missing_asset_unique_count": response.data["missing_asset_unique_count"],
+            },
+        )
+
+    def test_resolve_scan_project_root_returns_project_root_for_assets_scopes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            write_file(root / "Assets" / "Prefab" / "Subject.prefab", "%YAML 1.1\n")
+            resolver = ReferenceResolverService(project_root=root)
+
+            resolved_roots = (
+                resolver._resolve_scan_project_root(root / "Assets" / "Prefab"),
+                resolver._resolve_scan_project_root(root / "Assets" / "Prefab" / "Subject.prefab"),
+            )
+
+        self.assertEqual((root, root), resolved_roots)
+
+
+    def test_missing_scope_preserves_top_level_ref404_envelope(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            resolver = ReferenceResolverService(project_root=root)
+
+            response = validate_refs(resolver, scope="Assets/Does/Not/Exist")
+
+        step_result = response.data["steps"][0]["result"]
+        self.assertEqual((False, Severity.ERROR, "REF404"), (response.success, response.severity, response.code))
+        self.assertEqual(
+            {
+                "scope": "Assets/Does/Not/Exist",
+                "read_only": True,
+                "step_code": "REF404",
+                "step_data": {"scope": "Assets/Does/Not/Exist", "read_only": True},
+            },
+            {
+                "scope": response.data["scope"],
+                "read_only": response.data["read_only"],
+                "step_code": step_result["code"],
+                "step_data": step_result["data"],
+            },
+        )
+
+    def test_scope_resolve_failure_preserves_top_level_ref404_envelope(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            resolver = ReferenceResolverService(project_root=root)
+
+            from unittest.mock import patch
+
+            with patch.object(Path, "resolve", side_effect=OSError("resolve failed")):
+                try:
+                    response = validate_refs(resolver, scope="Assets")
+                except OSError as exc:
+                    response = type(
+                        "RaisedResponse",
+                        (),
+                        {
+                            "success": "raised",
+                            "severity": Severity.CRITICAL,
+                            "code": type(exc).__name__,
+                            "data": {"error": str(exc)},
+                        },
+                    )()
+
+        self.assertEqual(
+            (False, Severity.ERROR, "REF404", "resolve failed"),
+            (
+                response.success,
+                response.severity,
+                response.code,
+                response.data.get("error"),
+            ),
+        )
+
+    def test_absolute_scope_outside_active_project_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as active_raw, tempfile.TemporaryDirectory() as other_raw:
+            active_root = Path(active_raw)
+            other_root = Path(other_raw)
+            (active_root / "Assets").mkdir()
+            (other_root / "Assets").mkdir()
+            resolver = ReferenceResolverService(project_root=active_root)
+
+            response = validate_refs(resolver, scope=str(other_root / "Assets"))
+
+        step_result = response.data["steps"][0]["result"]
+        self.assertEqual(
+            (False, Severity.ERROR, "REF404", "outside_project_root"),
+            (
+                response.success,
+                response.severity,
+                response.code,
+                step_result["data"]["reason"],
+            ),
         )
 
 

@@ -110,7 +110,7 @@ class McpSmokeTests(unittest.TestCase):
     # --- inspect_hierarchy ---
 
     def test_inspect_hierarchy_returns_root(self) -> None:
-        """hierarchy.prefab has Root as the root node."""
+        """hierarchy.prefab has Root as the only root node."""
         _, result = _run(self.server.call_tool(
             "inspect_hierarchy",
             {"asset_path": _fixture_asset("hierarchy.prefab")},
@@ -119,8 +119,16 @@ class McpSmokeTests(unittest.TestCase):
             self.assertIn(key, result, f"Missing envelope key: {key}")
         self.assertTrue(result["success"])
         roots = result["data"]["roots"]
-        self.assertGreater(len(roots), 0)
-        self.assertEqual(roots[0]["name"], "Root")
+        self.assertEqual(1, len(roots))
+        self.assertEqual("Root", roots[0]["name"])
+        self.assertEqual(
+            {
+                "loaded_targets": 1,
+                "game_objects": result["data"]["total_game_objects"],
+                "components": result["data"]["total_components"],
+            },
+            result["data"]["partial_counts"],
+        )
 
     # --- validate_structure ---
 

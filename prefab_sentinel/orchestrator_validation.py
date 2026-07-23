@@ -390,6 +390,11 @@ def validate_refs(
                 diagnostics.append(
                     _stale_cache_hint_diagnostic(stale_count),
                 )
+    elif not step.success:
+        top_code = step.code
+        top_success = False
+        top_severity = step.severity
+        top_message = step.message
     else:
         top_code = "VALIDATE_REFS_RESULT"
         top_success = step.success
@@ -413,6 +418,10 @@ def validate_refs(
             }
         ],
     }
+    if not step.success:
+        for field in ("error", "reason"):
+            if field in step_data:
+                response_data[field] = step_data[field]
     if diagnostics_baseline is not None and "diagnostic_keys" in step_data:
         response_data["diagnostics_baseline"] = classify_current_keys(
             _diagnostic_key_records_from_scan(step_data),

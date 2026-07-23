@@ -4,11 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "prefab-sentinel"
-version = "0.8.1"
+version = "0.8.9"
 description = "Prefab Sentinel — Unity Prefab/Scene inspection and editing toolkit."
 requires-python = ">=3.11"
 readme = "README.md"
-dependencies = []
+dependencies = ["jsonschema>=4.25,<5"]
 
 [project.optional-dependencies]
 mcp = ["mcp>=1.12"]
@@ -62,14 +62,17 @@ module = [
 disable_error_code = ["arg-type", "index", "assignment", "var-annotated", "no-redef"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["prefab_sentinel"]
+only-include = ["prefab_sentinel", "tools/unity", "knowledge"]
+# Normal file selection honors exclusions before the source-path rewrite.
+# This keeps workspace-local Serena metadata out of the mapped bridge tree.
+exclude = ["**/.serena/**"]
 
-[tool.hatch.build.targets.wheel.force-include]
+[tool.hatch.build.targets.wheel.sources]
 "tools/unity" = "prefab_sentinel/_bridge_files"
 "knowledge" = "prefab_sentinel/_knowledge_files"
 
 # uv cache-keys: default cache invalidation only watches pyproject.toml,
-# setup.py, setup.cfg (astral-sh/uv#16196). The wheel force-includes
+# setup.py, setup.cfg (astral-sh/uv#16196). The wheel maps
 # `tools/unity/` and `knowledge/`, so edits under those trees would
 # otherwise be invisible to `uvx --from <local-path>` and produce stale
 # wheels that ship outdated bridge C# or knowledge markdown. Listing
@@ -83,7 +86,7 @@ cache-keys = [
 ]
 
 [tool.bumpversion]
-current_version = "0.8.1"
+current_version = "0.8.9"
 commit = false
 tag = false
 allow_dirty = true

@@ -43,6 +43,17 @@ def _parse(payload: object) -> protocol.ToolResponse:
         relative_fn=_identity_relative,
     )
 
+def _parse_clientsim(payload: object) -> protocol.ToolResponse:
+    return protocol.parse_runtime_response(
+        payload,
+        action="run_clientsim",
+        project_root=Path("/project"),
+        scene_path="Assets/Scene.unity",
+        profile="default",
+        log_path=Path("/logs/run.log"),
+        relative_fn=_identity_relative,
+    )
+
 
 class RuntimeProtocolFailureTests(unittest.TestCase):
     """Issue #222 Phase 2 — each per-field rejection branch is expressed
@@ -114,6 +125,28 @@ class RuntimeProtocolFailureTests(unittest.TestCase):
                     code="RUN_PROTOCOL_ERROR",
                     severity="error",
                     message_match=message_regex,
+                )
+
+    def test_clientsim_requires_boolean_executed_field(self) -> None:
+        invalid_data_rows: tuple[tuple[str, dict[str, object]], ...] = (
+            ("missing", {}),
+            ("null", {"executed": None}),
+            ("integer", {"executed": 1}),
+            ("string", {"executed": "true"}),
+        )
+        for label, data in invalid_data_rows:
+            with self.subTest(label=label):
+                response = _parse_clientsim(
+                    {
+                        **self._BASE_VALID,
+                        "data": data,
+                    }
+                )
+                assert_error_envelope(
+                    response,
+                    code="RUN_PROTOCOL_ERROR",
+                    severity="error",
+                    message_match=r"field 'data.executed' must be a boolean",
                 )
 
     def test_failure_envelope_merges_base_context_and_stamps_flags(self) -> None:

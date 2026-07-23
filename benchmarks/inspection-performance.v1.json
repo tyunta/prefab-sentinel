@@ -1,0 +1,102 @@
+{
+  "schema_version": "inspection-performance.v1",
+  "fixture": {
+    "version": "synthetic-unity-project.v1",
+    "cardinalities": {
+      "game_objects": 512,
+      "mono_behaviours": 256,
+      "matching_mono_behaviours": 128,
+      "non_matching_mono_behaviours": 128,
+      "nested_instances": 16,
+      "source_prefabs": 4,
+      "hierarchy_depth": 8,
+      "summary_material_properties": 64,
+      "material_assets": 256,
+      "renderer_host_assets": 64,
+      "material_slot_references": 1024
+    }
+  },
+  "cases": [
+    {"id": "inspect_wiring_cold", "method": "inspect_wiring", "state": "cold", "arguments": {"target_path": "Assets/Benchmark/InspectionTarget.prefab", "script_filter": "BenchmarkMatch", "summary_only": true}, "measured_trials": 5, "budget_sec": 10.0},
+    {"id": "inspect_wiring_warm", "method": "inspect_wiring", "state": "warm", "arguments": {"target_path": "Assets/Benchmark/InspectionTarget.prefab", "script_filter": "BenchmarkMatch", "summary_only": true}, "measured_trials": 5, "budget_sec": 10.0},
+    {"id": "inspect_hierarchy_cold", "method": "inspect_hierarchy", "state": "cold", "arguments": {"target_path": "Assets/Benchmark/InspectionTarget.prefab", "show_components": true, "expand_monobehaviour": true, "expand_prefab_instances": true}, "measured_trials": 5, "budget_sec": 10.0},
+    {"id": "inspect_hierarchy_warm", "method": "inspect_hierarchy", "state": "warm", "arguments": {"target_path": "Assets/Benchmark/InspectionTarget.prefab", "show_components": true, "expand_monobehaviour": true, "expand_prefab_instances": true}, "measured_trials": 5, "budget_sec": 10.0},
+    {"id": "inspect_material_asset_summary_cold", "method": "inspect_material_asset", "state": "cold", "arguments": {"target_path": "Assets/Benchmark/Materials/Material000.mat", "mode": "summary", "property_names": ["_MainTex", "_Benchmark00", "_Benchmark16", "_Benchmark32", "_Benchmark63"]}, "measured_trials": 5, "budget_sec": 5.0},
+    {"id": "inspect_material_asset_summary_warm", "method": "inspect_material_asset", "state": "warm", "arguments": {"target_path": "Assets/Benchmark/Materials/Material000.mat", "mode": "summary", "property_names": ["_MainTex", "_Benchmark00", "_Benchmark16", "_Benchmark32", "_Benchmark63"]}, "measured_trials": 5, "budget_sec": 5.0},
+    {"id": "validate_materials_cold", "method": "validate_materials", "state": "cold", "arguments": {"scope": "Assets/Benchmark", "include_details": false}, "measured_trials": 3, "budget_sec": 60.0}
+  ],
+  "dependency_mapping": {
+    "#143": {
+      "inspect_wiring_cold": {"impact": "direct", "evidence": "Fresh-session call executes the issue #143 ordered parallel scan path."},
+      "inspect_wiring_warm": {"impact": "indirect", "evidence": "Excluded warmup populates state produced through the issue #143 scan path."},
+      "inspect_hierarchy_cold": {"impact": "direct", "evidence": "Fresh expanded hierarchy call executes issue #143 scan scheduling."},
+      "inspect_hierarchy_warm": {"impact": "indirect", "evidence": "Excluded warmup changes the measured hierarchy session state."},
+      "inspect_material_asset_summary_cold": {"impact": "direct", "evidence": "Fresh material lookup executes shared issue #143 inspection scheduling."},
+      "inspect_material_asset_summary_warm": {"impact": "indirect", "evidence": "Excluded material warmup changes the measured session state."},
+      "validate_materials_cold": {"impact": "direct", "evidence": "Broad validation executes the issue #143 ordered scan runner."}
+    },
+    "#144": {
+      "inspect_wiring_cold": {"impact": "direct", "evidence": "Filtered wiring consumes the shared project inspection context."},
+      "inspect_wiring_warm": {"impact": "direct", "evidence": "Measured warm wiring call consumes the shared cached context."},
+      "inspect_hierarchy_cold": {"impact": "direct", "evidence": "Expanded hierarchy consumes the shared GUID/script context."},
+      "inspect_hierarchy_warm": {"impact": "direct", "evidence": "Measured warm hierarchy call consumes the shared context."},
+      "inspect_material_asset_summary_cold": {"impact": "direct", "evidence": "Material lookup consumes the shared GUID context."},
+      "inspect_material_asset_summary_warm": {"impact": "direct", "evidence": "Measured warm material lookup consumes shared context."},
+      "validate_materials_cold": {"impact": "direct", "evidence": "Broad validation consumes one shared project context."}
+    },
+    "#145": {
+      "inspect_wiring_cold": {"impact": "non-impact", "evidence": "Reference validation and where-used parallelism are not invoked."},
+      "inspect_wiring_warm": {"impact": "non-impact", "evidence": "Reference validation and where-used parallelism are not invoked."},
+      "inspect_hierarchy_cold": {"impact": "non-impact", "evidence": "Hierarchy inspection does not run reference validation."},
+      "inspect_hierarchy_warm": {"impact": "non-impact", "evidence": "Hierarchy inspection does not run reference validation."},
+      "inspect_material_asset_summary_cold": {"impact": "non-impact", "evidence": "Narrow material inspection does not run where-used."},
+      "inspect_material_asset_summary_warm": {"impact": "non-impact", "evidence": "Narrow material inspection does not run where-used."},
+      "validate_materials_cold": {"impact": "non-impact", "evidence": "Material validation has its own evidence runner."}
+    },
+    "#146": {
+      "inspect_wiring_cold": {"impact": "non-impact", "evidence": "Single-file wiring does not invoke validate-all-wiring."},
+      "inspect_wiring_warm": {"impact": "non-impact", "evidence": "Single-file wiring does not invoke validate-all-wiring."},
+      "inspect_hierarchy_cold": {"impact": "non-impact", "evidence": "Hierarchy inspection does not invoke validate-all-wiring."},
+      "inspect_hierarchy_warm": {"impact": "non-impact", "evidence": "Hierarchy inspection does not invoke validate-all-wiring."},
+      "inspect_material_asset_summary_cold": {"impact": "non-impact", "evidence": "Material inspection does not invoke validate-all-wiring."},
+      "inspect_material_asset_summary_warm": {"impact": "non-impact", "evidence": "Material inspection does not invoke validate-all-wiring."},
+      "validate_materials_cold": {"impact": "non-impact", "evidence": "Material validation does not invoke validate-all-wiring."}
+    },
+    "#147": {
+      "inspect_wiring_cold": {"impact": "non-impact", "evidence": "Wiring does not collect material evidence."},
+      "inspect_wiring_warm": {"impact": "non-impact", "evidence": "Wiring does not collect material evidence."},
+      "inspect_hierarchy_cold": {"impact": "non-impact", "evidence": "Hierarchy does not collect material evidence."},
+      "inspect_hierarchy_warm": {"impact": "non-impact", "evidence": "Hierarchy does not collect material evidence."},
+      "inspect_material_asset_summary_cold": {"impact": "non-impact", "evidence": "Single material parsing bypasses broad evidence collection."},
+      "inspect_material_asset_summary_warm": {"impact": "non-impact", "evidence": "Single material parsing bypasses broad evidence collection."},
+      "validate_materials_cold": {"impact": "direct", "evidence": "Broad validation executes issue #147 material evidence collection."}
+    },
+    "#148": {
+      "inspect_wiring_cold": {"impact": "non-impact", "evidence": "Serialized-field impact scans are not invoked."},
+      "inspect_wiring_warm": {"impact": "non-impact", "evidence": "Serialized-field impact scans are not invoked."},
+      "inspect_hierarchy_cold": {"impact": "non-impact", "evidence": "Serialized-field impact scans are not invoked."},
+      "inspect_hierarchy_warm": {"impact": "non-impact", "evidence": "Serialized-field impact scans are not invoked."},
+      "inspect_material_asset_summary_cold": {"impact": "non-impact", "evidence": "Serialized-field impact scans are not invoked."},
+      "inspect_material_asset_summary_warm": {"impact": "non-impact", "evidence": "Serialized-field impact scans are not invoked."},
+      "validate_materials_cold": {"impact": "non-impact", "evidence": "Serialized-field impact scans are not invoked."}
+    },
+    "#149": {
+      "inspect_wiring_cold": {"impact": "direct", "evidence": "Nested wiring reads source Prefabs through the issue #149 cache."},
+      "inspect_wiring_warm": {"impact": "direct", "evidence": "Warm wiring reuses the issue #149 nested Prefab cache."},
+      "inspect_hierarchy_cold": {"impact": "direct", "evidence": "Expanded hierarchy reads nested sources through the cache."},
+      "inspect_hierarchy_warm": {"impact": "direct", "evidence": "Warm hierarchy reuses cached nested source blocks."},
+      "inspect_material_asset_summary_cold": {"impact": "non-impact", "evidence": "Material asset inspection has no nested Prefab input."},
+      "inspect_material_asset_summary_warm": {"impact": "non-impact", "evidence": "Material asset inspection has no nested Prefab input."},
+      "validate_materials_cold": {"impact": "non-impact", "evidence": "Broad material evidence does not expand nested Prefabs."}
+    },
+    "#154": {
+      "inspect_wiring_cold": {"impact": "direct", "evidence": "Measured response uses issue #154 timeout/progress completeness."},
+      "inspect_wiring_warm": {"impact": "direct", "evidence": "Measured response uses issue #154 timeout/progress completeness."},
+      "inspect_hierarchy_cold": {"impact": "direct", "evidence": "Measured response uses issue #154 timeout/progress completeness."},
+      "inspect_hierarchy_warm": {"impact": "direct", "evidence": "Measured response uses issue #154 timeout/progress completeness."},
+      "inspect_material_asset_summary_cold": {"impact": "direct", "evidence": "The measured summary mode is the issue #154 narrow path."},
+      "inspect_material_asset_summary_warm": {"impact": "direct", "evidence": "The measured summary mode is the issue #154 narrow path."},
+      "validate_materials_cold": {"impact": "direct", "evidence": "Broad response completeness follows issue #154 semantics."}
+    }
+  }
+}

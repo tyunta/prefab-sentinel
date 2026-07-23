@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import time
 import uuid
@@ -24,13 +25,16 @@ from prefab_sentinel.bridge_constants import (
     PROTOCOL_VERSION,
     UNITY_TIMEOUT_SEC_ENV as BRIDGE_TIMEOUT_ENV,
 )
-from prefab_sentinel.json_io import dump_json, load_json
-from prefab_sentinel.wsl_compat import to_wsl_path
 
 # ``PROTOCOL_VERSION`` is imported above and used internally to build
 # request/response envelopes (drift-checked against ``bridge_constants`` as
 # the single source of truth).
 # Empirical: sufficient for typical Inspector operations in loaded projects
+from prefab_sentinel.editor_status_blockers import classify_tool_error_blocker
+from prefab_sentinel.json_io import dump_json, load_json
+from prefab_sentinel.wsl_compat import to_wsl_path
+
+_LOGGER = logging.getLogger(__name__)
 DEFAULT_TIMEOUT_SEC = 30
 # Cached bridge version from last successful response
 _last_bridge_version: str | None = None
@@ -74,6 +78,7 @@ SUPPORTED_ACTIONS = frozenset(
         "editor_set_property",
         "editor_serialized_property_read",
         "editor_serialized_property_list",
+        "editor_inspect_serialized_surface",
         "editor_serialized_property_write",
         "create_generated_asset",
         "move_asset",
@@ -145,15 +150,40 @@ SUPPORTED_ACTIONS = frozenset(
 
 
 def _error_response(*, code: str, message: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
+    response_data = dict(data) if data is not None else {}
+    blocker = classify_tool_error_blocker({"code": code, "message": message, "data": response_data})
+    if blocker is not None:
+        response_data["blocker_class"] = blocker["blocker_class"]
+        response_data["suggested_next_action"] = blocker["suggested_next_action"]
     return {
         "protocol_version": PROTOCOL_VERSION,
         "success": False,
         "severity": "error",
         "code": code,
         "message": message,
-        "data": data or {},
+        "data": response_data,
         "diagnostics": [],
     }
+
+
+def _enrich_bridge_error_response(payload: dict[str, Any]) -> dict[str, Any]:
+    if payload.get("success") is not False:
+        return payload
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return payload
+    editor_state = data.get("editor_state")
+    if not isinstance(editor_state, dict):
+        return payload
+    blocker = classify_tool_error_blocker(payload, editor_state=editor_state)
+    if blocker is None:
+        return payload
+    enriched_data = dict(data)
+    enriched_data.setdefault("blocker_class", blocker["blocker_class"])
+    enriched_data.setdefault("suggested_next_action", blocker["suggested_next_action"])
+    enriched = dict(payload)
+    enriched["data"] = enriched_data
+    return enriched
 
 
 def _set_expected_project_root_provider(
@@ -220,8 +250,7 @@ def _project_root_mismatch_response(
     if actual_project_root is not None:
         data["actual_project_root"] = actual_project_root
         message = (
-            "Editor bridge reached Unity project root "
-            f"{actual_project_root!r}, expected {expected_project_root!r}."
+            f"Editor bridge reached Unity project root {actual_project_root!r}, expected {expected_project_root!r}."
         )
     else:
         message = (
@@ -255,9 +284,7 @@ def _verify_expected_project_root(
             payload=payload,
         )
 
-    if _normal_project_root_identity(actual_project_root) == _normal_project_root_identity(
-        expected_project_root
-    ):
+    if _normal_project_root_identity(actual_project_root) == _normal_project_root_identity(expected_project_root):
         return None
 
     return _project_root_mismatch_response(
@@ -274,10 +301,7 @@ def _try_delete(path: Path) -> None:
         path.unlink(missing_ok=True)
 
 
-_BRIDGE_SETUP_HINT = (
-    f" Set {BRIDGE_WATCH_DIR_ENV}=<path>."
-    " See README 'Unity Bridge セットアップ' section."
-)
+_BRIDGE_SETUP_HINT = f" Set {BRIDGE_WATCH_DIR_ENV}=<path>. See README 'Unity Bridge セットアップ' section."
 
 
 def check_editor_bridge_env() -> dict[str, Any] | None:
@@ -289,11 +313,21 @@ def check_editor_bridge_env() -> dict[str, Any] | None:
             message=f"Editor Bridge not connected: {BRIDGE_WATCH_DIR_ENV} is not set.{_BRIDGE_SETUP_HINT}",
             data={"env_var": BRIDGE_WATCH_DIR_ENV},
         )
-    if not Path(to_wsl_path(watch_dir)).is_dir():
+    watch_path = Path(to_wsl_path(watch_dir))
+    try:
+        watch_dir_exists = watch_path.is_dir()
+    except OSError:
+        _LOGGER.error("Editor Bridge watch directory status probe failed")
         return _error_response(
             code="EDITOR_BRIDGE_WATCH_DIR_NOT_FOUND",
-            message=f"Editor Bridge not connected: watch directory does not exist: {watch_dir}.{_BRIDGE_SETUP_HINT}",
-            data={"env_var": BRIDGE_WATCH_DIR_ENV, "value": watch_dir},
+            message=f"Editor Bridge watch directory status is unavailable.{_BRIDGE_SETUP_HINT}",
+            data={"env_var": BRIDGE_WATCH_DIR_ENV},
+        )
+    if not watch_dir_exists:
+        return _error_response(
+            code="EDITOR_BRIDGE_WATCH_DIR_NOT_FOUND",
+            message=f"Editor Bridge watch directory does not exist.{_BRIDGE_SETUP_HINT}",
+            data={"env_var": BRIDGE_WATCH_DIR_ENV},
         )
     return None
 
@@ -338,10 +372,15 @@ def send_action(
 
     watch_dir = Path(to_wsl_path(os.environ[BRIDGE_WATCH_DIR_ENV]))
     if timeout_sec is None:
-        timeout_sec = int(os.environ.get(BRIDGE_TIMEOUT_ENV, DEFAULT_TIMEOUT_SEC))
-    # Reject non-positive timeouts at the boundary so an operator
-    # misconfiguration surfaces as a dedicated envelope rather than an
-    # immediate transport timeout (parallels editor_bridge_invoke's check).
+        timeout_raw = os.environ.get(BRIDGE_TIMEOUT_ENV, str(DEFAULT_TIMEOUT_SEC))
+        try:
+            timeout_sec = int(timeout_raw)
+        except ValueError:
+            return _error_response(
+                code="EDITOR_BRIDGE_TIMEOUT_INVALID",
+                message=f"{BRIDGE_TIMEOUT_ENV} must be a positive integer.",
+                data={"received_timeout": timeout_raw},
+            )
     if timeout_sec <= 0:
         return _error_response(
             code="EDITOR_BRIDGE_TIMEOUT_INVALID",
@@ -354,6 +393,7 @@ def send_action(
     response_file = watch_dir / f"{request_id}.response.json"
     tmp_file = Path(str(request_file) + ".tmp")
 
+    resolved_expected_project_root = _expected_project_root(expected_project_root)
     request_payload: dict[str, Any] = {
         "protocol_version": PROTOCOL_VERSION,
         "action": action,
@@ -361,82 +401,93 @@ def send_action(
     }
     if request_extras:
         request_payload.update(request_extras)
+    if resolved_expected_project_root is not None:
+        request_payload["expected_project_root"] = resolved_expected_project_root
 
     # Atomic write uses .tmp plus rename to avoid partial reads by the watcher.
+    env_err = check_editor_bridge_env()
+    if env_err is not None:
+        return env_err
     try:
-        watch_dir.mkdir(parents=True, exist_ok=True)
         tmp_file.write_text(
             dump_json(request_payload, indent=None),
             encoding="utf-8",
         )
         tmp_file.rename(request_file)
-    except OSError as exc:
+    except OSError:
+        _LOGGER.error("Editor Bridge request write failed")
+        _try_delete(tmp_file)
         return _error_response(
             code="EDITOR_BRIDGE_WRITE",
             message="Failed to write editor bridge request file.",
-            data={"request_file": str(request_file), "error": str(exc)},
         )
 
     deadline = time.monotonic() + timeout_sec
-    while time.monotonic() < deadline:
-        if response_file.exists():
+    try:
+        while time.monotonic() < deadline:
             try:
-                raw = response_file.read_text(encoding="utf-8")
-                payload = load_json(raw)
-            except (OSError, json.JSONDecodeError) as exc:
+                response_ready = response_file.exists()
+            except OSError:
+                _LOGGER.error("Editor Bridge response status probe failed")
+                _try_delete(response_file)
                 return _error_response(
                     code="EDITOR_BRIDGE_RESPONSE_READ",
-                    message="Editor bridge response file could not be read.",
-                    data={"response_file": str(response_file), "error": str(exc)},
+                    message="Editor bridge response file status could not be read.",
                 )
-            finally:
-                _try_delete(request_file)
-                _try_delete(response_file)
+            if response_ready:
+                try:
+                    raw = response_file.read_text(encoding="utf-8")
+                    payload = load_json(raw)
+                except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                    _LOGGER.error("Editor Bridge response read failed")
+                    return _error_response(
+                        code="EDITOR_BRIDGE_RESPONSE_READ",
+                        message="Editor bridge response file could not be read.",
+                    )
+                finally:
+                    _try_delete(response_file)
 
-            if not isinstance(payload, dict):
-                return _error_response(
-                    code="EDITOR_BRIDGE_RESPONSE_SCHEMA",
-                    message="Editor bridge response root must be an object.",
+                if not isinstance(payload, dict):
+                    return _error_response(
+                        code="EDITOR_BRIDGE_RESPONSE_SCHEMA",
+                        message="Editor bridge response root must be an object.",
+                    )
+
+                # ``bridge_mode`` is always "editor" since the batchmode dispatch
+                # path was removed in issue #270; the field is retained as a stable
+                # transport tag for response-shape callers and pinned by tests.
+                payload.setdefault("bridge_mode", "editor")
+                payload.setdefault("action", action)
+                # Issue #94: this is the file-transport request id used by the
+                # bridge to tag log entries captured during the request. Expose it
+                # so callers can pass it to editor_console(since_request_id=...).
+                payload.setdefault("request_id", request_id)
+
+                global _last_bridge_version
+                if "bridge_version" in payload:
+                    _last_bridge_version = payload["bridge_version"]
+
+                verified_request_id = str(payload["request_id"])
+                mismatch = _verify_expected_project_root(
+                    payload=payload,
+                    action=action,
+                    request_id=verified_request_id,
+                    expected_project_root=resolved_expected_project_root,
                 )
+                if mismatch is not None:
+                    return mismatch
 
-            # ``bridge_mode`` is always "editor" since the batchmode dispatch
-            # path was removed in issue #270; the field is retained as a stable
-            # transport tag for response-shape callers and pinned by tests.
-            payload.setdefault("bridge_mode", "editor")
-            payload.setdefault("action", action)
-            # Issue #94: this is the file-transport request id used by the
-            # bridge to tag log entries captured during the request. Expose it
-            # so callers can pass it to editor_console(since_request_id=...).
-            payload.setdefault("request_id", request_id)
+                return _enrich_bridge_error_response(payload)
 
-            global _last_bridge_version
-            if "bridge_version" in payload:
-                _last_bridge_version = payload["bridge_version"]
+            time.sleep(DEFAULT_POLL_INTERVAL)
 
-            verified_request_id = str(payload["request_id"])
-            mismatch = _verify_expected_project_root(
-                payload=payload,
-                action=action,
-                request_id=verified_request_id,
-                expected_project_root=_expected_project_root(expected_project_root),
-            )
-            if mismatch is not None:
-                return mismatch
-
-            return payload
-
-        time.sleep(DEFAULT_POLL_INTERVAL)
-
-    _try_delete(request_file)
-    return _error_response(
-        code="EDITOR_BRIDGE_TIMEOUT",
-        message="Editor bridge response timed out.",
-        data={
-            "action": action,
-            "timeout_sec": timeout_sec,
-            "request_file": str(request_file),
-        },
-    )
+        return _error_response(
+            code="EDITOR_BRIDGE_TIMEOUT",
+            message="Editor bridge response timed out.",
+            data={"action": action, "timeout_sec": timeout_sec},
+        )
+    finally:
+        _try_delete(request_file)
 
 
 def bridge_status() -> dict[str, Any]:
@@ -446,11 +497,20 @@ def bridge_status() -> dict[str, Any]:
     Does not attempt an actual bridge request (no I/O cost).
     """
     watch_dir = os.environ.get(BRIDGE_WATCH_DIR_ENV, "")
-    connected = bool(watch_dir) and Path(to_wsl_path(watch_dir)).is_dir()
-    return {
+    connected = False
+    status_error: str | None = None
+    if watch_dir:
+        try:
+            connected = Path(to_wsl_path(watch_dir)).is_dir()
+        except OSError as exc:
+            status_error = str(exc)
+    status: dict[str, Any] = {
         "connected": connected,
         "watch_dir": watch_dir or None,
     }
+    if status_error is not None:
+        status["watch_dir_status_error"] = status_error
+    return status
 
 
 def get_last_bridge_version() -> str | None:

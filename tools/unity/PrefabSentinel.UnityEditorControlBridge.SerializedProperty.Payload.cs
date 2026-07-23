@@ -359,6 +359,12 @@ namespace PrefabSentinel
             for (int i = 0; i < text.Length; i++)
             {
                 char c = text[i];
+                if (c <= '\u001F')
+                {
+                    json.Append("\\u");
+                    json.Append(((int)c).ToString("x4", CultureInfo.InvariantCulture));
+                    continue;
+                }
                 switch (c)
                 {
                     case '\\':
@@ -366,15 +372,6 @@ namespace PrefabSentinel
                         break;
                     case '"':
                         json.Append("\\\"");
-                        break;
-                    case '\n':
-                        json.Append("\\n");
-                        break;
-                    case '\r':
-                        json.Append("\\r");
-                        break;
-                    case '\t':
-                        json.Append("\\t");
                         break;
                     default:
                         json.Append(c);

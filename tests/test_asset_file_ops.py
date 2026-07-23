@@ -32,6 +32,7 @@ from prefab_sentinel.asset_file_ops import (
     copy_asset,
     rename_asset,
 )
+from prefab_sentinel.material_asset_inspector import inspect_material_asset
 from prefab_sentinel.unity_assets import decode_text_file
 
 _FIXTURES = Path(__file__).parent / "fixtures" / "mat"
@@ -234,6 +235,56 @@ class CopyAssetApplyTests(unittest.TestCase):
         self.assertNotIn("m_name_unchanged", result["data"])
 
 
+class CopyAssetProjectRootPathTests(unittest.TestCase):
+    def test_project_relative_material_path_uses_project_root_for_dry_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "Assets" / "Materials").mkdir(parents=True)
+            src = root / "Assets" / "Materials" / "Source.mat"
+            shutil.copy(_FIXTURES / "standard_textured.mat", src)
+            dest = root / "Assets" / "Materials" / "Copied.mat"
+
+            inspected = inspect_material_asset(str(src))
+            result = copy_asset(
+                "Assets/Materials/Source.mat",
+                "Assets/Materials/Copied.mat",
+                dry_run=True,
+                project_root=root,
+            )
+            dest_exists = dest.exists()
+
+        self.assertEqual(
+            ("TestMaterial", True, "ASSET_COPY_DRY_RUN", False),
+            (inspected.material_name, result["success"], result["code"], dest_exists),
+        )
+        self.assertEqual(
+            (str(src), str(dest)),
+            (result["data"]["source_path"], result["data"]["dest_path"]),
+        )
+
+    def test_project_relative_material_path_apply_creates_asset_and_meta(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "Assets" / "Materials").mkdir(parents=True)
+            src = root / "Assets" / "Materials" / "Source.mat"
+            shutil.copy(_FIXTURES / "standard_textured.mat", src)
+            dest = root / "Assets" / "Materials" / "Copied.mat"
+            dest_meta = Path(str(dest) + ".meta")
+
+            result = copy_asset(
+                "Assets/Materials/Source.mat",
+                "Assets/Materials/Copied.mat",
+                dry_run=False,
+                project_root=root,
+            )
+            filesystem_state = (dest.exists(), dest_meta.exists())
+
+        self.assertEqual(
+            (True, "ASSET_COPY_APPLIED", (True, True)),
+            (result["success"], result["code"], filesystem_state),
+        )
+
+
 class CopyAssetFailureCodeTests(unittest.TestCase):
     """Pin every documented failure envelope code."""
 
@@ -263,6 +314,163 @@ class CopyAssetFailureCodeTests(unittest.TestCase):
             (result["success"], result["code"]),
         )
 
+    def test_missing_project_relative_source_reports_resolution_details(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "Assets" / "Materials").mkdir(parents=True)
+            try:
+                result = copy_asset(
+                    "Assets/Materials/Missing.mat",
+                    "Assets/Materials/Copied.mat",
+                    dry_run=True,
+                    project_root=root,
+                )
+            except ValueError as exc:
+                result = {
+                    "success": "raised",
+                    "code": type(exc).__name__,
+                    "data": {"message": str(exc)},
+                    "diagnostics": [],
+                }
+            expected_candidate = str(root / "Assets" / "Materials" / "Missing.mat")
+
+        self.assertEqual(
+            (
+                False,
+                "ASSET_COPY_SOURCE_NOT_FOUND",
+                {
+                    "input_path": "Assets/Materials/Missing.mat",
+                    "normalized_candidate_path": expected_candidate,
+                    "resolution_root": str(root),
+                    "reason": "not_found",
+                },
+                [
+                    {
+                        "detail": "copy_source_resolution",
+                        "evidence": "reason=not_found",
+                    }
+                ],
+            ),
+            (
+                result["success"],
+                result["code"],
+                result["data"],
+                result["diagnostics"],
+            ),
+        )
+
+    def test_source_status_probe_error_returns_source_not_found_envelope(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            src = root / "Assets" / "Materials" / "Input.mat"
+            src.parent.mkdir(parents=True)
+            src.write_text(_NO_M_NAME_CONTENT, encoding="utf-8")
+            original_is_file = Path.is_file
+
+            def fail_source_probe(path: Path) -> bool:
+                if path == src:
+                    raise OSError("stat failed")
+                return original_is_file(path)
+
+            try:
+                Path.is_file = fail_source_probe  # type: ignore[assignment]
+                result = copy_asset(
+                    "Assets/Materials/Input.mat",
+                    "Assets/Materials/Copied.mat",
+                    dry_run=True,
+                    project_root=root,
+                )
+            except OSError as exc:
+                result = {"success": "raised", "code": type(exc).__name__, "data": {"error": str(exc)}}
+            finally:
+                Path.is_file = original_is_file  # type: ignore[assignment]
+
+        self.assertEqual(
+            (False, "ASSET_COPY_SOURCE_NOT_FOUND", "status_error"),
+            (result["success"], result["code"], result["data"]["reason"]),
+        )
+
+    def test_absolute_outside_source_yields_invalid_path_envelope(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "Project"
+            root.mkdir()
+            outside = Path(tmpdir) / "Outside.mat"
+            outside.write_text(
+                "%YAML 1.1\n--- !u!21 &2100000\nMaterial:\n  m_Name: Outside\n",
+                encoding="utf-8",
+            )
+            try:
+                result = copy_asset(
+                    str(outside),
+                    "Assets/Materials/Copied.mat",
+                    dry_run=True,
+                    project_root=root,
+                )
+            except ValueError as exc:
+                result = {
+                    "success": "raised",
+                    "code": type(exc).__name__,
+                    "data": {"message": str(exc)},
+                    "diagnostics": [],
+                }
+            expected_candidate = str(outside)
+
+        self.assertEqual(
+            (
+                False,
+                "ASSET_COPY_SOURCE_INVALID_PATH",
+                {
+                    "input_path": str(outside),
+                    "normalized_candidate_path": expected_candidate,
+                    "resolution_root": str(root),
+                    "reason": "outside_project",
+                },
+                [
+                    {
+                        "detail": "copy_source_resolution",
+                        "evidence": "reason=outside_project",
+                    }
+                ],
+            ),
+            (
+                result["success"],
+                result["code"],
+                result["data"],
+                result["diagnostics"],
+            ),
+        )
+
+    def test_source_resolve_failure_returns_invalid_path_envelope(self) -> None:
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "Project"
+            (root / "Assets" / "Materials").mkdir(parents=True)
+
+            with patch.object(Path, "resolve", side_effect=OSError("resolve failed")):
+                try:
+                    result = copy_asset(
+                        "Assets/Materials/Input.mat",
+                        "Assets/Materials/Copied.mat",
+                        dry_run=False,
+                        project_root=root,
+                    )
+                except OSError as exc:
+                    result = {
+                        "success": "raised",
+                        "code": type(exc).__name__,
+                        "data": {"error": str(exc)},
+                    }
+
+        self.assertEqual(
+            (False, "ASSET_COPY_SOURCE_INVALID_PATH", "resolve_error"),
+            (
+                result["success"],
+                result["code"],
+                result["data"].get("reason"),
+            ),
+        )
+
     def test_existing_dest_yields_dest_exists_envelope(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             src = Path(tmpdir) / "original.mat"
@@ -290,6 +498,126 @@ class CopyAssetFailureCodeTests(unittest.TestCase):
         self.assertEqual(
             (False, "ASSET_COPY_DEST_DIR_NOT_FOUND"),
             (result["success"], result["code"]),
+        )
+
+    def test_project_relative_dest_outside_project_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_root = Path(tmpdir) / "Project"
+            assets = project_root / "Assets"
+            assets.mkdir(parents=True)
+            src = assets / "original.mat"
+            shutil.copy(_FIXTURES / "standard_textured.mat", src)
+            outside_dest = project_root.parent / "outside" / "copied.mat"
+
+            result = copy_asset(
+                "Assets/original.mat",
+                "Assets/../../outside/copied.mat",
+                dry_run=False,
+                project_root=project_root,
+            )
+
+        self.assertEqual(
+            (False, "ASSET_COPY_DEST_INVALID_PATH", False),
+            (result["success"], result["code"], outside_dest.exists()),
+        )
+        self.assertEqual("outside_project_root", result["data"]["reason"])
+
+    def test_failed_copy_cleanup_unlink_returns_write_failed_diagnostic(self) -> None:
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src = Path(tmpdir) / "original.mat"
+            dest = Path(tmpdir) / "copied.mat"
+            shutil.copy(_FIXTURES / "standard_textured.mat", src)
+            Path(f"{src}.meta").write_text(
+                "fileFormatVersion: 2\nguid: 0123456789abcdef0123456789abcdef\n",
+                encoding="utf-8",
+            )
+            original_write_text = Path.write_text
+
+            def fail_meta_write(path, *args, **kwargs):
+                if str(path).endswith(".meta"):
+                    raise OSError("meta write failed")
+                return original_write_text(path, *args, **kwargs)
+
+            def fail_cleanup_unlink(path, *args, **kwargs):
+                raise OSError("unlink failed")
+
+            with (
+                patch.object(Path, "write_text", fail_meta_write),
+                patch.object(Path, "unlink", fail_cleanup_unlink),
+            ):
+                result = copy_asset(str(src), str(dest), dry_run=False)
+            dest_exists = dest.exists()
+            meta_exists = Path(f"{dest}.meta").exists()
+
+        self.assertEqual(
+            (False, "ASSET_OP_WRITE_FAILED", False, False),
+            (result["success"], result["code"], dest_exists, meta_exists),
+        )
+        self.assertEqual("copy_cleanup_failed", result["diagnostics"][0]["detail"])
+
+    def test_copy_cleanup_exists_probe_failure_keeps_write_failed_envelope(self) -> None:
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src = Path(tmpdir) / "original.mat"
+            dest = Path(tmpdir) / "copied.mat"
+            shutil.copy(_FIXTURES / "standard_textured.mat", src)
+            Path(f"{src}.meta").write_text(_DUMMY_META, encoding="utf-8")
+            original_write_text = Path.write_text
+            original_exists = Path.exists
+
+            def fail_meta_write(path, *args, **kwargs):
+                if str(path).endswith(".meta"):
+                    raise OSError("meta write failed")
+                return original_write_text(path, *args, **kwargs)
+
+            def fail_hidden_exists(path):
+                if path.name.startswith("."):
+                    raise OSError("exists failed")
+                return original_exists(path)
+
+            with (
+                patch.object(Path, "write_text", fail_meta_write),
+                patch.object(Path, "exists", fail_hidden_exists),
+            ):
+                try:
+                    result = copy_asset(str(src), str(dest), dry_run=False)
+                except OSError as exc:
+                    result = {
+                        "success": "raised",
+                        "code": type(exc).__name__,
+                        "message": str(exc),
+                    }
+
+        self.assertEqual(
+            (False, "ASSET_OP_WRITE_FAILED"),
+            (result["success"], result["code"]),
+        )
+
+    def test_failed_meta_write_does_not_leave_partial_asset_copy(self) -> None:
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src = Path(tmpdir) / "original.mat"
+            dest = Path(tmpdir) / "copied.mat"
+            shutil.copy(_FIXTURES / "standard_textured.mat", src)
+            original_write_text = Path.write_text
+
+            def fail_meta_write(path, *args, **kwargs):
+                if str(path).endswith(".meta"):
+                    raise OSError("meta write failed")
+                return original_write_text(path, *args, **kwargs)
+
+            with patch.object(Path, "write_text", fail_meta_write):
+                result = copy_asset(str(src), str(dest), dry_run=False)
+            dest_exists = dest.exists()
+            meta_exists = Path(f"{dest}.meta").exists()
+
+        self.assertEqual(
+            (False, "ASSET_OP_WRITE_FAILED", False, False),
+            (result["success"], result["code"], dest_exists, meta_exists),
         )
 
 
@@ -410,22 +738,56 @@ class RenameAssetDryRunTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             src = Path(tmpdir) / "original.mat"
             shutil.copy(_FIXTURES / "standard_textured.mat", src)
+            src_meta = Path(str(src) + ".meta")
+            src_meta.write_text(_DUMMY_META, encoding="utf-8")
             new_path = Path(tmpdir) / "renamed.mat"
+            new_meta = Path(str(new_path) + ".meta")
 
             result = rename_asset(str(src), "renamed.mat", dry_run=True)
 
-            # Capture filesystem state inside the temp-dir context — once
-            # the ``with`` block exits, the temp dir is deleted and every
-            # ``Path.exists()`` would otherwise return False.
+            # Capture filesystem state inside the temp-dir context; once
+            # the with block exits, the temp dir is deleted and every
+            # Path.exists() would otherwise return False.
             observed = (
                 result["success"],
                 result["code"],
+                src.exists(),
+                src_meta.exists(),
+                new_path.exists(),
+                new_meta.exists(),
+            )
+
+        self.assertEqual(
+            (True, "ASSET_RENAME_DRY_RUN", True, True, False, False),
+            observed,
+        )
+
+    def test_dry_run_missing_source_meta_returns_write_failed_diagnostic(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src = Path(tmpdir) / "original.mat"
+            shutil.copy(_FIXTURES / "standard_textured.mat", src)
+            new_path = Path(tmpdir) / "renamed.mat"
+
+            result = rename_asset(str(src), "renamed.mat", dry_run=True)
+            observed = (
+                result["success"],
+                result["code"],
+                result["data"].get("meta_renamed"),
+                _diag_details(result),
                 src.exists(),
                 new_path.exists(),
             )
 
         self.assertEqual(
-            (True, "ASSET_RENAME_DRY_RUN", True, False), observed
+            (
+                False,
+                "ASSET_OP_WRITE_FAILED",
+                False,
+                ["source_meta_missing"],
+                True,
+                False,
+            ),
+            observed,
         )
 
 
@@ -492,6 +854,136 @@ class RenameAssetFailureCodeTests(unittest.TestCase):
             (result["success"], result["code"]),
         )
 
+    def test_source_status_probe_error_returns_rename_not_found_envelope(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src = Path(tmpdir) / "existing.mat"
+            src.write_text(_NO_M_NAME_CONTENT, encoding="utf-8")
+            original_is_file = Path.is_file
+
+            def fail_source_probe(path: Path) -> bool:
+                if path == src:
+                    raise OSError("stat failed")
+                return original_is_file(path)
+
+            try:
+                Path.is_file = fail_source_probe  # type: ignore[assignment]
+                result = rename_asset(str(src), "renamed.mat", dry_run=True)
+            except OSError as exc:
+                result = {"success": "raised", "code": type(exc).__name__, "data": {"error": str(exc)}}
+            finally:
+                Path.is_file = original_is_file  # type: ignore[assignment]
+
+        self.assertEqual(
+            (False, "ASSET_RENAME_NOT_FOUND", "status_error"),
+            (result["success"], result["code"], result["data"].get("reason")),
+        )
+
+    def test_dest_status_probe_error_returns_write_failure_envelope(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            src = root / "existing.mat"
+            dest = root / "renamed.mat"
+            src.write_text(_NO_M_NAME_CONTENT, encoding="utf-8")
+            original_exists = Path.exists
+
+            def fail_dest_probe(path: Path) -> bool:
+                if path == dest:
+                    raise OSError("exists failed")
+                return original_exists(path)
+
+            try:
+                Path.exists = fail_dest_probe  # type: ignore[assignment]
+                result = rename_asset(str(src), "renamed.mat", dry_run=True)
+            except OSError as exc:
+                result = {"success": "raised", "code": type(exc).__name__, "diagnostics": []}
+            finally:
+                Path.exists = original_exists  # type: ignore[assignment]
+
+        self.assertEqual(
+            (False, "ASSET_OP_WRITE_FAILED", ["rename_dest_status_failed"]),
+            (
+                result["success"],
+                result["code"],
+                [item["detail"] for item in result["diagnostics"]],
+            ),
+        )
+
+    def test_outside_project_asset_path_yields_invalid_path_envelope(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "Project"
+            root.mkdir()
+            try:
+                result = rename_asset(
+                    "../outside.mat",
+                    "renamed.mat",
+                    dry_run=True,
+                    project_root=root,
+                )
+            except ValueError as exc:
+                result = {
+                    "success": "raised",
+                    "code": type(exc).__name__,
+                    "data": {"message": str(exc)},
+                    "diagnostics": [],
+                }
+            expected_candidate = str((root / "../outside.mat").resolve())
+
+        self.assertEqual(
+            (
+                False,
+                "ASSET_RENAME_INVALID_PATH",
+                {
+                    "input_path": "../outside.mat",
+                    "normalized_candidate_path": expected_candidate,
+                    "resolution_root": str(root),
+                    "reason": "outside_project",
+                },
+                [
+                    {
+                        "detail": "rename_source_resolution",
+                        "evidence": "reason=outside_project",
+                    }
+                ],
+            ),
+            (
+                result["success"],
+                result["code"],
+                result["data"],
+                result["diagnostics"],
+            ),
+        )
+
+    def test_source_resolve_failure_returns_invalid_path_envelope(self) -> None:
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "Project"
+            (root / "Assets" / "Materials").mkdir(parents=True)
+
+            with patch.object(Path, "resolve", side_effect=OSError("resolve failed")):
+                try:
+                    result = rename_asset(
+                        "Assets/Materials/Input.mat",
+                        "Renamed.mat",
+                        dry_run=False,
+                        project_root=root,
+                    )
+                except OSError as exc:
+                    result = {
+                        "success": "raised",
+                        "code": type(exc).__name__,
+                        "data": {"error": str(exc)},
+                    }
+
+        self.assertEqual(
+            (False, "ASSET_RENAME_INVALID_PATH", "resolve_error"),
+            (
+                result["success"],
+                result["code"],
+                result["data"].get("reason"),
+            ),
+        )
+
     def test_existing_dest_yields_dest_exists_envelope(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             src = Path(tmpdir) / "original.mat"
@@ -506,6 +998,36 @@ class RenameAssetFailureCodeTests(unittest.TestCase):
             (result["success"], result["code"]),
         )
 
+    def test_existing_dest_meta_yields_dest_exists_envelope_and_preserves_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src = Path(tmpdir) / "original.mat"
+            src_meta = Path(str(src) + ".meta")
+            dest = Path(tmpdir) / "renamed.mat"
+            dest_meta = Path(str(dest) + ".meta")
+            shutil.copy(_FIXTURES / "standard_textured.mat", src)
+            src_meta.write_text(_DUMMY_META, encoding="utf-8")
+            dest_meta.write_text("guid: existingmeta\n", encoding="utf-8")
+
+            result = rename_asset(str(src), "renamed.mat", dry_run=False)
+            filesystem_state = (
+                src.exists(),
+                src_meta.exists(),
+                dest.exists(),
+                dest_meta.read_text(encoding="utf-8"),
+            )
+
+        self.assertEqual(
+            (
+                False,
+                "ASSET_RENAME_DEST_EXISTS",
+                True,
+                True,
+                False,
+                "guid: existingmeta\n",
+            ),
+            (result["success"], result["code"], *filesystem_state),
+        )
+
     def test_extension_change_yields_extension_mismatch_envelope(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             src = Path(tmpdir) / "original.mat"
@@ -518,21 +1040,168 @@ class RenameAssetFailureCodeTests(unittest.TestCase):
             (result["success"], result["code"]),
         )
 
+    def test_path_like_new_name_is_rejected_without_moving_asset(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src = Path(tmpdir) / "original.mat"
+            shutil.copy(_FIXTURES / "standard_textured.mat", src)
+            outside = Path(tmpdir) / "outside.mat"
+
+            result = rename_asset(str(src), "../outside.mat", dry_run=False)
+            src_exists = src.exists()
+            outside_exists = outside.exists()
+
+        self.assertEqual(
+            (False, "ASSET_RENAME_INVALID_NAME", True, False),
+            (result["success"], result["code"], src_exists, outside_exists),
+        )
+        self.assertEqual(
+            {
+                "input_name": "../outside.mat",
+                "reason": "not_bare_filename",
+            },
+            result["data"],
+        )
+
+    def test_absolute_new_name_is_rejected_without_moving_asset(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src = Path(tmpdir) / "original.mat"
+            shutil.copy(_FIXTURES / "standard_textured.mat", src)
+            absolute_dest = Path(tmpdir) / "absolute.mat"
+
+            result = rename_asset(str(src), str(absolute_dest), dry_run=False)
+            src_exists = src.exists()
+            absolute_dest_exists = absolute_dest.exists()
+
+        self.assertEqual(
+            (False, "ASSET_RENAME_INVALID_NAME", True, False),
+            (
+                result["success"],
+                result["code"],
+                src_exists,
+                absolute_dest_exists,
+            ),
+        )
+        self.assertEqual("not_bare_filename", result["data"]["reason"])
+
+    def test_failed_rename_cleanup_unlink_returns_write_failed_diagnostic(self) -> None:
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src = Path(tmpdir) / "original.mat"
+            dest = Path(tmpdir) / "renamed.mat"
+            shutil.copy(_FIXTURES / "standard_textured.mat", src)
+            Path(str(src) + ".meta").write_text(
+                "guid: 1234567890abcdef1234567890abcdef\n",
+                encoding="utf-8",
+            )
+            original_rename = Path.rename
+            original_replace = Path.replace
+
+            def fail_content_replace(path, target):
+                if path.name.startswith(".renamed.mat") and target == dest:
+                    raise OSError("replace failed")
+                return original_replace(path, target)
+
+            def fail_cleanup_unlink(path, *args, **kwargs):
+                raise OSError("unlink failed")
+
+            with (
+                patch.object(Path, "replace", fail_content_replace),
+                patch.object(Path, "rename", original_rename),
+                patch.object(Path, "unlink", fail_cleanup_unlink),
+            ):
+                result = rename_asset(str(src), "renamed.mat", dry_run=False)
+            filesystem_state = (src.exists(), dest.exists())
+
+        self.assertEqual(
+            (False, "ASSET_OP_WRITE_FAILED", True, False),
+            (result["success"], result["code"], *filesystem_state),
+        )
+        self.assertEqual(
+            ["content_replace_failed", "rename_cleanup_failed"],
+            [diagnostic["detail"] for diagnostic in result["diagnostics"][:2]],
+        )
+
+    def test_rename_cleanup_exists_probe_failure_keeps_write_failed_envelope(self) -> None:
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src = Path(tmpdir) / "original.mat"
+            dest = Path(tmpdir) / "renamed.mat"
+            shutil.copy(_FIXTURES / "standard_textured.mat", src)
+            original_replace = Path.replace
+            original_exists = Path.exists
+
+            def fail_content_replace(path, target):
+                if path.name.startswith(".renamed.mat") and target == dest:
+                    raise OSError("replace failed")
+                return original_replace(path, target)
+
+            def fail_hidden_exists(path):
+                if path.name.startswith("."):
+                    raise OSError("exists failed")
+                return original_exists(path)
+
+            with (
+                patch.object(Path, "replace", fail_content_replace),
+                patch.object(Path, "exists", fail_hidden_exists),
+            ):
+                try:
+                    result = rename_asset(str(src), "renamed.mat", dry_run=False)
+                except OSError as exc:
+                    result = {
+                        "success": "raised",
+                        "code": type(exc).__name__,
+                        "message": str(exc),
+                    }
+
+        self.assertEqual(
+            (False, "ASSET_OP_WRITE_FAILED"),
+            (result["success"], result["code"]),
+        )
+
+    def test_failed_rename_preserves_source_text(self) -> None:
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src = Path(tmpdir) / "original.mat"
+            dest = Path(tmpdir) / "renamed.mat"
+            shutil.copy(_FIXTURES / "standard_textured.mat", src)
+            before = src.read_text(encoding="utf-8")
+            original_rename = Path.rename
+
+            def fail_asset_rename(path, target):
+                if path == src and target == dest:
+                    raise OSError("rename failed")
+                return original_rename(path, target)
+
+            with patch.object(Path, "rename", fail_asset_rename):
+                result = rename_asset(str(src), "renamed.mat", dry_run=False)
+            after = src.read_text(encoding="utf-8")
+
+        self.assertEqual(
+            (False, "ASSET_OP_WRITE_FAILED", before, False),
+            (result["success"], result["code"], after, dest.exists()),
+        )
+
 
 class RenameAssetWithoutMetaTests(unittest.TestCase):
     """Pin the no-meta rename branch's flag value."""
 
-    def test_apply_without_meta_sibling_sets_meta_renamed_to_false(self) -> None:
+    def test_apply_without_meta_sibling_fails_and_preserves_source(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             src = Path(tmpdir) / "original.mat"
+            dest = Path(tmpdir) / "renamed.mat"
             shutil.copy(_FIXTURES / "standard_textured.mat", src)
 
             result = rename_asset(str(src), "renamed.mat", dry_run=False)
+            filesystem_state = (src.exists(), dest.exists())
 
         self.assertEqual(
-            (True, False),
-            (result["success"], result["data"]["meta_renamed"]),
+            (False, "ASSET_OP_WRITE_FAILED", True, False),
+            (result["success"], result["code"], *filesystem_state),
         )
+        self.assertIn("source_meta_missing", _diag_details(result))
 
 
 class RenameAssetDiagnosticDetailTests(unittest.TestCase):
@@ -542,6 +1211,8 @@ class RenameAssetDiagnosticDetailTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             src = Path(tmpdir) / "no_name.asset"
             src.write_text(_NO_M_NAME_CONTENT, encoding="utf-8")
+            src_meta = Path(str(src) + ".meta")
+            src_meta.write_text(_DUMMY_META, encoding="utf-8")
 
             result = rename_asset(str(src), "renamed.asset", dry_run=True)
 
@@ -553,25 +1224,37 @@ class RenameAssetDiagnosticDetailTests(unittest.TestCase):
             (result["success"], _diag_details(result)),
         )
 
-    def test_meta_rename_failure_emits_meta_rename_failed_diag_and_flag_false(
+    def test_meta_rename_failure_returns_write_failed_and_rolls_back_asset(
         self,
     ) -> None:
-        # Pre-create the destination meta path as a directory so the
-        # rename of the meta file fails; the documented contract is
-        # success envelope + meta_renamed=False + the named diagnostic.
+        from unittest.mock import patch
+
         with tempfile.TemporaryDirectory() as tmpdir:
             src = Path(tmpdir) / "original.mat"
+            dest = Path(tmpdir) / "renamed.mat"
             shutil.copy(_FIXTURES / "standard_textured.mat", src)
             src_meta = Path(str(src) + ".meta")
             src_meta.write_text(_DUMMY_META, encoding="utf-8")
             dest_meta = Path(tmpdir) / "renamed.mat.meta"
-            dest_meta.mkdir()
+            original_rename = Path.rename
 
-            result = rename_asset(str(src), "renamed.mat", dry_run=False)
+            def fail_meta_rename(path: Path, target: Path) -> Path:
+                if path == src_meta and target == dest_meta:
+                    raise OSError("meta rename failed")
+                return original_rename(path, target)
+
+            with patch.object(Path, "rename", fail_meta_rename):
+                result = rename_asset(str(src), "renamed.mat", dry_run=False)
+            filesystem_state = (
+                src.exists(),
+                dest.exists(),
+                src_meta.exists(),
+                dest_meta.exists(),
+            )
 
         self.assertEqual(
-            (True, False),
-            (result["success"], result["data"]["meta_renamed"]),
+            (False, "ASSET_OP_WRITE_FAILED", True, False, True, False),
+            (result["success"], result["code"], *filesystem_state),
         )
         self.assertIn("meta_rename_failed", _diag_details(result))
 
@@ -602,6 +1285,8 @@ class RenameAssetMNameUnchangedTests(unittest.TestCase):
             # m_Name in _MONOBEHAVIOUR_ASSET is "OriginalAsset".
             src = Path(tmpdir) / "wrong_filename.asset"
             src.write_text(_MONOBEHAVIOUR_ASSET, encoding="utf-8")
+            src_meta = Path(str(src) + ".meta")
+            src_meta.write_text(_DUMMY_META, encoding="utf-8")
 
             result = rename_asset(
                 str(src), "OriginalAsset.asset", dry_run=True

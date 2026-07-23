@@ -1,8 +1,8 @@
 ---
 tool: vvmw
-version_tested: "VizVid 2026-05 build / VRC SDK 3.7+ / UdonSharp 2023.12+"
-last_updated: 2026-06-07
-confidence: medium
+version_tested: "1.7.5"
+last_updated: 2026-07-22
+confidence: high
 ---
 
 # VVMW (VizVid) 統合パターン
@@ -146,6 +146,32 @@ standard 5.1 の channel label と実際の AudioSource 配置は、利用する
 ### Volume/Mute の同期問題
 
 `synced=false` の場合、Volume/Mute は完全 local。ただし VVMW UI Handler は別途 sync する設計があるので、独自 UI から `Core.Volume = X` を直接書く構成にする (UI Handler を bypass)。
+
+## L3: Core screen-target の shared-index 配列
+
+`JLChnToZ.VRC.VVMW.Core` の画面出力設定は、次の 7 配列を同じ index の 1 行として扱う。`screenTargetIndeces` は package source の綴りそのままであり、`Indices` に補正してはならない。
+
+| SerializedProperty path | Unity raw element type | 意味 |
+|---|---|---|
+| `screenTargets` | `PPtr<$Object>` | Renderer / Material 等の出力対象 |
+| `screenTargetModes` | `int` | 対象種別・書き込み方式 |
+| `screenTargetIndeces` | `int` | material 等の対象 index |
+| `screenTargetPropertyNames` | `string` | Unity video texture property 名 |
+| `avProPropertyNames` | `string` | AVPro video texture property 名 |
+| `screenTargetDefaultTextures` | `PPtr<$Texture>` | 再生停止時等に戻す texture |
+| `rtScreenTargetSTs` | `Vector4` | RenderTexture 用 scale / offset |
+
+`CoreEditor` は `OnEnable` でこれらの exact path を `SerializedObject.FindProperty` に束縛する。画面一覧の resize・行削除・行追加は 7 配列すべてに対して同じ index で実行されるため、配列長の一致が構造上の不変条件になる。1 配列だけを append / remove してはならない。
+
+PrefabSentinel で semantic profile を作る場合は `zipped_arrays` view として宣言し、`screenTargets` と `screenTargetDefaultTextures` の profile element type は `ObjectReference` にする。Unity の raw `PPtr<T>` は ObjectReference の具体表現である。既定は read-only とし、配列長が不一致なら読み取り結果に warning を残して writer を無効化する。
+
+Core script の package 固定 GUID は `1d107e5840840004ab05d92303812e85`、fileID は `11500000`。型識別は `JLChnToZ.VRC.VVMW.Core` / assembly `JLChnToZ.VVMW` と組み合わせる。
+
+根拠:
+
+- `Packages/idv.jlchntoz.vvmw/Runtime/VVMW/Core_Screen.cs`
+- `Packages/idv.jlchntoz.vvmw/Editor/VVMW/CoreEditor.cs`
+- Unity `SerializedObject` surface で全 7 path、raw element type、script identity を実測済み
 
 ## L3: Core を別 UB から制御する統合パターン (実例)
 

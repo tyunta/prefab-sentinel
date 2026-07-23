@@ -163,19 +163,13 @@ class TestWiringResponseSerialization(unittest.TestCase):
 
         wire = _component_to_dict(comp, "TestObj", guid_to_name={})
 
-        # Legacy flat list preserved.
         self.assertEqual(["targetRef"], wire["null_field_names"])
-        # Spec Expected Observable: existing keys (`null_ratio` etc.)
-        # retain their values. Fixture has exactly one non-skipped
-        # field (`targetRef`), one of which is null, so the ratio
-        # string is `"1/1"`.
         self.assertEqual(
             "1/1",
             wire["null_ratio"],
             f"null_ratio must be '1/1' for one null field out of one "
             f"total; got {wire['null_ratio']!r}",
         )
-        # New classification list under the documented key, three-key entries.
         classifications = require_list(
             wire["null_field_classifications"],
             "null field classifications",
@@ -183,11 +177,13 @@ class TestWiringResponseSerialization(unittest.TestCase):
         self.assertEqual(1, len(classifications))
         entry = require_mapping(classifications[0], "null field classification")
         self.assertEqual(
-            {"name", "kind", "evidence"},
+            {"name", "kind", "evidence", "actionability"},
             set(entry.keys()),
         )
-        self.assertEqual("targetRef", entry["name"])
-        self.assertEqual("variant_overridden_null", entry["kind"])
+        self.assertEqual(
+            ("targetRef", "variant_overridden_null", "actionable"),
+            (entry["name"], entry["kind"], entry["actionability"]),
+        )
 
 
 if __name__ == "__main__":

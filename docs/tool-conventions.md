@@ -24,6 +24,12 @@ scene 側スキーム（symbol-path / hierarchy-path / patch-selector）では�
 
 `.prefab` / `.unity` / `.asset` / `.mat` / `.cs` / `.anim` 等、project 内の asset ファイルを相対パスで指す（例: `Assets/Prefabs/Mic.prefab`）。offline ツールと editor_* ツールの双方が使う。
 
+`validate_refs(scope=...)` の `scope` は検査対象 file / directory selector であり、GUID / fileID の解決 universe ではない。`Assets/...` 配下の file scope を指定しても、project 内 sibling / parent asset の GUID は active project root で解決する。応答では `scan_scope` と `guid_resolution_root` を分けて返す。
+
+offline `copy_asset` の source は inspect-side と同じ project-relative `Assets/...` normalization を使う。絶対パスや project 外 source は `ASSET_COPY_SOURCE_INVALID_PATH`、project 内だが存在しない source は `ASSET_COPY_SOURCE_NOT_FOUND` とし、`normalized_candidate_path` / `resolution_root` / `reason` を diagnostic evidence として返す。
+
+offline `rename_asset` の source は inspect-side と同じ project-relative normalization を使う。project root 外 source は `ASSET_RENAME_INVALID_PATH` とし、`normalized_candidate_path` / `resolution_root` / `reason` を diagnostic evidence として返す。`new_name` は同一ディレクトリ内の bare filename のみを受け入れる。`../x.mat`、path separator、absolute path、Windows drive-rooted path、または project root 外へ解決される name は `ASSET_RENAME_INVALID_NAME` で拒否する。cross-directory move は `editor_move_asset` の責務であり、offline rename は source asset / `.meta` を変更しない。
+
 `editor_create_generated_asset` の `asset_path` は case-sensitive `.renderTexture` generated asset の destination を表し、`editor_move_asset` の `source_asset_path` / `destination_asset_path` は AssetDatabase.MoveAsset に渡す project-relative asset path を表す。どちらも `.meta` path を対象にせず、Editor Bridge 側で AssetDatabase state を確認する。
 
 ### 1.2 asset-guid
@@ -34,6 +40,8 @@ asset ファイルを 32 文字 hex の GUID で指す。asset-path の代替表
 
 offline symbol tree（YAML 直読みで構築する人間可読ツリー）上のオブジェクトを指す。GameObject パス + 末尾コンポーネントの形（例: `CharacterBody/MeshRenderer`、`Body/Head/MonoBehaviour(PlayerScript)`）。`get_unity_symbols` / `find_unity_symbol` / offline の `set_property` / `set_properties` 等が使う。権威は last-saved disk YAML — live editor の未保存編集は反映されない（Editor Bridge 接続中かつ未保存変更がある場合、`get_unity_symbols` / `find_unity_symbol` はペイロードに freshness マーカーを付与する — issue #40）。
 
+`get_unity_symbols(expand_nested=true)` の display path は人間が読む identity であり、nested / duplicate / placeholder entry では lookup key と一致しない場合がある。expanded nested payload が `lookup.asset_path`, `lookup.symbol_path`, `lookup.expand_nested=true` を持つ場合、`find_unity_symbol` はその lookup object の値を canonical key として受け取る。display-only path を lookup に使って miss しても、空 `matches` は正常な no-match payload であり、discovery payload 側が正しい lookup identity を提示する。
+
 ### 1.4 hierarchy-path
 
 live editor の scene または active Prefab Stage 上の GameObject を `/` 区切りで指す（例: `/Canvas/Panel/Button`）。editor_* ツールが使う。Prefab Stage が開いていれば stage root を先に解決する。権威は live editor。
@@ -41,6 +49,12 @@ live editor の scene または active Prefab Stage 上の GameObject を `/` �
 live geometry (`editor_get_transform` / `editor_get_bounds` / `editor_measure_distance`) と target screenshot (`editor_screenshot(target=...)`) は同じ hierarchy-path authority を使う。geometry は read-only で、missing / ambiguous path は typed envelope で fail-fast する。routine geometry inspection は dedicated geometry tool を使い、`editor_run_script` snippets を第一選択にしない。
 
 `editor_frame` と `editor_screenshot(target=...)` の renderer framing は `bounds_policy` を共有する。既定の `all_visible_renderers` は対象 GameObject 配下の active enabled child Renderers をすべて集約する。`focus_core` は明示 opt-in の policy で、core-focused framing に戻したい場合だけ指定する。policy 名を省略して implicit filtering に戻す経路は持たない。
+
+### 1.4.1 live/saved status provenance
+
+offline asset-path / symbol-path inspection は saved disk YAML を読む。`get_project_status` は single status surface として live Editor state を補助的に返し、Bridge 由来 fields は `state_source="live_editor"` を持つ。dirty scene / prefab / material / asset identities と blocker records は live API が提供できた範囲だけの evidence であり、saved-disk inspection の代替 authority ではない。
+
+Bridge / live Editor blocker vocabulary は `watch_dir`, `bridge_connection`, `compile_or_build`, `playmode_transition`, `prefab_stage_for_scene_bound_operation`, `dirty_or_save_blocker` に固定する。tool error がこの vocabulary に分類できる場合は `blocker_class` と `suggested_next_action` を返し、evidence-free failure では blocker を合成しない。
 
 ### 1.5 patch-selector
 

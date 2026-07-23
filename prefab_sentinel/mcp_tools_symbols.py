@@ -80,23 +80,35 @@ def register_symbol_tools(server: FastMCP, session: ProjectSession) -> None:
                     "origin_path": v["origin_path"],
                     "origin_depth": v["origin_depth"],
                 }
-        result: list[dict[str, Any]] = []
-        for match in matches:
-            props = match.get("properties")
-            file_id = match.get("file_id", "")
-            if not props or not file_id:
-                result.append(match)
-                continue
-            annotated: dict[str, Any] = {}
-            for prop_name, prop_value in props.items():
-                entry: dict[str, Any] = {"value": prop_value}
-                origin = origin_map.get((file_id, prop_name))
-                if origin:
-                    entry["origin_path"] = origin["origin_path"]
-                    entry["origin_depth"] = origin["origin_depth"]
-                annotated[prop_name] = entry
-            result.append({**match, "properties": annotated})
-        return result
+
+        def annotate_node(node: dict[str, Any]) -> dict[str, Any]:
+            updated = node
+            props = node.get("properties")
+            file_id = node.get("file_id", "")
+            if props and file_id:
+                annotated: dict[str, Any] = {}
+                for prop_name, prop_value in props.items():
+                    entry: dict[str, Any] = {"value": prop_value}
+                    origin = origin_map.get((file_id, prop_name))
+                    if origin:
+                        entry["origin_path"] = origin["origin_path"]
+                        entry["origin_depth"] = origin["origin_depth"]
+                    annotated[prop_name] = entry
+                updated = {**node, "properties": annotated}
+
+            children = node.get("children")
+            if not isinstance(children, list):
+                return updated
+            annotated_children = [
+                annotate_node(child) if isinstance(child, dict) else child
+                for child in children
+            ]
+            if updated is node:
+                updated = {**node}
+            updated["children"] = annotated_children
+            return updated
+
+        return [annotate_node(match) for match in matches]
 
     @server.tool()
     def get_unity_symbols(
@@ -144,6 +156,7 @@ def register_symbol_tools(server: FastMCP, session: ProjectSession) -> None:
         depth: int = 0,
         include_fields: bool = False,
         show_origin: bool = False,
+        expand_nested: bool = False,
     ) -> dict[str, Any]:
         """Find a Unity object by its human-readable symbol path.
 
@@ -160,11 +173,19 @@ def register_symbol_tools(server: FastMCP, session: ProjectSession) -> None:
             include_fields: Include all field values for matched symbols.
             show_origin: Annotate properties with Variant chain origin
                 (which Prefab set each value). Implies include_fields.
+            expand_nested: Resolve against expanded Nested Prefab symbols.
         """
         fields = include_fields or show_origin
         text, resolved = read_asset(asset_path, session.project_root)
+        guid_to_asset_path = None
+        if expand_nested and session.project_root:
+            guid_to_asset_path = session.guid_index()
         tree = session.get_symbol_tree(
-            resolved, text, include_properties=fields,
+            resolved,
+            text,
+            include_properties=fields,
+            expand_nested=expand_nested,
+            guid_to_asset_path=guid_to_asset_path,
         )
         results = tree.query(symbol_path, depth=depth)
         if results and show_origin:
@@ -174,6 +195,8 @@ def register_symbol_tools(server: FastMCP, session: ProjectSession) -> None:
             "symbol_path": symbol_path,
             "matches": results,
         }
+        if expand_nested:
+            response["expand_nested"] = True
         if show_origin:
             response["show_origin"] = True
         marker = _offline_freshness_marker()

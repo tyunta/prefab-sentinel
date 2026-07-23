@@ -108,6 +108,19 @@
 - ベンチマーク・smoke batch・regression report 等の出力先パスは scope 配下の `reports/` / `benchmark_*.json` を慣例として使うが、本ファイルは scope 規約の正本としては扱わない（個別スクリプトの引数仕様は [docs/execution-reference.md](./docs/execution-reference.md) を参照）。
 - `<scope>/config/` 配下に新規の設定ファイルを追加する場合は、auto-load 規約とサンプルパスを本節に追記し、対応 issue 番号を残す。
 
+## Inspector profile locations and writer gates
+
+The activated project owns two distinct profile locations:
+
+- `.prefab-sentinel/profiles/` is the only project-local discovery root. Discovered entries must be contained regular non-symlink JSON files.
+- `.prefab-sentinel/profile-drafts/` is outside discovery. The authoring workflow stages a draft here, calls `validate_inspector_profile` against a current Editor surface, and only then atomically promotes it to the deterministic recommended path.
+
+Public `recommended_profile_path` and project-local `profile_path` values are relative to the activated project; selected bundled profiles use `profiles/<filename>`. Profile filesystem failures expose stable diagnostics without absolute project, package, or host paths.
+
+Profiles are declarative and read-only by default. Every writer-enabled view explicitly sets `writable.enabled=true`. Medium- and low-confidence writer-enabled views also require a persistent approval record with `kind="explicit_user_request"`, reason, and recorded timestamp. There is no per-call writable bypass: path/type/array checks and the existing dry-run, confirm, `change_reason`, and report gates still apply to `set_property`, `set_properties`, and `patch_apply`. Mechanical writer validation requires the numeric target `local_file_id` returned by the same Editor surface inspection; missing identity disables the writable declaration instead of falling back to YAML or symbol-path resolution. The probe follows the actual resource grammar: Prefab component `file_id`, ScriptableObject root `$asset`, and fail-closed for scene components until an exact component-handle grammar exists.
+
+An unsafe, conflicting, or invalid project-local profile blocks bundled fallback. Bridge unavailability blocks surface validation and promotion; it never enables YAML or unsaved-live-state substitution.
+
 ## confirm / change_reason 必須対象一覧
 
 | ツール名 | `change_reason` 必須 | `out_report` 必須 |
@@ -128,7 +141,7 @@
 | `editor_create_generated_asset` | ✅ | ✅ `out_report` |
 | `editor_move_asset` | ✅ | ✅ `out_report` |
 | `revert_overrides` | ✅ | — |
-| `patch_apply` | ✅ | ✅ |
+| `patch_apply` | ✅ | ✅ (confirmed exactly one open Prefab only) |
 | `vrcsdk_upload` | ✅ | — |
 | `editor_run_script` | ✅ | — |
 | `editor_run_script_submit` | ✅ | — |
@@ -145,8 +158,12 @@
 
 issue #49 で `editor_execute_menu_item` / `editor_safe_save_prefab` / `editor_create_udon_program_asset` / `editor_create_scene` / `editor_save_scene` が監査ペア対象へ追加された（逆不可逆性原理: arbitrary code 実行・非 Undo の asset 改変）。`editor_batch_set_blend_shape` / `editor_apply_animation_clip` は Undo 可能な scene 変更のため監査ペア対象外（`confirm` / `change_reason` を渡すと `TypeError`）。
 
-`validate_runtime(profile="clientsim")` も ClientSim が Play Mode と scene dirty state に触れうるため `confirm=True` + 非空 `change_reason` を要求する。既定 profile は `compile_only` で、ClientSim は明示 profile なしには実行されない。
+`validate_runtime(profile="clientsim")` も ClientSim が Play Mode と scene dirty state に触れうるため `confirm=True` + 非空 `change_reason` を要求する。既定 profile は `compile_only` で、ClientSim は明示 profile なしには実行されない。さらに requested scene は sole loaded active scene でなければならず、ClientSim package/public lifecycle API と `ClientSimSettings.Instance.enableClientSim` を Play 前に検査する。操作 timeout は request 受理時からの Unity 側 preflight/enter/ready 共通 deadline で、preflight 中に期限切れなら Play Mode へ入らない。file transport は cleanup 30 秒 + dispatch 5 秒を別に待つ。
 
 `editor_serialized_property_read` / `editor_serialized_property_list` は read-only なので audit pair 対象外。`editor_serialized_property_write` は dry-run 既定だが、`confirm=True` の確定書き込みでは Undo / dirty / Prefab override state に触れるため `change_reason` を必須にする。
 
 `editor_create_generated_asset` / `editor_move_asset` は issue #116 の AssetDatabase-backed project asset 操作で、`confirm=False` dry-run は Bridge に到達して AssetDatabase state を読むが `project_root` / `out_report` / `change_reason` を検証しない。`confirm=True` では Python 境界で `project_root` → `out_report` → `change_reason` の順に検証し、`OUT_REPORT_REQUIRED` などの監査/report error は Bridge 呼び出し前に返す。成功・失敗どちらでも、最終 MCP response と同一 JSON を `out_report` に排他作成で書く。
+
+`set_properties(confirm=True)` は asset/symbol/property validation 後、dedicated writer dispatch の直前に project-contained `out_report` を排他予約する。canonical containment は missing parent 判定より先に行い、予約直前にも symlink-safe containment を再検証する。final response は atomic replace で確定し、operation 後の report failure は stable `OUT_REPORT_WRITE_FAILED` と元 operation evidence を返す。
+
+`patch_apply` の transaction report gate は exactly one open Prefab resource にだけ適用する。relative/absolute `out_report` は project root 内へ解決され、既存 destination、project 外、missing/non-directory parent、予約不能を mutation 前に拒否する。multi/create/non-Prefab plan に transaction state や新しい save semantics を追加しない。

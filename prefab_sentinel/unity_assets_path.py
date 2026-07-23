@@ -19,6 +19,10 @@ __all__ = [
 _PATH_DOUBLING_RE = re.compile(r"Assets/.*Assets/", re.IGNORECASE)
 
 
+class ProjectPathEscapeError(ValueError):
+    pass
+
+
 def has_path_doubling(path: str) -> bool:
     """Return True if *path* contains a repeated ``Assets/`` segment.
 
@@ -45,10 +49,7 @@ def resolve_scope_path(scope: str, project_root: Path) -> Path:
 
 
 def resolve_asset_path(path: str, project_root: Path | None) -> Path:
-    """Resolve asset path, joining ``Assets/...`` paths with project root.
-
-    If *path* is relative (e.g. ``Assets/Foo/Bar.prefab``) and doesn't exist
-    as-is, tries joining with *project_root*.
+    """Resolve asset path, joining project-relative paths with project root.
 
     Raises:
         ValueError: If the resolved path escapes the project root.
@@ -56,24 +57,20 @@ def resolve_asset_path(path: str, project_root: Path | None) -> Path:
     from prefab_sentinel.wsl_compat import to_wsl_path
 
     resolved = Path(to_wsl_path(path))
-    if not resolved.is_file() and project_root and not resolved.is_absolute():
-        joined = (project_root / resolved).resolve()
-        if joined.is_file():
-            resolved = joined
+    if project_root is None:
+        return resolved
 
-    # Path containment guard: resolved must not escape project root.
-    # Uses is_relative_to (Python 3.9+) to avoid prefix-collision bypass.
-    if project_root is not None:
-        resolved_abs = resolved.resolve()
-        root_abs = Path(project_root).resolve()
-        if not resolved_abs.is_relative_to(root_abs):
-            msg = (
-                f"Path escapes project root: {path!r} "
-                f"resolves to {resolved_abs} which is outside {root_abs}"
-            )
-            raise ValueError(msg)
-
-    return resolved
+    root_abs = Path(project_root).resolve()
+    if not resolved.is_absolute():
+        resolved = root_abs / resolved
+    resolved_abs = resolved.resolve()
+    if not resolved_abs.is_relative_to(root_abs):
+        msg = (
+            f"Path escapes project root: {path!r} "
+            f"resolves to {resolved_abs} which is outside {root_abs}"
+        )
+        raise ProjectPathEscapeError(msg)
+    return resolved_abs
 
 
 def relative_to_root(path: Path, root: Path) -> str:

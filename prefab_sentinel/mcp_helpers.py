@@ -53,11 +53,20 @@ def normalize_material_value(value: str | list | int | float) -> str:
 
 def read_asset(path: str, project_root: Path | None) -> tuple[str, Path]:
     """Read a Unity asset file, returning (text, resolved_path)."""
-    resolved = resolve_asset_path(path, project_root)
-    if not resolved.is_file():
+    try:
+        resolved = resolve_asset_path(path, project_root)
+        asset_exists = resolved.is_file()
+    except OSError as exc:
+        msg = f"File could not be resolved: {path}: {exc}"
+        raise FileNotFoundError(msg) from exc
+    if not asset_exists:
         msg = f"File not found: {path}"
         raise FileNotFoundError(msg)
-    text = decode_text_file(resolved)
+    try:
+        text = decode_text_file(resolved)
+    except OSError as exc:
+        msg = f"Unable to read file: {path}: {exc}"
+        raise ValueError(msg) from exc
     if text is None:
         msg = f"Unable to decode file: {path}"
         raise ValueError(msg)

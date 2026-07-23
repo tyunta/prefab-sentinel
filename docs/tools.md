@@ -1,6 +1,6 @@
 # MCP ツール一覧
 
-`prefab-sentinel-mcp` が公開する全 MCP ツール（現在 98 件 / 18 カテゴリ）の正本カタログ。各カテゴリは `prefab_sentinel/mcp_tools_*.py` の 1 モジュールに対応する。エンベロープ仕様は [api-reference.md「レスポンスフォーマット」](./api-reference.md#レスポンスフォーマット)、エラーコードの正本は [api-reference.md「エラーコード規約」](./api-reference.md#エラーコード規約) を参照。
+`prefab-sentinel-mcp` が公開する全 MCP ツール（現在 101 件 / 19 カテゴリ）の正本カタログ。各カテゴリは `prefab_sentinel/mcp_tools_*.py` の 1 モジュールに対応する。エンベロープ仕様は [api-reference.md「レスポンスフォーマット」](./api-reference.md#レスポンスフォーマット)、エラーコードの正本は [api-reference.md「エラーコード規約」](./api-reference.md#エラーコード規約) を参照。
 
 ## 用途索引
 
@@ -11,6 +11,7 @@
 - **editor_assets** — RenderTexture generated asset 作成と AssetDatabase.MoveAsset による project asset 移動を行う
 - **set_property** — シンボルパス + コンポーネント型でフィールド値を狙い撃ち編集する
 - **validation** — broken reference / 配線 / 構造 / 命名整合 / ランタイムを read-only で診断する (`/prefab-sentinel:prefab-reference-repair` の起点)
+- **inspector_profile** — last-saved SerializedObject surface を読み、project-local `inspector-profile.v1` を検証・適用する
 - **symbols** — 人間可読パスで Unity オブジェクトをアドレッシングする
 - **session** — `activate_project` でスコープを宣言し、`deploy_bridge` で Bridge C# を同期する
 - **editor_view** — Editor Bridge 経由で Scene/Hierarchy/Console を read する（スクショ・カメラ・ログ）
@@ -27,7 +28,7 @@
 
 ## 全ツール一覧（カテゴリ別）
 
-各カテゴリ表のカラム: ツール / 区分 / 簡潔説明 / 関連 issue / 種別（read-only / write）。`write` はプロジェクト / Editor / アセット状態に副作用を持つことを示す表示で、`confirm=True` + 非空 `change_reason` を引数として要求する audit-pair 対象はこの中の部分集合（`patch` / `components` / `set_property` の各カテゴリ全体と、`vrcsdk_upload` / `editor_run_script` / `editor_run_script_submit` / `editor_create_animation_clip` / `editor_execute_menu_item` / `editor_safe_save_prefab` / `editor_create_udon_program_asset` / `editor_set_material_property` / `editor_serialized_property_write` / `editor_add_udonsharp_component` / `editor_set_udonsharp_field` / `editor_wire_persistent_listener` / `editor_create_scene` / `editor_save_scene` / `editor_close_prefab` / `editor_create_generated_asset` / `editor_move_asset`）に限られる。`patch_apply` / `set_properties` / `editor_create_generated_asset` / `editor_move_asset` は `out_report` も必須。正本一覧は [CONFIGURATION.md](../CONFIGURATION.md#confirm--change_reason-必須対象一覧)。それ以外の `write` ツール（例: `editor_select` / `editor_rename` / `editor_set_blend_shape` / `editor_set_property` / `editor_batch_*` / `editor_batch_set_blend_shape` / `editor_apply_animation_clip` 等）は audit-pair なしで呼び出す（`confirm` / `change_reason` を引数に渡すと `TypeError` で拒否される）。issue #49 で `editor_execute_menu_item` / `editor_safe_save_prefab` / `editor_create_udon_program_asset` / `editor_create_scene` / `editor_save_scene` が audit-pair 側へ、`editor_batch_set_blend_shape` / `editor_apply_animation_clip` が非 audit 側へ再分類された（逆不可逆性原理の適用）。issue #114 で `delete_asset` / `delete_assets` は dry-run 既定、確定適用時は AssetDatabase 経由 + audit-pair 必須の patch ツールとして追加された。issue #112 で `editor_serialized_property_write` は raw `propertyPath` 汎用 writer として audit-pair 対象に追加された。issue #116 で `editor_create_generated_asset` / `editor_move_asset` は dry-run では audit/report を検証せず Bridge で AssetDatabase state を読み、確定時だけ `change_reason` + `out_report` を要求する editor_assets ツールとして追加された。
+各カテゴリ表のカラム: ツール / 区分 / 簡潔説明 / 関連 issue / 種別（read-only / write）。`write` はプロジェクト / Editor / アセット状態に副作用を持つことを示す表示で、`confirm=True` + 非空 `change_reason` を引数として要求する audit-pair 対象はこの中の部分集合（`patch` / `components` / `set_property` の各カテゴリ全体と、`vrcsdk_upload` / `editor_run_script` / `editor_run_script_submit` / `editor_create_animation_clip` / `editor_execute_menu_item` / `editor_safe_save_prefab` / `editor_create_udon_program_asset` / `editor_set_material_property` / `editor_serialized_property_write` / `editor_add_udonsharp_component` / `editor_set_udonsharp_field` / `editor_wire_persistent_listener` / `editor_create_scene` / `editor_save_scene` / `editor_close_prefab` / `editor_create_generated_asset` / `editor_move_asset`）に限られる。`set_properties` / `editor_create_generated_asset` / `editor_move_asset` は `out_report` も必須。`patch_apply` は confirmed exactly one open Prefab transaction の場合だけ `out_report` を必須とする。正本一覧は [CONFIGURATION.md](../CONFIGURATION.md#confirm--change_reason-必須対象一覧)。それ以外の `write` ツール（例: `editor_select` / `editor_rename` / `editor_set_blend_shape` / `editor_set_property` / `editor_batch_*` / `editor_batch_set_blend_shape` / `editor_apply_animation_clip` 等）は audit-pair なしで呼び出す（`confirm` / `change_reason` を引数に渡すと `TypeError` で拒否される）。issue #49 で `editor_execute_menu_item` / `editor_safe_save_prefab` / `editor_create_udon_program_asset` / `editor_create_scene` / `editor_save_scene` が audit-pair 側へ、`editor_batch_set_blend_shape` / `editor_apply_animation_clip` が非 audit 側へ再分類された（逆不可逆性原理の適用）。issue #114 で `delete_asset` / `delete_assets` は dry-run 既定、確定適用時は AssetDatabase 経由 + audit-pair 必須の patch ツールとして追加された。issue #112 で `editor_serialized_property_write` は raw `propertyPath` 汎用 writer として audit-pair 対象に追加された。issue #116 で `editor_create_generated_asset` / `editor_move_asset` は dry-run では audit/report を検証せず Bridge で AssetDatabase state を読み、確定時だけ `change_reason` + `out_report` を要求する editor_assets ツールとして追加された。
 
 ### components
 
@@ -46,11 +47,11 @@
 | ツール | 区分 | 簡潔説明 | 関連 issue | 種別 |
 |--------|------|----------|-----------|------|
 | `set_material_property` | patch | `.mat` ファイルのプロパティをオフライン YAML 編集 | — | write |
-| `copy_asset` | patch | アセットファイルをコピーし `m_Name` と `.meta` を自動同期 | — | write |
-| `rename_asset` | patch | アセットファイルをリネームし `m_Name` と `.meta` を追従 | — | write |
+| `copy_asset` | patch | project-relative `Assets/...` source を project root で正規化してコピーし、`m_Name` と `.meta` を自動同期。invalid / not-found source は normalized candidate / resolution root / reason を返す | #151 | write |
+| `rename_asset` | patch | project-relative source を正規化して同一ディレクトリ内の bare filename へリネームし `m_Name` と `.meta` を追従。project 外 source は `ASSET_RENAME_INVALID_PATH`、path-shaped `new_name` は `ASSET_RENAME_INVALID_NAME` で拒否する | — | write |
 | `delete_asset` | patch | 1 件の project asset 削除を dry-run で影響確認し、`confirm` + `change_reason` で Unity AssetDatabase 経由に適用 | #114 | write |
 | `delete_assets` | patch | 複数 project asset 削除を一括 dry-run / AssetDatabase 確定適用し、削除後 broken-reference delta を返す | #114 | write |
-| `patch_apply` | patch | パッチ計画（v2 スキーマ）の dry-run / confirm 適用。`change_reason` + `out_report` 必須 | — | write |
+| `patch_apply` | patch | パッチ計画（v2）の dry-run / confirm 適用。exactly one open Prefab は `$root` / generated handle composition、selected created-result audit、response-equal report、introduced-only validation、automatic rollback を持つ transaction。confirmed transaction は `change_reason` + contained `out_report` 必須 | #156 | write |
 | `revert_overrides` | patch | Variant から指定 propertyPath の override を YAML レベルで削除 | — | write |
 
 ### editor_assets
@@ -68,8 +69,8 @@
 
 | ツール | 区分 | 簡潔説明 | 関連 issue | 種別 |
 |--------|------|----------|-----------|------|
-| `set_property` | set_property | シンボルパスでコンポーネントのフィールド値を設定。patch op は `TypeName@/hierarchy/path` selector を発行 | #37 | write |
-| `set_properties` | set_property | コンポーネントを指す `symbol_path`（component 引数なし）で複数プロパティを一括設定。`change_reason` + `out_report` 必須 | #41, #109 | write |
+| `set_property` | set_property | シンボルパスで component を一意に解決し、その local fileID を dedicated serialized-value route へ渡してフィールド値を設定 | #37 | write |
+| `set_properties` | set_property | component を指す `symbol_path`（component 引数なし）を local fileID に解決し、dedicated serialized-value route で複数プロパティを一括設定。confirm は contained `out_report` を mutation 前に排他予約し、最終 response を atomic replace する。`change_reason` + `out_report` 必須 | #41, #109, #156 | write |
 
 ### validation
 
@@ -78,23 +79,33 @@
 | ツール | 区分 | 簡潔説明 | 関連 issue | 種別 |
 |--------|------|----------|-----------|------|
 | `find_referencing_assets` | validation | GUID / パスの参照元アセット検索。成功時は直接ペイロードを返し、scope / target asset status failure は `REF404`、target `.meta` status/read failure は `REF001` を含む `ToolError` へ変換する | #122 | read-only |
-| `validate_refs` | validation | 壊れた GUID / fileID 参照のスキャン。`ignore_asset_guids` / snapshot diff / `refresh_guid_index` / diagnostics baseline 分類対応 | #100, #198, #199, #229, #237 | read-only |
-| `inspect_wiring` | validation | MonoBehaviour フィールド配線の分析。pagination / `script_filter` / `summary_only` / `include_out_of_scope_diagnostics` / diagnostics baseline 分類対応 | #100, #197, #227 | read-only |
+| `validate_refs` | validation | 壊れた GUID / fileID 参照のスキャン。target `scope` と `guid_resolution_root` を分離し、`ignore_asset_guids` / snapshot diff / `refresh_guid_index` / diagnostics baseline 分類対応 | #100, #150, #198, #199, #229, #237 | read-only |
+| `inspect_wiring` | validation | MonoBehaviour フィールド配線の分析。pagination / `script_filter` / `summary_only` / `include_out_of_scope_diagnostics` / actionability counts / progress-timeout metadata / diagnostics baseline 分類対応 | #100, #152, #153, #154, #197, #227 | read-only |
 | `inspect_variant` | validation | Prefab Variant の override チェーン分析 | — | read-only |
 | `diff_unity_symbols` | validation | Variant と Base の差分のみ返す | — | read-only |
 | `list_serialized_fields` | validation | C# スクリプトのシリアライズ対象フィールド一覧 | — | read-only |
 | `validate_field_rename` | validation | フィールドリネームの影響分析（派生クラス経由含む） | — | read-only |
 | `check_field_coverage` | validation | C# フィールドと YAML propertyPath の不一致検出 | — | read-only |
 | `inspect_materials` | validation | レンダラーごとのマテリアルスロット表示（override / inherited マーカー） | — | read-only |
-| `inspect_material_asset` | validation | `.mat` ファイルのシェーダー・プロパティ・テクスチャ参照を構造化データで返す | — | read-only |
-| `validate_materials` | validation | scope 内の `.mat` / renderer slot / TMP material preset / folder policy を静的検証し、generic risk と declarative rule drift を diagnostics baseline 分類付きで返す | #99, #100 | read-only |
+| `inspect_material_asset` | validation | `.mat` ファイルのシェーダー・プロパティ・テクスチャ参照を full mode で構造化データとして返し、summary mode では shader / main texture / selected properties / counts だけを返す | #154 | read-only |
+| `validate_materials` | validation | scope 内の `.mat` / renderer slot / TMP material preset / folder policy を静的検証し、generic risk と declarative rule drift を diagnostics baseline 分類付きで返す。`timeout_sec` 時は partial counts と next action を返す | #99, #100, #154 | read-only |
 | `validate_structure` | validation | YAML 内部構造の検証（fileID 重複・Transform 整合）を diagnostics baseline 分類付きで返す | #100 | read-only |
-| `inspect_hierarchy` | validation | GameObject 階層ツリー表示。`expand_monobehaviour` でスクリプトクラス名展開、`expand_prefab_instances` で saved YAML の effective nested PrefabInstance 階層を展開 | #96, #196, #238 | read-only |
+| `inspect_hierarchy` | validation | GameObject 階層ツリー表示。`expand_monobehaviour` でスクリプトクラス名展開、`expand_prefab_instances` で saved YAML の effective nested PrefabInstance 階層を展開し、`timeout_sec` 指定時は progress metadata を維持した timeout 応答を返す | #96, #154, #196, #238 | read-only |
 | `inspect_transform_effective_values` | validation | offline `asset_path` + `symbol_path` の Transform local/world position・rotation・scale を source default / host override / effective 列で比較 | #97 | read-only |
 | `inspect_unity_event_listeners` | validation | Button.onClick / Slider.onValueChanged / Toggle.onValueChanged の persistent listener entries と UdonSharp 診断を 1 応答で返す | #110 | read-only |
-| `validate_all_wiring` | validation | スコープ内の全 `.prefab` / `.unity` の null 参照を一括スキャンし、各 file の `inspect_wiring` key で diagnostics baseline 分類する | #100 | read-only |
+| `validate_all_wiring` | validation | スコープ内の全 `.prefab` / `.unity` の null 参照を一括スキャンし、actionability / progress counts を deterministic path order で集約し、各 file の `inspect_wiring` key で diagnostics baseline 分類する | #100, #152, #154 | read-only |
 | `update_diagnostics_baseline` | validation | supported validation source を再実行して project root の `config/diagnostics_baseline.json` 更新を preview/write する。`mode="write"` は `confirm=True` + 非空 `change_reason` 必須 | #100 | write |
-| `validate_runtime` | validation | `compile_only` / `editor_console_only` / `clientsim` profile で runtime 検証。既定は Play Mode に入らない `compile_only`、ClientSim は明示 profile + audit pair 必須 | #92 | read-only |
+| `validate_runtime` | validation | `compile_only` / `editor_console_only` / `clientsim` profile で runtime 検証。既定は Play Mode に入らない `compile_only`。ClientSim は明示 profile + audit pair に加え、指定 scene が唯一 loaded かつ active であることを要求し、Play Mode 終了・start-scene 復元後に3時点 side-effect report を返す | #92 | read-only |
+
+### inspector_profile
+
+`prefab_sentinel/mcp_tools_inspector_profiles.py`。Editor Bridge の last-saved SerializedObject surface と、project-local declarative Inspector profile を扱う。プロファイル作成・修復手順は `prefab-sentinel:inspector-profile-authoring`（`skills/inspector-profile-authoring/SKILL.md`）、単一の正本 schema/template は `prefab_sentinel/resources/inspector-profile.v1.schema.json` と `prefab_sentinel/resources/inspector-profile.template.json`。
+
+| ツール | 区分 | 簡潔説明 | 関連 issue | 種別 |
+|--------|------|----------|-----------|------|
+| `inspect_serialized_surface` | inspector_profile | component または ScriptableObject の target local fileID、last-saved raw property tree、effective value、optional origin、one-hop ObjectReference を同じ Editor Bridge inspection から取得 | #157 | read-only |
+| `inspect_with_profile` | inspector_profile | target identity で `inspector-profile.v1` を選択し、指定した 1 view だけを current effective value と raw property path 付きで返す | #157 | read-only |
+| `validate_inspector_profile` | inspector_profile | contained draft/profile を current Editor surface に対して全 view 機械検証し、writer-enabled path は同一 surface の exact target local fileID を identity gate に、Prefab `file_id` / ScriptableObject root `$asset` の実 writer grammarで dry-runする。exact scene component grammar は未対応のため writable を fail-closed にする。YAML/symbol 再解決、semantic truth の主張、promotion は行わない | #157 | read-only |
 
 ### symbols
 
@@ -102,8 +113,8 @@
 
 | ツール | 区分 | 簡潔説明 | 関連 issue | 種別 |
 |--------|------|----------|-----------|------|
-| `get_unity_symbols` | symbols | アセットのシンボルツリー取得（`depth` / `detail` / `expand_nested`） | — | read-only |
-| `find_unity_symbol` | symbols | 人間可読パスでオブジェクト検索（`include_fields` / `show_origin`） | — | read-only |
+| `get_unity_symbols` | symbols | アセットのシンボルツリー取得（`depth` / `detail` / `expand_nested`）。expanded nested entry は display identity と canonical lookup metadata を分けて返す | #153 | read-only |
+| `find_unity_symbol` | symbols | 人間可読または discovery-emitted lookup path でオブジェクト検索（`include_fields` / `show_origin` / `expand_nested`） | #153 | read-only |
 
 ### session
 
@@ -113,7 +124,7 @@
 |--------|------|----------|-----------|------|
 | `activate_project` | session | プロジェクトスコープ設定 + キャッシュ warm。`project_root` 明示指定可 | #244 | read-only |
 | `deploy_bridge` | session | Unity プロジェクトの Bridge C# / `.asmdef` ファイルを自動更新 | — | write |
-| `get_project_status` | session | セッション状態の表示（キャッシュ件数・スコープ・watcher・editor state）。`operator_context` 由来の actual project root と ProjectSession expected root から `project_root_consistent` を算出し、不一致は `EDITOR_BRIDGE_PROJECT_ROOT_MISMATCH` diagnostic として返す。live `get_editor_state` が successful warning diagnostics（例: `EDITOR_STATE_ENUMERATION_LIMITED`）を返した場合も status diagnostics / severity に引き継ぐ | #239, #111, #117 | read-only |
+| `get_project_status` | session | セッション状態の表示（キャッシュ件数・スコープ・watcher・editor state）。live editor dirty identities / `state_source` / blockers / `suggested_next_action` を single status surface で返し、project-root mismatch や `EDITOR_STATE_ENUMERATION_LIMITED` も warning diagnostics / severity に引き継ぐ | #155, #239, #111, #117 | read-only |
 
 ### editor_view
 

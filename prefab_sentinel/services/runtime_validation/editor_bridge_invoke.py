@@ -10,6 +10,7 @@ and an unset value short-circuits with a ``RUN_CONFIG_ERROR`` envelope.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 import uuid
@@ -22,6 +23,7 @@ from prefab_sentinel.bridge_constants import (
     UNITY_TIMEOUT_SEC_ENV,
 )
 from prefab_sentinel.contracts import ToolResponse, error_response
+from prefab_sentinel.editor_bridge import check_editor_bridge_env
 from prefab_sentinel.json_io import dump_json, load_json
 from prefab_sentinel.services.runtime_validation.config import (
     DEFAULT_EDITOR_POLL_INTERVAL,
@@ -35,6 +37,32 @@ from prefab_sentinel.services.runtime_validation.protocol import (
 )
 from prefab_sentinel.wsl_compat import to_windows_path, to_wsl_path
 
+_LOGGER = logging.getLogger(__name__)
+
+
+# ClientSim cleanup remains bridge-owned after its operation deadline. The transport
+# therefore waits through the 30-second exit bound plus a 5-second file-dispatch margin.
+_CLIENTSIM_EXIT_CLEANUP_GRACE_SEC = 30
+_EDITOR_DISPATCH_MARGIN_SEC = 5
+
+
+def _transport_failure_data(*, action: str, read_only: bool) -> dict[str, object]:
+    return {
+        "action": action,
+        "read_only": read_only,
+        "executed": False,
+    }
+
+
+def _transport_timeout_sec(action: str, operation_timeout_sec: int) -> int:
+    if action != "run_clientsim":
+        return operation_timeout_sec
+    return (
+        operation_timeout_sec
+        + _CLIENTSIM_EXIT_CLEANUP_GRACE_SEC
+        + _EDITOR_DISPATCH_MARGIN_SEC
+    )
+
 
 def invoke_via_editor_bridge(
     *,
@@ -47,11 +75,10 @@ def invoke_via_editor_bridge(
     change_reason: str | None = None,
     allow_dirty_before: bool = False,
 ) -> ToolResponse:
-    watch_dir_raw = os.environ.get(BRIDGE_WATCH_DIR_ENV, "").strip()
-    if not watch_dir_raw:
+    def unavailable_watch_directory() -> ToolResponse:
         return error_response(
             "RUN_CONFIG_ERROR",
-            f"{BRIDGE_WATCH_DIR_ENV} is required to reach the Unity Editor Bridge.",
+            f"{BRIDGE_WATCH_DIR_ENV} must name an existing Editor Bridge watch directory.",
             data={
                 "action": action,
                 "project_root": relative_fn(target_root),
@@ -60,8 +87,15 @@ def invoke_via_editor_bridge(
             },
         )
 
+    if check_editor_bridge_env() is not None:
+        return unavailable_watch_directory()
+
+    watch_dir_raw = os.environ[BRIDGE_WATCH_DIR_ENV].strip()
     watch_dir = Path(to_wsl_path(watch_dir_raw))
-    timeout_raw = os.environ.get(UNITY_TIMEOUT_SEC_ENV, str(DEFAULT_TIMEOUT_SEC)).strip()
+    timeout_raw = os.environ.get(
+        UNITY_TIMEOUT_SEC_ENV,
+        str(DEFAULT_TIMEOUT_SEC),
+    ).strip()
     try:
         timeout_sec = int(timeout_raw)
     except ValueError:
@@ -94,49 +128,55 @@ def invoke_via_editor_bridge(
         "allow_dirty_before": allow_dirty_before,
     }
 
+    if check_editor_bridge_env() is not None:
+        return unavailable_watch_directory()
     try:
-        watch_dir.mkdir(parents=True, exist_ok=True)
         tmp_file.write_text(dump_json(payload, indent=None), encoding="utf-8")
         tmp_file.rename(request_file)
-    except OSError as exc:
+    except OSError:
+        _LOGGER.error("Runtime Editor Bridge request write failed")
+        try_delete(tmp_file)
         return error_response(
             "RUN_EDITOR_BRIDGE_WRITE",
             "Failed to write editor bridge runtime request file.",
-            data={
-                "action": action,
-                "project_root": relative_fn(target_root),
-                "request_file": str(request_file),
-                "error": str(exc),
-                "read_only": True,
-                "executed": False,
-            },
+            data=_transport_failure_data(action=action, read_only=True),
         )
 
-    deadline = time.monotonic() + timeout_sec
+    deadline = time.monotonic() + _transport_timeout_sec(action, timeout_sec)
     while time.monotonic() < deadline:
-        if response_file.exists():
+        try:
+            response_ready = response_file.exists()
+        except OSError:
+            _LOGGER.error("Runtime Editor Bridge response status probe failed")
+            try_delete(request_file)
+            try_delete(response_file)
+            return error_response(
+                "RUN_EDITOR_BRIDGE_RESPONSE",
+                "Editor bridge runtime response file status could not be read.",
+                data=_transport_failure_data(action=action, read_only=False),
+            )
+
+        if response_ready:
             try:
                 raw = response_file.read_text(encoding="utf-8")
                 response_payload = load_json(raw)
-            except (OSError, json.JSONDecodeError) as exc:
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                _LOGGER.error("Runtime Editor Bridge response read failed")
                 return error_response(
                     "RUN_EDITOR_BRIDGE_RESPONSE",
                     "Editor bridge runtime response file could not be read.",
-                    data={
-                        "action": action,
-                        "project_root": relative_fn(target_root),
-                        "response_file": str(response_file),
-                        "error": str(exc),
-                        "read_only": False,
-                        "executed": False,
-                    },
+                    data=_transport_failure_data(action=action, read_only=False),
                 )
             finally:
                 try_delete(request_file)
                 try_delete(response_file)
 
             log_path_raw = os.environ.get(UNITY_LOG_FILE_ENV, "").strip()
-            log_path = Path(log_path_raw) if log_path_raw else target_root / "Logs" / "Editor.log"
+            log_path = (
+                Path(log_path_raw)
+                if log_path_raw
+                else target_root / "Logs" / "Editor.log"
+            )
             return parse_runtime_response(
                 response_payload,
                 action=action,
@@ -153,51 +193,28 @@ def invoke_via_editor_bridge(
     return error_response(
         failure_code(action),
         "Editor bridge runtime response timed out.",
-        data={
-            "action": action,
-            "project_root": relative_fn(target_root),
-            "scene_path": scene_path,
-            "profile": profile,
-            "timeout_sec": timeout_sec,
-            "request_file": str(request_file),
-            "bridge_mode": "editor",
-            "read_only": False,
-            "executed": False,
-        },
+        data=_transport_failure_data(action=action, read_only=False),
     )
-
-
-def _clientsim_side_effect_codes(report: object) -> list[str]:
-    if not isinstance(report, dict):
-        return []
-    if report.get("diff_complete") is False:
-        return ["CLIENTSIM_SIDE_EFFECT_DIFF_UNAVAILABLE"]
-    changed_keys = (
-        "added_gameobjects",
-        "removed_gameobjects",
-        "added_components",
-        "removed_components",
-        "asset_change_candidates",
-    )
-    if any(report.get(key) for key in changed_keys):
-        return ["CLIENTSIM_SIDE_EFFECT_DIFF_DETECTED"]
-    if report.get("dirty_before") != report.get("dirty_after"):
-        return ["CLIENTSIM_SIDE_EFFECT_DIFF_DETECTED"]
-    if report.get("dirty_count_before") != report.get("dirty_count_after"):
-        return ["CLIENTSIM_SIDE_EFFECT_DIFF_DETECTED"]
-    return []
 
 
 def with_clientsim_side_effect_diagnostics(response: ToolResponse) -> ToolResponse:
     from prefab_sentinel.contracts import Diagnostic, Severity, max_severity
+    from prefab_sentinel.services.runtime_validation.classification import (
+        clientsim_side_effect_codes,
+    )
 
-    codes = _clientsim_side_effect_codes(response.data.get("side_effect_report"))
+    if response.data.get("executed") is False:
+        return response
+    codes = clientsim_side_effect_codes(response.data.get("side_effect_report"))
     if not codes:
         return response
 
     messages = {
         "CLIENTSIM_SIDE_EFFECT_DIFF_UNAVAILABLE": "ClientSim side-effect diff could not be fully collected.",
-        "CLIENTSIM_SIDE_EFFECT_DIFF_DETECTED": "ClientSim side-effect diff detected scene, hierarchy, component, dirty, or asset candidates.",
+        "CLIENTSIM_SIDE_EFFECT_DIFF_DETECTED": (
+            "ClientSim cleanup left post-exit scene, hierarchy, component, dirty, "
+            "or asset-candidate differences."
+        ),
     }
     diagnostics = [
         *response.diagnostics,
@@ -238,27 +255,32 @@ def collect_editor_console_via_bridge(
         order="oldest_first",
     )
     data = response.get("data")
-    if not response.get("success") or not isinstance(data, dict):
+    entries = data.get("entries") if isinstance(data, dict) else None
+    if (
+        response.get("success") is not True
+        or not isinstance(data, dict)
+        or not isinstance(entries, list)
+        or any(
+            not isinstance(entry, dict)
+            or not isinstance(entry.get("message"), str)
+            or not isinstance(entry.get("log_type"), str)
+            for entry in entries
+        )
+    ):
         return error_response(
-            str(response.get("code", "RUN_EDITOR_CONSOLE_ERROR")),
-            str(response.get("message", "Editor console capture failed.")),
+            "RUN_EDITOR_CONSOLE_ERROR",
+            "Editor console capture failed.",
             data={
                 "since_timestamp": since_timestamp,
                 "read_only": True,
-                "executed": bool(isinstance(data, dict) and data.get("executed", False)),
-                "bridge_response": response,
+                "executed": isinstance(data, dict) and data.get("executed") is True,
             },
         )
 
-    entries = data.get("entries", [])
-    log_lines: list[str] = []
-    if isinstance(entries, list):
-        for entry in entries:
-            if isinstance(entry, dict):
-                message = entry.get("message", "")
-                log_type = entry.get("log_type", "")
-                if isinstance(message, str):
-                    log_lines.append(f"[{log_type}] {message}" if log_type else message)
+    log_lines = [
+        f"[{entry['log_type']}] {entry['message']}" if entry["log_type"] else entry["message"]
+        for entry in entries
+    ]
     return success_response(
         "RUN_EDITOR_CONSOLE_COLLECTED",
         "Editor Bridge console entries collected.",

@@ -1,16 +1,22 @@
 {
   "code": "INSPECT_WIRING_RESULT",
   "data_keys": [
+    "actionability_counts",
     "component_count",
     "components",
+    "current_or_slowest_step",
     "cursor",
+    "diagnostic_actionability",
     "duplicate_reference_count",
     "internal_broken_ref_count",
     "next_cursor",
     "null_reference_count",
     "page_size",
     "page_slice_length",
+    "partial_counts",
+    "progress_summary",
     "read_only",
+    "suggested_next_action",
     "target_path",
     "udon_only"
   ],

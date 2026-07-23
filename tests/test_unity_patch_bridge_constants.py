@@ -104,7 +104,7 @@ class TestPatchBridgeWireCodeRegression(unittest.TestCase):
                     {
                         "id": "r1",
                         "kind": "prefab",
-                        "mode": "edit",
+                        "mode": "open",
                         "path": "Assets/Foo.prefab",
                     }
                 ],

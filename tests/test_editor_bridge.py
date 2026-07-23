@@ -12,6 +12,7 @@ from typing import Any
 from unittest.mock import patch
 
 from prefab_sentinel.editor_bridge import (
+    BRIDGE_TIMEOUT_ENV,
     BRIDGE_WATCH_DIR_ENV,
     PROTOCOL_VERSION,
     SUPPORTED_ACTIONS,
@@ -21,7 +22,7 @@ from prefab_sentinel.editor_bridge import (
 )
 from prefab_sentinel.editor_bridge_builders import build_create_empty_kwargs, build_set_camera_kwargs
 from prefab_sentinel.unity_assets_path import resolve_asset_path
-from tests._typing_helpers import require_mapping
+from tests._typing_helpers import require_mapping, require_not_none
 
 
 class TestCheckEditorBridgeEnv(unittest.TestCase):
@@ -37,26 +38,120 @@ class TestCheckEditorBridgeEnv(unittest.TestCase):
                 result = check_editor_bridge_env()
                 self.assertIsNone(result)
 
-    @patch.dict(os.environ, {BRIDGE_WATCH_DIR_ENV: ""}, clear=False)
     def test_watch_dir_unset_emits_watch_dir_missing(self) -> None:
-        result = check_editor_bridge_env()
-        assert result is not None
+        with patch.dict(os.environ, {}, clear=True):
+            result = require_not_none(check_editor_bridge_env(), "watch-dir missing envelope")
         self.assertEqual("EDITOR_BRIDGE_WATCH_DIR_MISSING", result["code"])
-        self.assertEqual("error", result["severity"])
-        self.assertIn(BRIDGE_WATCH_DIR_ENV, result["message"])
-        self.assertEqual(BRIDGE_WATCH_DIR_ENV, result["data"]["env_var"])
+        self.assertEqual("watch_dir", result["data"]["blocker_class"])
+        self.assertEqual(
+            "Set UNITYTOOL_BRIDGE_WATCH_DIR to an existing Editor Bridge watch directory.",
+            result["data"]["suggested_next_action"],
+        )
 
-    @patch.dict(
-        os.environ,
-        {BRIDGE_WATCH_DIR_ENV: "/nonexistent/xyz"},
-        clear=False,
-    )
     def test_watch_dir_nonexistent_emits_watch_dir_not_found(self) -> None:
-        result = check_editor_bridge_env()
-        assert result is not None
-        self.assertEqual("EDITOR_BRIDGE_WATCH_DIR_NOT_FOUND", result["code"])
-        self.assertEqual("error", result["severity"])
-        self.assertEqual("/nonexistent/xyz", result["data"]["value"])
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = Path(tmp) / "secret-missing"
+            with patch.dict(os.environ, {BRIDGE_WATCH_DIR_ENV: str(missing)}):
+                result = require_not_none(check_editor_bridge_env(), "watch-dir missing-path envelope")
+
+        self.assertEqual(
+            (
+                "EDITOR_BRIDGE_WATCH_DIR_NOT_FOUND",
+                {
+                    "env_var": BRIDGE_WATCH_DIR_ENV,
+                    "blocker_class": "watch_dir",
+                    "suggested_next_action": (
+                        "Set UNITYTOOL_BRIDGE_WATCH_DIR to an existing Editor Bridge watch directory."
+                    ),
+                },
+                False,
+            ),
+            (
+                result["code"],
+                result["data"],
+                str(missing) in json.dumps(result),
+            ),
+            msg=f"missing watch-dir failures must not expose the configured path: {result!r}",
+        )
+
+    def test_watch_dir_status_probe_error_emits_watch_dir_not_found(self) -> None:
+        secret = "/secret/watch-dir-status"
+        with tempfile.TemporaryDirectory() as tmp:
+            watch_dir = Path(tmp)
+            original_is_dir = Path.is_dir
+
+            def fail_watch_dir_probe(path: Path) -> bool:
+                if path == watch_dir:
+                    raise OSError(secret)
+                return original_is_dir(path)
+
+            try:
+                Path.is_dir = fail_watch_dir_probe  # type: ignore[assignment]
+                with (
+                    patch.dict(os.environ, {BRIDGE_WATCH_DIR_ENV: str(watch_dir)}),
+                    self.assertLogs("prefab_sentinel.editor_bridge", level="ERROR") as captured,
+                ):
+                    result = require_not_none(
+                        check_editor_bridge_env(),
+                        "watch-dir status-error envelope",
+                    )
+            finally:
+                Path.is_dir = original_is_dir  # type: ignore[assignment]
+
+        self.assertEqual(
+            (
+                "EDITOR_BRIDGE_WATCH_DIR_NOT_FOUND",
+                {
+                    "env_var": BRIDGE_WATCH_DIR_ENV,
+                    "blocker_class": "watch_dir",
+                    "suggested_next_action": (
+                        "Set UNITYTOOL_BRIDGE_WATCH_DIR to an existing Editor Bridge watch directory."
+                    ),
+                },
+                False,
+                False,
+                [
+                    "ERROR:prefab_sentinel.editor_bridge:"
+                    "Editor Bridge watch directory status probe failed"
+                ],
+            ),
+            (
+                result["code"],
+                result["data"],
+                secret in json.dumps(result),
+                str(watch_dir) in json.dumps(result),
+                captured.output,
+            ),
+            msg=f"watch-dir status failures must redact transport details: {result!r}",
+        )
+
+    def test_bridge_status_probe_error_reports_disconnected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            watch_dir = Path(tmp)
+            original_is_dir = Path.is_dir
+
+            def fail_watch_dir_probe(path: Path) -> bool:
+                if path == watch_dir:
+                    raise OSError("stat failed")
+                return original_is_dir(path)
+
+            try:
+                Path.is_dir = fail_watch_dir_probe  # type: ignore[assignment]
+                with patch.dict(os.environ, {BRIDGE_WATCH_DIR_ENV: str(watch_dir)}):
+                    status = bridge_status()
+            except OSError as exc:
+                status = {"connected": "raised", "watch_dir_status_error": str(exc)}
+            finally:
+                Path.is_dir = original_is_dir  # type: ignore[assignment]
+
+        self.assertEqual(
+            (False, str(watch_dir), "stat failed"),
+            (
+                status["connected"],
+                status["watch_dir"],
+                status.get("watch_dir_status_error"),
+            ),
+        )
 
     def test_wsl_conversion_applied_in_check_editor_bridge_env(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -96,16 +191,13 @@ class TestCheckEditorBridgeEnv(unittest.TestCase):
                         send_action(action="capture_screenshot", timeout_sec=1)
                         mock_to_wsl_path.assert_called_once_with("D:\\Project\\Watch")
 
-    @patch.dict(
-        os.environ,
-        {BRIDGE_WATCH_DIR_ENV: "D:\\Nonexistent"},
-        clear=False,
-    )
     def test_windows_path_without_wsl_conversion_fails(self) -> None:
-        result = check_editor_bridge_env()
-        assert result is not None
-        self.assertFalse(result["success"])
-        self.assertEqual("EDITOR_BRIDGE_WATCH_DIR_NOT_FOUND", result["code"])
+        with patch.dict(os.environ, {BRIDGE_WATCH_DIR_ENV: "Z:\\Missing\\Watch"}):
+            result = require_not_none(check_editor_bridge_env(), "windows watch-dir envelope")
+        self.assertEqual(
+            (False, "EDITOR_BRIDGE_WATCH_DIR_NOT_FOUND"),
+            (result["success"], result["code"]),
+        )
 
 
 class TestSendAction(unittest.TestCase):
@@ -142,6 +234,33 @@ class TestSendAction(unittest.TestCase):
                 self.assertEqual("EDITOR_BRIDGE_TIMEOUT_INVALID", result["code"])
                 self.assertEqual(0, result["data"]["received_timeout"])
 
+    def test_non_numeric_timeout_env_returns_invalid_envelope_before_write(self) -> None:
+        received_timeout = "not-an-int"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        BRIDGE_WATCH_DIR_ENV: tmpdir,
+                        BRIDGE_TIMEOUT_ENV: received_timeout,
+                    },
+                    clear=False,
+                ),
+                patch.object(Path, "write_text") as write_text,
+            ):
+                result = send_action(action="capture_screenshot")
+
+        self.assertEqual(
+            (
+                False,
+                "EDITOR_BRIDGE_TIMEOUT_INVALID",
+                {"received_timeout": received_timeout},
+            ),
+            (result["success"], result["code"], result["data"]),
+            msg=f"invalid timeout configuration must return a stable envelope: {result!r}",
+        )
+        write_text.assert_not_called()
+
     def test_negative_timeout_sec_rejected_at_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch.dict(
@@ -153,7 +272,6 @@ class TestSendAction(unittest.TestCase):
                 self.assertEqual("EDITOR_BRIDGE_TIMEOUT_INVALID", result["code"])
 
     def test_request_file_written_and_timeout(self) -> None:
-        """Verify request file is written correctly; timeout since no Unity responds."""
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch.dict(
                 os.environ,
@@ -167,9 +285,231 @@ class TestSendAction(unittest.TestCase):
                     height=600,
                     timeout_sec=1,
                 )
-                # Should timeout since no Unity editor is responding.
-                self.assertFalse(result["success"])
-                self.assertEqual("EDITOR_BRIDGE_TIMEOUT", result["code"])
+
+        self.assertEqual(
+            (
+                False,
+                "EDITOR_BRIDGE_TIMEOUT",
+                {
+                    "action": "capture_screenshot",
+                    "timeout_sec": 1,
+                    "blocker_class": "bridge_connection",
+                    "suggested_next_action": (
+                        "Confirm Unity is running and the PrefabSentinel Editor Bridge watcher is active."
+                    ),
+                },
+                False,
+            ),
+            (
+                result["success"],
+                result["code"],
+                result["data"],
+                tmpdir in json.dumps(result),
+            ),
+            msg=f"timeout failures must retain safe context without request paths: {result!r}",
+        )
+
+    def test_deleted_watch_directory_after_preflight_is_not_recreated(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            watch_dir = Path(temp_dir) / "watch"
+            watch_dir.mkdir()
+            check_count = 0
+
+            def validate_then_delete() -> dict[str, object] | None:
+                nonlocal check_count
+                result = check_editor_bridge_env()
+                if check_count == 0:
+                    watch_dir.rmdir()
+                check_count += 1
+                return result
+
+            with (
+                patch.dict(
+                    os.environ,
+                    {BRIDGE_WATCH_DIR_ENV: str(watch_dir)},
+                    clear=False,
+                ),
+                patch(
+                    "prefab_sentinel.editor_bridge.check_editor_bridge_env",
+                    side_effect=validate_then_delete,
+                ),
+            ):
+                result = send_action(action="capture_screenshot", timeout_sec=1)
+
+        self.assertEqual(
+            (
+                False,
+                "error",
+                "EDITOR_BRIDGE_WATCH_DIR_NOT_FOUND",
+                (
+                    "Editor Bridge watch directory does not exist. "
+                    "Set UNITYTOOL_BRIDGE_WATCH_DIR=<path>. "
+                    "See README 'Unity Bridge セットアップ' section."
+                ),
+                2,
+                False,
+            ),
+            (
+                result["success"],
+                result["severity"],
+                result["code"],
+                result["message"],
+                check_count,
+                watch_dir.exists(),
+            ),
+            msg=(
+                "a vanished resident watch directory must fail before request "
+                f"write without being recreated: {result!r}"
+            ),
+        )
+
+    def test_response_poll_exists_failure_returns_envelope_and_cleans_request(self) -> None:
+        secret = "/secret/response-status"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            watch_dir = Path(tmpdir)
+            original_exists = Path.exists
+
+            def fail_response_exists(path: Path) -> bool:
+                if path.parent == watch_dir and path.name.endswith(".response.json"):
+                    raise OSError(secret)
+                return original_exists(path)
+
+            with (
+                patch.dict(
+                    os.environ,
+                    {BRIDGE_WATCH_DIR_ENV: tmpdir},
+                    clear=False,
+                ),
+                patch.object(Path, "exists", fail_response_exists),
+                self.assertLogs("prefab_sentinel.editor_bridge", level="ERROR") as captured,
+            ):
+                result = send_action(
+                    action="capture_screenshot",
+                    view="scene",
+                    width=1,
+                    height=1,
+                    timeout_sec=1,
+                )
+            remaining_requests = [
+                path.name
+                for path in watch_dir.iterdir()
+                if path.name.endswith(".request.json")
+            ]
+
+        self.assertEqual(
+            (
+                False,
+                "EDITOR_BRIDGE_RESPONSE_READ",
+                {},
+                [],
+                False,
+                [
+                    "ERROR:prefab_sentinel.editor_bridge:"
+                    "Editor Bridge response status probe failed"
+                ],
+            ),
+            (
+                result["success"],
+                result["code"],
+                result["data"],
+                remaining_requests,
+                secret in json.dumps(result),
+                captured.output,
+            ),
+            msg=f"response status failures must be sanitized and cleaned up: {result!r}",
+        )
+
+    def test_response_read_failure_redacts_transport_details(self) -> None:
+        secret = "/secret/response-read"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            watch_dir = Path(tmpdir)
+            original_exists = Path.exists
+
+            def response_is_ready(path: Path) -> bool:
+                if path.parent == watch_dir and path.name.endswith(".response.json"):
+                    return True
+                return original_exists(path)
+
+            with (
+                patch.dict(
+                    os.environ,
+                    {BRIDGE_WATCH_DIR_ENV: tmpdir},
+                    clear=False,
+                ),
+                patch.object(Path, "exists", response_is_ready),
+                patch.object(Path, "read_text", side_effect=OSError(secret)),
+                self.assertLogs("prefab_sentinel.editor_bridge", level="ERROR") as captured,
+            ):
+                result = send_action(
+                    action="capture_screenshot",
+                    timeout_sec=1,
+                )
+
+        self.assertEqual(
+            (
+                False,
+                "EDITOR_BRIDGE_RESPONSE_READ",
+                {},
+                False,
+                False,
+                [
+                    "ERROR:prefab_sentinel.editor_bridge:"
+                    "Editor Bridge response read failed"
+                ],
+            ),
+            (
+                result["success"],
+                result["code"],
+                result["data"],
+                secret in json.dumps(result),
+                tmpdir in json.dumps(result),
+                captured.output,
+            ),
+            msg=f"response read failures must redact exception and path details: {result!r}",
+        )
+
+    def test_request_write_failure_includes_watch_dir_blocker(self) -> None:
+        secret = "/secret/request-write"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch.dict(os.environ, {BRIDGE_WATCH_DIR_ENV: tmpdir}, clear=False),
+                patch.object(Path, "rename", side_effect=OSError(secret)),
+                self.assertLogs("prefab_sentinel.editor_bridge", level="ERROR") as captured,
+            ):
+                result = send_action(action="capture_screenshot", timeout_sec=1)
+            remaining_files = sorted(path.name for path in Path(tmpdir).iterdir())
+
+        self.assertEqual(
+            (
+                False,
+                "EDITOR_BRIDGE_WRITE",
+                {
+                    "blocker_class": "watch_dir",
+                    "suggested_next_action": (
+                        "Set UNITYTOOL_BRIDGE_WATCH_DIR to an existing Editor Bridge watch directory."
+                    ),
+                },
+                False,
+                False,
+                [],
+                [
+                    "ERROR:prefab_sentinel.editor_bridge:"
+                    "Editor Bridge request write failed"
+                ],
+            ),
+            (
+                result["success"],
+                result["code"],
+                result["data"],
+                secret in json.dumps(result),
+                tmpdir in json.dumps(result),
+                remaining_files,
+                captured.output,
+            ),
+            msg=(
+                f"request write failures must redact paths and remove temporary transport files: {result!r}"
+            ),
+        )
 
     def test_response_read_successfully(self) -> None:
         """Simulate Unity writing a response file."""
@@ -187,10 +527,7 @@ class TestSendAction(unittest.TestCase):
             def notifying_rename(self_path: Path, target: str | Path) -> Path:
                 renamed_path = original_rename(self_path, target)
                 target_path = Path(target)
-                if (
-                    target_path.parent == watch_dir
-                    and target_path.name.endswith(".request.json")
-                ):
+                if target_path.parent == watch_dir and target_path.name.endswith(".request.json"):
                     with request_ready:
                         observed_request["path"] = target_path
                         request_ready.notify_all()
@@ -204,9 +541,7 @@ class TestSendAction(unittest.TestCase):
                         timeout=2,
                     )
                 if not request_seen:
-                    responder_errors.append(
-                        AssertionError("Expected request file before fake Unity response")
-                    )
+                    responder_errors.append(AssertionError("Expected request file before fake Unity response"))
                     return
 
                 request_file = observed_request["path"]
@@ -255,19 +590,10 @@ class TestSendAction(unittest.TestCase):
                 self.assertEqual("/tmp/test.png", result["data"]["output_path"])
                 self.assertEqual(seen_request_id["value"], result["request_id"])
 
-
-class BridgeProjectRootMismatchTests(unittest.TestCase):
-    _OMIT_EXPECTED_ROOT = object()
-
-    def _send_with_fake_response(
-        self,
-        response_payload: dict[str, object],
-        *,
-        expected_project_root: str | None | object = _OMIT_EXPECTED_ROOT,
-    ) -> tuple[dict[str, Any], str]:
+    def test_bridge_origin_editor_state_error_includes_blocker_next_action(self) -> None:
+        """Simulate Unity returning a live-state failure envelope."""
         with tempfile.TemporaryDirectory() as tmpdir:
             watch_dir = Path(tmpdir)
-            seen_request_id: dict[str, str] = {}
             responder_errors: list[BaseException] = []
 
             import threading
@@ -279,9 +605,7 @@ class BridgeProjectRootMismatchTests(unittest.TestCase):
             def notifying_rename(self_path: Path, target: str | Path) -> Path:
                 renamed_path = original_rename(self_path, target)
                 target_path = Path(target)
-                if target_path.parent == watch_dir and target_path.name.endswith(
-                    ".request.json"
-                ):
+                if target_path.parent == watch_dir and target_path.name.endswith(".request.json"):
                     with request_ready:
                         observed_request["path"] = target_path
                         request_ready.notify_all()
@@ -294,14 +618,159 @@ class BridgeProjectRootMismatchTests(unittest.TestCase):
                         timeout=2,
                     )
                 if not request_seen:
-                    responder_errors.append(
-                        AssertionError("Expected request file before fake Unity response")
+                    responder_errors.append(AssertionError("Expected request file before fake Unity response"))
+                    return
+
+                request_file = observed_request["path"]
+                base = request_file.name.replace(".request.json", "")
+                resp_path = watch_dir / f"{base}.response.json"
+                resp = {
+                    "protocol_version": PROTOCOL_VERSION,
+                    "success": False,
+                    "severity": "error",
+                    "code": "EDITOR_CTRL_SCENE_BUSY",
+                    "message": "Unity is compiling.",
+                    "data": {
+                        "editor_state": {
+                            "is_compiling": True,
+                            "is_building_player": False,
+                            "state_source": "live_editor",
+                        }
+                    },
+                    "diagnostics": [],
+                }
+                resp_path.write_text(json.dumps(resp), encoding="utf-8")
+
+            with (
+                patch.dict(os.environ, {BRIDGE_WATCH_DIR_ENV: tmpdir}, clear=False),
+                patch.object(Path, "rename", notifying_rename),
+            ):
+                t = threading.Thread(target=fake_send)
+                t.start()
+                result = send_action(action="capture_screenshot", timeout_sec=5)
+                t.join()
+
+        self.assertEqual([], responder_errors)
+        self.assertEqual(
+            (
+                False,
+                "compile_or_build",
+                "Wait for Unity compile or build activity to finish, then retry the tool.",
+            ),
+            (
+                result["success"],
+                result["data"].get("blocker_class"),
+                result["data"].get("suggested_next_action"),
+            ),
+        )
+
+
+class EditorBridgeBlockerDiagnosticTests(unittest.TestCase):
+    def test_watch_dir_errors_include_blocker_data(self) -> None:
+        expected_action = "Set UNITYTOOL_BRIDGE_WATCH_DIR to an existing Editor Bridge watch directory."
+        with tempfile.NamedTemporaryFile() as tmp_file:
+            cases = (
+                (
+                    {BRIDGE_WATCH_DIR_ENV: ""},
+                    check_editor_bridge_env,
+                    "EDITOR_BRIDGE_WATCH_DIR_MISSING",
+                ),
+                (
+                    {BRIDGE_WATCH_DIR_ENV: tmp_file.name},
+                    check_editor_bridge_env,
+                    "EDITOR_BRIDGE_WATCH_DIR_NOT_FOUND",
+                ),
+                (
+                    {BRIDGE_WATCH_DIR_ENV: ""},
+                    lambda: send_action(action="capture_screenshot"),
+                    "EDITOR_BRIDGE_WATCH_DIR_MISSING",
+                ),
+            )
+            for env, call, expected_code in cases:
+                with self.subTest(expected_code=expected_code, env=env):
+                    with patch.dict(os.environ, env, clear=False):
+                        result = require_not_none(call(), f"{expected_code} returned no envelope")
+                    self.assertEqual(expected_code, result["code"])
+                    self.assertEqual(
+                        ("watch_dir", expected_action),
+                        (
+                            result["data"].get("blocker_class"),
+                            result["data"].get("suggested_next_action"),
+                        ),
                     )
+
+    def test_response_timeout_includes_bridge_connection_blocker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.dict(os.environ, {BRIDGE_WATCH_DIR_ENV: tmpdir}, clear=False):
+                result = send_action(action="capture_screenshot", timeout_sec=1)
+
+        self.assertEqual("EDITOR_BRIDGE_TIMEOUT", result["code"])
+        self.assertEqual(
+            (
+                "bridge_connection",
+                "Confirm Unity is running and the PrefabSentinel Editor Bridge watcher is active.",
+            ),
+            (
+                result["data"].get("blocker_class"),
+                result["data"].get("suggested_next_action"),
+            ),
+        )
+
+    def test_invalid_timeout_keeps_caller_input_error_without_blocker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.dict(os.environ, {BRIDGE_WATCH_DIR_ENV: tmpdir}, clear=False):
+                result = send_action(action="capture_screenshot", timeout_sec=0)
+
+        self.assertEqual("EDITOR_BRIDGE_TIMEOUT_INVALID", result["code"])
+        self.assertNotIn("blocker_class", result["data"])
+        self.assertNotIn("suggested_next_action", result["data"])
+
+
+class BridgeProjectRootMismatchTests(unittest.TestCase):
+    _OMIT_EXPECTED_ROOT = object()
+
+    def _send_with_fake_response(
+        self,
+        response_payload: dict[str, object],
+        *,
+        expected_project_root: str | None | object = _OMIT_EXPECTED_ROOT,
+        request_extras: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], str, dict[str, Any]]:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            watch_dir = Path(tmpdir)
+            seen_request_id: dict[str, str] = {}
+            seen_request_payload: dict[str, Any] = {}
+            responder_errors: list[BaseException] = []
+
+            import threading
+
+            request_ready = threading.Condition()
+            observed_request: dict[str, Path] = {}
+            original_rename = Path.rename
+
+            def notifying_rename(self_path: Path, target: str | Path) -> Path:
+                renamed_path = original_rename(self_path, target)
+                target_path = Path(target)
+                if target_path.parent == watch_dir and target_path.name.endswith(".request.json"):
+                    with request_ready:
+                        observed_request["path"] = target_path
+                        request_ready.notify_all()
+                return renamed_path
+
+            def fake_send() -> None:
+                with request_ready:
+                    request_seen = request_ready.wait_for(
+                        lambda: "path" in observed_request,
+                        timeout=2,
+                    )
+                if not request_seen:
+                    responder_errors.append(AssertionError("Expected request file before fake Unity response"))
                     return
 
                 request_file = observed_request["path"]
                 request_id = request_file.name.removesuffix(".request.json")
                 seen_request_id["value"] = request_id
+                seen_request_payload.update(json.loads(request_file.read_text(encoding="utf-8")))
                 response = dict(response_payload)
                 response.setdefault("protocol_version", PROTOCOL_VERSION)
                 response_file = watch_dir / f"{request_id}.response.json"
@@ -319,26 +788,29 @@ class BridgeProjectRootMismatchTests(unittest.TestCase):
                 t = threading.Thread(target=fake_send)
                 t.start()
                 if expected_project_root is self._OMIT_EXPECTED_ROOT:
-                    result = send_action(action="get_editor_state", timeout_sec=5)
-                else:
-                    if not isinstance(expected_project_root, str):
-                        raise AssertionError(
-                            "expected_project_root must be a string when provided"
-                        )
                     result = send_action(
                         action="get_editor_state",
                         timeout_sec=5,
+                        request_extras=request_extras,
+                    )
+                else:
+                    if not isinstance(expected_project_root, str):
+                        raise AssertionError("expected_project_root must be a string when provided")
+                    result = send_action(
+                        action="get_editor_state",
+                        timeout_sec=5,
+                        request_extras=request_extras,
                         expected_project_root=expected_project_root,
                     )
                 t.join()
 
         self.assertEqual([], responder_errors)
-        return result, seen_request_id["value"]
+        return result, seen_request_id["value"], seen_request_payload
 
     def test_mismatching_project_root_returns_typed_error_with_identity(self) -> None:
         expected_root = "/workspace/ExpectedProject"
         actual_root = "/workspace/OtherProject"
-        result, request_id = self._send_with_fake_response(
+        result, request_id, request_payload = self._send_with_fake_response(
             {
                 "success": True,
                 "severity": "info",
@@ -364,13 +836,14 @@ class BridgeProjectRootMismatchTests(unittest.TestCase):
         self.assertEqual("get_editor_state", data["action"])
         self.assertEqual(request_id, data["request_id"])
         self.assertEqual(expected_root, data["expected_project_root"])
+        self.assertEqual(expected_root, request_payload["expected_project_root"])
         self.assertEqual(actual_root, data["actual_project_root"])
         self.assertEqual("bridge-session-1", data["bridge_session_id"])
         self.assertEqual("bridge-instance-1", data["bridge_instance_id"])
 
     def test_expected_root_requires_actual_root_identity(self) -> None:
         expected_root = "/workspace/ExpectedProject"
-        result, request_id = self._send_with_fake_response(
+        result, request_id, request_payload = self._send_with_fake_response(
             {
                 "success": True,
                 "severity": "info",
@@ -393,11 +866,12 @@ class BridgeProjectRootMismatchTests(unittest.TestCase):
         data = require_mapping(result["data"], "mismatch data")
         self.assertEqual(request_id, data["request_id"])
         self.assertEqual(expected_root, data["expected_project_root"])
+        self.assertEqual(expected_root, request_payload["expected_project_root"])
         self.assertNotIn("actual_project_root", data)
 
     def test_matching_project_root_preserves_success_payload(self) -> None:
         expected_root = "/workspace/ExpectedProject"
-        result, request_id = self._send_with_fake_response(
+        result, request_id, request_payload = self._send_with_fake_response(
             {
                 "success": True,
                 "severity": "info",
@@ -417,16 +891,33 @@ class BridgeProjectRootMismatchTests(unittest.TestCase):
         self.assertEqual(True, result["success"], result)
         self.assertEqual("EDITOR_CTRL_STATE_OK", result["code"])
         self.assertEqual(request_id, result["request_id"])
-        operator_context = require_mapping(
-            result["operator_context"], "operator context"
-        )
+        operator_context = require_mapping(result["operator_context"], "operator context")
         data = require_mapping(result["data"], "success data")
         self.assertEqual(expected_root, operator_context["project_root"])
+        self.assertEqual(expected_root, request_payload["expected_project_root"])
         self.assertEqual(False, data["is_playing"])
 
+    def test_request_extras_cannot_override_expected_project_root(self) -> None:
+        expected_root = "/workspace/ExpectedProject"
+        _, _, request_payload = self._send_with_fake_response(
+            {
+                "success": True,
+                "severity": "info",
+                "code": "EDITOR_CTRL_STATE_OK",
+                "message": "Editor state captured",
+                "data": {"is_playing": False},
+                "diagnostics": [],
+                "operator_context": {
+                    "project_root": expected_root,
+                    "bridge_session_id": "bridge-session-1",
+                    "bridge_instance_id": "bridge-instance-1",
+                },
+            },
+            expected_project_root=expected_root,
+            request_extras={"expected_project_root": "/workspace/AttackerProject"},
+        )
 
-
-
+        self.assertEqual(expected_root, request_payload["expected_project_root"])
 
 
 class TestEditorBridgeSupportedActions(unittest.TestCase):
@@ -477,6 +968,7 @@ class TestSupportedActions(unittest.TestCase):
             "editor_set_property",
             "editor_serialized_property_read",
             "editor_serialized_property_list",
+            "editor_inspect_serialized_surface",
             "editor_serialized_property_write",
             "create_generated_asset",
             "move_asset",
@@ -618,6 +1110,7 @@ class TestSetCameraParams(unittest.TestCase):
         # still pass ``distance=...`` should get the standard Python
         # ``TypeError`` for an unknown keyword argument.
         import inspect
+
         params = inspect.signature(build_set_camera_kwargs).parameters
         self.assertIn("size", params)
         self.assertNotIn("distance", params)
@@ -653,10 +1146,12 @@ class TestEditorSetCameraForwardsResetToDefaults(unittest.TestCase):
                 "diagnostics": [],
             }
             server = create_server()
-            asyncio.run(server.call_tool(
-                "editor_set_camera",
-                {"reset_to_defaults": True},
-            ))
+            asyncio.run(
+                server.call_tool(
+                    "editor_set_camera",
+                    {"reset_to_defaults": True},
+                )
+            )
         kwargs = send.call_args.kwargs
         self.assertEqual("set_camera", kwargs["action"])
         self.assertTrue(kwargs.get("reset_to_defaults"))
@@ -679,10 +1174,12 @@ class TestEditorConsoleForwardsClassificationFilter(unittest.TestCase):
                 "diagnostics": [],
             }
             server = create_server()
-            asyncio.run(server.call_tool(
-                "editor_console",
-                {"classification_filter": "non_fatal"},
-            ))
+            asyncio.run(
+                server.call_tool(
+                    "editor_console",
+                    {"classification_filter": "non_fatal"},
+                )
+            )
         kwargs = send.call_args.kwargs
         self.assertEqual("capture_console_logs", kwargs["action"])
         self.assertEqual("non_fatal", kwargs["classification_filter"])

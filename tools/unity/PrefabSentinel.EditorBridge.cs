@@ -195,9 +195,11 @@ namespace PrefabSentinel
                 UnityPatchBridge.ApplyFromPaths(requestPath, responsePath);
             }
 
-            // Async actions write the response file later
-            bool isAsyncAction = isEditorControl
-                && UnityEditorControlBridge.AsyncActions.Contains(header.action);
+            // Async actions write the response file after their editor lifecycle completes.
+            bool isAsyncAction = (isEditorControl
+                && UnityEditorControlBridge.AsyncActions.Contains(header.action))
+                || (isRuntime
+                && UnityRuntimeValidationBridge.AsyncActions.Contains(header.action));
 
             // Atomic write: the bridge methods write directly to responsePath.
             // If the response file doesn't exist at this point, something went wrong.

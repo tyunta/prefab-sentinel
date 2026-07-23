@@ -274,6 +274,67 @@ class TestMaterialValidatorScopeAndRules(unittest.TestCase):
             msg="missing scope should fail before validation",
         )
 
+    def test_scope_status_probe_error_returns_scope_not_found_envelope(self) -> None:
+        with _project() as tmp:
+            project_root = _project_root(tmp)
+            scope_path = project_root / "Assets"
+            resolver = ReferenceResolverService(project_root=project_root)
+            original_exists = Path.exists
+
+            def fail_scope_probe(path: Path) -> bool:
+                if path == scope_path:
+                    raise OSError("stat failed")
+                return original_exists(path)
+
+            try:
+                Path.exists = fail_scope_probe  # type: ignore[assignment]
+                response = _response_dict(orchestrate_validate(resolver, "Assets"))
+            except OSError as exc:
+                response = {
+                    "success": "raised",
+                    "severity": "critical",
+                    "code": type(exc).__name__,
+                    "data": {"error": str(exc)},
+                }
+            finally:
+                Path.exists = original_exists  # type: ignore[assignment]
+
+        self.assertEqual(
+            (False, "error", "MATERIAL_VALIDATION_SCOPE_NOT_FOUND", "stat failed"),
+            (
+                response["success"],
+                response["severity"],
+                response["code"],
+                response["data"].get("error"),
+            ),
+        )
+
+    def test_scope_resolve_failure_returns_scope_not_found_envelope(self) -> None:
+        with _project() as tmp:
+            project_root = _project_root(tmp)
+            resolver = ReferenceResolverService(project_root=project_root)
+
+            with patch.object(Path, "resolve", side_effect=OSError("resolve failed")):
+                try:
+                    response = _response_dict(orchestrate_validate(resolver, "Assets"))
+                except OSError as exc:
+                    response = {
+                        "success": "raised",
+                        "severity": "critical",
+                        "code": type(exc).__name__,
+                        "data": {"error": str(exc)},
+                    }
+
+        self.assertEqual(
+            (False, "error", "MATERIAL_VALIDATION_SCOPE_NOT_FOUND", "resolve failed"),
+            (
+                response["success"],
+                response["severity"],
+                response["code"],
+                response["data"].get("error"),
+            ),
+        )
+
     def test_outside_project_scope_is_reported_as_error(self) -> None:
         with _project() as tmp, tempfile.TemporaryDirectory() as outside_tmp:
             project_root = _project_root(tmp)
@@ -476,6 +537,64 @@ class TestMaterialValidatorScopeAndRules(unittest.TestCase):
                 response["diagnostics"],
             ),
             msg="clean material and renderer evidence should stay successful",
+        )
+
+    def test_clean_non_empty_scope_progress_counts_direct_material_once(self) -> None:
+        with _project() as tmp:
+            project_root = _project_root(tmp)
+            _write_shader_meta(project_root, "Assets/Shaders/Good.shader", GOOD_SHADER_GUID)
+            _write_asset(
+                project_root,
+                "Assets/UI/Good.mat",
+                _material_yaml("Good"),
+                guid=MATCH_MATERIAL_GUID,
+            )
+            _write_asset(
+                project_root,
+                "Assets/UI/Clean.prefab",
+                _prefab_with_renderers((MATCH_MATERIAL_GUID,)),
+            )
+            resolver = ReferenceResolverService(project_root=project_root)
+
+            response = _response_dict(orchestrate_validate(resolver, "Assets/UI"))
+            material_progress = next(
+                stage
+                for stage in response["data"]["progress_summary"]
+                if stage["name"] == "materials"
+            )
+
+        self.assertEqual(
+            (1, 1, 1),
+            (
+                response["data"]["summary"]["materials"],
+                response["data"]["partial_counts"]["materials"],
+                material_progress["count"],
+            ),
+        )
+
+    def test_clean_non_empty_scope_progress_includes_next_action_fields(self) -> None:
+        with _project() as tmp:
+            project_root = _project_root(tmp)
+            _write_shader_meta(project_root, "Assets/Shaders/Good.shader", GOOD_SHADER_GUID)
+            _write_asset(
+                project_root,
+                "Assets/UI/Good.mat",
+                _material_yaml("Good"),
+                guid=MATCH_MATERIAL_GUID,
+            )
+            resolver = ReferenceResolverService(project_root=project_root)
+
+            response = _response_dict(orchestrate_validate(resolver, "Assets/UI"))
+
+        self.assertEqual(
+            (
+                "material_validation",
+                "Use include_details for evidence or inspect_material_asset summary mode for a narrower material view.",
+            ),
+            (
+                response["data"]["current_or_slowest_step"],
+                response["data"]["suggested_next_action"],
+            ),
         )
 
 
@@ -985,6 +1104,139 @@ class TestMaterialValidatorEvidenceBuilder(unittest.TestCase):
             ("MATERIAL_VALIDATION_READ_ERROR", str(bad_path.relative_to(project_root))),
         ], [(diag.detail, diag.path) for diag in state.read_errors])
 
+    def test_timeout_response_includes_partial_counts_and_next_action(self) -> None:
+        with _project() as tmp:
+            project_root = _project_root(tmp)
+            _write_shader_meta(project_root, "Assets/Shaders/Good.shader", GOOD_SHADER_GUID)
+            _write_asset(
+                project_root,
+                "Assets/UI/Button.mat",
+                _material_yaml("ButtonMaterial"),
+                guid=MATCH_MATERIAL_GUID,
+            )
+            resolver = ReferenceResolverService(project_root=project_root)
+            try:
+                response = core_validate(
+                    resolver,
+                    project_root / "Assets",
+                    _rules_empty(),
+                    timeout_sec=0,
+                )
+            except TypeError as exc:
+                self.fail(
+                    "Expected validate_materials timeout_sec response, "
+                    f"observed unsupported signature: {exc}."
+                )
+
+        self.assertEqual(
+            (
+                False,
+                "error",
+                "INSPECTION_TIMEOUT",
+                1,
+                "material_validation",
+                "Use a narrower scope or inspect_material_asset summary mode.",
+            ),
+            (
+                response.success,
+                response.severity.value,
+                response.code,
+                response.data["partial_counts"]["scanned_targets"],
+                response.data["current_or_slowest_step"],
+                response.data["suggested_next_action"],
+            ),
+        )
+
+    def test_positive_timeout_uses_elapsed_budget(self) -> None:
+        from prefab_sentinel import material_validator as validator_module
+
+        with _project() as tmp:
+            project_root = _project_root(tmp)
+            _write_shader_meta(project_root, "Assets/Shaders/Good.shader", GOOD_SHADER_GUID)
+            _write_asset(
+                project_root,
+                "Assets/UI/Button.mat",
+                _material_yaml("ButtonMaterial"),
+                guid=MATCH_MATERIAL_GUID,
+            )
+            resolver = ReferenceResolverService(project_root=project_root)
+            original = validator_module._build_evidence
+            clock = iter((0.0, 0.002))
+
+            def slow_build(*args, **kwargs):
+                return original(*args, **kwargs)
+
+            with (
+                patch.object(
+                    validator_module, "_build_evidence", side_effect=slow_build
+                ),
+                patch("time.monotonic", side_effect=lambda: next(clock, 0.002)),
+            ):
+                response = core_validate(
+                    resolver,
+                    project_root / "Assets",
+                    _rules_empty(),
+                    timeout_sec=0.001,
+                )
+
+        self.assertEqual(
+            (
+                False,
+                "error",
+                "INSPECTION_TIMEOUT",
+                1,
+                "material_validation",
+                "Use a narrower scope or inspect_material_asset summary mode.",
+            ),
+            (
+                response.success,
+                response.severity.value,
+                response.code,
+                response.data["partial_counts"]["scanned_targets"],
+                response.data["current_or_slowest_step"],
+                response.data["suggested_next_action"],
+            ),
+        )
+
+    def test_positive_timeout_threads_deadline_to_evidence_builder(self) -> None:
+        from prefab_sentinel import material_validator as validator_module
+
+        with _project() as tmp:
+            project_root = _project_root(tmp)
+            _write_shader_meta(project_root, "Assets/Shaders/Good.shader", GOOD_SHADER_GUID)
+            _write_asset(
+                project_root,
+                "Assets/UI/Button.mat",
+                _material_yaml("ButtonMaterial"),
+                guid=MATCH_MATERIAL_GUID,
+            )
+            resolver = ReferenceResolverService(project_root=project_root)
+            original = validator_module._build_evidence
+            observed_deadlines: list[float | None] = []
+            clock = iter((10.0, 10.0, 10.002))
+
+            def capture_build(*args, **kwargs):
+                observed_deadlines.append(kwargs.get("deadline"))
+                return original(*args, **kwargs)
+
+            with (
+                patch.object(
+                    validator_module, "_build_evidence", side_effect=capture_build
+                ),
+                patch("time.monotonic", side_effect=lambda: next(clock, 10.002)),
+            ):
+                response = core_validate(
+                    resolver,
+                    project_root / "Assets",
+                    _rules_empty(),
+                    timeout_sec=0.001,
+                )
+
+        self.assertEqual("INSPECTION_TIMEOUT", response.code)
+        self.assertEqual(1, len(observed_deadlines))
+        self.assertIsNotNone(observed_deadlines[0])
+        self.assertAlmostEqual(10.001, observed_deadlines[0] or 0.0, places=6)
+
     def test_evidence_builder_uses_context_guid_index_for_material_paths(self) -> None:
         from prefab_sentinel.inspection_context import ProjectInspectionContext
         from prefab_sentinel.material_validator import _build_evidence
@@ -1436,6 +1688,60 @@ class TestPhase1OrchestratorMaterialValidation(unittest.TestCase):
                 helper.call_args.args[0],
                 helper.call_args.args[1],
                 helper.call_args.kwargs["include_details"],
+            ),
+        )
+
+    def test_timeout_response_omits_diagnostics_baseline(self) -> None:
+        from prefab_sentinel.diagnostics_baseline import DiagnosticsBaseline  # noqa: PLC0415
+
+        with _project() as tmp:
+            project_root = _project_root(tmp)
+            _write_asset(project_root, "Assets/UI/Button.mat", _material_yaml("ButtonMaterial"))
+            resolver = ReferenceResolverService(project_root=project_root)
+            timeout_response = ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code="INSPECTION_TIMEOUT",
+                message="Material validation timed out.",
+                data={
+                    "partial_counts": {"scanned_targets": 1},
+                    "current_or_slowest_step": "material_validation",
+                    "suggested_next_action": "Use a narrower scope or inspect_material_asset summary mode.",
+                },
+                diagnostics=[],
+            )
+            baseline = DiagnosticsBaseline(
+                known_diagnostics=("material_validation:known",),
+                path=str(project_root / "config" / "diagnostics_baseline.json"),
+                status="loaded",
+            )
+            with patch(
+                "prefab_sentinel.orchestrator_material_validation.validate_materials_core",
+                return_value=timeout_response,
+            ) as helper:
+                try:
+                    response = orchestrate_validate(
+                        resolver,
+                        "Assets/UI",
+                        timeout_sec=0.25,
+                        diagnostics_baseline=baseline,
+                    )
+                except TypeError as exc:
+                    self.fail(
+                        "Expected orchestrator material timeout_sec response, "
+                        f"observed unsupported signature: {exc}."
+                    )
+
+        self.assertEqual(
+            (
+                "INSPECTION_TIMEOUT",
+                0.25,
+                False,
+            ),
+            (
+                response.code,
+                helper.call_args.kwargs["timeout_sec"],
+                "diagnostics_baseline" in response.data,
             ),
         )
 

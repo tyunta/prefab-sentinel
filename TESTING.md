@@ -169,6 +169,8 @@ pytestmark = pytest.mark.source_text_invariant
 
 `source_text_invariant` マーカー付きの source-text テスト（`tests/test_*_source.py`）は **Tier 3 = 構造不変条件のみ**を pin する。C# Bridge の*振る舞い*検証は `tests/csharp/` の xUnit ハーネスへ移行済みであり（clean-win concern は H-2…H-8 / H-11 で完了。per-concern Tier 分類の正本は [`docs/csharp_bridge_tier_migration.md`](./docs/csharp_bridge_tier_migration.md)）、source-text テストに残るのは partial 構成・定義の唯一性・命名規約・定数ドリフト・xUnit クラスへの委譲配線といった、実行では検証できない構造事実のみである。各 source-text grep は照合前に C# コメント（`//` / `/* ... */`）を除去し、コメント中のリテラルが false-green を生まないようにする（issue #5 / #358）。新しい振る舞いアサーションは source-text テストではなく xUnit ハーネスへ書く。
 
+例外的に、UnityEditor 参照が必要で xUnit ハーネスに取り込めない Bridge partial の live Editor API surface は、TAKT 内では source invariant で構造契約だけを pin する。`UnityEditorControlBridge.EditorState` partial は `EditorStateSnapshot` の dirty identity / `state_source` fields、`HandleGetEditorState` dispatch target、`EDITOR_STATE_ENUMERATION_LIMITED` diagnostic branch、root bridge constants の不移動を `tests/test_editor_control_bridge_source.py` で固定する。実 Unity compile / dirty identity smoke は下記「Unity 依存 Bridge C# のコンパイル検証」の手動 follow-up に回す。
+
 ## skip-reason の検証
 
 `@unittest.skipUnless(condition, reason)` / `@unittest.skipIf(condition, reason)` は、**スキップが実際に適用されたときだけ** 対象クラスに `__unittest_skip_why__` 属性（値は `reason`）を設定する。スキップされない側（テストが実行される regime）では属性そのものが存在しない。
@@ -210,6 +212,7 @@ class CsharpHarnessCollectionSkipTests(unittest.TestCase):
 | `unit-tests` | 全 push / PR / manual / weekly | `uv sync --extra test --extra mcp` → `uv run python scripts/run_unit_tests.py` |
 | `changes` | 全 push / PR / manual / weekly | `tools/unity/**` / `tests/csharp/**` / `global.json` / `ci.yml` 自身の変更を `dorny/paths-filter@v3` で検出し、`csharp` 出力フラグを立てる |
 | `csharp-tests` | `changes.outputs.csharp == 'true'` または manual | `.NET SDK setup`（`global.json` で pin）→ `dotnet restore --locked-mode` → `dotnet build --no-restore --configuration Release` → `dotnet test --no-build` で `tests/csharp/` の sanity Fact を実行 |
+| `performance-benchmarks` | weekly / manual のみ | synthetic 7-case benchmark を `--enforce` で実行し、成功・失敗にかかわらず JSON report を artifact として保存する。checked-in baseline は読み取り専用 |
 
 Full test-target mypy は test 依存と MCP 依存も含むため、pre-commit には入れない。local / TAKT 検証では `uv run --extra lint mypy prefab_sentinel tests --show-error-codes` を走らせ、CI では `typecheck-tests` job が同じ対象を通常 gate として検証する。
 
@@ -274,9 +277,51 @@ Unity の `internal` メンバを参照する必要が生じた段階で初め�
 
 Unity 依存 Bridge C#（`tools/unity/` の `UnityEditor` / VRChat SDK 参照ファイル）を変更したら、`deploy_bridge` で実 Unity 2022.3 + VRChat SDK プロジェクトに配置し、Unity のコンパイルがエラー 0 件であることを手動で確認する。これが現状唯一のコンパイル検証経路。pure-logic を新規抽出して Unity 非依存にできた分は xUnit ハーネス（`<Compile Include>`）へ取り込み、検証対象を段階的に CI 側へ移すことで、この未検証 surface を縮小していく。
 
+### ClientSim lifecycle regression
+
+`run_clientsim` は通常の compile gate では実行しない。source invariants は runtime dispatcher が deferred response を待つこと、requested scene が sole loaded active scene であること、`playModeStartScene=null` の current-scene Play、public ClientSim settings/readiness API preflight、Resources prefab asset を除外した loaded live main instance の一意性、snapshot/preflight より前に固定した absolute deadline、全 project asset を load しない loaded-dirty asset 観測、full request + independent restoration lease の `SessionState` persistence、reload reconciliation、preflight/enter/ready/exit の別 timeout、before/runtime/after の3時点 report、duplicate multiplicity を保つ diff、asset candidate の before/after 対称差分、restore（失敗時は lease 保持）→ strict atomic response success → persisted-state clear の順序を固定する。Python service tests は operation timeout より cleanup 30 秒 + dispatch 5 秒だけ transport deadline が長いこと、`executed` が必須 boolean であること、実行済み report の欠落・型不正が fail-closed warning になること、runtime-only additions は警告せず post-exit residual additionsは警告すること、runtime snapshot のみ欠けても信頼できる before/after residual を落とさず、before/after snapshot 欠落時は推測差分を警告しないことを固定する。
+
+修正確認では `deploy_bridge` 経路から Unity 2022.3 + VRChat SDK + ClientSim project へ Bridge files を配置し、recompile success と C# compiler error 0 件を確認した。ユーザーの作業 scene では ClientSim / Play Mode を起動しない。実 ClientSim acceptance が必要な場合は、operator が明示承認した disposable scene を唯一 loaded かつ active にし、before hierarchy を記録してから実行する。応答後は `residual_added_*` / `residual_removed_*` が空、元の `playModeStartScene` が復元済み、Editor が stable Edit Mode、scene が clean であることを確認し、最後に verified-clean scene を再読込する。
+
 issue #112 の `editor_serialized_property_read` / `editor_serialized_property_list` / `editor_serialized_property_write` は `UnityEditorControlBridge.SerializedProperty` partial に実装されるため、Unity real-device validation はこの手動 deploy コンパイル確認の対象になる。`UnityIntegrationTests` には `SerializedPropertySmokeSupport` と `EditorCtrl_SerializedProperty_ReadListWriteDryRunNoOp` probe を置き、read / list / dry-run / confirmed write / no-op を同じ temporary GameObject で検証する。TAKT 内では source invariant までを自動確認し、実 Unity 2022.3 + VRChat SDK project で `deploy_bridge` 後に `editor_run_tests` から probe を実行することを follow-up 条件にする。
 
+`UnityIntegrationTests.RunTestSuite` は開始時の scene setup を [`EditorSceneManager.GetSceneManagerSetup`](https://docs.unity3d.com/ja/2019.3/ScriptReference/SceneManagement.EditorSceneManager.GetSceneManagerSetup.html) で保存し、loaded scene がすべて保存済みかつ clean である場合だけ fixture mutation を開始する。unsaved / dirty scene はユーザー作業を暗黙に破棄できないため mutation 前に fail-fast する。各 case の fixture 再作成前と suite の `finally` では元 setup を復元し、test asset directory 配下の scene が loaded でないことを確認してから、戻り値を検査する [`AssetDatabase.DeleteAsset`](https://docs.unity3d.com/kr/2022.3/ScriptReference/AssetDatabase.DeleteAsset.html) で削除する。domain reload を伴う run-script stuck / recovery probe は同期 suite には含めず、Unity 非依存の `RunScriptCompilePendingCodeSelectorTests`（first timeout / threshold recovery）で固定する。
+
 Issue #116 の `editor_create_generated_asset` / `editor_move_asset` は `UnityEditorControlBridge.AssetOps` partial に実装されるため、TAKT 内では Python wrapper tests、Unity-free C# `AssetOpsPathValidation` xUnit tests、source invariant までを自動確認する。実 Unity 2022.3 + VRChat SDK project では `deploy_bridge` 後に `editor_create_generated_asset` create dry-run、create confirm、`editor_move_asset` move dry-run、move confirm、lowercase `.rendertexture` reject、case-only move reject、confirm report equality を手動 smoke し、cleanup は既存 `delete_assets` で行う。
+
+Issue #155 の `get_editor_state` dirty identity / blocker provenance は `UnityEditorControlBridge.EditorState` partial に実装されるため、TAKT 内では Python status/bridge tests と C# source invariant までを自動確認する。実 Unity 2022.3 + VRChat SDK project では `deploy_bridge` 後に Unity コンパイルエラー 0 件を確認し、dirty scene / Prefab Stage / material / ScriptableObject asset を用意した状態で `get_project_status` が `state_source="live_editor"`、dirty identity arrays、`dirty_or_save_blocker`、compile/playmode/stage blockers を返すことを手動 smoke する。
+
+## Post-TAKT Unity Inspector verification
+
+Issue #157 は Unity 2022.3 + VRChat SDK project の representative Inspector fixture で受入済み。Bridge 配置後に Unity compile error 0 件を確認し、component / ScriptableObject surface、array、ObjectReference、override-origin、custom-editor degraded path、invalid/incomplete profile、zipped-array mismatch、writer rejection、atomic promotion/rollback を live Unity layer と deterministic Python/C# tests の双方で固定した。writer probe は同一 surface identity を必須とし、Prefab component は exact `file_id`、ScriptableObject root は実 open-asset grammar の `$asset` で real orchestrator dry-run を通す。exact component handle を構築できない scene writable は false-positive を避けて fail-closed にする。
+
+再検証では次の protocol を使う:
+
+1. Run `activate_project` and `deploy_bridge`, wait for compilation, and record `compile errors = 0`.
+2. Create the synthetic `ExampleVideoCore` component fixture plus handler/module references, a ScriptableObject root, enum and array fields, null/missing/local/asset ObjectReference values, materials, and a nested Prefab variant.
+3. Run `inspect_serialized_surface` for the component and ScriptableObject addresses. Value-pin ordered raw paths, array sizes, enum values, effective values, one-hop ObjectReference identity, and the absence/presence of origin when `include_override_origin` is false/true.
+4. On the nested and variant fixture, confirm source/default, host override, effective value, and override origin are read from the intended layer.
+5. Exercise candidate discovery with a runtime script, no custom editor, one active custom editor, and an unavailable assembly/editor case. Confirm bounded candidates and exact degraded reasons.
+6. Run `inspect_with_profile` through `INSPECTOR_PROFILE_REQUIRED`, `INSPECTOR_PROFILE_INCOMPLETE`, `INSPECTOR_PROFILE_INVALID`, surface-unavailable, requested zipped mismatch, and valid Core/screen views.
+7. Stage a read-only draft outside discovery, run `validate_inspector_profile`, atomically promote it, and rerun every intended view. For a writer-enabled draft, value-pin the numeric target `local_file_id` from that same surface and verify addressability uses the actual resource grammar with `dry_run=true` / `confirm=false`: exact `file_id` for Prefab components and `$asset` for a ScriptableObject root without `symbol_path`. Verify set/array operations through the real orchestrator, and verify a missing ID, unsupported scene component address, or writer rejection disables the declaration. Repeat with an invalid draft and verify the existing profile remains byte-identical.
+8. Preserve the console output and MCP envelopes as issue evidence. Every value pin must pass before accepting a later Inspector-profile change.
+
+## Post-TAKT Unity open Prefab transaction verification
+
+Issue #156 は real-Unity layer と deterministic fault-injection layer の双方で受入済み。live run では duplicate sibling、generated `#N` lookup、Camera scalar、Canvas ObjectReference を含む multi-op transaction、post-save distinct object IDs、apply/postcondition failure の exact-preimage rollback を確認した。UdonSharp proxy を含む representative Prefab では copy / instantiate / rename / field set の dry-run と confirm を通し、committed transaction と response-equal report を確認した。
+
+保存後に target を再 load し、linked proxy、proxy value、backing public variables、backing→proxy round-trip の保持を確認した。`validate_structure` は duplicate fileID / Transform inconsistency / missing component / orphan Transform がすべて 0、`validate_refs` は broken GUID/fileID 0 件だった。package source と target の既存 unresolved-looking handles は type/property/instance signature が一致し、transaction が新規導入した参照不整合ではないことを確認した。save/report/rollback failure と introduced structure/reference diagnostics は同一 revision の deterministic tests で固定している。
+
+この live acceptance plan では `runtime_scene` を指定していないため ClientSim gate は起動しておらず、ClientSim の結果を #156 の受入証跡には数えていない。実 ClientSim を再検証する場合は、ユーザーの作業 scene ではなく disposable scene を使い、operator の明示合意、終了時 cleanup、verified-clean scene の再読込までを一組の手順とする。
+
+再検証では次の protocol を使う。real-Unity layer は public MCP/Bridge contract で到達可能な状態を、deterministic fault-injection layer は valid Unity operations では任意に作れない corruption/persistence failure を覆う。Unit evidence は live success/rollback path の代替にしない:
+
+1. Run `activate_project` and `deploy_bridge`, then record Unity compile errors = 0.
+2. Create disposable target/source Prefabs containing duplicate-name siblings, a reference-bearing component, and a nested Prefab connection.
+3. Dry-run and confirm one plan that composes `instantiate_prefab` → rename → generated relative `#N` lookup → component lookup → scalar/reference `set`, with non-empty `change_reason` and contained `out_report`.
+4. Reload the saved target and value-pin source Prefab connection, post-save symbol path, GameObject/Transform IDs, scalar value, ObjectReference identity, actual override pairs, exactly one save route, and response-equal report.
+5. Through the public MCP surface, exercise apply rejection, missing-component lookup, an explicit postcondition failure, and the configured compile / runtime failure path. Run a real ClientSim gate only in a disposable scene with explicit operator approval and cleanup; otherwise cover its transaction-failure contract with the deterministic harness. For each post-mutation failure, compare the restored Prefab byte/identity state to the preimage and inspect original/rollback/report results.
+6. In deterministic transaction tests, inject save failure; introduced duplicate-fileID, orphaned-Transform, and broken-reference diagnostics; report-finalization failure; preimage-restoration failure; and rollback-refresh failure. Value-pin the diagnostic partitions and, for rollback failure, `critical`, `PATCH_ROLLBACK_FAILED`, the exact message, and preservation of both causes. Preserve the live envelopes and deterministic test log as issue evidence; both layers must pass before accepting a later transaction change.
 
 ### 安全網: dev 経路での visual 検証
 

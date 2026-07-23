@@ -47,6 +47,9 @@ namespace PrefabSentinel
 
         // ping_object / instantiate_to_scene
         public string asset_path = string.Empty;
+        public string expected_project_root = string.Empty;
+        public string symbol_path = string.Empty;
+        public bool include_override_origin = false;
         public string asset_paths_json = string.Empty;
         public int material_index = -1;
         public string material_guid = string.Empty;

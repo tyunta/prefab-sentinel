@@ -12,8 +12,8 @@
 - 必須参照の欠落は補完せず `error` で停止する（fail-fast）。
 - ファイルサイズ目安（200〜400 行）は **partial 単位**で評価する。1 ファイル合計ではなく `partial class` ごとの責務単位で行数を判定する。partial 構成は disk 上のファイル名（`tools/unity/PrefabSentinel.Unity*Bridge.<Concern>.cs`）が正本で、test が AGENTS.md inventory との drift を検出する（`tests/test_editor_control_bridge_source.py::TestOperationalRulesPartialInventory` / `tests/test_unity_patch_bridge_source.py::TestPatchBridgeOperationalRulesInventory`）。
 - 現在の per-concern token inventory（test 用、追加・削除時に同期）:
-  - `UnityEditorControlBridge`: AnimationClip / AssetDelete / AssetOps / AssetOps.Create / AssetOps.Move / BlendShape / CameraView / CompileBarrier / Components / ConsoleCapture / Geometry / GeometryContributors / Helpers / Hierarchy / MaterialBatch / MaterialQuery / MaterialWrite / Menu / MenuScriptWatch / PrefabStage / Properties / PropertyObjectReference / PropertyWrite / RendererFramingBounds / RunScriptAsync / RunScriptCompile / SaveInstantiate / Screenshot / Screenshot.TargetCapture / Screenshot.TargetCapture.WorldSpaceUi / SerializedProperty / SerializedProperty.ObjectReference / SerializedProperty.Payload / SerializedProperty.Target / SerializedProperty.Traversal / SerializedProperty.Write / UdonSharpAddComponent / UdonSharpArrayWrite / UdonSharpFieldWrite / UdonSharpInvocation / UdonSharpListenerWiring / UiElement
-  - `UnityPatchBridge`: Payloads / Prefab / Asset / Scene / Resolve / Mutation / ManagedReference / Diagnostics
+  - `UnityEditorControlBridge`: AnimationClip / AssetDelete / AssetOps / AssetOps.Create / AssetOps.Move / BlendShape / CameraView / CompileBarrier / Components / ConsoleCapture / EditorState / Geometry / GeometryContributors / Helpers / Hierarchy / InspectorSurface / InspectorSurface.Payload / MaterialBatch / MaterialQuery / MaterialWrite / Menu / MenuScriptWatch / PrefabStage / Properties / PropertyObjectReference / PropertyWrite / RendererFramingBounds / RunScriptAsync / RunScriptCompile / SaveInstantiate / Screenshot / Screenshot.TargetCapture / Screenshot.TargetCapture.WorldSpaceUi / SerializedProperty / SerializedProperty.ObjectReference / SerializedProperty.Payload / SerializedProperty.Target / SerializedProperty.Traversal / SerializedProperty.Write / UdonSharpAddComponent / UdonSharpArrayWrite / UdonSharpFieldWrite / UdonSharpInvocation / UdonSharpListenerWiring / UiElement
+  - `UnityPatchBridge`: Payloads / Prefab / OpenComposition / OpenCompositionAudit / Asset / Scene / Resolve / Mutation / ManagedReference / Diagnostics
 - `Mutation` partial は value-kind dispatcher と各 `SerializedPropertyType` 用 reader が 1 つの cohesive concern を構成するため、200〜400 行ガイドラインも issue #129 暫定の 1,000 行上限も意図的に超過する（issue #129 spec.md "further sub-split" / Non-Goals 参照）。
 
 ## 責務境界（Services / Skills / MCP）
@@ -31,7 +31,7 @@
 3. 変更は `dry_run_patch` で差分確認後に `apply_and_save` する。
 4. 適用後に `compile_udonsharp` と `run_clientsim` で実行検証する。
 5. `critical` / `error` が 1 件でもあれば停止し、修正または判断待ちへ回す。
-- 書き込み系ツール（`set_property`, `add_component`, `remove_component`, `copy_component_fields`, `set_properties`, `set_material_property`, `copy_asset`, `rename_asset`, `delete_asset`, `delete_assets`, `editor_create_generated_asset`, `editor_move_asset`, `revert_overrides`, `patch_apply`）は `confirm=True` 時に `change_reason` を必須とする（監査ログのため）。`patch_apply`、`set_properties`、`editor_create_generated_asset`、`editor_move_asset` はさらに `out_report` も必須。
+- 書き込み系ツール（`set_property`, `add_component`, `remove_component`, `copy_component_fields`, `set_properties`, `set_material_property`, `copy_asset`, `rename_asset`, `delete_asset`, `delete_assets`, `editor_create_generated_asset`, `editor_move_asset`, `revert_overrides`, `patch_apply`）は `confirm=True` 時に `change_reason` を必須とする（監査ログのため）。`set_properties`、`editor_create_generated_asset`、`editor_move_asset` はさらに `out_report` も必須。`patch_apply` は confirmed exactly one open Prefab transaction の場合だけ `out_report` を必須とする。
 
 ## 意思決定ルール
 - 自動修復可能で根拠があるもののみ `safe_fix` として提案・適用する。

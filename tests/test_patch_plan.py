@@ -110,31 +110,46 @@ class NormalizeResourceTests(unittest.TestCase):
         result = _normalize_resource(resource, 0)
         self.assertEqual(result["kind"], "scene")
 
-    def test_kind_none_triggers_inference(self) -> None:
-        resource = {"id": "r1", "path": "Assets/a.mat", "kind": None}
-        result = _normalize_resource(resource, 0)
-        self.assertEqual(result["kind"], "material")
+    def test_explicit_kind_requires_a_non_empty_string(self) -> None:
+        for invalid_kind in (None, 123, "  "):
+            with self.subTest(kind=invalid_kind):
+                with self.assertRaises(ValueError) as cm:
+                    _normalize_resource(
+                        {"id": "r1", "path": "Assets/a.mat", "kind": invalid_kind},
+                        0,
+                    )
+                self.assertIn("resources[0].kind", str(cm.exception))
 
-    def test_empty_kind_triggers_inference(self) -> None:
-        resource = {"id": "r1", "path": "Assets/a.prefab", "kind": "  "}
-        result = _normalize_resource(resource, 0)
-        self.assertEqual(result["kind"], "prefab")
+    def test_explicit_kind_must_be_supported(self) -> None:
+        with self.assertRaises(ValueError) as cm:
+            _normalize_resource(
+                {"id": "r1", "path": "Assets/a.prefab", "kind": "texture"},
+                0,
+            )
+        self.assertIn("resources[0].kind", str(cm.exception))
 
     def test_mode_defaults_to_open(self) -> None:
         resource = {"id": "r1", "path": "Assets/a.prefab"}
         result = _normalize_resource(resource, 0)
         self.assertEqual(result["mode"], "open")
 
-    def test_empty_mode_raises(self) -> None:
-        with self.assertRaises(ValueError) as cm:
-            _normalize_resource({"id": "r1", "path": "a.prefab", "mode": "  "}, 0)
-        self.assertIn(".mode", str(cm.exception))
+    def test_explicit_mode_requires_a_supported_non_empty_string(self) -> None:
+        for invalid_mode in (None, 123, "  ", "append"):
+            with self.subTest(mode=invalid_mode):
+                with self.assertRaises(ValueError) as cm:
+                    _normalize_resource(
+                        {"id": "r1", "path": "a.prefab", "mode": invalid_mode},
+                        0,
+                    )
+                self.assertIn("resources[0].mode", str(cm.exception))
 
     def test_strips_whitespace(self) -> None:
-        resource = {"id": " r1 ", "path": " Assets/a.prefab "}
+        resource = {"id": " r1 ", "path": " Assets/a.prefab ", "kind": " prefab ", "mode": " open "}
         result = _normalize_resource(resource, 0)
         self.assertEqual(result["id"], "r1")
         self.assertEqual(result["path"], "Assets/a.prefab")
+        self.assertEqual(result["kind"], "prefab")
+        self.assertEqual(result["mode"], "open")
 
     def test_deepcopy_isolation(self) -> None:
         resource: dict[str, Any] = {"id": "r1", "path": "a.prefab", "extra": {"nested": 1}}
@@ -280,19 +295,25 @@ class NormalizePatchPlanTests(unittest.TestCase):
         result = normalize_patch_plan(plan)
         self.assertEqual(result["plan_version"], PLAN_VERSION)
 
-    def test_version_alias_accepted(self) -> None:
+    def test_version_alias_is_rejected(self) -> None:
         plan = _v2_plan()
         del plan["plan_version"]
         plan["version"] = 2
-        result = normalize_patch_plan(plan)
-        self.assertEqual(result["plan_version"], PLAN_VERSION)
 
-    def test_version_alias_string_accepted(self) -> None:
+        with self.assertRaises(ValueError) as context:
+            normalize_patch_plan(plan)
+
+        self.assertIn("plan_version", str(context.exception))
+
+    def test_string_version_alias_is_rejected(self) -> None:
         plan = _v2_plan()
         del plan["plan_version"]
         plan["version"] = "2"
-        result = normalize_patch_plan(plan)
-        self.assertEqual(result["plan_version"], PLAN_VERSION)
+
+        with self.assertRaises(ValueError) as context:
+            normalize_patch_plan(plan)
+
+        self.assertIn("plan_version", str(context.exception))
 
     def test_wrong_version_error_message_includes_received_value(self) -> None:
         with self.assertRaises(ValueError) as ctx:
@@ -303,6 +324,15 @@ class NormalizePatchPlanTests(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             normalize_patch_plan({"plan_version": "abc"})
         self.assertIn("abc", str(ctx.exception))
+
+    def test_non_integer_numeric_and_boolean_plan_versions_are_rejected(self) -> None:
+        for raw_version in (2.0, 2.9, True):
+            with self.subTest(raw_version=raw_version):
+                plan = _v2_plan()
+                plan["plan_version"] = raw_version
+                with self.assertRaises(ValueError) as context:
+                    normalize_patch_plan(plan)
+                self.assertIn("plan_version", str(context.exception))
 
 
 class LoadPatchPlanTests(unittest.TestCase):
@@ -384,17 +414,19 @@ class IterResourceBatchesTests(unittest.TestCase):
         self.assertNotIn("resource", ops[0])
 
     def test_multi_resource(self) -> None:
-        plan = normalize_patch_plan(_v2_plan(
-            resources=[
-                {"id": "r1", "path": "a.prefab"},
-                {"id": "r2", "path": "b.unity"},
-            ],
-            ops=[
-                {"resource": "r1", "op": "set", "property_path": "k1", "value": "v1"},
-                {"resource": "r2", "op": "set", "property_path": "k2", "value": "v2"},
-                {"resource": "r1", "op": "set", "property_path": "k3", "value": "v3"},
-            ],
-        ))
+        plan = normalize_patch_plan(
+            _v2_plan(
+                resources=[
+                    {"id": "r1", "path": "a.prefab"},
+                    {"id": "r2", "path": "b.unity"},
+                ],
+                ops=[
+                    {"resource": "r1", "op": "set", "property_path": "k1", "value": "v1"},
+                    {"resource": "r2", "op": "set", "property_path": "k2", "value": "v2"},
+                    {"resource": "r1", "op": "set", "property_path": "k3", "value": "v3"},
+                ],
+            )
+        )
         batches = iter_resource_batches(plan)
         self.assertEqual(len(batches), 2)
         r1_resource, r1_ops = batches[0]
@@ -405,10 +437,12 @@ class IterResourceBatchesTests(unittest.TestCase):
         self.assertEqual(len(r2_ops), 1)
 
     def test_resource_with_no_ops(self) -> None:
-        plan = normalize_patch_plan(_v2_plan(
-            resources=[{"id": "r1", "path": "a.prefab"}],
-            ops=[],
-        ))
+        plan = normalize_patch_plan(
+            _v2_plan(
+                resources=[{"id": "r1", "path": "a.prefab"}],
+                ops=[],
+            )
+        )
         batches = iter_resource_batches(plan)
         self.assertEqual(len(batches), 1)
         _, ops = batches[0]
@@ -447,16 +481,18 @@ class BuildBridgeRequestTests(unittest.TestCase):
         self.assertEqual(request["resources"][0]["path"], "test.prefab")
 
     def test_multi_resource_no_target(self) -> None:
-        plan = normalize_patch_plan(_v2_plan(
-            resources=[
-                {"id": "r1", "path": "a.prefab"},
-                {"id": "r2", "path": "b.unity"},
-            ],
-            ops=[
-                {"resource": "r1", "op": "set", "property_path": "k1", "value": "v1"},
-                {"resource": "r2", "op": "set", "property_path": "k2", "value": "v2"},
-            ],
-        ))
+        plan = normalize_patch_plan(
+            _v2_plan(
+                resources=[
+                    {"id": "r1", "path": "a.prefab"},
+                    {"id": "r2", "path": "b.unity"},
+                ],
+                ops=[
+                    {"resource": "r1", "op": "set", "property_path": "k1", "value": "v1"},
+                    {"resource": "r2", "op": "set", "property_path": "k2", "value": "v2"},
+                ],
+            )
+        )
         request = build_bridge_request(plan)
         self.assertNotIn("target", request)
         self.assertNotIn("kind", request)

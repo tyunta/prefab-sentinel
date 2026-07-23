@@ -609,6 +609,40 @@ class ValidateMaterialsToolForwardingTests(unittest.TestCase):
             ),
         )
 
+    def test_timeout_is_forwarded_to_orchestrator(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            (project_root / "Assets").mkdir()
+            orch_mock = MagicMock()
+            orch_mock.validate_materials.return_value = _material_success_resp()
+            session = ProjectSession(project_root=project_root)
+            cache = cast(Any, session._cache)
+            cache.get_orchestrator = MagicMock(return_value=orch_mock)
+            validate_materials = _registered_validation_tool(session, "validate_materials")
+
+            try:
+                response = validate_materials(
+                    scope="Assets/UI",
+                    include_details=True,
+                    timeout_sec=0.25,
+                )
+            except TypeError as exc:
+                self.fail(
+                    "Expected validate_materials timeout_sec forwarding, "
+                    f"observed unsupported signature: {exc}."
+                )
+
+        kwargs = orch_mock.validate_materials.call_args.kwargs
+        self.assertEqual(
+            ("Assets/UI", True, 0.25, "MATERIAL_VALIDATION_OK"),
+            (
+                kwargs["scope"],
+                kwargs["include_details"],
+                kwargs["timeout_sec"],
+                response["code"],
+            ),
+        )
+
     def test_activated_session_scope_is_used_when_explicit_scope_is_omitted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project_root = Path(tmp)
@@ -630,6 +664,60 @@ class ValidateMaterialsToolForwardingTests(unittest.TestCase):
                 kwargs["scope"],
                 kwargs["include_details"],
                 response["success"],
+            ),
+        )
+
+
+class InspectMaterialAssetToolForwardingTests(unittest.TestCase):
+    def test_mode_and_property_names_are_forwarded_to_orchestrator(self) -> None:
+        from prefab_sentinel.contracts import Severity
+
+        expected = ToolResponse(
+            success=True,
+            severity=Severity.INFO,
+            code="INSPECT_MATERIAL_ASSET_RESULT",
+            message="inspect.material_asset completed.",
+            data={"mode": "summary", "selected_properties": {"_Color": {}}},
+            diagnostics=[],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            (project_root / "Assets").mkdir()
+            orch_mock = MagicMock()
+            orch_mock.inspect_material_asset.return_value = expected
+            session = ProjectSession(project_root=project_root)
+            cache = cast(Any, session._cache)
+            cache.get_orchestrator = MagicMock(return_value=orch_mock)
+            inspect_material_asset = _registered_validation_tool(
+                session,
+                "inspect_material_asset",
+            )
+
+            try:
+                response = inspect_material_asset(
+                    asset_path="Assets/UI/Button.mat",
+                    mode="summary",
+                    property_names=["_Color"],
+                )
+            except TypeError as exc:
+                self.fail(
+                    "Expected inspect_material_asset mode/property_names forwarding, "
+                    f"observed unsupported signature: {exc}."
+                )
+
+        kwargs = orch_mock.inspect_material_asset.call_args.kwargs
+        self.assertEqual(
+            (
+                "Assets/UI/Button.mat",
+                "summary",
+                ["_Color"],
+                "INSPECT_MATERIAL_ASSET_RESULT",
+            ),
+            (
+                kwargs["target_path"],
+                kwargs["mode"],
+                kwargs["property_names"],
+                response["code"],
             ),
         )
 

@@ -78,10 +78,10 @@ class Phase1Orchestrator:
         if not status["connected"]:
             return "skipped"
         try:
-            send_action(action="refresh_asset_database")
-            return "true"
+            response = send_action(action="refresh_asset_database")
         except Exception:
             return "false"
+        return "true" if response.get("success") is True else "false"
 
     # ------------------------------------------------------------------
     # Cache invalidation (delegated to services)
@@ -292,6 +292,7 @@ class Phase1Orchestrator:
         summary_only: bool = False,
         script_filter: str = "",
         include_out_of_scope_diagnostics: bool = False,
+        timeout_sec: float | None = None,
         diagnostics_baseline: orchestrator_wiring.DiagnosticsBaseline | None = None,
     ) -> ToolResponse:
         """Analyze MonoBehaviour field wiring in a Prefab or Scene (read-only).
@@ -328,6 +329,7 @@ class Phase1Orchestrator:
             udon_only=udon_only, cursor=cursor, page_size=page_size,
             summary_only=summary_only, script_filter=script_filter,
             include_out_of_scope_diagnostics=include_out_of_scope_diagnostics,
+            timeout_sec=timeout_sec,
             diagnostics_baseline=diagnostics_baseline,
             **self._inspection_context_kwargs(),
         )
@@ -337,6 +339,7 @@ class Phase1Orchestrator:
         *,
         target_path: str = "",
         diagnostics_baseline: orchestrator_validation.DiagnosticsBaseline | None = None,
+        timeout_sec: float | None = None,
     ) -> ToolResponse:
         """Run inspect_wiring on all .prefab/.unity files in scope.
 
@@ -351,6 +354,7 @@ class Phase1Orchestrator:
             self.reference_resolver,
             target_path=target_path,
             diagnostics_baseline=diagnostics_baseline,
+            timeout_sec=timeout_sec,
             **self._inspection_context_kwargs(),
         )
 
@@ -366,6 +370,7 @@ class Phase1Orchestrator:
         show_components: bool = True,
         expand_monobehaviour: bool = False,
         expand_prefab_instances: bool = False,
+        timeout_sec: float | None = None,
     ) -> ToolResponse:
         """Build the GameObject/Transform hierarchy tree (read-only).
 
@@ -390,6 +395,7 @@ class Phase1Orchestrator:
             show_components=show_components,
             expand_monobehaviour=expand_monobehaviour,
             expand_prefab_instances=expand_prefab_instances,
+            timeout_sec=timeout_sec,
             **self._inspection_context_kwargs(),
         )
 
@@ -453,6 +459,9 @@ class Phase1Orchestrator:
     def inspect_material_asset(
         self,
         target_path: str,
+        *,
+        mode: str = "full",
+        property_names: list[str] | None = None,
     ) -> ToolResponse:
         """Inspect shader and properties of a .mat asset file (read-only).
 
@@ -468,7 +477,10 @@ class Phase1Orchestrator:
             counts.
         """
         return orchestrator_inspect.inspect_material_asset(
-            self.prefab_variant, target_path,
+            self.prefab_variant,
+            target_path,
+            mode=mode,
+            property_names=property_names,
             **self._inspection_context_kwargs(),
         )
 
@@ -478,6 +490,7 @@ class Phase1Orchestrator:
         scope: str,
         include_details: bool = False,
         diagnostics_baseline: orchestrator_validation.DiagnosticsBaseline | None = None,
+        timeout_sec: float | None = None,
     ) -> ToolResponse:
         """Run static material/shader/TMP/icon-font validation (read-only)."""
         return orchestrator_material_validation.validate_materials(
@@ -485,6 +498,7 @@ class Phase1Orchestrator:
             scope,
             include_details=include_details,
             diagnostics_baseline=diagnostics_baseline,
+            timeout_sec=timeout_sec,
             **self._inspection_context_kwargs(),
         )
 
@@ -686,6 +700,23 @@ class Phase1Orchestrator:
     # Patch application
     # ------------------------------------------------------------------
 
+    def serialized_value_patch_apply(
+        self,
+        plan: dict[str, object],
+        dry_run: bool,
+        confirm: bool,
+        change_reason: str | None,
+    ) -> ToolResponse:
+        """Execute the offline set-property grammar as a distinct writer contract."""
+
+        return orchestrator_patch.serialized_value_patch_apply(
+            self,
+            plan,
+            dry_run,
+            confirm,
+            change_reason,
+        )
+
     def patch_apply(
         self,
         plan: dict[str, object],
@@ -694,6 +725,7 @@ class Phase1Orchestrator:
         plan_sha256: str | None = None,
         plan_signature: str | None = None,
         change_reason: str | None = None,
+        out_report: str | None = None,
         scope: str | None = None,
         runtime_scene: str | None = None,
         runtime_profile: str = "default",
@@ -701,6 +733,7 @@ class Phase1Orchestrator:
         runtime_since_timestamp: str | None = None,
         runtime_allow_warnings: bool = False,
         runtime_max_diagnostics: int = 200,
+        transactional: bool = False,
     ) -> ToolResponse:
         """Execute a patch plan through dry-run, apply, and optional post-validation.
 
@@ -711,6 +744,7 @@ class Phase1Orchestrator:
             plan_sha256: Optional SHA-256 digest for plan integrity verification.
             plan_signature: Optional signature for signed execution plans.
             change_reason: Human-readable reason for the change (audit trail).
+            out_report: Audit report path for eligible open-Prefab transactions.
             scope: Scope path for optional post-apply reference validation.
             runtime_scene: Scene path for optional post-apply runtime validation.
             runtime_profile: ClientSim profile for runtime validation.
@@ -718,6 +752,7 @@ class Phase1Orchestrator:
             runtime_since_timestamp: Log timestamp filter for runtime validation.
             runtime_allow_warnings: Allow warnings in runtime assertion.
             runtime_max_diagnostics: Cap on runtime diagnostic entries.
+            transactional: Enables the public one-open-Prefab transaction contract.
 
         Returns:
             ``ToolResponse`` with ``data.steps`` containing dry_run_patch,
@@ -726,7 +761,7 @@ class Phase1Orchestrator:
         """
         return orchestrator_patch.patch_apply(
             self, plan, dry_run, confirm, plan_sha256, plan_signature,
-            change_reason, scope, runtime_scene, runtime_profile,
+            change_reason, out_report, scope, runtime_scene, runtime_profile,
             runtime_log_file, runtime_since_timestamp, runtime_allow_warnings,
-            runtime_max_diagnostics,
+            runtime_max_diagnostics, transactional,
         )

@@ -212,13 +212,11 @@ namespace PrefabSentinel
                 );
                 return false;
             }
-            // Issue #37: a ``set`` op may target its component by an exact
-            // fileID or a type-name selector; when both are present the
-            // fileID wins. Array ops continue to require the selector.
-            bool isSetOp = string.Equals(opName, "set", StringComparison.Ordinal);
+            // Writer probes retain the exact local fileID for every value op.
+            // Component selectors remain supported; fileID wins when both exist.
             Component component;
             string componentError;
-            if (isSetOp && op.file_id != null && op.file_id.Trim().Length > 0)
+            if (op.file_id != null && op.file_id.Trim().Length > 0)
             {
                 if (!TryResolveComponentByFileId(
                         prefabRoot, op.file_id, out component, out componentError))
@@ -275,9 +273,8 @@ namespace PrefabSentinel
                         path = target,
                         location = $"ops[{opIndex}].component",
                         detail = "schema_error",
-                        evidence = isSetOp
-                            ? "set op requires a 'component' selector or a 'file_id'"
-                            : "component is required"
+                        evidence =
+                            $"{opName} op requires a 'component' selector or a 'file_id'"
                     }
                 );
                 return false;
@@ -782,7 +779,8 @@ namespace PrefabSentinel
                     }
                     catch (Exception ex)
                     {
-                        error = $"failed to assign Gradient value: {ex.Message}";
+                        Debug.LogException(ex);
+                        error = "failed to assign Gradient value";
                         return false;
                     }
                     return true;
@@ -883,7 +881,8 @@ namespace PrefabSentinel
                     }
                     catch (Exception ex)
                     {
-                        error = $"failed to assign generic value: {ex.Message}";
+                        Debug.LogException(ex);
+                        error = "failed to assign generic value";
                         return false;
                     }
                     return true;
@@ -1550,7 +1549,8 @@ namespace PrefabSentinel
             }
             catch (Exception ex)
             {
-                error = $"failed to assign Gradient keys: {ex.Message}";
+                Debug.LogException(ex);
+                error = "failed to assign Gradient keys";
                 return false;
             }
 
@@ -1876,7 +1876,8 @@ namespace PrefabSentinel
             }
             catch (Exception ex)
             {
-                error = $"failed to read generic boxedValue: {ex.Message}";
+                Debug.LogException(ex);
+                error = "failed to read generic boxedValue";
                 return false;
             }
 
@@ -2000,7 +2001,8 @@ namespace PrefabSentinel
             }
             catch (Exception ex)
             {
-                error = ex.Message;
+                Debug.LogException(ex);
+                error = "value_json could not be decoded";
                 return false;
             }
 
@@ -2021,7 +2023,8 @@ namespace PrefabSentinel
             }
             catch (Exception ex)
             {
-                error = $"failed to create default instance for value type '{targetType.FullName}': {ex.Message}";
+                Debug.LogException(ex);
+                error = $"failed to create default instance for value type '{targetType.FullName}'";
                 return false;
             }
         }
@@ -2050,7 +2053,8 @@ namespace PrefabSentinel
             }
             catch (Exception ex)
             {
-                error = ex.Message;
+                Debug.LogException(ex);
+                error = "value_json could not be decoded";
                 return false;
             }
 

@@ -56,6 +56,10 @@ class SymbolNode:
     depth: int = 0
     properties: dict[str, str] = field(default_factory=dict)
     source_prefab: str = ""
+    display_path: str = ""
+    entry_kind: str = ""
+    entry_reason: str = ""
+    lookup: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self, depth_limit: int | None = None, *, detail: str = "full") -> dict[str, Any]:
         """Serialize to a JSON-compatible dict with optional depth truncation.
@@ -71,6 +75,14 @@ class SymbolNode:
             "kind": self.kind.value,
             "name": self.name,
         }
+        if self.display_path:
+            result["display_path"] = self.display_path
+        if self.entry_kind:
+            result["entry_kind"] = self.entry_kind
+        if self.entry_reason:
+            result["entry_reason"] = self.entry_reason
+        if self.lookup:
+            result["lookup"] = dict(self.lookup)
         if detail == "fields" and self.properties:
             result["field_names"] = sorted(self.properties.keys())
         if detail == "full":

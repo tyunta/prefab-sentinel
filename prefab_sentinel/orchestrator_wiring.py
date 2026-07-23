@@ -20,6 +20,7 @@ from prefab_sentinel.diagnostics_baseline import (
     classify_current_keys,
 )
 from prefab_sentinel.inspection_context import ProjectInspectionContext
+from prefab_sentinel.inspection_progress import InspectionProgress
 from prefab_sentinel.nested_prefab_cache import NestedPrefabCache
 from prefab_sentinel.orchestrator_variant import read_target_file, resolve_variant_base
 from prefab_sentinel.parallel_scan import run_ordered
@@ -42,6 +43,12 @@ from prefab_sentinel.unity_yaml_parser import YamlBlock, iter_nested_prefab_chil
 # page size and the inclusive bounds are pinned here as load-bearing
 # constants so tests in ``tests/test_default_parameter_boundaries.py`` can
 # anchor mutation testing on the literals.
+from prefab_sentinel.wiring_actionability import (
+    classify_duplicate_reference,
+    classify_null_field,
+    empty_actionability_counts,
+)
+
 INSPECT_WIRING_CURSOR_PREFIX = "pos:"
 INSPECT_WIRING_PAGE_SIZE_DEFAULT = 50
 INSPECT_WIRING_PAGE_SIZE_MIN = 1
@@ -93,13 +100,17 @@ def _component_to_dict(
         if f.is_overridden:
             fd["is_overridden"] = True
         field_dicts.append(fd)
-    # Issue #296: surface the per-field classification list under the
-    # documented response key alongside the legacy flat list of names.
+    script_name = guid_to_name.get(comp.script_guid, "")
     null_field_classifications = [
         {
             "name": entry.name,
             "kind": entry.kind,
             "evidence": entry.evidence,
+            "actionability": classify_null_field(
+                script_name,
+                entry.name,
+                entry.kind,
+            ),
         }
         for entry in comp.null_field_classifications
     ]
@@ -108,7 +119,7 @@ def _component_to_dict(
         "game_object_file_id": comp.game_object_file_id,
         "game_object_name": go_name,
         "script_guid": comp.script_guid,
-        "script_name": guid_to_name.get(comp.script_guid, ""),
+        "script_name": script_name,
         "is_udon_sharp": comp.is_udon_sharp,
         "field_count": len(comp.fields),
         "null_ratio": f"{len(comp.null_field_names)}/{len(comp.fields)}",
@@ -118,6 +129,14 @@ def _component_to_dict(
     }
     if source_prefab is not None:
         cd["source_prefab"] = source_prefab
+        if comp.game_object_file_id == "0":
+            cd["entry_kind"] = "source_only"
+            cd["entry_reason"] = "missing_game_object_file_id"
+        elif not comp.fields:
+            cd["entry_kind"] = "placeholder"
+            cd["entry_reason"] = "no_serialized_fields"
+        else:
+            cd["entry_kind"] = "effective_component"
     if comp.override_count > 0:
         cd["override_count"] = comp.override_count
     return cd
@@ -303,6 +322,73 @@ def _diagnostic_counts(
     return counts
 
 
+def _is_duplicate_reference_diagnostic(diagnostic: Diagnostic) -> bool:
+    return diagnostic.detail.startswith("[same-component] Duplicate reference target") or diagnostic.detail.startswith(
+        "[cross-component] Duplicate reference target"
+    )
+
+
+def _diagnostic_actionability_rows(
+    diagnostics: list[Diagnostic],
+    components: list[dict[str, object]],
+) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for diagnostic in diagnostics:
+        if not _is_duplicate_reference_diagnostic(diagnostic):
+            continue
+        actionability = classify_duplicate_reference(diagnostic, components)
+        if actionability == "expected":
+            diagnostic.severity = Severity.INFO.value
+        severity = diagnostic.severity
+        if severity is None:
+            severity = (
+                Severity.WARNING.value
+                if diagnostic.detail.startswith("[same-component]")
+                else Severity.INFO.value
+            )
+        rows.append({
+            "category": "duplicate_reference",
+            "actionability": actionability,
+            "severity": severity,
+            "code": diagnostic.detail,
+        })
+    return rows
+
+
+def _actionability_counts(
+    components: list[dict[str, object]],
+    diagnostic_actionability: list[dict[str, str]],
+) -> dict[str, int]:
+    counts = empty_actionability_counts()
+    for component in components:
+        classifications = component.get("null_field_classifications", [])
+        if not isinstance(classifications, list):
+            continue
+        for raw_classification in classifications:
+            if not isinstance(raw_classification, dict):
+                continue
+            actionability = str(raw_classification.get("actionability", "actionable"))
+            if actionability in counts:
+                counts[actionability] += 1
+    for row in diagnostic_actionability:
+        actionability = row.get("actionability", "actionable")
+        if actionability in counts:
+            counts[actionability] += 1
+    return counts
+
+
+def _component_count_progress(
+    component_count: int,
+    null_reference_count: int,
+) -> InspectionProgress:
+    progress = InspectionProgress()
+    progress.record_stage("components", completed=True, count=component_count)
+    progress.record_stage(
+        "null_references", completed=True, count=null_reference_count,
+    )
+    return progress
+
+
 def _max_diagnostic_severity(
     diagnostics: list[Diagnostic],
     default_severity: Severity,
@@ -379,6 +465,31 @@ def _match_component_diagnostic(
     return None
 
 
+def _apply_null_actionability_severity(
+    diagnostics: list[Diagnostic],
+    components: list[dict[str, object]],
+    target_path: str,
+) -> None:
+    for diag in diagnostics:
+        matched = _match_component_diagnostic(diag, components, target_path)
+        if matched is None:
+            continue
+        component, kind, field_name = matched
+        if kind != "null_reference":
+            continue
+        classifications = component.get("null_field_classifications", [])
+        if not isinstance(classifications, list):
+            continue
+        for classification in classifications:
+            if not isinstance(classification, dict):
+                continue
+            if classification.get("name") != field_name:
+                continue
+            if classification.get("actionability") == "optional":
+                diag.severity = Severity.INFO.value
+            break
+
+
 def _diagnostic_key_for_component(
     target_path: str,
     component: dict[str, object],
@@ -432,9 +543,12 @@ def inspect_wiring(
     summary_only: bool = False,
     script_filter: str = "",
     include_out_of_scope_diagnostics: bool = False,
+    timeout_sec: float | None = None,
     diagnostics_baseline: DiagnosticsBaseline | None = None,
     inspection_context: ProjectInspectionContext | None = None,
 ) -> ToolResponse:
+    import time
+
     # Issue #197: validate page_size before any I/O so a misconfigured
     # caller short-circuits before the YAML scan.
     if page_size < INSPECT_WIRING_PAGE_SIZE_MIN or page_size > INSPECT_WIRING_PAGE_SIZE_MAX:
@@ -444,6 +558,11 @@ def inspect_wiring(
             f"[{INSPECT_WIRING_PAGE_SIZE_MIN}, "
             f"{INSPECT_WIRING_PAGE_SIZE_MAX}].",
         )
+
+    deadline = time.monotonic() + timeout_sec if timeout_sec is not None else None
+
+    def timed_out() -> bool:
+        return deadline is not None and time.monotonic() >= deadline
 
     text_or_error = read_target_file(prefab_variant, target_path, "INSPECT_WIRING")
     if isinstance(text_or_error, ToolResponse):
@@ -564,6 +683,28 @@ def inspect_wiring(
     duplicate_reference_count = (
         len(result.duplicate_references) + len(nested_dup_refs)
     )
+    _apply_null_actionability_severity(
+        diagnostics, component_summaries, target_path,
+    )
+    diagnostic_actionability = _diagnostic_actionability_rows(
+        diagnostics, component_summaries,
+    )
+    actionability_counts = _actionability_counts(
+        component_summaries, diagnostic_actionability,
+    )
+    progress = _component_count_progress(
+        len(component_summaries), null_reference_count,
+    )
+    if timed_out():
+        return error_response(
+            "INSPECTION_TIMEOUT",
+            "inspect.wiring timed out after partial analysis.",
+            severity=Severity.ERROR,
+            data=progress.to_data(
+                current_or_slowest_step="inspect_wiring",
+                suggested_next_action="Use a narrower scope or script_filter.",
+            ),
+        )
 
     response_default_severity = _max_diagnostic_severity(
         diagnostics,
@@ -615,6 +756,15 @@ def inspect_wiring(
                     "null_reference_count": 0,
                     "internal_broken_ref_count": 0,
                     "duplicate_reference_count": 0,
+                    "actionability_counts": empty_actionability_counts(),
+                    "diagnostic_actionability": [],
+                    **_component_count_progress(0, 0).to_data(
+                        current_or_slowest_step="inspect_wiring",
+                        suggested_next_action=(
+                            "Use summary_only or script_filter when the full "
+                            "component list is too broad."
+                        ),
+                    ),
                     "diagnostic_counts": {
                         "filtered": _diagnostic_counts([], Severity.INFO),
                         "out_of_scope": _diagnostic_counts([], Severity.INFO),
@@ -688,11 +838,20 @@ def inspect_wiring(
                 out_of_scope_default_severity,
             ),
         }
+        diagnostic_actionability = _diagnostic_actionability_rows(
+            filtered_diagnostics, component_summaries,
+        )
+        actionability_counts = _actionability_counts(
+            component_summaries, diagnostic_actionability,
+        )
+        progress = _component_count_progress(
+            len(component_summaries), null_reference_count,
+        )
         response_severity = filtered_default_severity
         response_success = response_severity not in (Severity.ERROR, Severity.CRITICAL)
         response_diagnostics = _copy_diagnostics_with_default_severity(
-            diagnostics,
-            response_default_severity,
+            filtered_diagnostics,
+            filtered_default_severity,
         )
     elif diagnostics_baseline is not None:
         _, _, diagnostic_key_records = _partition_component_diagnostics(
@@ -716,7 +875,16 @@ def inspect_wiring(
             "null_reference_count": null_reference_count,
             "internal_broken_ref_count": internal_broken_ref_count,
             "duplicate_reference_count": duplicate_reference_count,
+            "actionability_counts": actionability_counts,
+            "diagnostic_actionability": diagnostic_actionability,
         }
+        data.update(progress.to_data(
+            current_or_slowest_step="inspect_wiring",
+            suggested_next_action=(
+                "Use summary_only or script_filter when the full component "
+                "list is too broad."
+            ),
+        ))
         if filter_active:
             data["script_filter"] = script_filter
             data["diagnostic_counts"] = diagnostic_counts
@@ -766,12 +934,21 @@ def inspect_wiring(
         "null_reference_count": null_reference_count,
         "internal_broken_ref_count": internal_broken_ref_count,
         "duplicate_reference_count": duplicate_reference_count,
+        "actionability_counts": actionability_counts,
+        "diagnostic_actionability": diagnostic_actionability,
         "components": page_slice,
         "page_slice_length": len(page_slice),
         "page_size": page_size,
         "cursor": cursor,
         "next_cursor": next_cursor,
     }
+    data.update(progress.to_data(
+        current_or_slowest_step="inspect_wiring",
+        suggested_next_action=(
+            "Use summary_only or script_filter when the full component list "
+            "is too broad."
+        ),
+    ))
     if filter_active:
         data["script_filter"] = script_filter
         data["diagnostic_counts"] = diagnostic_counts
@@ -813,9 +990,22 @@ def validate_all_wiring(
     reference_resolver: ReferenceResolverService,
     *,
     target_path: str = "",
+    timeout_sec: float | None = None,
     diagnostics_baseline: DiagnosticsBaseline | None = None,
     inspection_context: ProjectInspectionContext | None = None,
 ) -> ToolResponse:
+    import time
+
+    deadline = time.monotonic() + timeout_sec if timeout_sec is not None else None
+
+    def timed_out() -> bool:
+        return deadline is not None and time.monotonic() >= deadline
+
+    def remaining_timeout() -> float | None:
+        if deadline is None:
+            return None
+        return max(0.0, deadline - time.monotonic())
+
     project_root: Path | None = None
     if target_path:
         paths = [Path(target_path)]
@@ -832,11 +1022,22 @@ def validate_all_wiring(
         )
 
     if not paths:
+        progress = InspectionProgress()
+        progress.record_stage("queued_targets", completed=True, count=0)
+        progress.record_stage("scanned_targets", completed=True, count=0)
         data: dict[str, object] = {
             "files_scanned": 0,
             "total_components": 0,
             "total_null_refs": 0,
+            "actionability_counts": empty_actionability_counts(),
         }
+        data.update(progress.to_data(
+            current_or_slowest_step="validate_all_wiring",
+            suggested_next_action=(
+                "Use target_path for a narrower scan when the project-wide "
+                "summary is too broad."
+            ),
+        ))
         if diagnostics_baseline is not None:
             data["diagnostics_baseline"] = classify_current_keys(
                 (),
@@ -853,71 +1054,148 @@ def validate_all_wiring(
         if project_root is not None
         else [(path, target_path) for path in paths]
     )
+    progress = InspectionProgress()
+    progress.record_stage("queued_targets", count=len(scan_targets))
 
     if inspection_context is not None:
         prefab_variant.preload_guid_index(inspection_context.guid_index)
 
     total_components = 0
     total_null_refs = 0
+    processed_targets = 0
+    actionability_counts = empty_actionability_counts()
     null_refs_by_file: list[dict[str, object]] = []
     diagnostic_key_records: list[DiagnosticKeyRecord] = []
-    baseline_key_set_complete = True
+    child_failures: list[dict[str, str]] = []
+    child_failure_diagnostics: list[Diagnostic] = []
     collection_baseline = (
         DiagnosticsBaseline((), diagnostics_baseline.path, diagnostics_baseline.status)
         if diagnostics_baseline is not None else None
     )
 
+    def record_child_failure(
+        path: Path,
+        code: str,
+        message: str,
+        detail: str,
+    ) -> None:
+        child_failures.append({
+            "file": str(path),
+            "code": code,
+            "message": message,
+        })
+        child_failure_diagnostics.append(
+            Diagnostic(
+                path=str(path),
+                location="validate_all_wiring",
+                detail=detail,
+                evidence=f"{code}: {message}",
+                severity=Severity.ERROR.value,
+            )
+        )
+
     def inspect_path(
         scan_target: tuple[Path, str],
     ) -> tuple[Path, ToolResponse | None, Exception | None]:
         path, worker_target_path = scan_target
+        child_timeout = remaining_timeout()
         try:
             result = inspect_wiring(
                 prefab_variant, reference_resolver, target_path=worker_target_path,
                 page_size=INSPECT_WIRING_PAGE_SIZE_MAX,
                 diagnostics_baseline=collection_baseline,
                 inspection_context=inspection_context,
+                timeout_sec=child_timeout,
             )
         except Exception as exc:
             return path, None, exc
         return path, result, None
 
-    for p, result, exc in run_ordered(scan_targets, inspect_path):
+    def scan_results():
+        if deadline is None:
+            yield from run_ordered(scan_targets, inspect_path)
+            return
+        for scan_target in scan_targets:
+            yield inspect_path(scan_target)
+            if timed_out():
+                return
+
+    for p, result, exc in scan_results():
         if exc is not None:
-            baseline_key_set_complete = False
+            record_child_failure(
+                p,
+                type(exc).__name__,
+                str(exc),
+                "child_scan_exception",
+            )
             logging.getLogger(__name__).debug(
                 "validate_all_wiring: skipped %s: %s", p, exc,
             )
             continue
         if result is None:
-            baseline_key_set_complete = False
+            record_child_failure(
+                p,
+                "INSPECT_WIRING_MISSING_RESPONSE",
+                "inspect_wiring returned no response.",
+                "child_scan_missing_response",
+            )
             continue
         resp_dict = result.to_dict()
         if not resp_dict.get("success", False):
-            baseline_key_set_complete = False
+            record_child_failure(
+                p,
+                str(resp_dict.get("code", "INSPECT_WIRING_FAILED")),
+                str(resp_dict.get("message", "inspect_wiring failed.")),
+                "child_scan_failed",
+            )
             continue
         response_data = resp_dict.get("data")
         if not isinstance(response_data, dict):
-            baseline_key_set_complete = False
+            record_child_failure(
+                p,
+                str(resp_dict.get("code", "INSPECT_WIRING_INVALID_RESPONSE")),
+                "inspect_wiring returned non-object data.",
+                "child_scan_invalid_response",
+            )
             continue
         raw_components = response_data.get("components", [])
         if not isinstance(raw_components, list):
-            baseline_key_set_complete = False
+            record_child_failure(
+                p,
+                str(resp_dict.get("code", "INSPECT_WIRING_INVALID_COMPONENTS")),
+                "inspect_wiring returned non-list components.",
+                "child_scan_invalid_components",
+            )
             continue
         components = [
             component
             for component in raw_components
             if isinstance(component, dict)
         ]
-        comp_count = len(components)
-        null_count = sum(
-            len(raw_names)
-            for component in components
-            for raw_names in (component.get("null_field_names"),)
-            if isinstance(raw_names, list)
+        raw_component_count = response_data.get("component_count")
+        raw_null_count = response_data.get("null_reference_count")
+        comp_count = (
+            raw_component_count if isinstance(raw_component_count, int)
+            else len(components)
         )
+        null_count = (
+            raw_null_count if isinstance(raw_null_count, int)
+            else sum(
+                len(raw_names)
+                for component in components
+                for raw_names in (component.get("null_field_names"),)
+                if isinstance(raw_names, list)
+            )
+        )
+        child_actionability = response_data.get("actionability_counts", {})
+        if isinstance(child_actionability, dict):
+            for key in actionability_counts:
+                raw_count = child_actionability.get(key, 0)
+                if isinstance(raw_count, int):
+                    actionability_counts[key] += raw_count
         total_components += comp_count
         total_null_refs += null_count
+        processed_targets += 1
         if diagnostics_baseline is not None:
             diagnostic_key_records.extend(
                 _diagnostic_key_records_from_classification(response_data)
@@ -928,15 +1206,53 @@ def validate_all_wiring(
                 "null_refs": null_count,
                 "components": comp_count,
             })
+    progress.record_stage("scanned_targets", completed=True, count=processed_targets)
+    progress.record_stage("components", completed=True, count=total_components)
+    progress.record_stage("null_references", completed=True, count=total_null_refs)
 
     data = {
-        "files_scanned": len(paths),
+        "files_scanned": processed_targets,
         "total_components": total_components,
         "total_null_refs": total_null_refs,
+        "actionability_counts": actionability_counts,
         "null_refs_by_file": null_refs_by_file,
     }
-    if diagnostics_baseline is not None and baseline_key_set_complete:
-        # A skipped child scan cannot prove any known baseline key is resolved.
+    if child_failures:
+        data["failed_targets"] = child_failures
+    data.update(progress.to_data(
+        current_or_slowest_step="validate_all_wiring",
+        suggested_next_action=(
+            "Use target_path for a narrower scan when the project-wide "
+            "summary is too broad."
+        ),
+    ))
+    if timed_out():
+        timeout_data = dict(data)
+        timeout_data.update(progress.to_data(
+            current_or_slowest_step="validate_all_wiring",
+            suggested_next_action="Use a narrower scope or target_path.",
+        ))
+        return error_response(
+            "INSPECTION_TIMEOUT",
+            "validate_all_wiring timed out after partial scan.",
+            severity=Severity.ERROR,
+            data=timeout_data,
+            diagnostics=child_failure_diagnostics,
+        )
+    if child_failures:
+        failure_data = dict(data)
+        failure_data.update(progress.to_data(
+            current_or_slowest_step="validate_all_wiring",
+            suggested_next_action="Inspect failed targets individually.",
+        ))
+        return error_response(
+            "VALIDATE_WIRING_CHILD_SCAN_FAILED",
+            "validate_all_wiring could not inspect every target.",
+            severity=Severity.ERROR,
+            data=failure_data,
+            diagnostics=child_failure_diagnostics,
+        )
+    if diagnostics_baseline is not None:
         data["diagnostics_baseline"] = classify_current_keys(
             tuple(diagnostic_key_records),
             diagnostics_baseline,
@@ -944,7 +1260,7 @@ def validate_all_wiring(
 
     return success_response(
         "VALIDATE_WIRING_OK",
-        f"Scanned {len(paths)} files: "
+        f"Scanned {processed_targets} files: "
         f"{total_components} components, {total_null_refs} null references",
         data=data,
     )

@@ -59,8 +59,15 @@ def _resolve_target_file_path(
     if ".." in converted_target.parts or ".." in windows_target.parts:
         return _invalid_target_path_response(target_path, code_prefix)
 
-    root = project_root.resolve()
-    resolved = resolve_scope_path(target_path, project_root)
+    try:
+        root = project_root.resolve()
+        resolved = resolve_scope_path(target_path, project_root)
+    except OSError as exc:
+        return error_response(
+            f"{code_prefix}_READ_ERROR",
+            f"Failed to resolve target file: {exc}",
+            data={"target_path": target_path, "read_only": True},
+        )
     try:
         resolved.relative_to(root)
     except ValueError:
@@ -82,7 +89,15 @@ def read_target_file(
     if isinstance(path_or_error, ToolResponse):
         return path_or_error
     path = path_or_error
-    if not path.exists():
+    try:
+        target_exists = path.exists()
+    except OSError as exc:
+        return error_response(
+            f"{code_prefix}_READ_ERROR",
+            f"Failed to read target file: {exc}",
+            data={"target_path": target_path, "read_only": True},
+        )
+    if not target_exists:
         return error_response(
             f"{code_prefix}_FILE_NOT_FOUND",
             f"Target file does not exist: {target_path}",

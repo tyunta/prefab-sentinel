@@ -20,6 +20,10 @@ _RESOURCE_KIND_BY_SUFFIX = {
 }
 
 
+_RESOURCE_KINDS = frozenset(_RESOURCE_KIND_BY_SUFFIX.values())
+_RESOURCE_MODES = frozenset({"open", "create"})
+
+
 def _error(field: str, message: str) -> ValueError:
     return ValueError(f"Patch plan field '{field}' {message}")
 
@@ -42,15 +46,22 @@ def _normalize_resource(resource: object, index: int) -> dict[str, Any]:
     if not isinstance(path, str) or not path.strip():
         raise _error(f"{field_prefix}.path", "must be a non-empty string.")
 
-    kind_value = resource.get("kind")
-    kind = str(kind_value).strip() if kind_value is not None else ""
-    if not kind:
+    if "kind" not in resource:
         kind = _infer_resource_kind(path)
+    else:
+        kind_value = resource["kind"]
+        if not isinstance(kind_value, str) or not kind_value.strip():
+            raise _error(f"{field_prefix}.kind", "must be a non-empty string when provided.")
+        kind = kind_value.strip()
+    if kind not in _RESOURCE_KINDS:
+        raise _error(f"{field_prefix}.kind", "is not supported.")
 
     mode_value = resource.get("mode", "open")
-    mode = str(mode_value).strip()
-    if not mode:
+    if not isinstance(mode_value, str) or not mode_value.strip():
         raise _error(f"{field_prefix}.mode", "must be a non-empty string when provided.")
+    mode = mode_value.strip()
+    if mode not in _RESOURCE_MODES:
+        raise _error(f"{field_prefix}.mode", "is not supported.")
 
     normalized = deepcopy(resource)
     normalized["id"] = resource_id.strip()
@@ -64,18 +75,27 @@ def normalize_patch_plan(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("Patch plan root must be an object.")
 
-    raw_version = payload.get("plan_version", payload.get("version"))
+    raw_version = payload.get("plan_version")
     if raw_version is None:
-        # Legacy ``{target, ops}`` shape is no longer accepted (#88).  Callers
-        # must send the canonical v2 schema with an explicit ``plan_version``.
         raise _error(
             "plan_version",
             "is required; the legacy {target, ops} shape is no longer accepted.",
         )
-    try:
-        plan_version = int(raw_version)
-    except (TypeError, ValueError) as exc:
-        raise _error("plan_version", f"must be an integer, got {raw_version!r}.") from exc
+    if type(raw_version) is int:
+        plan_version = raw_version
+    elif isinstance(raw_version, str):
+        try:
+            plan_version = int(raw_version)
+        except ValueError as exc:
+            raise _error(
+                "plan_version",
+                f"must be an integer, got {raw_version!r}.",
+            ) from exc
+    else:
+        raise _error(
+            "plan_version",
+            f"must be an integer, got {raw_version!r}.",
+        )
     if plan_version != PLAN_VERSION:
         raise _error("plan_version", f"must equal {PLAN_VERSION}, got {plan_version}.")
 
@@ -173,10 +193,15 @@ def iter_resource_batches(plan: dict[str, Any]) -> list[tuple[dict[str, Any], li
             {key: deepcopy(value) for key, value in op.items() if key != "resource"}
         )
 
-    return [
-        (deepcopy(resource), grouped.get(resource["id"], []))
-        for resource in resources
-    ]
+    return [(deepcopy(resource), grouped.get(resource["id"], [])) for resource in resources]
+
+
+def is_single_open_prefab_plan(plan: dict[str, Any]) -> bool:
+    resources = plan.get("resources")
+    if not isinstance(resources, list) or len(resources) != 1:
+        return False
+    resource = resources[0]
+    return isinstance(resource, dict) and resource.get("kind") == "prefab" and resource.get("mode") == "open"
 
 
 def build_bridge_request(plan: dict[str, Any]) -> dict[str, Any]:
@@ -193,3 +218,109 @@ def build_bridge_request(plan: dict[str, Any]) -> dict[str, Any]:
         "resources": deepcopy(plan.get("resources", [])),
         "ops": deepcopy(plan.get("ops", [])),
     }
+
+
+_BRIDGE_PLAN_DATA_FIELDS = frozenset(
+    ("plan_version", "resource_count", "op_count", "applied", "resources", "read_only", "executed", "protocol_version")
+)
+_BRIDGE_RESOURCE_FIELDS = frozenset(
+    ("id", "kind", "path", "mode", "op_count", "applied", "executed")
+)
+_BRIDGE_RESOURCE_RESULT_FIELDS = frozenset(("success", "severity", "code"))
+_BRIDGE_SEVERITIES = frozenset(("info", "warning", "error", "critical"))
+
+
+def bridge_response_state_is_valid(
+    *,
+    success: bool,
+    severity: str,
+    code: str,
+) -> bool:
+    if success:
+        return severity not in {"error", "critical"}
+    return severity in {"error", "critical"} and code != "SER_APPLY_OK"
+
+
+def _bridge_resource_summary_is_valid(value: object) -> bool:
+    if not isinstance(value, dict) or type(value.get("executed")) is not bool:
+        return False
+    executed = value["executed"]
+    expected_fields = (
+        _BRIDGE_RESOURCE_FIELDS | _BRIDGE_RESOURCE_RESULT_FIELDS
+        if executed
+        else _BRIDGE_RESOURCE_FIELDS
+    )
+    if set(value) != expected_fields:
+        return False
+    if (
+        not isinstance(value["id"], str)
+        or not value["id"].strip()
+        or not isinstance(value["kind"], str)
+        or value["kind"] not in _RESOURCE_KINDS
+        or not isinstance(value["path"], str)
+        or not value["path"].strip()
+        or not isinstance(value["mode"], str)
+        or value["mode"] not in _RESOURCE_MODES
+    ):
+        return False
+    op_count = value["op_count"]
+    applied = value["applied"]
+    if type(op_count) is not int or type(applied) is not int:
+        return False
+    if not executed:
+        return op_count == 0 and applied == 0
+
+    success = value["success"]
+    severity = value["severity"]
+    code = value["code"]
+    if (
+        type(success) is not bool
+        or not isinstance(severity, str)
+        or severity not in _BRIDGE_SEVERITIES
+        or not isinstance(code, str)
+        or not code.strip()
+    ):
+        return False
+    return (
+        op_count > 0
+        and 0 <= applied <= op_count
+        and bridge_response_state_is_valid(
+            success=success,
+            severity=severity,
+            code=code,
+        )
+    )
+
+
+def bridge_plan_response_data_is_valid(
+    data: object,
+    *,
+    op_count: int,
+    success: bool,
+) -> bool:
+    if not isinstance(data, dict) or set(data) != _BRIDGE_PLAN_DATA_FIELDS:
+        return False
+    int_fields = ("plan_version", "resource_count", "op_count", "applied", "protocol_version")
+    if any(type(data[field]) is not int for field in int_fields):
+        return False
+    if type(data["read_only"]) is not bool or type(data["executed"]) is not bool:
+        return False
+    resources = data["resources"]
+    if not isinstance(resources, list) or not all(
+        _bridge_resource_summary_is_valid(resource) for resource in resources
+    ):
+        return False
+    executed = [resource for resource in resources if resource["executed"]]
+    return (
+        data["plan_version"] == PLAN_VERSION
+        and data["protocol_version"] == PLAN_VERSION
+        and data["resource_count"] == len(resources) >= 2
+        and data["op_count"] == op_count
+        and sum(resource["op_count"] for resource in resources) == op_count
+        and data["applied"] == sum(resource["applied"] for resource in resources)
+        and data["read_only"] is False
+        and data["executed"] is True
+        and len({resource["id"] for resource in resources}) == len(resources)
+        and bool(executed)
+        and all(resource["success"] for resource in executed) is success
+    )

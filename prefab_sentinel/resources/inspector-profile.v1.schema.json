@@ -1,0 +1,294 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://prefab-sentinel.local/schemas/inspector-profile.v1.schema.json",
+  "$defs": {
+    "property_path": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*(?:\\.(?:[A-Za-z_][A-Za-z0-9_]*|Array\\.(?:size|data\\[[0-9]+\\])))*$"
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "detail"],
+      "properties": {
+        "kind": {
+          "enum": ["serialized_surface", "source", "custom_inspector", "binding", "explicit_user_request"]
+        },
+        "detail": {"type": "string", "minLength": 1},
+        "file": {"type": "string", "minLength": 1},
+        "line": {"type": "integer", "minimum": 1}
+      }
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "reason", "recorded_at"],
+      "properties": {
+        "kind": {"const": "explicit_user_request"},
+        "reason": {"type": "string", "minLength": 1},
+        "recorded_at": {"type": "string", "minLength": 1}
+      }
+    },
+    "writable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "operations": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"enum": ["set", "set_element", "append_row", "remove_row"]}
+        },
+        "requires_equal_array_lengths": {"type": "boolean"},
+        "approval": {"$ref": "#/$defs/approval"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"enabled": {"const": true}},
+            "required": ["enabled"]
+          },
+          "then": {"required": ["operations"]}
+        }
+      ]
+    },
+    "view_common": {
+      "type": "object",
+      "required": ["name", "kind", "evidence", "limitations"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "kind": {"enum": ["fields", "zipped_arrays", "object_reference_table"]},
+        "label": {"type": "string", "minLength": 1},
+        "confidence": {"enum": ["high", "medium", "low"]},
+        "evidence": {"type": "array", "items": {"$ref": "#/$defs/evidence"}},
+        "limitations": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "notes": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "writable": {"$ref": "#/$defs/writable"}
+      }
+    },
+    "view_writable_approval_gate": {
+      "if": {
+        "properties": {
+          "confidence": {"enum": ["medium", "low"]},
+          "writable": {
+            "properties": {"enabled": {"const": true}},
+            "required": ["enabled"]
+          }
+        },
+        "required": ["confidence", "writable"]
+      },
+      "then": {
+        "properties": {"writable": {"required": ["approval"]}}
+      }
+    },
+    "field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "path"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "path": {"$ref": "#/$defs/property_path"},
+        "label": {"type": "string", "minLength": 1},
+        "expected_type": {"type": "string", "minLength": 1},
+        "group": {"type": "string", "minLength": 1},
+        "enum_map": {
+          "type": "object",
+          "propertyNames": {"pattern": "^-?[0-9]+$"},
+          "additionalProperties": {"type": "string"}
+        }
+      }
+    },
+    "array_column": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "path"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "path": {"$ref": "#/$defs/property_path"},
+        "label": {"type": "string", "minLength": 1},
+        "element_type": {"type": "string", "minLength": 1}
+      }
+    },
+    "reference_column": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "path"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "path": {"$ref": "#/$defs/property_path"},
+        "label": {"type": "string", "minLength": 1}
+      }
+    },
+    "fields_view": {
+      "allOf": [
+        {"$ref": "#/$defs/view_common"},
+        {
+          "type": "object",
+          "required": ["kind", "fields"],
+          "properties": {
+            "kind": {"const": "fields"},
+            "fields": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/field"}}
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "writable": {
+                "properties": {"enabled": {"const": true}},
+                "required": ["enabled"]
+              }
+            },
+            "required": ["writable"]
+          },
+          "then": {
+            "properties": {
+              "fields": {"items": {"required": ["expected_type"]}}
+            }
+          }
+        },
+        {"$ref": "#/$defs/view_writable_approval_gate"}
+      ],
+      "unevaluatedProperties": false
+    },
+    "zipped_arrays_view": {
+      "allOf": [
+        {"$ref": "#/$defs/view_common"},
+        {
+          "type": "object",
+          "required": ["kind", "arrays"],
+          "properties": {
+            "kind": {"const": "zipped_arrays"},
+            "arrays": {"type": "array", "minItems": 2, "items": {"$ref": "#/$defs/array_column"}}
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "writable": {
+                "properties": {"enabled": {"const": true}},
+                "required": ["enabled"]
+              }
+            },
+            "required": ["writable"]
+          },
+          "then": {
+            "properties": {
+              "arrays": {"items": {"required": ["element_type"]}}
+            }
+          }
+        },
+        {"$ref": "#/$defs/view_writable_approval_gate"}
+      ],
+      "unevaluatedProperties": false
+    },
+    "object_reference_table_view": {
+      "allOf": [
+        {"$ref": "#/$defs/view_common"},
+        {
+          "type": "object",
+          "required": ["kind", "references"],
+          "properties": {
+            "kind": {"const": "object_reference_table"},
+            "references": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/reference_column"}}
+          }
+        },
+        {"$ref": "#/$defs/view_writable_approval_gate"}
+      ],
+      "unevaluatedProperties": false
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "target",
+    "generated_by",
+    "confidence",
+    "evidence",
+    "limitations",
+    "views"
+  ],
+  "properties": {
+    "schema_version": {"const": "inspector_profile.v1"},
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["managed_type"],
+      "properties": {
+        "managed_type": {"type": "string", "minLength": 1},
+        "assembly": {"type": "string", "minLength": 1},
+        "script_guid": {"type": "string", "pattern": "^[0-9a-fA-F]{32}$"},
+        "script_file_id": {"type": "integer"}
+      },
+      "dependentRequired": {"script_guid": ["script_file_id"], "script_file_id": ["script_guid"]}
+    },
+    "generated_by": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "skill", "created_at", "source", "mcp_tool"],
+      "properties": {
+        "kind": {"const": "ai-skill"},
+        "skill": {"const": "prefab-sentinel:inspector-profile-authoring"},
+        "created_at": {"type": "string", "minLength": 1},
+        "source": {"type": "string", "minLength": 1},
+        "mcp_tool": {"type": "string", "minLength": 1}
+      }
+    },
+    "confidence": {"enum": ["high", "medium", "low"]},
+    "evidence": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/evidence"}},
+    "limitations": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "notes": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "package_name": {"type": "string", "minLength": 1},
+        "package_version": {"type": "string", "minLength": 1},
+        "unity_version": {"type": "string", "minLength": 1},
+        "notes": {"type": "string", "minLength": 1}
+      }
+    },
+    "views": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "oneOf": [
+          {"$ref": "#/$defs/fields_view"},
+          {"$ref": "#/$defs/zipped_arrays_view"},
+          {"$ref": "#/$defs/object_reference_table_view"}
+        ]
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"confidence": {"enum": ["medium", "low"]}},
+        "required": ["confidence"]
+      },
+      "then": {
+        "properties": {
+          "views": {
+            "items": {
+              "if": {
+                "properties": {
+                  "writable": {
+                    "properties": {"enabled": {"const": true}},
+                    "required": ["enabled"]
+                  }
+                },
+                "required": ["writable"]
+              },
+              "then": {
+                "properties": {"writable": {"required": ["approval"]}}
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}
