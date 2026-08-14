@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 
 from prefab_sentinel.editor_bridge import send_action
 
@@ -137,7 +137,7 @@ def _write_intent_error(intents: list[str], array_size: int | None) -> dict[str,
     return None
 
 
-def register_editor_serialized_property_tools(server: FastMCP) -> None:
+def register_editor_serialized_property_tools(server: MCPServer) -> None:
     """Register issue #112 SerializedProperty editor tools on *server*."""
 
     @server.tool()
@@ -147,6 +147,7 @@ def register_editor_serialized_property_tools(server: FastMCP) -> None:
         property_path: str,
         component_index: int | None = None,
     ) -> dict[str, Any]:
+        """Read one SerializedProperty from a Unity Editor hierarchy component."""
         err = _required_address_error(hierarchy_path, component_type, property_path)
         if err is not None:
             return err
@@ -170,6 +171,7 @@ def register_editor_serialized_property_tools(server: FastMCP) -> None:
         cap: int = DEFAULT_CAP,
         cursor: str | None = None,
     ) -> dict[str, Any]:
+        """List a bounded page of SerializedProperties for a Unity Editor component."""
         err = _required_address_error(hierarchy_path, component_type, None)
         if err is not None:
             return err
@@ -212,6 +214,7 @@ def register_editor_serialized_property_tools(server: FastMCP) -> None:
         confirm: bool = False,
         change_reason: str = "",
     ) -> dict[str, Any]:
+        """Dry-run or apply one typed SerializedProperty write in the Unity Editor."""
         err = _required_address_error(hierarchy_path, component_type, property_path)
         if err is not None:
             return err

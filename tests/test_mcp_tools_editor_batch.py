@@ -42,7 +42,7 @@ _DOCUMENTED_TOOLS = {
 
 
 class RecorderServerNameKwargTests(unittest.TestCase):
-    """Issue #260 — recorder registration follows FastMCP name rules."""
+    """Issue #260 — recorder registration follows MCPServer name rules."""
 
     def test_explicit_name_kwarg_is_used_as_registration_key(self) -> None:
         server = ToolRecorderServer()

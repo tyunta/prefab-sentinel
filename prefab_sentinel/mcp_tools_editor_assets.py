@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 
 from prefab_sentinel.editor_bridge import send_action
 
@@ -883,7 +883,7 @@ def _report_write_failed(
     )
 
 
-def register_editor_asset_tools(server: FastMCP) -> None:
+def register_editor_asset_tools(server: MCPServer) -> None:
     @server.tool()
     def editor_create_generated_asset(
         asset_type: object,
@@ -894,6 +894,7 @@ def register_editor_asset_tools(server: FastMCP) -> None:
         out_report: object | None = None,
         change_reason: object | None = None,
     ) -> dict[str, Any]:
+        """Dry-run or create a validated RenderTexture asset through the Unity Editor."""
         create_tool = cast(
             Callable[..., dict[str, Any]],
             globals()["editor_create_generated_asset"],
@@ -917,6 +918,7 @@ def register_editor_asset_tools(server: FastMCP) -> None:
         out_report: object | None = None,
         change_reason: object | None = None,
     ) -> dict[str, Any]:
+        """Dry-run or move a Unity asset to a validated destination path."""
         move_tool = cast(
             Callable[..., dict[str, Any]],
             globals()["editor_move_asset"],

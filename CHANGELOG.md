@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-14
+
+### Added
+
+- stdio を既定のまま、必要に応じて `127.0.0.1:<port>/mcp` の loopback 限定 Streamable HTTP endpoint を利用できるようにした。外部公開用の host 設定は提供しない。
+
+### Changed
+
+- MCP server を Python SDK 2.x と MCP `2026-07-28` の Tools-only contract へ移行した。legacy `initialize` / `initialized` と `Mcp-Session-Id` lifecycle は非対応となるため、旧 client は更新が必要になる破壊的変更。
+- `editor_set_udonsharp_field.values_json` は explicit `null` を受け付けず、省略または空文字列を「配列値なし」として扱う。
+
 ## [0.8.9] - 2026-07-23
 
 ### Added

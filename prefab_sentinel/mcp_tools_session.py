@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 
 from prefab_sentinel.contracts import Severity, max_severity
 from prefab_sentinel.editor_bridge import (
@@ -232,7 +232,7 @@ def _append_project_root_mismatch_diagnostic(
     )
 
 
-def register_session_tools(server: FastMCP, session: ProjectSession) -> None:
+def register_session_tools(server: MCPServer, session: ProjectSession) -> None:
     """Register session management tools on *server*."""
 
     @server.tool()

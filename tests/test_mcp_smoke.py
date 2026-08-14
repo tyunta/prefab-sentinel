@@ -2,32 +2,15 @@
 
 from __future__ import annotations
 
-import asyncio
-import json
 import os
 import unittest
 from pathlib import Path
 from typing import Any, ClassVar
 
 from prefab_sentinel.mcp_server import create_server
+from tests._mcp_test_support import call_tool_result, structured_payload
 
 FIXTURES = Path(__file__).parent / "fixtures" / "smoke"
-
-
-def _run(coro: Any) -> Any:
-    """Run an async coroutine synchronously.
-
-    When the result is a call_tool response (list[TextContent]), normalises
-    across MCP versions to always return a 2-tuple (content_list, parsed_dict)
-    so tests can use ``_, result = _run(server.call_tool(...))``.
-    """
-    raw = asyncio.run(coro)
-    if isinstance(raw, tuple) and len(raw) == 2 and isinstance(raw[1], dict):
-        return raw
-    if isinstance(raw, list) and raw and hasattr(raw[0], "text"):
-        parsed = json.loads(raw[0].text)
-        return raw, parsed
-    return raw
 
 
 def _fixture_asset(name: str) -> str:
@@ -47,7 +30,7 @@ class McpSmokeTests(unittest.TestCase):
 
     def test_inspect_wiring_envelope_structure(self) -> None:
         """inspect_wiring returns a well-formed envelope response."""
-        _, result = _run(self.server.call_tool(
+        result = structured_payload(call_tool_result(self.server,
             "inspect_wiring",
             {"asset_path": _fixture_asset("basic.prefab")},
         ))
@@ -57,7 +40,7 @@ class McpSmokeTests(unittest.TestCase):
 
     def test_inspect_wiring_null_ratio_correct(self) -> None:
         """basic.prefab has 1 null ref out of 2 fields -> null_ratio='1/2'."""
-        _, result = _run(self.server.call_tool(
+        result = structured_payload(call_tool_result(self.server,
             "inspect_wiring",
             {"asset_path": _fixture_asset("basic.prefab")},
         ))
@@ -67,7 +50,7 @@ class McpSmokeTests(unittest.TestCase):
 
     def test_inspect_wiring_null_field_names_correct(self) -> None:
         """basic.prefab null_field_names should be ['nullRef']."""
-        _, result = _run(self.server.call_tool(
+        result = structured_payload(call_tool_result(self.server,
             "inspect_wiring",
             {"asset_path": _fixture_asset("basic.prefab")},
         ))
@@ -78,7 +61,7 @@ class McpSmokeTests(unittest.TestCase):
 
     def test_validate_refs_detects_broken_ref(self) -> None:
         """broken_ref.prefab has fileID:99999 that does not exist."""
-        _, result = _run(self.server.call_tool(
+        result = structured_payload(call_tool_result(self.server,
             "validate_refs",
             {"scope": str(FIXTURES / "broken_ref.prefab"), "details": True},
         ))
@@ -95,7 +78,7 @@ class McpSmokeTests(unittest.TestCase):
 
     def test_validate_refs_clean_file_no_broken_local_ids(self) -> None:
         """basic.prefab has no broken internal fileID references."""
-        _, result = _run(self.server.call_tool(
+        result = structured_payload(call_tool_result(self.server,
             "validate_refs",
             {"scope": str(FIXTURES / "basic.prefab"), "details": True},
         ))
@@ -111,7 +94,7 @@ class McpSmokeTests(unittest.TestCase):
 
     def test_inspect_hierarchy_returns_root(self) -> None:
         """hierarchy.prefab has Root as the only root node."""
-        _, result = _run(self.server.call_tool(
+        result = structured_payload(call_tool_result(self.server,
             "inspect_hierarchy",
             {"asset_path": _fixture_asset("hierarchy.prefab")},
         ))
@@ -134,7 +117,7 @@ class McpSmokeTests(unittest.TestCase):
 
     def test_validate_structure_clean_file(self) -> None:
         """hierarchy.prefab should pass structure validation (no dup fileIDs)."""
-        _, result = _run(self.server.call_tool(
+        result = structured_payload(call_tool_result(self.server,
             "validate_structure",
             {"asset_path": _fixture_asset("hierarchy.prefab")},
         ))
@@ -144,7 +127,7 @@ class McpSmokeTests(unittest.TestCase):
 
     def test_validate_structure_basic_file(self) -> None:
         """basic.prefab should also pass structure validation."""
-        _, result = _run(self.server.call_tool(
+        result = structured_payload(call_tool_result(self.server,
             "validate_structure",
             {"asset_path": _fixture_asset("basic.prefab")},
         ))
@@ -154,7 +137,7 @@ class McpSmokeTests(unittest.TestCase):
 
     def test_get_unity_symbols_returns_symbols(self) -> None:
         """hierarchy.prefab should return symbols (requires Transform for tree)."""
-        _, result = _run(self.server.call_tool(
+        result = structured_payload(call_tool_result(self.server,
             "get_unity_symbols",
             {"asset_path": _fixture_asset("hierarchy.prefab")},
         ))
@@ -164,7 +147,7 @@ class McpSmokeTests(unittest.TestCase):
 
     def test_get_unity_symbols_hierarchy_root(self) -> None:
         """hierarchy.prefab root-level symbols should contain Root."""
-        _, result = _run(self.server.call_tool(
+        result = structured_payload(call_tool_result(self.server,
             "get_unity_symbols",
             {"asset_path": _fixture_asset("hierarchy.prefab")},
         ))
@@ -186,12 +169,14 @@ class McpSmokeExternalTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.server = create_server()
         cls.project_root = os.environ["SMOKE_PROJECT_ROOT"]
-        _run(cls.server.call_tool(
-            "activate_project", {"scope": cls.project_root},
+        structured_payload(call_tool_result(
+            cls.server,
+            "activate_project",
+            {"scope": cls.project_root},
         ))
 
     def test_validate_refs_structure(self) -> None:
-        _, result = _run(self.server.call_tool(
+        result = structured_payload(call_tool_result(self.server,
             "validate_refs",
             {"scope": self.project_root},
         ))
@@ -206,7 +191,7 @@ class McpSmokeExternalTests(unittest.TestCase):
         )
         if not prefabs:
             self.skipTest("no .prefab files in project")
-        _, result = _run(self.server.call_tool(
+        result = structured_payload(call_tool_result(self.server,
             "inspect_wiring",
             {"asset_path": prefabs[0]},
         ))

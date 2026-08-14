@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 
 from prefab_sentinel.editor_bridge import send_action
 from prefab_sentinel.json_io import dump_json
@@ -166,7 +166,7 @@ def editor_apply_animation_clip(
     )
 
 
-def register_editor_animation_tools(server: FastMCP) -> None:
+def register_editor_animation_tools(server: MCPServer) -> None:
     """Register the three AnimationClip tools on *server*."""
 
     @server.tool(name="editor_inspect_animation_clip")

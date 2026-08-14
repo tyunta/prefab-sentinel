@@ -10,6 +10,8 @@ Unity / VRChat プロジェクトの Prefab / Scene / Asset を安全に検査�
 
 YAML-backed read-only 経路（`validate_refs` / `validate_materials` / `inspect_wiring` / `inspect_variant` / `inspect_hierarchy` / `find_referencing_assets` 等）は Unity を起動せずに完結する。`inspect_serialized_surface` / `inspect_with_profile` / `validate_inspector_profile` は、last-saved `SerializedObject` surface を常駐 Editor Bridge 経由で取得する。書き込み経路（`patch_apply` / `set_property` / `editor_*` 等）は常駐 Editor Bridge との file-IPC で動き、`confirm=True` + 非空 `change_reason` の監査ペアを欠く呼び出しは `CHANGE_REASON_REQUIRED` で拒否される。
 
+公開 MCP 境界は **2026-07-28 のみ・Tools capability のみ**をサポートする。stdio が既定で、任意の HTTP 経路はローカル loopback の `/mcp` に限定する。これは full conformance の合格宣言ではなく、protocol error の優先順位と stdio transport 例外は [docs/api-reference.md](./docs/api-reference.md#エラーコード規約)、厳格 CI gate の対象範囲は [TESTING.md](./TESTING.md#mcp-2026-07-28-protocol--wire-conformance)、process-state の既知逸脱は [ARCHITECTURE.md](./ARCHITECTURE.md#mcpserver--protocol-boundary) を正本とする。対応する request method と transport は [docs/tool-conventions.md](./docs/tool-conventions.md)、[docs/execution-reference.md](./docs/execution-reference.md) を参照。
+
 本 README は各専門ドキュメントへの入口（[ドキュメントマップ](#ドキュメントマップ) 参照）。仕様の正本は専門ドキュメント群、運用ルールの正本は [AGENTS.md](./AGENTS.md)。
 
 ## やること / やらないこと
@@ -31,6 +33,7 @@ YAML-backed read-only 経路（`validate_refs` / `validate_materials` / `inspect
 - 変更根拠のない自動最適化をしない
 - 実プロジェクトを timing gate に使わず、weekly benchmark から baseline を自動更新しない
 - ユーザー判断が要る仕様変更を勝手に適用しない
+- legacy MCP の handshake / session lifecycle を互換維持せず、remote / shared HTTP server として公開しない
 
 ## Quickstart
 
@@ -96,7 +99,7 @@ Python wheel は `tools/unity/` と `knowledge/` の配布対象だけを packag
 
 | ツール | 説明 |
 |--------|------|
-| `activate_project` | プロジェクトスコープ設定 + キャッシュ warm（セッション開始時に呼ぶ） |
+| `activate_project` | プロジェクトスコープ設定 + キャッシュ warm（サーバープロセス起動後に呼ぶ） |
 | `validate_refs` | 壊れた GUID / fileID 参照のスキャン |
 | `validate_materials` | `.mat` / renderer slot / TMP material preset / folder policy の静的検証。任意ルールは [CONFIGURATION.md](./CONFIGURATION.md#material_validation_rulesjson-形式仕様) を正本とする |
 | `validate_structure` | YAML 内部構造の検証（fileID 重複・Transform 整合性） |
@@ -135,9 +138,9 @@ YAML-backed read-only 検査（`validate_refs` / `validate_materials` / `inspect
 |--------------|------|
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | 構成概観・レイヤ責務・サービス仕様・データモデル・用語集 |
 | [docs/tools.md](./docs/tools.md) | 全 MCP ツールの正本カタログ |
-| [docs/tool-conventions.md](./docs/tool-conventions.md) | MCP ツールの住所表現・引数命名・監査ペア要否の規約 |
-| [docs/api-reference.md](./docs/api-reference.md) | MCP 応答エンベロープの形状とエラーコードの正本 |
-| [docs/execution-reference.md](./docs/execution-reference.md) | MCP サーバーの実行リファレンス / smoke-batch / ベンチマーク / patch スキーマ / レポート出力フォーマット |
+| [docs/tool-conventions.md](./docs/tool-conventions.md) | MCP protocol / result 境界と、ツールの住所表現・引数命名・監査ペア要否の規約 |
+| [docs/api-reference.md](./docs/api-reference.md) | MCP protocol error、ツール応答エンベロープ、domain error code の正本 |
+| [docs/execution-reference.md](./docs/execution-reference.md) | MCP transport / 起動方法 / smoke-batch / ベンチマーク / patch スキーマ / レポート出力フォーマット |
 | [TESTING.md](./TESTING.md) | ユニット / 統合 / 回帰 / mutation テストの実行手順とテスト戦略 |
 | [CONFIGURATION.md](./CONFIGURATION.md) | `UNITYTOOL_*` 環境変数・`ignore_guids.txt`・scope config 規約 |
 | [skills/inspector-profile-authoring/SKILL.md](./skills/inspector-profile-authoring/SKILL.md) | `inspector-profile.v1` の安全な project-local author / repair 手順 |

@@ -24,9 +24,14 @@ route requests to a live bridge mid-test (issue #88, #89).
 from __future__ import annotations
 
 import unittest
+from typing import Any
 from unittest.mock import patch
 
+from mcp.server.mcpserver.exceptions import ToolError
+
 from prefab_sentinel import mcp_tools_editor_udonsharp
+from prefab_sentinel.mcp_server import create_server
+from tests._mcp_test_support import call_tool_result, structured_payload
 
 _BRIDGE_OK = {
     "success": True,
@@ -38,34 +43,25 @@ _BRIDGE_OK = {
 }
 
 
-def _resolve_tool(name: str):
-    """Resolve a registered FastMCP tool by *name* by registering tools
-    against a stub server and returning the underlying callable.
-
-    The registration entry point uses ``@server.tool()`` decorators
-    which the FastMCP server records in its ``_tool_manager``; the
-    underlying callable is exposed as ``Tool.fn`` (or the equivalent
-    attribute on the FastMCP version under test).
-    """
-    from mcp.server.fastmcp import FastMCP
-
-    server = FastMCP(name="udonsharp-test")
-    mcp_tools_editor_udonsharp.register_editor_udonsharp_tools(server)
-    tools = server._tool_manager._tools  # type: ignore[attr-defined]
-    return tools[name].fn
-
-
 class _UdonSharpToolHarness(unittest.TestCase):
-    """Common harness: resolve the three tools once per test class.
+    """Common harness that invokes UdonSharp tools through MCPServer."""
 
-    The tools are stored as staticmethods so unittest does not treat
-    them as bound methods of the test class (which would inject
-    ``self`` as the first argument and break the tool signature).
-    """
+    def setUp(self) -> None:
+        self.server = create_server()
 
-    add_tool = staticmethod(_resolve_tool("editor_add_udonsharp_component"))
-    set_tool = staticmethod(_resolve_tool("editor_set_udonsharp_field"))
-    wire_tool = staticmethod(_resolve_tool("editor_wire_persistent_listener"))
+    def _call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        result = call_tool_result(self.server, name, arguments)
+        self.assertIs(result.is_error, False)
+        return structured_payload(result)
+
+    def add_tool(self, **arguments: Any) -> dict[str, Any]:
+        return self._call_tool("editor_add_udonsharp_component", arguments)
+
+    def set_tool(self, **arguments: Any) -> dict[str, Any]:
+        return self._call_tool("editor_set_udonsharp_field", arguments)
+
+    def wire_tool(self, **arguments: Any) -> dict[str, Any]:
+        return self._call_tool("editor_wire_persistent_listener", arguments)
 
 
 class AddUdonSharpComponentForwardingTests(_UdonSharpToolHarness):
@@ -119,7 +115,7 @@ class AddUdonSharpComponentForwardingTests(_UdonSharpToolHarness):
                 confirm=True,
                 change_reason="add play controller",
             )
-        self.assertIs(_BRIDGE_OK, resp)
+        self.assertEqual(_BRIDGE_OK, resp)
 
     def test_requires_audit_pair(self) -> None:
         with patch.object(mcp_tools_editor_udonsharp, "send_action") as send:
@@ -208,7 +204,7 @@ class SetUdonSharpFieldArrayTests(_UdonSharpToolHarness):
                 change_reason="set label array",
             )
 
-        self.assertIs(response, _BRIDGE_OK)
+        self.assertEqual(response, _BRIDGE_OK)
         self.assertEqual(
             {
                 "action": "editor_set_udonsharp_field",
@@ -222,7 +218,7 @@ class SetUdonSharpFieldArrayTests(_UdonSharpToolHarness):
             msg=f"array payload was not forwarded exactly: {send.call_args.kwargs!r}",
         )
 
-    def test_empty_values_json_is_forwarded_as_explicit_array_input(self) -> None:
+    def test_empty_values_json_is_treated_as_omitted(self) -> None:
         with patch.object(
             mcp_tools_editor_udonsharp, "send_action", return_value=_BRIDGE_OK,
         ) as send:
@@ -231,20 +227,17 @@ class SetUdonSharpFieldArrayTests(_UdonSharpToolHarness):
                 property_name="labels",
                 values_json="",
                 confirm=True,
-                change_reason="set empty label array",
+                change_reason="leave label array omitted",
             )
 
-        self.assertIs(response, _BRIDGE_OK)
+        send.assert_not_called()
         self.assertEqual(
-            {
-                "action": "editor_set_udonsharp_field",
-                "hierarchy_path": "/World/Udon",
-                "field_name": "labels",
-                "values_json": "",
-                "values_json_present": True,
-            },
-            send.call_args.kwargs,
-            msg=f"empty array payload did not stay explicit: {send.call_args.kwargs!r}",
+            (False, "error", "EDITOR_CTRL_UDON_SET_FIELD_NO_VALUE"),
+            (
+                response["success"],
+                response["severity"],
+                response["code"],
+            ),
         )
 
     def test_values_json_rejects_conflicts(self) -> None:
@@ -287,7 +280,7 @@ class SetUdonSharpFieldValidationTests(_UdonSharpToolHarness):
         self.assertEqual("EDITOR_CTRL_UDON_SET_FIELD_INPUT_CONFLICT", resp["code"])
         send.assert_not_called()
 
-    def test_rejects_neither_input(self) -> None:
+    def test_omitted_values_json_is_not_supplied(self) -> None:
         with patch.object(mcp_tools_editor_udonsharp, "send_action") as send:
             resp = self.set_tool(
                 hierarchy_path="/UI/Play",
@@ -297,6 +290,17 @@ class SetUdonSharpFieldValidationTests(_UdonSharpToolHarness):
         self.assertEqual("error", resp["severity"])
         self.assertEqual("EDITOR_CTRL_UDON_SET_FIELD_NO_VALUE", resp["code"])
         send.assert_not_called()
+
+    def test_explicit_null_values_json_is_rejected_by_public_validation(self) -> None:
+        with self.assertRaises(ToolError) as cm:
+            self.set_tool(
+                hierarchy_path="/UI/Play",
+                property_name="labels",
+                values_json=None,
+            )
+
+        self.assertIn("values_json", str(cm.exception))
+        self.assertIn("valid string", str(cm.exception))
 
 
 class WirePersistentListenerForwardingTests(_UdonSharpToolHarness):

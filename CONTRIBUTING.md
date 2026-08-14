@@ -22,10 +22,12 @@ For plugin development or debugging you can launch the MCP server straight from 
 uv sync --extra mcp --extra watch
 uv run prefab-sentinel-mcp                                       # stdio transport (default)
 uv run prefab-sentinel-mcp --project-root /path/to/unity/project # pin the Unity project root
-uv run prefab-sentinel-mcp --transport streamable-http           # HTTP transport
+uv run prefab-sentinel-mcp --transport streamable-http --port 8000 # loopback HTTP
 ```
 
-The server keeps caches across requests: `activate_project` warms the GUID index, script-name map, and symbol tree, and the `watch` extra invalidates them on `.meta` / `.cs` / asset changes. `--project-root` is optional — the target project can also be declared per session via `activate_project`.
+The HTTP endpoint is fixed to `http://127.0.0.1:<port>/mcp`; there is no public-host option. Both transports expose only the MCP `2026-07-28` Tools surface, with three request methods: `server/discover`, `tools/list`, and `tools/call`. stdio additionally forwards the `notifications/cancelled` notification; it is not a fourth request method. Legacy `initialize` / `initialized` and `Mcp-Session-Id` lifecycle are intentionally unsupported, so older clients must migrate to per-request namespaced metadata.
+
+The server keeps one process-wide `ProjectSession`: `activate_project` warms the GUID index, script-name map, and symbol tree, and the `watch` extra invalidates them on `.meta` / `.cs` / asset changes. `--project-root` is optional — the target project can also be declared after process start via `activate_project`. Later requests implicitly reuse that state. This is a deliberate product constraint and a known deviation from MCP 2026-07-28 statelessness, not evidence of full conformance. Treat one process as one logical client / project scope; tool calls execute serially. Run separate processes rather than sharing one HTTP server between projects or clients. See [the execution reference](./docs/execution-reference.md#実行方法), [protocol/result conventions](./docs/tool-conventions.md#mcp-protocol--result-境界), and [configuration](./CONFIGURATION.md#mcp-dependency--transport-configuration) for the owned details.
 
 ## Running tests and lint
 

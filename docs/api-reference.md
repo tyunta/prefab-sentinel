@@ -227,6 +227,29 @@ Exactly one `kind="prefab"`, `mode="open"` resource with `confirm=true` returns 
 
 ## エラーコード規約
 
+### MCP protocol-boundary JSON-RPC errors
+
+次の表は、現行の Prefab Sentinel protocol / HTTP gate が自ら返す JSON-RPC error を網羅する。これらは MCP wire contract 自体の rejection であり、`tools/call` の `CallToolResult` や Prefab Sentinel の `success / severity / code / ...` domain envelope には包まない。HTTP status は Streamable HTTP の場合だけ適用し、stdio には HTTP status がない。JSON-RPC / MCP 全体の error inventory ではなく、現在の gate-owned emission surface である。
+
+| JSON-RPC code | 名前 | 条件 | HTTP status |
+|---:|---|---|---:|
+| `-32700` | `Parse error` | request body が JSON として parse できない | `400` |
+| `-32600` | `Invalid Request` | JSON-RPC request object が不正。HTTP では request ID を持たない notification（`notifications/cancelled` を含む）も現行 gate がこの code で拒否する | `400` |
+| `-32602` | `Invalid params` | 必須の namespaced request `_meta` または method parameter が欠落・不正 | `400` |
+| `-32022` | `UnsupportedProtocolVersion` | namespaced request metadata の protocol version が `2026-07-28` 以外。`data` に requested / supported version evidence を返す | `400` |
+| `-32020` | `HeaderMismatch` | HTTP の必須 header が欠落・malformed、または header value が対応する request body value と一致しない | `400` |
+| `-32601` | `Method not found` | 上記 validation を通過した後、3 つの request method (`server/discover` / `tools/list` / `tools/call`) 以外。valid modern `initialize` も removed method としてこの code を返す | `404` |
+
+HTTP の request classification は、malformed metadata `-32602` → unsupported version `-32022` → header/body mismatch `-32020` → valid modern removed method（`initialize` を含む）`-32601` の優先順位である。legacy `params.protocolVersion` は removed method を復活させない。
+
+stdio では pinned MCP Python SDK v2.0.0 の stream loop が modern `initialize` を product middleware より先に処理し、`-32022` と `data.supported=["2026-07-28"]` を返す。これは SDK-owned transport 例外であり、HTTP または direct middleware の method-resolution contract を変更する互換経路ではない。
+
+現行 101 tool は client capability を必要としないため、product が `-32021` (`MissingRequiredClientCapability`) を返す経路はない。pinned conformance alpha.11 の `server-stateless` は `test_missing_capability` という structural diagnostic tool を要求するが、その tool を公開 surface または hidden dispatch に追加しない。この非適用 probe を含む scenario は厳格 CI gate から除外し、upstream が non-applicable structural probe の skip をサポートした時点で再検討する。これは full conformance の主張ではなく、process-wide state の既知逸脱は [ARCHITECTURE.md](../ARCHITECTURE.md#mcpserver--protocol-boundary) に残る。
+
+この表の numeric code を下記の domain-code inventory に文字列として追加しない。tool が正常に実行されて domain envelope の `success=false` を返す場合は MCP execution error ではなく、`CallToolResult.isError=false` の structured result として保持する。SDK の tool 引数検証・handler 実行失敗だけが `CallToolResult.isError=true` になる。result 境界の正本は [tool-conventions.md](./tool-conventions.md#mcp-protocol--result-境界)。
+
+### Prefab Sentinel domain-code inventory
+
 | コード | 説明 |
 |--------|------|
 | `SER001` | Serialized path not found — `propertyPath` の構文不正（空文字列、空セグメント `a..b`、閉じ括弧欠落 `a.Array.data[0` 等）または対象のプロパティが存在しない。 |

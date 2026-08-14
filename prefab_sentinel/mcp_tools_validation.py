@@ -5,7 +5,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
 from prefab_sentinel.contracts import Severity, ToolResponse, error_response, success_response
 from prefab_sentinel.diagnostics_baseline import (
@@ -222,7 +223,7 @@ def _write_diagnostics_baseline_update(
         data=data,
     ).to_dict()
 
-def register_validation_tools(server: FastMCP, session: ProjectSession) -> None:
+def register_validation_tools(server: MCPServer, session: ProjectSession) -> None:
     """Register inspection and validation tools on *server*."""
 
     @server.tool()
@@ -246,7 +247,6 @@ def register_validation_tools(server: FastMCP, session: ProjectSession) -> None:
             max_usages=max_results,
         )
         if not step.success:
-            from mcp.server.fastmcp.exceptions import ToolError
             raise ToolError(f"{step.code}: {step.message}")
 
         usages = step.data.get("usages", [])
@@ -746,6 +746,7 @@ def register_validation_tools(server: FastMCP, session: ProjectSession) -> None:
         change_reason: str | None = None,
         allow_dirty_before_clientsim: bool = False,
     ) -> dict[str, Any]:
+        """Run the selected Unity runtime-validation pipeline for a scene."""
         orch = session.get_orchestrator()
         resp = orch.validate_runtime(
             scene_path=asset_path,

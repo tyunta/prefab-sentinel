@@ -1394,7 +1394,7 @@ class PatchValidatorEnvelopeTests(unittest.TestCase):
         suggestions, read_only) and the diagnostic by full-string
         equality on path / location / detail / evidence."""
         from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
-        from tests.test_mcp_server import _run  # noqa: PLC0415
+        from tests._mcp_test_support import call_tool_result, structured_payload  # noqa: PLC0415
 
         with tempfile.TemporaryDirectory() as raw:
             td = Path(raw)
@@ -1403,7 +1403,7 @@ class PatchValidatorEnvelopeTests(unittest.TestCase):
             from prefab_sentinel.mcp_server import create_server  # noqa: PLC0415
 
             server = create_server()
-            _, response = _run(server.call_tool(
+            response = structured_payload(call_tool_result(server,
                 "set_properties",
                 {
                     "asset_path": str(prefab_path),
@@ -1449,7 +1449,7 @@ class PatchValidatorEnvelopeTests(unittest.TestCase):
         resolution with ``SYMBOL_NOT_FOUND`` (the legacy
         component-not-found SER003 branch no longer exists)."""
         from tests._assertion_helpers import assert_error_envelope  # noqa: PLC0415
-        from tests.test_mcp_server import _run  # noqa: PLC0415
+        from tests._mcp_test_support import call_tool_result, structured_payload  # noqa: PLC0415
 
         with tempfile.TemporaryDirectory() as raw:
             td = Path(raw)
@@ -1458,7 +1458,7 @@ class PatchValidatorEnvelopeTests(unittest.TestCase):
             from prefab_sentinel.mcp_server import create_server  # noqa: PLC0415
 
             server = create_server()
-            _, response = _run(server.call_tool(
+            response = structured_payload(call_tool_result(server,
                 "set_properties",
                 {
                     "asset_path": str(prefab_path),

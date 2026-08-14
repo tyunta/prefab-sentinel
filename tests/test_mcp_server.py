@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import shutil
@@ -15,6 +14,8 @@ from typing import Any, cast
 from unittest.mock import MagicMock, call, patch
 
 import pytest
+from mcp import Client
+from mcp_types import CallToolResult, TextContent
 
 import prefab_sentinel.editor_bridge as editor_bridge
 from prefab_sentinel.contracts import Severity, ToolResponse
@@ -25,6 +26,7 @@ from prefab_sentinel.mcp_validation import require_change_reason
 from prefab_sentinel.session import ProjectSession
 from prefab_sentinel.symbol_tree_builder import build_symbol_tree
 from tests._assertion_helpers import assert_error_envelope
+from tests._mcp_test_support import call_tool_result, run, structured_payload
 from tests.yaml_helpers import (
     YAML_HEADER,
     make_gameobject,
@@ -33,27 +35,6 @@ from tests.yaml_helpers import (
     make_monobehaviour,
     make_transform,
 )
-
-
-def _run(coro: Any) -> Any:
-    """Run an async coroutine synchronously.
-
-    When the result is a call_tool response (list[TextContent]), normalises
-    across MCP versions to always return a 2-tuple (content_list, parsed_dict)
-    so tests can use ``_, result = _run(server.call_tool(...))``.
-
-    For other coroutines (e.g. list_tools), returns the raw result unchanged.
-    """
-    raw = asyncio.run(coro)
-    if isinstance(raw, tuple) and len(raw) == 2 and isinstance(raw[1], dict):
-        # MCP 1.6+ Python 3.11 venv: (content_list, dict)
-        return raw
-    if isinstance(raw, list) and raw and hasattr(raw[0], "text"):
-        # MCP 1.6+ Python 3.12: list[TextContent] from call_tool
-        parsed = json.loads(raw[0].text)
-        return raw, parsed
-    # list_tools() or other coroutines: return as-is
-    return raw
 
 
 def _simple_prefab() -> str:
@@ -148,12 +129,29 @@ class TestRequireChangeReason(unittest.TestCase):
         self.assertIsNone(result)
 
 
+class TestMcpTestSupport(unittest.TestCase):
+    def test_structured_payload_rejects_error_before_missing_payload(self) -> None:
+        result = CallToolResult(
+            content=[],
+            structured_content=None,
+            is_error=True,
+        )
+
+        with self.assertRaises(AssertionError) as cm:
+            structured_payload(result)
+
+        self.assertEqual(
+            "expected CallToolResult with is_error=False, observed True",
+            str(cm.exception),
+        )
+
+
 class TestToolRegistration(unittest.TestCase):
     """Verify all expected tools are registered on the server."""
 
     def test_all_tools_registered(self) -> None:
         server = create_server()
-        tools = _run(server.list_tools())
+        tools = run(server.list_tools())
         tool_names = {t.name for t in tools}
         expected = {
             # Existing 15 tools
@@ -276,7 +274,7 @@ class TestToolRegistration(unittest.TestCase):
 
     def test_tool_count(self) -> None:
         server = create_server()
-        tools = _run(server.list_tools())
+        tools = run(server.list_tools())
         # Issue #195 added the dedicated ``editor_create_ui_element``
         # tool, bringing the registered surface from 75 to 76; issues
         # #233 / #236 / #240 / #242 / #243 add 9 more tools, bringing
@@ -323,7 +321,7 @@ class TestToolsCatalogDoc(unittest.TestCase):
     def test_catalog_header_count_equals_registered_surface(self) -> None:
         import re
 
-        registered = len(_run(create_server().list_tools()))
+        registered = len(run(create_server().list_tools()))
         header = self._TOOLS_MD.read_text(encoding="utf-8").splitlines()[2]
         match = re.search(r"現在 (\d+) 件", header)
         assert match is not None, "docs/tools.md header must state the tool count as '現在 N 件'."
@@ -610,8 +608,7 @@ class TestSymbolTools(unittest.TestCase):
     def test_get_unity_symbols_depth0(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             prefab = self._write_prefab(Path(td))
-            _, result = _run(
-                self.server.call_tool(
+            result = structured_payload(call_tool_result(self.server,
                     "get_unity_symbols",
                     {"asset_path": str(prefab), "depth": 0},
                 )
@@ -629,8 +626,7 @@ class TestSymbolTools(unittest.TestCase):
     def test_get_unity_symbols_depth1(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             prefab = self._write_prefab(Path(td))
-            _, result = _run(
-                self.server.call_tool(
+            result = structured_payload(call_tool_result(self.server,
                     "get_unity_symbols",
                     {"asset_path": str(prefab), "depth": 1},
                 )
@@ -644,8 +640,7 @@ class TestSymbolTools(unittest.TestCase):
     def test_find_unity_symbol_found(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             prefab = self._write_prefab(Path(td))
-            _, result = _run(
-                self.server.call_tool(
+            result = structured_payload(call_tool_result(self.server,
                     "find_unity_symbol",
                     {"asset_path": str(prefab), "symbol_path": "Cube"},
                 )
@@ -658,8 +653,7 @@ class TestSymbolTools(unittest.TestCase):
     def test_find_unity_symbol_not_found(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             prefab = self._write_prefab(Path(td))
-            _, result = _run(
-                self.server.call_tool(
+            result = structured_payload(call_tool_result(self.server,
                     "find_unity_symbol",
                     {"asset_path": str(prefab), "symbol_path": "NonExistent"},
                 )
@@ -671,8 +665,7 @@ class TestSymbolTools(unittest.TestCase):
     def test_find_unity_symbol_component_path(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             prefab = self._write_prefab(Path(td))
-            _, result = _run(
-                self.server.call_tool(
+            result = structured_payload(call_tool_result(self.server,
                     "find_unity_symbol",
                     {"asset_path": str(prefab), "symbol_path": "Cube/MeshRenderer"},
                 )
@@ -681,27 +674,32 @@ class TestSymbolTools(unittest.TestCase):
             self.assertEqual("MeshRenderer", result["matches"][0]["name"])
 
     def test_get_unity_symbols_file_not_found(self) -> None:
-        from mcp.server.fastmcp.exceptions import ToolError
+        from mcp.server.mcpserver.exceptions import ToolError
 
         with self.assertRaises(ToolError) as cm:
-            _run(
-                self.server.call_tool(
-                    "get_unity_symbols",
-                    {"asset_path": "/nonexistent/test.prefab"},
-                )
+            call_tool_result(
+                self.server,
+                "get_unity_symbols",
+                {"asset_path": "/nonexistent/test.prefab"},
             )
+
         self.assertIsInstance(cm.exception, ToolError)
-        self.assertTrue(str(cm.exception))
+        self.assertEqual(
+            (
+                "Error executing tool get_unity_symbols: "
+                "File not found: /nonexistent/test.prefab"
+            ),
+            str(cm.exception),
+        )
 
     def test_get_unity_symbols_resolution_failure_raises_tool_error(self) -> None:
-        from mcp.server.fastmcp.exceptions import ToolError
+        from mcp.server.mcpserver.exceptions import ToolError
 
         with tempfile.TemporaryDirectory() as td:
             server = create_server(project_root=td)
             with patch.object(Path, "resolve", side_effect=OSError("resolve failed")):
                 with self.assertRaises(ToolError) as cm:
-                    _run(
-                        server.call_tool(
+                    (call_tool_result(server,
                             "get_unity_symbols",
                             {"asset_path": "Assets/Test.prefab"},
                         )
@@ -735,8 +733,7 @@ class TestGetUnitySymbolsDetail(unittest.TestCase):
     def test_detail_summary_returns_minimal_nodes(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             prefab = self._write_prefab_with_mb(Path(td))
-            _, result = _run(
-                self.server.call_tool(
+            result = structured_payload(call_tool_result(self.server,
                     "get_unity_symbols",
                     {"asset_path": str(prefab), "depth": 1, "detail": "summary"},
                 )
@@ -751,8 +748,7 @@ class TestGetUnitySymbolsDetail(unittest.TestCase):
     def test_detail_fields_returns_field_names(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             prefab = self._write_prefab_with_mb(Path(td))
-            _, result = _run(
-                self.server.call_tool(
+            result = structured_payload(call_tool_result(self.server,
                     "get_unity_symbols",
                     {"asset_path": str(prefab), "depth": 1, "detail": "fields"},
                 )
@@ -768,8 +764,7 @@ class TestGetUnitySymbolsDetail(unittest.TestCase):
     def test_default_depth_none_returns_full_tree(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             prefab = self._write_prefab_with_mb(Path(td))
-            _, result = _run(
-                self.server.call_tool(
+            result = structured_payload(call_tool_result(self.server,
                     "get_unity_symbols",
                     {"asset_path": str(prefab)},
                 )
@@ -781,8 +776,7 @@ class TestGetUnitySymbolsDetail(unittest.TestCase):
     def test_explicit_depth_1_limits_children(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             prefab = self._write_prefab_with_mb(Path(td))
-            _, result = _run(
-                self.server.call_tool(
+            result = structured_payload(call_tool_result(self.server,
                     "get_unity_symbols",
                     {"asset_path": str(prefab), "depth": 1},
                 )
@@ -796,8 +790,7 @@ class TestGetUnitySymbolsDetail(unittest.TestCase):
     def test_response_includes_detail_key(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             prefab = self._write_prefab_with_mb(Path(td))
-            _, result = _run(
-                self.server.call_tool(
+            result = structured_payload(call_tool_result(self.server,
                     "get_unity_symbols",
                     {"asset_path": str(prefab), "detail": "summary"},
                 )
@@ -807,8 +800,7 @@ class TestGetUnitySymbolsDetail(unittest.TestCase):
     def test_response_detail_key_defaults_to_full(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             prefab = self._write_prefab_with_mb(Path(td))
-            _, result = _run(
-                self.server.call_tool(
+            result = structured_payload(call_tool_result(self.server,
                     "get_unity_symbols",
                     {"asset_path": str(prefab)},
                 )
@@ -841,8 +833,7 @@ class TestFindUnitySymbolIncludeFields(unittest.TestCase):
     def test_include_fields_false_default_no_properties(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             prefab = self._write_prefab_with_mb(Path(td))
-            _, result = _run(
-                self.server.call_tool(
+            result = structured_payload(call_tool_result(self.server,
                     "find_unity_symbol",
                     {"asset_path": str(prefab), "symbol_path": "Player/MonoBehaviour"},
                 )
@@ -853,8 +844,7 @@ class TestFindUnitySymbolIncludeFields(unittest.TestCase):
     def test_include_fields_true_has_properties(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             prefab = self._write_prefab_with_mb(Path(td))
-            _, result = _run(
-                self.server.call_tool(
+            result = structured_payload(call_tool_result(self.server,
                     "find_unity_symbol",
                     {
                         "asset_path": str(prefab),
@@ -889,8 +879,7 @@ class TestFindUnitySymbolIncludeFields(unittest.TestCase):
                 mock_orch = MagicMock()
                 mock_orch.prefab_variant.resolve_chain_values_with_origin.return_value = mock_resp
                 mock_cls.default.return_value = mock_orch
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "find_unity_symbol",
                         {
                             "asset_path": str(p),
@@ -919,8 +908,7 @@ class TestSymbolToolsWithMonoBehaviour(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / "player.prefab"
             p.write_text(text, encoding="utf-8")
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "find_unity_symbol",
                     {
                         "asset_path": str(p),
@@ -942,8 +930,7 @@ class TestGetUnitySymbolsExpandNested(unittest.TestCase):
             p = Path(td) / "test.prefab"
             p.write_text(text, encoding="utf-8")
             with patch("prefab_sentinel.session_cache.build_symbol_tree", wraps=build_symbol_tree) as mock_build:
-                _run(
-                    server.call_tool(
+                (call_tool_result(server,
                         "get_unity_symbols",
                         {"asset_path": str(p), "expand_nested": True},
                     )
@@ -982,8 +969,7 @@ class TestGetUnitySymbolsExpandNested(unittest.TestCase):
                 "prefab_sentinel.session_cache.collect_project_guid_index",
                 return_value={child_guid: child_path},
             ):
-                _, discovery = _run(
-                    server.call_tool(
+                discovery = structured_payload(call_tool_result(server,
                         "get_unity_symbols",
                         {"asset_path": str(parent_path), "depth": 3, "expand_nested": True},
                     )
@@ -992,8 +978,7 @@ class TestGetUnitySymbolsExpandNested(unittest.TestCase):
                     child for child in discovery["symbols"][0]["children"] if child["kind"] == "prefab_instance"
                 )
                 lookup = marker["children"][0]["children"][1]["lookup"]
-                _, found = _run(
-                    server.call_tool(
+                found = structured_payload(call_tool_result(server,
                         "find_unity_symbol",
                         {
                             "asset_path": lookup["asset_path"],
@@ -1045,8 +1030,7 @@ class TestOrchestratorTools(unittest.TestCase):
 
         with patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_cls:
             mock_cls.default.return_value = mock_orch
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "validate_refs",
                     {"scope": "/some/path"},
                 )
@@ -1089,8 +1073,7 @@ class TestOrchestratorTools(unittest.TestCase):
 
         with patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_cls:
             mock_cls.default.return_value = mock_orch
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "validate_refs",
                     {"scope": "/some/path", "refresh_guid_index": True},
                 )
@@ -1112,8 +1095,7 @@ class TestOrchestratorTools(unittest.TestCase):
 
         with patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_cls:
             mock_cls.default.return_value = mock_orch
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "inspect_wiring",
                     {"asset_path": "/some/test.prefab"},
                 )
@@ -1149,8 +1131,7 @@ class TestOrchestratorTools(unittest.TestCase):
 
         with patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_cls:
             mock_cls.default.return_value = mock_orch
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "inspect_wiring",
                     {
                         "asset_path": "/some/test.prefab",
@@ -1195,8 +1176,7 @@ class TestOrchestratorTools(unittest.TestCase):
                 patch.object(ProjectSession, "project_root", project_root),
             ):
                 mock_cls.default.return_value = mock_orch
-                _run(
-                    server.call_tool(
+                (call_tool_result(server,
                         "inspect_wiring",
                         {
                             "asset_path": "Assets/Base.prefab",
@@ -1232,8 +1212,7 @@ class TestOrchestratorTools(unittest.TestCase):
                 patch.object(ProjectSession, "project_root", project_root),
             ):
                 mock_cls.default.return_value = mock_orch
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "inspect_wiring",
                         {"asset_path": "Assets/Base.prefab"},
                     )
@@ -1258,8 +1237,7 @@ class TestOrchestratorTools(unittest.TestCase):
 
         with patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_cls:
             mock_cls.default.return_value = mock_orch
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "inspect_wiring",
                     {
                         "asset_path": "/some/test.prefab",
@@ -1302,8 +1280,7 @@ class TestOrchestratorTools(unittest.TestCase):
 
         with patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_cls:
             mock_cls.default.return_value = mock_orch
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "find_referencing_assets",
                     {"asset_or_guid": "abcd1234abcd1234abcd1234abcd1234"},
                 )
@@ -1327,8 +1304,7 @@ class TestOrchestratorTools(unittest.TestCase):
 
         with patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_cls:
             mock_cls.default.return_value = mock_orch
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "inspect_variant",
                     {"asset_path": "/some/variant.prefab", "show_origin": True},
                 )
@@ -1358,8 +1334,7 @@ class TestDiffUnitySymbolsTool(unittest.TestCase):
 
         with patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_cls:
             mock_cls.default.return_value = mock_orch
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "diff_unity_symbols",
                     {"asset_path": "/some/variant.prefab"},
                 )
@@ -1381,8 +1356,7 @@ class TestDiffUnitySymbolsTool(unittest.TestCase):
 
         with patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_cls:
             mock_cls.default.return_value = mock_orch
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "diff_unity_symbols",
                     {"asset_path": "/v.prefab", "component_filter": "speed"},
                 )
@@ -1411,8 +1385,7 @@ class TestFindUnitySymbolShowOrigin(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / "test.prefab"
             p.write_text(text, encoding="utf-8")
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "find_unity_symbol",
                     {
                         "asset_path": str(p),
@@ -1473,8 +1446,7 @@ class TestFindUnitySymbolShowOrigin(unittest.TestCase):
                 mock_orch.prefab_variant.resolve_chain_values_with_origin.return_value = mock_resp
                 mock_cls.default.return_value = mock_orch
 
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "find_unity_symbol",
                         {
                             "asset_path": str(p),
@@ -1527,8 +1499,7 @@ class TestFindUnitySymbolShowOrigin(unittest.TestCase):
                 mock_orch.prefab_variant.resolve_chain_values_with_origin.return_value = mock_resp
                 mock_cls.default.return_value = mock_orch
 
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "find_unity_symbol",
                         {
                             "asset_path": str(p),
@@ -1579,8 +1550,7 @@ class TestFindUnitySymbolShowOrigin(unittest.TestCase):
                 mock_orch.prefab_variant.resolve_chain_values_with_origin.return_value = mock_resp
                 mock_cls.default.return_value = mock_orch
 
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "find_unity_symbol",
                         {
                             "asset_path": str(p),
@@ -1623,8 +1593,7 @@ class TestFindUnitySymbolShowOrigin(unittest.TestCase):
                 mock_cls.default.return_value = mock_orch
 
                 with self.assertLogs("prefab_sentinel.mcp_tools_symbols", level="DEBUG") as cm:
-                    _, result = _run(
-                        server.call_tool(
+                    result = structured_payload(call_tool_result(server,
                             "find_unity_symbol",
                             {
                                 "asset_path": str(p),
@@ -1690,8 +1659,7 @@ class TestSetPropertyTool(unittest.TestCase):
                 mock_orch.serialized_value_patch_apply.return_value = mock_resp
                 mock_cls.default.return_value = mock_orch
 
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "set_property",
                         {
                             "asset_path": str(p),
@@ -1723,8 +1691,7 @@ class TestSetPropertyTool(unittest.TestCase):
                 mock_orch.serialized_value_patch_apply.return_value = mock_resp
                 mock_cls.default.return_value = mock_orch
 
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "set_property",
                         {
                             "asset_path": str(p),
@@ -1769,8 +1736,7 @@ class TestSetPropertyTool(unittest.TestCase):
                 mock_orch.serialized_value_patch_apply.return_value = failed_response
                 mock_cls.default.return_value = mock_orch
                 server = create_server(project_root=temporary)
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "set_property",
                         {
                             "asset_path": str(asset_path),
@@ -1844,8 +1810,7 @@ class TestSetPropertyTool(unittest.TestCase):
                 ) as invalidate_symbol_tree,
             ):
                 server = create_server(project_root=temporary)
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "set_property",
                         {
                             "asset_path": str(asset_path),
@@ -1883,8 +1848,7 @@ class TestSetPropertyTool(unittest.TestCase):
             escaped_target = (Path(project_directory).parent / "secret.prefab").resolve()
             with patch.object(ProjectSession, "get_orchestrator") as get_orchestrator:
                 server = create_server(project_root=project_directory)
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "set_property",
                         {
                             "asset_path": "../secret.prefab",
@@ -1932,8 +1896,7 @@ class TestSetPropertyTool(unittest.TestCase):
                 )
                 mock_cls.default.return_value = mock_orch
                 server = create_server(project_root=temporary)
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "set_property",
                         {
                             "asset_path": str(asset_path),
@@ -2009,8 +1972,7 @@ class TestSetPropertyTool(unittest.TestCase):
                 )
                 mock_cls.default.return_value = mock_orch
                 server = create_server(project_root=temporary)
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "set_property",
                         {
                             "asset_path": str(asset_path),
@@ -2072,8 +2034,7 @@ class TestSetPropertyTool(unittest.TestCase):
             p = Path(td) / "test.prefab"
             p.write_text(text, encoding="utf-8")
 
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "set_property",
                     {
                         "asset_path": str(p),
@@ -2098,8 +2059,7 @@ class TestSetPropertyTool(unittest.TestCase):
             p = Path(td) / "test.prefab"
             p.write_text(text, encoding="utf-8")
 
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "set_property",
                     {
                         "asset_path": str(p),
@@ -2129,8 +2089,7 @@ class TestSetPropertyTool(unittest.TestCase):
                 mock_orch.serialized_value_patch_apply.return_value = mock_resp
                 mock_cls.default.return_value = mock_orch
 
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "set_property",
                         {
                             "asset_path": str(p),
@@ -2175,8 +2134,7 @@ class TestSetPropertyTool(unittest.TestCase):
                 mock_orch.serialized_value_patch_apply.return_value = mock_resp
                 mock_cls.default.return_value = mock_orch
 
-                _, result = _run(
-                    server_with_root.call_tool(
+                result = structured_payload(call_tool_result(server_with_root,
                         "set_property",
                         {
                             "asset_path": str(p),
@@ -2200,8 +2158,7 @@ class TestSetPropertyTool(unittest.TestCase):
             p = Path(td) / "test.prefab"
             p.write_text(text, encoding="utf-8")
 
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "set_property",
                     {
                         "asset_path": str(p),
@@ -2230,8 +2187,7 @@ class TestSetPropertyTool(unittest.TestCase):
                 mock_orch.serialized_value_patch_apply.return_value = mock_resp
                 mock_cls.default.return_value = mock_orch
 
-                _run(
-                    server.call_tool(
+                (call_tool_result(server,
                         "set_property",
                         {
                             "asset_path": str(p),
@@ -2261,8 +2217,7 @@ class TestSetPropertyTool(unittest.TestCase):
                 mock_orch.serialized_value_patch_apply.return_value = mock_resp
                 mock_cls.default.return_value = mock_orch
 
-                _run(
-                    server.call_tool(
+                (call_tool_result(server,
                         "set_property",
                         {
                             "asset_path": str(p),
@@ -2301,8 +2256,7 @@ class TestSetPropertyTool(unittest.TestCase):
                 mock_orch.serialized_value_patch_apply.return_value = mock_resp
                 mock_cls.default.return_value = mock_orch
 
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "set_property",
                         {
                             "asset_path": str(p),
@@ -2322,8 +2276,7 @@ class TestSetPropertyTool(unittest.TestCase):
     def test_confirm_requires_change_reason(self) -> None:
         server = create_server()
 
-        _, result = _run(
-            server.call_tool(
+        result = structured_payload(call_tool_result(server,
                 "set_property",
                 {
                     "asset_path": "Assets/DoesNotExist.prefab",
@@ -2365,8 +2318,7 @@ class TestListSerializedFieldsTool(unittest.TestCase):
         )
         with patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_orch_cls:
             mock_orch_cls.default.return_value.list_serialized_fields.return_value = mock_resp
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "list_serialized_fields",
                     {"script_or_guid": "aabb"},
                 )
@@ -2388,8 +2340,7 @@ class TestListSerializedFieldsTool(unittest.TestCase):
         )
         with patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_orch_cls:
             mock_orch_cls.default.return_value.list_serialized_fields.return_value = mock_resp
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "list_serialized_fields",
                     {"script_or_guid": "missing.cs"},
                 )
@@ -2424,8 +2375,7 @@ class TestValidateFieldRenameTool(unittest.TestCase):
         )
         with patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_orch_cls:
             mock_orch_cls.default.return_value.validate_field_rename.return_value = mock_resp
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "validate_field_rename",
                     {
                         "script_or_guid": "aabb",
@@ -2452,8 +2402,7 @@ class TestValidateFieldRenameTool(unittest.TestCase):
         with patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_orch_cls:
             mock_orch = mock_orch_cls.default.return_value
             mock_orch.validate_field_rename.return_value = mock_resp
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "validate_field_rename",
                     {
                         "script_or_guid": "aabb",
@@ -2498,8 +2447,7 @@ class TestCheckFieldCoverageTool(unittest.TestCase):
         )
         with patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_orch_cls:
             mock_orch_cls.default.return_value.check_field_coverage.return_value = mock_resp
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "check_field_coverage",
                     {"scope": "Assets/"},
                 )
@@ -2516,7 +2464,7 @@ class TestSessionTools(unittest.TestCase):
 
     def test_get_project_status_before_activation(self) -> None:
         server = create_server()
-        _, result = _run(server.call_tool("get_project_status", {}))
+        result = structured_payload(call_tool_result(server,"get_project_status", {}))
 
         self.assertTrue(result["success"])
         self.assertEqual("SESSION_STATUS", result["code"])
@@ -2547,8 +2495,7 @@ class TestSessionTools(unittest.TestCase):
         mock_build.return_value = {"g1": "ScriptA"}
 
         server = create_server()
-        _, result = _run(
-            server.call_tool(
+        result = structured_payload(call_tool_result(server,
                 "activate_project",
                 {"scope": "Assets/MyScope"},
             )
@@ -2585,14 +2532,14 @@ class TestSessionTools(unittest.TestCase):
         server = create_server()
 
         # Before: not activated
-        _, before = _run(server.call_tool("get_project_status", {}))
+        before = structured_payload(call_tool_result(server,"get_project_status", {}))
         self.assertFalse(before["data"]["orchestrator_cached"])
 
         # Activate
-        _run(server.call_tool("activate_project", {"scope": "Assets/Scope"}))
+        (call_tool_result(server,"activate_project", {"scope": "Assets/Scope"}))
 
         # After: caches warm
-        _, after = _run(server.call_tool("get_project_status", {}))
+        after = structured_payload(call_tool_result(server,"get_project_status", {}))
         self.assertTrue(after["data"]["orchestrator_cached"])
         self.assertTrue(after["data"]["script_map_cached"])
 
@@ -2612,8 +2559,7 @@ class TestSessionTools(unittest.TestCase):
             mock_resolve.return_value = assets / "MyScope"
 
             server = create_server()
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "activate_project",
                     {"scope": "Assets/MyScope", "project_root": tmpdir},
                 )
@@ -2625,8 +2571,7 @@ class TestSessionTools(unittest.TestCase):
     def test_activate_project_with_invalid_project_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             server = create_server()
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "activate_project",
                     {"scope": "Assets/X", "project_root": tmpdir},
                 )
@@ -2651,8 +2596,7 @@ class TestSessionTools(unittest.TestCase):
         mock_build.return_value = {"g1": "ScriptA"}
 
         server = create_server()
-        _, result = _run(
-            server.call_tool(
+        result = structured_payload(call_tool_result(server,
                 "activate_project",
                 {"scope": "Assets/MyScope"},
             )
@@ -2706,8 +2650,7 @@ class TestAddComponentTool(unittest.TestCase):
                 mock_orch.patch_apply.return_value = mock_resp
                 mock_cls.default.return_value = mock_orch
 
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "add_component",
                         {
                             "asset_path": str(p),
@@ -2740,8 +2683,7 @@ class TestAddComponentTool(unittest.TestCase):
                 mock_orch.patch_apply.return_value = mock_resp
                 mock_cls.default.return_value = mock_orch
 
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "add_component",
                         {
                             "asset_path": str(p),
@@ -2765,8 +2707,7 @@ class TestAddComponentTool(unittest.TestCase):
             p = Path(td) / "test.prefab"
             p.write_text(text, encoding="utf-8")
 
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "add_component",
                     {
                         "asset_path": str(p),
@@ -2790,8 +2731,7 @@ class TestAddComponentTool(unittest.TestCase):
             p = Path(td) / "test.prefab"
             p.write_text(text, encoding="utf-8")
 
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "add_component",
                     {
                         "asset_path": str(p),
@@ -2818,8 +2758,7 @@ class TestAddComponentTool(unittest.TestCase):
                 mock_orch.patch_apply.return_value = mock_resp
                 mock_cls.default.return_value = mock_orch
 
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "add_component",
                         {
                             "asset_path": str(p),
@@ -2850,8 +2789,7 @@ class TestAddComponentTool(unittest.TestCase):
                 mock_orch.patch_apply.return_value = mock_resp
                 mock_cls.default.return_value = mock_orch
 
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "add_component",
                         {
                             "asset_path": str(p),
@@ -2870,8 +2808,7 @@ class TestAddComponentTool(unittest.TestCase):
     def test_confirm_requires_change_reason(self) -> None:
         server = create_server()
 
-        _, result = _run(
-            server.call_tool(
+        result = structured_payload(call_tool_result(server,
                 "add_component",
                 {
                     "asset_path": "Assets/DoesNotExist.prefab",
@@ -2926,8 +2863,7 @@ class TestRemoveComponentTool(unittest.TestCase):
                 mock_orch.patch_apply.return_value = mock_resp
                 mock_cls.default.return_value = mock_orch
 
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "remove_component",
                         {
                             "asset_path": str(p),
@@ -2958,8 +2894,7 @@ class TestRemoveComponentTool(unittest.TestCase):
                 mock_orch.patch_apply.return_value = mock_resp
                 mock_cls.default.return_value = mock_orch
 
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "remove_component",
                         {
                             "asset_path": str(p),
@@ -2983,8 +2918,7 @@ class TestRemoveComponentTool(unittest.TestCase):
             p = Path(td) / "test.prefab"
             p.write_text(text, encoding="utf-8")
 
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "remove_component",
                     {
                         "asset_path": str(p),
@@ -3007,8 +2941,7 @@ class TestRemoveComponentTool(unittest.TestCase):
             p = Path(td) / "test.prefab"
             p.write_text(text, encoding="utf-8")
 
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "remove_component",
                     {
                         "asset_path": str(p),
@@ -3034,8 +2967,7 @@ class TestRemoveComponentTool(unittest.TestCase):
                 mock_orch.patch_apply.return_value = mock_resp
                 mock_cls.default.return_value = mock_orch
 
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "remove_component",
                         {
                             "asset_path": str(p),
@@ -3052,8 +2984,7 @@ class TestRemoveComponentTool(unittest.TestCase):
     def test_confirm_requires_change_reason(self) -> None:
         server = create_server()
 
-        _, result = _run(
-            server.call_tool(
+        result = structured_payload(call_tool_result(server,
                 "remove_component",
                 {
                     "asset_path": "Assets/DoesNotExist.prefab",
@@ -3081,7 +3012,7 @@ class TestScopeFallback(unittest.TestCase):
         ):
             mock_orch = mock_cls.default.return_value
             mock_orch.validate_refs.return_value = mock_resp
-            _run(server.call_tool("validate_refs", {"scope": "Assets/Explicit"}))
+            (call_tool_result(server,"validate_refs", {"scope": "Assets/Explicit"}))
             self.assertEqual(
                 "Assets/Resolved",
                 mock_orch.validate_refs.call_args.kwargs["scope"],
@@ -3104,8 +3035,7 @@ class TestScopeFallback(unittest.TestCase):
         ):
             mock_orch = mock_cls.default.return_value
             mock_orch.reference_resolver.where_used.return_value = mock_step
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "find_referencing_assets",
                     {"asset_or_guid": "abcd1234abcd1234abcd1234abcd1234"},
                 )
@@ -3125,8 +3055,7 @@ class TestScopeFallback(unittest.TestCase):
         ):
             mock_orch = mock_cls.default.return_value
             mock_orch.validate_field_rename.return_value = mock_resp
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "validate_field_rename",
                     {
                         "script_or_guid": "aabb",
@@ -3150,7 +3079,7 @@ class TestScopeFallback(unittest.TestCase):
         ):
             mock_orch = mock_cls.default.return_value
             mock_orch.check_field_coverage.return_value = mock_resp
-            _run(server.call_tool("check_field_coverage", {"scope": "Assets/Explicit"}))
+            (call_tool_result(server,"check_field_coverage", {"scope": "Assets/Explicit"}))
             self.assertEqual(
                 "Assets/Resolved",
                 mock_orch.check_field_coverage.call_args.kwargs["scope"],
@@ -3182,8 +3111,7 @@ class TestFindReferencingAssetsDirectPayload(unittest.TestCase):
         with patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_cls:
             mock_orch = mock_cls.default.return_value
             mock_orch.reference_resolver.where_used.return_value = mock_step
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "find_referencing_assets",
                     {"asset_or_guid": "abcd1234abcd1234abcd1234abcd1234"},
                 )
@@ -3221,8 +3149,7 @@ class TestFindReferencingAssetsDirectPayload(unittest.TestCase):
         with patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_cls:
             mock_orch = mock_cls.default.return_value
             mock_orch.reference_resolver.where_used.return_value = mock_step
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "find_referencing_assets",
                     {"asset_or_guid": "f" * 32},
                 )
@@ -3259,8 +3186,7 @@ class TestFindReferencingAssetsDirectPayload(unittest.TestCase):
         with patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_cls:
             mock_orch = mock_cls.default.return_value
             mock_orch.reference_resolver.where_used.return_value = mock_step
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "find_referencing_assets",
                     {"asset_or_guid": "x" * 32, "max_results": 1},
                 )
@@ -3270,7 +3196,7 @@ class TestFindReferencingAssetsDirectPayload(unittest.TestCase):
         self.assertEqual(50, result["metadata"]["total_count"])
 
     def test_error_raises_tool_error(self) -> None:
-        from mcp.server.fastmcp.exceptions import ToolError
+        from mcp.server.mcpserver.exceptions import ToolError
 
         server = create_server()
         mock_step = ToolResponse(
@@ -3285,8 +3211,7 @@ class TestFindReferencingAssetsDirectPayload(unittest.TestCase):
             mock_orch = mock_cls.default.return_value
             mock_orch.reference_resolver.where_used.return_value = mock_step
             with self.assertRaises(ToolError) as ctx:
-                _run(
-                    server.call_tool(
+                (call_tool_result(server,
                         "find_referencing_assets",
                         {"asset_or_guid": "x" * 32},
                     )
@@ -3305,7 +3230,7 @@ class TestEditorReadOnlyTools(unittest.TestCase):
         server = create_server()
         mock_response = {"success": True, "data": {"output_path": "/tmp/shot.png"}}
         with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value=mock_response) as mock_send:
-            _, result = _run(server.call_tool("editor_screenshot", {"view": "game", "width": 1920}))
+            result = structured_payload(call_tool_result(server,"editor_screenshot", {"view": "game", "width": 1920}))
         self.assertEqual(mock_response, result)
         # Default refresh=True: refresh + capture = 2 calls
         self.assertEqual(mock_send.call_count, 2)
@@ -3313,7 +3238,7 @@ class TestEditorReadOnlyTools(unittest.TestCase):
     def test_editor_screenshot_defaults(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
-            _run(server.call_tool("editor_screenshot", {}))
+            (call_tool_result(server,"editor_screenshot", {}))
         # Default refresh=True means 2 calls: refresh + capture
         self.assertEqual(mock_send.call_count, 2)
         mock_send.assert_any_call(action="capture_screenshot", view="scene", width=0, height=0)
@@ -3321,7 +3246,7 @@ class TestEditorReadOnlyTools(unittest.TestCase):
     def test_editor_screenshot_refresh_true_calls_refresh_then_capture(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
-            _run(server.call_tool("editor_screenshot", {"refresh": True}))
+            (call_tool_result(server,"editor_screenshot", {"refresh": True}))
         self.assertEqual(mock_send.call_count, 2)
         calls = mock_send.call_args_list
         self.assertEqual(calls[0], call(action="refresh_asset_database"))
@@ -3330,11 +3255,11 @@ class TestEditorReadOnlyTools(unittest.TestCase):
     def test_editor_screenshot_refresh_false_skips_refresh(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
-            _run(server.call_tool("editor_screenshot", {"refresh": False}))
+            (call_tool_result(server,"editor_screenshot", {"refresh": False}))
         mock_send.assert_called_once_with(action="capture_screenshot", view="scene", width=0, height=0)
 
     def test_editor_screenshot_refresh_failure_stops_before_capture(self) -> None:
-        from mcp.server.fastmcp.exceptions import ToolError
+        from mcp.server.mcpserver.exceptions import ToolError
 
         server = create_server()
         with patch(
@@ -3342,7 +3267,7 @@ class TestEditorReadOnlyTools(unittest.TestCase):
             side_effect=Exception("refresh failed"),
         ) as mock_send:
             with self.assertRaises(ToolError) as ctx:
-                _run(server.call_tool("editor_screenshot", {"refresh": True}))
+                (call_tool_result(server,"editor_screenshot", {"refresh": True}))
 
         mock_send.assert_called_once_with(action="refresh_asset_database")
         self.assertIn("refresh failed", str(ctx.exception))
@@ -3350,8 +3275,7 @@ class TestEditorReadOnlyTools(unittest.TestCase):
     def test_editor_select_delegates(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "editor_select",
                     {
                         "hierarchy_path": "/Canvas/Panel",
@@ -3369,14 +3293,14 @@ class TestEditorReadOnlyTools(unittest.TestCase):
     def test_editor_select_omits_empty_prefab_asset_path(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
-            _run(server.call_tool("editor_select", {"hierarchy_path": "/Root/Child"}))
+            (call_tool_result(server,"editor_select", {"hierarchy_path": "/Root/Child"}))
         _, kwargs = mock_send.call_args
         self.assertNotIn("prefab_asset_path", kwargs)
 
     def test_editor_frame_delegates(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
-            _run(server.call_tool("editor_frame", {"zoom": 2.5}))
+            (call_tool_result(server,"editor_frame", {"zoom": 2.5}))
         mock_send.assert_called_once_with(
             action="frame_selected",
             zoom=2.5,
@@ -3386,7 +3310,7 @@ class TestEditorReadOnlyTools(unittest.TestCase):
     def test_editor_frame_defaults(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
-            _run(server.call_tool("editor_frame", {}))
+            (call_tool_result(server,"editor_frame", {}))
         mock_send.assert_called_once_with(
             action="frame_selected",
             zoom=0.0,
@@ -3419,7 +3343,7 @@ class TestEditorReadOnlyTools(unittest.TestCase):
             "prefab_sentinel.mcp_tools_editor_view.send_action",
             return_value=bridge_response,
         ):
-            _, result = _run(server.call_tool("editor_frame", {"zoom": 1.0}))
+            result = structured_payload(call_tool_result(server,"editor_frame", {"zoom": 1.0}))
         # Wrapper must preserve the bounds payload byte-for-byte.
         self.assertEqual(bridge_response, result)
         self.assertEqual([0.0, 1.5, 0.0], result["data"]["bounds_center"])
@@ -3428,7 +3352,7 @@ class TestEditorReadOnlyTools(unittest.TestCase):
     def test_editor_get_camera_delegates(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
-            _run(server.call_tool("editor_get_camera", {}))
+            (call_tool_result(server,"editor_get_camera", {}))
         mock_send.assert_called_once_with(action="get_camera")
 
     def test_editor_set_camera_mode_b(self) -> None:
@@ -3437,22 +3361,21 @@ class TestEditorReadOnlyTools(unittest.TestCase):
         # MCP surface and must not appear on the bridge call kwargs.
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
-            _run(server.call_tool("editor_set_camera", {"yaw": 45.0, "pitch": 15.0, "size": 3.0}))
+            (call_tool_result(server,"editor_set_camera", {"yaw": 45.0, "pitch": 15.0, "size": 3.0}))
         mock_send.assert_called_once_with(action="set_camera", yaw=45.0, pitch=15.0, size=3.0)
         self.assertNotIn("distance", mock_send.call_args.kwargs)
 
     def test_editor_set_camera_defaults(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
-            _run(server.call_tool("editor_set_camera", {}))
+            (call_tool_result(server,"editor_set_camera", {}))
         mock_send.assert_called_once_with(action="set_camera")
 
     def test_editor_list_children_delegates(self) -> None:
         server = create_server()
         mock_response = {"success": True, "data": {"children": ["A", "B"]}}
         with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value=mock_response):
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "editor_list_children",
                     {
                         "hierarchy_path": "/Root",
@@ -3465,26 +3388,25 @@ class TestEditorReadOnlyTools(unittest.TestCase):
     def test_editor_list_children_default_depth(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
-            _run(server.call_tool("editor_list_children", {"hierarchy_path": "/Root"}))
+            (call_tool_result(server,"editor_list_children", {"hierarchy_path": "/Root"}))
         mock_send.assert_called_once_with(action="list_children", hierarchy_path="/Root", depth=1)
 
     def test_editor_list_materials_delegates(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
-            _run(server.call_tool("editor_list_materials", {"hierarchy_path": "/Body"}))
+            (call_tool_result(server,"editor_list_materials", {"hierarchy_path": "/Body"}))
         mock_send.assert_called_once_with(action="list_materials", hierarchy_path="/Body")
 
     def test_editor_list_roots_delegates(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
-            _run(server.call_tool("editor_list_roots", {}))
+            (call_tool_result(server,"editor_list_roots", {}))
         mock_send.assert_called_once_with(action="list_roots")
 
     def test_editor_get_material_property_delegates(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "editor_get_material_property",
                     {
                         "hierarchy_path": "/Body",
@@ -3503,8 +3425,7 @@ class TestEditorReadOnlyTools(unittest.TestCase):
     def test_editor_get_material_property_default_property_name(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "editor_get_material_property",
                     {
                         "hierarchy_path": "/Body",
@@ -3522,8 +3443,7 @@ class TestEditorReadOnlyTools(unittest.TestCase):
     def test_editor_console_delegates(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "editor_console",
                     {
                         "max_entries": 50,
@@ -3547,7 +3467,7 @@ class TestEditorReadOnlyTools(unittest.TestCase):
         """Issue #113: defaults are newest-first + 60-second window + empty cursor."""
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
-            _run(server.call_tool("editor_console", {}))
+            (call_tool_result(server,"editor_console", {}))
         mock_send.assert_called_once_with(
             action="capture_console_logs",
             max_entries=200,
@@ -3563,7 +3483,7 @@ class TestEditorReadOnlyTools(unittest.TestCase):
         """Issue #113: explicit cursor token forwards verbatim."""
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
-            _run(server.call_tool("editor_console", {"cursor": "opaque-token-42"}))
+            (call_tool_result(server,"editor_console", {"cursor": "opaque-token-42"}))
         mock_send.assert_called_once_with(
             action="capture_console_logs",
             max_entries=200,
@@ -3579,7 +3499,7 @@ class TestEditorReadOnlyTools(unittest.TestCase):
         """Issue #113: explicit ordering keyword forwards verbatim."""
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
-            _run(server.call_tool("editor_console", {"order": "oldest_first"}))
+            (call_tool_result(server,"editor_console", {"order": "oldest_first"}))
         mock_send.assert_called_once_with(
             action="capture_console_logs",
             max_entries=200,
@@ -3601,7 +3521,7 @@ class TestEditorSideEffectTools(unittest.TestCase):
         # transport budget to cover a compile plus domain reload.
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
-            _, result = _run(server.call_tool("editor_refresh", {}))
+            result = structured_payload(call_tool_result(server,"editor_refresh", {}))
         mock_send.assert_called_once_with(
             action="refresh_asset_database",
             timeout_sec=65,
@@ -3615,7 +3535,7 @@ class TestEditorSideEffectTools(unittest.TestCase):
         # ``editor_recompile_and_wait`` bridge action.
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
-            _run(server.call_tool("editor_recompile", {}))
+            (call_tool_result(server,"editor_recompile", {}))
         mock_send.assert_called_once_with(
             action="editor_recompile_and_wait",
             timeout_sec=65,
@@ -3625,13 +3545,13 @@ class TestEditorSideEffectTools(unittest.TestCase):
     def test_editor_run_tests_delegates(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
-            _run(server.call_tool("editor_run_tests", {}))
+            (call_tool_result(server,"editor_run_tests", {}))
         mock_send.assert_called_once_with(action="run_integration_tests", timeout_sec=300)
 
     def test_editor_run_tests_custom_timeout(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
-            _run(server.call_tool("editor_run_tests", {"timeout_sec": 600}))
+            (call_tool_result(server,"editor_run_tests", {"timeout_sec": 600}))
         mock_send.assert_called_once_with(action="run_integration_tests", timeout_sec=600)
 
 
@@ -3643,7 +3563,7 @@ class TestEditorRecompileNaming(unittest.TestCase):
 
     def test_blocking_recompile_registered_and_fire_and_return_absent(self) -> None:
         server = create_server()
-        tools = _run(server.list_tools())
+        tools = run(server.list_tools())
         names = {t.name for t in tools}
         self.assertIn(
             "editor_recompile",
@@ -3665,7 +3585,7 @@ class TestEditorRecompileNaming(unittest.TestCase):
             "prefab_sentinel.mcp_tools_editor_view.send_action",
             return_value={"success": True},
         ) as mock_send:
-            _run(server.call_tool("editor_recompile", {"timeout_sec": 30.0}))
+            (call_tool_result(server,"editor_recompile", {"timeout_sec": 30.0}))
         mock_send.assert_called_once_with(
             action="editor_recompile_and_wait",
             timeout_sec=35,
@@ -3719,7 +3639,7 @@ class TestEditorAuditReclassification(unittest.TestCase):
                         "prefab_sentinel.mcp_tools_editor_batch.send_action",
                     ) as b,
                 ):
-                    _, result = _run(server.call_tool(tool_name, args))
+                    result = structured_payload(call_tool_result(server,tool_name, args))
                     w.assert_not_called()
                     o.assert_not_called()
                     b.assert_not_called()
@@ -3729,32 +3649,23 @@ class TestEditorAuditReclassification(unittest.TestCase):
                     severity="error",
                 )
 
-    def test_de_audited_tools_reject_confirm_argument(self) -> None:
-        """T-49-2: the two de-audited tools raise TypeError on a confirm arg."""
-        server = create_server()
-        tools = server._tool_manager._tools
+    def test_de_audited_tools_omit_legacy_audit_arguments_from_schema(self) -> None:
+        """T-49-2: de-audited tools do not publish legacy audit arguments."""
+        tools_by_name = {
+            tool.name: tool for tool in run(create_server().list_tools())
+        }
+
         for tool_name in (
             "editor_batch_set_blend_shape",
             "editor_apply_animation_clip",
         ):
             with self.subTest(tool=tool_name):
-                fn = tools[tool_name].fn
-                with self.assertRaises(TypeError) as cm:
-                    if tool_name == "editor_batch_set_blend_shape":
-                        fn(
-                            hierarchy_path="/Obj",
-                            shapes=[],
-                            confirm=True,
-                            change_reason="x",
-                        )
-                    else:
-                        fn(
-                            asset_path="Assets/X.anim",
-                            target_hierarchy_path="/Obj",
-                            confirm=True,
-                            change_reason="x",
-                        )
-                self.assertIn("confirm", str(cm.exception))
+                properties = cast(
+                    dict[str, Any],
+                    tools_by_name[tool_name].input_schema["properties"],
+                )
+                self.assertNotIn("confirm", properties)
+                self.assertNotIn("change_reason", properties)
 
 
 class TestEditorAddUdonSharpComponentTool(unittest.TestCase):
@@ -3785,8 +3696,7 @@ class TestEditorAddUdonSharpComponentTool(unittest.TestCase):
             "prefab_sentinel.mcp_tools_editor_udonsharp.send_action",
             return_value=bridge_envelope,
         ):
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "editor_add_udonsharp_component",
                     {
                         "hierarchy_path": "/UI/PlayButton",
@@ -3820,8 +3730,7 @@ class TestEditorAddUdonSharpComponentTool(unittest.TestCase):
             "prefab_sentinel.mcp_tools_editor_udonsharp.send_action",
             return_value=bridge_envelope,
         ):
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "editor_add_udonsharp_component",
                     {
                         "hierarchy_path": "/UI/PlayButton",
@@ -3850,8 +3759,7 @@ class TestEditorSetPropertyValueSemantics(unittest.TestCase):
             "prefab_sentinel.mcp_tools_editor_ops.send_action",
             return_value={"success": True},
         ) as mock_send:
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "editor_set_property",
                     {
                         "hierarchy_path": "/Obj",
@@ -3871,8 +3779,7 @@ class TestEditorSetPropertyValueSemantics(unittest.TestCase):
             "prefab_sentinel.mcp_tools_editor_ops.send_action",
             return_value={"success": True},
         ) as mock_send:
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "editor_set_property",
                     {
                         "hierarchy_path": "/Obj",
@@ -3892,8 +3799,7 @@ class TestEditorSetPropertyValueSemantics(unittest.TestCase):
             "prefab_sentinel.mcp_tools_editor_ops.send_action",
             return_value={"success": True},
         ) as mock_send:
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "editor_set_property",
                     {
                         "hierarchy_path": "/Obj",
@@ -3934,8 +3840,7 @@ class TestEditorSerializedPropertyTools(unittest.TestCase):
             "prefab_sentinel.mcp_tools_editor_serialized_property.send_action",
             return_value=bridge_response,
         ) as mock_send:
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "editor_serialized_property_read",
                     {
                         "hierarchy_path": "/Obj",
@@ -3970,8 +3875,7 @@ class TestEditorSerializedPropertyTools(unittest.TestCase):
             "prefab_sentinel.mcp_tools_editor_serialized_property.send_action",
             return_value=bridge_response,
         ) as mock_send:
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "editor_serialized_property_read",
                     {
                         "hierarchy_path": "/Obj",
@@ -4009,7 +3913,7 @@ class TestEditorSerializedPropertyTools(unittest.TestCase):
         with patch("prefab_sentinel.mcp_tools_editor_serialized_property.send_action") as mock_send:
             for payload, expected_code in cases:
                 with self.subTest(expected_code=expected_code):
-                    _, result = _run(server.call_tool("editor_serialized_property_read", payload))
+                    result = structured_payload(call_tool_result(server,"editor_serialized_property_read", payload))
                     self.assertEqual((False, expected_code), (result["success"], result["code"]))
         mock_send.assert_not_called()
 
@@ -4019,14 +3923,12 @@ class TestEditorSerializedPropertyTools(unittest.TestCase):
             "prefab_sentinel.mcp_tools_editor_serialized_property.send_action",
             return_value={"success": True, "code": "EDITOR_CTRL_SERIALIZED_PROPERTY_LIST_OK"},
         ) as mock_send:
-            _, default_result = _run(
-                server.call_tool(
+            default_result = structured_payload(call_tool_result(server,
                     "editor_serialized_property_list",
                     {"hierarchy_path": "/Obj", "component_type": "ExampleComponent"},
                 )
             )
-            _, cursor_result = _run(
-                server.call_tool(
+            cursor_result = structured_payload(call_tool_result(server,
                     "editor_serialized_property_list",
                     {
                         "hierarchy_path": "/Obj",
@@ -4079,7 +3981,7 @@ class TestEditorSerializedPropertyTools(unittest.TestCase):
             for extra, expected_code in cases:
                 payload = {**base, **extra}
                 with self.subTest(expected_code=expected_code, payload=payload):
-                    _, result = _run(server.call_tool("editor_serialized_property_list", payload))
+                    result = structured_payload(call_tool_result(server,"editor_serialized_property_list", payload))
                     self.assertEqual((False, expected_code), (result["success"], result["code"]))
         mock_send.assert_not_called()
 
@@ -4101,7 +4003,7 @@ class TestEditorSerializedPropertyTools(unittest.TestCase):
                     "property_path": "m_Name",
                     **extra,
                 }
-                _run(server.call_tool("editor_serialized_property_write", payload))
+                (call_tool_result(server,"editor_serialized_property_write", payload))
                 kwargs = mock_send.call_args.kwargs
                 self.assertTrue(kwargs[present_key])
                 self.assertEqual(expected_value, kwargs[value_key])
@@ -4123,7 +4025,7 @@ class TestEditorSerializedPropertyTools(unittest.TestCase):
             for extra, expected_code in cases:
                 payload = {**base, **extra}
                 with self.subTest(expected_code=expected_code):
-                    _, result = _run(server.call_tool("editor_serialized_property_write", payload))
+                    result = structured_payload(call_tool_result(server,"editor_serialized_property_write", payload))
                     self.assertEqual((False, expected_code), (result["success"], result["code"]))
         mock_send.assert_not_called()
 
@@ -4137,8 +4039,7 @@ class TestEditorSerializedPropertyTools(unittest.TestCase):
             "confirm": True,
         }
         with patch("prefab_sentinel.mcp_tools_editor_serialized_property.send_action") as mock_send:
-            _, rejected = _run(
-                server.call_tool(
+            rejected = structured_payload(call_tool_result(server,
                     "editor_serialized_property_write",
                     {**base, "change_reason": "   "},
                 )
@@ -4153,8 +4054,7 @@ class TestEditorSerializedPropertyTools(unittest.TestCase):
                 "success": True,
                 "code": "EDITOR_CTRL_SERIALIZED_PROPERTY_WRITE_OK",
             }
-            _, accepted = _run(
-                server.call_tool(
+            accepted = structured_payload(call_tool_result(server,
                     "editor_serialized_property_write",
                     {**base, "change_reason": "  audit reason  "},
                 )
@@ -4185,8 +4085,7 @@ class TestEditorSetUdonSharpFieldValueSemantics(unittest.TestCase):
             "prefab_sentinel.mcp_tools_editor_udonsharp.send_action",
             return_value={"success": True},
         ) as mock_send:
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "editor_set_udonsharp_field",
                     {
                         "hierarchy_path": "/UI/PlayButton",
@@ -4211,8 +4110,7 @@ class TestEditorSetUdonSharpFieldValueSemantics(unittest.TestCase):
         with patch(
             "prefab_sentinel.mcp_tools_editor_udonsharp.send_action",
         ) as mock_send:
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "editor_set_udonsharp_field",
                     {
                         "hierarchy_path": "/UI/PlayButton",
@@ -4240,8 +4138,7 @@ class TestEditorDictPathValueSemantics(unittest.TestCase):
             "prefab_sentinel.mcp_tools_editor_ops.send_action",
             return_value={"success": True},
         ) as mock_send:
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "editor_set_properties",
                     {
                         "hierarchy_path": "/Obj",
@@ -4265,8 +4162,7 @@ class TestEditorDictPathValueSemantics(unittest.TestCase):
             "prefab_sentinel.mcp_tools_editor_batch.send_action",
             return_value={"success": True},
         ) as mock_send:
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "editor_batch_set_property",
                     {
                         "operations": [
@@ -4295,119 +4191,172 @@ class TestEditorDictPathValueSemantics(unittest.TestCase):
 class TestEditorArgumentNaming(unittest.TestCase):
     """T-53-1: editor_* address/property arguments conform to the conventions.
 
-    A conforming argument name is accepted; the legacy name raises TypeError.
+    Conforming names are accepted directly; legacy names stay absent from public
+    schemas, and missing canonical required fields drive protocol validation.
     """
 
     def setUp(self) -> None:
         os.environ.pop("UNITYTOOL_BRIDGE_WATCH_DIR", None)
+        self.server = create_server()
 
-    def _tool_fn(self, name: str):
-        return create_server()._tool_manager._tools[name].fn
+    def _call_tool(self, name: str, arguments: dict[str, object]) -> dict[str, Any]:
+        result = call_tool_result(self.server, name, arguments)
+        self.assertIs(result.is_error, False)
+        payload = structured_payload(result)
+        self.assertEqual({"success": True}, payload)
+        return payload
+
+    def _assert_schema_omits(
+        self,
+        name: str,
+        *legacy_arguments: str,
+    ) -> None:
+        tools_by_name = {
+            tool.name: tool for tool in run(self.server.list_tools())
+        }
+        properties = cast(
+            dict[str, Any],
+            tools_by_name[name].input_schema["properties"],
+        )
+        for legacy_argument in legacy_arguments:
+            self.assertNotIn(legacy_argument, properties)
+
+    def _assert_protocol_error(
+        self,
+        name: str,
+        arguments: dict[str, object],
+        canonical_argument: str,
+    ) -> None:
+        async def invoke() -> CallToolResult:
+            async with Client(self.server, mode="2026-07-28") as client:
+                return await client.call_tool(name, arguments)
+
+        result = run(invoke())
+        self.assertTrue(result.is_error)
+        self.assertIsNone(result.structured_content)
+        self.assertIsInstance(result.content[0], TextContent)
+        content = cast(TextContent, result.content[0])
+        self.assertIn(canonical_argument, content.text)
 
     def test_conforming_argument_names_accepted(self) -> None:
-        # editor_set_parent: parent_hierarchy_path
         with patch(
             "prefab_sentinel.mcp_tools_editor_ops.send_action",
             return_value={"success": True},
         ) as send:
-            self._tool_fn("editor_set_parent")(
-                hierarchy_path="/A",
-                parent_hierarchy_path="/B",
+            self._call_tool(
+                "editor_set_parent",
+                {
+                    "hierarchy_path": "/A",
+                    "parent_hierarchy_path": "/B",
+                },
             )
         send.assert_called_once()
-        # editor_open_scene: asset_path
+
         with patch(
             "prefab_sentinel.mcp_tools_editor_batch.send_action",
             return_value={"success": True},
         ) as send:
-            self._tool_fn("editor_open_scene")(asset_path="Assets/X.unity")
+            self._call_tool("editor_open_scene", {"asset_path": "Assets/X.unity"})
         send.assert_called_once()
-        # editor_set_material: material_asset_path
+
         with patch(
             "prefab_sentinel.mcp_tools_editor_write.send_action",
             return_value={"success": True},
         ) as send:
-            self._tool_fn("editor_set_material")(
-                hierarchy_path="/A",
-                material_index=0,
-                material_asset_path="Assets/M.mat",
+            self._call_tool(
+                "editor_set_material",
+                {
+                    "hierarchy_path": "/A",
+                    "material_index": 0,
+                    "material_asset_path": "Assets/M.mat",
+                },
             )
         send.assert_called_once()
-        # editor_wire_persistent_listener: target_hierarchy_path
+
         with patch(
             "prefab_sentinel.mcp_tools_editor_udonsharp.send_action",
             return_value={"success": True},
         ) as send:
-            self._tool_fn("editor_wire_persistent_listener")(
-                hierarchy_path="/A",
-                property_name="onValueChanged",
-                target_hierarchy_path="/B",
-                method="M",
-                arg="x",
-                confirm=True,
-                change_reason="wire listener",
+            self._call_tool(
+                "editor_wire_persistent_listener",
+                {
+                    "hierarchy_path": "/A",
+                    "property_name": "onValueChanged",
+                    "target_hierarchy_path": "/B",
+                    "method": "M",
+                    "arg": "x",
+                    "confirm": True,
+                    "change_reason": "wire listener",
+                },
             )
         send.assert_called_once()
 
-    def test_legacy_parent_path_argument_raises_type_error(self) -> None:
-        fn = self._tool_fn("editor_set_parent")
-        with self.assertRaises(TypeError) as cm:
-            fn(hierarchy_path="/A", parent_path="/B")
-        self.assertIn("parent_path", str(cm.exception))
+    def test_legacy_parent_path_is_absent_from_public_schema(self) -> None:
+        self._assert_schema_omits("editor_set_parent", "parent_path")
 
-    def test_legacy_scene_path_argument_raises_type_error(self) -> None:
-        fn = self._tool_fn("editor_open_scene")
-        with self.assertRaises(TypeError) as cm:
-            fn(scene_path="Assets/X.unity")
-        self.assertIn("scene_path", str(cm.exception))
+    def test_legacy_scene_path_is_absent_and_asset_path_is_required(self) -> None:
+        self._assert_schema_omits("editor_open_scene", "scene_path")
+        self._assert_protocol_error(
+            "editor_open_scene",
+            {"scene_path": "Assets/X.unity"},
+            "asset_path",
+        )
 
-    def test_legacy_material_path_argument_raises_type_error(self) -> None:
-        fn = self._tool_fn("editor_set_material")
-        with self.assertRaises(TypeError) as cm:
-            fn(hierarchy_path="/A", material_index=0, material_path="Assets/M.mat")
-        self.assertIn("material_path", str(cm.exception))
+    def test_legacy_material_path_is_absent_from_public_schema(self) -> None:
+        self._assert_schema_omits("editor_set_material", "material_path")
 
-    def test_legacy_target_path_argument_raises_type_error(self) -> None:
-        fn = self._tool_fn("editor_wire_persistent_listener")
-        with self.assertRaises(TypeError) as cm:
-            fn(
-                hierarchy_path="/A",
-                property_name="onValueChanged",
-                target_path="/B",
-                method="M",
-                arg="x",
-            )
-        self.assertIn("target_path", str(cm.exception))
+    def test_legacy_target_path_is_absent_and_canonical_field_is_required(self) -> None:
+        self._assert_schema_omits(
+            "editor_wire_persistent_listener",
+            "target_path",
+        )
+        self._assert_protocol_error(
+            "editor_wire_persistent_listener",
+            {
+                "hierarchy_path": "/A",
+                "property_name": "onValueChanged",
+                "target_path": "/B",
+                "method": "M",
+                "arg": "x",
+            },
+            "target_hierarchy_path",
+        )
 
-    def test_legacy_event_path_argument_raises_type_error(self) -> None:
+    def test_legacy_event_path_is_absent_and_canonical_field_is_required(self) -> None:
         """Issue #53/#58: the former event_path argument no longer binds."""
-        fn = self._tool_fn("editor_wire_persistent_listener")
-        with self.assertRaises(TypeError) as cm:
-            fn(
-                hierarchy_path="/A",
-                event_path="onValueChanged",
-                target_hierarchy_path="/B",
-                method="M",
-                arg="x",
-            )
-        self.assertIn("event_path", str(cm.exception))
+        self._assert_schema_omits(
+            "editor_wire_persistent_listener",
+            "event_path",
+        )
+        self._assert_protocol_error(
+            "editor_wire_persistent_listener",
+            {
+                "hierarchy_path": "/A",
+                "event_path": "onValueChanged",
+                "target_hierarchy_path": "/B",
+                "method": "M",
+                "arg": "x",
+            },
+            "property_name",
+        )
 
     def test_listener_property_name_travels_on_event_wire_field(self) -> None:
-        """Issue #61: the property_name argument is forwarded on the
-        event_property_name wire field; the misleading event_path wire
-        key is gone."""
+        """Issue #61: property_name uses event_property_name on the wire."""
         with patch(
             "prefab_sentinel.mcp_tools_editor_udonsharp.send_action",
             return_value={"success": True},
         ) as send:
-            self._tool_fn("editor_wire_persistent_listener")(
-                hierarchy_path="/A",
-                property_name="OnX",
-                target_hierarchy_path="/B",
-                method="M",
-                arg="x",
-                confirm=True,
-                change_reason="wire listener",
+            self._call_tool(
+                "editor_wire_persistent_listener",
+                {
+                    "hierarchy_path": "/A",
+                    "property_name": "OnX",
+                    "target_hierarchy_path": "/B",
+                    "method": "M",
+                    "arg": "x",
+                    "confirm": True,
+                    "change_reason": "wire listener",
+                },
             )
         kwargs = send.call_args.kwargs
         self.assertEqual(
@@ -4426,23 +4375,27 @@ class TestEditorArgumentNaming(unittest.TestCase):
 
 
 class TestEditorSetParentWireField(unittest.TestCase):
-    """Issue #56 — editor_set_parent transmits the parent address on the
-    dedicated parent_hierarchy_path wire field, not the rename field."""
+    """Issue #56 — editor_set_parent uses the dedicated parent wire field."""
 
     def setUp(self) -> None:
         os.environ.pop("UNITYTOOL_BRIDGE_WATCH_DIR", None)
+        self.server = create_server()
 
-    def _tool_fn(self, name: str):
-        return create_server()._tool_manager._tools[name].fn
+    def _call_set_parent(self, arguments: dict[str, object]) -> None:
+        result = call_tool_result(self.server, "editor_set_parent", arguments)
+        self.assertIs(result.is_error, False)
+        self.assertEqual({"success": True}, structured_payload(result))
 
     def test_parent_address_travels_on_dedicated_field(self) -> None:
         with patch(
             "prefab_sentinel.mcp_tools_editor_ops.send_action",
             return_value={"success": True},
         ) as send:
-            self._tool_fn("editor_set_parent")(
-                hierarchy_path="/A",
-                parent_hierarchy_path="/B",
+            self._call_set_parent(
+                {
+                    "hierarchy_path": "/A",
+                    "parent_hierarchy_path": "/B",
+                },
             )
         kwargs = send.call_args.kwargs
         self.assertEqual(
@@ -4464,7 +4417,7 @@ class TestEditorSetParentWireField(unittest.TestCase):
             "prefab_sentinel.mcp_tools_editor_ops.send_action",
             return_value={"success": True},
         ) as send:
-            self._tool_fn("editor_set_parent")(hierarchy_path="/A")
+            self._call_set_parent({"hierarchy_path": "/A"})
         kwargs = send.call_args.kwargs
         self.assertEqual(
             ("editor_set_parent", ""),
@@ -4483,8 +4436,7 @@ class TestEditorWriteTools(unittest.TestCase):
     def test_editor_instantiate_delegates(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_write.send_action", return_value={"success": True}) as mock_send:
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "editor_instantiate",
                     {
                         "asset_path": "Assets/Prefabs/Mic.prefab",
@@ -4503,8 +4455,7 @@ class TestEditorWriteTools(unittest.TestCase):
     def test_editor_instantiate_no_position(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_write.send_action", return_value={"success": True}) as mock_send:
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "editor_instantiate",
                     {
                         "asset_path": "Assets/Prefabs/Mic.prefab",
@@ -4520,8 +4471,7 @@ class TestEditorWriteTools(unittest.TestCase):
     def test_editor_instantiate_invalid_position_count(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_write.send_action"):
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "editor_instantiate",
                     {
                         "asset_path": "Assets/X.prefab",
@@ -4535,8 +4485,7 @@ class TestEditorWriteTools(unittest.TestCase):
     def test_editor_instantiate_invalid_position_value(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_write.send_action"):
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "editor_instantiate",
                     {
                         "asset_path": "Assets/X.prefab",
@@ -4550,8 +4499,7 @@ class TestEditorWriteTools(unittest.TestCase):
     def test_editor_set_material_delegates(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_write.send_action", return_value={"success": True}) as mock_send:
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "editor_set_material",
                     {
                         "hierarchy_path": "/Body",
@@ -4570,8 +4518,7 @@ class TestEditorWriteTools(unittest.TestCase):
     def test_editor_set_material_property_delegates(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_write.send_action", return_value={"success": True}) as mock_send:
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "editor_set_material_property",
                     {
                         "hierarchy_path": "/Foo",
@@ -4594,8 +4541,7 @@ class TestEditorWriteTools(unittest.TestCase):
     def test_editor_set_material_property_requires_audit_pair(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_write.send_action") as mock_send:
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "editor_set_material_property",
                     {
                         "hierarchy_path": "/Foo",
@@ -4616,8 +4562,7 @@ class TestEditorWriteTools(unittest.TestCase):
     def test_editor_batch_set_material_property_delegates(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_batch.send_action", return_value={"success": True}) as mock_send:
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "editor_batch_set_material_property",
                     {
                         "hierarchy_path": "/Avatar/Hair",
@@ -4643,8 +4588,7 @@ class TestEditorWriteTools(unittest.TestCase):
     def test_editor_batch_set_material_property_by_path_delegates(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_batch.send_action", return_value={"success": True}) as mock_send:
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "editor_batch_set_material_property",
                     {
                         "material_asset_path": "Assets/Materials/Hair.mat",
@@ -4663,8 +4607,7 @@ class TestEditorWriteTools(unittest.TestCase):
     def test_editor_batch_set_material_property_by_guid_delegates(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_batch.send_action", return_value={"success": True}) as mock_send:
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "editor_batch_set_material_property",
                     {
                         "material_asset_guid": "abc123def456abc123def456abc123de",
@@ -4684,7 +4627,7 @@ class TestEditorWriteTools(unittest.TestCase):
     def test_editor_delete_delegates(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_write.send_action", return_value={"success": True}) as mock_send:
-            _run(server.call_tool("editor_delete", {"hierarchy_path": "/OldObject"}))
+            (call_tool_result(server,"editor_delete", {"hierarchy_path": "/OldObject"}))
         mock_send.assert_called_once_with(action="delete_object", hierarchy_path="/OldObject")
 
     def test_editor_add_component_preserves_reused_envelope(self) -> None:
@@ -4713,8 +4656,7 @@ class TestEditorWriteTools(unittest.TestCase):
             "prefab_sentinel.mcp_tools_editor_write.send_action",
             return_value=bridge_response,
         ):
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "editor_add_component",
                     {
                         "hierarchy_path": "/Player",
@@ -4751,8 +4693,7 @@ class TestEditorWriteTools(unittest.TestCase):
             "prefab_sentinel.mcp_tools_editor_write.send_action",
             return_value=bridge_response,
         ):
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "editor_add_component",
                     {
                         "hierarchy_path": "/Player",
@@ -4767,8 +4708,7 @@ class TestEditorWriteTools(unittest.TestCase):
     def test_editor_remove_component_delegates(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_write.send_action", return_value={"success": True}) as mock_send:
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "editor_remove_component",
                     {
                         "hierarchy_path": "/Player",
@@ -4785,8 +4725,7 @@ class TestEditorWriteTools(unittest.TestCase):
     def test_editor_remove_component_with_index(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_write.send_action", return_value={"success": True}) as mock_send:
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "editor_remove_component",
                     {
                         "hierarchy_path": "/Player",
@@ -4808,8 +4747,7 @@ class TestEditorWriteTools(unittest.TestCase):
         with patch(
             "prefab_sentinel.mcp_tools_editor_advanced.send_action", return_value={"success": True, "data": {}}
         ) as mock_send:
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "vrcsdk_upload",
                     {
                         "target_type": "avatar",
@@ -4836,8 +4774,7 @@ class TestEditorWriteTools(unittest.TestCase):
         """confirm=True without change_reason returns error without calling bridge."""
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_advanced.send_action") as mock_send:
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "vrcsdk_upload",
                     {
                         "target_type": "avatar",
@@ -4856,8 +4793,7 @@ class TestEditorWriteTools(unittest.TestCase):
         """Empty platforms list returns validation error."""
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_advanced.send_action") as mock_send:
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "vrcsdk_upload",
                     {
                         "target_type": "avatar",
@@ -4875,8 +4811,7 @@ class TestEditorWriteTools(unittest.TestCase):
         """Invalid platform name returns validation error."""
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_advanced.send_action") as mock_send:
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "vrcsdk_upload",
                     {
                         "target_type": "avatar",
@@ -4894,8 +4829,7 @@ class TestEditorWriteTools(unittest.TestCase):
         """Duplicate platform returns validation error."""
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_advanced.send_action") as mock_send:
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "vrcsdk_upload",
                     {
                         "target_type": "avatar",
@@ -4921,8 +4855,7 @@ class TestEditorWriteTools(unittest.TestCase):
             },
         }
         with patch("prefab_sentinel.mcp_tools_editor_advanced.send_action", return_value=bridge_response):
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "vrcsdk_upload",
                     {
                         "target_type": "avatar",
@@ -4949,8 +4882,7 @@ class TestEditorWriteTools(unittest.TestCase):
             },
         }
         with patch("prefab_sentinel.mcp_tools_editor_advanced.send_action", return_value=bridge_response):
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "vrcsdk_upload",
                     {
                         "target_type": "avatar",
@@ -4974,8 +4906,7 @@ class TestEditorWriteTools(unittest.TestCase):
         server = create_server()
         bridge_response = {"success": True, "data": {"phase": "validated"}}
         with patch("prefab_sentinel.mcp_tools_editor_advanced.send_action", return_value=bridge_response):
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "vrcsdk_upload",
                     {
                         "target_type": "avatar",
@@ -4990,8 +4921,7 @@ class TestEditorWriteTools(unittest.TestCase):
     def test_editor_get_blend_shapes_delegates(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_write.send_action", return_value={"success": True}) as mock_send:
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "editor_get_blend_shapes",
                     {
                         "hierarchy_path": "/Avatar/Body",
@@ -5012,8 +4942,7 @@ class TestEditorWriteTools(unittest.TestCase):
     def test_editor_get_blend_shapes_default_filter(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_write.send_action", return_value={"success": True}) as mock_send:
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "editor_get_blend_shapes",
                     {
                         "hierarchy_path": "/Avatar/Body",
@@ -5031,8 +4960,7 @@ class TestEditorWriteTools(unittest.TestCase):
     def test_editor_set_blend_shape_delegates(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_write.send_action", return_value={"success": True}) as mock_send:
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "editor_set_blend_shape",
                     {
                         "hierarchy_path": "/Avatar/Body",
@@ -5051,13 +4979,13 @@ class TestEditorWriteTools(unittest.TestCase):
     def test_editor_list_menu_items_delegates(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_write.send_action", return_value={"success": True}) as mock_send:
-            _run(server.call_tool("editor_list_menu_items", {"prefix": "Tools/"}))
+            (call_tool_result(server,"editor_list_menu_items", {"prefix": "Tools/"}))
         mock_send.assert_called_once_with(action="list_menu_items", filter="Tools/")
 
     def test_editor_list_menu_items_default_prefix(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_write.send_action", return_value={"success": True}) as mock_send:
-            _run(server.call_tool("editor_list_menu_items", {}))
+            (call_tool_result(server,"editor_list_menu_items", {}))
         mock_send.assert_called_once_with(action="list_menu_items", filter="")
 
     def test_editor_execute_menu_item_delegates(self) -> None:
@@ -5068,8 +4996,7 @@ class TestEditorWriteTools(unittest.TestCase):
         """
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_write.send_action", return_value={"success": True}) as mock_send:
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "editor_execute_menu_item",
                     {
                         "menu_path": "Tools/NDMF/Manual Bake",
@@ -5093,8 +5020,7 @@ class TestEditorWriteTools(unittest.TestCase):
         """
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_write.send_action", return_value={"success": True}) as mock_send:
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "editor_execute_menu_item",
                     {
                         "menu_path": "Tools/NDMF/Manual Bake",
@@ -5129,8 +5055,7 @@ class TestEditorWriteTools(unittest.TestCase):
             "prefab_sentinel.mcp_tools_editor_write.send_action",
             return_value=bridge_envelope,
         ):
-            _, envelope = _run(
-                server.call_tool(
+            envelope = structured_payload(call_tool_result(server,
                     "editor_execute_menu_item",
                     {
                         "menu_path": "Tools/NDMF/Manual Bake",
@@ -5151,7 +5076,7 @@ class TestEditorWriteTools(unittest.TestCase):
         ]
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_batch.send_action", return_value={"success": True}) as mock_send:
-            _run(server.call_tool("editor_batch_add_component", {"operations": operations}))
+            (call_tool_result(server,"editor_batch_add_component", {"operations": operations}))
         self.assertIn("properties", operations[0])
         call_kwargs = mock_send.call_args[1]
         sent = json.loads(call_kwargs["batch_operations_json"])
@@ -5171,8 +5096,7 @@ class TestEditorExecTools(unittest.TestCase):
             "prefab_sentinel.mcp_tools_editor_exec.send_action",
             return_value={"success": True, "code": "EDITOR_CTRL_RUN_SCRIPT_OK"},
         ) as mock_send:
-            _, parsed = _run(
-                server.call_tool(
+            parsed = structured_payload(call_tool_result(server,
                     "editor_run_script",
                     {
                         "code": "public static void Run() {}",
@@ -5199,8 +5123,7 @@ class TestEditorExecTools(unittest.TestCase):
         ``CHANGE_REASON_REQUIRED`` without contacting the bridge."""
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_exec.send_action") as mock_send:
-            _, parsed = _run(
-                server.call_tool(
+            parsed = structured_payload(call_tool_result(server,
                     "editor_run_script",
                     {
                         "code": "public static void Run() {}",
@@ -5218,8 +5141,7 @@ class TestEditorExecTools(unittest.TestCase):
         ``CHANGE_REASON_REQUIRED`` and the bridge is never invoked."""
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_exec.send_action") as mock_send:
-            _, parsed = _run(
-                server.call_tool(
+            parsed = structured_payload(call_tool_result(server,
                     "editor_run_script",
                     {
                         "code": "public static void Run() {}",
@@ -5248,8 +5170,7 @@ class TestInspectionTools(unittest.TestCase):
         server = create_server()
         with patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_cls:
             mock_cls.default.return_value = mock_orch
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "inspect_materials",
                     {
                         "asset_path": "Assets/Avatar.prefab",
@@ -5274,8 +5195,7 @@ class TestInspectionTools(unittest.TestCase):
         server = create_server()
         with patch("prefab_sentinel.session_cache.Phase1Orchestrator") as mock_cls:
             mock_cls.default.return_value = mock_orch
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "validate_structure",
                     {
                         "asset_path": "Assets/Scene.unity",
@@ -5307,8 +5227,7 @@ class TestRevertOverridesTool(unittest.TestCase):
             "prefab_sentinel.mcp_tools_patch.revert_overrides_impl",
             return_value=mock_resp,
         ) as mock_revert:
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "revert_overrides",
                     {
                         "asset_path": "Assets/V.prefab",
@@ -5340,8 +5259,7 @@ class TestRevertOverridesTool(unittest.TestCase):
             "prefab_sentinel.mcp_tools_patch.revert_overrides_impl",
             return_value=mock_resp,
         ) as mock_revert:
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "revert_overrides",
                     {
                         "asset_path": "Assets/V.prefab",
@@ -5371,8 +5289,7 @@ class TestRevertOverridesTool(unittest.TestCase):
             "prefab_sentinel.mcp_tools_patch.revert_overrides_impl",
             return_value=mock_resp,
         ) as mock_revert:
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "revert_overrides",
                     {
                         "asset_path": "Assets/V.prefab",
@@ -5391,8 +5308,7 @@ class TestRevertOverridesTool(unittest.TestCase):
         with patch(
             "prefab_sentinel.mcp_tools_patch.revert_overrides_impl",
         ) as mock_revert:
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "revert_overrides",
                     {
                         "asset_path": "Assets/V.prefab",
@@ -5424,7 +5340,7 @@ class TestInspectHierarchyTool(unittest.TestCase):
             "get_orchestrator",
             return_value=mock_orch,
         ):
-            _, result = _run(server.call_tool("inspect_hierarchy", {"asset_path": "Assets/A.prefab"}))
+            result = structured_payload(call_tool_result(server,"inspect_hierarchy", {"asset_path": "Assets/A.prefab"}))
 
         self.assertTrue(result["success"])
         mock_orch.inspect_hierarchy.assert_called_once_with(
@@ -5448,8 +5364,7 @@ class TestInspectHierarchyTool(unittest.TestCase):
             "get_orchestrator",
             return_value=mock_orch,
         ):
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "inspect_hierarchy",
                     {
                         "asset_path": "Assets/A.prefab",
@@ -5480,8 +5395,7 @@ class TestInspectHierarchyTool(unittest.TestCase):
             "get_orchestrator",
             return_value=mock_orch,
         ):
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "inspect_hierarchy",
                     {
                         "asset_path": "Assets/A.prefab",
@@ -5508,8 +5422,7 @@ class TestInspectHierarchyTool(unittest.TestCase):
             "get_orchestrator",
             return_value=mock_orch,
         ):
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "inspect_hierarchy",
                     {
                         "asset_path": "Assets/A.prefab",
@@ -5538,8 +5451,7 @@ class TestEffectiveInspectorTools(unittest.TestCase):
             "get_orchestrator",
             return_value=mock_orch,
         ):
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "inspect_transform_effective_values",
                     {"asset_path": "Assets/Host.prefab", "symbol_path": "Root/Child"},
                 )
@@ -5567,8 +5479,7 @@ class TestEffectiveInspectorTools(unittest.TestCase):
             "get_orchestrator",
             return_value=mock_orch,
         ):
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "inspect_unity_event_listeners",
                     {
                         "asset_path": "Assets/Control.prefab",
@@ -5629,8 +5540,7 @@ class TestValidateRuntimeTool(unittest.TestCase):
 
         server = create_server()
         with patch.object(ProjectSession, "get_orchestrator", return_value=mock_orch):
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "validate_runtime",
                     {"asset_path": "Assets/Scenes/Main.unity"},
                 )
@@ -5661,8 +5571,7 @@ class TestValidateRuntimeTool(unittest.TestCase):
 
         server = create_server()
         with patch.object(ProjectSession, "get_orchestrator", return_value=mock_orch):
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "validate_runtime",
                     {
                         "asset_path": "Assets/S.unity",
@@ -5746,7 +5655,7 @@ class TestPatchApplyTool(unittest.TestCase):
             "get_orchestrator",
             return_value=mock_orch,
         ):
-            _, result = _run(server.call_tool("patch_apply", {"plan": plan_json}))
+            result = structured_payload(call_tool_result(server,"patch_apply", {"plan": plan_json}))
 
         self.assertTrue(result["success"])
         mock_orch.patch_apply.assert_called_once_with(
@@ -5780,8 +5689,7 @@ class TestPatchApplyTool(unittest.TestCase):
             "get_orchestrator",
             return_value=mock_orch,
         ):
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "patch_apply",
                     {
                         "plan": plan_json,
@@ -5839,8 +5747,7 @@ class TestPatchApplyTool(unittest.TestCase):
                     return_value=orchestrator,
                 ),
             ):
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "patch_apply",
                         {"plan": plan},
                     )
@@ -5951,8 +5858,7 @@ class TestPatchApplyTool(unittest.TestCase):
                     return_value=orchestrator,
                 ),
             ):
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "patch_apply",
                         {
                             "plan": {
@@ -6082,8 +5988,7 @@ class TestPatchApplyTool(unittest.TestCase):
         secret = "SECRET_JSON"
         server = create_server()
 
-        _, result = _run(
-            server.call_tool(
+        result = structured_payload(call_tool_result(server,
                 "patch_apply",
                 {"plan": f'{{"plan_version": "{secret}"'},
             )
@@ -6113,8 +6018,7 @@ class TestPatchApplyTool(unittest.TestCase):
                 "get_orchestrator",
                 return_value=orchestrator,
             ):
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "patch_apply",
                         {
                             "plan": {
@@ -6154,8 +6058,7 @@ class TestPatchApplyTool(unittest.TestCase):
             "get_orchestrator",
             side_effect=ValueError(secret),
         ) as get_orchestrator:
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "patch_apply",
                     {
                         "plan": plan,
@@ -6192,8 +6095,7 @@ class TestPatchApplyTool(unittest.TestCase):
             "get_orchestrator",
             return_value=mock_orch,
         ) as get_orchestrator:
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "patch_apply",
                     {
                         "plan": plan,
@@ -6239,8 +6141,7 @@ class TestPatchApplyTool(unittest.TestCase):
             "get_orchestrator",
             return_value=mock_orch,
         ) as get_orchestrator:
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "patch_apply",
                     {
                         "plan": plan,
@@ -6336,8 +6237,7 @@ class TestPatchApplyTool(unittest.TestCase):
                                 return_value=orchestrator,
                             ),
                         ):
-                            _, result = _run(
-                                server.call_tool(
+                            result = structured_payload(call_tool_result(server,
                                     "patch_apply",
                                     {
                                         "plan": plan,
@@ -6382,8 +6282,7 @@ class TestPatchApplyTool(unittest.TestCase):
             "get_orchestrator",
             return_value=mock_orchestrator,
         ):
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "patch_apply",
                     {
                         "plan": "[]",
@@ -6411,8 +6310,7 @@ class TestPatchApplyTool(unittest.TestCase):
             "get_orchestrator",
             return_value=mock_orch,
         ):
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "patch_apply",
                     {
                         "plan": '{"plan_version": "2"}',
@@ -6432,8 +6330,7 @@ class TestPatchApplyTool(unittest.TestCase):
             "get_orchestrator",
             return_value=mock_orch,
         ):
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "patch_apply",
                     {
                         "plan": '{"plan_version": "2"}',
@@ -6490,8 +6387,7 @@ class TestPatchTransactionAuditPreflight(unittest.TestCase):
                 "get_orchestrator",
                 return_value=orchestrator,
             ):
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "patch_apply",
                         {
                             "plan": plan,
@@ -6584,8 +6480,7 @@ class TestPatchTransactionAuditPreflight(unittest.TestCase):
                     return_value=orchestrator,
                 ),
             ):
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "patch_apply",
                         {
                             "plan": self._ELIGIBLE_PLAN,
@@ -6688,8 +6583,7 @@ class TestPatchTransactionAuditPreflight(unittest.TestCase):
                     return_value=orchestrator,
                 ),
             ):
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "patch_apply",
                         {
                             "plan": plan,
@@ -6896,8 +6790,7 @@ class TestPatchTransactionAuditPreflight(unittest.TestCase):
             "get_orchestrator",
             return_value=mock_orch,
         ):
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "patch_apply",
                     {
                         "plan": self._ELIGIBLE_PLAN,
@@ -7085,8 +6978,7 @@ class TestPatchTransactionAuditPreflight(unittest.TestCase):
                         return_value=orchestrator,
                     ),
                 ):
-                    _, result = _run(
-                        server.call_tool(
+                    result = structured_payload(call_tool_result(server,
                             "patch_apply",
                             {
                                 "plan": self._ELIGIBLE_PLAN,
@@ -7283,8 +7175,7 @@ class TestPatchTransactionAuditPreflight(unittest.TestCase):
                     "get_orchestrator",
                     return_value=orchestrator,
                 ):
-                    _, result = _run(
-                        server.call_tool(
+                    result = structured_payload(call_tool_result(server,
                             "patch_apply",
                             {
                                 "plan": {
@@ -7491,7 +7382,7 @@ class TestActivateProjectBatchScope(unittest.TestCase):
         mock_build.return_value = {}
         mock_guid.return_value = {}
         server = create_server()
-        _, result = _run(server.call_tool("activate_project", {"scope": "Assets/MyScope"}))
+        result = structured_payload(call_tool_result(server,"activate_project", {"scope": "Assets/MyScope"}))
 
         self.assertEqual(True, result["success"], result)
         self.assertNotIn("suggested_reads", result["data"])
@@ -7510,7 +7401,7 @@ class TestKnowledgeResourcesNotRegisteredForBatch(unittest.TestCase):
 
     def test_create_server_registers_no_knowledge_resources(self) -> None:
         server = create_server()
-        resources = _run(server.list_resources())
+        resources = run(server.list_resources())
 
         knowledge_uris = [str(r.uri) for r in resources if "knowledge/" in str(r.uri)]
         self.assertEqual([], knowledge_uris)
@@ -7598,16 +7489,17 @@ class TestExpectedRootProviderLifespan(unittest.TestCase):
 
         async def exercise() -> dict[str, object]:
             server = create_server(project_root=expected_root)
-            async with server._mcp_server.lifespan(cast(Any, server)):
+            async with Client(server, mode="2026-07-28"):
                 result, _ = self._send_with_fake_response(self._successful_editor_state(actual_root))
             return result
 
-        result = _run(exercise())
+        result = run(exercise())
+        data = cast(dict[str, object], result["data"])
 
         self.assertEqual(False, result["success"], result)
         self.assertEqual("EDITOR_BRIDGE_PROJECT_ROOT_MISMATCH", result["code"])
-        self.assertEqual(expected_root, result["data"]["expected_project_root"])
-        self.assertEqual(actual_root, result["data"]["actual_project_root"])
+        self.assertEqual(expected_root, data["expected_project_root"])
+        self.assertEqual(actual_root, data["actual_project_root"])
 
     def test_lifespan_clears_expected_root_before_shutdown(self) -> None:
         expected_root = "/workspace/ExpectedProject"
@@ -7620,10 +7512,10 @@ class TestExpectedRootProviderLifespan(unittest.TestCase):
             server = create_server(project_root=expected_root)
             with patch("prefab_sentinel.session.ProjectSession.shutdown", fail_shutdown):
                 with self.assertRaisesRegex(RuntimeError, "shutdown failed"):
-                    async with server._mcp_server.lifespan(cast(Any, server)):
+                    async with Client(server, mode="2026-07-28"):
                         pass
 
-        _run(exercise_failed_shutdown())
+        run(exercise_failed_shutdown())
         try:
             result, _ = self._send_with_fake_response(self._successful_editor_state(actual_root))
             self.assertEqual(True, result["success"], result)
@@ -7665,8 +7557,7 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         old_meta.write_text("guid: abc", encoding="utf-8")
 
         server = create_server(project_root=str(self._project_root))
-        _, result = _run(
-            server.call_tool(
+        result = structured_payload(call_tool_result(server,
                 "deploy_bridge",
                 {"target_dir": str(self._target)},
             )
@@ -7683,8 +7574,7 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         """When parent has no old files, removed_old_files is empty."""
         self._mock_successful_refresh(mock_send)
         server = create_server(project_root=str(self._project_root))
-        _, result = _run(
-            server.call_tool(
+        result = structured_payload(call_tool_result(server,
                 "deploy_bridge",
                 {"target_dir": str(self._target)},
             )
@@ -7699,8 +7589,7 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self._mock_successful_refresh(mock_send)
         deep_target = self._project_root / "Assets" / "NewDir" / "SubDir" / "Bridge"
         server = create_server(project_root=str(self._project_root))
-        _, result = _run(
-            server.call_tool(
+        result = structured_payload(call_tool_result(server,
                 "deploy_bridge",
                 {"target_dir": str(deep_target)},
             )
@@ -7714,8 +7603,7 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         """VRCSDKUploadHandler.cs is always copied unconditionally."""
         self._mock_successful_refresh(mock_send)
         server = create_server(project_root=str(self._project_root))
-        _, result = _run(
-            server.call_tool(
+        result = structured_payload(call_tool_result(server,
                 "deploy_bridge",
                 {"target_dir": str(self._target)},
             )
@@ -7730,8 +7618,7 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         """PrefabSentinel.Editor.asmdef is copied alongside C# files."""
         self._mock_successful_refresh(mock_send)
         server = create_server(project_root=str(self._project_root))
-        _, result = _run(
-            server.call_tool(
+        result = structured_payload(call_tool_result(server,
                 "deploy_bridge",
                 {"target_dir": str(self._target)},
             )
@@ -7746,8 +7633,7 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         """Response data must not contain skipped_files key."""
         self._mock_successful_refresh(mock_send)
         server = create_server(project_root=str(self._project_root))
-        _, result = _run(
-            server.call_tool(
+        result = structured_payload(call_tool_result(server,
                 "deploy_bridge",
                 {"target_dir": str(self._target)},
             )
@@ -7764,8 +7650,7 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         (parent / "PrefabSentinel.EditorBridge.cs").write_text("// old", encoding="utf-8")
 
         server = create_server(project_root=str(self._project_root))
-        _, result = _run(
-            server.call_tool(
+        result = structured_payload(call_tool_result(server,
                 "deploy_bridge",
                 {"target_dir": str(self._target)},
             )
@@ -7784,8 +7669,7 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         (parent / "PrefabSentinel.Legacy.cs").write_text("// old", encoding="utf-8")
 
         server = create_server(project_root=str(self._project_root))
-        _, result = _run(
-            server.call_tool(
+        result = structured_payload(call_tool_result(server,
                 "deploy_bridge",
                 {"target_dir": str(self._target)},
             )
@@ -7804,8 +7688,7 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         (self._target / "Dummy.cs.meta").write_text("guid: dummy", encoding="utf-8")
 
         server = create_server(project_root=str(self._project_root))
-        _, result = _run(
-            server.call_tool(
+        result = structured_payload(call_tool_result(server,
                 "deploy_bridge",
                 {"target_dir": str(self._target)},
             )
@@ -7824,8 +7707,7 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         (subdir / "keep.txt").write_text("keep", encoding="utf-8")
 
         server = create_server(project_root=str(self._project_root))
-        _, result = _run(
-            server.call_tool(
+        result = structured_payload(call_tool_result(server,
                 "deploy_bridge",
                 {"target_dir": str(self._target)},
             )
@@ -7843,8 +7725,7 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         (self._target / "OldFile.cs").write_text("// old", encoding="utf-8")
 
         server = create_server(project_root=str(self._project_root))
-        _, result = _run(
-            server.call_tool(
+        result = structured_payload(call_tool_result(server,
                 "deploy_bridge",
                 {"target_dir": str(self._target)},
             )
@@ -7860,8 +7741,7 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         (self._target / "Stale.cs").write_text("// stale", encoding="utf-8")
 
         server = create_server(project_root=str(self._project_root))
-        _, result = _run(
-            server.call_tool(
+        result = structured_payload(call_tool_result(server,
                 "deploy_bridge",
                 {"target_dir": str(self._target)},
             )
@@ -7876,8 +7756,7 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         self._mock_successful_refresh(mock_send)
         fresh_target = self._project_root / "Assets" / "Editor" / "FreshDeploy"
         server = create_server(project_root=str(self._project_root))
-        _, result = _run(
-            server.call_tool(
+        result = structured_payload(call_tool_result(server,
                 "deploy_bridge",
                 {"target_dir": str(fresh_target)},
             )
@@ -7900,8 +7779,7 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         mock_send.return_value = refresh_failure
 
         server = create_server(project_root=str(self._project_root))
-        _, result = _run(
-            server.call_tool(
+        result = structured_payload(call_tool_result(server,
                 "deploy_bridge",
                 {"target_dir": str(self._target)},
             )
@@ -7928,8 +7806,7 @@ class TestDeployBridgeCleanup(unittest.TestCase):
         mcp_mod.__file__ = str(fake_pkg / "mcp_tools_session.py")
         try:
             server = create_server(project_root=str(self._project_root))
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "deploy_bridge",
                     {"target_dir": str(self._target)},
                 )
@@ -7962,8 +7839,7 @@ class TestCopyAssetTool(unittest.TestCase):
             "get_orchestrator",
             return_value=mock_orch,
         ):
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "copy_asset",
                     {
                         "source_path": "Assets/Mat/A.mat",
@@ -7990,8 +7866,7 @@ class TestCopyAssetTool(unittest.TestCase):
             "get_orchestrator",
             return_value=mock_orch,
         ):
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "copy_asset",
                     {
                         "source_path": "Assets/Mat/A.mat",
@@ -8022,8 +7897,7 @@ class TestRenameAssetTool(unittest.TestCase):
             "get_orchestrator",
             return_value=mock_orch,
         ):
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "rename_asset",
                     {
                         "asset_path": "Assets/Mat/Old.mat",
@@ -8050,8 +7924,7 @@ class TestRenameAssetTool(unittest.TestCase):
             "get_orchestrator",
             return_value=mock_orch,
         ):
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "rename_asset",
                     {
                         "asset_path": "Assets/Mat/Old.mat",
@@ -8082,8 +7955,7 @@ class PatchAssetDeleteToolTests(unittest.TestCase):
             "get_orchestrator",
             return_value=mock_orch,
         ):
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "delete_asset",
                     {"asset_path": "Assets/Foo.prefab"},
                 )
@@ -8110,8 +7982,7 @@ class PatchAssetDeleteToolTests(unittest.TestCase):
             "get_orchestrator",
             return_value=mock_orch,
         ):
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "delete_assets",
                     {"asset_paths": ["Assets/Foo.prefab"]},
                 )
@@ -8137,8 +8008,7 @@ class PatchAssetDeleteToolTests(unittest.TestCase):
             patch.object(ProjectSession, "get_orchestrator", return_value=mock_orch),
             patch.object(ProjectSession, "resolve_scope", return_value="Assets/Resolved"),
         ):
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "delete_assets",
                     {
                         "asset_paths": ["Assets/Foo.prefab"],
@@ -8167,8 +8037,7 @@ class PatchAssetDeleteToolTests(unittest.TestCase):
             "get_orchestrator",
             return_value=mock_orch,
         ):
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "delete_assets",
                     {
                         "asset_paths": ["Assets/Foo.prefab"],
@@ -8197,8 +8066,7 @@ class TestSetMaterialPropertyTool(unittest.TestCase):
             "get_orchestrator",
             return_value=mock_orch,
         ):
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "set_material_property",
                     {
                         "asset_path": "Assets/M.mat",
@@ -8327,8 +8195,7 @@ class TestCopyComponentFieldsTool(unittest.TestCase):
                 mock_orch.patch_apply.return_value = mock_resp
                 mock_cls.default.return_value = mock_orch
 
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "copy_component_fields",
                         {
                             "src_asset_path": str(src),
@@ -8382,8 +8249,7 @@ class TestCopyComponentFieldsTool(unittest.TestCase):
                 mock_orch.patch_apply.return_value = mock_resp
                 mock_cls.default.return_value = mock_orch
 
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "copy_component_fields",
                         {
                             "src_asset_path": str(src),
@@ -8420,8 +8286,7 @@ class TestCopyComponentFieldsTool(unittest.TestCase):
                 mock_orch.patch_apply.return_value = mock_resp
                 mock_cls.default.return_value = mock_orch
 
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "copy_component_fields",
                         {
                             "src_asset_path": str(src),
@@ -8453,8 +8318,7 @@ class TestCopyComponentFieldsTool(unittest.TestCase):
                 mock_orch.patch_apply.return_value = mock_resp
                 mock_cls.default.return_value = mock_orch
 
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "copy_component_fields",
                         {
                             "src_asset_path": str(p),
@@ -8488,8 +8352,7 @@ class TestCopyComponentFieldsTool(unittest.TestCase):
                 mock_orch.maybe_auto_refresh.return_value = "done"
                 mock_cls.default.return_value = mock_orch
 
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "copy_component_fields",
                         {
                             "src_asset_path": str(src),
@@ -8526,8 +8389,7 @@ class TestCopyComponentFieldsTool(unittest.TestCase):
             src.write_text(src_text, encoding="utf-8")
             dst.write_text(dst_text, encoding="utf-8")
 
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "copy_component_fields",
                     {
                         "src_asset_path": str(src),
@@ -8555,8 +8417,7 @@ class TestCopyComponentFieldsTool(unittest.TestCase):
             src.write_text(src_text, encoding="utf-8")
             dst.write_text(dst_text, encoding="utf-8")
 
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "copy_component_fields",
                     {
                         "src_asset_path": str(src),
@@ -8583,8 +8444,7 @@ class TestCopyComponentFieldsTool(unittest.TestCase):
             src.write_text(src_text, encoding="utf-8")
             dst.write_text(dst_text, encoding="utf-8")
 
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "copy_component_fields",
                     {
                         "src_asset_path": str(src),
@@ -8610,8 +8470,7 @@ class TestCopyComponentFieldsTool(unittest.TestCase):
             src.write_text(src_text, encoding="utf-8")
             dst.write_text(dst_text, encoding="utf-8")
 
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "copy_component_fields",
                     {
                         "src_asset_path": str(src),
@@ -8637,8 +8496,7 @@ class TestCopyComponentFieldsTool(unittest.TestCase):
             src.write_text(src_text, encoding="utf-8")
             dst.write_text(dst_text, encoding="utf-8")
 
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "copy_component_fields",
                     {
                         "src_asset_path": str(src),
@@ -8664,8 +8522,7 @@ class TestCopyComponentFieldsTool(unittest.TestCase):
             src.write_text(src_text, encoding="utf-8")
             dst.write_text(dst_text, encoding="utf-8")
 
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "copy_component_fields",
                     {
                         "src_asset_path": str(src),
@@ -8714,8 +8571,7 @@ class TestCopyComponentFieldsTool(unittest.TestCase):
                 mock_cls.default.return_value = mock_orch
 
                 server_inst = create_server(project_root=td)
-                _, result = _run(
-                    server_inst.call_tool(
+                result = structured_payload(call_tool_result(server_inst,
                         "copy_component_fields",
                         {
                             "src_asset_path": str(src),
@@ -8744,8 +8600,7 @@ class TestCopyComponentFieldsTool(unittest.TestCase):
             src.write_text(src_text, encoding="utf-8")
             dst.write_text(dst_text, encoding="utf-8")
 
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "copy_component_fields",
                     {
                         "src_asset_path": str(src),
@@ -8773,8 +8628,7 @@ class TestCopyComponentFieldsTool(unittest.TestCase):
             src.write_text(src_text, encoding="utf-8")
             dst.write_text(dst_text, encoding="utf-8")
 
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "copy_component_fields",
                     {
                         "src_asset_path": str(src),
@@ -8793,8 +8647,7 @@ class TestCopyComponentFieldsTool(unittest.TestCase):
     def test_confirm_requires_change_reason(self) -> None:
         server = create_server()
 
-        _, result = _run(
-            server.call_tool(
+        result = structured_payload(call_tool_result(server,
                 "copy_component_fields",
                 {
                     "src_asset_path": "Assets/DoesNotExist.prefab",
@@ -8869,7 +8722,7 @@ class TestSetPropertiesTool(unittest.TestCase):
     def test_legacy_tool_name_not_registered(self) -> None:
         """T-41-2: ``set_component_fields`` is not registered; ``set_properties`` is."""
         server = create_server()
-        names = {t.name for t in _run(server.list_tools())}
+        names = {t.name for t in run(server.list_tools())}
         self.assertIn("set_properties", names)
         self.assertNotIn("set_component_fields", names)
 
@@ -8890,8 +8743,7 @@ class TestSetPropertiesTool(unittest.TestCase):
                 mock_orch.serialized_value_patch_apply.return_value = mock_resp
                 mock_cls.default.return_value = mock_orch
 
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "set_properties",
                         {
                             "asset_path": str(p),
@@ -8907,19 +8759,16 @@ class TestSetPropertiesTool(unittest.TestCase):
             result["symbol_resolution"]["resolved_component"],
         )
 
-    def test_component_keyword_argument_raises_type_error(self) -> None:
-        """T-41-1: passing a residual ``component`` keyword raises ``TypeError``."""
-        server = create_server()
-        registered = server._tool_manager._tools
-        fn = registered["set_properties"].fn
-        with self.assertRaises(TypeError) as cm:
-            fn(
-                asset_path="x.prefab",
-                symbol_path="Cube/MeshRenderer",
-                component="MeshRenderer",
-                properties={"m_Enabled": 0},
-            )
-        self.assertIn("component", str(cm.exception))
+    def test_component_keyword_is_absent_from_public_schema(self) -> None:
+        """T-41-1: the residual component keyword is not published."""
+        tools_by_name = {
+            tool.name: tool for tool in run(create_server().list_tools())
+        }
+        properties = cast(
+            dict[str, Any],
+            tools_by_name["set_properties"].input_schema["properties"],
+        )
+        self.assertNotIn("component", properties)
 
     def test_dry_run_multiple_properties(self) -> None:
         """Dry-run with 2 properties builds a 2-op plan and enriches symbol_resolution."""
@@ -8938,8 +8787,7 @@ class TestSetPropertiesTool(unittest.TestCase):
                 mock_orch.serialized_value_patch_apply.return_value = mock_resp
                 mock_cls.default.return_value = mock_orch
 
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "set_properties",
                         {
                             "asset_path": str(p),
@@ -8989,8 +8837,7 @@ class TestSetPropertiesTool(unittest.TestCase):
                 # Two MeshRenderers on one GameObject — addressing the
                 # first by #0 must resolve uniquely. ``m_GameObject`` is
                 # the property present on the bare synthetic fixture.
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "set_properties",
                         {
                             "asset_path": str(p),
@@ -9026,8 +8873,7 @@ class TestSetPropertiesTool(unittest.TestCase):
 
                 report_path = Path(td) / "report.json"
                 server = create_server(project_root=td)
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "set_properties",
                         {
                             "asset_path": str(p),
@@ -9076,8 +8922,7 @@ class TestSetPropertiesTool(unittest.TestCase):
                 mock_cls.default.return_value = mock_orch
 
                 server = create_server(project_root=td)
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "set_properties",
                         {
                             "asset_path": str(p),
@@ -9115,8 +8960,7 @@ class TestSetPropertiesTool(unittest.TestCase):
                 mock_orch.serialized_value_patch_apply.return_value = mock_resp
                 mock_cls.default.return_value = mock_orch
 
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "set_properties",
                         {
                             "asset_path": str(p),
@@ -9140,8 +8984,7 @@ class TestSetPropertiesTool(unittest.TestCase):
             p = Path(td) / "test.prefab"
             p.write_text(text, encoding="utf-8")
 
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "set_properties",
                     {
                         "asset_path": str(p),
@@ -9168,8 +9011,7 @@ class TestSetPropertiesTool(unittest.TestCase):
             p.write_text(text, encoding="utf-8")
 
             # Two root GameObjects named 'Cube', each with a MeshRenderer.
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "set_properties",
                     {
                         "asset_path": str(p),
@@ -9194,8 +9036,7 @@ class TestSetPropertiesTool(unittest.TestCase):
             p = Path(td) / "test.prefab"
             p.write_text(text, encoding="utf-8")
 
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "set_properties",
                     {
                         "asset_path": str(p),
@@ -9220,8 +9061,7 @@ class TestSetPropertiesTool(unittest.TestCase):
             p = Path(td) / "test.prefab"
             p.write_text(text, encoding="utf-8")
 
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "set_properties",
                     {
                         "asset_path": str(p),
@@ -9240,8 +9080,7 @@ class TestSetPropertiesTool(unittest.TestCase):
         """EMPTY_FIELDS error returned before any file I/O when properties dict is empty."""
         server = create_server()
 
-        _, result = _run(
-            server.call_tool(
+        result = structured_payload(call_tool_result(server,
                 "set_properties",
                 {
                     "asset_path": "Assets/DoesNotExist.prefab",
@@ -9257,8 +9096,7 @@ class TestSetPropertiesTool(unittest.TestCase):
         """CHANGE_REASON_REQUIRED when confirm=True without change_reason."""
         server = create_server()
 
-        _, result = _run(
-            server.call_tool(
+        result = structured_payload(call_tool_result(server,
                 "set_properties",
                 {
                     "asset_path": "Assets/DoesNotExist.prefab",
@@ -9279,8 +9117,7 @@ class TestSetPropertiesTool(unittest.TestCase):
         """OUT_REPORT_REQUIRED when confirm=True with change_reason but no out_report."""
         server = create_server()
 
-        _, result = _run(
-            server.call_tool(
+        result = structured_payload(call_tool_result(server,
                 "set_properties",
                 {
                     "asset_path": "Assets/DoesNotExist.prefab",
@@ -9306,8 +9143,7 @@ class TestSetPropertiesTool(unittest.TestCase):
         ):
             outside_report = Path(outside_directory) / "outside_project.json"
             server = create_server(project_root=project_directory)
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "set_properties",
                     {
                         "asset_path": "Assets/DoesNotExist.prefab",
@@ -9349,8 +9185,7 @@ class TestSetPropertiesTool(unittest.TestCase):
                 mock_orch = MagicMock()
                 mock_cls.default.return_value = mock_orch
                 server = create_server(project_root=project_directory)
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "set_properties",
                         {
                             "asset_path": str(asset_path),
@@ -9376,8 +9211,7 @@ class TestSetPropertiesTool(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             out_path = Path(td) / "report.json"
             server = create_server()  # no project_root
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "set_properties",
                     {
                         "asset_path": "Assets/DoesNotExist.prefab",
@@ -9413,8 +9247,7 @@ class TestSetPropertiesTool(unittest.TestCase):
                 mock_cls.default.return_value = mock_orch
 
                 server = create_server(project_root=td)
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "set_properties",
                         {
                             "asset_path": str(p),
@@ -9447,8 +9280,7 @@ class TestSetPropertiesTool(unittest.TestCase):
                 mock_cls.default.return_value = mock_orch
 
                 server = create_server(project_root=td)
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "set_properties",
                         {
                             "asset_path": str(p),
@@ -9482,8 +9314,7 @@ class TestSetPropertiesTool(unittest.TestCase):
                 mock_cls.default.return_value = mock_orch
 
                 server = create_server(project_root=td)
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "set_properties",
                         {
                             "asset_path": str(p),
@@ -9518,8 +9349,7 @@ class TestSetPropertiesTool(unittest.TestCase):
                 mock_cls.default.return_value = mock_orch
 
                 server = create_server(project_root=td)
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "set_properties",
                         {
                             "asset_path": str(p),
@@ -9560,8 +9390,7 @@ class TestSetPropertiesTool(unittest.TestCase):
                 mock_orch.maybe_auto_refresh.return_value = "done"
                 mock_cls.default.return_value = mock_orch
                 server = create_server(project_root=project_directory)
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "set_properties",
                         {
                             "asset_path": str(asset_path),
@@ -9620,8 +9449,7 @@ class TestSetPropertiesTool(unittest.TestCase):
                 )
                 mock_cls.default.return_value = mock_orch
                 server = create_server(project_root=project_directory)
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "set_properties",
                         {
                             "asset_path": str(asset_path),
@@ -9680,8 +9508,7 @@ class TestSetPropertiesTool(unittest.TestCase):
                 )
                 mock_cls.default.return_value = mock_orch
                 server = create_server(project_root=project_directory)
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "set_properties",
                         {
                             "asset_path": str(asset_path),
@@ -9762,8 +9589,7 @@ class TestSetPropertiesTool(unittest.TestCase):
                 )
                 mock_cls.default.return_value = mock_orch
                 server = create_server(project_root=project_directory)
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "set_properties",
                         {
                             "asset_path": str(asset_path),
@@ -9816,8 +9642,7 @@ class TestSetPropertiesTool(unittest.TestCase):
                 )
                 mock_cls.default.return_value = mock_orch
                 server = create_server(project_root=project_directory)
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "set_properties",
                         {
                             "asset_path": str(asset_path),
@@ -9876,8 +9701,7 @@ class TestSetPropertiesTool(unittest.TestCase):
                 ) as invalidate_symbol_tree,
             ):
                 server = create_server(project_root=project_directory)
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "set_properties",
                         {
                             "asset_path": str(asset_path),
@@ -9916,8 +9740,7 @@ class TestSetPropertiesTool(unittest.TestCase):
             escaped_target = (Path(project_directory).parent / "secret.prefab").resolve()
             with patch.object(ProjectSession, "get_orchestrator") as get_orchestrator:
                 server = create_server(project_root=project_directory)
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "set_properties",
                         {
                             "asset_path": "../secret.prefab",
@@ -9993,8 +9816,7 @@ class TestSetPropertiesTool(unittest.TestCase):
                 mock_orch.serialized_value_patch_apply.return_value = failed_response
                 mock_cls.default.return_value = mock_orch
                 server = create_server(project_root=project_directory)
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "set_properties",
                         {
                             "asset_path": str(asset_path),
@@ -10070,8 +9892,7 @@ class TestSetPropertiesTool(unittest.TestCase):
                 mock_cls.default.return_value = mock_orch
 
                 server = create_server(project_root=td)
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "set_properties",
                         {
                             "asset_path": str(p),
@@ -10104,8 +9925,7 @@ class TestSetPropertiesTool(unittest.TestCase):
             p = Path(td) / "test.prefab"
             p.write_text(text, encoding="utf-8")
 
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "set_properties",
                     {
                         "asset_path": str(p),
@@ -10165,8 +9985,7 @@ class TestSetPropertyTool37(unittest.TestCase):
                 mock_orch.serialized_value_patch_apply.return_value = mock_resp
                 mock_cls.default.return_value = mock_orch
 
-                _run(
-                    server.call_tool(
+                (call_tool_result(server,
                         "set_property",
                         {
                             "asset_path": str(p),
@@ -10206,8 +10025,7 @@ class TestSetPropertyTool37(unittest.TestCase):
                 mock_orch.serialized_value_patch_apply.return_value = mock_resp
                 mock_cls.default.return_value = mock_orch
 
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "set_property",
                         {
                             "asset_path": str(p),
@@ -10241,7 +10059,7 @@ class TestEditorSetPropertiesTool(unittest.TestCase):
     def test_legacy_tool_name_not_registered(self) -> None:
         """T-41-2: ``editor_set_component_fields`` is gone; ``editor_set_properties`` present."""
         server = create_server()
-        names = {t.name for t in _run(server.list_tools())}
+        names = {t.name for t in run(server.list_tools())}
         self.assertIn("editor_set_properties", names)
         self.assertNotIn("editor_set_component_fields", names)
 
@@ -10252,8 +10070,7 @@ class TestEditorSetPropertiesTool(unittest.TestCase):
             "prefab_sentinel.mcp_tools_editor_ops.send_action",
             return_value={"success": True, "data": {}},
         ) as mock_send:
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "editor_set_properties",
                     {
                         "hierarchy_path": "/Foo/Bar",
@@ -10285,8 +10102,7 @@ class TestEditorSetPropertiesTool(unittest.TestCase):
             "prefab_sentinel.mcp_tools_editor_ops.send_action",
             return_value={"success": True, "data": {}},
         ) as mock_send:
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "editor_set_properties",
                     {
                         "hierarchy_path": "/Obj",
@@ -10312,8 +10128,7 @@ class TestEditorSetPropertiesTool(unittest.TestCase):
             "prefab_sentinel.mcp_tools_editor_ops.send_action",
             return_value={"success": True, "data": {}},
         ) as mock_send:
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "editor_set_properties",
                     {
                         "hierarchy_path": "/Ctrl",
@@ -10339,8 +10154,7 @@ class TestEditorSetPropertiesTool(unittest.TestCase):
         """EDITOR_SET_COMP_EMPTY_FIELDS returned for empty properties list."""
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_ops.send_action") as mock_send:
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "editor_set_properties",
                     {
                         "hierarchy_path": "/Obj",
@@ -10361,8 +10175,7 @@ class TestEditorSetPropertiesTool(unittest.TestCase):
         """EDITOR_SET_COMP_INVALID_FIELD when an entry has no 'property_name' key."""
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_ops.send_action") as mock_send:
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "editor_set_properties",
                     {
                         "hierarchy_path": "/Obj",
@@ -10383,8 +10196,7 @@ class TestEditorSetPropertiesTool(unittest.TestCase):
         """EDITOR_SET_COMP_INVALID_FIELD when entry has property_name but no value/ref."""
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_ops.send_action") as mock_send:
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "editor_set_properties",
                     {
                         "hierarchy_path": "/Obj",
@@ -10405,8 +10217,7 @@ class TestEditorSetPropertiesTool(unittest.TestCase):
         """EDITOR_SET_COMP_INVALID_FIELD when entry supplies both value and object_reference."""
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_ops.send_action") as mock_send:
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "editor_set_properties",
                     {
                         "hierarchy_path": "/Obj",
@@ -10446,8 +10257,7 @@ class TestSetPropertiesIntegration(unittest.TestCase):
             p.write_text(text, encoding="utf-8")
 
             server = create_server(project_root=td)
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "set_properties",
                     {
                         "asset_path": str(p),
@@ -10494,8 +10304,7 @@ class TestSetPropertiesIntegration(unittest.TestCase):
             report_path = Path(td) / "report.json"
 
             server = create_server(project_root=td)
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "set_properties",
                     {
                         "asset_path": str(p),
@@ -10530,8 +10339,7 @@ class TestEditorSetPropertiesIntegration(unittest.TestCase):
         follow-up; post-#270 the bridge dispatch surface has no mode env var).
         """
         server = create_server()
-        _, result = _run(
-            server.call_tool(
+        result = structured_payload(call_tool_result(server,
                 "editor_set_properties",
                 {
                     "hierarchy_path": "/DualButtonController/Controller",
@@ -10578,8 +10386,7 @@ class TestSafeSaveAsPrefabPython(unittest.TestCase):
             "prefab_sentinel.mcp_tools_editor_ops.send_action",
             return_value={"success": True, "data": {}},
         ) as mock_send:
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "editor_safe_save_prefab",
                     {
                         "hierarchy_path": "/Obj",
@@ -10625,8 +10432,7 @@ class TestSafeSaveAsPrefabPython(unittest.TestCase):
             "prefab_sentinel.mcp_tools_editor_ops.send_action",
             return_value=bridge_envelope,
         ):
-            _, envelope = _run(
-                server.call_tool(
+            envelope = structured_payload(call_tool_result(server,
                     "editor_safe_save_prefab",
                     {
                         "hierarchy_path": "/Obj",
@@ -10645,8 +10451,7 @@ class TestSafeSaveAsPrefabPython(unittest.TestCase):
             "prefab_sentinel.mcp_tools_editor_ops.send_action",
             return_value={"success": True, "data": {}},
         ) as mock_send:
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "editor_safe_save_prefab",
                     {
                         "hierarchy_path": "/Obj",
@@ -10670,8 +10475,7 @@ class TestSafeSaveAsPrefabPython(unittest.TestCase):
             "prefab_sentinel.mcp_tools_editor_ops.send_action",
             return_value={"success": True, "data": {}},
         ) as mock_send:
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "editor_safe_save_prefab",
                     {
                         "hierarchy_path": "/Obj",
@@ -10694,8 +10498,7 @@ class TestSafeSaveAsPrefabPython(unittest.TestCase):
             "prefab_sentinel.mcp_tools_editor_ops.send_action",
             return_value={"success": True, "data": {}},
         ) as mock_send:
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "editor_safe_save_prefab",
                     {
                         "hierarchy_path": "/Obj",
@@ -10720,7 +10523,7 @@ class TestMcpServerToolNames(unittest.TestCase):
 
     def test_safe_save_prefab_is_only_prefab_save_tool(self) -> None:
         server = create_server()
-        tools = _run(server.list_tools())
+        tools = run(server.list_tools())
         names = {t.name for t in tools}
         self.assertIn("editor_safe_save_prefab", names)
         self.assertNotIn("editor_save_as_prefab", names)
@@ -10732,8 +10535,7 @@ class TestEditorBatchCreateComponents(unittest.TestCase):
     def test_editor_batch_create_components_serialized(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.mcp_tools_editor_batch.send_action", return_value={"success": True}) as mock_send:
-            _run(
-                server.call_tool(
+            (call_tool_result(server,
                     "editor_batch_create",
                     {"objects": [{"name": "Box", "components": ["BoxCollider"]}]},
                 )

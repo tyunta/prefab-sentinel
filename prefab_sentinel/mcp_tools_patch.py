@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 
 from prefab_sentinel.json_io import load_json
 from prefab_sentinel.mcp_validation import require_change_reason
@@ -21,7 +21,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 
-def register_patch_tools(server: FastMCP, session: ProjectSession) -> None:
+def register_patch_tools(server: MCPServer, session: ProjectSession) -> None:
     """Register patch and asset operation tools on *server*."""
 
     @server.tool()

@@ -1,0 +1,4097 @@
+{
+  "_provenance": {
+    "canonicalization": {
+      "comparison": "Materialize missing type=object only on schema nodes that contain properties; no other structural normalization.",
+      "export": "Pydantic JSON serialization converts non-finite numeric schema defaults to JSON null."
+    },
+    "export_api": "create_server().list_tools()",
+    "mcp_sdk_version": "1.26.0",
+    "prefab_sentinel_version": "0.8.9"
+  },
+  "tools": [
+    {
+      "inputSchema": {
+        "properties": {
+          "project_root": {
+            "default": "",
+            "title": "Project Root",
+            "type": "string"
+          },
+          "scope": {
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope"
+        ],
+        "title": "activate_projectArguments",
+        "type": "object"
+      },
+      "name": "activate_project",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "activate_projectDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "asset_path": {
+            "title": "Asset Path",
+            "type": "string"
+          },
+          "change_reason": {
+            "default": "",
+            "title": "Change Reason",
+            "type": "string"
+          },
+          "component_type": {
+            "title": "Component Type",
+            "type": "string"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "symbol_path": {
+            "title": "Symbol Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset_path",
+          "symbol_path",
+          "component_type"
+        ],
+        "title": "add_componentArguments",
+        "type": "object"
+      },
+      "name": "add_component",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "add_componentDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "scope": {
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope"
+        ],
+        "title": "check_field_coverageArguments",
+        "type": "object"
+      },
+      "name": "check_field_coverage",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "check_field_coverageDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "change_reason": {
+            "default": "",
+            "title": "Change Reason",
+            "type": "string"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "dest_path": {
+            "title": "Dest Path",
+            "type": "string"
+          },
+          "source_path": {
+            "title": "Source Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_path",
+          "dest_path"
+        ],
+        "title": "copy_assetArguments",
+        "type": "object"
+      },
+      "name": "copy_asset",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "copy_assetDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "change_reason": {
+            "default": "",
+            "title": "Change Reason",
+            "type": "string"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "dst_asset_path": {
+            "title": "Dst Asset Path",
+            "type": "string"
+          },
+          "dst_symbol_path": {
+            "title": "Dst Symbol Path",
+            "type": "string"
+          },
+          "fields": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Fields"
+          },
+          "src_asset_path": {
+            "title": "Src Asset Path",
+            "type": "string"
+          },
+          "src_symbol_path": {
+            "title": "Src Symbol Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "src_asset_path",
+          "src_symbol_path",
+          "dst_asset_path",
+          "dst_symbol_path"
+        ],
+        "title": "copy_component_fieldsArguments",
+        "type": "object"
+      },
+      "name": "copy_component_fields",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "copy_component_fieldsDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "asset_path": {
+            "title": "Asset Path",
+            "type": "string"
+          },
+          "change_reason": {
+            "default": "",
+            "title": "Change Reason",
+            "type": "string"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "dry_run": {
+            "default": true,
+            "title": "Dry Run",
+            "type": "boolean"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Scope"
+          }
+        },
+        "required": [
+          "asset_path"
+        ],
+        "title": "delete_assetArguments",
+        "type": "object"
+      },
+      "name": "delete_asset",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "delete_assetDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "asset_paths": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Asset Paths",
+            "type": "array"
+          },
+          "change_reason": {
+            "default": "",
+            "title": "Change Reason",
+            "type": "string"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "dry_run": {
+            "default": true,
+            "title": "Dry Run",
+            "type": "boolean"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Scope"
+          }
+        },
+        "required": [
+          "asset_paths"
+        ],
+        "title": "delete_assetsArguments",
+        "type": "object"
+      },
+      "name": "delete_assets",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "delete_assetsDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "target_dir": {
+            "default": "",
+            "title": "Target Dir",
+            "type": "string"
+          }
+        },
+        "title": "deploy_bridgeArguments",
+        "type": "object"
+      },
+      "name": "deploy_bridge",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "deploy_bridgeDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "asset_path": {
+            "title": "Asset Path",
+            "type": "string"
+          },
+          "component_filter": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Component Filter"
+          }
+        },
+        "required": [
+          "asset_path"
+        ],
+        "title": "diff_unity_symbolsArguments",
+        "type": "object"
+      },
+      "name": "diff_unity_symbols",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "diff_unity_symbolsDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "component_type": {
+            "title": "Component Type",
+            "type": "string"
+          },
+          "hierarchy_path": {
+            "title": "Hierarchy Path",
+            "type": "string"
+          },
+          "properties": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Properties"
+          }
+        },
+        "required": [
+          "hierarchy_path",
+          "component_type"
+        ],
+        "title": "editor_add_componentArguments",
+        "type": "object"
+      },
+      "name": "editor_add_component",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_add_componentDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "change_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Change Reason"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "fields_json": {
+            "default": "",
+            "title": "Fields Json",
+            "type": "string"
+          },
+          "hierarchy_path": {
+            "title": "Hierarchy Path",
+            "type": "string"
+          },
+          "type_full_name": {
+            "title": "Type Full Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "hierarchy_path",
+          "type_full_name"
+        ],
+        "title": "editor_add_udonsharp_componentArguments",
+        "type": "object"
+      },
+      "name": "editor_add_udonsharp_component",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_add_udonsharp_componentDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "asset_path": {
+            "title": "Asset Path",
+            "type": "string"
+          },
+          "target_hierarchy_path": {
+            "title": "Target Hierarchy Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset_path",
+          "target_hierarchy_path"
+        ],
+        "title": "_editor_apply_animation_clipArguments",
+        "type": "object"
+      },
+      "name": "editor_apply_animation_clip",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "_editor_apply_animation_clipDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "operations": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Operations",
+            "type": "array"
+          }
+        },
+        "required": [
+          "operations"
+        ],
+        "title": "editor_batch_add_componentArguments",
+        "type": "object"
+      },
+      "name": "editor_batch_add_component",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_batch_add_componentDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "objects": {
+            "items": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                ]
+              },
+              "type": "object"
+            },
+            "title": "Objects",
+            "type": "array"
+          }
+        },
+        "required": [
+          "objects"
+        ],
+        "title": "editor_batch_createArguments",
+        "type": "object"
+      },
+      "name": "editor_batch_create",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_batch_createDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "hierarchy_path": {
+            "title": "Hierarchy Path",
+            "type": "string"
+          },
+          "shapes": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Shapes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "hierarchy_path",
+          "shapes"
+        ],
+        "title": "editor_batch_set_blend_shapeArguments",
+        "type": "object"
+      },
+      "name": "editor_batch_set_blend_shape",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_batch_set_blend_shapeDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "hierarchy_path": {
+            "default": "",
+            "title": "Hierarchy Path",
+            "type": "string"
+          },
+          "material_asset_guid": {
+            "default": "",
+            "title": "Material Asset Guid",
+            "type": "string"
+          },
+          "material_asset_path": {
+            "default": "",
+            "title": "Material Asset Path",
+            "type": "string"
+          },
+          "material_index": {
+            "default": -1,
+            "title": "Material Index",
+            "type": "integer"
+          },
+          "properties": {
+            "items": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "items": {},
+                    "type": "array"
+                  },
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "type": "object"
+            },
+            "title": "Properties",
+            "type": "array"
+          }
+        },
+        "required": [
+          "properties"
+        ],
+        "title": "editor_batch_set_material_propertyArguments",
+        "type": "object"
+      },
+      "name": "editor_batch_set_material_property",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_batch_set_material_propertyDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "operations": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Operations",
+            "type": "array"
+          }
+        },
+        "required": [
+          "operations"
+        ],
+        "title": "editor_batch_set_propertyArguments",
+        "type": "object"
+      },
+      "name": "editor_batch_set_property",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_batch_set_propertyDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "change_reason": {
+            "default": "",
+            "title": "Change Reason",
+            "type": "string"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "save": {
+            "default": true,
+            "title": "Save",
+            "type": "boolean"
+          }
+        },
+        "title": "_editor_close_prefabArguments",
+        "type": "object"
+      },
+      "name": "editor_close_prefab",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "_editor_close_prefabDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "classification_filter": {
+            "default": "all",
+            "title": "Classification Filter",
+            "type": "string"
+          },
+          "cursor": {
+            "default": "",
+            "title": "Cursor",
+            "type": "string"
+          },
+          "log_type_filter": {
+            "default": "all",
+            "title": "Log Type Filter",
+            "type": "string"
+          },
+          "max_entries": {
+            "default": 200,
+            "title": "Max Entries",
+            "type": "integer"
+          },
+          "order": {
+            "default": "newest_first",
+            "title": "Order",
+            "type": "string"
+          },
+          "phase_filter": {
+            "default": "all",
+            "title": "Phase Filter",
+            "type": "string"
+          },
+          "since_request_id": {
+            "default": "",
+            "title": "Since Request Id",
+            "type": "string"
+          },
+          "since_seconds": {
+            "default": 60.0,
+            "title": "Since Seconds",
+            "type": "number"
+          },
+          "since_sequence": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Since Sequence"
+          }
+        },
+        "title": "_editor_consoleArguments",
+        "type": "object"
+      },
+      "name": "editor_console",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "_editor_consoleDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "asset_path": {
+            "title": "Asset Path",
+            "type": "string"
+          },
+          "change_reason": {
+            "default": "",
+            "title": "Change Reason",
+            "type": "string"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "curves": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Curves",
+            "type": "array"
+          }
+        },
+        "required": [
+          "asset_path",
+          "curves"
+        ],
+        "title": "_editor_create_animation_clipArguments",
+        "type": "object"
+      },
+      "name": "editor_create_animation_clip",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "_editor_create_animation_clipDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "parent_hierarchy_path": {
+            "default": "",
+            "title": "Parent Hierarchy Path",
+            "type": "string"
+          },
+          "position": {
+            "default": "",
+            "title": "Position",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "editor_create_emptyArguments",
+        "type": "object"
+      },
+      "name": "editor_create_empty",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_create_emptyDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "asset_path": {
+            "title": "Asset Path"
+          },
+          "asset_type": {
+            "title": "Asset Type"
+          },
+          "change_reason": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Change Reason"
+          },
+          "confirm": {
+            "title": "Confirm"
+          },
+          "out_report": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Out Report"
+          },
+          "parameters": {
+            "title": "Parameters"
+          },
+          "project_root": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Project Root"
+          }
+        },
+        "required": [
+          "asset_type",
+          "asset_path",
+          "parameters",
+          "confirm"
+        ],
+        "title": "editor_create_generated_assetArguments",
+        "type": "object"
+      },
+      "name": "editor_create_generated_asset",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_create_generated_assetDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "name": {
+            "default": "",
+            "title": "Name",
+            "type": "string"
+          },
+          "parent_hierarchy_path": {
+            "default": "",
+            "title": "Parent Hierarchy Path",
+            "type": "string"
+          },
+          "position": {
+            "default": "",
+            "title": "Position",
+            "type": "string"
+          },
+          "primitive_type": {
+            "title": "Primitive Type",
+            "type": "string"
+          },
+          "rotation": {
+            "default": "",
+            "title": "Rotation",
+            "type": "string"
+          },
+          "scale": {
+            "default": "",
+            "title": "Scale",
+            "type": "string"
+          }
+        },
+        "required": [
+          "primitive_type"
+        ],
+        "title": "editor_create_primitiveArguments",
+        "type": "object"
+      },
+      "name": "editor_create_primitive",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_create_primitiveDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "asset_path": {
+            "title": "Asset Path",
+            "type": "string"
+          },
+          "change_reason": {
+            "default": "",
+            "title": "Change Reason",
+            "type": "string"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "asset_path"
+        ],
+        "title": "editor_create_sceneArguments",
+        "type": "object"
+      },
+      "name": "editor_create_scene",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_create_sceneDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "asset_path": {
+            "title": "Asset Path",
+            "type": "string"
+          },
+          "change_reason": {
+            "default": "",
+            "title": "Change Reason",
+            "type": "string"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "output_asset_path": {
+            "default": "",
+            "title": "Output Asset Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset_path"
+        ],
+        "title": "editor_create_udon_program_assetArguments",
+        "type": "object"
+      },
+      "name": "editor_create_udon_program_asset",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_create_udon_program_assetDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "parent_hierarchy_path": {
+            "default": "",
+            "title": "Parent Hierarchy Path",
+            "type": "string"
+          },
+          "properties": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Properties"
+          },
+          "rect": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "items": {
+                    "type": "number"
+                  },
+                  "type": "array"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Rect"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "type"
+        ],
+        "title": "editor_create_ui_elementArguments",
+        "type": "object"
+      },
+      "name": "editor_create_ui_element",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_create_ui_elementDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "hierarchy_path": {
+            "title": "Hierarchy Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "hierarchy_path"
+        ],
+        "title": "editor_deleteArguments",
+        "type": "object"
+      },
+      "name": "editor_delete",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_deleteDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "assume_compiled": {
+            "default": false,
+            "title": "Assume Compiled",
+            "type": "boolean"
+          },
+          "change_reason": {
+            "default": "",
+            "title": "Change Reason",
+            "type": "string"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "menu_path": {
+            "title": "Menu Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "menu_path"
+        ],
+        "title": "editor_execute_menu_itemArguments",
+        "type": "object"
+      },
+      "name": "editor_execute_menu_item",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_execute_menu_itemDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "material_asset_guid": {
+            "default": "",
+            "title": "Material Asset Guid",
+            "type": "string"
+          },
+          "material_asset_path": {
+            "default": "",
+            "title": "Material Asset Path",
+            "type": "string"
+          }
+        },
+        "title": "editor_find_renderers_by_materialArguments",
+        "type": "object"
+      },
+      "name": "editor_find_renderers_by_material",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_find_renderers_by_materialDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {},
+        "title": "_editor_force_scene_view_refreshArguments",
+        "type": "object"
+      },
+      "name": "editor_force_scene_view_refresh",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "_editor_force_scene_view_refreshDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "bounds_policy": {
+            "default": "all_visible_renderers",
+            "title": "Bounds Policy",
+            "type": "string"
+          },
+          "zoom": {
+            "default": 0.0,
+            "title": "Zoom",
+            "type": "number"
+          }
+        },
+        "title": "editor_frameArguments",
+        "type": "object"
+      },
+      "name": "editor_frame",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_frameDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "filter": {
+            "default": "",
+            "title": "Filter",
+            "type": "string"
+          },
+          "hierarchy_path": {
+            "title": "Hierarchy Path",
+            "type": "string"
+          },
+          "limit": {
+            "default": 200,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "default": 0,
+            "title": "Offset",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "hierarchy_path"
+        ],
+        "title": "_editor_get_blend_shapesArguments",
+        "type": "object"
+      },
+      "name": "editor_get_blend_shapes",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "_editor_get_blend_shapesDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "hierarchy_path": {
+            "title": "Hierarchy Path",
+            "type": "string"
+          },
+          "include_children": {
+            "default": true,
+            "title": "Include Children",
+            "type": "boolean"
+          },
+          "source": {
+            "default": "auto",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "hierarchy_path"
+        ],
+        "title": "editor_get_boundsArguments",
+        "type": "object"
+      },
+      "name": "editor_get_bounds",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_get_boundsDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {},
+        "title": "editor_get_cameraArguments",
+        "type": "object"
+      },
+      "name": "editor_get_camera",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_get_cameraDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "hierarchy_path": {
+            "title": "Hierarchy Path",
+            "type": "string"
+          },
+          "material_index": {
+            "title": "Material Index",
+            "type": "integer"
+          },
+          "property_name": {
+            "default": "",
+            "title": "Property Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "hierarchy_path",
+          "material_index"
+        ],
+        "title": "editor_get_material_propertyArguments",
+        "type": "object"
+      },
+      "name": "editor_get_material_property",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_get_material_propertyDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "hierarchy_path": {
+            "title": "Hierarchy Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "hierarchy_path"
+        ],
+        "title": "editor_get_transformArguments",
+        "type": "object"
+      },
+      "name": "editor_get_transform",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_get_transformDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "asset_path": {
+            "title": "Asset Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset_path"
+        ],
+        "title": "_editor_inspect_animation_clipArguments",
+        "type": "object"
+      },
+      "name": "editor_inspect_animation_clip",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "_editor_inspect_animation_clipDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "asset_path": {
+            "title": "Asset Path",
+            "type": "string"
+          },
+          "hierarchy_path": {
+            "default": "",
+            "title": "Hierarchy Path",
+            "type": "string"
+          },
+          "position": {
+            "default": "",
+            "title": "Position",
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset_path"
+        ],
+        "title": "editor_instantiateArguments",
+        "type": "object"
+      },
+      "name": "editor_instantiate",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_instantiateDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "depth": {
+            "default": 1,
+            "title": "Depth",
+            "type": "integer"
+          },
+          "hierarchy_path": {
+            "title": "Hierarchy Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "hierarchy_path"
+        ],
+        "title": "editor_list_childrenArguments",
+        "type": "object"
+      },
+      "name": "editor_list_children",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_list_childrenDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "hierarchy_path": {
+            "title": "Hierarchy Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "hierarchy_path"
+        ],
+        "title": "editor_list_materialsArguments",
+        "type": "object"
+      },
+      "name": "editor_list_materials",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_list_materialsDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "prefix": {
+            "default": "",
+            "title": "Prefix",
+            "type": "string"
+          }
+        },
+        "title": "editor_list_menu_itemsArguments",
+        "type": "object"
+      },
+      "name": "editor_list_menu_items",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_list_menu_itemsDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {},
+        "title": "editor_list_rootsArguments",
+        "type": "object"
+      },
+      "name": "editor_list_roots",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_list_rootsDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "a": {
+            "title": "A",
+            "type": "string"
+          },
+          "b": {
+            "title": "B",
+            "type": "string"
+          },
+          "bounds_source": {
+            "default": "auto",
+            "title": "Bounds Source",
+            "type": "string"
+          },
+          "mode": {
+            "default": "pivot",
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "required": [
+          "a",
+          "b"
+        ],
+        "title": "editor_measure_distanceArguments",
+        "type": "object"
+      },
+      "name": "editor_measure_distance",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_measure_distanceDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "change_reason": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Change Reason"
+          },
+          "confirm": {
+            "title": "Confirm"
+          },
+          "destination_asset_path": {
+            "title": "Destination Asset Path"
+          },
+          "out_report": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Out Report"
+          },
+          "project_root": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Project Root"
+          },
+          "source_asset_path": {
+            "title": "Source Asset Path"
+          }
+        },
+        "required": [
+          "source_asset_path",
+          "destination_asset_path",
+          "confirm"
+        ],
+        "title": "editor_move_assetArguments",
+        "type": "object"
+      },
+      "name": "editor_move_asset",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_move_assetDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "asset_path": {
+            "title": "Asset Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset_path"
+        ],
+        "title": "_editor_open_prefabArguments",
+        "type": "object"
+      },
+      "name": "editor_open_prefab",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "_editor_open_prefabDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "asset_path": {
+            "title": "Asset Path",
+            "type": "string"
+          },
+          "mode": {
+            "default": "single",
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset_path"
+        ],
+        "title": "editor_open_sceneArguments",
+        "type": "object"
+      },
+      "name": "editor_open_scene",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_open_sceneDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "timeout_sec": {
+            "default": 60.0,
+            "title": "Timeout Sec",
+            "type": "number"
+          }
+        },
+        "title": "_editor_recompileArguments",
+        "type": "object"
+      },
+      "name": "editor_recompile",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "_editor_recompileDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "class_name": {
+            "default": "",
+            "title": "Class Name",
+            "type": "string"
+          },
+          "member_name": {
+            "default": "",
+            "title": "Member Name",
+            "type": "string"
+          },
+          "query": {
+            "default": "",
+            "title": "Query",
+            "type": "string"
+          },
+          "scope": {
+            "default": "all",
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "title": "editor_reflectArguments",
+        "type": "object"
+      },
+      "name": "editor_reflect",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_reflectDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {},
+        "title": "_editor_refreshArguments",
+        "type": "object"
+      },
+      "name": "editor_refresh",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "_editor_refreshDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "component_type": {
+            "title": "Component Type",
+            "type": "string"
+          },
+          "hierarchy_path": {
+            "title": "Hierarchy Path",
+            "type": "string"
+          },
+          "index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Index"
+          }
+        },
+        "required": [
+          "hierarchy_path",
+          "component_type"
+        ],
+        "title": "editor_remove_componentArguments",
+        "type": "object"
+      },
+      "name": "editor_remove_component",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_remove_componentDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "hierarchy_path": {
+            "title": "Hierarchy Path",
+            "type": "string"
+          },
+          "new_name": {
+            "title": "New Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "hierarchy_path",
+          "new_name"
+        ],
+        "title": "editor_renameArguments",
+        "type": "object"
+      },
+      "name": "editor_rename",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_renameDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "change_reason": {
+            "default": "",
+            "title": "Change Reason",
+            "type": "string"
+          },
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "compile_timeout_ms": {
+            "default": 15000,
+            "title": "Compile Timeout Ms",
+            "type": "integer"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "title": "_editor_run_scriptArguments",
+        "type": "object"
+      },
+      "name": "editor_run_script",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "_editor_run_scriptDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "cleanup_on_timeout": {
+            "default": false,
+            "title": "Cleanup On Timeout",
+            "type": "boolean"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id"
+        ],
+        "title": "_editor_run_script_pollArguments",
+        "type": "object"
+      },
+      "name": "editor_run_script_poll",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "_editor_run_script_pollDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "change_reason": {
+            "default": "",
+            "title": "Change Reason",
+            "type": "string"
+          },
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "compile_timeout_ms": {
+            "default": 15000,
+            "title": "Compile Timeout Ms",
+            "type": "integer"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "title": "_editor_run_script_submitArguments",
+        "type": "object"
+      },
+      "name": "editor_run_script_submit",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "_editor_run_script_submitDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "timeout_sec": {
+            "default": 300,
+            "title": "Timeout Sec",
+            "type": "integer"
+          }
+        },
+        "title": "editor_run_testsArguments",
+        "type": "object"
+      },
+      "name": "editor_run_tests",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_run_testsDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "asset_path": {
+            "title": "Asset Path",
+            "type": "string"
+          },
+          "change_reason": {
+            "default": "",
+            "title": "Change Reason",
+            "type": "string"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "force_original": {
+            "default": false,
+            "title": "Force Original",
+            "type": "boolean"
+          },
+          "hierarchy_path": {
+            "title": "Hierarchy Path",
+            "type": "string"
+          },
+          "protect_components": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Protect Components",
+            "type": "array"
+          }
+        },
+        "required": [
+          "hierarchy_path",
+          "asset_path",
+          "protect_components"
+        ],
+        "title": "editor_safe_save_prefabArguments",
+        "type": "object"
+      },
+      "name": "editor_safe_save_prefab",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_safe_save_prefabDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "asset_path": {
+            "default": "",
+            "title": "Asset Path",
+            "type": "string"
+          },
+          "change_reason": {
+            "default": "",
+            "title": "Change Reason",
+            "type": "string"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          }
+        },
+        "title": "editor_save_sceneArguments",
+        "type": "object"
+      },
+      "name": "editor_save_scene",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_save_sceneDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "angle": {
+            "default": "",
+            "title": "Angle",
+            "type": "string"
+          },
+          "bounds_policy": {
+            "default": "all_visible_renderers",
+            "title": "Bounds Policy",
+            "type": "string"
+          },
+          "crop_roi": {
+            "default": "",
+            "title": "Crop Roi",
+            "type": "string"
+          },
+          "fit_mode": {
+            "default": "max_axis",
+            "title": "Fit Mode",
+            "type": "string"
+          },
+          "height": {
+            "default": 0,
+            "title": "Height",
+            "type": "integer"
+          },
+          "padding_ratio": {
+            "default": 0.1,
+            "title": "Padding Ratio",
+            "type": "number"
+          },
+          "projection": {
+            "default": "auto",
+            "title": "Projection",
+            "type": "string"
+          },
+          "refresh": {
+            "default": true,
+            "title": "Refresh",
+            "type": "boolean"
+          },
+          "target": {
+            "default": "",
+            "title": "Target",
+            "type": "string"
+          },
+          "target_mode": {
+            "default": "auto",
+            "title": "Target Mode",
+            "type": "string"
+          },
+          "view": {
+            "default": "scene",
+            "title": "View",
+            "type": "string"
+          },
+          "width": {
+            "default": 0,
+            "title": "Width",
+            "type": "integer"
+          }
+        },
+        "title": "_editor_screenshotArguments",
+        "type": "object"
+      },
+      "name": "editor_screenshot",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "_editor_screenshotDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "hierarchy_path": {
+            "title": "Hierarchy Path",
+            "type": "string"
+          },
+          "prefab_asset_path": {
+            "default": "",
+            "title": "Prefab Asset Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "hierarchy_path"
+        ],
+        "title": "editor_selectArguments",
+        "type": "object"
+      },
+      "name": "editor_select",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_selectDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "cap": {
+            "default": 50,
+            "title": "Cap",
+            "type": "integer"
+          },
+          "component_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Component Index"
+          },
+          "component_type": {
+            "title": "Component Type",
+            "type": "string"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cursor"
+          },
+          "depth": {
+            "default": 1,
+            "title": "Depth",
+            "type": "integer"
+          },
+          "hierarchy_path": {
+            "title": "Hierarchy Path",
+            "type": "string"
+          },
+          "root_property_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Root Property Path"
+          }
+        },
+        "required": [
+          "hierarchy_path",
+          "component_type"
+        ],
+        "title": "editor_serialized_property_listArguments",
+        "type": "object"
+      },
+      "name": "editor_serialized_property_list",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_serialized_property_listDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "component_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Component Index"
+          },
+          "component_type": {
+            "title": "Component Type",
+            "type": "string"
+          },
+          "hierarchy_path": {
+            "title": "Hierarchy Path",
+            "type": "string"
+          },
+          "property_path": {
+            "title": "Property Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "hierarchy_path",
+          "component_type",
+          "property_path"
+        ],
+        "title": "editor_serialized_property_readArguments",
+        "type": "object"
+      },
+      "name": "editor_serialized_property_read",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_serialized_property_readDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "array_size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Array Size"
+          },
+          "bool_value": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Bool Value"
+          },
+          "change_reason": {
+            "default": "",
+            "title": "Change Reason",
+            "type": "string"
+          },
+          "component_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Component Index"
+          },
+          "component_type": {
+            "title": "Component Type",
+            "type": "string"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "enum_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Enum Index"
+          },
+          "enum_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Enum Name"
+          },
+          "float_value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Float Value"
+          },
+          "hierarchy_path": {
+            "title": "Hierarchy Path",
+            "type": "string"
+          },
+          "int_value": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Int Value"
+          },
+          "long_value": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Long Value"
+          },
+          "object_reference_asset_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Object Reference Asset Path"
+          },
+          "object_reference_hierarchy_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Object Reference Hierarchy Path"
+          },
+          "object_reference_null": {
+            "default": false,
+            "title": "Object Reference Null",
+            "type": "boolean"
+          },
+          "property_path": {
+            "title": "Property Path",
+            "type": "string"
+          },
+          "string_value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "String Value"
+          }
+        },
+        "required": [
+          "hierarchy_path",
+          "component_type",
+          "property_path"
+        ],
+        "title": "editor_serialized_property_writeArguments",
+        "type": "object"
+      },
+      "name": "editor_serialized_property_write",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_serialized_property_writeDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "hierarchy_path": {
+            "title": "Hierarchy Path",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "weight": {
+            "title": "Weight",
+            "type": "number"
+          }
+        },
+        "required": [
+          "hierarchy_path",
+          "name",
+          "weight"
+        ],
+        "title": "editor_set_blend_shapeArguments",
+        "type": "object"
+      },
+      "name": "editor_set_blend_shape",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_set_blend_shapeDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "look_at": {
+            "default": "",
+            "title": "Look At",
+            "type": "string"
+          },
+          "orthographic": {
+            "default": -1,
+            "title": "Orthographic",
+            "type": "integer"
+          },
+          "pitch": {
+            "default": null,
+            "title": "Pitch",
+            "type": "number"
+          },
+          "pivot": {
+            "default": "",
+            "title": "Pivot",
+            "type": "string"
+          },
+          "position": {
+            "default": "",
+            "title": "Position",
+            "type": "string"
+          },
+          "reset_to_defaults": {
+            "default": false,
+            "title": "Reset To Defaults",
+            "type": "boolean"
+          },
+          "size": {
+            "default": -1.0,
+            "title": "Size",
+            "type": "number"
+          },
+          "yaw": {
+            "default": null,
+            "title": "Yaw",
+            "type": "number"
+          }
+        },
+        "title": "editor_set_cameraArguments",
+        "type": "object"
+      },
+      "name": "editor_set_camera",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_set_cameraDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "hierarchy_path": {
+            "title": "Hierarchy Path",
+            "type": "string"
+          },
+          "material_asset_guid": {
+            "default": "",
+            "title": "Material Asset Guid",
+            "type": "string"
+          },
+          "material_asset_path": {
+            "default": "",
+            "title": "Material Asset Path",
+            "type": "string"
+          },
+          "material_index": {
+            "title": "Material Index",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "hierarchy_path",
+          "material_index"
+        ],
+        "title": "editor_set_materialArguments",
+        "type": "object"
+      },
+      "name": "editor_set_material",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_set_materialDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "change_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Change Reason"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "hierarchy_path": {
+            "title": "Hierarchy Path",
+            "type": "string"
+          },
+          "material_index": {
+            "title": "Material Index",
+            "type": "integer"
+          },
+          "property_name": {
+            "title": "Property Name",
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "hierarchy_path",
+          "material_index",
+          "property_name",
+          "value"
+        ],
+        "title": "editor_set_material_propertyArguments",
+        "type": "object"
+      },
+      "name": "editor_set_material_property",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_set_material_propertyDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "hierarchy_path": {
+            "title": "Hierarchy Path",
+            "type": "string"
+          },
+          "parent_hierarchy_path": {
+            "default": "",
+            "title": "Parent Hierarchy Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "hierarchy_path"
+        ],
+        "title": "editor_set_parentArguments",
+        "type": "object"
+      },
+      "name": "editor_set_parent",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_set_parentDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "component_type": {
+            "title": "Component Type",
+            "type": "string"
+          },
+          "hierarchy_path": {
+            "title": "Hierarchy Path",
+            "type": "string"
+          },
+          "properties": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Properties",
+            "type": "array"
+          }
+        },
+        "required": [
+          "hierarchy_path",
+          "component_type",
+          "properties"
+        ],
+        "title": "editor_set_propertiesArguments",
+        "type": "object"
+      },
+      "name": "editor_set_properties",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_set_propertiesDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "component_type": {
+            "title": "Component Type",
+            "type": "string"
+          },
+          "hierarchy_path": {
+            "title": "Hierarchy Path",
+            "type": "string"
+          },
+          "object_reference": {
+            "default": "",
+            "title": "Object Reference",
+            "type": "string"
+          },
+          "property_name": {
+            "title": "Property Name",
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Value"
+          }
+        },
+        "required": [
+          "hierarchy_path",
+          "component_type",
+          "property_name"
+        ],
+        "title": "editor_set_propertyArguments",
+        "type": "object"
+      },
+      "name": "editor_set_property",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_set_propertyDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "change_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Change Reason"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "expected_length": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Length"
+          },
+          "hierarchy_path": {
+            "title": "Hierarchy Path",
+            "type": "string"
+          },
+          "object_reference": {
+            "default": "",
+            "title": "Object Reference",
+            "type": "string"
+          },
+          "property_name": {
+            "title": "Property Name",
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Value"
+          },
+          "values_json": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Values Json"
+          }
+        },
+        "required": [
+          "hierarchy_path",
+          "property_name"
+        ],
+        "title": "editor_set_udonsharp_fieldArguments",
+        "type": "object"
+      },
+      "name": "editor_set_udonsharp_field",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_set_udonsharp_fieldDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "arg": {
+            "title": "Arg",
+            "type": "string"
+          },
+          "change_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Change Reason"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "hierarchy_path": {
+            "title": "Hierarchy Path",
+            "type": "string"
+          },
+          "method": {
+            "title": "Method",
+            "type": "string"
+          },
+          "property_name": {
+            "title": "Property Name",
+            "type": "string"
+          },
+          "target_hierarchy_path": {
+            "title": "Target Hierarchy Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "hierarchy_path",
+          "property_name",
+          "target_hierarchy_path",
+          "method",
+          "arg"
+        ],
+        "title": "editor_wire_persistent_listenerArguments",
+        "type": "object"
+      },
+      "name": "editor_wire_persistent_listener",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "editor_wire_persistent_listenerDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "asset_or_guid": {
+            "title": "Asset Or Guid",
+            "type": "string"
+          },
+          "max_results": {
+            "default": 100,
+            "title": "Max Results",
+            "type": "integer"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Scope"
+          }
+        },
+        "required": [
+          "asset_or_guid"
+        ],
+        "title": "find_referencing_assetsArguments",
+        "type": "object"
+      },
+      "name": "find_referencing_assets",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "find_referencing_assetsDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "asset_path": {
+            "title": "Asset Path",
+            "type": "string"
+          },
+          "depth": {
+            "default": 0,
+            "title": "Depth",
+            "type": "integer"
+          },
+          "expand_nested": {
+            "default": false,
+            "title": "Expand Nested",
+            "type": "boolean"
+          },
+          "include_fields": {
+            "default": false,
+            "title": "Include Fields",
+            "type": "boolean"
+          },
+          "show_origin": {
+            "default": false,
+            "title": "Show Origin",
+            "type": "boolean"
+          },
+          "symbol_path": {
+            "title": "Symbol Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset_path",
+          "symbol_path"
+        ],
+        "title": "find_unity_symbolArguments",
+        "type": "object"
+      },
+      "name": "find_unity_symbol",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "find_unity_symbolDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {},
+        "title": "get_project_statusArguments",
+        "type": "object"
+      },
+      "name": "get_project_status",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "get_project_statusDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "asset_path": {
+            "title": "Asset Path",
+            "type": "string"
+          },
+          "depth": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Depth"
+          },
+          "detail": {
+            "default": "full",
+            "enum": [
+              "summary",
+              "fields",
+              "full"
+            ],
+            "title": "Detail",
+            "type": "string"
+          },
+          "expand_nested": {
+            "default": false,
+            "title": "Expand Nested",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "asset_path"
+        ],
+        "title": "get_unity_symbolsArguments",
+        "type": "object"
+      },
+      "name": "get_unity_symbols",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "get_unity_symbolsDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "asset_path": {
+            "title": "Asset Path",
+            "type": "string"
+          },
+          "depth": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Depth"
+          },
+          "expand_monobehaviour": {
+            "default": false,
+            "title": "Expand Monobehaviour",
+            "type": "boolean"
+          },
+          "expand_prefab_instances": {
+            "default": false,
+            "title": "Expand Prefab Instances",
+            "type": "boolean"
+          },
+          "show_components": {
+            "default": true,
+            "title": "Show Components",
+            "type": "boolean"
+          },
+          "timeout_sec": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timeout Sec"
+          }
+        },
+        "required": [
+          "asset_path"
+        ],
+        "title": "inspect_hierarchyArguments",
+        "type": "object"
+      },
+      "name": "inspect_hierarchy",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "inspect_hierarchyDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "asset_path": {
+            "title": "Asset Path",
+            "type": "string"
+          },
+          "mode": {
+            "default": "full",
+            "title": "Mode",
+            "type": "string"
+          },
+          "property_names": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Property Names"
+          }
+        },
+        "required": [
+          "asset_path"
+        ],
+        "title": "inspect_material_assetArguments",
+        "type": "object"
+      },
+      "name": "inspect_material_asset",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "inspect_material_assetDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "asset_path": {
+            "title": "Asset Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset_path"
+        ],
+        "title": "inspect_materialsArguments",
+        "type": "object"
+      },
+      "name": "inspect_materials",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "inspect_materialsDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "asset_path": {
+            "title": "Asset Path",
+            "type": "string"
+          },
+          "include_override_origin": {
+            "default": false,
+            "title": "Include Override Origin",
+            "type": "boolean"
+          },
+          "symbol_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Symbol Path"
+          }
+        },
+        "required": [
+          "asset_path"
+        ],
+        "title": "inspect_serialized_surfaceArguments",
+        "type": "object"
+      },
+      "name": "inspect_serialized_surface",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "inspect_serialized_surfaceDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "asset_path": {
+            "title": "Asset Path",
+            "type": "string"
+          },
+          "symbol_path": {
+            "title": "Symbol Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset_path",
+          "symbol_path"
+        ],
+        "title": "inspect_transform_effective_valuesArguments",
+        "type": "object"
+      },
+      "name": "inspect_transform_effective_values",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "inspect_transform_effective_valuesDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "asset_path": {
+            "title": "Asset Path",
+            "type": "string"
+          },
+          "component_type": {
+            "title": "Component Type",
+            "type": "string"
+          },
+          "property_name": {
+            "title": "Property Name",
+            "type": "string"
+          },
+          "symbol_path": {
+            "title": "Symbol Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset_path",
+          "symbol_path",
+          "component_type",
+          "property_name"
+        ],
+        "title": "inspect_unity_event_listenersArguments",
+        "type": "object"
+      },
+      "name": "inspect_unity_event_listeners",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "inspect_unity_event_listenersDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "asset_path": {
+            "title": "Asset Path",
+            "type": "string"
+          },
+          "component_filter": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Component Filter"
+          },
+          "show_origin": {
+            "default": false,
+            "title": "Show Origin",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "asset_path"
+        ],
+        "title": "inspect_variantArguments",
+        "type": "object"
+      },
+      "name": "inspect_variant",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "inspect_variantDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "asset_path": {
+            "title": "Asset Path",
+            "type": "string"
+          },
+          "cursor": {
+            "default": "",
+            "title": "Cursor",
+            "type": "string"
+          },
+          "include_out_of_scope_diagnostics": {
+            "default": false,
+            "title": "Include Out Of Scope Diagnostics",
+            "type": "boolean"
+          },
+          "page_size": {
+            "default": 50,
+            "title": "Page Size",
+            "type": "integer"
+          },
+          "script_filter": {
+            "default": "",
+            "title": "Script Filter",
+            "type": "string"
+          },
+          "summary_only": {
+            "default": false,
+            "title": "Summary Only",
+            "type": "boolean"
+          },
+          "timeout_sec": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timeout Sec"
+          },
+          "udon_only": {
+            "default": false,
+            "title": "Udon Only",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "asset_path"
+        ],
+        "title": "inspect_wiringArguments",
+        "type": "object"
+      },
+      "name": "inspect_wiring",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "inspect_wiringDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "asset_path": {
+            "title": "Asset Path",
+            "type": "string"
+          },
+          "include_override_origin": {
+            "default": false,
+            "title": "Include Override Origin",
+            "type": "boolean"
+          },
+          "symbol_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Symbol Path"
+          },
+          "view_name": {
+            "title": "View Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset_path",
+          "view_name"
+        ],
+        "title": "inspect_with_profileArguments",
+        "type": "object"
+      },
+      "name": "inspect_with_profile",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "inspect_with_profileDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "include_inherited": {
+            "default": false,
+            "title": "Include Inherited",
+            "type": "boolean"
+          },
+          "script_or_guid": {
+            "title": "Script Or Guid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "script_or_guid"
+        ],
+        "title": "list_serialized_fieldsArguments",
+        "type": "object"
+      },
+      "name": "list_serialized_fields",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "list_serialized_fieldsDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "change_reason": {
+            "default": "",
+            "title": "Change Reason",
+            "type": "string"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "out_report": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Out Report"
+          },
+          "plan": {
+            "title": "Plan"
+          },
+          "runtime_allow_warnings": {
+            "default": false,
+            "title": "Runtime Allow Warnings",
+            "type": "boolean"
+          },
+          "runtime_log_file": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Runtime Log File"
+          },
+          "runtime_max_diagnostics": {
+            "default": 200,
+            "title": "Runtime Max Diagnostics",
+            "type": "integer"
+          },
+          "runtime_profile": {
+            "default": "default",
+            "title": "Runtime Profile",
+            "type": "string"
+          },
+          "runtime_scene": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Runtime Scene"
+          },
+          "runtime_since_timestamp": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Runtime Since Timestamp"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Scope"
+          }
+        },
+        "required": [
+          "plan"
+        ],
+        "title": "patch_applyArguments",
+        "type": "object"
+      },
+      "name": "patch_apply",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "patch_applyDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "asset_path": {
+            "title": "Asset Path",
+            "type": "string"
+          },
+          "change_reason": {
+            "default": "",
+            "title": "Change Reason",
+            "type": "string"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "symbol_path": {
+            "title": "Symbol Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset_path",
+          "symbol_path"
+        ],
+        "title": "remove_componentArguments",
+        "type": "object"
+      },
+      "name": "remove_component",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "remove_componentDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "asset_path": {
+            "title": "Asset Path",
+            "type": "string"
+          },
+          "change_reason": {
+            "default": "",
+            "title": "Change Reason",
+            "type": "string"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "new_name": {
+            "title": "New Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset_path",
+          "new_name"
+        ],
+        "title": "rename_assetArguments",
+        "type": "object"
+      },
+      "name": "rename_asset",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "rename_assetDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "asset_path": {
+            "title": "Asset Path",
+            "type": "string"
+          },
+          "change_reason": {
+            "default": "",
+            "title": "Change Reason",
+            "type": "string"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "property_path": {
+            "title": "Property Path",
+            "type": "string"
+          },
+          "target_file_id": {
+            "title": "Target File Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset_path",
+          "target_file_id",
+          "property_path"
+        ],
+        "title": "revert_overridesArguments",
+        "type": "object"
+      },
+      "name": "revert_overrides",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "revert_overridesDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "asset_path": {
+            "title": "Asset Path",
+            "type": "string"
+          },
+          "change_reason": {
+            "default": "",
+            "title": "Change Reason",
+            "type": "string"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "property_name": {
+            "title": "Property Name",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset_path",
+          "property_name",
+          "value"
+        ],
+        "title": "set_material_propertyArguments",
+        "type": "object"
+      },
+      "name": "set_material_property",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "set_material_propertyDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "asset_path": {
+            "title": "Asset Path",
+            "type": "string"
+          },
+          "change_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Change Reason"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "dry_run": {
+            "default": false,
+            "title": "Dry Run",
+            "type": "boolean"
+          },
+          "out_report": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Out Report"
+          },
+          "properties": {
+            "additionalProperties": true,
+            "title": "Properties",
+            "type": "object"
+          },
+          "symbol_path": {
+            "title": "Symbol Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset_path",
+          "symbol_path",
+          "properties"
+        ],
+        "title": "set_propertiesArguments",
+        "type": "object"
+      },
+      "name": "set_properties",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "set_propertiesDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "asset_path": {
+            "title": "Asset Path",
+            "type": "string"
+          },
+          "change_reason": {
+            "default": "",
+            "title": "Change Reason",
+            "type": "string"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "property_path": {
+            "title": "Property Path",
+            "type": "string"
+          },
+          "symbol_path": {
+            "title": "Symbol Path",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value"
+          }
+        },
+        "required": [
+          "asset_path",
+          "symbol_path",
+          "property_path",
+          "value"
+        ],
+        "title": "set_propertyArguments",
+        "type": "object"
+      },
+      "name": "set_property",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "set_propertyDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "change_reason": {
+            "default": "",
+            "title": "Change Reason",
+            "type": "string"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "details": {
+            "default": false,
+            "title": "Details",
+            "type": "boolean"
+          },
+          "include_details": {
+            "default": false,
+            "title": "Include Details",
+            "type": "boolean"
+          },
+          "mode": {
+            "default": "preview",
+            "title": "Mode",
+            "type": "string"
+          },
+          "prune_resolved": {
+            "default": false,
+            "title": "Prune Resolved",
+            "type": "boolean"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "target": {
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "target"
+        ],
+        "title": "update_diagnostics_baselineArguments",
+        "type": "object"
+      },
+      "name": "update_diagnostics_baseline",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "update_diagnostics_baselineDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "asset_path": {
+            "default": "",
+            "title": "Asset Path",
+            "type": "string"
+          },
+          "timeout_sec": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timeout Sec"
+          }
+        },
+        "title": "validate_all_wiringArguments",
+        "type": "object"
+      },
+      "name": "validate_all_wiring",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "validate_all_wiringDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "new_name": {
+            "title": "New Name",
+            "type": "string"
+          },
+          "old_name": {
+            "title": "Old Name",
+            "type": "string"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Scope"
+          },
+          "script_or_guid": {
+            "title": "Script Or Guid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "script_or_guid",
+          "old_name",
+          "new_name"
+        ],
+        "title": "validate_field_renameArguments",
+        "type": "object"
+      },
+      "name": "validate_field_rename",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "validate_field_renameDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "asset_path": {
+            "title": "Asset Path",
+            "type": "string"
+          },
+          "profile_path": {
+            "title": "Profile Path",
+            "type": "string"
+          },
+          "symbol_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Symbol Path"
+          }
+        },
+        "required": [
+          "profile_path",
+          "asset_path"
+        ],
+        "title": "validate_inspector_profileArguments",
+        "type": "object"
+      },
+      "name": "validate_inspector_profile",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "validate_inspector_profileDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "include_details": {
+            "default": false,
+            "title": "Include Details",
+            "type": "boolean"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Scope"
+          },
+          "timeout_sec": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timeout Sec"
+          }
+        },
+        "title": "validate_materialsArguments",
+        "type": "object"
+      },
+      "name": "validate_materials",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "validate_materialsDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "details": {
+            "default": false,
+            "title": "Details",
+            "type": "boolean"
+          },
+          "ignore_asset_guids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Ignore Asset Guids"
+          },
+          "max_diagnostics": {
+            "default": 200,
+            "title": "Max Diagnostics",
+            "type": "integer"
+          },
+          "refresh_guid_index": {
+            "default": false,
+            "title": "Refresh Guid Index",
+            "type": "boolean"
+          },
+          "scope": {
+            "title": "Scope",
+            "type": "string"
+          },
+          "snapshot_diff": {
+            "default": "",
+            "title": "Snapshot Diff",
+            "type": "string"
+          },
+          "snapshot_save": {
+            "default": "",
+            "title": "Snapshot Save",
+            "type": "string"
+          },
+          "top_missing_breakdown": {
+            "default": false,
+            "title": "Top Missing Breakdown",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "scope"
+        ],
+        "title": "validate_refsArguments",
+        "type": "object"
+      },
+      "name": "validate_refs",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "validate_refsDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "allow_dirty_before_clientsim": {
+            "default": false,
+            "title": "Allow Dirty Before Clientsim",
+            "type": "boolean"
+          },
+          "allow_warnings": {
+            "default": false,
+            "title": "Allow Warnings",
+            "type": "boolean"
+          },
+          "asset_path": {
+            "title": "Asset Path",
+            "type": "string"
+          },
+          "change_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Change Reason"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "log_file": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Log File"
+          },
+          "max_diagnostics": {
+            "default": 200,
+            "title": "Max Diagnostics",
+            "type": "integer"
+          },
+          "profile": {
+            "default": "compile_only",
+            "title": "Profile",
+            "type": "string"
+          },
+          "since_timestamp": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Since Timestamp"
+          }
+        },
+        "required": [
+          "asset_path"
+        ],
+        "title": "validate_runtimeArguments",
+        "type": "object"
+      },
+      "name": "validate_runtime",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "validate_runtimeDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "asset_path": {
+            "title": "Asset Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset_path"
+        ],
+        "title": "validate_structureArguments",
+        "type": "object"
+      },
+      "name": "validate_structure",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "validate_structureDictOutput",
+        "type": "object"
+      }
+    },
+    {
+      "inputSchema": {
+        "properties": {
+          "asset_path": {
+            "title": "Asset Path",
+            "type": "string"
+          },
+          "blueprint_id": {
+            "title": "Blueprint Id",
+            "type": "string"
+          },
+          "change_reason": {
+            "default": "",
+            "title": "Change Reason",
+            "type": "string"
+          },
+          "confirm": {
+            "default": false,
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          },
+          "platforms": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Platforms"
+          },
+          "release_status": {
+            "default": "",
+            "title": "Release Status",
+            "type": "string"
+          },
+          "tags": {
+            "default": "",
+            "title": "Tags",
+            "type": "string"
+          },
+          "target_type": {
+            "title": "Target Type",
+            "type": "string"
+          },
+          "timeout_sec": {
+            "default": 600,
+            "title": "Timeout Sec",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "target_type",
+          "asset_path",
+          "blueprint_id"
+        ],
+        "title": "vrcsdk_uploadArguments",
+        "type": "object"
+      },
+      "name": "vrcsdk_upload",
+      "outputSchema": {
+        "additionalProperties": true,
+        "title": "vrcsdk_uploadDictOutput",
+        "type": "object"
+      }
+    }
+  ]
+}

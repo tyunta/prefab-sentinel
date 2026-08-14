@@ -8,7 +8,7 @@ from typing import Any
 from unittest.mock import patch
 
 from prefab_sentinel.mcp_server import create_server
-from tests.test_mcp_server import _run
+from tests._mcp_test_support import call_tool_result, structured_payload
 
 
 class TestEditorReflectValidation(unittest.TestCase):
@@ -19,15 +19,14 @@ class TestEditorReflectValidation(unittest.TestCase):
 
     def test_should_reject_unknown_action(self) -> None:
         with patch("prefab_sentinel.mcp_tools_editor_advanced.send_action") as mock_send:
-            _, result = _run(self.server.call_tool("editor_reflect", {"action": "bogus"}))
+            result = structured_payload(call_tool_result(self.server,"editor_reflect", {"action": "bogus"}))
         mock_send.assert_not_called()
         self.assertFalse(result["success"])
         self.assertEqual("EDITOR_REFLECT_UNKNOWN_ACTION", result["code"])
 
     def test_should_reject_invalid_scope(self) -> None:
         with patch("prefab_sentinel.mcp_tools_editor_advanced.send_action") as mock_send:
-            _, result = _run(
-                self.server.call_tool("editor_reflect", {"action": "search", "query": "Foo", "scope": "invalid"})
+            result = structured_payload(call_tool_result(self.server,"editor_reflect", {"action": "search", "query": "Foo", "scope": "invalid"})
             )
         mock_send.assert_not_called()
         self.assertFalse(result["success"])
@@ -35,22 +34,21 @@ class TestEditorReflectValidation(unittest.TestCase):
 
     def test_should_reject_search_without_query(self) -> None:
         with patch("prefab_sentinel.mcp_tools_editor_advanced.send_action") as mock_send:
-            _, result = _run(self.server.call_tool("editor_reflect", {"action": "search"}))
+            result = structured_payload(call_tool_result(self.server,"editor_reflect", {"action": "search"}))
         mock_send.assert_not_called()
         self.assertFalse(result["success"])
         self.assertEqual("EDITOR_REFLECT_MISSING_PARAM", result["code"])
 
     def test_should_reject_get_type_without_class_name(self) -> None:
         with patch("prefab_sentinel.mcp_tools_editor_advanced.send_action") as mock_send:
-            _, result = _run(self.server.call_tool("editor_reflect", {"action": "get_type"}))
+            result = structured_payload(call_tool_result(self.server,"editor_reflect", {"action": "get_type"}))
         mock_send.assert_not_called()
         self.assertFalse(result["success"])
         self.assertEqual("EDITOR_REFLECT_MISSING_PARAM", result["code"])
 
     def test_should_reject_get_member_without_class_name(self) -> None:
         with patch("prefab_sentinel.mcp_tools_editor_advanced.send_action") as mock_send:
-            _, result = _run(
-                self.server.call_tool("editor_reflect", {"action": "get_member", "member_name": "Position"})
+            result = structured_payload(call_tool_result(self.server,"editor_reflect", {"action": "get_member", "member_name": "Position"})
             )
         mock_send.assert_not_called()
         self.assertFalse(result["success"])
@@ -58,8 +56,7 @@ class TestEditorReflectValidation(unittest.TestCase):
 
     def test_should_reject_get_member_without_member_name(self) -> None:
         with patch("prefab_sentinel.mcp_tools_editor_advanced.send_action") as mock_send:
-            _, result = _run(
-                self.server.call_tool("editor_reflect", {"action": "get_member", "class_name": "Transform"})
+            result = structured_payload(call_tool_result(self.server,"editor_reflect", {"action": "get_member", "class_name": "Transform"})
             )
         mock_send.assert_not_called()
         self.assertFalse(result["success"])
@@ -86,8 +83,7 @@ class TestEditorReflectResponseUnwrap(unittest.TestCase):
         inner = {"found": True, "name": "Transform", "full_name": "UnityEngine.Transform"}
         bridge_resp = self._make_bridge_response(inner)
         with patch("prefab_sentinel.mcp_tools_editor_advanced.send_action", return_value=bridge_resp):
-            _, result = _run(
-                self.server.call_tool("editor_reflect", {"action": "get_type", "class_name": "Transform"})
+            result = structured_payload(call_tool_result(self.server,"editor_reflect", {"action": "get_type", "class_name": "Transform"})
             )
         self.assertTrue(result["success"])
         self.assertEqual("Transform", result["data"]["name"])
@@ -103,8 +99,7 @@ class TestEditorReflectResponseUnwrap(unittest.TestCase):
             "diagnostics": [],
         }
         with patch("prefab_sentinel.mcp_tools_editor_advanced.send_action", return_value=bridge_resp):
-            _, result = _run(
-                self.server.call_tool("editor_reflect", {"action": "get_type", "class_name": "Transform"})
+            result = structured_payload(call_tool_result(self.server,"editor_reflect", {"action": "get_type", "class_name": "Transform"})
             )
         self.assertFalse(result["success"])
         self.assertEqual("EDITOR_REFLECT_PARSE", result["code"])
@@ -119,8 +114,7 @@ class TestEditorReflectResponseUnwrap(unittest.TestCase):
             "diagnostics": [],
         }
         with patch("prefab_sentinel.mcp_tools_editor_advanced.send_action", return_value=bridge_resp):
-            _, result = _run(
-                self.server.call_tool("editor_reflect", {"action": "search", "query": "Foo"})
+            result = structured_payload(call_tool_result(self.server,"editor_reflect", {"action": "search", "query": "Foo"})
             )
         self.assertFalse(result["success"])
         self.assertEqual("EDITOR_BRIDGE_TIMEOUT", result["code"])
@@ -136,8 +130,7 @@ class TestEditorReflectResponseUnwrap(unittest.TestCase):
             }
             bridge_resp = self._make_bridge_response(inner)
             with patch("prefab_sentinel.mcp_tools_editor_advanced.send_action", return_value=bridge_resp):
-                _, result = _run(
-                    self.server.call_tool("editor_reflect", {"action": "search", "query": "Foo", "scope": scope})
+                result = structured_payload(call_tool_result(self.server,"editor_reflect", {"action": "search", "query": "Foo", "scope": scope})
                 )
             self.assertTrue(result["success"], f"scope={scope} should be accepted")
 

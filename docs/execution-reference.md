@@ -7,9 +7,28 @@ v0.4.0 で CLI (`prefab-sentinel` コマンド) は廃止され、MCP サーバ�
 
 ## 実行方法
 
-- MCP サーバー: `prefab-sentinel-mcp`（エントリポイント）。検査・編集はすべて MCP ツール経由で行う（ツール一覧は [docs/tools.md](./tools.md)）。
-- 環境変数プレフィックス（`UNITYTOOL_*`）は互換性のため現状維持とする（一覧は [CONFIGURATION.md](../CONFIGURATION.md)）。
-- unit test は `scripts/run_unit_tests.py` で並列実行する（「CI / テスト実行」節参照）。
+`prefab-sentinel-mcp` が MCP server entry point。検査・編集はすべて MCP ツール経由で行う（ツール一覧は [docs/tools.md](./tools.md)）。公開 contract は **MCP 2026-07-28 only / Tools only** で、request method は `server/discover` / `tools/list` / `tools/call` の 3 つだけを受理する。stdio の `notifications/cancelled` はこの request method allowlist とは別の notification 経路として SDK へ転送する。legacy client の `initialize` / `initialized` handshake、version negotiation、`Mcp-Session-Id` lifecycle はサポートしない。
+
+### stdio（既定）
+
+```bash
+uv run prefab-sentinel-mcp
+uv run prefab-sentinel-mcp --project-root /path/to/unity/project
+```
+
+stdio は既定 transport で、ホスト側が server process の stdin / stdout を所有する。1 server process は 1 logical client / project scope として扱う。
+
+### local Streamable HTTP
+
+```bash
+uv run prefab-sentinel-mcp --transport streamable-http --port 8000
+```
+
+endpoint は `http://127.0.0.1:<port>/mcp`。host は `127.0.0.1` 固定で設定項目を持たず、port の既定値は `8000`、受理範囲は `1..65535`。MCP request は `/mcp` への POST のみで、GET / DELETE による stream や session termination は提供しない。2026-07-28 の HTTP core protocol には client-to-server notification がないため、request ID のない `notifications/cancelled` 等は現行 gate が HTTP `400` / `-32600` で拒否する。legacy session header が送られても session は作られず、response に session ID を発行しない。remote / shared server、public bind、TLS termination、認証はこの process の責務外である。
+
+transport にかかわらず `ProjectSession` は process-wide application state で、MCP protocol session ではない。`activate_project` は後続 request が暗黙利用する state と cache / watcher を更新し、`tools/call` は process-wide に直列実行する。複数 client / project を分離する場合は server process も分ける。この continuity は deliberate product constraint であり、MCP 2026-07-28 の per-request stateless model に対する既知の逸脱なので、現行 server について full conformance は主張しない。責務境界は [ARCHITECTURE.md](../ARCHITECTURE.md#mcpserver--protocol-boundary)、request metadata と result semantics は [tool-conventions.md](./tool-conventions.md#mcp-protocol--result-境界)、protocol error の優先順位と stdio transport 例外は [api-reference.md](./api-reference.md#エラーコード規約) を参照。
+
+環境変数プレフィックス（`UNITYTOOL_*`）は互換性のため現状維持とする（一覧は [CONFIGURATION.md](../CONFIGURATION.md)）。unit test は `scripts/run_unit_tests.py` で並列実行する（「CI / テスト実行」節参照）。
 
 ## レポート / ignore-guid
 

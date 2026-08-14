@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 
 from prefab_sentinel.editor_bridge import DEFAULT_TIMEOUT_SEC, send_action
 from prefab_sentinel.mcp_validation import require_write_audit
@@ -290,7 +290,7 @@ def editor_run_script_poll(
     return _normalize_run_script_envelope(response)
 
 
-def register_editor_exec_tools(server: FastMCP) -> None:
+def register_editor_exec_tools(server: MCPServer) -> None:
     """Register ``editor_run_script`` on *server*."""
 
     @server.tool(name="editor_run_script")

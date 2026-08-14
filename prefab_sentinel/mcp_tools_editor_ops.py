@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 
 from prefab_sentinel.editor_bridge import send_action
 from prefab_sentinel.json_io import dump_json
@@ -13,7 +13,7 @@ from prefab_sentinel.mcp_validation import require_write_audit
 __all__ = ["register_editor_ops_tools"]
 
 
-def register_editor_ops_tools(server: FastMCP) -> None:
+def register_editor_ops_tools(server: MCPServer) -> None:
     """Register editor property and prefab operation tools on *server*."""
 
     @server.tool()

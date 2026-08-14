@@ -3,7 +3,7 @@
     "command": "uvx",
     "args": [
       "--from", "git+https://github.com/tyunta/prefab-sentinel.git",
-      "--with", "mcp>=1.12",
+      "--with", "mcp>=2,<3",
       "prefab-sentinel-mcp"
     ]
   }
