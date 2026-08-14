@@ -562,7 +562,9 @@ class TestSendAction(unittest.TestCase):
                     },
                     "diagnostics": [],
                 }
-                resp_path.write_text(json.dumps(resp), encoding="utf-8")
+                tmp_resp_path = Path(str(resp_path) + ".tmp")
+                tmp_resp_path.write_text(json.dumps(resp), encoding="utf-8")
+                tmp_resp_path.rename(resp_path)
 
             with (
                 patch.dict(
@@ -638,7 +640,9 @@ class TestSendAction(unittest.TestCase):
                     },
                     "diagnostics": [],
                 }
-                resp_path.write_text(json.dumps(resp), encoding="utf-8")
+                tmp_resp_path = Path(str(resp_path) + ".tmp")
+                tmp_resp_path.write_text(json.dumps(resp), encoding="utf-8")
+                tmp_resp_path.rename(resp_path)
 
             with (
                 patch.dict(os.environ, {BRIDGE_WATCH_DIR_ENV: tmpdir}, clear=False),
