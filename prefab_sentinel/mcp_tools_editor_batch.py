@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 
 from prefab_sentinel.editor_bridge import send_action
 from prefab_sentinel.editor_bridge_builders import build_create_empty_kwargs
@@ -48,7 +48,7 @@ def editor_batch_set_blend_shape(
     )
 
 
-def register_editor_batch_tools(server: FastMCP) -> None:
+def register_editor_batch_tools(server: MCPServer) -> None:
     """Register editor batch and scene management tools on *server*."""
 
     @server.tool()

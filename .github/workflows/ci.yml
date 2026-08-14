@@ -86,6 +86,412 @@ jobs:
       - name: Run Unit Tests
         run: uv run python scripts/run_unit_tests.py
 
+  mcp-conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+
+      - name: Setup Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.11"
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+
+      - name: Install MCP server
+        run: uv sync --extra mcp
+
+      - name: Start loopback MCP server
+        run: |
+          stop_server_launcher() {
+            launcher_pid=${1:-}
+            case "$launcher_pid" in
+              ''|*[!0-9]*)
+                echo "Missing or invalid MCP server launcher PID: ${launcher_pid:-<unset>}" >&2
+                return 1
+                ;;
+            esac
+            if [ "$launcher_pid" -le 1 ] || [ "$launcher_pid" -eq "$$" ]; then
+              echo "Unsafe MCP server launcher PID: $launcher_pid" >&2
+              return 1
+            fi
+            if ! kill -0 "$launcher_pid" 2>/dev/null; then
+              echo "MCP server launcher $launcher_pid already exited"
+              return 0
+            fi
+            kill -TERM "$launcher_pid" 2>/dev/null || true
+            for attempt in $(seq 1 20); do
+              if ! kill -0 "$launcher_pid" 2>/dev/null; then
+                echo "MCP server launcher $launcher_pid stopped"
+                return 0
+              fi
+              sleep 0.25
+            done
+            echo "MCP server launcher $launcher_pid did not stop after SIGTERM; sending SIGKILL" >&2
+            kill -KILL "$launcher_pid" 2>/dev/null || true
+            for attempt in $(seq 1 20); do
+              if ! kill -0 "$launcher_pid" 2>/dev/null; then
+                echo "MCP server launcher $launcher_pid stopped after SIGKILL"
+                return 0
+              fi
+              sleep 0.25
+            done
+            echo "MCP server launcher $launcher_pid is still alive after SIGKILL" >&2
+            return 1
+          }
+
+          workflow_pgid=$(ps -o pgid= -p "$$" | tr -d '[:space:]')
+          case "$workflow_pgid" in
+            ''|*[!0-9]*)
+              echo "Invalid workflow process group: $workflow_pgid" >&2
+              exit 1
+              ;;
+          esac
+          if [ "$workflow_pgid" -le 1 ]; then
+            echo "Unsafe workflow process group: $workflow_pgid" >&2
+            exit 1
+          fi
+
+          server_pgid_file="$RUNNER_TEMP/prefab-sentinel-mcp.pgid"
+          setsid --fork --wait sh -c '
+            candidate_pgid=$$
+            case "$candidate_pgid" in
+              ""|*[!0-9]*) exit 1 ;;
+            esac
+            [ "$candidate_pgid" -gt 1 ] || exit 1
+            case "$1" in
+              ""|*[!0-9]*) exit 1 ;;
+            esac
+            [ "$1" -gt 1 ] || exit 1
+            actual_candidate_pgid=$(ps -o pgid= -p "$candidate_pgid") || exit 1
+            actual_candidate_pgid=$(printf "%s" "$actual_candidate_pgid" | tr -d "[:space:]")
+            [ "$actual_candidate_pgid" = "$candidate_pgid" ] || exit 1
+            [ "$candidate_pgid" != "$1" ] || exit 1
+            printf "%s\n" "$candidate_pgid" > "$2" || exit 1
+            exec uv run prefab-sentinel-mcp --transport streamable-http --port 8000
+          ' sh "$workflow_pgid" "$server_pgid_file" \
+            > "$RUNNER_TEMP/prefab-sentinel-mcp.log" 2>&1 &
+          server_launcher_pid=$!
+          echo "server_launcher_pid=$server_launcher_pid" >> "$GITHUB_ENV"
+
+          for attempt in $(seq 1 40); do
+            if [ -s "$server_pgid_file" ]; then
+              break
+            fi
+            if ! kill -0 "$server_launcher_pid" 2>/dev/null; then
+              echo "MCP server launcher $server_launcher_pid exited before recording its process group" >&2
+              cat "$RUNNER_TEMP/prefab-sentinel-mcp.log" >&2
+              stop_server_launcher "$server_launcher_pid" || true
+              exit 1
+            fi
+            sleep 0.05
+          done
+          if [ ! -s "$server_pgid_file" ]; then
+            echo "MCP server did not record its process group" >&2
+            cat "$RUNNER_TEMP/prefab-sentinel-mcp.log" >&2
+            if ! stop_server_launcher "$server_launcher_pid"; then
+              echo "Failed to stop MCP server launcher after publication timeout" >&2
+            fi
+            exit 1
+          fi
+
+          IFS= read -r server_pgid < "$server_pgid_file"
+          case "$server_pgid" in
+            ''|*[!0-9]*)
+              echo "Invalid MCP server process group: $server_pgid" >&2
+              exit 1
+              ;;
+          esac
+          if [ "$server_pgid" -le 1 ]; then
+            echo "Unsafe MCP server process group: $server_pgid" >&2
+            exit 1
+          fi
+          echo "server_pgid=$server_pgid" >> "$GITHUB_ENV"
+
+          if ! actual_server_pgid=$(ps -o pgid= -p "$server_pgid"); then
+            echo "MCP server group leader $server_pgid exited during launch" >&2
+            cat "$RUNNER_TEMP/prefab-sentinel-mcp.log" >&2
+            exit 1
+          fi
+          actual_server_pgid=$(printf '%s' "$actual_server_pgid" | tr -d '[:space:]')
+          workflow_pgid=$(ps -o pgid= -p "$$" | tr -d '[:space:]')
+          if [ "$actual_server_pgid" != "$server_pgid" ]; then
+            echo "MCP server PGID mismatch: recorded=$server_pgid actual=$actual_server_pgid" >&2
+            exit 1
+          fi
+          if [ "$server_pgid" = "$workflow_pgid" ]; then
+            echo "Refusing to use workflow process group $workflow_pgid for the MCP server" >&2
+            exit 1
+          fi
+          if ! kill -0 -- "-$server_pgid" 2>/dev/null; then
+            echo "MCP server process group $server_pgid exited during launch" >&2
+            cat "$RUNNER_TEMP/prefab-sentinel-mcp.log" >&2
+            exit 1
+          fi
+
+      - name: Wait for MCP endpoint
+        run: |
+          case "${server_pgid:-}" in
+            ''|*[!0-9]*)
+              echo "Missing or invalid MCP server process group: ${server_pgid:-<unset>}" >&2
+              exit 1
+              ;;
+          esac
+          if [ "$server_pgid" -le 1 ]; then
+            echo "Unsafe MCP server process group: $server_pgid" >&2
+            exit 1
+          fi
+          workflow_pgid=$(ps -o pgid= -p "$$" | tr -d '[:space:]')
+          if [ "$server_pgid" = "$workflow_pgid" ]; then
+            echo "Refusing to probe workflow process group $workflow_pgid" >&2
+            exit 1
+          fi
+
+          for attempt in $(seq 1 60); do
+            if ! kill -0 -- "-$server_pgid" 2>/dev/null; then
+              echo "MCP server process group $server_pgid exited before readiness" >&2
+              if [ -f "$RUNNER_TEMP/prefab-sentinel-mcp.log" ]; then
+                cat "$RUNNER_TEMP/prefab-sentinel-mcp.log" >&2
+              else
+                echo "No MCP server log was generated" >&2
+              fi
+              exit 1
+            fi
+            if curl --silent --output /dev/null \
+              --connect-timeout 0.2 \
+              --max-time 0.2 \
+              http://127.0.0.1:8000/mcp
+            then
+              if ! kill -0 -- "-$server_pgid" 2>/dev/null; then
+                echo "MCP server process group $server_pgid exited during readiness" >&2
+                if [ -f "$RUNNER_TEMP/prefab-sentinel-mcp.log" ]; then
+                  cat "$RUNNER_TEMP/prefab-sentinel-mcp.log" >&2
+                else
+                  echo "No MCP server log was generated" >&2
+                fi
+                exit 1
+              fi
+              exit 0
+            fi
+            sleep 0.25
+          done
+          echo "MCP endpoint was not ready after 60 attempts" >&2
+          if [ -f "$RUNNER_TEMP/prefab-sentinel-mcp.log" ]; then
+            cat "$RUNNER_TEMP/prefab-sentinel-mcp.log" >&2
+          else
+            echo "No MCP server log was generated" >&2
+          fi
+          exit 1
+
+      - name: Run MCP 2026-07-28 conformance scenarios
+        run: |
+          mkdir -p results
+          scenario_failures=0
+          for scenario in \
+            tools-list \
+            dns-rebinding-protection \
+            http-header-validation
+          do
+            scenario_failed=0
+            if npx --yes @modelcontextprotocol/conformance@0.2.0-alpha.11 \
+                server \
+                --url http://127.0.0.1:8000/mcp \
+                --scenario "$scenario" \
+                --spec-version 2026-07-28 \
+                --output-dir "results/$scenario"
+            then
+              scenario_status=0
+            else
+              scenario_status=$?
+              scenario_failed=1
+            fi
+            echo "scenario=$scenario exit=$scenario_status"
+            printf '%s\n' "$scenario_status" > "results/$scenario.exit-code"
+
+            scenario_report_manifest="results/$scenario.checks.manifest"
+            if find "results/$scenario" -name checks.json -print0 > "$scenario_report_manifest"; then
+              scenario_report_count=0
+              scenario_report=
+              while IFS= read -r -d '' report; do
+                scenario_report_count=$((scenario_report_count + 1))
+                scenario_report=$report
+              done < "$scenario_report_manifest"
+              if [ "$scenario_report_count" -ne 1 ]; then
+                echo "scenario=$scenario expected exactly one checks.json; found $scenario_report_count" >&2
+                scenario_failed=1
+              elif ! jq -e \
+                  'type == "array" and length > 0 and all(.[]; .status == "SUCCESS")' \
+                  "$scenario_report" > /dev/null
+              then
+                echo "scenario=$scenario checks.json must be a nonempty all-SUCCESS array" >&2
+                scenario_failed=1
+              fi
+            else
+              echo "scenario=$scenario failed to enumerate checks.json" >&2
+              scenario_failed=1
+            fi
+            if [ "$scenario_failed" -ne 0 ]; then
+              scenario_failures=$((scenario_failures + 1))
+            fi
+          done
+          if [ "$scenario_failures" -ne 0 ]; then
+            echo "$scenario_failures conformance scenario(s) failed" >&2
+            exit 1
+          fi
+
+      - name: Print conformance reports
+        if: always()
+        run: |
+          diagnostics_failed=0
+          reports_found=0
+          if [ -d results ]; then
+            report_manifest="$RUNNER_TEMP/conformance-checks.manifest"
+            if ! find results -name checks.json -print0 > "$report_manifest"; then
+              echo "Failed to enumerate conformance reports" >&2
+              diagnostics_failed=1
+            fi
+            while IFS= read -r -d '' report; do
+              reports_found=1
+              echo "$report"
+              if ! jq '.' "$report"; then
+                echo "Failed to print conformance report: $report" >&2
+                diagnostics_failed=1
+              fi
+            done < "$report_manifest"
+            if [ "$reports_found" -eq 0 ]; then
+              echo "No conformance checks.json reports were generated"
+            fi
+          else
+            echo "No conformance results directory was generated"
+          fi
+          if [ -f "$RUNNER_TEMP/prefab-sentinel-mcp.log" ]; then
+            echo "MCP server log:"
+            cat "$RUNNER_TEMP/prefab-sentinel-mcp.log"
+          else
+            echo "No MCP server log was generated"
+          fi
+          if [ "$diagnostics_failed" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Stop MCP server
+        if: always()
+        run: |
+          stop_server_launcher() {
+            launcher_pid=${1:-}
+            case "$launcher_pid" in
+              '')
+                echo "No MCP server launcher PID was recorded; nothing to stop"
+                return 0
+                ;;
+              *[!0-9]*)
+                echo "Invalid MCP server launcher PID: $launcher_pid" >&2
+                return 1
+                ;;
+            esac
+            if [ "$launcher_pid" -le 1 ] || [ "$launcher_pid" -eq "$$" ]; then
+              echo "Unsafe MCP server launcher PID: $launcher_pid" >&2
+              return 1
+            fi
+            if ! kill -0 "$launcher_pid" 2>/dev/null; then
+              echo "MCP server launcher $launcher_pid already exited"
+              return 0
+            fi
+            kill -TERM "$launcher_pid" 2>/dev/null || true
+            for attempt in $(seq 1 20); do
+              if ! kill -0 "$launcher_pid" 2>/dev/null; then
+                echo "MCP server launcher $launcher_pid stopped"
+                return 0
+              fi
+              sleep 0.25
+            done
+            echo "MCP server launcher $launcher_pid did not stop after SIGTERM; sending SIGKILL" >&2
+            kill -KILL "$launcher_pid" 2>/dev/null || true
+            for attempt in $(seq 1 20); do
+              if ! kill -0 "$launcher_pid" 2>/dev/null; then
+                echo "MCP server launcher $launcher_pid stopped after SIGKILL"
+                return 0
+              fi
+              sleep 0.25
+            done
+            echo "MCP server launcher $launcher_pid is still alive after SIGKILL" >&2
+            return 1
+          }
+
+          case "${server_pgid:-}" in
+            '')
+              echo "No MCP server process group was recorded; stopping launcher only"
+              stop_server_launcher "${server_launcher_pid:-}"
+              exit $?
+              ;;
+            *[!0-9]*)
+              echo "Invalid MCP server process group: $server_pgid" >&2
+              exit 1
+              ;;
+          esac
+          if [ "$server_pgid" -le 1 ]; then
+            echo "Unsafe MCP server process group: $server_pgid" >&2
+            exit 1
+          fi
+          workflow_pgid=$(ps -o pgid= -p "$$" | tr -d '[:space:]')
+          if [ "$server_pgid" = "$workflow_pgid" ]; then
+            echo "Refusing to signal workflow process group $workflow_pgid" >&2
+            exit 1
+          fi
+          cleanup_failed=0
+          if ! kill -0 -- "-$server_pgid" 2>/dev/null; then
+            echo "MCP server process group $server_pgid already exited"
+          else
+            kill -TERM -- "-$server_pgid" 2>/dev/null || true
+            group_stopped=0
+            for attempt in $(seq 1 20); do
+              if ! kill -0 -- "-$server_pgid" 2>/dev/null; then
+                echo "MCP server process group $server_pgid stopped"
+                group_stopped=1
+                break
+              fi
+              sleep 0.25
+            done
+            if [ "$group_stopped" -eq 0 ]; then
+              echo "MCP server process group $server_pgid did not stop after SIGTERM; sending SIGKILL" >&2
+              kill -KILL -- "-$server_pgid" 2>/dev/null || true
+              for attempt in $(seq 1 20); do
+                if ! kill -0 -- "-$server_pgid" 2>/dev/null; then
+                  echo "MCP server process group $server_pgid stopped after SIGKILL"
+                  group_stopped=1
+                  break
+                fi
+                sleep 0.25
+              done
+            fi
+            if [ "$group_stopped" -eq 0 ]; then
+              echo "MCP server process group $server_pgid is still alive after SIGKILL" >&2
+              cleanup_failed=1
+            fi
+          fi
+          if ! stop_server_launcher "${server_launcher_pid:-}"; then
+            cleanup_failed=1
+          fi
+          exit "$cleanup_failed"
+
+      - name: Upload conformance evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mcp-2026-07-28-conformance
+          path: |
+            results/
+            ${{ runner.temp }}/prefab-sentinel-mcp.log
+          if-no-files-found: error
+
   performance-benchmarks:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest

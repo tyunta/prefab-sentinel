@@ -11,18 +11,21 @@ Requires the ``mcp`` optional dependency::
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from importlib.metadata import version
 from pathlib import Path
 
 try:
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server import MCPServer
 except ImportError as exc:
-    raise ImportError(
-        "MCP server requires the 'mcp' extra: "
-        "pip install prefab-sentinel[mcp]"
-    ) from exc
+    raise ImportError("MCP server requires the 'mcp' extra: pip install prefab-sentinel[mcp]") from exc
 
 import prefab_sentinel.editor_bridge as editor_bridge
+from prefab_sentinel.mcp_protocol import (
+    ProtocolContractMiddleware,
+    SerializeToolCallsMiddleware,
+)
 from prefab_sentinel.mcp_tools_components import register_component_tools
 from prefab_sentinel.mcp_tools_components_copy import register_copy_component_fields_tool
 from prefab_sentinel.mcp_tools_editor_advanced import register_editor_advanced_tools
@@ -55,50 +58,60 @@ __all__ = ["create_server"]
 
 logger = logging.getLogger(__name__)
 
+SERVER_NAME = "prefab-sentinel"
 
 
-
-
-
-
-
+def _server_instructions() -> str:
+    return (
+        "activate_project selects the process-wide active Unity project. "
+        "One process represents one logical client/project scope. "
+        "Tool calls execute serially. "
+        "Normal inspection, dry-run, and confirm entry points remain unchanged."
+    )
 
 
 def create_server(
     project_root: str | Path | None = None,
-) -> FastMCP:
+) -> MCPServer[ProjectSession]:
     """Create and configure the Prefab Sentinel MCP server.
 
     Args:
-        project_root: Unity project root. Auto-detected when ``None``.
+        project_root: Unity project root. Auto-detected when None.
 
     Returns:
-        A configured ``FastMCP`` server instance ready to run.
+        A configured MCPServer instance ready to run.
     """
-    _root = Path(project_root).resolve() if project_root else None
-    session = ProjectSession(project_root=_root)
+    root = Path(project_root).resolve() if project_root else None
+    session = ProjectSession(project_root=root)
+    server_version = version("prefab-sentinel")
+    instructions = _server_instructions()
 
     @asynccontextmanager
-    async def _lifespan(_app: FastMCP):  # type: ignore[type-arg]
+    async def lifespan(
+        _server: MCPServer[ProjectSession],
+    ) -> AsyncIterator[ProjectSession]:
         editor_bridge._set_expected_project_root_provider(
             lambda: str(session.project_root) if session.project_root is not None else None
         )
         try:
-            yield
+            yield session
         finally:
             editor_bridge._set_expected_project_root_provider(None)
             await session.shutdown()
 
-    server = FastMCP(
-        name="prefab-sentinel",
-        instructions=(
-            "Unity asset inspection and editing tools. "
-            "Use activate_project to set scope, "
-            "get_unity_symbols to explore asset structure, "
-            "find_unity_symbol to locate specific objects by name, "
-            "and validate_refs to check for broken references."
-        ),
-        lifespan=_lifespan,
+    server = MCPServer(
+        name=SERVER_NAME,
+        version=server_version,
+        instructions=instructions,
+        lifespan=lifespan,
+        middleware=[
+            ProtocolContractMiddleware(
+                server_name=SERVER_NAME,
+                server_version=server_version,
+                instructions=instructions,
+            ),
+            SerializeToolCallsMiddleware(),
+        ],
     )
 
     # Register tool modules
@@ -128,9 +141,26 @@ def create_server(
     return server
 
 
+def _port_number(value: str) -> int:
+    """Parse a TCP port accepted by the loopback HTTP CLI."""
+    import argparse
+
+    try:
+        port = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("PORT must be an integer from 1 through 65535") from exc
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError("PORT must be an integer from 1 through 65535")
+    return port
+
+
 def main() -> None:
     """Entry point for the MCP server."""
     import argparse
+
+    import uvicorn
+
+    from prefab_sentinel.mcp_http import build_http_app
 
     parser = argparse.ArgumentParser(description="Prefab Sentinel MCP Server")
     parser.add_argument(
@@ -144,10 +174,22 @@ def main() -> None:
         default=None,
         help="Unity project root directory (auto-detected if omitted)",
     )
+    parser.add_argument(
+        "--port",
+        type=_port_number,
+        default=8000,
+        metavar="PORT",
+        help="Streamable HTTP loopback port (default: %(default)s)",
+    )
     args = parser.parse_args()
 
     server = create_server(project_root=args.project_root)
-    server.run(transport=args.transport)
+    if args.transport == "stdio":
+        server.run("stdio")
+        return
+
+    app = build_http_app(server)
+    uvicorn.run(app, host="127.0.0.1", port=args.port)
 
 
 if __name__ == "__main__":

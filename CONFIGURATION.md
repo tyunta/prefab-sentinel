@@ -2,6 +2,14 @@
 
 `UNITYTOOL_*` 環境変数・`ignore_guids.txt` ファイル・`<scope>/config/` 規約・書き込み系ツールの監査ペアの正本。実行・bridge 連携の仕様は [docs/execution-reference.md](./docs/execution-reference.md)、運用ルールの正本は [AGENTS.md](./AGENTS.md)。本ファイルは設定項目を 1 箇所に集約して、新規・既存いずれのコントリビュータが「何を設定すれば動くか / 何を設定しないと止まるか」を一覧で確認できるようにする。
 
+## MCP dependency / transport configuration
+
+- optional dependency `mcp` は Python SDK `mcp>=2,<3` を使用する。server、MCP-focused test、ad-hoc client を実行するときは `uv sync --extra mcp` または `uv run --extra mcp ...` で導入する。
+- transport は stdio が既定。HTTP を使う場合は `--transport streamable-http --port <port>` を指定する。port の既定値は `8000`、受理範囲は `1..65535`。
+- HTTP host は `127.0.0.1`、path は `/mcp` に固定する。host / path の CLI option や環境変数はなく、public bind、TLS、OAuth / authentication をこの server に設定することはできない。
+- 公開 contract は MCP `2026-07-28` の Tools-only surface。legacy handshake / session lifecycle を有効化する compatibility flag はない。
+- `ProjectSession` は process-wide application state で、request / network client ごとに生成する設定はない。`activate_project` の結果を後続 request が暗黙利用する continuity は deliberate product constraint かつ MCP 2026-07-28 stateless model からの既知逸脱であり、これを conformance option で無効化する設定もない。1 logical client / project scope ごとに server process を分離する。起動例と transport semantics は [docs/execution-reference.md](./docs/execution-reference.md#実行方法)、責務境界は [ARCHITECTURE.md](./ARCHITECTURE.md#mcpserver--protocol-boundary) を参照。
+
 ## 環境変数一覧
 
 `UNITYTOOL_*` プレフィックスの環境変数は Unity Editor Bridge 連携・CI 連携・テストゲーティングに使用する。`種別` 列の値は **active**（実運用で active に読まれる）/ **test-only**（テストの opt-in ゲートにのみ使用）/ **planned**（AGENTS.md / README.md で仕様化済みだが現コードベースでは未参照）/ **legacy**（旧経路用で現コードでは未参照、docstring または ideas doc にのみ残る）。

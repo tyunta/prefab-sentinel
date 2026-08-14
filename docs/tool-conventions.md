@@ -1,10 +1,24 @@
 # MCP ツール表面規約
 
-`prefab-sentinel-mcp` が公開する MCP ツールの **住所表現・引数命名・監査ペア要否** の規約の正本。[docs/tools.md](./tools.md) が「どのツールがあるか」のカタログであるのに対し、本書は「ツールをどう名付け・どう住所し・いつ監査するか」の規約を定める。
+`prefab-sentinel-mcp` が公開する **MCP protocol / result 境界、住所表現、引数命名、監査ペア要否** の規約の正本。[docs/tools.md](./tools.md) が「どのツールがあるか」のカタログであるのに対し、本書は「どの request / result contract でツールを公開し、どう名付け・住所し・監査するか」を定める。
 
 本書は規約（あるべき形）の正本であり、新規ツールの追加・既存ツールの変更は本書に従う。本書ではスキーム名をハイフン（`asset-path`）、実際の引数名をアンダースコア（`asset_path`）で表記する。
 
 _規約確定: 2026-05-18_
+
+## MCP protocol / result 境界
+
+公開 MCP contract は `2026-07-28` のみを受理し、server capability は Tools (`listChanged=false`) のみを宣言する。request method allowlist は `server/discover` / `tools/list` / `tools/call` の 3 つで、legacy `initialize` / `initialized` と resource / prompt request method は公開しない。stdio の `notifications/cancelled` はこの 3 request method に数えず、notification として SDK handler へ転送する。HTTP core protocol には client-to-server notification がないため、HTTP gate は request ID のない notification を `-32600` で拒否する。この移行は legacy client に対する意図的な breaking change であり、version negotiation や session lifecycle の互換レイヤは持たない。
+
+この節は受理 surface の規約であり、full conformance の合格宣言ではない。現行 protocol error の優先順位と stdio transport 例外は [api-reference.md](./api-reference.md#エラーコード規約)、process-wide application state の statelessness 逸脱は [ARCHITECTURE.md](../ARCHITECTURE.md#mcpserver--protocol-boundary) を正本とする。
+
+2026-07-28 の各 request は `_meta["io.modelcontextprotocol/protocolVersion"]="2026-07-28"` と `_meta["io.modelcontextprotocol/clientCapabilities"]` を必須とする。`_meta["io.modelcontextprotocol/clientInfo"]` は optional だが、client は送信することが推奨される。これらは request ごとの namespaced metadata であり、事前 handshake や session state の代替ではない。
+
+`tools/call` の失敗は次の 3 境界を混同しない。
+
+- ツールが正常に実行され、Prefab Sentinel の domain envelope が `success=false` を返す場合は、MCP `CallToolResult.isError=false` のまま `structuredContent` に envelope を保持する。domain failure は MCP execution failure ではない。
+- SDK の引数 schema 検証や tool handler の実行自体が失敗した場合は `CallToolResult.isError=true` とする。
+- protocol version / request metadata / request-method allowlist の違反は tool result に包まず、top-level JSON-RPC error とする。numeric code と HTTP status の正本は [api-reference.md「エラーコード規約」](./api-reference.md#エラーコード規約)。
 
 ## 1. 住所スキーム
 
@@ -88,6 +102,8 @@ patch v2 スキーマの op 内でコンポーネントを指す文字列フォ�
 ### 2.4 value 引数
 
 「値」を受け取る引数は、**「未指定」と「空値」を別の表現にする**。`value: str = ""` のように既定値が「未指定」のセンチネルを兼ねる設計を禁止する（空文字列を書けなくなる）。`value: str | None = None` のように、値が与えられたか否かを内容と独立に表せる型にする。
+
+0.9.x の narrow exception として、`editor_set_udonsharp_field.values_json` だけは非 nullable の `str = ""` を維持する。omitted または空文字列を「配列値なし」として扱い、explicit JSON `null` は SDK 2.x の公開 input schema で schema-invalid としてサポートしない。この例外を他の value 引数へ一般化してはならない。
 
 ### 2.5 単複
 

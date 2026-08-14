@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 
 from prefab_sentinel.editor_bridge import send_action
 from prefab_sentinel.json_io import load_json
@@ -28,7 +28,7 @@ def _reflect_error(code: str, message: str) -> dict[str, Any]:
     }
 
 
-def register_editor_advanced_tools(server: FastMCP) -> None:
+def register_editor_advanced_tools(server: MCPServer) -> None:
     """Register VRC SDK and reflection tools on *server*."""
 
     @server.tool()

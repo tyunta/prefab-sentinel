@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 
 from prefab_sentinel.mcp_helpers import (
     COPY_SKIP_FIELDS,
@@ -20,7 +20,7 @@ from prefab_sentinel.yaml_field_extraction import extract_block_fields, parse_ya
 __all__ = ["register_copy_component_fields_tool"]
 
 
-def register_copy_component_fields_tool(server: FastMCP, session: ProjectSession) -> None:
+def register_copy_component_fields_tool(server: MCPServer, session: ProjectSession) -> None:
     """Register the copy_component_fields tool on *server*."""
 
     @server.tool()

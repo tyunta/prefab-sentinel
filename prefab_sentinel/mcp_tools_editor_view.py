@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 
 from prefab_sentinel.bridge_constants import CONSOLE_LOG_BUFFER_MAX_ENTRIES
 from prefab_sentinel.editor_bridge import send_action
@@ -590,7 +590,7 @@ def editor_console(
     return send_action(**request)
 
 
-def register_editor_view_tools(server: FastMCP) -> None:
+def register_editor_view_tools(server: MCPServer) -> None:
     """Register view-oriented editor bridge tools on *server*."""
 
     @server.tool(name="editor_screenshot")

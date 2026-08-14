@@ -4,16 +4,16 @@ build-backend = "hatchling.build"
 
 [project]
 name = "prefab-sentinel"
-version = "0.8.9"
+version = "0.9.0"
 description = "Prefab Sentinel — Unity Prefab/Scene inspection and editing toolkit."
 requires-python = ">=3.11"
 readme = "README.md"
 dependencies = ["jsonschema>=4.25,<5"]
 
 [project.optional-dependencies]
-mcp = ["mcp>=1.12"]
+mcp = ["mcp>=2,<3"]
 watch = ["watchfiles>=1.0"]
-test = ["unittest-parallel>=1.6,<2"]
+test = ["unittest-parallel>=1.6,<2", "httpx>=0.27.0,<0.29.0"]
 lint = ["ruff>=0.8", "mypy>=1.13", "bump-my-version>=0.31"]
 
 [project.scripts]
@@ -86,7 +86,7 @@ cache-keys = [
 ]
 
 [tool.bumpversion]
-current_version = "0.8.9"
+current_version = "0.9.0"
 commit = false
 tag = false
 allow_dirty = true

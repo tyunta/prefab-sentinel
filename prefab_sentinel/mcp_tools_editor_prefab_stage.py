@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 
 from prefab_sentinel.editor_bridge import send_action
 from prefab_sentinel.mcp_validation import require_write_audit
@@ -64,7 +64,7 @@ def editor_close_prefab(
     return send_action(action="close_prefab", save_on_close=False)
 
 
-def register_editor_prefab_stage_tools(server: FastMCP) -> None:
+def register_editor_prefab_stage_tools(server: MCPServer) -> None:
     """Register the Prefab Stage open / close tools on *server*."""
 
     @server.tool(name="editor_open_prefab")

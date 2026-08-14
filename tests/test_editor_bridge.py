@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import tempfile
@@ -563,7 +562,9 @@ class TestSendAction(unittest.TestCase):
                     },
                     "diagnostics": [],
                 }
-                resp_path.write_text(json.dumps(resp), encoding="utf-8")
+                tmp_resp_path = Path(str(resp_path) + ".tmp")
+                tmp_resp_path.write_text(json.dumps(resp), encoding="utf-8")
+                tmp_resp_path.rename(resp_path)
 
             with (
                 patch.dict(
@@ -639,7 +640,9 @@ class TestSendAction(unittest.TestCase):
                     },
                     "diagnostics": [],
                 }
-                resp_path.write_text(json.dumps(resp), encoding="utf-8")
+                tmp_resp_path = Path(str(resp_path) + ".tmp")
+                tmp_resp_path.write_text(json.dumps(resp), encoding="utf-8")
+                tmp_resp_path.rename(resp_path)
 
             with (
                 patch.dict(os.environ, {BRIDGE_WATCH_DIR_ENV: tmpdir}, clear=False),
@@ -1135,6 +1138,10 @@ class TestEditorSetCameraForwardsResetToDefaults(unittest.TestCase):
     def test_editor_set_camera_forwards_reset_to_defaults(self) -> None:
         from prefab_sentinel import mcp_tools_editor_view  # noqa: PLC0415
         from prefab_sentinel.mcp_server import create_server  # noqa: PLC0415
+        from tests._mcp_test_support import (  # noqa: PLC0415
+            call_tool_result,
+            structured_payload,
+        )
 
         with patch.object(mcp_tools_editor_view, "send_action") as send:
             send.return_value = {
@@ -1146,11 +1153,22 @@ class TestEditorSetCameraForwardsResetToDefaults(unittest.TestCase):
                 "diagnostics": [],
             }
             server = create_server()
-            asyncio.run(
-                server.call_tool(
-                    "editor_set_camera",
-                    {"reset_to_defaults": True},
-                )
+            result = call_tool_result(
+                server,
+                "editor_set_camera",
+                {"reset_to_defaults": True},
+            )
+            self.assertIs(result.is_error, False)
+            self.assertEqual(
+                {
+                    "success": True,
+                    "severity": "info",
+                    "code": "EDITOR_CTRL_SET_CAMERA_OK",
+                    "message": "ok",
+                    "data": {},
+                    "diagnostics": [],
+                },
+                structured_payload(result),
             )
         kwargs = send.call_args.kwargs
         self.assertEqual("set_camera", kwargs["action"])
@@ -1163,6 +1181,10 @@ class TestEditorConsoleForwardsClassificationFilter(unittest.TestCase):
     def test_editor_console_classification_filter_forwarded(self) -> None:
         from prefab_sentinel import mcp_tools_editor_view  # noqa: PLC0415
         from prefab_sentinel.mcp_server import create_server  # noqa: PLC0415
+        from tests._mcp_test_support import (  # noqa: PLC0415
+            call_tool_result,
+            structured_payload,
+        )
 
         with patch.object(mcp_tools_editor_view, "send_action") as send:
             send.return_value = {
@@ -1174,11 +1196,22 @@ class TestEditorConsoleForwardsClassificationFilter(unittest.TestCase):
                 "diagnostics": [],
             }
             server = create_server()
-            asyncio.run(
-                server.call_tool(
-                    "editor_console",
-                    {"classification_filter": "non_fatal"},
-                )
+            result = call_tool_result(
+                server,
+                "editor_console",
+                {"classification_filter": "non_fatal"},
+            )
+            self.assertIs(result.is_error, False)
+            self.assertEqual(
+                {
+                    "success": True,
+                    "severity": "info",
+                    "code": "EDITOR_CTRL_CONSOLE_OK",
+                    "message": "ok",
+                    "data": {"entries": []},
+                    "diagnostics": [],
+                },
+                structured_payload(result),
             )
         kwargs = send.call_args.kwargs
         self.assertEqual("capture_console_logs", kwargs["action"])

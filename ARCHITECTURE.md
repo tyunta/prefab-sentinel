@@ -4,11 +4,13 @@ Prefab Sentinel の構成概観・レイヤ責務・サービス仕様・デー�
 
 ## 概要
 
-MCP クライアントから入った 1 リクエストは、`mcp_tools` で受信され、`orchestrator` がユースケース単位に各 `services` を順序付き編成し、書き込み・実行検証は `tools/unity` の常駐 Editor Bridge へ file-IPC で中継される。Bridge は Unity Editor 内で操作を実行し、`success / severity / code / message / data / diagnostics` エンベロープを応答として返す。
+MCP クライアントから入った 1 リクエストは、stdio またはローカル loopback HTTP の protocol boundary を通って `mcp_tools` へ渡される。`orchestrator` がユースケース単位に各 `services` を順序付き編成し、書き込み・実行検証は `tools/unity` の常駐 Editor Bridge へ file-IPC で中継される。Bridge は Unity Editor 内で操作を実行し、`success / severity / code / message / data / diagnostics` エンベロープを応答として返す。
 
 ```mermaid
 flowchart LR
-    Client["MCP client<br/>(AI agent)"] -->|tool call| Tools["mcp_tools<br/>(MCP surface)"]
+    Client["MCP client<br/>(AI agent)"] --> Transport["stdio or loopback HTTP<br/>POST /mcp"]
+    Transport --> Boundary["MCPServer + protocol middleware<br/>2026-07-28 / Tools only"]
+    Boundary -->|tools/call| Tools["mcp_tools<br/>(MCP surface)"]
     Tools --> Orch["orchestrator<br/>(per-use-case)"]
     Orch --> Svc["services<br/>(serialized-object /<br/>prefab-variant /<br/>reference-resolver /<br/>runtime-validation)"]
     Svc -->|"file-IPC<br/>(request.json)"| Bridge["tools/unity<br/>Editor Bridge"]
@@ -16,7 +18,8 @@ flowchart LR
     Bridge -.->|EditorApplication.update| Unity["Unity Editor<br/>(Assets / Scene / Prefab)"]
     Svc --> Orch
     Orch --> Tools
-    Tools -->|envelope| Client
+    Tools -->|tool result| Boundary
+    Boundary -->|MCP response| Client
 ```
 
 データフロー原則:
@@ -28,6 +31,14 @@ flowchart LR
 ## レイヤ責務
 
 各レイヤは単一責務を持ち、入出力は隣接レイヤとの境界でだけ正規化される。書き込みは必ず `confirm=True` + `change_reason` を要求し、未配線・必須参照欠落は `error` で fail-fast する。冗長化のためのフォールバック実装（自動探索・代替経路）は持たない。
+
+### MCPServer / protocol boundary
+
+Python SDK 2.x の `MCPServer` と protocol middleware が公開 wire contract を所有する。受理する protocol version は `2026-07-28` のみ、公開 capability は Tools のみ、request method allowlist は `server/discover` / `tools/list` / `tools/call` の 3 つである。stdio の `notifications/cancelled` は request method ではなく notification として middleware が SDK へ転送し、HTTP notification は gate が拒否する。legacy client の `initialize` / `initialized` handshake や `Mcp-Session-Id` による session lifecycle は持たず、互換レイヤも置かない。HTTP は `MCP20260728HTTPGate` が loopback host、method、header、request metadata を SDK dispatch 前に検査し、fixed host `127.0.0.1` の configurable port、単一 endpoint `/mcp` への POST に限定する。transport と起動方法は [docs/execution-reference.md](./docs/execution-reference.md)、request metadata と result semantics は [docs/tool-conventions.md](./docs/tool-conventions.md)、protocol-boundary error の優先順位と stdio transport 例外は [docs/api-reference.md](./docs/api-reference.md#エラーコード規約) を正本とする。
+
+サーバー生成時に作る `ProjectSession` は MCP protocol session ではなく、activation、cache、watcher を保持する process-wide application state である。1 プロセスを 1 logical client / 1 project scope として運用し、`activate_project` が後続 request で暗黙利用される state を更新する。`tools/call` は process-wide lock で直列化し、`server/discover` / `tools/list` は tool-call lock の対象外とする。複数 client / project の共有 server や request ごとの ProjectSession は提供しない。
+
+この request 間の `ProjectSession` / `activate_project` continuity は **意図した product constraint であると同時に、MCP 2026-07-28 の per-request metadata / stateless model に対する既知の逸脱**である。protocol-level session header を使わないことと、application state が stateless であることは同義ではない。選択した HTTP conformance scenarios が通過してもこの逸脱は解消されないため、現行設計について full 2026-07-28 conformance は主張しない。
 
 ### services
 
@@ -145,7 +156,8 @@ orchestrator / services 間で受け渡すコアエンティティと、それ�
 | `prefab-variant` | どこが上書きされているか | Variant パス | `overrides[]` / stale 候補 / chain values | `serialized-object`（before 解決元）/ `reference-resolver`（参照確認） |
 | `reference-resolver` | 参照が有効か | GUID / fileID / asset path / scope | `resolved` / `missing_asset` / `missing_local_id` / `type_mismatch` | `prefab-variant`（参照存在チェック）/ orchestrator（snapshot diff） |
 | `runtime-validation` | 実行時に壊れていないか | scene 経路 + log_file | UdonSharp compile 結果 / 分類済み console / `critical` 件数 | `tools/unity`（compile / ClientSim 実行）/ Skills（運用判断） |
-| `mcp_tools` | どの API を公開するか | MCP リクエスト | 標準エンベロープ または 参照系ペイロード | クライアント / orchestrator |
+| MCPServer / protocol boundary | どの wire contract を受理するか | stdio / HTTP の MCP リクエスト | 2026-07-28 MCP response または protocol error | クライアント / `mcp_tools` |
+| `mcp_tools` | どの tool API を公開するか | 検証済み `tools/call` | 標準エンベロープ または 参照系ペイロード | protocol boundary / orchestrator |
 | `orchestrator` | どの順で繋ぐか | ユースケース引数 | 編成済み `ToolResponse` | 各 services / `mcp_tools` |
 | `skills` | どの順で使うか | 運用フェーズ宣言 | `safe_fix` / `decision_required` 分類 | ユーザー / orchestrator |
 
@@ -159,6 +171,7 @@ orchestrator / services 間で受け渡すコアエンティティと、それ�
 * **orchestrator** — ユースケース単位で複数 service を順序付き編成する層。`prefab_sentinel.orchestrator*` モジュール群が実体で、応答は標準エンベロープに正規化する。
 * **Skill** — `skills/<name>/SKILL.md` に記述された運用手順書。ツール呼び出し順・停止条件・成功条件を含み、Claude Code Plugin として `/prefab-sentinel:<name>` で呼び出される。
 * **Service** — 単一責務サブパッケージ（`prefab_sentinel/services/<name>/`）。公開 API はファサードクラス 1 つに絞り、後方互換シムは持たない。
+* **ProjectSession** — activation / cache / watcher を process-wide に保持する application state。MCP protocol session や client handshake を表さないが、後続 request が暗黙に再利用するため 2026-07-28 stateless model からは意図的に逸脱する。1 server process を 1 logical client / project scope とする。
 * **partial concern** — 1 つの C# クラスを `disk 上の partial ファイル` ごとに概念単位で分割した責務分割の単位。`UnityEditorControlBridge` / `UnityPatchBridge` は両方ともこの形で構成され、AGENTS.md の per-concern token inventory がドリフト検出の正本。
 * **scope** — `validate_refs` / `find_referencing_assets` 等で受け取る走査範囲指定。`--scope` で実行時指定し、固定パスは持たない。`<scope>/config/ignore_guids.txt` 等の auto-load はこのパスを起点に解決する。
 * **handle** — Bridge への 1 回の create / open 操作で確立した resource identifier。`prefab create mode` の root asset `$asset`、scene mode の component `$handle` / asset `$handle` などで `target` フィールドに与え、後続 mutation op の対象を一意に指す（[docs/execution-reference.md「Unity bridge / runtime」](./docs/execution-reference.md#unity-bridge--runtime)）。

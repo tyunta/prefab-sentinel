@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import tempfile
@@ -9,14 +8,11 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import Mock, call, patch
 
-from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.mcpserver.exceptions import ToolError
 
 from prefab_sentinel.inspector_profiles import application
 from prefab_sentinel.mcp_server import create_server
-
-
-def _run(coro: Any) -> Any:
-    return asyncio.run(coro)
+from tests._mcp_test_support import call_tool_result, run, structured_payload
 
 
 def _assert_component_surface_request(
@@ -103,7 +99,7 @@ class TestInspectorProfileToolRegistration(unittest.TestCase):
 
         names = {
             tool.name
-            for tool in _run(server.list_tools())
+            for tool in run(server.list_tools())
             if tool.name
             in {
                 "inspect_serialized_surface",
@@ -125,7 +121,7 @@ class TestInspectorProfileToolRegistration(unittest.TestCase):
     def test_tool_schemas_require_the_authority_named_inputs(self) -> None:
         server = create_server()
 
-        tools = {tool.name: tool for tool in _run(server.list_tools())}
+        tools = {tool.name: tool for tool in run(server.list_tools())}
 
         self.assertEqual(
             {
@@ -134,22 +130,21 @@ class TestInspectorProfileToolRegistration(unittest.TestCase):
                 "validate_inspector_profile": ["asset_path", "profile_path"],
             },
             {
-                name: sorted(tools[name].inputSchema["required"])
+                name: sorted(tools[name].input_schema["required"])
                 for name in (
                     "inspect_serialized_surface",
                     "inspect_with_profile",
                     "validate_inspector_profile",
                 )
             },
-            msg="FastMCP required-field schemas drifted from MC-003 through MC-005",
+            msg="MCPServer required-field schemas drifted from MC-003 through MC-005",
         )
 
     def test_empty_view_name_precedes_malformed_target_resolution(self) -> None:
         server = create_server()
 
         try:
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "inspect_with_profile",
                     {"asset_path": "", "view_name": ""},
                 )
@@ -183,8 +178,7 @@ class TestSerializedSurfaceTool(unittest.TestCase):
     def test_inactive_project_returns_before_bridge_dispatch(self) -> None:
         server = create_server()
         with patch("prefab_sentinel.inspector_profiles.application.send_action") as mock_send:
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "inspect_serialized_surface",
                     {
                         "asset_path": "Assets/Test.prefab",
@@ -203,8 +197,7 @@ class TestSerializedSurfaceTool(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             server = create_server(project_root=Path(temporary))
             try:
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "inspect_serialized_surface",
                         {
                             "asset_path": "Assets/Test.prefab",
@@ -270,8 +263,7 @@ class TestSerializedSurfaceTool(unittest.TestCase):
                     return_value=bridge_response,
                 ),
             ):
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "inspect_serialized_surface",
                         {
                             "asset_path": "Assets/Test.prefab",
@@ -347,8 +339,7 @@ class TestSerializedSurfaceTool(unittest.TestCase):
             "prefab_sentinel.inspector_profiles.application.send_action",
             return_value=bridge_response,
         ) as mock_send:
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "inspect_serialized_surface",
                     {
                         "asset_path": "Assets/Test.prefab",
@@ -417,8 +408,7 @@ class TestSerializedSurfaceTool(unittest.TestCase):
             "prefab_sentinel.inspector_profiles.application.send_action",
             return_value=bridge_response,
         ) as mock_send:
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "inspect_serialized_surface",
                     {
                         "asset_path": "Assets/Test.prefab",
@@ -459,8 +449,7 @@ class TestSerializedSurfaceTool(unittest.TestCase):
             "prefab_sentinel.inspector_profiles.application.send_action",
             return_value=bridge_response,
         ) as mock_send:
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "inspect_serialized_surface",
                     {
                         "asset_path": "Assets/Test.prefab",
@@ -598,8 +587,7 @@ class TestSerializedSurfaceTool(unittest.TestCase):
                     "prefab_sentinel.inspector_profiles.application.send_action",
                     return_value=bridge_response,
                 ) as mock_send:
-                    _, result = _run(
-                        server.call_tool(
+                    result = structured_payload(call_tool_result(server,
                             "inspect_serialized_surface",
                             {
                                 "asset_path": "Assets/Test.prefab",
@@ -646,8 +634,7 @@ class TestSerializedSurfaceTool(unittest.TestCase):
             "prefab_sentinel.inspector_profiles.application.send_action",
             return_value=bridge_response,
         ) as mock_send:
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "inspect_serialized_surface",
                     {
                         "asset_path": "Assets/Test.prefab",
@@ -703,8 +690,7 @@ class TestSerializedSurfaceTool(unittest.TestCase):
                 ),
                 patch.object(Path, "rename", publish_invalid_response),
             ):
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "inspect_serialized_surface",
                         {
                             "asset_path": "Assets/Test.prefab",
@@ -822,8 +808,7 @@ class TestSerializedSurfaceTool(unittest.TestCase):
                     "prefab_sentinel.inspector_profiles.application.send_action",
                     return_value=bridge_response,
                 ) as mock_send:
-                    _, result = _run(
-                        server.call_tool(
+                    result = structured_payload(call_tool_result(server,
                             "inspect_serialized_surface",
                             {
                                 "asset_path": "Assets/Test.prefab",
@@ -940,8 +925,7 @@ class TestSerializedSurfaceTool(unittest.TestCase):
             "prefab_sentinel.inspector_profiles.application.send_action",
             return_value=bridge_response,
         ) as mock_send:
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "inspect_serialized_surface",
                     {
                         "asset_path": "Assets/Test.prefab",
@@ -1026,8 +1010,7 @@ class TestProfileWorkflow(unittest.TestCase):
                 return_value=bridge_response,
             ) as mock_send:
                 try:
-                    _, result = _run(
-                        server.call_tool(
+                    result = structured_payload(call_tool_result(server,
                             "inspect_with_profile",
                             {
                                 "asset_path": "Assets/Test.prefab",
@@ -1163,8 +1146,7 @@ class TestProfileWorkflow(unittest.TestCase):
                 "prefab_sentinel.inspector_profiles.application.send_action",
                 return_value=bridge_response,
             ) as mock_send:
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "inspect_with_profile",
                         {
                             "asset_path": "Assets/Test.prefab",
@@ -1257,8 +1239,7 @@ class TestProfileWorkflow(unittest.TestCase):
                 "prefab_sentinel.inspector_profiles.application.send_action",
                 return_value=bridge_response,
             ) as mock_send:
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "inspect_with_profile",
                         {
                             "asset_path": "Assets/Test.prefab",
@@ -1337,8 +1318,7 @@ class TestProfileWorkflow(unittest.TestCase):
                     return_value=bridge_response,
                 ) as mock_send,
             ):
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "inspect_with_profile",
                         {
                             "asset_path": "Assets/Test.prefab",
@@ -1428,8 +1408,7 @@ class TestProfileWorkflow(unittest.TestCase):
                 return_value=bridge_response,
             ) as mock_send:
                 try:
-                    _, result = _run(
-                        server.call_tool(
+                    result = structured_payload(call_tool_result(server,
                             "inspect_with_profile",
                             {
                                 "asset_path": "Assets/Test.prefab",
@@ -1512,8 +1491,7 @@ class TestProfileWorkflow(unittest.TestCase):
                 "prefab_sentinel.inspector_profiles.application.send_action",
                 return_value=bridge_response,
             ) as mock_send:
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "inspect_with_profile",
                         {
                             "asset_path": "Assets/Test.prefab",
@@ -1609,8 +1587,7 @@ class TestProfileWorkflow(unittest.TestCase):
                     return_value=bridge_response,
                 ) as mock_send,
             ):
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "inspect_with_profile",
                         {
                             "asset_path": "Assets/Test.prefab",
@@ -1694,8 +1671,7 @@ class TestInspectorCandidateDiscovery(unittest.TestCase):
                 "prefab_sentinel.inspector_profiles.application.send_action",
                 return_value=bridge_response,
             ) as mock_send:
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "inspect_with_profile",
                         {
                             "asset_path": "Assets/Test.prefab",
@@ -1769,8 +1745,7 @@ class TestValidateInspectorProfile(unittest.TestCase):
 
             with patch("prefab_sentinel.inspector_profiles.application.send_action") as mock_send:
                 try:
-                    _, result = _run(
-                        server.call_tool(
+                    result = structured_payload(call_tool_result(server,
                             "validate_inspector_profile",
                             {
                                 "profile_path": str(outside_profile),
@@ -1830,8 +1805,7 @@ class TestValidateInspectorProfile(unittest.TestCase):
                             ),
                             patch("prefab_sentinel.inspector_profiles.application.send_action") as mock_send,
                         ):
-                            _, result = _run(
-                                server.call_tool(
+                            result = structured_payload(call_tool_result(server,
                                     "validate_inspector_profile",
                                     {
                                         "profile_path": str(unsafe_profile),
@@ -1903,8 +1877,7 @@ class TestValidateInspectorProfile(unittest.TestCase):
                 "prefab_sentinel.inspector_profiles.application.send_action",
                 return_value=bridge_response,
             ) as mock_send:
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "validate_inspector_profile",
                         {
                             "profile_path": str(profile_path),
@@ -2012,8 +1985,7 @@ class TestValidateInspectorProfile(unittest.TestCase):
                 "prefab_sentinel.inspector_profiles.application.send_action",
                 return_value=bridge_response,
             ) as mock_send:
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "validate_inspector_profile",
                         {
                             "profile_path": str(profile_path),
@@ -2065,8 +2037,7 @@ class TestValidateInspectorProfile(unittest.TestCase):
             server = create_server(project_root=project_root)
 
             with patch("prefab_sentinel.inspector_profiles.application.send_action") as mock_send:
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "validate_inspector_profile",
                         {
                             "profile_path": str(profile_path),
@@ -2100,8 +2071,7 @@ class TestValidateInspectorProfile(unittest.TestCase):
             server = create_server(project_root=project_root)
 
             with patch("prefab_sentinel.inspector_profiles.application.send_action") as mock_send:
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "validate_inspector_profile",
                         {
                             "profile_path": str(profile_path),
@@ -2192,8 +2162,7 @@ class TestValidateInspectorProfile(unittest.TestCase):
                     return_value=orchestrator,
                 ),
             ):
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "validate_inspector_profile",
                         {
                             "profile_path": str(profile_path),
@@ -2346,8 +2315,7 @@ class TestValidateInspectorProfile(unittest.TestCase):
                     return_value=orchestrator,
                 ),
             ):
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "validate_inspector_profile",
                         {
                             "profile_path": str(profile_path),
@@ -2470,8 +2438,7 @@ class TestInspectorSurfaceBlockers(unittest.TestCase):
             "prefab_sentinel.inspector_profiles.application.send_action",
             return_value=bridge_response,
         ) as mock_send:
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "inspect_serialized_surface",
                     {"asset_path": "Assets/Test.asset"},
                 )
@@ -2548,8 +2515,7 @@ class TestInspectorSurfaceBlockers(unittest.TestCase):
                     "prefab_sentinel.inspector_profiles.application.send_action",
                     return_value=bridge_response,
                 ) as mock_send:
-                    _, result = _run(
-                        server.call_tool(
+                    result = structured_payload(call_tool_result(server,
                             "inspect_serialized_surface",
                             {"asset_path": "Assets/Test.asset"},
                         )
@@ -2598,7 +2564,7 @@ class TestInspectSerializedSurfaceAddresses(unittest.TestCase):
             arguments["symbol_path"] = symbol_path
 
         with patch("prefab_sentinel.inspector_profiles.application.send_action") as mock_send:
-            _, result = _run(server.call_tool("inspect_serialized_surface", arguments))
+            result = structured_payload(call_tool_result(server,"inspect_serialized_surface", arguments))
 
         self.assertEqual(
             (False, "error", "INSPECTOR_SURFACE_ADDRESS_INVALID", field),
@@ -2646,8 +2612,7 @@ class TestInspectSerializedSurfaceAddresses(unittest.TestCase):
             server = create_server(project_root=project_root)
 
             with patch("prefab_sentinel.inspector_profiles.application.send_action") as mock_send:
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "inspect_serialized_surface",
                         {
                             "asset_path": "Assets/Linked.prefab",
@@ -2679,8 +2644,7 @@ class TestInspectSerializedSurfaceAddresses(unittest.TestCase):
             server = create_server(project_root=project_root)
 
             with patch("prefab_sentinel.inspector_profiles.application.send_action") as mock_send:
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "inspect_serialized_surface",
                         {
                             "asset_path": "Assets/Linked/Test.prefab",
@@ -2752,8 +2716,7 @@ class TestInspectSerializedSurfaceAddresses(unittest.TestCase):
             "prefab_sentinel.inspector_profiles.application.send_action",
             return_value=bridge_response,
         ) as mock_send:
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "inspect_serialized_surface",
                     {
                         "asset_path": "Assets/Settings.asset",
@@ -2802,8 +2765,7 @@ class TestInspectorProfileWorkflowStates(unittest.TestCase):
                 "prefab_sentinel.inspector_profiles.application.send_action",
                 return_value=bridge_response,
             ) as mock_send:
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "inspect_with_profile",
                         {
                             "asset_path": "Assets/Test.prefab",
@@ -2887,8 +2849,7 @@ class TestInspectorProfileWorkflowStates(unittest.TestCase):
                     "prefab_sentinel.inspector_profiles.application.send_action",
                     return_value=bridge_response,
                 ) as mock_send:
-                    _, result = _run(
-                        server.call_tool(
+                    result = structured_payload(call_tool_result(server,
                             "inspect_with_profile",
                             {
                                 "asset_path": "Assets/Test.prefab",
@@ -2974,8 +2935,7 @@ class TestInspectorProfileWorkflowStates(unittest.TestCase):
                 "prefab_sentinel.inspector_profiles.application.send_action",
                 return_value=bridge_response,
             ) as mock_send:
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "inspect_with_profile",
                         {
                             "asset_path": "Assets/Test.prefab",
@@ -3074,8 +3034,7 @@ class TestInspectorProfileWorkflowStates(unittest.TestCase):
                     return_value=orchestrator,
                 ),
             ):
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "inspect_with_profile",
                         {
                             "asset_path": "Assets/Test.prefab",
@@ -3213,8 +3172,7 @@ class TestInspectorProfileWorkflowPartitions(unittest.TestCase):
             "prefab_sentinel.inspector_profiles.application.send_action",
             return_value=bridge_response,
         ) as mock_send:
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "inspect_with_profile",
                     {
                         "asset_path": "Assets/Test.prefab",
@@ -3469,8 +3427,7 @@ class TestInspectorProfileRecommendationPaths(unittest.TestCase):
 
     @staticmethod
     def _call(server: Any) -> dict[str, Any]:
-        _, result = _run(
-            server.call_tool(
+        result = structured_payload(call_tool_result(server,
                 "inspect_with_profile",
                 {
                     "asset_path": "Assets/Missing.prefab",
@@ -3594,8 +3551,7 @@ class TestInspectWithProfileAddresses(unittest.TestCase):
         server = create_server()
 
         with patch("prefab_sentinel.inspector_profiles.application.send_action") as mock_send:
-            _, result = _run(
-                server.call_tool(
+            result = structured_payload(call_tool_result(server,
                     "inspect_with_profile",
                     {
                         "asset_path": "../outside.prefab",
@@ -3632,8 +3588,7 @@ class TestInspectWithProfileAddresses(unittest.TestCase):
             server = create_server(project_root=project_root)
 
             with patch("prefab_sentinel.inspector_profiles.application.send_action") as mock_send:
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "inspect_with_profile",
                         {
                             "asset_path": "Assets/Test.prefab",
@@ -3673,8 +3628,7 @@ class TestInspectWithProfileAddresses(unittest.TestCase):
                 "prefab_sentinel.inspector_profiles.application.send_action",
                 return_value=bridge_response,
             ) as mock_send:
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "inspect_with_profile",
                         {
                             "asset_path": "Assets/Missing.prefab",
@@ -3739,8 +3693,7 @@ class TestValidateInspectorProfileSurfaceBlocker(unittest.TestCase):
                 "prefab_sentinel.inspector_profiles.application.send_action",
                 return_value=bridge_response,
             ) as mock_send:
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "validate_inspector_profile",
                         {
                             "profile_path": str(draft),
@@ -3812,8 +3765,7 @@ class TestValidateInspectorProfileAddresses(unittest.TestCase):
             server = create_server(project_root=project_root)
 
             with patch("prefab_sentinel.inspector_profiles.application.send_action") as mock_send:
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "validate_inspector_profile",
                         {
                             "profile_path": str(draft),
@@ -3855,8 +3807,7 @@ class TestValidateInspectorProfileAddresses(unittest.TestCase):
                 "prefab_sentinel.inspector_profiles.application.send_action",
                 return_value=bridge_response,
             ) as mock_send:
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "validate_inspector_profile",
                         {
                             "profile_path": str(draft),
@@ -3899,8 +3850,7 @@ class TestValidateInspectorProfileAddresses(unittest.TestCase):
             server = create_server(project_root=project_root)
 
             with patch("prefab_sentinel.inspector_profiles.application.send_action") as mock_send:
-                _, result = _run(
-                    server.call_tool(
+                result = structured_payload(call_tool_result(server,
                         "validate_inspector_profile",
                         {
                             "profile_path": str(outside),

@@ -17,7 +17,6 @@ prefix.
 
 from __future__ import annotations
 
-import asyncio
 import tempfile
 import unittest
 from pathlib import Path
@@ -38,17 +37,7 @@ from prefab_sentinel.services.serialized_object.patch_preview import (
 from prefab_sentinel.services.serialized_object.service import (
     SerializedObjectService as _ServiceSerializedObjectService,
 )
-from tests._typing_helpers import load_json_object
-
-
-def _run_call_tool(coro: Any) -> dict[str, Any]:
-    """Run a server.call_tool coroutine and return the parsed JSON dict."""
-    raw = asyncio.run(coro)
-    if isinstance(raw, tuple) and len(raw) == 2 and isinstance(raw[1], dict):
-        return raw[1]
-    if isinstance(raw, list) and raw and hasattr(raw[0], "text"):
-        return load_json_object(raw[0].text, "call_tool response")
-    raise RuntimeError("Unexpected call_tool return shape")
+from tests._mcp_test_support import call_tool_result, structured_payload
 
 
 def _meshrenderer_prefab() -> str:
@@ -124,7 +113,7 @@ class SetComponentFieldsSER003Tests(unittest.TestCase):
         prefab_path = assets / "test.prefab"
         prefab_path.write_text(_meshrenderer_prefab(), encoding="utf-8")
         server = create_server()
-        activation = _run_call_tool(server.call_tool(
+        activation = structured_payload(call_tool_result(server,
             "activate_project",
             {"scope": "Assets", "project_root": str(td)},
         ))
@@ -139,7 +128,7 @@ class SetComponentFieldsSER003Tests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             td = Path(raw)
             server, prefab_path = self._setup_server_and_prefab(td)
-            result = _run_call_tool(server.call_tool(
+            result = structured_payload(call_tool_result(server,
                 "set_properties",
                 {
                     "asset_path": str(prefab_path),
@@ -165,7 +154,7 @@ class SetComponentFieldsSER003Tests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             td = Path(raw)
             server, prefab_path = self._setup_server_and_prefab(td)
-            result = _run_call_tool(server.call_tool(
+            result = structured_payload(call_tool_result(server,
                 "set_properties",
                 {
                     "asset_path": str(prefab_path),
@@ -192,7 +181,7 @@ class SetComponentFieldsSER003Tests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             td = Path(raw)
             server, prefab_path = self._setup_server_and_prefab(td)
-            result = _run_call_tool(server.call_tool(
+            result = structured_payload(call_tool_result(server,
                 "set_properties",
                 {
                     "asset_path": str(prefab_path),
@@ -218,7 +207,7 @@ class SetComponentFieldsSER003Tests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             td = Path(raw)
             server, prefab_path = self._setup_server_and_prefab(td)
-            result = _run_call_tool(server.call_tool(
+            result = structured_payload(call_tool_result(server,
                 "set_properties",
                 {
                     "asset_path": str(prefab_path),

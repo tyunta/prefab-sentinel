@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 
 from prefab_sentinel.contracts import ToolResponse, error_dict
 from prefab_sentinel.mcp_helpers import (
@@ -137,7 +137,7 @@ def _resolve_writer_target(
 
 
 
-def register_set_property_tools(server: FastMCP, session: ProjectSession) -> None:
+def register_set_property_tools(server: MCPServer, session: ProjectSession) -> None:
     """Register property-setting tools on *server*."""
 
     @server.tool()

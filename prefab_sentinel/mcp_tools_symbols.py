@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Literal
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 
 from prefab_sentinel.editor_bridge import bridge_status, send_action
 from prefab_sentinel.mcp_helpers import read_asset
@@ -55,7 +55,7 @@ def _offline_freshness_marker() -> dict[str, Any] | None:
     return None
 
 
-def register_symbol_tools(server: FastMCP, session: ProjectSession) -> None:
+def register_symbol_tools(server: MCPServer, session: ProjectSession) -> None:
     """Register symbol tree inspection tools on *server*."""
 
     def _annotate_origins(

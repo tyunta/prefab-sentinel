@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 
 from prefab_sentinel.editor_bridge import send_action
 from prefab_sentinel.json_io import dump_json
@@ -92,7 +92,7 @@ def editor_get_blend_shapes(
     )
 
 
-def register_editor_write_tools(server: FastMCP) -> None:
+def register_editor_write_tools(server: MCPServer) -> None:
     """Register editor write/mutation tools on *server*."""
 
     @server.tool()

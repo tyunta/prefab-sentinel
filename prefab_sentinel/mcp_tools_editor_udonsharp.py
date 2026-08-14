@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 
 from prefab_sentinel.editor_bridge import send_action
 from prefab_sentinel.mcp_validation import require_write_audit
@@ -60,7 +60,7 @@ def _no_value_envelope() -> dict[str, Any]:
     }
 
 
-def register_editor_udonsharp_tools(server: FastMCP) -> None:
+def register_editor_udonsharp_tools(server: MCPServer) -> None:
     """Register the three UdonSharp authoring tools on *server*."""
 
     @server.tool()
@@ -136,14 +136,14 @@ def register_editor_udonsharp_tools(server: FastMCP) -> None:
         property_name: str,
         value: str | None = None,
         object_reference: str = "",
-        values_json: str | None = None,
+        values_json: str = "",
         expected_length: int | None = None,
         confirm: bool = False,
         change_reason: str | None = None,
     ) -> dict[str, Any]:
         """Write a serialized field on the unique UdonSharp behaviour."""
         input_count = sum(
-            [value is not None, bool(object_reference), values_json is not None]
+            [value is not None, bool(object_reference), bool(values_json)]
         )
         if input_count > 1:
             return _both_value_envelope()
@@ -162,7 +162,7 @@ def register_editor_udonsharp_tools(server: FastMCP) -> None:
         }
         if object_reference:
             kwargs["object_reference"] = object_reference
-        elif values_json is not None:
+        elif values_json:
             kwargs["values_json"] = values_json
             kwargs["values_json_present"] = True
             if expected_length is not None:

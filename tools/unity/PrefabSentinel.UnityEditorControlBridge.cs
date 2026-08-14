@@ -19,7 +19,7 @@ namespace PrefabSentinel
     public static partial class UnityEditorControlBridge
     {
         public const int ProtocolVersion = 1;
-        public const string BridgeVersion = "0.8.9";
+        public const string BridgeVersion = "0.9.0";
         private static readonly string BridgeSessionId = Guid.NewGuid().ToString("N");
         private static readonly string BridgeInstanceId = Guid.NewGuid().ToString("N");
 

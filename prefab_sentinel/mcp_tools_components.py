@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 
 from prefab_sentinel.mcp_helpers import (
     read_asset,
@@ -18,7 +18,7 @@ from prefab_sentinel.session import ProjectSession
 __all__ = ["register_component_tools"]
 
 
-def register_component_tools(server: FastMCP, session: ProjectSession) -> None:
+def register_component_tools(server: MCPServer, session: ProjectSession) -> None:
     """Register component manipulation tools on *server*."""
 
     @server.tool()

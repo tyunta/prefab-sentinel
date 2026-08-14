@@ -10,6 +10,52 @@ PR を上げる前にローカルで走らせるテストの実行手順とテ�
 uv run --extra test --extra mcp python scripts/run_unit_tests.py
 ```
 
+## MCP 2026-07-28 protocol / wire conformance
+
+MCP-focused regression gate は、protocol contract / distribution surface、middleware、stdio wire、HTTP gate を同時に固定する。migration 変更時は次を実行する。
+
+```bash
+uv run --extra mcp pytest \
+  tests/test_mcp_distribution_contract.py \
+  tests/test_mcp_protocol.py \
+  tests/test_mcp_http.py \
+  tests/test_mcp_stdio_transport.py \
+  tests/test_mcp_http_transport.py -q
+```
+
+この gate は `2026-07-28` のみ、Tools-only request-method allowlist、request ごとの namespaced `_meta`、legacy lifecycle rejection、stdio `notifications/cancelled` forwarding、loopback HTTP wire、process-wide tool-call serialization を対象とする。domain envelope の `success=false`、tool execution error、top-level protocol error の区別は [docs/tool-conventions.md](./docs/tool-conventions.md#mcp-protocol--result-境界) を正本とする。
+
+公式 conformance runner は server を別 process で起動し、各 scenario を個別の output directory へ保存する。
+
+```bash
+uv run prefab-sentinel-mcp --transport streamable-http --port 8000
+```
+
+別 shell で:
+
+```bash
+for scenario in \
+  tools-list \
+  dns-rebinding-protection \
+  http-header-validation
+do
+  npx --yes @modelcontextprotocol/conformance@0.2.0-alpha.11 \
+    server \
+    --url http://127.0.0.1:8000/mcp \
+    --scenario "$scenario" \
+    --spec-version 2026-07-28 \
+    --output-dir "results/$scenario"
+done
+```
+
+各 `results/<scenario>/checks.json` を検査し、failure が 0 件であることを acceptance criterion とする。normative docs や unit test の成功を、この runner の代替証跡にしない。
+
+CI の strict gate は `tools-list`、`dns-rebinding-protection`、`http-header-validation` の 3 scenario だけを実行する。baseline、expected-failures、`continue-on-error`、`--suite`、`--requirements`、diagnostic tool は使わず、3 exit のいずれかが非 0、またはいずれかの `checks.json` に failure / warning があれば失敗とする。
+
+`server-stateless` は alpha.11 が `test_missing_capability` structural diagnostic tool と `-32021` response を要求するため対象外とする。現行の固定 101-tool product には client capability を必要とする tool がなく、この probe のために public tool や hidden conformance hook は追加しない。初回の 4-scenario run と公式 source audit は historical evidence として保持し、upstream が non-applicable structural probe の skip をサポートした時点で scenario 採用を再検討する。
+
+valid modern HTTP `initialize` は removed method として `404` / `-32601` になり、以前の RED gap は解消済みである。real stdio だけは pinned MCP Python SDK v2.0.0 が product middleware より先に `-32022` を返す transport 例外として test で固定する。process-wide `ProjectSession` と `activate_project` の暗黙 continuity は deliberate product constraint かつ per-request stateless model からの既知逸脱のままなので、選択した 3 scenario の通過を full 2026-07-28 conformance と表現しない。error precedence と SDK 例外は [docs/api-reference.md](./docs/api-reference.md#エラーコード規約) を参照。
+
 ## ユニットテスト
 
 `scripts/run_unit_tests.py` が `unittest_parallel` のラッパーで、3 段の preflight（stale `mutants/` 検出 → `mcp` extra 検出 → `unittest_parallel` 検出）を順に通してからテストを発火する。
@@ -331,10 +377,12 @@ Issue #156 は real-Unity layer と deterministic fault-injection layer の双�
 - visual 検証には **MCP plugin Python と Bridge C# が同じ commit の資材で揃っている必要**がある。bridge だけ手動配置しても plugin 側のリクエスト形が古いと検証が成立しない。
 - Claude Code / Codex CLI が起動済みの plugin プロセス（`~/.claude/plugins/cache/.../prefab-sentinel-mcp` 等）は session 開始時に固定されるため、session 内で同 plugin を最新ソースに張り替えても反映されない。`.mcp.json` を編集して再起動するか、本節の ad-hoc 経路を使う。
 
-**経路**: `uvx --from <local-path>[mcp] prefab-sentinel-mcp` で dev ソースから MCP server を一時起動し、stdio で `activate_project` → `deploy_bridge` → 検証ツールを呼ぶ Python script を走らせる。`mcp` Python SDK の `stdio_client` + `ClientSession` で実装する：
+**経路**: `uvx --from <local-path>[mcp] prefab-sentinel-mcp` で dev ソースから MCP server を一時起動し、stdio で `activate_project` → `deploy_bridge` → 検証ツールを呼ぶ Python script を走らせる。Python SDK 2.x の `Client` を `mode="2026-07-28"` で使い、legacy handshake を挟まず request ごとの namespaced `_meta` を送る：
 
 ```python
-from mcp import ClientSession, StdioServerParameters
+import os
+
+from mcp import Client, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 params = StdioServerParameters(
@@ -345,15 +393,14 @@ params = StdioServerParameters(
     ],
     env={**os.environ, "UNITYTOOL_BRIDGE_WATCH_DIR": "D:\\UnitySampleProject\\prefab-sentinel"},
 )
-async with stdio_client(params) as (read, write):
-    async with ClientSession(read, write) as session:
-        await session.initialize()
-        await session.call_tool("activate_project", {...})
-        await session.call_tool("deploy_bridge", {})
-        await session.call_tool("<verify_tool>", {...})
+async with Client(stdio_client(params), mode="2026-07-28") as client:
+    assert client.protocol_version == "2026-07-28"
+    await client.call_tool("activate_project", {...})
+    await client.call_tool("deploy_bridge", {})
+    await client.call_tool("<verify_tool>", {...})
 ```
 
-実行は `uv run --with 'mcp>=1.12' python /tmp/verify_<topic>.py`。Claude Code 設定の永続変更も bg uvx 残置もなく完結する。
+実行は `uv run --with 'mcp>=2,<3' python /tmp/verify_<topic>.py`。Claude Code 設定の永続変更も bg uvx 残置もなく完結する。
 
 **uv キャッシュの落とし穴**（astral-sh/uv#16196）:
 - `uvx --from <local-path>` のデフォルト cache key は `pyproject.toml` / `setup.py` / `setup.cfg` のみ。`tools/unity/*.cs` を編集しても **wheel が rebuild されない** ため、修正済みソースが配置されず古い bridge が deploy される事故が起こる。
