@@ -61,6 +61,26 @@ MCP ツールが返す応答エンベロープの形状とエラーコードの�
 
 wire `severity` の決定規則（issue #4）: `Diagnostic` dataclass は任意の per-item `severity`（`str | None`、既定 `None`）を持つ。`_diagnostic_to_wire` は **diagnostic 自身の `severity` が設定されていればそれを優先**し、`None` のときはエンベロープの `severity` を継承する（`diag.severity or default_severity`）。これにより 1 つのエンベロープ内で個々の diagnostic が異なる severity を運べる（例: envelope が `error` でも一部 diagnostic は `warning`）。per-item `severity` は `Severity` 語彙に対して検証されない任意文字列であり、設定しない限り wire 出力は従来と byte-identical。
 
+## MCP protocol surface
+
+stdio は二つの era を持つ。modern `2026-07-28` は `server/discover` / `tools/list` / `tools/call` と `notifications/cancelled`、legacy `2025-11-25` と `2025-06-18` はそれぞれ同じ `initialize` / `tools/list` / `tools/call` と `notifications/initialized` / `notifications/cancelled` を受理する。いずれも Tools-only で、Tool 名、入力 schema、tool result、domain envelope は共有する。どちらの legacy `initialize` も成功後に client が `notifications/initialized` を送ってから通常 operation に入る。
+
+legacy `initialize` の product-owned result は次の値へ正規化する。`protocolVersion` は要求した `2025-11-25` または `2025-06-18` をそのまま echo する。SDK が選択 revision 用に serialize した dictionary を `call_next` の内部から受け取った後に、ここに示す product-owned field だけを置き換える。`serverInfo` は modern discovery と同じ package name / installed package version、`instructions` は modern discovery と byte-for-byte 同じ次の文字列である。次は `2025-11-25` request の例であり、`2025-06-18` request はその値だけを `2025-06-18` にする。
+
+```json
+{
+  "protocolVersion": "2025-11-25",
+  "capabilities": {"tools": {"listChanged": false}},
+  "serverInfo": {
+    "name": "prefab-sentinel",
+    "version": "<installed package version, identical to modern discovery>"
+  },
+  "instructions": "activate_project selects the process-wide active Unity project. One process represents one logical client/project scope. Tool calls execute serially. Normal inspection, dry-run, and confirm entry points remain unchanged."
+}
+```
+
+modern `server/discover` と HTTP は `2026-07-28` のみである。したがって discovery `supportedVersions` は常に `["2026-07-28"]` であり、legacy を必要とする client は別の stdio process を `initialize` で開始する。
+
 ## inspection progress / timeout metadata
 
 長時間化しやすい read-only inspection / validation (`inspect_hierarchy`, `inspect_wiring`, `validate_all_wiring`, `validate_materials`) は、完了応答または timeout 応答の `data` に次の共通 metadata を載せる。
@@ -229,20 +249,20 @@ Exactly one `kind="prefab"`, `mode="open"` resource with `confirm=true` returns 
 
 ### MCP protocol-boundary JSON-RPC errors
 
-次の表は、現行の Prefab Sentinel protocol / HTTP gate が自ら返す JSON-RPC error を網羅する。これらは MCP wire contract 自体の rejection であり、`tools/call` の `CallToolResult` や Prefab Sentinel の `success / severity / code / ...` domain envelope には包まない。HTTP status は Streamable HTTP の場合だけ適用し、stdio には HTTP status がない。JSON-RPC / MCP 全体の error inventory ではなく、現在の gate-owned emission surface である。
+次の表は、Prefab Sentinel product middleware / HTTP gate が自ら返す JSON-RPC error を網羅する。これらは MCP wire contract 自体の rejection であり、`tools/call` の `CallToolResult` や Prefab Sentinel の `success / severity / code / ...` domain envelope には包まない。HTTP status は Streamable HTTP の場合だけ適用し、stdio には HTTP status がない。JSON-RPC / MCP 全体の error inventory ではなく、現在の product-owned emission surface である。
 
 | JSON-RPC code | 名前 | 条件 | HTTP status |
 |---:|---|---|---:|
 | `-32700` | `Parse error` | request body が JSON として parse できない | `400` |
 | `-32600` | `Invalid Request` | JSON-RPC request object が不正。HTTP では request ID を持たない notification（`notifications/cancelled` を含む）も現行 gate がこの code で拒否する | `400` |
-| `-32602` | `Invalid params` | 必須の namespaced request `_meta` または method parameter が欠落・不正 | `400` |
-| `-32022` | `UnsupportedProtocolVersion` | namespaced request metadata の protocol version が `2026-07-28` 以外。`data` に requested / supported version evidence を返す | `400` |
+| `-32602` | `Invalid params` | HTTP の true legacy `initialize` body のように、modern namespaced request `_meta` が欠落・不正 | `400` |
+| `-32022` | `UnsupportedProtocolVersion` | stdio の well-formed unsupported `initialize` / unsupported era、または legacy version を運ぶ modern-envelope HTTP request。`data` に requested / supported version evidence を返す | stdio: なし、HTTP: `400` |
 | `-32020` | `HeaderMismatch` | HTTP の必須 header が欠落・malformed、または header value が対応する request body value と一致しない | `400` |
-| `-32601` | `Method not found` | 上記 validation を通過した後、3 つの request method (`server/discover` / `tools/list` / `tools/call`) 以外。valid modern `initialize` も removed method としてこの code を返す | `404` |
+| `-32601` | `Method not found` | 上記 validation を通過した後、対応する era の Tools-only request method 以外。valid modern HTTP `initialize` も removed method としてこの code を返す | `404` |
 
-HTTP の request classification は、malformed metadata `-32602` → unsupported version `-32022` → header/body mismatch `-32020` → valid modern removed method（`initialize` を含む）`-32601` の優先順位である。legacy `params.protocolVersion` は removed method を復活させない。
+stdio product-owned `-32022` は `data.supported=["2026-07-28", "2025-11-25", "2025-06-18"]`（modern-first）と `data.requested` を返す。HTTP の modern-envelope rejection は `data.supported=["2026-07-28"]` を返す。HTTP の request classification は、true legacy body の malformed metadata `-32602` → modern-envelope unsupported version `-32022` → header/body mismatch `-32020` → valid modern removed method（`initialize` を含む）`-32601` の優先順位である。どちらの HTTP rejection も legacy HTTP session を作らない。
 
-stdio では pinned MCP Python SDK v2.0.0 の stream loop が modern `initialize` を product middleware より先に処理し、`-32022` と `data.supported=["2026-07-28"]` を返す。これは SDK-owned transport 例外であり、HTTP または direct middleware の method-resolution contract を変更する互換経路ではない。
+mixed-era request の rejection は SDK-owned である。test は JSON-RPC code と machine-readable structure / semantics を pin するが、SDK の explanatory prose は `mcp>=2,<3` の依存範囲で product contract にしない。
 
 現行 101 tool は client capability を必要としないため、product が `-32021` (`MissingRequiredClientCapability`) を返す経路はない。pinned conformance alpha.11 の `server-stateless` は `test_missing_capability` という structural diagnostic tool を要求するが、その tool を公開 surface または hidden dispatch に追加しない。この非適用 probe を含む scenario は厳格 CI gate から除外し、upstream が non-applicable structural probe の skip をサポートした時点で再検討する。これは full conformance の主張ではなく、process-wide state の既知逸脱は [ARCHITECTURE.md](../ARCHITECTURE.md#mcpserver--protocol-boundary) に残る。
 

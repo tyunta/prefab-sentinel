@@ -31,3 +31,17 @@ class TestMCPDistributionContract(unittest.TestCase):
             "httpx>=0.27.0,<0.29.0",
             pyproject["project"]["optional-dependencies"]["test"],
         )
+
+    def test_codex_marks_modern_protocol_opt_in_without_marking_claude(self) -> None:
+        codex = json.loads(
+            (_ROOT / ".codex-plugin/mcp.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            {"CODEX_MCP_PROTOCOL_VERSION": "2026-07-28"},
+            codex["prefab-sentinel"].get("env"),
+        )
+
+        claude = json.loads(
+            (_ROOT / ".claude-plugin/plugin.json").read_text(encoding="utf-8")
+        )
+        self.assertNotIn("env", claude["mcpServers"]["prefab-sentinel"])

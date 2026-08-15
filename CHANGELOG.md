@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-08-16
+
+### Changed
+
+- stdio で modern `2026-07-28` に加えて legacy `2025-11-25` / `2025-06-18` の Tools-only lifecycle を受理する。選択した revision は process lifetime に固定し、mixed-era request は拒否する。
+- Codex Plugin の MCP 定義に modern protocol marker を追加した。HTTP と modern discovery は引き続き `2026-07-28` のみで、legacy HTTP、追加 capability、`ping` は提供しない。
+
 ## [0.9.0] - 2026-08-14
 
 ### Added

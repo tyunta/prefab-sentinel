@@ -10,7 +10,7 @@ PR を上げる前にローカルで走らせるテストの実行手順とテ�
 uv run --extra test --extra mcp python scripts/run_unit_tests.py
 ```
 
-## MCP 2026-07-28 protocol / wire conformance
+## MCP three-revision stdio / modern HTTP protocol / wire conformance
 
 MCP-focused regression gate は、protocol contract / distribution surface、middleware、stdio wire、HTTP gate を同時に固定する。migration 変更時は次を実行する。
 
@@ -23,7 +23,7 @@ uv run --extra mcp pytest \
   tests/test_mcp_http_transport.py -q
 ```
 
-この gate は `2026-07-28` のみ、Tools-only request-method allowlist、request ごとの namespaced `_meta`、legacy lifecycle rejection、stdio `notifications/cancelled` forwarding、loopback HTTP wire、process-wide tool-call serialization を対象とする。domain envelope の `success=false`、tool execution error、top-level protocol error の区別は [docs/tool-conventions.md](./docs/tool-conventions.md#mcp-protocol--result-境界) を正本とする。
+この gate は Tools-only request-method allowlist、modern request ごとの namespaced `_meta`、legacy `initialize` / `notifications/initialized` lifecycle、stdio `notifications/cancelled` forwarding、loopback modern HTTP wire、process-wide tool-call serialization を対象とする。raw-wire assertion は `2025-11-25` と `2025-06-18` の各 legacy revision を別 process で独立に実行し、それぞれの initialize identity / capability、legacy と modern の `tools/list` / `tools/call`、mixed-era rejection が process state を変更しないこと、legacy response に modern-only field が出ないことを固定する。HTTP は各 legacy revision について、true legacy body が `-32602`、legacy version を持つ modern envelope が `-32022` になる二つの rejection shape を固定する。domain envelope の `success=false`、tool execution error、top-level protocol error の区別は [docs/tool-conventions.md](./docs/tool-conventions.md#mcp-protocol--result-境界) を正本とする。
 
 公式 conformance runner は server を別 process で起動し、各 scenario を個別の output directory へ保存する。
 
@@ -54,7 +54,7 @@ CI の strict gate は `tools-list`、`dns-rebinding-protection`、`http-header-
 
 `server-stateless` は alpha.11 が `test_missing_capability` structural diagnostic tool と `-32021` response を要求するため対象外とする。現行の固定 101-tool product には client capability を必要とする tool がなく、この probe のために public tool や hidden conformance hook は追加しない。初回の 4-scenario run と公式 source audit は historical evidence として保持し、upstream が non-applicable structural probe の skip をサポートした時点で scenario 採用を再検討する。
 
-valid modern HTTP `initialize` は removed method として `404` / `-32601` になり、以前の RED gap は解消済みである。real stdio だけは pinned MCP Python SDK v2.0.0 が product middleware より先に `-32022` を返す transport 例外として test で固定する。process-wide `ProjectSession` と `activate_project` の暗黙 continuity は deliberate product constraint かつ per-request stateless model からの既知逸脱のままなので、選択した 3 scenario の通過を full 2026-07-28 conformance と表現しない。error precedence と SDK 例外は [docs/api-reference.md](./docs/api-reference.md#エラーコード規約) を参照。
+valid modern HTTP `initialize` は removed method として `404` / `-32601` になり、以前の RED gap は解消済みである。mixed-era stdio error は SDK が所有するため、test は error code と machine-readable structure / semantics を固定し SDK prose は固定しない。process-wide `ProjectSession` と `activate_project` の暗黙 continuity は deliberate product constraint かつ per-request stateless model からの既知逸脱のままなので、選択した 3 scenario の通過を full 2026-07-28 conformance と表現しない。error precedence と SDK 例外は [docs/api-reference.md](./docs/api-reference.md#エラーコード規約) を参照。
 
 ## ユニットテスト
 

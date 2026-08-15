@@ -11,18 +11,41 @@ from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 from mcp_types import METHOD_NOT_FOUND, UNSUPPORTED_PROTOCOL_VERSION
 
 MCP_PROTOCOL_VERSION: Final = "2026-07-28"
+LEGACY_PROTOCOL_VERSION: Final = "2025-11-25"
+MCP_2025_06_18_PROTOCOL_VERSION: Final = "2025-06-18"
+
+# Modern-only consumers: discovery and the HTTP gate.
 SUPPORTED_PROTOCOL_VERSIONS: Final = (MCP_PROTOCOL_VERSION,)
+
+SUPPORTED_LEGACY_PROTOCOL_VERSIONS: Final = (
+    LEGACY_PROTOCOL_VERSION,
+    MCP_2025_06_18_PROTOCOL_VERSION,
+)
+
+# Fresh stdio processes may start in either era; modern stays first.
+SUPPORTED_STDIO_PROTOCOL_VERSIONS: Final = (
+    MCP_PROTOCOL_VERSION,
+    *SUPPORTED_LEGACY_PROTOCOL_VERSIONS,
+)
+
 ALLOWED_REQUEST_METHODS: Final = frozenset(
     {"server/discover", "tools/list", "tools/call"}
+)
+LEGACY_ALLOWED_REQUEST_METHODS: Final = frozenset(
+    {"initialize", "tools/list", "tools/call"}
 )
 SERVER_INFO_META_KEY: Final = "io.modelcontextprotocol/serverInfo"
 
 
-def unsupported_protocol_version(requested: str) -> MCPError:
+def unsupported_protocol_version(
+    requested: str,
+    *,
+    supported: tuple[str, ...] = SUPPORTED_PROTOCOL_VERSIONS,
+) -> MCPError:
     return MCPError(
         code=UNSUPPORTED_PROTOCOL_VERSION,
         message=f"Unsupported protocol version: {requested}",
-        data={"supported": list(SUPPORTED_PROTOCOL_VERSIONS), "requested": requested},
+        data={"supported": list(supported), "requested": requested},
     )
 
 
@@ -46,20 +69,49 @@ class ProtocolContractMiddleware:
         if ctx.request_id is None:
             if ctx.method == "notifications/cancelled":
                 return await call_next(ctx)
+            if (
+                ctx.protocol_version in SUPPORTED_LEGACY_PROTOCOL_VERSIONS
+                and ctx.method == "notifications/initialized"
+            ):
+                return await call_next(ctx)
             return None
 
-        if ctx.protocol_version != MCP_PROTOCOL_VERSION:
-            raise unsupported_protocol_version(ctx.protocol_version)
+        if ctx.protocol_version not in SUPPORTED_STDIO_PROTOCOL_VERSIONS:
+            raise unsupported_protocol_version(
+                ctx.protocol_version,
+                supported=SUPPORTED_STDIO_PROTOCOL_VERSIONS,
+            )
 
-        if ctx.method not in ALLOWED_REQUEST_METHODS:
+        allowed_methods = (
+            LEGACY_ALLOWED_REQUEST_METHODS
+            if ctx.protocol_version in SUPPORTED_LEGACY_PROTOCOL_VERSIONS
+            else ALLOWED_REQUEST_METHODS
+        )
+        if ctx.method not in allowed_methods:
             raise MCPError(
                 code=METHOD_NOT_FOUND,
                 message=f"Method not found: {ctx.method}",
             )
 
+        initialize_protocol_version = ctx.protocol_version
+        if ctx.method == "initialize":
+            requested = (ctx.params or {}).get("protocolVersion")
+            if isinstance(requested, str):
+                if requested not in SUPPORTED_LEGACY_PROTOCOL_VERSIONS:
+                    raise unsupported_protocol_version(
+                        requested,
+                        supported=SUPPORTED_STDIO_PROTOCOL_VERSIONS,
+                    )
+                initialize_protocol_version = requested
+
         result = await call_next(ctx)
         if ctx.method == "server/discover":
             return self._normalize_discovery(result)
+        if ctx.method == "initialize":
+            return self._normalize_initialize(
+                result,
+                protocol_version=initialize_protocol_version,
+            )
         return result
 
     def _normalize_discovery(self, result: HandlerResult) -> dict[str, Any]:
@@ -85,6 +137,25 @@ class ProtocolContractMiddleware:
                 "version": self.server_version,
             },
         }
+        return payload
+
+    def _normalize_initialize(
+        self,
+        result: HandlerResult,
+        *,
+        protocol_version: str,
+    ) -> dict[str, Any]:
+        if not isinstance(result, dict):
+            raise TypeError("initialize handler must return a dictionary")
+
+        payload = result.copy()
+        payload["protocolVersion"] = protocol_version
+        payload["capabilities"] = {"tools": {"listChanged": False}}
+        payload["serverInfo"] = {
+            "name": self.server_name,
+            "version": self.server_version,
+        }
+        payload["instructions"] = self.instructions
         return payload
 
 

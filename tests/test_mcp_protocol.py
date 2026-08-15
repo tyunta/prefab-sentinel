@@ -266,6 +266,256 @@ class TestCreateServerComposition(unittest.TestCase):
         self.assertEqual(1, len(shutdown_sessions))
 
 class TestProtocolContractMiddleware(unittest.TestCase):
+
+    def test_legacy_initialize_reaches_handler_and_normalizes_sdk_result(self) -> None:
+        for protocol_version in ("2025-11-25", "2025-06-18"):
+            with self.subTest(protocol_version=protocol_version):
+
+                async def scenario(
+                    bound_protocol_version: str = protocol_version,
+                ) -> None:
+                    sdk_initialize = {"vendor.example/preserved": True}
+                    original_initialize = copy.deepcopy(sdk_initialize)
+                    delegated = False
+
+                    async def call_next(
+                        _: ServerRequestContext[Any, Any],
+                    ) -> HandlerResult:
+                        nonlocal delegated
+                        delegated = True
+                        return sdk_initialize
+
+                    result = await _contract()(
+                        _context(
+                            "initialize",
+                            protocol_version=bound_protocol_version,
+                            params={
+                                "protocolVersion": bound_protocol_version,
+                            },
+                        ),
+                        call_next,
+                    )
+
+                    self.assertTrue(delegated)
+                    self.assertEqual(
+                        {
+                            "protocolVersion": bound_protocol_version,
+                            "capabilities": {"tools": {"listChanged": False}},
+                            "serverInfo": {
+                                "name": "prefab-sentinel-test",
+                                "version": "9.8.7",
+                            },
+                            "instructions": "Use only the advertised tools.",
+                            "vendor.example/preserved": True,
+                        },
+                        result,
+                    )
+                    self.assertEqual(original_initialize, sdk_initialize)
+
+                anyio.run(scenario)
+
+    def test_legacy_initialize_rejects_unsupported_raw_version_before_delegation(self) -> None:
+        requested = "2025-01-01"
+
+        async def scenario() -> None:
+            delegated = False
+
+            async def call_next(_: ServerRequestContext[Any, Any]) -> HandlerResult:
+                nonlocal delegated
+                delegated = True
+                return EmptyResult()
+
+            with self.assertRaises(MCPError) as caught:
+                await _contract()(
+                    _context(
+                        "initialize",
+                        protocol_version="2025-11-25",
+                        params={"protocolVersion": requested},
+                    ),
+                    call_next,
+                )
+            error = caught.exception
+
+            self.assertFalse(delegated)
+            self.assertEqual(-32022, error.code)
+            self.assertEqual(
+                f"Unsupported protocol version: {requested}",
+                error.message,
+            )
+            self.assertEqual(
+                {
+                    "supported": ["2026-07-28", "2025-11-25", "2025-06-18"],
+                    "requested": requested,
+                },
+                error.data,
+            )
+
+        anyio.run(scenario)
+
+    def test_legacy_initialize_malformed_raw_version_reaches_sdk_validation(self) -> None:
+        parameter_sets = (None, {"protocolVersion": 7})
+
+        for protocol_version in ("2025-11-25", "2025-06-18"):
+            for params in parameter_sets:
+                with self.subTest(protocol_version=protocol_version, params=params):
+
+                    async def scenario(
+                        bound_protocol_version: str = protocol_version,
+                        bound_params: Mapping[str, Any] | None = params,
+                    ) -> None:
+                        delegated = False
+
+                        async def call_next(
+                            _: ServerRequestContext[Any, Any],
+                        ) -> HandlerResult:
+                            nonlocal delegated
+                            delegated = True
+                            return {}
+
+                        await _contract()(
+                            _context(
+                                "initialize",
+                                protocol_version=bound_protocol_version,
+                                params=bound_params,
+                            ),
+                            call_next,
+                        )
+
+                        self.assertTrue(delegated)
+
+                    anyio.run(scenario)
+
+    def test_unknown_context_version_uses_modern_first_stdio_supported_list(self) -> None:
+        async def scenario() -> None:
+            async def call_next(_: ServerRequestContext[Any, Any]) -> HandlerResult:
+                self.fail("unsupported context version must not reach the handler")
+
+            await _contract()(
+                _context("tools/list", protocol_version="2026-08-01"),
+                call_next,
+            )
+
+        with self.assertRaises(MCPError) as caught:
+            anyio.run(scenario)
+        self.assertEqual(-32022, caught.exception.code)
+        self.assertEqual(
+            "Unsupported protocol version: 2026-08-01",
+            caught.exception.message,
+        )
+        self.assertEqual(
+            {
+                "supported": ["2026-07-28", "2025-11-25", "2025-06-18"],
+                "requested": "2026-08-01",
+            },
+            caught.exception.data,
+        )
+
+    def test_legacy_tools_delegate_and_unsupported_methods_are_product_errors(self) -> None:
+        delegated_methods = ("tools/list", "tools/call")
+        rejected_methods = (
+            "ping",
+            "resources/list",
+            "prompts/list",
+            "server/discover",
+        )
+
+        for protocol_version in ("2025-11-25", "2025-06-18"):
+            for method in delegated_methods:
+                with self.subTest(protocol_version=protocol_version, method=method):
+
+                    async def scenario(
+                        bound_protocol_version: str = protocol_version,
+                        bound_method: str = method,
+                    ) -> None:
+                        delegated = False
+                        delegated_result = EmptyResult()
+
+                        async def call_next(
+                            _: ServerRequestContext[Any, Any],
+                        ) -> HandlerResult:
+                            nonlocal delegated
+                            delegated = True
+                            return delegated_result
+
+                        result = await _contract()(
+                            _context(
+                                bound_method,
+                                protocol_version=bound_protocol_version,
+                            ),
+                            call_next,
+                        )
+
+                        self.assertTrue(delegated)
+                        self.assertIs(delegated_result, result)
+
+                    anyio.run(scenario)
+
+            for method in rejected_methods:
+                with self.subTest(protocol_version=protocol_version, method=method):
+
+                    async def scenario(
+                        bound_protocol_version: str = protocol_version,
+                        bound_method: str = method,
+                    ) -> None:
+                        delegated = False
+
+                        async def call_next(
+                            _: ServerRequestContext[Any, Any],
+                        ) -> HandlerResult:
+                            nonlocal delegated
+                            delegated = True
+                            return EmptyResult()
+
+                        with self.assertRaises(MCPError) as caught:
+                            await _contract()(
+                                _context(
+                                    bound_method,
+                                    protocol_version=bound_protocol_version,
+                                ),
+                                call_next,
+                            )
+                        error = caught.exception
+
+                        self.assertFalse(delegated)
+                        self.assertEqual(-32601, error.code)
+                        self.assertEqual(
+                            f"Method not found: {bound_method}",
+                            error.message,
+                        )
+                        self.assertIsNone(error.data)
+
+                    anyio.run(scenario)
+
+    def test_legacy_initialize_rejects_non_dictionary_result(self) -> None:
+        for protocol_version in ("2025-11-25", "2025-06-18"):
+            with self.subTest(protocol_version=protocol_version):
+
+                async def scenario(
+                    bound_protocol_version: str = protocol_version,
+                ) -> None:
+                    async def call_next(
+                        _: ServerRequestContext[Any, Any],
+                    ) -> HandlerResult:
+                        return None
+
+                    await _contract()(
+                        _context(
+                            "initialize",
+                            protocol_version=bound_protocol_version,
+                            params={
+                                "protocolVersion": bound_protocol_version,
+                            },
+                        ),
+                        call_next,
+                    )
+
+                with self.assertRaises(TypeError) as caught:
+                    anyio.run(scenario)
+                self.assertEqual(
+                    "initialize handler must return a dictionary",
+                    str(caught.exception),
+                )
+
     def test_allowlisted_2026_request_reaches_handler(self) -> None:
         async def scenario() -> None:
             server = MCPServer("modern-contract", middleware=[_contract()])
@@ -309,7 +559,7 @@ class TestProtocolContractMiddleware(unittest.TestCase):
                 error.message,
             )
             self.assertEqual(
-                {"supported": ["2026-07-28"], "requested": "2026-08-01"},
+                {"supported": ["2026-07-28", "2025-11-25", "2025-06-18"], "requested": "2026-08-01"},
                 error.data,
             )
 
@@ -329,6 +579,10 @@ class TestProtocolContractMiddleware(unittest.TestCase):
             {
                 "_meta": modern_meta,
                 "protocolVersion": "2025-11-25",
+            },
+            {
+                "_meta": modern_meta,
+                "protocolVersion": "2026-07-28",
             },
         )
 
@@ -369,7 +623,7 @@ class TestProtocolContractMiddleware(unittest.TestCase):
             anyio.run(scenario)
         self.assertEqual(-32022, caught.exception.code)
         self.assertEqual(
-            {"supported": ["2026-07-28"], "requested": "2026-08-01"},
+            {"supported": ["2026-07-28", "2025-11-25", "2025-06-18"], "requested": "2026-08-01"},
             caught.exception.data,
         )
 
@@ -471,26 +725,93 @@ class TestProtocolContractMiddleware(unittest.TestCase):
             anyio.run(scenario)
         self.assertEqual("server/discover handler must return a dictionary", str(caught.exception))
 
-    def test_cancellation_notification_delegates_to_sdk_dispatcher(self) -> None:
+    def test_legacy_initialized_notification_delegates_to_sdk_dispatcher(self) -> None:
         async def scenario() -> None:
-            delegated = False
+            delegated_methods: list[str] = []
 
-            async def call_next(_: ServerRequestContext[Any, Any]) -> HandlerResult:
-                nonlocal delegated
-                delegated = True
+            async def call_next(ctx: ServerRequestContext[Any, Any]) -> HandlerResult:
+                delegated_methods.append(ctx.method)
                 return None
 
-            result = await _contract()(
+            for protocol_version in ("2025-11-25", "2025-06-18", "2026-07-28"):
+                with self.subTest(protocol_version=protocol_version):
+                    result = await _contract()(
+                        _context(
+                            "notifications/initialized",
+                            protocol_version=protocol_version,
+                            request_id=None,
+                        ),
+                        call_next,
+                    )
+                    self.assertIsNone(result)
+
+            arbitrary_result = await _contract()(
                 _context(
-                    "notifications/cancelled",
+                    "notifications/roots/list_changed",
                     protocol_version="2025-11-25",
                     request_id=None,
                 ),
                 call_next,
             )
+            self.assertIsNone(arbitrary_result)
 
-            self.assertTrue(delegated)
-            self.assertIsNone(result)
+            for protocol_version in (
+                "2025-11-25",
+                "2025-06-18",
+                "2026-07-28",
+            ):
+                with self.subTest(cancelled_protocol_version=protocol_version):
+                    result = await _contract()(
+                        _context(
+                            "notifications/cancelled",
+                            protocol_version=protocol_version,
+                            request_id=None,
+                        ),
+                        call_next,
+                    )
+                    self.assertIsNone(result)
+
+            self.assertEqual(
+                [
+                    "notifications/initialized",
+                    "notifications/initialized",
+                    "notifications/cancelled",
+                    "notifications/cancelled",
+                    "notifications/cancelled",
+                ],
+                delegated_methods,
+            )
+
+        anyio.run(scenario)
+
+    def test_cancellation_notification_delegates_to_sdk_dispatcher(self) -> None:
+        async def scenario() -> None:
+            for protocol_version in (
+                "2026-07-28",
+                "2025-11-25",
+                "2025-06-18",
+            ):
+                with self.subTest(protocol_version=protocol_version):
+                    delegated = False
+
+                    async def call_next(
+                        _: ServerRequestContext[Any, Any],
+                    ) -> HandlerResult:
+                        nonlocal delegated
+                        delegated = True
+                        return None
+
+                    result = await _contract()(
+                        _context(
+                            "notifications/cancelled",
+                            protocol_version=protocol_version,
+                            request_id=None,
+                        ),
+                        call_next,
+                    )
+
+                    self.assertTrue(delegated)
+                    self.assertIsNone(result)
 
         anyio.run(scenario)
 

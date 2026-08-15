@@ -20,6 +20,10 @@ from typing import Any, cast
 
 MCP_PROTOCOL_VERSION = "2026-07-28"
 LEGACY_PROTOCOL_VERSION = "2025-11-25"
+LEGACY_PROTOCOL_VERSIONS = (
+    LEGACY_PROTOCOL_VERSION,
+    "2025-06-18",
+)
 
 _PROCESS_TIMEOUT_SECONDS = 15.0
 _SHUTDOWN_TIMEOUT_SECONDS = 5.0
@@ -381,7 +385,7 @@ def assert_jsonrpc_error(
     *,
     request_id: int | str,
     code: int,
-    message: str,
+    message: str | None,
 ) -> dict[str, Any]:
     """Pin the JSON-RPC 2.0 error response envelope."""
 
@@ -393,9 +397,28 @@ def assert_jsonrpc_error(
     test.assertIsInstance(error, dict)
     typed_error = cast(dict[str, Any], error)
     test.assertEqual(code, typed_error.get("code"))
-    test.assertEqual(message, typed_error.get("message"))
+    if message is None:
+        test.assertIsInstance(typed_error.get("message"), str)
+    else:
+        test.assertEqual(message, typed_error.get("message"))
     return typed_error
 
+
+def legacy_initialize_request(
+    *,
+    request_id: int | str = 1,
+    version: str = LEGACY_PROTOCOL_VERSION,
+) -> dict[str, object]:
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": version,
+            "capabilities": {},
+            "clientInfo": {"name": "transport-tests", "version": "1"},
+        },
+    }
 
 def modern_meta(version: str = MCP_PROTOCOL_VERSION) -> dict[str, object]:
     return {

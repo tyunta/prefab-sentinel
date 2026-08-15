@@ -5,6 +5,7 @@
 !/.serena/project.yml
 .claude/
 .superpowers/
+.worktrees/
 .takt/
 __pycache__/
 *.pyc

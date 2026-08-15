@@ -9,7 +9,7 @@ MCP クライアントから入った 1 リクエストは、stdio またはロ�
 ```mermaid
 flowchart LR
     Client["MCP client<br/>(AI agent)"] --> Transport["stdio or loopback HTTP<br/>POST /mcp"]
-    Transport --> Boundary["MCPServer + protocol middleware<br/>2026-07-28 / Tools only"]
+    Transport --> Boundary["MCPServer + protocol middleware<br/>stdio three revisions / HTTP modern-only / Tools only"]
     Boundary -->|tools/call| Tools["mcp_tools<br/>(MCP surface)"]
     Tools --> Orch["orchestrator<br/>(per-use-case)"]
     Orch --> Svc["services<br/>(serialized-object /<br/>prefab-variant /<br/>reference-resolver /<br/>runtime-validation)"]
@@ -34,7 +34,17 @@ flowchart LR
 
 ### MCPServer / protocol boundary
 
-Python SDK 2.x の `MCPServer` と protocol middleware が公開 wire contract を所有する。受理する protocol version は `2026-07-28` のみ、公開 capability は Tools のみ、request method allowlist は `server/discover` / `tools/list` / `tools/call` の 3 つである。stdio の `notifications/cancelled` は request method ではなく notification として middleware が SDK へ転送し、HTTP notification は gate が拒否する。legacy client の `initialize` / `initialized` handshake や `Mcp-Session-Id` による session lifecycle は持たず、互換レイヤも置かない。HTTP は `MCP20260728HTTPGate` が loopback host、method、header、request metadata を SDK dispatch 前に検査し、fixed host `127.0.0.1` の configurable port、単一 endpoint `/mcp` への POST に限定する。transport と起動方法は [docs/execution-reference.md](./docs/execution-reference.md)、request metadata と result semantics は [docs/tool-conventions.md](./docs/tool-conventions.md)、protocol-boundary error の優先順位と stdio transport 例外は [docs/api-reference.md](./docs/api-reference.md#エラーコード規約) を正本とする。
+公開 MCP boundary は 3 層で責務を分ける。MCP Python SDK 2.x runner は最初の stdio request から modern `2026-07-28` または legacy `2025-11-25` / `2025-06-18` のいずれか一つを選択して process lifetime に固定し、legacy initialize lifecycle、mixed-era rejection、revision ごとの request validation と result serialization を所有する。`ProtocolContractMiddleware` は client identity ではなく revision membership、revision ごとの Tools-only allowlist、legacy initialize の product identity、product-owned error を正規化する。`MCP20260728HTTPGate` は SDK dispatch 前に loopback host、method、header、modern request metadata を検査し、HTTP を `2026-07-28` に限定する。HTTP は fixed host `127.0.0.1` の configurable port、単一 endpoint `/mcp` への POST に限定する。
+
+| Transport / era | request | notification |
+|---|---|---|
+| stdio `2026-07-28` | `server/discover` / `tools/list` / `tools/call` | `notifications/cancelled` |
+| stdio `2025-11-25` | `initialize` / `tools/list` / `tools/call` | `notifications/initialized` / `notifications/cancelled` |
+| stdio `2025-06-18` | `initialize` / `tools/list` / `tools/call` | `notifications/initialized` / `notifications/cancelled` |
+| HTTP `2026-07-28` | `server/discover` / `tools/list` / `tools/call` | なし（HTTP request ID rule により拒否） |
+| HTTP legacy | なし | なし |
+
+`server/discover.supportedVersions` は modern-only の `["2026-07-28"]` のままである。legacy client は新しい stdio process を `initialize` で開始し、modern connection を途中から legacy に切り替えない。SDK は revision-specific result を `call_next` の内部で serialize し、その後 middleware は discovery / initialize の product-owned field だけを正規化する。transport と起動方法は [docs/execution-reference.md](./docs/execution-reference.md)、request metadata と result semantics は [docs/tool-conventions.md](./docs/tool-conventions.md)、protocol-boundary error の優先順位と stdio transport 例外は [docs/api-reference.md](./docs/api-reference.md#エラーコード規約) を正本とする。
 
 サーバー生成時に作る `ProjectSession` は MCP protocol session ではなく、activation、cache、watcher を保持する process-wide application state である。1 プロセスを 1 logical client / 1 project scope として運用し、`activate_project` が後続 request で暗黙利用される state を更新する。`tools/call` は process-wide lock で直列化し、`server/discover` / `tools/list` は tool-call lock の対象外とする。複数 client / project の共有 server や request ごとの ProjectSession は提供しない。
 
@@ -156,7 +166,7 @@ orchestrator / services 間で受け渡すコアエンティティと、それ�
 | `prefab-variant` | どこが上書きされているか | Variant パス | `overrides[]` / stale 候補 / chain values | `serialized-object`（before 解決元）/ `reference-resolver`（参照確認） |
 | `reference-resolver` | 参照が有効か | GUID / fileID / asset path / scope | `resolved` / `missing_asset` / `missing_local_id` / `type_mismatch` | `prefab-variant`（参照存在チェック）/ orchestrator（snapshot diff） |
 | `runtime-validation` | 実行時に壊れていないか | scene 経路 + log_file | UdonSharp compile 結果 / 分類済み console / `critical` 件数 | `tools/unity`（compile / ClientSim 実行）/ Skills（運用判断） |
-| MCPServer / protocol boundary | どの wire contract を受理するか | stdio / HTTP の MCP リクエスト | 2026-07-28 MCP response または protocol error | クライアント / `mcp_tools` |
+| MCPServer / protocol boundary | どの wire contract を受理するか | stdio / HTTP の MCP リクエスト | stdio は選択 revision（`2026-07-28` / `2025-11-25` / `2025-06-18`）の MCP response、HTTP は modern-only `2026-07-28` response、または protocol error | クライアント / `mcp_tools` |
 | `mcp_tools` | どの tool API を公開するか | 検証済み `tools/call` | 標準エンベロープ または 参照系ペイロード | protocol boundary / orchestrator |
 | `orchestrator` | どの順で繋ぐか | ユースケース引数 | 編成済み `ToolResponse` | 各 services / `mcp_tools` |
 | `skills` | どの順で使うか | 運用フェーズ宣言 | `safe_fix` / `decision_required` 分類 | ユーザー / orchestrator |

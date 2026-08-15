@@ -7,7 +7,17 @@ v0.4.0 で CLI (`prefab-sentinel` コマンド) は廃止され、MCP サーバ�
 
 ## 実行方法
 
-`prefab-sentinel-mcp` が MCP server entry point。検査・編集はすべて MCP ツール経由で行う（ツール一覧は [docs/tools.md](./tools.md)）。公開 contract は **MCP 2026-07-28 only / Tools only** で、request method は `server/discover` / `tools/list` / `tools/call` の 3 つだけを受理する。stdio の `notifications/cancelled` はこの request method allowlist とは別の notification 経路として SDK へ転送する。legacy client の `initialize` / `initialized` handshake、version negotiation、`Mcp-Session-Id` lifecycle はサポートしない。
+`prefab-sentinel-mcp` が MCP server entry point。検査・編集はすべて MCP ツール経由で行う（ツール一覧は [docs/tools.md](./tools.md)）。公開 capability は Tools のみで、transport/version ごとの surface は次のとおり。
+
+| Transport / version | request | notification |
+|---|---|---|
+| stdio `2026-07-28` | `server/discover` / `tools/list` / `tools/call` | `notifications/cancelled` |
+| stdio `2025-11-25` | `initialize` / `tools/list` / `tools/call` | `notifications/initialized` / `notifications/cancelled` |
+| stdio `2025-06-18` | `initialize` / `tools/list` / `tools/call` | `notifications/initialized` / `notifications/cancelled` |
+| Streamable HTTP `2026-07-28` | `server/discover` / `tools/list` / `tools/call` | なし |
+| HTTP legacy（`2025-11-25` / `2025-06-18` を含む）または `2025-06-18` より古い legacy revision | 非対応 | 非対応 |
+
+stdio runner は最初の request で選ばれた era/revision を process lifetime に固定する。`2025-11-25` と `2025-06-18` の各 legacy client は新しい process を `initialize` で開始して lifecycle を完了し、`2026-07-28` client は request `_meta` を使う。HTTP は両 legacy revision を拒否する。modern discovery の `supportedVersions` は HTTP と同じく `["2026-07-28"]` のみで、既存 connection 上で legacy を選び直すことはできない。
 
 ### stdio（既定）
 
@@ -16,7 +26,7 @@ uv run prefab-sentinel-mcp
 uv run prefab-sentinel-mcp --project-root /path/to/unity/project
 ```
 
-stdio は既定 transport で、ホスト側が server process の stdin / stdout を所有する。1 server process は 1 logical client / project scope として扱う。
+stdio は既定 transport で、ホスト側が server process の stdin / stdout を所有する。1 server process は 1 選択済み protocol era と 1 logical client / project scope として扱う。
 
 ### local Streamable HTTP
 
