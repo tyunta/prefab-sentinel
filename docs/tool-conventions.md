@@ -8,11 +8,19 @@ _規約確定: 2026-05-18_
 
 ## MCP protocol / result 境界
 
-公開 MCP contract は `2026-07-28` のみを受理し、server capability は Tools (`listChanged=false`) のみを宣言する。request method allowlist は `server/discover` / `tools/list` / `tools/call` の 3 つで、legacy `initialize` / `initialized` と resource / prompt request method は公開しない。stdio の `notifications/cancelled` はこの 3 request method に数えず、notification として SDK handler へ転送する。HTTP core protocol には client-to-server notification がないため、HTTP gate は request ID のない notification を `-32600` で拒否する。この移行は legacy client に対する意図的な breaking change であり、version negotiation や session lifecycle の互換レイヤは持たない。
+公開 MCP contract は Tools capability のみを宣言する。stdio は modern `2026-07-28` と、二つの revision を持つ legacy era（`2025-11-25` / `2025-06-18`）を受理する。
+
+| stdio revision | request allowlist | notification allowlist |
+|---|---|---|
+| `2026-07-28` | `server/discover` / `tools/list` / `tools/call` | `notifications/cancelled` |
+| `2025-11-25` | `initialize` / `tools/list` / `tools/call` | `notifications/initialized` / `notifications/cancelled` |
+| `2025-06-18` | `initialize` / `tools/list` / `tools/call` | `notifications/initialized` / `notifications/cancelled` |
+
+stdio の `notifications/cancelled` は全 revision で SDK handler へ転送し、`notifications/initialized` は各 legacy lifecycle だけで転送する。resource / prompt / `ping` は全 revision に公開しない。HTTP は `2026-07-28` のみで、client-to-server notification を持たないため、HTTP gate は request ID のない notification を `-32600` で拒否する。
 
 この節は受理 surface の規約であり、full conformance の合格宣言ではない。現行 protocol error の優先順位と stdio transport 例外は [api-reference.md](./api-reference.md#エラーコード規約)、process-wide application state の statelessness 逸脱は [ARCHITECTURE.md](../ARCHITECTURE.md#mcpserver--protocol-boundary) を正本とする。
 
-2026-07-28 の各 request は `_meta["io.modelcontextprotocol/protocolVersion"]="2026-07-28"` と `_meta["io.modelcontextprotocol/clientCapabilities"]` を必須とする。`_meta["io.modelcontextprotocol/clientInfo"]` は optional だが、client は送信することが推奨される。これらは request ごとの namespaced metadata であり、事前 handshake や session state の代替ではない。
+modern `2026-07-28` の各 request は `_meta["io.modelcontextprotocol/protocolVersion"]="2026-07-28"` と `_meta["io.modelcontextprotocol/clientCapabilities"]` を必須とする。`_meta["io.modelcontextprotocol/clientInfo"]` は optional だが、client は送信することが推奨される。legacy `2025-11-25` と `2025-06-18` の stdio request は modern request `_meta` を使わず、それぞれの `initialize.params` に lifecycle metadata（`protocolVersion`、capabilities、client information）を入れ、`notifications/initialized` の後に `tools/list` / `tools/call` を送る。Tool 名、引数 schema、result と domain envelope の contract は両 era で共有する。modern の namespaced `_meta` は request ごとの metadata であり、legacy initialize lifecycle の代替ではない。
 
 `tools/call` の失敗は次の 3 境界を混同しない。
 

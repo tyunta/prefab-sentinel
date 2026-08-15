@@ -5,6 +5,9 @@
       "--from", "git+https://github.com/tyunta/prefab-sentinel.git",
       "--with", "mcp>=2,<3",
       "prefab-sentinel-mcp"
-    ]
+    ],
+    "env": {
+      "CODEX_MCP_PROTOCOL_VERSION": "2026-07-28"
+    }
   }
 }

@@ -7,7 +7,8 @@
 - optional dependency `mcp` は Python SDK `mcp>=2,<3` を使用する。server、MCP-focused test、ad-hoc client を実行するときは `uv sync --extra mcp` または `uv run --extra mcp ...` で導入する。
 - transport は stdio が既定。HTTP を使う場合は `--transport streamable-http --port <port>` を指定する。port の既定値は `8000`、受理範囲は `1..65535`。
 - HTTP host は `127.0.0.1`、path は `/mcp` に固定する。host / path の CLI option や環境変数はなく、public bind、TLS、OAuth / authentication をこの server に設定することはできない。
-- 公開 contract は MCP `2026-07-28` の Tools-only surface。legacy handshake / session lifecycle を有効化する compatibility flag はない。
+- 公開 contract は Tools-only surface。stdio は `2026-07-28`、`2025-11-25`、`2025-06-18` を modern-first で受理し、HTTP と modern discovery は `2026-07-28` のみを受理する。user-facing compatibility flag はない。
+- Codex distribution の `.codex-plugin/mcp.json` だけが declarative な `CODEX_MCP_PROTOCOL_VERSION=2026-07-28` marker を持つ。これは配布定義に宣言する MCP host 向け marker であり、server runtime は検査しない。Claude の MCP launch definition は marker を持たず、変更しない。
 - `ProjectSession` は process-wide application state で、request / network client ごとに生成する設定はない。`activate_project` の結果を後続 request が暗黙利用する continuity は deliberate product constraint かつ MCP 2026-07-28 stateless model からの既知逸脱であり、これを conformance option で無効化する設定もない。1 logical client / project scope ごとに server process を分離する。起動例と transport semantics は [docs/execution-reference.md](./docs/execution-reference.md#実行方法)、責務境界は [ARCHITECTURE.md](./ARCHITECTURE.md#mcpserver--protocol-boundary) を参照。
 
 ## 環境変数一覧

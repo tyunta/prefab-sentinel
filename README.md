@@ -10,7 +10,7 @@ Unity / VRChat プロジェクトの Prefab / Scene / Asset を安全に検査�
 
 YAML-backed read-only 経路（`validate_refs` / `validate_materials` / `inspect_wiring` / `inspect_variant` / `inspect_hierarchy` / `find_referencing_assets` 等）は Unity を起動せずに完結する。`inspect_serialized_surface` / `inspect_with_profile` / `validate_inspector_profile` は、last-saved `SerializedObject` surface を常駐 Editor Bridge 経由で取得する。書き込み経路（`patch_apply` / `set_property` / `editor_*` 等）は常駐 Editor Bridge との file-IPC で動き、`confirm=True` + 非空 `change_reason` の監査ペアを欠く呼び出しは `CHANGE_REASON_REQUIRED` で拒否される。
 
-公開 MCP 境界は **2026-07-28 のみ・Tools capability のみ**をサポートする。stdio が既定で、任意の HTTP 経路はローカル loopback の `/mcp` に限定する。これは full conformance の合格宣言ではなく、protocol error の優先順位と stdio transport 例外は [docs/api-reference.md](./docs/api-reference.md#エラーコード規約)、厳格 CI gate の対象範囲は [TESTING.md](./TESTING.md#mcp-2026-07-28-protocol--wire-conformance)、process-state の既知逸脱は [ARCHITECTURE.md](./ARCHITECTURE.md#mcpserver--protocol-boundary) を正本とする。対応する request method と transport は [docs/tool-conventions.md](./docs/tool-conventions.md)、[docs/execution-reference.md](./docs/execution-reference.md) を参照。
+公開 MCP 境界は Tools capability のみを提供する。stdio は modern `2026-07-28` と、二つの legacy revision（`2025-11-25` / `2025-06-18`）に対応し、任意の HTTP 経路は modern `2026-07-28` のみをローカル loopback の `/mcp` で提供する。これは full conformance の合格宣言ではなく、protocol error の優先順位と stdio transport 例外は [docs/api-reference.md](./docs/api-reference.md#エラーコード規約)、厳格 CI gate の対象範囲は [TESTING.md](./TESTING.md#mcp-three-revision-stdio--modern-http-protocol--wire-conformance)、process-state の既知逸脱は [ARCHITECTURE.md](./ARCHITECTURE.md#mcpserver--protocol-boundary) を正本とする。対応する request method と transport は [docs/tool-conventions.md](./docs/tool-conventions.md)、[docs/execution-reference.md](./docs/execution-reference.md) を参照。
 
 本 README は各専門ドキュメントへの入口（[ドキュメントマップ](#ドキュメントマップ) 参照）。仕様の正本は専門ドキュメント群、運用ルールの正本は [AGENTS.md](./AGENTS.md)。
 
@@ -33,7 +33,7 @@ YAML-backed read-only 経路（`validate_refs` / `validate_materials` / `inspect
 - 変更根拠のない自動最適化をしない
 - 実プロジェクトを timing gate に使わず、weekly benchmark から baseline を自動更新しない
 - ユーザー判断が要る仕様変更を勝手に適用しない
-- legacy MCP の handshake / session lifecycle を互換維持せず、remote / shared HTTP server として公開しない
+- legacy HTTP、`2025-06-18` より古い legacy protocol version、remote / shared HTTP server は公開しない
 
 ## Quickstart
 
@@ -74,7 +74,7 @@ MCP サーバーは Plugin 内部で `uv` / `uvx` 経由でローカル起動さ
 
 ### Codex CLI Plugin
 
-[Quickstart](#quickstart) の手順で導入する（シェルで `codex plugin marketplace add` → Codex CLI 内の `/plugins` TUI で `prefab-sentinel` を Install）。MCP サーバーは Plugin 定義（`.codex-plugin/plugin.json` の `mcpServers` が指す `.codex-plugin/mcp.json`）から登録され、skill bundle も同時に展開される。Codex の MCP サーバーは `uvx` が GitHub から本体を取得して起動するため、起動時にネットワーク接続が必要（Claude Code 経路はローカル導入物から起動する）。Plugin を更新したら Codex CLI セッションを再起動する。無効化・登録解除は `/plugins` TUI から行う。
+[Quickstart](#quickstart) の手順で導入する（シェルで `codex plugin marketplace add` → Codex CLI 内の `/plugins` TUI で `prefab-sentinel` を Install）。MCP サーバーは Plugin 定義（`.codex-plugin/plugin.json` の `mcpServers` が指す `.codex-plugin/mcp.json`）から登録され、packaged MCP definition は必要な modern protocol marker も供給する。skill bundle も同時に展開される。Codex の MCP サーバーは `uvx` が GitHub から本体を取得して起動するため、起動時にネットワーク接続が必要（Claude Code 経路はローカル導入物から起動する）。Plugin を更新したら Codex CLI セッションを再起動する。無効化・登録解除は `/plugins` TUI から行う。
 
 ### スキル
 

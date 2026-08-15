@@ -15,6 +15,7 @@ from prefab_sentinel.mcp_protocol import MCP_PROTOCOL_VERSION, ProtocolContractM
 
 _EXPECTED_BODY_LIMIT = 4 * 1024 * 1024
 _LEGACY_VERSION = "2025-11-25"
+_LEGACY_VERSIONS = (_LEGACY_VERSION, "2025-06-18")
 _UNKNOWN_VERSION = "2099-01-01"
 
 
@@ -319,6 +320,59 @@ class TestMCPHTTPGateErrors(unittest.TestCase):
                     )
         self.assertEqual([], spy.http_scopes)
 
+
+    def test_legacy_initialize_without_modern_metadata_is_invalid_request(self) -> None:
+        spy = _SpyASGI()
+
+        with _client(_spy_gate(spy)) as client:
+            for protocol_version in _LEGACY_VERSIONS:
+                with self.subTest(protocol_version=protocol_version):
+                    legacy_body = {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "initialize",
+                        "params": {
+                            "protocolVersion": protocol_version,
+                            "capabilities": {},
+                            "clientInfo": {"name": "http-tests", "version": "1"},
+                        },
+                    }
+                    response = client.post(
+                        "/mcp",
+                        json=legacy_body,
+                        headers=_headers("initialize", version=protocol_version),
+                    )
+                    _assert_jsonrpc_error(
+                        self,
+                        response,
+                        status=400,
+                        code=-32602,
+                        request_id=1,
+                    )
+        self.assertEqual([], spy.http_scopes)
+
+    def test_legacy_initialize_with_modern_envelope_is_unsupported(self) -> None:
+        spy = _SpyASGI()
+
+        with _client(_spy_gate(spy)) as client:
+            for protocol_version in _LEGACY_VERSIONS:
+                with self.subTest(protocol_version=protocol_version):
+                    body = _request(
+                        "initialize",
+                        version=protocol_version,
+                        params={"protocolVersion": protocol_version},
+                    )
+                    headers = _headers("initialize", version=protocol_version)
+                    response = client.post("/mcp", json=body, headers=headers)
+                    _assert_jsonrpc_error(
+                        self,
+                        response,
+                        status=400,
+                        code=-32022,
+                        request_id=1,
+                        data={"supported": ["2026-07-28"], "requested": protocol_version},
+                    )
+        self.assertEqual([], spy.http_scopes)
 
     def test_initialize_version_errors_precede_removed_method_resolution(self) -> None:
         spy = _SpyASGI()
